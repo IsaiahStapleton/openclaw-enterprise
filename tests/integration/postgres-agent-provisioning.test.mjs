@@ -11,14 +11,14 @@ import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { GitHubRepoDriver } from "../../apps/controller/src/drivers/repo/github/driver.ts";
-import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/providers/repository-credentials/control-client.ts";
+import { UnixRepositoryCredentialControlClient } from "../../apps/controller/src/backends/repository-credentials/control-client.ts";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
-import { waitFor } from "../helpers/postgres-provider-state.mjs";
+import { waitFor } from "../helpers/postgres-backend-state.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "postgres-agent-provisioning-v2@example.test";
@@ -63,7 +63,12 @@ async function createNamespaceSecret(
 
 async function createProvisioningSecrets(fixture, namespaceId) {
   const modelKey = await createNamespaceSecret(fixture, namespaceId, "model-api-key");
-  const slackBotToken = await createNamespaceSecret(fixture, namespaceId, "slack-bot-token");
+  const slackBotToken = await createNamespaceSecret(
+    fixture,
+    namespaceId,
+    "slack-bot-token",
+    `xoxb-${randomUUID()}`,
+  );
   const slackSigningSecret = await createNamespaceSecret(
     fixture,
     namespaceId,
@@ -89,8 +94,9 @@ function provisioningBody(namespaceId, secrets, overrides = {}) {
         channels: {
           slack: {
             enabled: true,
-            botTokenEnv: "SLACK_BOT_TOKEN",
-            signingSecretEnv: "SLACK_SIGNING_SECRET",
+            mode: "http",
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
           },
         },
       },
@@ -127,6 +133,7 @@ function createRuntimeComputeDriver(options = {}) {
   return {
     ...base,
     agentProvisioning: { executionModes: ["dedicated"] },
+    requiresAgentRuntimeCredentials: true,
     calls,
     validateAgentProvisioning(input) {
       if (input.executionMode !== "dedicated") {
@@ -149,6 +156,10 @@ function createRuntimeComputeDriver(options = {}) {
       });
       runtimeStatus.set(keyOf(binding), { transportConfigured: true });
       return { transportConfigured: true };
+    },
+    async deleteAgentRuntimeCredentials(binding) {
+      calls.push({ operation: "deleteAgentRuntimeCredentials", agentId: binding.agent.id });
+      runtimeStatus.delete(keyOf(binding));
     },
     async getAgentRuntimeCredentialStatus(binding) {
       calls.push({ operation: "getAgentRuntimeCredentialStatus", agentId: binding.agent.id });
@@ -204,7 +215,7 @@ function installationDrivers({ computeDriver, configurationDriver, secretDriver,
     installation: {
       occ: { cluster: "postgres-agent-provisioning" },
       logging: {},
-      provider:
+      backend:
         repoDriver === undefined
           ? []
           : [
@@ -244,6 +255,15 @@ function installationDrivers({ computeDriver, configurationDriver, secretDriver,
 }
 
 async function createFixture(context, options = {}) {
+  // Keep real admission and Secret access; only Slack's external response is a fixture.
+  const originalFetch = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    if (String(url) === "https://slack.com/api/auth.test") {
+      assert.match(init.headers.authorization, /^Bearer xoxb-/);
+      return Response.json({ ok: true, bot_id: "B0123456789", team_id: "T0123456789" });
+    }
+    return originalFetch(url, init);
+  });
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   const state = new PostgresPlatformState(pool);
   await ensureProvisioningBootstrap(context, state);
@@ -355,7 +375,7 @@ async function createFixture(context, options = {}) {
       pool: workerPool,
       drivers,
       pollIntervalMs: 15,
-      leaseDurationMs: 30_000,
+      leaseDurationMs: options.leaseDurationMs ?? 30_000,
       maxAttempts: 3,
       emit: (event) => {
         // This persistence case ends at durable handoff, before credential service dispatch.
@@ -553,7 +573,7 @@ test(
       },
       {
         version: 1,
-        providerId: "provisioning-repositories",
+        backendId: "provisioning-repositories",
         providerInstanceId: "provisioning-github",
         appId: "123",
         githubInstallationId: "456",
@@ -588,7 +608,10 @@ test(
     const secretCreateCallCount = fixture.secretDriver.calls.filter(
       ({ operation }) => operation === "create",
     ).length;
-    const body = provisioningBody(namespace.id, secrets, { repositoryBindings });
+    const body = {
+      ...provisioningBody(namespace.id, secrets, { repositoryBindings }),
+      pluginApprovers: [],
+    };
     const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
       body,
     });
@@ -596,6 +619,7 @@ test(
 
     const queued = await provisioningRow(fixture.pool, namespace.id, body.requestId);
     assert.deepEqual(queued.plan.repositoryBindings, repositoryBindings);
+    assert.deepEqual(queued.plan.pluginApprovers, []);
     assert.equal(queued.agent_id, null);
     const replay = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
       body,
@@ -676,10 +700,12 @@ test(
     assert.equal(revisions.length, 1);
     assert.equal(revisions[0].id, status.revisionId);
     assert.equal(revisions[0].configurationGeneration, 1);
+    assert.deepEqual(revisions[0].pluginApprovers, []);
     const agentPath = `/namespaces/${namespace.id}/agents/${status.agentId}`;
     const agent = await fixture.request("GET", agentPath);
     assert.equal(agent.status, 200, JSON.stringify(agent.body));
     assert.deepEqual(agent.data.repositoryBindings, repositoryBindings);
+    assert.deepEqual(agent.data.pluginApprovers, []);
     const revisionPath = `${agentPath}/revisions/${status.revisionId}`;
     const revision = await fixture.request("GET", revisionPath);
     assert.equal(revision.status, 200, JSON.stringify(revision.body));
@@ -847,8 +873,8 @@ test(
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
     assert.deepEqual(
       secretDriver.calls.map(({ operation }) => operation),
-      ["create", "create", "create", "create"],
-      "only the explicit Secret API calls should touch the Secret backend before provisioning runs",
+      ["create", "create", "create", "create", "withValue"],
+      "admission validates the existing Slack Secret without creating provisioning resources",
     );
     const resources = await fixture.pool.query(
       `SELECT
@@ -890,6 +916,7 @@ test(
       body,
     });
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const callsBeforeRevocation = structuredClone(secretDriver.calls);
 
     await fixture.revokeCurrentPrincipal();
     await fixture.startWorker();
@@ -920,9 +947,9 @@ test(
       },
     ]);
     assert.deepEqual(
-      secretDriver.calls.map(({ operation }) => operation),
-      ["create", "create", "create", "create"],
-      "revoked initiating authority must not create additional Secret backend values",
+      secretDriver.calls,
+      callsBeforeRevocation,
+      "revoked initiating authority must not perform further Secret backend operations",
     );
     const resources = await fixture.pool.query(
       `SELECT
@@ -1040,72 +1067,75 @@ test(
   },
 );
 
+async function createFailedPreHandoffAgent(fixture) {
+  const namespace = await fixture.bootstrapNamespace();
+  const secrets = await createProvisioningSecrets(fixture, namespace.id);
+  const body = provisioningBody(namespace.id, secrets);
+  const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+    body,
+  });
+  assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+
+  await fixture.startWorker();
+  const failed = await waitFor("Agent provisioning to fail before handoff", async () => {
+    const observed = await fixture.request("GET", admitted.data.provisioning.url);
+    assert.equal(observed.status, 200, JSON.stringify(observed.body));
+    return observed.data.status === "failed" ? observed.data : undefined;
+  });
+  await fixture.stopWorker();
+  assert.match(failed.agentId, identifier("agt"));
+  assert.equal(failed.revisionId, undefined);
+  const pending = await fixture.pool.query(
+    "SELECT progress->'pendingEffect' AS pending_effect FROM occ.agent_provisioning_work WHERE work_id = $1",
+    [admitted.data.provisioning.workId],
+  );
+  assert.equal(pending.rowCount, 1);
+  assert.deepEqual(pending.rows[0].pending_effect?.kind, "transport");
+  assert.deepEqual(pending.rows[0].pending_effect?.targetId, failed.agentId);
+  return { namespace, admitted, failed, pendingEffect: pending.rows[0].pending_effect };
+}
+
+function failingTransportDriver(reportStoredCredentials = () => false) {
+  const computeDriver = createRuntimeComputeDriver();
+  const provisionRuntimeCredentials = computeDriver.provisionAgentRuntimeCredentials;
+  const getRuntimeCredentialStatus = computeDriver.getAgentRuntimeCredentialStatus;
+  computeDriver.provisionAgentRuntimeCredentials = async (...args) => {
+    await provisionRuntimeCredentials(...args);
+    throw new Error("synthetic pre-handoff transport failure");
+  };
+  computeDriver.getAgentRuntimeCredentialStatus = async (...args) =>
+    reportStoredCredentials()
+      ? getRuntimeCredentialStatus(...args)
+      : { transportConfigured: false };
+  return computeDriver;
+}
+
+async function settleLateTransport(fixture, target) {
+  const settled = await fixture.state.transact((unit) =>
+    unit.provisioning.settleEffect(target.admitted.data.provisioning.workId, {
+      kind: "transport",
+      owner: target.pendingEffect.owner,
+      targetId: target.pendingEffect.targetId,
+      result: { status: { transportConfigured: true } },
+    }),
+  );
+  assert.equal(settled.status, "cancelled");
+  const revisions = await fixture.pool.query(
+    "SELECT id FROM occ.agent_revisions WHERE namespace_id = $1 AND agent_id = $2",
+    [target.namespace.id, target.failed.agentId],
+  );
+  assert.equal(revisions.rowCount, 0, "late settlement must not deploy by itself");
+  return settled;
+}
+
 test(
   "Stop and Delete cancel failed pre-handoff provisioning Agents without deployment resurrection",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
-    async function createFailedPreHandoffAgent(fixture) {
-      const namespace = await fixture.bootstrapNamespace();
-      const secrets = await createProvisioningSecrets(fixture, namespace.id);
-      const body = provisioningBody(namespace.id, secrets);
-      const admitted = await fixture.request(
-        "POST",
-        `/namespaces/${namespace.id}/agents/provision`,
-        {
-          body,
-        },
-      );
-      assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
-
-      await fixture.startWorker();
-      const failed = await waitFor("Agent provisioning to fail before handoff", async () => {
-        const observed = await fixture.request("GET", admitted.data.provisioning.url);
-        assert.equal(observed.status, 200, JSON.stringify(observed.body));
-        return observed.data.status === "failed" ? observed.data : undefined;
-      });
-      await fixture.stopWorker();
-      assert.match(failed.agentId, identifier("agt"));
-      assert.equal(failed.revisionId, undefined);
-      const pending = await fixture.pool.query(
-        "SELECT progress->'pendingEffect' AS pending_effect FROM occ.agent_provisioning_work WHERE work_id = $1",
-        [admitted.data.provisioning.workId],
-      );
-      assert.equal(pending.rowCount, 1);
-      assert.deepEqual(pending.rows[0].pending_effect?.kind, "transport");
-      assert.deepEqual(pending.rows[0].pending_effect?.targetId, failed.agentId);
-      return { namespace, admitted, failed, pendingEffect: pending.rows[0].pending_effect };
-    }
-
-    function failingTransportDriver() {
-      const computeDriver = createRuntimeComputeDriver();
-      const provisionRuntimeCredentials = computeDriver.provisionAgentRuntimeCredentials;
-      computeDriver.provisionAgentRuntimeCredentials = async (...args) => {
-        await provisionRuntimeCredentials(...args);
-        throw new Error("synthetic pre-handoff transport failure");
-      };
-      computeDriver.getAgentRuntimeCredentialStatus = async () => ({ transportConfigured: false });
-      return computeDriver;
-    }
-
-    async function settleLateTransport(fixture, target) {
-      const settled = await fixture.state.transact((unit) =>
-        unit.provisioning.settleEffect(target.admitted.data.provisioning.workId, {
-          kind: "transport",
-          owner: target.pendingEffect.owner,
-          targetId: target.pendingEffect.targetId,
-          result: { status: { transportConfigured: true } },
-        }),
-      );
-      assert.equal(settled.status, "cancelled");
-      const revisions = await fixture.pool.query(
-        "SELECT id FROM occ.agent_revisions WHERE namespace_id = $1 AND agent_id = $2",
-        [target.namespace.id, target.failed.agentId],
-      );
-      assert.equal(revisions.rowCount, 0, "late settlement must not deploy by itself");
-      return settled;
-    }
-
-    const stopFixture = await createFixture(context, { computeDriver: failingTransportDriver() });
+    let reportStoredCredentials = false;
+    const stopFixture = await createFixture(context, {
+      computeDriver: failingTransportDriver(() => reportStoredCredentials),
+    });
     const stopTarget = await createFailedPreHandoffAgent(stopFixture);
     const stopped = await stopFixture.request(
       "POST",
@@ -1122,6 +1152,7 @@ test(
     assert.equal(stoppedProvisioning.data.error?.code, "PROVISIONING_CANCELLED");
 
     await settleLateTransport(stopFixture, stopTarget);
+    reportStoredCredentials = true;
     const deployed = await stopFixture.request(
       "POST",
       `/namespaces/${stopTarget.namespace.id}/agents/${stopTarget.failed.agentId}/deploy`,
@@ -1158,6 +1189,78 @@ test(
       `/namespaces/${deleteTarget.namespace.id}/agents/${deleteTarget.failed.agentId}/deploy`,
     );
     assert.equal(blockedDeploy.status, 409, JSON.stringify(blockedDeploy.body));
+  },
+);
+
+test(
+  "Delete finishes after failed pre-handoff provisioning leaves its effect unsettled",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const computeDriver = failingTransportDriver();
+    const fixture = await createFixture(context, { computeDriver, leaseDurationMs: 3_000 });
+    const target = await createFailedPreHandoffAgent(fixture);
+    const agentPath = `/namespaces/${target.namespace.id}/agents/${target.failed.agentId}`;
+    const deleting = await fixture.request("DELETE", agentPath);
+    assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
+
+    // Nothing settles a cancelled effect, so deletion itself must resolve it,
+    // but only after a lease has passed since the cancellation.
+    await fixture.startWorker();
+    try {
+      await waitFor("the Agent deletion to wait out the provisioning lease", async () => {
+        const deferred = await fixture.pool.query(
+          `SELECT 1 FROM occ.audit_events
+           WHERE action = 'reconcile' AND resource_kind = 'agent' AND resource_id = $1
+             AND details->>'reasonCode' = 'PROVISIONING_EFFECT_PENDING'`,
+          [target.failed.agentId],
+        );
+        return deferred.rowCount > 0 ? true : undefined;
+      });
+      assert.equal(
+        computeDriver.calls.some(
+          ({ operation, agentId }) =>
+            operation === "deleteAgentRuntimeCredentials" && agentId === target.failed.agentId,
+        ),
+        false,
+      );
+      await waitFor(
+        "the Agent deletion to finish",
+        async () => {
+          const observed = await fixture.request("GET", agentPath);
+          if (observed.status === 404) {
+            return true;
+          }
+          assert.equal(observed.status, 200, JSON.stringify(observed.body));
+          const work = await fixture.pool.query(
+            `SELECT state, reason_code FROM occ.controller_work
+             WHERE namespace_id = $1 AND agent_id = $2 AND agent_target = 'deleted'`,
+            [target.namespace.id, target.failed.agentId],
+          );
+          assert.notEqual(work.rows[0]?.state, "failed_permanent", JSON.stringify(work.rows));
+          return undefined;
+        },
+        20_000,
+      );
+    } finally {
+      await fixture.stopWorker();
+    }
+    // The shared database may hold other tests' deleting Agents; count only this one.
+    assert.equal(
+      computeDriver.calls.filter(
+        ({ operation, agentId }) =>
+          operation === "deleteAgentRuntimeCredentials" && agentId === target.failed.agentId,
+      ).length,
+      1,
+    );
+    const provisioning = await fixture.pool.query(
+      "SELECT 1 FROM occ.agent_provisioning_work WHERE work_id = $1",
+      [target.admitted.data.provisioning.workId],
+    );
+    assert.equal(provisioning.rowCount, 0);
+    const agents = await fixture.pool.query("SELECT 1 FROM occ.agents WHERE namespace_id = $1", [
+      target.namespace.id,
+    ]);
+    assert.equal(agents.rowCount, 0, "no Agent may keep the Namespace non-empty");
   },
 );
 

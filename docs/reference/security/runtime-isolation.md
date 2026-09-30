@@ -51,7 +51,7 @@ and AgentRevision responses can include the configured provider ID, which is
 persisted on the mutable Agent row and immutable AgentRevision row. Credential
 bytes stay out of OCC resources, AgentRevision snapshots, ConfigMaps, responses,
 and audit records. Upstream account, credential, and workspace identifiers remain
-private: the internal immutable auth snapshot retains verified Provider/workspace
+private: the internal immutable auth snapshot retains verified Backend/workspace
 ownership, while public responses expose only safe references. The runtime
 Secret retains the credential material required for authentication.
 
@@ -77,11 +77,11 @@ ownership checks do not eliminate this namespace-level trust; independently
 enforced workload admission is required for stronger isolation.
 
 The upstream ChatGPT admin key is read only by the API-side `ChatGPTClient`
-owned by its configured [Provider](../providers.md); it
+owned by its configured [Backend](../backends.md); it
 never appears in startup YAML, persistence, public account data, workload Pods,
 or the worker. Restrict provider TLS egress to the API Pod and an explicitly
 approved provider/proxy CIDR. The worker receives no provider egress exception.
-Managed account bindings carry exact Provider, Driver, and workspace identity.
+Managed account bindings carry exact Backend, Driver, and workspace identity.
 Issuance/deletion, deployment, and worker reconciliation reject conflicting
 ownership; the worker validates binding metadata and confirms issuance. Its Compute Driver
 reads admitted credential bytes only to deliver selected runtime fields; it does
@@ -106,9 +106,13 @@ Agent identity, gateway, and routing; a selected provider may own the dedicated
 Harness workload. The Compute-owned Pod templates above do not independently
 prove the containment of a provider-owned workload.
 
-The bundled OpenShell provider supports dedicated Codex and delegates containment
-outside the inner Codex sandbox. It requires upstream support for the workload's
-Secret references and projected identity. Stock gateway incompatibilities fail
+Dedicated native OpenClaw is admitted only when the selected SandboxDriver
+provisions the Harness and declares networking, filesystem, and process
+containment. The bundled OpenShell provider supports dedicated Codex and native
+OpenClaw, and delegates containment outside the inner Harness sandbox. Its paired
+Credential Gateway keeps the model
+API key outside the Harness. It still requires upstream support for the
+app-server token Secret reference and projected identity. Stock gateway incompatibilities fail
 explicitly, and test-only bridges are not production support. Do not infer a
 complete pre-execution policy barrier or command-level sandbox admission from
 Driver selection alone. See the [Sandbox overview](../../guides/topics/sandbox.md),
@@ -117,7 +121,8 @@ Driver selection alone. See the [Sandbox overview](../../guides/topics/sandbox.m
 
 ## Agent runtime isolation
 
-Production Agent dispatch supports embedded OpenClaw and dedicated Codex. Each
+Production Agent dispatch supports embedded OpenClaw, dedicated Codex, and
+sandbox-provisioned dedicated native OpenClaw. Each
 Agent has its own gateway, one selected active revision, and an exact-owner
 Service. Guarded routing does not guarantee a physical process singleton during
 Kubernetes node partitions or manual replacement; the
@@ -132,6 +137,16 @@ Existing claim-fenced worker reconciliation allows temporary unavailability but
 fails closed across Agent and Namespace boundaries. Brokered credentials,
 workload-bound transport authentication, and restricted model egress remain
 future work.
+
+OpenShell treats the AgentRevision as its containment boundary. It provisions
+one Sandbox for the dedicated Harness, disables nested Codex containment, and
+runs native OpenClaw session workers without an additional inner process
+sandbox. Dedicated Codex sessions share one app server; native OpenClaw admits
+a bounded, configurable set of session-owned workers with separate managed
+workspaces in one node host. Those sessions share the Sandbox's user,
+filesystem, process, and network boundary and therefore must belong to the same
+Agent trust domain. This model does not provide mutual operating-system
+isolation between sessions of one Agent.
 
 ## Related
 

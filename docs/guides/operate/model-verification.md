@@ -5,7 +5,21 @@ request and returns a real model response. The private OCC workspace proxy
 serves workspace administration; this check uses a separate gateway password
 over a Kubernetes port-forward bound to your machine's loopback address. For
 an interactive check with the same loopback password, use the
-[OpenClaw TUI](../deploy/production-agents.md#attach-with-the-openclaw-tui).
+[OpenClaw TUI](../deploy/production-tui.md).
+
+## What each check establishes
+
+| Check                                                      | Evidence                                                                                                 |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Authenticated `occ installation get`                       | The control plane accepts the caller's credential.                                                       |
+| Accepted deployment                                        | OCC stored a revision and queued work.                                                                   |
+| Deployment `succeeded` and the expected `activeRevisionId` | The worker completed the requested work and OCC selected that revision; this is not a live health probe. |
+| Successful OCC workspace-file read                         | Private routing and file access work for that Agent and caller.                                          |
+| Fresh nonce returned by the model                          | The selected Agent executed a model request.                                                             |
+
+Run the checks needed for your task. A model response does not establish tool,
+plugin, repository, sandbox, or workspace-file behavior; verify those operations
+separately. The console reports persisted deployment state, not live gateway health.
 
 ## Prepare the Agent
 
@@ -34,11 +48,14 @@ gateway:
         enabled: true
 ```
 
-The [transport Secret](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials)
-must have a `gateway-password` key. The initial credential API generates one;
+The [Gateway-password Secret](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials)
+must have a `gateway-password` key. Dedicated mode keeps it in the Gateway
+namespace; embedded mode uses the combined transport bundle in the tenant
+namespace. The initial credential API generates the password;
 external operators can provision one during [Agent deployment](../deploy/production-agents.md#configure-the-agent-runtime).
 If these Configuration fields changed, [deploy a new revision](../deploy/production-agents.md#configure-the-agent-runtime)
-and capture its new `REVISION_ID`. Wait for OCC to report that exact ID as active.
+and capture its new `REVISION_ID`. Wait for that deployment to succeed and for OCC
+to report that exact ID as active.
 The password is separate from the model provider's credential.
 
 ## Open a local connection
@@ -142,7 +159,10 @@ fetch_gateway_password() {
     return 1
   fi
   transport_secret="openclaw-agent-transport-$agent_suffix"
-  if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
+  if [ "${AGENT_EXECUTION_MODE:?}" = dedicated ]; then
+    transport_secret="gateway-password-$agent_suffix"
+  fi
+  if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$GATEWAY_NAMESPACE" \
     get secret "$transport_secret" -o json)"; then
     rmdir -- "$working_directory"
     return 1
@@ -167,7 +187,8 @@ fetch_gateway_password
 ```
 
 Replace `openclaw-agent-transport-` if your Installation sets a different
-`runtime.transportSecretPrefix`. Export `GATEWAY_PASSWORD_FILE` if you use your
+`runtime.transportSecretPrefix` and the Agent is embedded. Dedicated Agents use
+the separate `gateway-password-<suffix>` Secret in the Gateway namespace. Export `GATEWAY_PASSWORD_FILE` if you use your
 own protected file.
 
 ## Verify rejection and a real response

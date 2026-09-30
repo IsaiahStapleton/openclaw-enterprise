@@ -44,8 +44,23 @@ authorization behavior.
 ## Type contracts
 
 `@openclaw-enterprise/occ` exports the binding, factory, adapter-option, and
-complete-schema types. The schema type
-retains each canonical table's inferred columns and query results.
+complete-schema types. The schema type retains each canonical table's inferred
+columns and query results. `CoreSchemaRootV1`, `CoreResourceSchemaV1`, and
+`AuthTableSchemaV1` expose the original root and narrow readonly type views. The
+core view includes Installation, Namespace, Configuration, Secret, and
+ServiceAccount tables; the auth view includes user, session, account,
+verification, and API-key tables. These views preserve original column types
+and do not replace the complete runtime schema passed to the adapter.
+
+Consumers import these types from the package root. Earlier proposed subpath
+imports are not part of the current package export map.
+
+The PostgreSQL Controller options now require a real node-postgres `Pool`, rather
+than the broader structural pool interface used by State. Existing production and
+development composition use `createPostgresPool`, which returns that real pool.
+Callers supplying structural wrappers or checked-out clients must supply the
+owning pool instead; their objects cannot preserve the adapter's transaction
+connection selection.
 
 For test setup, focused checks, and database failure diagnosis, see
 [PostgreSQL tests](../testing/postgresql.md#authentication-binding).

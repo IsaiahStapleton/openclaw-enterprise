@@ -130,7 +130,7 @@ async function createFixture(options = {}) {
     const email = `${name}-${randomUUID()}@example.com`;
     const password = `generated-password-${randomUUID()}`;
     const account = await authFixture.auth.createAccount({ email, password, name });
-    const seed = authFixture.auth.principalSeed(account);
+    const seed = authFixture.auth.principalSeed(account, { grant: "none" });
     state.identities.push(seed.principal);
     sessionsByPrincipalId.set(
       seed.principal.id,
@@ -563,14 +563,14 @@ test("Secret API stores values through the selected driver and returns metadata 
   assert.equal(removedOwnerField.body.error.code, "INVALID_REQUEST");
 
   const created = await request(fixture.app, "POST", `/namespaces/${namespace.id}/secrets`, {
-    body: { name: "Provider API key", value: originalValue },
+    body: { name: "Backend API key", value: originalValue },
   });
   assert.equal(created.status, 201);
   assert.match(created.data.id, identifier("sec"));
   assert.deepEqual(created.data, {
     id: created.data.id,
     namespaceId: namespace.id,
-    name: "Provider API key",
+    name: "Backend API key",
     ref: { kind: "secret", namespaceId: namespace.id, id: created.data.id },
   });
   assert.equal(JSON.stringify(created.body).includes(originalValue), false);

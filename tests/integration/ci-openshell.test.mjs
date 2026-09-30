@@ -13,8 +13,10 @@ import {
   selectKubectlAsset,
 } from "../../scripts/ci/openshell.mjs";
 import {
+  createOpenShellInstallationConfiguration,
   createOpenShellServiceLoopbackLookup,
   openShellChartImageValues,
+  openShellGatewayNetworkPolicies,
 } from "../helpers/openshell-kubernetes-real.mjs";
 
 async function fixture(t, prefix = "ci-openshell-test") {
@@ -38,40 +40,35 @@ test("kubectl asset selection supports the pinned OpenShell CI host platforms", 
   assert.throws(() => selectKubectlAsset("darwin", "x64"), /no pinned kubectl/);
 });
 
-test("OpenShell Helm chart image values preserve immutable digests in rendered tags", () => {
+test("OpenShell Helm chart image values use the v0.1.0 registry and digest contract", () => {
   const digest = "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
   assert.deepEqual(
-    openShellChartImageValues("image", `localhost/example/gateway:local${digest}`, "0.1.0-pre.5"),
+    openShellChartImageValues("gateway.image", `localhost/example/gateway:local${digest}`),
     [
-      "--set-string=image.repository=localhost/example/gateway",
-      `--set-string=image.tag=local${digest}`,
+      "--set-string=gateway.image.registry=localhost",
+      "--set-string=gateway.image.repository=example/gateway",
+      `--set-string=gateway.image.digest=${digest.slice(1)}`,
     ],
   );
   assert.deepEqual(
-    openShellChartImageValues(
-      "supervisor.image",
-      `localhost/example/supervisor${digest}`,
-      "0.1.0-pre.5",
-    ),
+    openShellChartImageValues("supervisor.image", `localhost/example/supervisor${digest}`),
     [
-      "--set-string=supervisor.image.repository=localhost/example/supervisor",
-      `--set-string=supervisor.image.tag=0.1.0-pre.5${digest}`,
+      "--set-string=supervisor.image.registry=localhost",
+      "--set-string=supervisor.image.repository=example/supervisor",
+      `--set-string=supervisor.image.digest=${digest.slice(1)}`,
     ],
   );
   assert.deepEqual(
-    openShellChartImageValues(
-      "sandboxRuntime.image",
-      `localhost/example/sandbox${digest}`,
-      "0.1.0-pre.5",
-    ),
+    openShellChartImageValues("sandboxRuntime.image", `localhost:5000/example/sandbox${digest}`),
     [
-      "--set-string=sandboxRuntime.image.repository=localhost/example/sandbox",
-      `--set-string=sandboxRuntime.image.tag=0.1.0-pre.5${digest}`,
+      "--set-string=sandboxRuntime.image.registry=localhost:5000",
+      "--set-string=sandboxRuntime.image.repository=example/sandbox",
+      `--set-string=sandboxRuntime.image.digest=${digest.slice(1)}`,
     ],
   );
   assert.throws(
-    () => openShellChartImageValues("image", "localhost/example/gateway:local", "0.1.0-pre.5"),
+    () => openShellChartImageValues("gateway.image", "localhost/example/gateway:local"),
     /immutable OpenShell image digest/,
   );
 });
@@ -108,6 +105,90 @@ test("OpenShell host probes retain the exposed hostname while connecting to loop
   assert.equal(response.statusCode, 200);
   assert.equal(Buffer.concat(body).toString("utf8"), "routed");
   assert.equal(observedHost, `${serviceHostname}:${address.port}`);
+});
+
+test("OpenShell fixture networking admits the supervisor callback without granting tenant Pods", () => {
+  const configuration = createOpenShellInstallationConfiguration({
+    authentication: {},
+    platformNamespace: "openclaw-system",
+    gatewayImage: "gateway-fixture",
+    codexImage: "codex-fixture",
+    cluster: { name: "fixture" },
+  });
+  const networkPolicyResources =
+    configuration.drivers.sandbox.configuration.gateway.networkPolicyResources;
+  // Compute owns Harness DNS; the supervisor's egress comes from OpenShell's own policy.
+  assert.deepEqual(networkPolicyResources, []);
+  const apiPeers = [{ ipBlock: { cidr: "192.0.2.10/32" } }];
+  const policies = [
+    ...openShellGatewayNetworkPolicies("tenant-fixture", apiPeers).items,
+    ...networkPolicyResources,
+  ];
+  for (const policy of policies) {
+    assert.notDeepEqual(policy.spec.podSelector, {}, `${policy.metadata.name} selects every Pod`);
+  }
+  const matches = (selector, labels) =>
+    selector.matchLabels !== undefined &&
+    Object.entries(selector.matchLabels).every(([key, value]) => labels[key] === value);
+  // OpenShell v0.1.0 supervisor Pod labels (sandbox_runtime.rs; internal/occdev/kubernetes.go).
+  const supervisor = {
+    "openshell.ai/managed-by": "openshell",
+    "openshell.ai/boundary-role": "supervisor",
+  };
+  const callbacks = policies.filter((policy) => matches(policy.spec.podSelector, supervisor));
+  assert.equal(callbacks.length, 1);
+  assert.equal(callbacks[0].metadata.name, "allow-openshell-sandbox-callback");
+  assert.deepEqual(callbacks[0].spec.policyTypes, ["Egress"]);
+  assert.deepEqual(callbacks[0].spec.egress[0].ports, [{ protocol: "TCP", port: 8080 }]);
+  const gatewayLabels = callbacks[0].spec.egress[0].to[0].podSelector.matchLabels;
+  const gatewayPolicies = policies.filter((policy) =>
+    matches(policy.spec.podSelector, gatewayLabels),
+  );
+  assert.equal(gatewayPolicies.length, 2);
+  const controlPlane = gatewayPolicies.find((policy) => policy.spec.egress !== undefined);
+  assert.deepEqual(
+    controlPlane.spec.egress.map((rule) => rule.ports),
+    [
+      [
+        { protocol: "UDP", port: 53 },
+        { protocol: "TCP", port: 53 },
+      ],
+      [{ protocol: "TCP", port: 443 }],
+      [{ protocol: "TCP", port: 6443 }],
+    ],
+  );
+  assert.deepEqual(controlPlane.spec.egress[1].to, apiPeers);
+  assert.deepEqual(controlPlane.spec.egress[2].to, apiPeers);
+  const callbackIngress = gatewayPolicies.find((policy) => policy.spec.ingress !== undefined);
+  assert.equal(callbackIngress.metadata.name, "allow-openshell-gateway-callback");
+  assert.deepEqual(callbackIngress.spec.ingress[0].ports, [
+    { protocol: "TCP", port: 8080 },
+    { protocol: "TCP", port: 8081 },
+  ]);
+  const callers = callbackIngress.spec.ingress[0].from;
+  assert.equal(callers.length, 1);
+  assert.equal(callers[0].namespaceSelector, undefined);
+  assert.equal(matches(callers[0].podSelector, supervisor), true);
+
+  // The Harness workload (any profile) is not the gateway caller, and no additive fixture policy
+  // may select an openclaw Pod, classified or not.
+  for (const profile of [
+    undefined,
+    "",
+    "unknown-profile",
+    "broad-egress-v1",
+    "provider-fenced-v1",
+  ]) {
+    const agent = {
+      "openclaw.dev/workload-role": "agent",
+      ...(profile === undefined ? {} : { "openclaw.dev/network-profile": profile }),
+    };
+    assert.equal(matches(callers[0].podSelector, agent), false);
+    assert.equal(
+      policies.some((policy) => matches(policy.spec.podSelector, agent)),
+      false,
+    );
+  }
 });
 
 test("prepareOpenShellClusterBootstrap selects pinned K3s and kubectl with runc", async (t) => {

@@ -32,11 +32,11 @@ They do not establish support for a dedicated OpenClaw remote worker.
 Before creating a dedicated Agent, configure the service-key Secret and proxy
 trust below. Embedded Harnesses also support direct access.
 
-The runtime Dockerfile's default `2026.9.1` packages do not include this stack.
-Updating the controller alone removes dedicated Gateway workspace mounts without
-supplying the replacement runtime path. Use matching images before deploying
-this change; source merges alone do not update installed images. Native node
-enrollment through Envoy and a complete Enterprise task remain unverified.
+Build the matching Gateway and Harness images from the repository's pinned
+runtime sources; see the [runtime image procedure](../../../deploy/runtime/README.md).
+Updating the controller alone does not update installed images. Verify native
+node enrollment, workspace access, and a real model turn with your selected
+images before accepting the deployment.
 
 ## Agent workspace files
 
@@ -120,6 +120,10 @@ Helm does not rewrite the Installation Secret. The
 defines the naming rule. It does not require an existing Agent gateway.
 If you override `gatewayRouting.envoyHttpsTargetPort` (default `10443`),
 set the same value in Helm and the Installation Compute configuration.
+If the external load balancer exposes HTTPS on a port other than `443`, set
+`gatewayRouting.endpointPort` in the Installation Compute configuration and
+forward that port to the Gateway HTTPS listener. Helm does not create this
+external port mapping.
 
 To use an existing issuer instead of creating a CA, set
 `gatewayRouting.issuerRef.name`, with `kind` (default `ClusterIssuer`) and

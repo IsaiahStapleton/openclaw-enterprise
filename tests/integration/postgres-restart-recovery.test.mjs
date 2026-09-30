@@ -67,7 +67,7 @@ async function createResources(pool, agentCount = 1) {
       );
       await client.query(
         `INSERT INTO occ.agents
-           (id, namespace_id, name, configuration_id, provider_id, execution_mode, service_principal_id,
+           (id, namespace_id, name, configuration_id, backend_id, execution_mode, service_principal_id,
             harness_auth, created_at)
          VALUES ($1, $2, $3, $4, NULL, 'embedded', $5, $6::jsonb, clock_timestamp())`,
         [
@@ -486,15 +486,18 @@ test(
   requiresPostgres,
   async (context) => {
     const { pool, queue } = await dependencies(context, { maxAttempts: 2 });
-    const { namespaceId, agents } = await createResources(pool, 2);
-    const staleRevisionId = await createQueueRevision(pool, namespaceId, agents[0]);
-    const exhaustedRevisionId = await createQueueRevision(pool, namespaceId, agents[1]);
+    const { namespaceId: revisionNamespaceId, agents } = await createResources(pool, 2);
+    const namespaceId = await createNamespace(pool, "provisioning");
+    const staleRevisionId = await createQueueRevision(pool, revisionNamespaceId, agents[0]);
+    const exhaustedRevisionId = await createQueueRevision(pool, revisionNamespaceId, agents[1]);
     const prefix = `queue-current-recovery:${randomUUID()}`;
     const staleRevisionKey = `${prefix}:stale-revision`;
     const exhaustedRevisionKey = `${prefix}:exhausted-revision`;
     const namespaceKey = `${prefix}:namespace`;
 
-    await queue.enqueue(revisionWork(namespaceId, staleRevisionKey, agents[0], staleRevisionId));
+    await queue.enqueue(
+      revisionWork(revisionNamespaceId, staleRevisionKey, agents[0], staleRevisionId),
+    );
     const staleRevision = await queue.claim();
     assert.equal(staleRevision.idempotencyKey, staleRevisionKey);
 
@@ -502,7 +505,13 @@ test(
     const staleNamespace = await queue.claim();
     assert.equal(staleNamespace.idempotencyKey, namespaceKey);
     await queue.enqueue(
-      revisionWork(namespaceId, exhaustedRevisionKey, agents[1], exhaustedRevisionId, new Date(2)),
+      revisionWork(
+        revisionNamespaceId,
+        exhaustedRevisionKey,
+        agents[1],
+        exhaustedRevisionId,
+        new Date(2),
+      ),
     );
 
     await pool.query(
@@ -524,6 +533,19 @@ test(
     assert.ok(recovery.requeued >= 2, "the exact stale revision and Namespace must be requeued");
     assert.ok(recovery.failedPermanent >= 1, "the exact exhausted revision must fail permanently");
     assert.ok(recovery.exhaustedQueued >= 1, "the exact exhausted revision must be counted");
+
+    // Retryable provisioning remains pending; exhausted Agent work must not
+    // change its already-ready tenant's lifecycle status.
+    assert.equal(
+      (await pool.query("SELECT status FROM occ.namespaces WHERE id = $1", [namespaceId])).rows[0]
+        .status,
+      "provisioning",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM occ.namespaces WHERE id = $1", [revisionNamespaceId]))
+        .rows[0].status,
+      "ready",
+    );
 
     const recovered = await pool.query(
       `SELECT idempotency_key, state, attempt_count, claim_token
@@ -576,6 +598,150 @@ test(
     await queue.complete(recoveredNamespace);
   },
 );
+
+for (const source of ["claimed", "queued"]) {
+  test(
+    `exhausted ${source} recovery fails provisioning Namespaces atomically with work and audit`,
+    requiresPostgres,
+    async (context) => {
+      const { pool, queue, PostgresWorkQueue, WorkClaimLostError } = await dependencies(context, {
+        maxAttempts: 1,
+      });
+      const namespaceId = await createNamespace(pool, "provisioning");
+      const idempotencyKey = `queue-exhausted-${source}:${randomUUID()}`;
+      await queue.enqueue(namespaceWork(namespaceId, idempotencyKey));
+      const claim = await claimExpected(queue, idempotencyKey);
+
+      // A crashed final attempt leaves an expired claim. Queued exhaustion can
+      // also occur when a restarted worker lowers its configured attempt budget.
+      if (source === "claimed") {
+        await pool.query(
+          `UPDATE occ.controller_work
+           SET lease_expires_at = clock_timestamp() - interval '1 second'
+           WHERE idempotency_key = $1`,
+          [idempotencyKey],
+        );
+      } else {
+        const previousQueue = new PostgresWorkQueue(pool, { maxAttempts: 2, random: () => 0 });
+        await previousQueue.retry(claim, { code: "DEPENDENCY_UNAVAILABLE" });
+      }
+
+      const reasonCode = source === "claimed" ? "LEASE_EXPIRED" : "MAX_ATTEMPTS_EXHAUSTED";
+      const snapshot = async (client) => {
+        const result = await client.query(
+          `SELECT namespace.status, work.state, work.claim_token, work.lease_expires_at,
+                  work.completed_at,
+                  (SELECT count(*)::integer FROM occ.audit_events
+                   WHERE resource_id = $2 AND details->>'reasonCode' = $3) AS evidence
+           FROM occ.controller_work AS work
+           JOIN occ.namespaces AS namespace ON namespace.id = work.namespace_id
+           WHERE work.idempotency_key = $1`,
+          [idempotencyKey, namespaceId, reasonCode],
+        );
+        return result.rows[0];
+      };
+      const before = await snapshot(pool);
+      const expected = {
+        status: "failed",
+        state: "failed_permanent",
+        claim_token: null,
+        lease_expires_at: null,
+        evidence: 1,
+      };
+
+      // Block Namespace publication to force a real server-side statement
+      // failure. Standalone recovery must not commit work or audit first.
+      const blocker = await pool.connect();
+      const recoveryClient = await pool.connect();
+      try {
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT id FROM occ.namespaces WHERE id = $1 FOR UPDATE", [
+          namespaceId,
+        ]);
+        await recoveryClient.query("SET lock_timeout = '100ms'");
+        await assert.rejects(
+          new PostgresWorkQueue(recoveryClient, { maxAttempts: 1 }).recoverStale(),
+          { code: "55P03" },
+        );
+        assert.deepEqual(await snapshot(pool), before);
+      } finally {
+        await blocker.query("ROLLBACK");
+        blocker.release();
+        await recoveryClient.query("RESET lock_timeout");
+        recoveryClient.release();
+      }
+
+      // Recovery must participate in its caller's transaction: neither the
+      // terminal work nor the Namespace failure may survive a rollback alone.
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await new PostgresWorkQueue(client, { maxAttempts: 1 }).recoverStale();
+        const { completed_at, ...recovered } = await snapshot(client);
+        assert.ok(completed_at instanceof Date);
+        assert.deepEqual(recovered, expected);
+      } finally {
+        await client.query("ROLLBACK");
+        client.release();
+      }
+      assert.deepEqual(await snapshot(pool), before);
+
+      // A standalone pool call must publish all three effects together as well.
+      await queue.recoverStale();
+      const { completed_at, ...recovered } = await snapshot(pool);
+      assert.ok(completed_at instanceof Date);
+      assert.deepEqual(recovered, expected);
+      await assert.rejects(queue.complete(claim), WorkClaimLostError);
+      await queue.recoverStale();
+      assert.deepEqual(await snapshot(pool), { ...expected, completed_at });
+    },
+  );
+
+  test(
+    `exhausted ${source} recovery preserves ready and deleting Namespaces`,
+    requiresPostgres,
+    async (context) => {
+      const { pool, queue, PostgresWorkQueue } = await dependencies(context, { maxAttempts: 1 });
+      for (const [status, target, tombstone] of [
+        ["ready", "ready", false],
+        ["deleting", "ready", false],
+        ["deleting", "deleted", false],
+        ["deleting", "deleted", true],
+      ]) {
+        const namespaceId = await createNamespace(pool, status);
+        const key = `queue-exhausted-guard:${randomUUID()}`;
+        await queue.enqueue(namespaceWork(namespaceId, key, new Date(0), target));
+        const claim = await claimExpected(queue, key);
+        if (tombstone) {
+          // Teardown may already have published its tombstone before recovery.
+          await pool.query(
+            "UPDATE occ.namespaces SET deleted_at = clock_timestamp() WHERE id = $1",
+            [namespaceId],
+          );
+        }
+        if (source === "claimed") {
+          await pool.query(
+            `UPDATE occ.controller_work SET lease_expires_at = clock_timestamp() - interval '1 second'
+             WHERE idempotency_key = $1`,
+            [key],
+          );
+        } else {
+          await new PostgresWorkQueue(pool, { maxAttempts: 2, random: () => 0 }).retry(claim, {
+            code: "DEPENDENCY_UNAVAILABLE",
+          });
+        }
+        await queue.recoverStale();
+        const result = await pool.query(
+          `SELECT namespace.status, namespace.deleted_at IS NOT NULL AS tombstone, work.state
+           FROM occ.namespaces AS namespace JOIN occ.controller_work AS work ON work.namespace_id = namespace.id
+           WHERE work.idempotency_key = $1`,
+          [key],
+        );
+        assert.deepEqual(result.rows, [{ status, tombstone, state: "failed_permanent" }]);
+      }
+    },
+  );
+}
 
 test(
   "transaction-scoped queue fencing rolls back Namespace mutation, completion, and audit together",
@@ -839,9 +1005,9 @@ test(
   },
 );
 
-function repositoryCleanupKey(revisionId, sourceKey, purpose = "sessions") {
+function repositoryCleanupKey(revisionId, _sourceKey, purpose = "sessions") {
   const purposeKey = purpose === "terminal-runtime" ? "retire:" : "";
-  return `agent_revision:${revisionId}:repository_cleanup:${purposeKey}${createHash("sha256").update(sourceKey, "utf8").digest("hex")}`;
+  return `agent_revision:${revisionId}:repository_cleanup:${purposeKey}${createHash("sha256").update(revisionId, "utf8").digest("hex")}`;
 }
 
 async function createRepositoryRevision(
@@ -855,7 +1021,7 @@ async function createRepositoryRevision(
   const bindings = phases.map((_, index) => ({
     repositoryRef: `repository-${index}`,
     profile: "read",
-    providerId: "queue-provider",
+    backendId: "queue-provider",
     grant: {
       providerInstanceId: "queue-provider-instance",
       repositoryId: `repository-${index}`,
@@ -966,6 +1132,134 @@ async function completeCleanupWork(queue, revisionId, sourceKey, purpose = "sess
   );
 }
 
+test(
+  "repeated and concurrent cleanup registration coalesces by revision and purpose",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue, WorkClaimLostError } = await dependencies(context);
+    const { namespaceId, agents } = await createResources(pool, 2);
+    const owner = await createRepositoryRevision(pool, namespaceId, agents[0], ["invalidated"]);
+    const sibling = await createRepositoryRevision(pool, namespaceId, agents[1], ["invalidated"]);
+    let firstCleanup;
+
+    for (let index = 0; index < 8; index += 1) {
+      const sourceKey = `agent:${agents[0]}:reconcile:stopped:${randomUUID()}`;
+      await queue.enqueue({
+        idempotencyKey: sourceKey,
+        namespaceId,
+        agentId: agents[0],
+        agentTarget: "stopped",
+        actorId: `principal-source-${index}`,
+        availableAt: new Date(0),
+      });
+      const source = await claimExpected(queue, sourceKey);
+      await assert.rejects(queue.enqueueRepositoryCleanup(source, sibling));
+      await assert.rejects(
+        queue.enqueueRepositoryCleanup({ ...source, claimToken: randomUUID() }, owner),
+        WorkClaimLostError,
+      );
+      // Concurrent registrations must retain the same claim and never multiply
+      // the unknown provider obligation, even across different source actors.
+      const registered = await Promise.all(
+        Array.from({ length: 4 }, () => queue.enqueueRepositoryCleanup(source, owner)),
+      );
+      firstCleanup ??= registered[0];
+      assert.ok(registered.every((work) => work.idempotencyKey === firstCleanup.idempotencyKey));
+      assert.equal(registered[0].actorId, "principal-source-0");
+      await queue.complete(source);
+    }
+    const rows = await pool.query(
+      `SELECT idempotency_key, state, actor_id FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [owner.revisionId, `agent_revision:${owner.revisionId}:repository_cleanup:%`],
+    );
+    assert.deepEqual(rows.rows, [
+      {
+        idempotency_key: firstCleanup.idempotencyKey,
+        state: "queued",
+        actor_id: "principal-source-0",
+      },
+    ]);
+    assert.equal((await readRepositoryAttempts(pool, owner.revisionId))[0].phase, "invalidated");
+    assert.equal((await readRepositoryAttempts(pool, sibling.revisionId))[0].phase, "invalidated");
+
+    // Retry preserves the same durable obligation and claim ownership.
+    const cleanup = await claimExpected(queue, firstCleanup.idempotencyKey);
+    await assert.rejects(queue.fail(cleanup, { code: "CANNOT_ABANDON" }));
+    await queue.defer(cleanup, { code: "REPOSITORY_CLEANUP_PENDING" });
+    await assert.rejects(queue.complete(cleanup), WorkClaimLostError);
+    assert.equal((await readQueueRow(pool, firstCleanup.idempotencyKey)).state, "queued");
+    // Retain the unresolved fixture while keeping it out of other test scheduling.
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [firstCleanup.idempotencyKey],
+    );
+  },
+);
+
+test(
+  "batch recovery coalesces multiple failed Agent stops without losing audit attribution",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context, { maxAttempts: 1 });
+    const { namespaceId, agents } = await createResources(pool, 2);
+    const owner = await createRepositoryRevision(pool, namespaceId, agents[0], [
+      "open",
+      "invalidated",
+    ]);
+    const sibling = await createRepositoryRevision(pool, namespaceId, agents[1], ["open"]);
+    const siblingBefore = await readRepositoryAttempts(pool, sibling.revisionId);
+    await pool.query("UPDATE occ.agents SET desired_runtime_state = 'stopped' WHERE id = $1", [
+      agents[0],
+    ]);
+    const keys = [];
+    for (const actorId of ["principal-stop-a", "principal-stop-b"]) {
+      const key = `agent:${agents[0]}:reconcile:stopped:${randomUUID()}`;
+      keys.push(key);
+      await queue.enqueue({
+        idempotencyKey: key,
+        namespaceId,
+        agentId: agents[0],
+        agentTarget: "stopped",
+        actorId,
+      });
+    }
+    // Two distinct stop requests exhaust in one recovery statement.
+    await pool.query(
+      "UPDATE occ.controller_work SET attempt_count = 1 WHERE idempotency_key = ANY($1::text[])",
+      [keys],
+    );
+    const recovered = await queue.recoverStale();
+    assert.equal(recovered.exhaustedQueued, 2);
+    const cleanup = await pool.query(
+      `SELECT idempotency_key, state, actor_id FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [owner.revisionId, `agent_revision:${owner.revisionId}:repository_cleanup:%`],
+    );
+    assert.equal(cleanup.rowCount, 1);
+    assert.equal(cleanup.rows[0].state, "queued");
+    assert.ok(["principal-stop-a", "principal-stop-b"].includes(cleanup.rows[0].actor_id));
+    assert.deepEqual(
+      (await readRepositoryAttempts(pool, owner.revisionId)).map(({ phase }) => phase),
+      ["closing", "invalidated"],
+    );
+    assert.deepEqual(await readRepositoryAttempts(pool, sibling.revisionId), siblingBefore);
+    const evidence = await pool.query(
+      `SELECT actor_id FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' = 'MAX_ATTEMPTS_EXHAUSTED'`,
+      [agents[0]],
+    );
+    assert.deepEqual(evidence.rows.map(({ actor_id }) => actor_id).sort(), [
+      "principal-stop-a",
+      "principal-stop-b",
+    ]);
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [cleanup.rows[0].idempotency_key],
+    );
+  },
+);
+
 for (const transition of ["fail", "retry", "expired claim", "exhausted queued"]) {
   for (const sessionState of ["mixed", "settled", "unstarted"]) {
     test(
@@ -1053,7 +1347,7 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
         );
         const digest = await pool.query(
           "SELECT encode(sha256(convert_to($1, 'UTF8')), 'hex') AS hash",
-          [sourceKey],
+          [owner.revisionId],
         );
         assert.equal(
           cleanupKey,
@@ -1116,12 +1410,13 @@ test(
 );
 
 test(
-  "cleanup transfer rollback and a conflicting cleanup actor preserve the source claim",
+  "cleanup transfer rollback and a conflicting cleanup owner preserve the source claim",
   requiresPostgres,
   async (context) => {
     const { pool, queue, PostgresWorkQueue } = await dependencies(context);
-    const { namespaceId, agents } = await createResources(pool);
+    const { namespaceId, agents } = await createResources(pool, 2);
     const owner = await createRepositoryRevision(pool, namespaceId, agents[0]);
+    const sibling = await createRepositoryRevision(pool, namespaceId, agents[1]);
     const sourceKey = `queue-cleanup-rollback:${randomUUID()}`;
     await queue.enqueue(revisionWork(namespaceId, sourceKey, agents[0], owner.revisionId));
     const claim = await claimExpected(queue, sourceKey);
@@ -1147,7 +1442,7 @@ test(
     const cleanupKey = repositoryCleanupKey(owner.revisionId, sourceKey, "terminal-runtime");
     assert.equal(await readQueueRow(pool, cleanupKey), undefined);
     await insertRawQueueWork(pool, {
-      ...revisionWork(namespaceId, cleanupKey, agents[0], owner.revisionId),
+      ...revisionWork(namespaceId, cleanupKey, agents[1], sibling.revisionId),
       actorId: "principal-conflicting-cleanup",
     });
     await assert.rejects(queue.fail(claim, { code: "COLLIDING_CLEANUP" }));
@@ -1391,10 +1686,8 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
         );
         await assert.rejects(queue.enqueueRepositoryCleanup(claim, sibling));
         await assert.rejects(queue.enqueueRepositoryCleanup(claim, later));
-        assert.equal(
-          await queue.completeAgentDeletion(claim, namespaceId, agents[0]),
-          "cleanup-pending",
-        );
+        // Teardown fails before finalization; unresolved sessions no longer
+        // prevent successful finalization from deleting this Agent.
         if (transition === "expired claim") {
           await pool.query(
             "UPDATE occ.controller_work SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE idempotency_key = $1",
@@ -1434,6 +1727,80 @@ for (const transition of ["fail", "retry", "expired claim", "exhausted queued"])
     },
   );
 }
+
+test(
+  "deleted Agent repository cleanup audit retains the exact revision target",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context);
+    const { namespaceId, agents } = await createResources(pool);
+    const owner = await createRepositoryRevision(pool, namespaceId, agents[0], ["closing"]);
+    const sourceKey = `agent-delete-cleanup-audit:${randomUUID()}`;
+    const actorId = `principal-deletion-audit-${randomUUID()}`;
+    await queue.enqueue({
+      namespaceId,
+      agentId: agents[0],
+      agentTarget: "deleted",
+      idempotencyKey: sourceKey,
+      actorId,
+      availableAt: new Date(0),
+    });
+    await pool.query(
+      "UPDATE occ.agents SET desired_runtime_state = 'stopped', status = 'deleting' WHERE id = $1",
+      [agents[0]],
+    );
+    const deletion = await claimExpected(queue, sourceKey);
+    const registered = await queue.enqueueRepositoryCleanup(deletion, owner);
+    assert.ok(registered);
+    assert.equal(registered.agentId, agents[0]);
+    assert.equal(registered.revisionId, owner.revisionId);
+
+    assert.equal(await queue.completeAgentDeletion(deletion, namespaceId, agents[0]), "completed");
+    const removedOwner = await pool.query(
+      `SELECT
+         EXISTS (SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2) AS agent_exists,
+         EXISTS (SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $3) AS revision_exists`,
+      [namespaceId, agents[0], owner.revisionId],
+    );
+    assert.deepEqual(removedOwner.rows[0], { agent_exists: false, revision_exists: false });
+
+    const detached = await pool.query(
+      `SELECT agent_id, revision_id
+       FROM occ.controller_work
+       WHERE idempotency_key = $1`,
+      [registered.idempotencyKey],
+    );
+    assert.deepEqual(detached.rows, [{ agent_id: null, revision_id: null }]);
+
+    const cleanup = await claimExpected(queue, registered.idempotencyKey);
+    assert.equal(cleanup.agentId, undefined);
+    assert.equal(cleanup.revisionId, undefined);
+    await queue.defer(cleanup, { code: "REPOSITORY_CLEANUP_PENDING" });
+    const evidence = await pool.query(
+      `SELECT namespace_id, resource_kind, resource_id, actor_id, outcome,
+              details->>'reasonCode' AS reason
+       FROM occ.audit_events
+       WHERE actor_id = $1
+         AND action = 'reconcile'
+         AND details->>'reasonCode' = 'REPOSITORY_CLEANUP_PENDING'`,
+      [actorId],
+    );
+    assert.deepEqual(evidence.rows, [
+      {
+        namespace_id: namespaceId,
+        resource_kind: "agent_revision",
+        resource_id: owner.revisionId,
+        actor_id: actorId,
+        outcome: "success",
+        reason: "REPOSITORY_CLEANUP_PENDING",
+      },
+    ]);
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [registered.idempotencyKey],
+    );
+  },
+);
 
 for (const desiredState of ["stopped", "running"]) {
   test(

@@ -12,6 +12,7 @@ export function bindPlatformUnitOfWork(
       "findInstallation",
       "getInstallation",
       "createInstallation",
+      "holdPrincipalAccount",
     ]),
     namespaces: bindRepository(repositories.namespaces, lifetime, [
       "findNamespace",
@@ -23,6 +24,7 @@ export function bindPlatformUnitOfWork(
       "hasPresets",
       "hasServiceAccounts",
       "hasSecrets",
+      "hasCredentialSources",
       "transitionNamespaceStatus",
       "markNamespaceDeleted",
     ]),
@@ -49,10 +51,20 @@ export function bindPlatformUnitOfWork(
       "deleteSecret",
       "hasReferences",
     ]),
+    credentialSources: bindRepository(repositories.credentialSources, lifetime, [
+      "findCredentialSource",
+      "listCredentialSources",
+      "lockCredentialSource",
+      "createCredentialSource",
+      "markCredentialSourceDeleting",
+      "markCredentialSourceReady",
+      "deleteCredentialSource",
+      "hasReferences",
+    ]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [
       "findServiceAccount",
       "listServiceAccounts",
-      "findServiceAccountProviderBinding",
+      "findServiceAccountBackendBinding",
       "createServiceAccount",
       "lockServiceAccount",
       "updateCredential",
@@ -66,6 +78,8 @@ export function bindPlatformUnitOfWork(
       "delete",
     ]),
     agents: bindRepository(repositories.agents, lifetime, [
+      "findAgentForBrowsing",
+      "listAgentsForBrowsing",
       "findAgent",
       "listAgents",
       "createAgent",
@@ -77,6 +91,8 @@ export function bindPlatformUnitOfWork(
       "transitionAgentStatus",
     ]),
     revisions: bindRepository(repositories.revisions, lifetime, [
+      "findRevisionForBrowsing",
+      "listRevisionsForBrowsing",
       "findRevision",
       "listRevisions",
       "createRevision",
@@ -93,10 +109,15 @@ export function bindPlatformUnitOfWork(
     ]),
     repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
       "findAttempt",
+      "findBrokerReceipt",
+      "findBrokerReceiptBySession",
       "listRevisionAttempts",
       "listNamespaceAttempts",
       "createAttempt",
       "advanceAttempt",
+      "lockAttempt",
+      "createBrokerReceipt",
+      "advanceBrokerReceipt",
     ]),
     provisioning: bindRepository(repositories.provisioning, lifetime, [
       "findByWorkId",
@@ -114,6 +135,13 @@ export function bindPlatformUnitOfWork(
       "retryByWorkId",
     ]),
     audit: bindRepository(repositories.audit, lifetime, ["append", "list"]),
-    operations: bindRepository(repositories.operations, lifetime, ["append", "list", "findWork"]),
+    operations: bindRepository(repositories.operations, lifetime, [
+      "append",
+      "list",
+      "findWork",
+      "findWorkAttempt",
+      "retryFailedAgentDeletion",
+      "retryFailedNamespaceDeletion",
+    ]),
   });
 }

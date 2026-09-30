@@ -13,21 +13,34 @@ import {
 import {
   createPostgresPool,
   OpenClawController,
+  PostgresHumanAuthentication,
   PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { createPostgresControllerAuth } from "../auth/index.ts";
+import {
+  betterAuthIssuer,
+  createPostgresControllerAuth,
+  type GitHubLoginConfiguration,
+  type GoogleSignInConfiguration,
+  type PreparedAuthAccount,
+} from "../auth/index.ts";
 import { createDockerDevelopmentComputeDriverFromEnv } from "../drivers/compute/docker/index.ts";
 import { createFilesystemDevelopmentConfigurationDriverFromEnv } from "../drivers/configuration/filesystem/index.ts";
 import { createFastifyApp } from "../index.ts";
+import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
   InstallationRuntimeDrivers,
   ServiceAccountDriverFactory,
 } from "./installation-config.ts";
 import {
   initializeInstallationPresets,
-  providerSummariesFromDefinitions,
+  backendSummariesFromDefinitions,
 } from "./installation-config.ts";
-import type { LoggingConfiguration, OccLogger } from "../logging.ts";
+import {
+  emitOccLogEvent,
+  skippedUserLogFields,
+  type LoggingConfiguration,
+  type OccLogger,
+} from "../logging.ts";
 import { resolveApprovedHarness } from "./production-harness.ts";
 import type { ControllerWorkspaceFilesAccess } from "../gateway/contracts.ts";
 import type { NativeAdminAccessConfig } from "../gateway/native-admin.ts";
@@ -44,9 +57,12 @@ export interface PostgresDevelopmentConfig {
   readonly databaseUrl: string;
   readonly authSecret: string;
   readonly authBaseURL: string;
+  readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
   readonly poolMax?: number;
   readonly logger?: OccLogger;
   readonly logging?: LoggingConfiguration;
+  readonly observabilityUrl?: string;
   readonly trustedDevelopmentBridgeCidr?: string;
   readonly trustedDevelopmentForwarderCidr?: string;
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
@@ -83,6 +99,13 @@ export async function composePostgresDevelopment(
     );
   }
 
+  if (config.github !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("GitHub sign-in does not support native administration.");
+  }
+  if (config.google !== undefined && config.nativeAdmin?.enabled === true) {
+    throw new Error("Google sign-in does not support native administration.");
+  }
+
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
   });
@@ -95,19 +118,10 @@ export async function composePostgresDevelopment(
       throw new Error("The platform Installation must be bootstrapped before development startup.");
     }
     const installationId = persistedInstallation.id;
-    const auth = await createPostgresControllerAuth({
-      mode: config.mode,
-      installationId,
-      secret: config.authSecret,
-      baseURL: config.authBaseURL,
-      pool,
-      secureCookies: config.nativeAdmin?.enabled === true,
-      ...(config.nativeAdmin?.enabled === true
-        ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
-        : {}),
-    });
+
     const computeDriver = options.computeDriver ?? createDevelopmentDockerComputeDriver();
     const sandboxDriver = drivers?.sandboxDriver;
+    const credentialGatewayDriver = drivers?.credentialGatewayDriver;
     const configurationDriver =
       options.configurationDriver ??
       ("installation" in options
@@ -120,6 +134,24 @@ export async function composePostgresDevelopment(
       drivers === undefined
         ? new NativeIAMDriver(state, { id: driverId, implementation: "native" })
         : drivers.createIAMDriver(state);
+    const auth = await createPostgresControllerAuth({
+      mode: config.mode,
+      installationId,
+      secret: config.authSecret,
+      baseURL: config.authBaseURL,
+      pool,
+      state,
+      iamDriver,
+      ...(config.github === undefined ? {} : { github: config.github }),
+      ...(config.google === undefined ? {} : { google: config.google }),
+      ...(config.logger === undefined
+        ? {}
+        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
+      secureCookies: config.nativeAdmin?.enabled === true,
+      ...(config.nativeAdmin?.enabled === true
+        ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
+        : {}),
+    });
 
     const bootstrapPrincipal = iamState.identities.find(
       (identity) => identity.kind === "principal",
@@ -134,10 +166,28 @@ export async function composePostgresDevelopment(
     if (!principal || principal.kind !== "principal" || principal.id !== bootstrapPrincipal.id) {
       throw new Error("The configured development Principal is absent from persisted IAM policy.");
     }
-    const provisionAuthAccount = async (seed: AuthPrincipalSeed, auditEvent: AuditEvent) => {
+    if (auth.activationSkipped !== undefined && config.logger !== undefined) {
+      emitOccLogEvent(config.logger, {
+        event: "authentication.activation-warning",
+        reason: "Accounts without a Principal or exactly one password were not enrolled.",
+        ...skippedUserLogFields(auth.activationSkipped),
+      });
+    }
+    const humanAuthentication = new PostgresHumanAuthentication(
+      state,
+      installationId,
+      betterAuthIssuer(installationId),
+    );
+    const provisionAuthAccount = async (
+      seed: AuthPrincipalSeed,
+      auditEvent: AuditEvent,
+      prepared: PreparedAuthAccount,
+      external?: { readonly providerId: string; readonly subject: string },
+    ) => {
       const current = await state.loadNativeIAMState(installationId);
       validateAuthAccountPrincipalSeed(seed, current, installationId);
-      await state.appendNativeIAMPrincipal(seed, auditEvent);
+      // The account, its Principal and bindings, and its enrolment commit together.
+      await humanAuthentication.provisionPasswordAccount(prepared, seed, auditEvent, external);
     };
 
     const loggingLevel = config.logging?.level ?? drivers?.installation.logging.level;
@@ -146,50 +196,45 @@ export async function composePostgresDevelopment(
       recordOperations: true,
       defaultPresets: drivers?.defaultPresets ?? [],
       ...(loggingLevel === undefined ? {} : { loggingLevel }),
-      ...(drivers === undefined ? {} : { providers: drivers.installation.provider }),
+      ...(drivers === undefined ? {} : { backends: drivers.installation.backend }),
+      ...(drivers?.installation.runtime === undefined
+        ? {}
+        : { nativeWorkerSupport: drivers.installation.runtime.nativeWorkerSupport }),
     });
     controller.registerDriver(iamDriver);
-    const selected = controller.selectDriver("iam", driverId);
-    if (selected !== iamDriver || selected.capability !== "iam" || selected.id !== driverId) {
-      throw new Error("The server-owned IAM Driver was not selected correctly.");
-    }
+    controller.selectDriver("iam", driverId);
     controller.registerDriver(computeDriver);
     controller.selectDriver("compute", computeDriver.id);
+    const channelDriver = new SlackChannelDriver();
+    controller.registerDriver(channelDriver);
+    controller.selectDriver("channel", channelDriver.id);
     if (sandboxDriver !== undefined) {
       controller.registerDriver(sandboxDriver);
-      if (controller.selectDriver("sandbox", sandboxDriver.id) !== sandboxDriver) {
-        throw new Error("The configured Sandbox Driver was not selected correctly.");
-      }
+      controller.selectDriver("sandbox", sandboxDriver.id);
+    }
+    if (credentialGatewayDriver !== undefined) {
+      controller.registerDriver(credentialGatewayDriver);
+      controller.selectDriver("credential_gateway", credentialGatewayDriver.id);
     }
     if (configurationDriver !== undefined) {
       controller.registerDriver(configurationDriver);
-      if (
-        controller.selectDriver("configuration", configurationDriver.id) !== configurationDriver
-      ) {
-        throw new Error("The selected Configuration Driver was not selected correctly.");
-      }
+      controller.selectDriver("configuration", configurationDriver.id);
     }
     if (drivers?.secretDriver !== undefined) {
       controller.registerDriver(drivers.secretDriver);
-      if (controller.selectDriver("secret", drivers.secretDriver.id) !== drivers.secretDriver) {
-        throw new Error("The selected Secret Driver was not selected correctly.");
-      }
+      controller.selectDriver("secret", drivers.secretDriver.id);
     }
     if (drivers?.pluginDriver !== undefined) {
       controller.registerDriver(drivers.pluginDriver);
-      if (controller.selectDriver("plugin", drivers.pluginDriver.id) !== drivers.pluginDriver) {
-        throw new Error("The configured Plugin Driver was not selected correctly.");
-      }
+      controller.selectDriver("plugin", drivers.pluginDriver.id);
     }
     if (drivers?.repoDriver !== undefined) {
       const driver = drivers.repoDriver;
       controller.registerDriver(driver);
-      if (controller.selectDriver("repo", driver.id) !== driver) {
-        throw new Error("The configured repository credential Driver was not selected correctly.");
-      }
+      controller.selectDriver("repo", driver.id);
     }
     serviceAccountDriverFactory?.(controller, state);
-    await controller.validateProviderConfiguration();
+    await controller.validateBackendConfiguration();
     await initializeInstallationPresets(
       controller,
       iamDriver,
@@ -207,6 +252,7 @@ export async function composePostgresDevelopment(
       throw new Error("Native admin UI access requires OCC_GATEWAY_API_KEY_PATH.");
     }
 
+    const observabilityUrl = config.observabilityUrl ?? drivers?.installation.observability?.url;
     const app = createFastifyApp({
       ...(config.metrics === undefined ? {} : { metrics: config.metrics }),
       controller,
@@ -223,7 +269,8 @@ export async function composePostgresDevelopment(
       auditSink: state.auditSink,
       ...(drivers === undefined
         ? {}
-        : { providerSummaries: providerSummariesFromDefinitions(drivers.installation.provider) }),
+        : { backendSummaries: backendSummariesFromDefinitions(drivers.installation.backend) }),
+      ...(observabilityUrl === undefined ? {} : { observabilityUrl }),
       auth,
       ...(config.logger === undefined ? {} : { logger: config.logger }),
       provisionAuthAccount,

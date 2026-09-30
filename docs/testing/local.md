@@ -9,6 +9,7 @@ With infrastructure selectors unset:
 
 ```sh
 pnpm check:workspace
+pnpm check:modules
 pnpm lint
 pnpm format:check
 pnpm typecheck
@@ -20,7 +21,9 @@ pnpm test:integration
 `check:workspace` checks the active workspace, including the
 [repository credential source boundary](repository-credentials.md#check-source-authority-boundaries).
 The test scripts above run the same canonical workspace verification before
-their selected Node.js tests. `openapi:check` compares generated routes and the
+their selected Node.js tests. The conformance suite includes the
+[repository dependency policy test](repository-boundaries.md); `check:modules`
+runs that policy explicitly. `openapi:check` compares generated routes and the
 OpenAPI contract, HTTP API reference, and API cheat sheet with the checked-in
 versions. `typecheck` and `build` currently invoke the same TypeScript build command.
 
@@ -127,6 +130,12 @@ bodyless operations through the compiled OCC CLI. See
 [PostgreSQL tests](postgresql.md#service-key-persistence) for database-backed
 verification.
 
+GitHub's opted-in profile requires real PostgreSQL; the memory-backed suites do
+not prove its account/method versions, one-use attempts, or atomic session/audit
+commit. Run the [GitHub PostgreSQL and browser proof](postgresql.md#github-human-sign-in)
+for that path. Keep provider discovery failure and callback-error recovery
+separate from successful provider authentication when reporting Console results.
+
 ## Packaged-driver integration
 
 `tests/integration/driver-plugin-installation.test.mjs` installs scoped,
@@ -146,12 +155,12 @@ OpenClaw gateway, or a Codex model turn.
 
 The [console](../reference/console.md) uses real controller routes in
 `tests/integration/console-api.test.mjs`, `tests/browser/console.test.mjs`, and
-`tests/browser/console-agents.test.mjs`. The shared browser fixture runs
+the `tests/browser/console-agent*.test.mjs` files. The shared browser fixture runs
 Fastify, Better Auth memory storage, Native IAM, and in-memory platform storage
 on an ephemeral loopback port. Configuration and Compute helpers are test-only.
 The Agent browser suite seeds active revision pointers only to render admitted
 history; that fixture does not prove runtime dispatch, worker leases, Compute
-Driver effects, PostgreSQL persistence, live Provider health, or deployed Agent
+Driver effects, PostgreSQL persistence, live Backend health, or deployed Agent
 runtime behavior.
 
 Native admin UI coverage in this suite should prove panel visibility, warning
@@ -184,6 +193,42 @@ retain screenshots at a chosen path; otherwise the suite uses a temporary
 directory. The existing
 [image smoke test](images.md#images-and-helm) also loads console assets from the built
 controller image; it does not claim a live production deployment.
+
+### Browser failure diagnostics
+
+When a browser test fails in the checks-baseline lane, CI uploads a
+`browser-failures-*` artifact, kept for three days. Each failed test gets a
+directory with a screenshot of every open page and `failure.json`. That file
+holds the error, page URLs, requests still pending at failure time, and recent
+navigation, console and network events. Tests that pass write nothing. Set
+`OPENCLAW_CI_BROWSER_FAILURE_DIR` to collect the same files locally, and add
+`OPENCLAW_CI_BROWSER_FAILURE_TRACE=1` for a Playwright trace (`trace.zip`; open
+it with `pnpm exec playwright show-trace`). CI does not trace: tracing slows the
+page enough to make timing-sensitive console tests fail more often.
+
+### Console navigation coverage
+
+`apps/controller/src/console/navigation.mjs` owns the route inventory. The shared
+loader previously cleared the shell and repeated session, Namespace, and resource
+reads on each return; only same-Agent tab changes avoided that path. Audit return
+behavior at this shared boundary whenever adding a page.
+
+| Route family             | Return and refresh checks                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| Agents collection        | Create/detail breadcrumbs, sidebar, repeated Back/Forward, retained search, empty results. |
+| Create Agent             | Preset and form drafts, password clearing, Cancel/Start over, pending saves.               |
+| Agent detail             | Each tab, draft/admitted revision, page return, exact-Agent denial, missing resource.      |
+| Namespaces               | Installation-wide rows, selection changes, access removal.                                 |
+| Backends                 | Direct hidden route, return through Settings, denied discovery.                            |
+| Settings                 | Account menu, Back destination, changed account identity.                                  |
+| Login and unknown routes | Direct load, safe return, logout, missing session, no restored private content.            |
+
+Delay real HTTP responses to check what remains visible before revalidation
+finishes. Include Refresh, focus/visibility restoration, direct first load,
+Namespace switches, `401`, authorization denial, dependency errors, late responses,
+and pagehide/pageshow. Existing draft-retention cases cover editor semantics;
+Storybook's delayed navigation stories provide simulated visual checks.
+A passing fixture does not establish production deployment or runtime behavior.
 
 ## Repository and tooling configuration
 
@@ -224,7 +269,7 @@ OpenAPI contract, [HTTP API reference](../reference/api.md), and
 the checked-in OpenAPI contract without loading controller dependencies, run
 `node scripts/generate-occ-api-reference.mjs --check`.
 
-See the [architecture guide](../ARCHITECTURE.md) for ownership and runtime
+See the [architecture guide](../design.md) for ownership and runtime
 boundaries, the [quickstart](../guides/quickstart.md) for the default local
 startup helper, and the [deployment guide](../guides/deploy.md) for production
 example files and Helm installation.
@@ -241,7 +286,7 @@ Preset case posts the shipped JSON through Fastify with native IAM, reads it
 from the Namespace catalog, renders variables, and creates a Configuration
 and dedicated Agent. It checks credential references, native policy retention,
 and rejection of a cross-Namespace model credential. The password workflow in
-`tests/browser/console-agents.test.mjs` exercises the real chooser, masked input,
+`tests/browser/console-agent-presets.test.mjs` exercises the real chooser, masked input,
 same-Namespace Secret creation, credential grant, and retry after a name conflict.
 The API suite also loads Installation YAML and checks default seeding, preserved
 customizations, and authorization rollback. The

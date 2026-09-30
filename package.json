@@ -25,9 +25,11 @@
     "start:controller:production": "NODE_ENV=production node apps/controller/src/server.mjs",
     "start:worker": "node apps/controller/src/worker.mjs",
     "start:worker:production": "NODE_ENV=production node apps/controller/src/worker.mjs",
+    "auth:maintain": "node scripts/auth-maintain.mjs",
     "db:bootstrap": "NODE_ENV=development node scripts/bootstrap-installation.mjs",
     "db:bootstrap:production": "NODE_ENV=production node scripts/bootstrap-installation.mjs",
     "db:migrate:production": "NODE_ENV=production node scripts/migrate-production.mjs",
+    "profiles:render": "node scripts/render-installation-profile.mjs",
     "db:up": "docker compose -f compose.postgres.yaml up -d --wait",
     "db:down": "docker compose -f compose.postgres.yaml down",
     "db:generate": "drizzle-kit generate",
@@ -59,7 +61,9 @@
     "format": "pnpm format:fix",
     "storybook:install": "pnpm --dir scripts/console-storybook install --frozen-lockfile",
     "storybook": "pnpm --dir scripts/console-storybook dev",
-    "storybook:build": "pnpm --dir scripts/console-storybook build"
+    "storybook:build": "pnpm --dir scripts/console-storybook build",
+    "analyze:modules": "node scripts/verify-module-boundaries.mjs",
+    "check:modules": "node scripts/verify-module-boundaries.mjs --policy scripts/module-boundaries/policy.json --exceptions scripts/module-boundaries/exceptions.json"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -67,13 +71,14 @@
     "@types/node": "26.5.0",
     "@types/pg": "8.23.1",
     "@typescript/native": "npm:typescript@7.0.2",
-    "drizzle-kit": "0.31.10",
-    "eslint": "10.10.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "10.11.0",
     "globals": "17.12.0",
     "pg": "8.23.0",
     "playwright": "1.63.0",
     "prettier": "3.9.6",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "typescript-eslint": "8.70.0"
+    "typescript-compiler-api": "npm:typescript@6.0.3",
+    "typescript-eslint": "8.70.1"
   }
 }

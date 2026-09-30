@@ -67,9 +67,14 @@ async function setup(context) {
     };
     state.setBootstrapNativeIAM(
       createDevelopmentIAMState(
-        createAuthPrincipalSeed(installation.id, "before-commit-worker-integration", {
-          id: `account-before-commit-${randomUUID()}`,
-        }),
+        createAuthPrincipalSeed(
+          installation.id,
+          "before-commit-worker-integration",
+          {
+            id: `account-before-commit-${randomUUID()}`,
+          },
+          { grant: "administrator" },
+        ),
       ),
     );
     await state.transact((unit) => unit.installations.createInstallation(installation));
@@ -151,7 +156,7 @@ async function setup(context) {
         namespaceId: namespace.id,
         name: `singleton-runtime-${randomUUID()}`,
         configurationId,
-        providerId: null,
+        backendId: null,
         harnessAuth,
         executionMode: "dedicated",
         servicePrincipalId: `service-agent-${id}`,
@@ -172,7 +177,7 @@ async function setup(context) {
       configurationId: owner.configurationId,
       configurationKind: "agent",
       configurationGeneration: 1,
-      providerId: null,
+      backendId: null,
       harness: { ...PRODUCTION_HARNESS_DESCRIPTOR, mode: "dedicated" },
       compute: { id: compute.id, implementation: compute.implementation },
       harnessAuth: { ...owner.harnessAuth, secretDriverId: secretDriver.id },

@@ -22,8 +22,9 @@ import type {
   Namespace,
   NamespaceDeleteResult,
   NamespaceEnsureResult,
-  ProviderDefinition,
+  BackendDefinition,
   SandboxDriver,
+  CredentialGatewayDriver,
   SecretBindings,
   SecretDriver,
   ResolvedHarnessAuth,
@@ -42,10 +43,13 @@ import {
   OpenClawController,
   WorkClaimLostError,
   isRepositoryCleanupWork,
+  repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
   provisioningEffectReceipt as provisioningEffectReceiptForRecord,
   provisioningPendingEffect,
   type ClaimedWork,
+  type NativeWorkerSupport,
+  type ProvisioningEffectReceipt,
   type PlatformUnitOfWork,
   type PostgresPool,
   type PostgresQueryClient,
@@ -53,9 +57,9 @@ import {
   validateRuntimeFailureEvidence,
 } from "@openclaw-enterprise/occ";
 import {
-  providerDefinitionMap,
-  validateProviderDefinitions,
-  validateServiceAccountProviderBinding,
+  backendDefinitionMap,
+  validateBackendDefinitions,
+  validateServiceAccountBackendBinding,
 } from "@openclaw-enterprise/occ";
 import type { InstallationRuntimeDrivers } from "./composition/installation-config.ts";
 import { resolveApprovedHarness } from "./composition/production-harness.ts";
@@ -73,6 +77,7 @@ export interface ControllerWorkerOptions {
   readonly drivers?: InstallationRuntimeDrivers;
   readonly computeDriver?: ComputeDriver;
   readonly sandboxDriver?: SandboxDriver;
+  readonly credentialGatewayDriver?: CredentialGatewayDriver;
   readonly pollIntervalMs?: number;
   readonly leaseDurationMs?: number;
   readonly maxAttempts?: number;
@@ -83,6 +88,11 @@ export interface ControllerWorkerOptions {
 
 type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
 type Outcome = "success" | "pending" | "retry" | "permanent";
+
+// A revision whose runtime is not ready yet is progress, not a failure. Recheck
+// it on a short fixed cadence so earlier transient failures on the same Work do
+// not stretch readiness waits through the queue's exponential retry backoff.
+const REVISION_READINESS_RECHECK_MS = 500;
 
 interface DispatchResult {
   readonly outcome: Outcome;
@@ -111,6 +121,11 @@ interface AgentDeletionDispatchResult extends DispatchResult {
   readonly namespace?: Readonly<Namespace>;
   readonly agent?: Readonly<Agent>;
   readonly revisions?: readonly Readonly<AgentRevision>[];
+  readonly delayMs?: number;
+  readonly abandonedProvisioningEffect?: {
+    readonly workId: string;
+    readonly receipt: ProvisioningEffectReceipt;
+  };
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -138,6 +153,19 @@ function workOperation(claim: ClaimedWork): string {
   }
   return "work.reconcile";
 }
+
+// Worker-local phase timing for one deployment work item. It spans the passes
+// this process observes; a restart or eviction starts a new record.
+interface DeployTiming {
+  passes: number;
+  passStartedAt: number;
+  prepareMs: number;
+  firstUnreadyAt: number | undefined;
+  readinessWaitMs: number | undefined;
+  readyAt: number | undefined;
+}
+
+const MAX_DEPLOY_TIMINGS = 256;
 
 function workLogFields(claim: ClaimedWork): {
   readonly workId: string;
@@ -194,7 +222,8 @@ function validSecretDriver(driver: SecretDriver): boolean {
     typeof driver.create === "function" &&
     typeof driver.update === "function" &&
     typeof driver.delete === "function" &&
-    typeof driver.resolve === "function"
+    typeof driver.resolve === "function" &&
+    (driver.withValue === undefined || typeof driver.withValue === "function")
   );
 }
 
@@ -352,6 +381,8 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
   return [...refs.values()];
 }
 
+const MAX_STOPPED_PREDECESSOR_RECORDS = 4_096;
+
 export class ControllerWorker {
   private readonly metrics: OccMetrics | undefined;
   private passOutcome: WorkOutcome = "error";
@@ -364,11 +395,13 @@ export class ControllerWorker {
   private readonly iam: IAMDriver;
   private readonly secretDriverId: string | undefined;
   private readonly configuredServiceAccountDriverId: string | undefined;
+  private readonly nativeWorkerSupport: NativeWorkerSupport | undefined;
   private readonly secretDriver: SecretDriver | undefined;
   private provisioningController: OpenClawController | undefined;
   private readonly sandbox: SandboxDriver | undefined;
-  private readonly providers: readonly ProviderDefinition[];
-  private readonly providerMap: ReadonlyMap<string, ProviderDefinition>;
+  private readonly credentialGateway: CredentialGatewayDriver | undefined;
+  private readonly backends: readonly BackendDefinition[];
+  private readonly backendMap: ReadonlyMap<string, BackendDefinition>;
   private readonly requireComputePreflight: boolean;
   private readonly pollIntervalMs: number;
   private readonly leaseDurationMs: number;
@@ -376,6 +409,7 @@ export class ControllerWorker {
   private readonly convergenceTimeoutMs: number;
   private readonly maintenanceIntervalMs: number | undefined;
   private readonly repoDriver: RepoDriver | undefined;
+  private readonly repositoryCleanupRetryMs: number;
   private readonly pluginDriver: PluginDriver | undefined;
   private readonly repositoryCredentials: RepositoryCredentialLifecycle;
   private readonly mode: "development" | "production";
@@ -387,6 +421,20 @@ export class ControllerWorker {
   private stopping = false;
   private lastHealthAt = 0;
   private pendingHealth: Promise<void> | undefined;
+  /**
+   * Predecessors this process stopped for an exclusive successor, by revision ID.
+   * The dispatch guard supersedes a predecessor's own work once an exclusive
+   * successor exists, so only a late effect from a lost claim (or an edit outside
+   * the worker) can recreate it. Compute reports such a predecessor as a
+   * not-ready successor rather than an error, so each record is stopped again
+   * after one lease, then after two, four and so on: a returned predecessor is
+   * always stopped again, at a cost that grows only logarithmically with time.
+   */
+  private readonly stoppedPredecessors = new Map<
+    string,
+    { readonly stoppedAt: number; readonly restopAfterMs: number }
+  >();
+  private readonly deployTimings = new Map<string, DeployTiming>();
 
   constructor(options: ControllerWorkerOptions) {
     this.metrics = options.metrics;
@@ -403,6 +451,7 @@ export class ControllerWorker {
     );
     const drivers = options.drivers;
     this.configuredServiceAccountDriverId = drivers?.installation.drivers.service_account?.id;
+    this.nativeWorkerSupport = drivers?.installation.runtime?.nativeWorkerSupport;
     if (this.mode === "production" && drivers === undefined) {
       throw new Error("Production controller workers require Installation startup configuration.");
     }
@@ -412,8 +461,8 @@ export class ControllerWorker {
     };
     this.state = new PostgresPlatformState(options.pool, { workQueue: this.queueOptions });
     this.queue = new PostgresWorkQueue(options.pool, this.queueOptions);
-    this.providers = validateProviderDefinitions(drivers?.installation.provider ?? []);
-    this.providerMap = providerDefinitionMap(this.providers);
+    this.backends = validateBackendDefinitions(drivers?.installation.backend ?? []);
+    this.backendMap = backendDefinitionMap(this.backends);
     this.iamDriverId = drivers?.installation.drivers.iam.id ?? "native-iam";
     this.iam =
       drivers === undefined
@@ -457,6 +506,18 @@ export class ControllerWorker {
       throw new Error("The selected Configuration Driver exposes invalid lifecycle hooks.");
     }
     this.sandbox = drivers?.sandboxDriver ?? options.sandboxDriver;
+    this.credentialGateway = drivers?.credentialGatewayDriver ?? options.credentialGatewayDriver;
+    if (
+      (drivers?.installation.drivers.credential_gateway === undefined) !==
+      (drivers?.credentialGatewayDriver === undefined)
+    ) {
+      throw new Error(
+        "The selected Credential Gateway Driver requires shared startup configuration.",
+      );
+    }
+    if (this.credentialGateway !== undefined && this.sandbox === undefined) {
+      throw new Error("The selected Credential Gateway Driver requires a paired Sandbox Driver.");
+    }
     if (
       (drivers?.installation.drivers.sandbox === undefined) !==
       (drivers?.sandboxDriver === undefined)
@@ -480,6 +541,10 @@ export class ControllerWorker {
       });
     this.onHealthy = options.onHealthy;
     this.repoDriver = drivers?.repoDriver;
+    this.repositoryCleanupRetryMs = positiveInteger(
+      this.repoDriver?.maintenanceIntervalMs ?? 30_000,
+      "Repository cleanup retry interval",
+    );
     this.pluginDriver = drivers?.pluginDriver;
     if (this.repoDriver !== undefined) {
       const driver = this.repoDriver;
@@ -488,7 +553,8 @@ export class ControllerWorker {
         typeof driver.resolve !== "function" ||
         typeof driver.open !== "function" ||
         typeof driver.status !== "function" ||
-        typeof driver.close !== "function"
+        typeof driver.close !== "function" ||
+        (driver.durableBrokerReceipts === true && typeof driver.checkAdmissionReady !== "function")
       ) {
         throw new Error("The selected repository credential Driver is unavailable.");
       }
@@ -516,15 +582,19 @@ export class ControllerWorker {
     this.attachLifecycleDrivers(this.iam);
     const provisioning = new OpenClawController(installation, {
       state: this.state,
-      providers: this.providers,
+      backends: this.backends,
       recordOperations: true,
       ...(this.configuredServiceAccountDriverId === undefined
         ? {}
         : { configuredServiceAccountDriverId: this.configuredServiceAccountDriverId }),
+      ...(this.nativeWorkerSupport === undefined
+        ? {}
+        : { nativeWorkerSupport: this.nativeWorkerSupport }),
     });
     for (const driver of [
       this.configuration,
       this.sandbox,
+      this.credentialGateway,
       this.iam,
       this.secretDriver,
       this.repoDriver,
@@ -636,6 +706,7 @@ export class ControllerWorker {
     this.lastHealthAt = now;
     this.pendingHealth = (async () => {
       const pending = await this.queue.pending();
+      await this.repoDriver?.checkAdmissionReady?.(AbortSignal.timeout(2000));
       await this.onHealthy?.();
       this.emit({ event: "worker.health", status: "ready", pending });
     })()
@@ -713,6 +784,9 @@ export class ControllerWorker {
     const stage = this.compute[operation];
     if (typeof stage !== "function") {
       throw new Error(`The selected production Compute Driver requires ${operation}.`);
+    }
+    if (operation === "activateRevision") {
+      this.stoppedPredecessors.delete(revision.id);
     }
     await stage.call(this.compute, revision, context);
   }
@@ -843,9 +917,9 @@ export class ControllerWorker {
     if (denied !== undefined) {
       throw new RepositoryCredentialAuthorityError(denied.code);
     }
-    const provider = await this.resolveRevisionProvider(revision);
-    if (provider !== undefined) {
-      throw new RepositoryCredentialAuthorityError(provider.code);
+    const backend = await this.resolveRevisionBackend(revision);
+    if (backend !== undefined) {
+      throw new RepositoryCredentialAuthorityError(backend.code);
     }
     if (typeof this.compute.validateRepositoryCredentials !== "function") {
       throw new RepositoryCredentialAuthorityError("REPOSITORY_RUNTIME_UNSUPPORTED");
@@ -858,6 +932,87 @@ export class ControllerWorker {
   }
 
   private async prepareRevision(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    const timing = this.deployTimings.get(claim.idempotencyKey);
+    const started = Date.now();
+    try {
+      const prepared = await this.prepareRevisionPass(claim, revision, context);
+      if (timing !== undefined) {
+        const now = Date.now();
+        if (!prepared.observation.ready) {
+          timing.firstUnreadyAt ??= now;
+        } else {
+          timing.readyAt = now;
+          if (timing.readinessWaitMs === undefined && timing.firstUnreadyAt !== undefined) {
+            timing.readinessWaitMs = now - timing.firstUnreadyAt;
+          }
+        }
+      }
+      return prepared;
+    } finally {
+      if (timing !== undefined) {
+        timing.prepareMs += Date.now() - started;
+      }
+    }
+  }
+
+  private async prepareRevisionPass(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    context: ComputeRevisionContext,
+  ): Promise<{ readonly observation: ComputeReadiness; readonly context: ComputeRevisionContext }> {
+    // Preparing a revision can recreate its runtime, so it is no longer known stopped.
+    this.stoppedPredecessors.delete(revision.id);
+    let earlier: readonly Readonly<AgentRevision>[] = [];
+    if (this.compute.requiresStoppedPredecessors?.(revision) === true) {
+      earlier = await this.state.read(async (view) =>
+        (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).filter(
+          (candidate) => candidate.revision < revision.revision,
+        ),
+      );
+      await this.stopPredecessors(claim, earlier);
+    }
+    try {
+      return await this.prepareAfterPredecessors(claim, revision, context);
+    } catch (error) {
+      // A failed pass may stem from a predecessor that came back; sweep it again.
+      for (const previous of earlier) {
+        this.stoppedPredecessors.delete(previous.id);
+      }
+      throw error;
+    }
+  }
+
+  private async stopPredecessors(
+    claim: ClaimedWork,
+    earlier: readonly Readonly<AgentRevision>[],
+  ): Promise<void> {
+    for (const previous of earlier) {
+      const record = this.stoppedPredecessors.get(previous.id);
+      if (record !== undefined && Date.now() - record.stoppedAt < record.restopAfterMs) {
+        continue;
+      }
+      await this.closeRevisionCredentials(claim, previous);
+      await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(previous));
+      this.stoppedPredecessors.delete(previous.id);
+      this.stoppedPredecessors.set(previous.id, {
+        stoppedAt: Date.now(),
+        restopAfterMs: record === undefined ? this.leaseDurationMs : record.restopAfterMs * 2,
+      });
+      if (this.stoppedPredecessors.size > MAX_STOPPED_PREDECESSOR_RECORDS) {
+        // Forgetting a record only costs one repeated idempotent stop.
+        const oldest = this.stoppedPredecessors.keys().next().value;
+        if (oldest !== undefined) {
+          this.stoppedPredecessors.delete(oldest);
+        }
+      }
+    }
+  }
+
+  private async prepareAfterPredecessors(
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
     context: ComputeRevisionContext,
@@ -917,10 +1072,18 @@ export class ControllerWorker {
 
   private async processRepositoryCleanup(claim: ClaimedWork): Promise<void> {
     let complete = false;
+    const cleanupRevisionId = repositoryCleanupRevisionId(claim);
+    if (cleanupRevisionId === undefined) {
+      await this.finalize(claim, undefined, { outcome: "permanent", code: "INVALID_TARGET" });
+      return;
+    }
     try {
-      const revision = await this.state.read((view) =>
-        view.revisions.findRevision(claim.namespaceId, claim.agentId!, claim.revisionId!),
-      );
+      const revision = await this.state.read(async (view) => {
+        if (claim.agentId === undefined) {
+          return undefined;
+        }
+        return view.revisions.findRevision(claim.namespaceId, claim.agentId, cleanupRevisionId);
+      });
       if (revision !== undefined) {
         const retireRuntime = isRepositoryRuntimeRetirementWork(claim);
         complete = await this.repositoryCredentials.cleanup(claim, revision, { retireRuntime });
@@ -950,6 +1113,13 @@ export class ControllerWorker {
           // Session service outages cannot delay exact workload/material retirement.
           await this.withClaimHeartbeat(claim, () => this.compute.stopRevision(revision));
         }
+      } else {
+        const attempts = await this.state.read(async (view) =>
+          (await view.repositorySessions.listNamespaceAttempts(claim.namespaceId)).filter(
+            (attempt) => attempt.revisionId === cleanupRevisionId,
+          ),
+        );
+        complete = await this.repositoryCredentials.cleanupRetained(claim, attempts);
       }
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
@@ -961,12 +1131,17 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
+      const attempts =
+        claim.agentId === undefined
+          ? (await unit.repositorySessions.listNamespaceAttempts(claim.namespaceId)).filter(
+              (attempt) => attempt.revisionId === cleanupRevisionId,
+            )
+          : await unit.repositorySessions.listRevisionAttempts({
+              namespaceId: claim.namespaceId,
+              agentId: claim.agentId,
+              revisionId: cleanupRevisionId,
+            });
       if (complete) {
-        const attempts = await unit.repositorySessions.listRevisionAttempts({
-          namespaceId: claim.namespaceId,
-          agentId: claim.agentId!,
-          revisionId: claim.revisionId!,
-        });
         complete = !attempts.some(
           (attempt) => attempt.phase === "closing" || attempt.phase === "invalidated",
         );
@@ -974,7 +1149,11 @@ export class ControllerWorker {
       if (complete) {
         await queue.complete(claim);
       } else {
-        await queue.defer(claim, { code: "REPOSITORY_CLEANUP_PENDING" });
+        await queue.defer(
+          claim,
+          { code: "REPOSITORY_CLEANUP_PENDING" },
+          { delayMs: this.repositoryCleanupRetryMs },
+        );
       }
     }, this.queueOptions);
     this.emit({
@@ -982,7 +1161,7 @@ export class ControllerWorker {
       ...workLogFields(claim),
       namespaceId: claim.namespaceId,
       agentId: claim.agentId,
-      revisionId: claim.revisionId,
+      revisionId: cleanupRevisionId,
       outcome: complete ? "success" : "pending",
       code: complete ? "REPOSITORY_CLEANUP_COMPLETE" : "REPOSITORY_CLEANUP_PENDING",
     });
@@ -991,10 +1170,11 @@ export class ControllerWorker {
   private async closeRevisionCredentials(
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
+    options: { readonly awaitCleanup?: boolean } = {},
   ): Promise<void> {
     if (revision.repositoryCredentials !== undefined) {
       // An unavailable service leaves durable cleanup work; workload shutdown continues.
-      await this.repositoryCredentials.closeRevision(claim, revision);
+      await this.repositoryCredentials.closeRevision(claim, revision, options);
     }
   }
 
@@ -1097,7 +1277,7 @@ export class ControllerWorker {
         return;
       }
       // Admission may change desired state while IAM is consulted. Reload the exact
-      // Agent immediately before any provider effect so a later deployment wins.
+      // Agent immediately before any backend effect so a later deployment wins.
       const resources = await this.state.read(async (view) => {
         const agent = await view.agents.findAgent(claim.namespaceId, claim.agentId!);
         const namespace = await view.namespaces.findNamespace(claim.namespaceId);
@@ -1331,6 +1511,7 @@ export class ControllerWorker {
         pendingProvisioningEffect === undefined
           ? undefined
           : provisioningEffectReceiptForRecord(provisioning!);
+      let abandonedProvisioningEffect: AgentDeletionDispatchResult["abandonedProvisioningEffect"];
       if (
         provisioning?.progress.pendingEffect !== undefined &&
         (pendingProvisioningEffect === undefined ||
@@ -1340,14 +1521,35 @@ export class ControllerWorker {
           settledProvisioningEffect.owner !== pendingProvisioningEffect.owner ||
           settledProvisioningEffect.targetId !== pendingProvisioningEffect.targetId)
       ) {
-        await this.finalizeAgentDeletion(claim, {
-          outcome: "pending",
-          code: "PROVISIONING_EFFECT_PENDING",
-          namespace,
-          agent,
-          revisions,
-        });
-        return;
+        // A cancelled provisioning never runs again, so nothing else will settle
+        // its effect. After a former claim's lease has run out, this teardown
+        // removes what the effect could have written and settles it itself.
+        // Malformed or conflicting evidence stays fail-closed.
+        const abandonAfterMs = provisioning.updatedAt.getTime() + this.leaseDurationMs - Date.now();
+        if (
+          provisioning.status !== "cancelled" ||
+          pendingProvisioningEffect?.ownerPresent !== true ||
+          settledProvisioningEffect !== undefined ||
+          abandonAfterMs > 0
+        ) {
+          await this.finalizeAgentDeletion(claim, {
+            outcome: "pending",
+            code: "PROVISIONING_EFFECT_PENDING",
+            namespace,
+            agent,
+            revisions,
+            ...(abandonAfterMs > 0 ? { delayMs: Math.ceil(abandonAfterMs) } : {}),
+          });
+          return;
+        }
+        abandonedProvisioningEffect = {
+          workId: provisioning.workId,
+          receipt: {
+            kind: pendingProvisioningEffect.kind,
+            owner: pendingProvisioningEffect.owner!,
+            targetId: pendingProvisioningEffect.targetId,
+          },
+        };
       }
       if (revisions.length > 0 && this.compute.bindAgent !== undefined) {
         await this.withClaimHeartbeat(claim, async () => {
@@ -1355,7 +1557,7 @@ export class ControllerWorker {
         });
       }
       for (const revision of revisions) {
-        await this.closeRevisionCredentials(claim, revision);
+        await this.closeRevisionCredentials(claim, revision, { awaitCleanup: false });
         await this.withClaimHeartbeat(claim, () => this.compute.retireRevision(revision));
       }
       if (this.compute.deleteAgentRuntimeCredentials !== undefined) {
@@ -1369,6 +1571,7 @@ export class ControllerWorker {
         namespace,
         agent,
         revisions,
+        ...(abandonedProvisioningEffect === undefined ? {} : { abandonedProvisioningEffect }),
       };
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
@@ -1414,7 +1617,12 @@ export class ControllerWorker {
       if (claim.agentId === undefined) {
         throw new Error("The worker Agent deletion context is unavailable.");
       }
-      const completed = await this.state.transactWithQueue(async (_unit, queue) => {
+      const abandoned = result.abandonedProvisioningEffect;
+      const completed = await this.state.transactWithQueue(async (unit, queue) => {
+        if (abandoned !== undefined) {
+          // Committed only with the finalizer's claim check in this transaction.
+          await unit.provisioning.settleEffect(abandoned.workId, abandoned.receipt);
+        }
         const completed = await queue.completeAgentDeletion(
           claim,
           claim.namespaceId,
@@ -1452,6 +1660,13 @@ export class ControllerWorker {
         }
         if (terminalFailure) {
           await queue.fail(claim, { code: result.code });
+        } else if (result.outcome === "pending") {
+          // Convergence waits do not consume the bounded failure budget.
+          await queue.defer(
+            claim,
+            { code: result.code },
+            result.delayMs === undefined ? {} : { delayMs: result.delayMs },
+          );
         } else {
           await queue.retry(claim, { code: result.code });
         }
@@ -1642,7 +1857,63 @@ export class ControllerWorker {
     });
   }
 
+  private beginDeployPass(claim: ClaimedWork): void {
+    // Maintenance, cleanup and stop work are not deployments.
+    if (claim.idempotencyKey !== `agent_revision:${claim.revisionId}:reconcile`) {
+      return;
+    }
+    let timing = this.deployTimings.get(claim.idempotencyKey);
+    if (timing === undefined) {
+      if (this.deployTimings.size >= MAX_DEPLOY_TIMINGS) {
+        this.deployTimings.delete(this.deployTimings.keys().next().value!);
+      }
+      timing = {
+        passes: 0,
+        passStartedAt: 0,
+        prepareMs: 0,
+        firstUnreadyAt: undefined,
+        readinessWaitMs: undefined,
+        readyAt: undefined,
+      };
+      this.deployTimings.set(claim.idempotencyKey, timing);
+    }
+    timing.passes += 1;
+    timing.passStartedAt = Date.now();
+    timing.readyAt = undefined;
+  }
+
+  /**
+   * Phase timing for the deployment pass that is finishing. Milliseconds are
+   * worker wall clock: `durationMs` is this pass, `prepareMs` sums Compute
+   * preparation across passes, `readinessWaitMs` runs from the first unready
+   * observation to the first ready one (or now), `activationMs` runs from this
+   * pass's ready observation to completion, and `elapsedMs` is since admission.
+   */
+  private deployTimingFields(claim: ClaimedWork): Readonly<Record<string, number>> {
+    const timing = this.deployTimings.get(claim.idempotencyKey);
+    if (timing === undefined) {
+      return {};
+    }
+    const now = Date.now();
+    if (this.passOutcome === "success" || this.passOutcome === "permanent") {
+      this.deployTimings.delete(claim.idempotencyKey);
+    }
+    let readinessWaitMs = timing.readinessWaitMs ?? 0;
+    if (timing.readinessWaitMs === undefined && timing.firstUnreadyAt !== undefined) {
+      readinessWaitMs = now - timing.firstUnreadyAt;
+    }
+    return {
+      durationMs: now - timing.passStartedAt,
+      deployPasses: timing.passes,
+      prepareMs: timing.prepareMs,
+      readinessWaitMs,
+      ...(timing.readyAt === undefined ? {} : { activationMs: now - timing.readyAt }),
+      elapsedMs: Math.max(0, now - claim.createdAt.getTime()),
+    };
+  }
+
   private async processRevision(claim: ClaimedWork): Promise<void> {
+    this.beginDeployPass(claim);
     let result: RevisionDispatchResult;
     try {
       if (
@@ -1739,9 +2010,9 @@ export class ControllerWorker {
         await this.finalizeRevision(claim, denied);
         return;
       }
-      const provider = await this.resolveRevisionProvider(revision);
-      if (provider !== undefined) {
-        await this.finalizeRevision(claim, provider);
+      const backend = await this.resolveRevisionBackend(revision);
+      if (backend !== undefined) {
+        await this.finalizeRevision(claim, backend);
         return;
       }
       if (agent.desiredRuntimeState === "stopped") {
@@ -1777,6 +2048,28 @@ export class ControllerWorker {
           await this.retireEarlierRevisions(claim, revision);
         }
         await this.completeStoppedRevisionWork(claim, revision, "REVISION_STOPPED");
+        return;
+      }
+      // Exclusive preparation cannot allow an older maintenance/retry pass to
+      // recreate a predecessor between the replacement's readiness observations.
+      const successor =
+        this.compute.requiresStoppedPredecessors === undefined
+          ? undefined
+          : await this.state.read(async (view) =>
+              (await view.revisions.listRevisions(revision.namespaceId, revision.agentId)).find(
+                (candidate) =>
+                  candidate.revision > revision.revision &&
+                  candidate.compute.id === this.compute.id &&
+                  candidate.compute.implementation === this.compute.implementation &&
+                  this.compute.requiresStoppedPredecessors?.(candidate) === true,
+              ),
+            );
+      if (successor !== undefined) {
+        await this.finalizeRevision(claim, {
+          outcome: "success",
+          code: "REVISION_SUPERSEDED",
+          supersededBy: successor,
+        });
         return;
       }
       if (revision.repositoryCredentials !== undefined) {
@@ -1967,8 +2260,35 @@ export class ControllerWorker {
       ) {
         refs.push(auth.source);
       }
-    } else if (auth.method !== "chatgpt_service_account" && auth.method !== "runtime") {
+    } else if (
+      auth.method !== "chatgpt_service_account" &&
+      auth.method !== "credential_source" &&
+      auth.method !== "runtime"
+    ) {
       return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
+    }
+    if (auth.method === "credential_source") {
+      // Both the deploying actor and the Agent principal must still operate the source.
+      for (const principalId of [claim.actorId, revision.servicePrincipalId]) {
+        const sourceAuthorization: AuthorizationRequest = {
+          principalId,
+          action: "operate",
+          resource: {
+            kind: "credential_source",
+            id: auth.sourceId,
+            namespaceId: revision.namespaceId,
+          },
+        };
+        const sourceDecision = await this.iamDecision(driver, sourceAuthorization);
+        if (!sourceDecision.allowed) {
+          return {
+            outcome: "permanent",
+            code: "AUTHORIZATION_DENIED",
+            authorization: sourceAuthorization,
+            decision: sourceDecision,
+          };
+        }
+      }
     }
     for (const ref of refs) {
       for (const principalId of [claim.actorId, revision.servicePrincipalId]) {
@@ -2012,14 +2332,14 @@ export class ControllerWorker {
     return undefined;
   }
 
-  private async resolveRevisionProvider(
+  private async resolveRevisionBackend(
     revision: Readonly<AgentRevision>,
   ): Promise<RevisionDispatchResult | undefined> {
     if (
-      revision.providerId !== null &&
-      this.providerMap.get(revision.providerId)?.type !== "chatgpt"
+      revision.backendId !== null &&
+      this.backendMap.get(revision.backendId)?.type !== "chatgpt"
     ) {
-      return { outcome: "permanent", code: "PROVIDER_UNAVAILABLE" };
+      return { outcome: "permanent", code: "BACKEND_UNAVAILABLE" };
     }
     const auth = revision.harnessAuth;
     if (auth.method !== "chatgpt_service_account") {
@@ -2030,7 +2350,7 @@ export class ControllerWorker {
         revision.namespaceId,
         auth.serviceAccountId,
       ),
-      binding: await view.serviceAccounts.findServiceAccountProviderBinding(
+      binding: await view.serviceAccounts.findServiceAccountBackendBinding(
         revision.namespaceId,
         auth.serviceAccountId,
       ),
@@ -2046,21 +2366,21 @@ export class ControllerWorker {
       return { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_CHANGED" };
     }
     try {
-      validateServiceAccountProviderBinding(this.providerMap, revision.providerId, binding);
-      const admitted = auth.providerBinding;
+      validateServiceAccountBackendBinding(this.backendMap, revision.backendId, binding);
+      const admitted = auth.backendBinding;
       if (
         admitted === undefined ||
         binding === undefined ||
-        binding.providerId !== admitted.providerId ||
+        binding.backendId !== admitted.backendId ||
         binding.driverId !== admitted.driverId ||
         binding.workspaceId !== admitted.workspaceId ||
         binding.credentialIssued !== admitted.credentialIssued
       ) {
-        return { outcome: "permanent", code: "SERVICE_ACCOUNT_PROVIDER_MISMATCH" };
+        return { outcome: "permanent", code: "SERVICE_ACCOUNT_BACKEND_MISMATCH" };
       }
       return undefined;
     } catch {
-      return { outcome: "permanent", code: "SERVICE_ACCOUNT_PROVIDER_MISMATCH" };
+      return { outcome: "permanent", code: "SERVICE_ACCOUNT_BACKEND_MISMATCH" };
     }
   }
 
@@ -2194,6 +2514,27 @@ export class ControllerWorker {
       // Admission verifies the physical source. Workers project authoritative
       // OCC metadata without requiring permission to read backend Secret values.
       harnessAuth = { ...auth, backendRef: secret.backendRef };
+    } else if (revision.harnessAuth.method === "credential_source") {
+      const auth = revision.harnessAuth;
+      if (
+        this.credentialGateway === undefined ||
+        auth.credentialGatewayId !== this.credentialGateway.id
+      ) {
+        return { result: { outcome: "permanent", code: "CREDENTIAL_GATEWAY_MISMATCH" } };
+      }
+      const source = await this.state.read((view) =>
+        view.credentialSources.findCredentialSource(revision.namespaceId, auth.sourceId),
+      );
+      // A deleting source can no longer be attached, even to an admitted revision.
+      if (
+        source === undefined ||
+        source.state !== "ready" ||
+        source.driverId !== auth.credentialGatewayId ||
+        source.type !== auth.sourceType
+      ) {
+        return { result: { outcome: "permanent", code: "HARNESS_AUTH_SOURCE_UNAVAILABLE" } };
+      }
+      harnessAuth = { ...auth, source };
     } else {
       harnessAuth = revision.harnessAuth;
     }
@@ -2319,20 +2660,27 @@ export class ControllerWorker {
     claim: ClaimedWork,
     result: RevisionDispatchResult,
   ): Promise<void> {
+    const runtimeFailure =
+      result.outcome === "pending"
+        ? safeRuntimeFailureEvidence(result.data?.runtimeFailure)
+        : undefined;
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    let resolved: RevisionDispatchResult = expired
-      ? {
-          ...result,
-          outcome: "permanent",
-          code: "CONVERGENCE_DEADLINE_EXCEEDED",
-          data: convergenceDeadlineResultData(
-            this.convergenceTimeoutMs,
-            safeRuntimeFailureEvidence(result.data?.runtimeFailure),
-          ),
-        }
-      : result;
+    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
+    // or invalid-key rejections and then hold unready until restart, so waiting
+    // for the deadline cannot change the result. Other failures may recover.
+    let resolved: RevisionDispatchResult =
+      runtimeFailure?.code === "AUTHENTICATION_FAILED"
+        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -2346,6 +2694,13 @@ export class ControllerWorker {
             ? { outcome: "permanent", code: error.code }
             : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
       }
+    }
+    if (
+      resolved.outcome === "retry" &&
+      claim.attemptCount >= this.maxAttempts &&
+      (await this.continueExhaustedMaintenance(claim, resolved.code))
+    ) {
+      return;
     }
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
@@ -2413,7 +2768,11 @@ export class ControllerWorker {
           ...(resolved.resultData === undefined ? {} : { resultData: resolved.resultData }),
         });
       } else if (resolved.outcome === "pending") {
-        await queue.defer(claim, { code: resolved.code });
+        await queue.defer(
+          claim,
+          { code: resolved.code },
+          resolved.code === "REVISION_INCOMPLETE" ? { delayMs: REVISION_READINESS_RECHECK_MS } : {},
+        );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, {
           code: resolved.code,
@@ -2481,6 +2840,7 @@ export class ControllerWorker {
       result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2506,6 +2866,7 @@ export class ControllerWorker {
       result: "success",
       outcome: "success",
       code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2583,6 +2944,7 @@ export class ControllerWorker {
       result: result.outcome,
       outcome: result.outcome,
       code: result.code,
+      ...this.deployTimingFields(claim),
     });
   }
 
@@ -2640,7 +3002,7 @@ export class ControllerWorker {
         this.repositoryCredentials.validate(revision);
       }
       // Keep each failed observation bounded without permanently abandoning
-      // an authorized active runtime after one prolonged provider outage.
+      // an authorized active runtime after one prolonged backend outage.
       await queue.fail(claim, { code }, { continuingRevision: true });
       await this.enqueueMaintenance(queue, claim, revision);
     }, this.queueOptions);
@@ -2655,6 +3017,70 @@ export class ControllerWorker {
       outcome: "pending",
       code,
     });
+  }
+
+  // A dependency outage that outlasts one maintenance claim's retries must not
+  // retire the authorized active runtime. Fail only this bounded claim and keep
+  // the maintenance chain, as finalizeActiveRevision does for failed
+  // observations. The queue still refuses continuation past the credential
+  // deadline, and the next pass re-checks authority before any new material.
+  private async continueExhaustedMaintenance(claim: ClaimedWork, code: string): Promise<boolean> {
+    const revisionId = claim.revisionId;
+    if (
+      claim.agentId === undefined ||
+      revisionId === undefined ||
+      claim.namespaceTarget !== undefined ||
+      !new RegExp(`^agent_revision:${revisionId}:maintenance:(0|[1-9][0-9]*)$`).test(
+        claim.idempotencyKey,
+      )
+    ) {
+      return false;
+    }
+    let continued = false;
+    await this.state.transactWithQueue(async (unit, queue) => {
+      if ((await queue.heartbeat(claim)) === undefined) {
+        throw new WorkClaimLostError();
+      }
+      const agent = await unit.agents.lockAgent(claim.namespaceId, claim.agentId!);
+      if (agent?.activeRevisionId !== revisionId || agent.desiredRuntimeState !== "running") {
+        return;
+      }
+      const namespace = await unit.namespaces.findNamespace(claim.namespaceId);
+      const revision = await unit.revisions.findRevision(
+        claim.namespaceId,
+        claim.agentId!,
+        revisionId,
+      );
+      if (
+        namespace?.status !== "ready" ||
+        revision === undefined ||
+        revision.servicePrincipalId !== agent.servicePrincipalId ||
+        this.revisionMaintenanceInterval(revision) === undefined ||
+        (revision.repositoryCredentials !== undefined &&
+          Date.now() >= revision.repositoryCredentials.deadlineWallMs)
+      ) {
+        return;
+      }
+      await queue.fail(claim, { code }, { continuingRevision: true });
+      await this.enqueueMaintenance(queue, claim, revision);
+      continued = true;
+    }, this.queueOptions);
+    if (!continued) {
+      return false;
+    }
+    this.passOutcome = "permanent";
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      revisionId,
+      result: "retry",
+      outcome: "retry",
+      code,
+      ...this.deployTimingFields(claim),
+    });
+    return true;
   }
 
   private async enqueueMaintenance(

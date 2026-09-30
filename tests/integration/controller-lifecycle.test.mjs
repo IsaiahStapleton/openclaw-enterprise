@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../../apps/controller/src/composition/production-harness.ts";
+import {
+  PRODUCTION_HARNESS_DESCRIPTOR,
+  resolveApprovedHarness as resolveApprovedDevelopmentHarness,
+} from "../../apps/controller/src/composition/production-harness.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
@@ -10,6 +13,7 @@ import {
   DriverSelectionError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
+  NativeWorkerSupportError,
   OpenClawController,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
@@ -99,7 +103,8 @@ function createDrivers(iam) {
       if (
         auth.method !== "api_key" ||
         !(
-          (harness.id === "openclaw" && harness.mode === "embedded") ||
+          (harness.id === "openclaw" &&
+            (harness.mode === "embedded" || harness.mode === "dedicated")) ||
           (harness.id === "codex" && harness.mode === "dedicated")
         )
       ) {
@@ -159,9 +164,10 @@ function createSandboxDriver(options = {}) {
   };
 }
 
-function createController(iam = createIAMDriver()) {
+function createController(iam = createIAMDriver(), options = {}) {
   let nextIdentifier = 0;
   const controller = new OpenClawController(installation, {
+    ...options,
     now: () => new Date("2026-08-15T00:00:00.000Z"),
     createId: (kind) =>
       kind === "configuration"
@@ -330,7 +336,7 @@ test("the controller selects explicitly registered Sandbox Drivers with closed f
       }),
     DriverSelectionError,
   );
-  for (const hook of ["ensureNamespace", "provisionHarness"]) {
+  for (const hook of ["ensureNamespace", "provisionHarness", "cleanup"]) {
     assert.throws(
       () =>
         controller.registerDriver({
@@ -661,7 +667,7 @@ test("Agent configuration references stay mutable while deployment admits deeply
       providers: {
         openai: {
           baseUrl: "https://replacement.example/v1",
-          apiKey: { source: "file", provider: "teamfile", id: "/providers/openai/apiKey" },
+          apiKey: { source: "file", provider: "teamfile", id: "/backends/openai/apiKey" },
         },
       },
     },
@@ -710,9 +716,14 @@ test("Sandbox admission applies provider-owned Agent configuration before freezi
   const { controller } = createController();
   const sandbox = createSandboxDriver({
     implementation: "custom-containment",
-    configureAgent(configuration) {
+    configureAgent(configuration, harness) {
       assert.equal(Object.isFrozen(configuration), true);
       assert.equal(Object.isFrozen(configuration.plugins.entries.codex.config.appServer), true);
+      assert.deepEqual(harness, {
+        ...PRODUCTION_HARNESS_DESCRIPTOR,
+        mode: "dedicated",
+      });
+      assert.equal(Object.isFrozen(harness), true);
       const configured = structuredClone(configuration);
       configured.plugins.entries.codex.enabled = true;
       configured.plugins.entries.codex.config.appServer.sandbox = "danger-full-access";
@@ -896,6 +907,65 @@ for (const facets of [["networking"], ["filesystem"], ["process"], ["networking"
     );
   });
 }
+
+test("dedicated native OpenClaw requires native worker support and a full-facet provisioning Sandbox", async () => {
+  for (const [name, sandbox, nativeWorkerSupport, refusal] of [
+    ["pinned runtime", createSandboxDriver(), undefined, NativeWorkerSupportError],
+    ["missing", undefined, "custom-image", DependencyUnavailableError],
+    [
+      "partial",
+      createSandboxDriver({ facets: ["networking", "filesystem"] }),
+      "custom-image",
+      DependencyUnavailableError,
+    ],
+    ["complete", createSandboxDriver(), "custom-image", undefined],
+  ]) {
+    const { controller } = createController(
+      undefined,
+      nativeWorkerSupport === undefined ? {} : { nativeWorkerSupport },
+    );
+    if (sandbox !== undefined) {
+      controller.registerDriver(sandbox);
+      controller.selectDriver("sandbox", sandbox.id);
+    }
+    const namespace = await controller.createNamespace("principal-admin", {
+      name: `Native sandbox ${name}`,
+    });
+    await controller.handleNamespaceLifecycle("principal-admin", namespace.id, "ready");
+    const configuration = await createConfiguration(controller, namespace.id, {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          models: { "openai/gpt-5": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+    });
+    const agent = await controller.createAgent("principal-admin", {
+      namespaceId: namespace.id,
+      name: `Dedicated native ${name}`,
+      configurationId: configuration.id,
+      executionMode: "dedicated",
+    });
+    await bindHarnessAuth(controller, agent);
+
+    const deployment = controller.deployAgent(
+      "principal-admin",
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    );
+    if (refusal === undefined) {
+      const revision = await deployment;
+      assert.equal(revision.harness.id, "openclaw");
+      assert.equal(revision.sandboxDriverId, sandbox.id);
+    } else {
+      await assert.rejects(deployment, refusal, name);
+      assert.deepEqual(
+        await controller.transact((state) => state.revisions.listRevisions(namespace.id, agent.id)),
+        [],
+      );
+    }
+  }
+});
 
 test("selected Sandbox Drivers fail closed for embedded Agents regardless of declared facets", async () => {
   for (const sandbox of [

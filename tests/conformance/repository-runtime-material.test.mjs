@@ -10,26 +10,49 @@ import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/sr
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 const deadlineWallMs = Date.now() + 86400000;
-const client = {
-  gatewayOrigin: "https://credentials.example.test",
-  gitRemote: "https://credentials.example.test/example/project.git",
-  gitUsername: "gateway-session",
-  canonicalApiHost: "github.com",
-  apiHost: "credentials.example.test",
-  repository: "example/project",
-};
+function repositoryClient(gatewayOrigin = "https://git.credentials.svc.cluster.local") {
+  return {
+    gatewayOrigin,
+    gitRemote: `${gatewayOrigin}/example/project.git`,
+    gitUsername: "gateway-session",
+    canonicalApiHost: "github.com",
+    apiHost: new URL(gatewayOrigin).hostname,
+    repository: "example/project",
+  };
+}
 
-function runtimeBinding(sessionId = "session_material_original") {
+const client = repositoryClient();
+
+function codexPluginState() {
+  return {
+    driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
+    plugins: {},
+  };
+}
+
+function openClawPluginState() {
+  return {
+    driver: { id: "openclaw-plugin", implementation: "occ/openclaw-plugin" },
+    plugins: {
+      "openclaw-plugin:example": { enabled: true, toolDefaults: { approval: "provider_default" } },
+    },
+  };
+}
+
+function runtimeBinding(sessionId = "session_material_original", publicCa, gatewayOrigin) {
   return {
     kind: "new",
     repositoryRef: "project",
     sessionId,
     deadlineWallMs,
-    files: encodeRepositoryCredentialSessionFiles({
-      session: { sessionId, deadlineWallMs },
-      bearer: `controlled_gateway_bearer_${sessionId}_0000000000000000000000`,
-      client,
-    }),
+    files: encodeRepositoryCredentialSessionFiles(
+      {
+        session: { sessionId, deadlineWallMs },
+        bearer: `controlled_gateway_bearer_${sessionId}_0000000000000000000000`,
+        client: gatewayOrigin === undefined ? client : repositoryClient(gatewayOrigin),
+      },
+      publicCa,
+    ),
   };
 }
 
@@ -48,7 +71,7 @@ function workloadPod(deployment, namespace, name, ready = true) {
   };
 }
 
-async function fixture(mode = "embedded", nodeEnrollment) {
+async function fixture(mode = "embedded", nodeEnrollment, options = {}) {
   const alreadyEnrolled = mode === "dedicated" && nodeEnrollment === undefined;
   if (alreadyEnrolled) {
     nodeEnrollment = {
@@ -82,7 +105,7 @@ async function fixture(mode = "embedded", nodeEnrollment) {
           ? { gatewayClients: [{ namespace: "controller", podLabels: { app: "controller" } }] }
           : {}),
         repositoryCredentials: {
-          namespace: "credentials",
+          namespace: options.repositoryNamespace ?? "credentials",
           podLabels: { app: "credentials" },
           port: 8443,
         },
@@ -111,7 +134,7 @@ async function fixture(mode = "embedded", nodeEnrollment) {
     namespaceId: "namespace-repository-material",
     agentId: "agent-repository-material",
     revision: 1,
-    providerId: null,
+    backendId: null,
     configurationId: "configuration-repository-material",
     configurationKind: "agent",
     configurationGeneration: 1,
@@ -145,7 +168,7 @@ async function fixture(mode = "embedded", nodeEnrollment) {
         {
           repositoryRef: "project",
           profile: "read",
-          providerId: "github",
+          backendId: "github",
           grant: { providerInstanceId: "github-main", repositoryId: "project", grantId: "read" },
         },
       ],
@@ -302,6 +325,11 @@ async function fixture(mode = "embedded", nodeEnrollment) {
       ),
     };
   };
+  // Annotation patches that sync a running Harness after its node setup is written.
+  clients.core.patchNamespacedPod = async ({ name, namespace: target }) => {
+    calls.push({ operation: "patchPod", name, namespace: target });
+    return {};
+  };
   for (const [api, kinds] of [
     [
       clients.core,
@@ -419,7 +447,7 @@ async function fixture(mode = "embedded", nodeEnrollment) {
             namespaceId: revision.namespaceId,
             name: "Repository material Agent",
             configurationId: revision.configurationId,
-            providerId: revision.providerId,
+            backendId: revision.backendId,
             executionMode: mode,
             servicePrincipalId: revision.servicePrincipalId,
             createdAt: revision.createdAt,
@@ -465,13 +493,10 @@ async function fixture(mode = "embedded", nodeEnrollment) {
     );
   const enroll = (selected) => {
     const name = driver.workspaceNodeName(selected);
-    const secret = driver.manifest(
-      "v1",
-      "Secret",
-      name,
-      driver.pluginRuntimeOwnership(selected),
-      namespace,
-    );
+    const secret = driver.manifest("v1", "Secret", name, driver.pluginRuntimeOwnership(selected), {
+      name: namespace,
+      plane: "execution",
+    });
     save({
       ...secret,
       metadata: {
@@ -483,6 +508,8 @@ async function fixture(mode = "embedded", nodeEnrollment) {
       data: {
         deviceId: Buffer.from(`node-${selected.id}`).toString("base64"),
         setupCode: Buffer.from("completed-setup").toString("base64"),
+        // A current setup code, as preparation keeps renewing it.
+        expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
       },
     });
   };
@@ -493,7 +520,12 @@ async function fixture(mode = "embedded", nodeEnrollment) {
   }
   const markReady = () => {
     for (const object of deployments()) {
-      object.status = { observedGeneration: object.metadata.generation, readyReplicas: 1 };
+      object.status = {
+        observedGeneration: object.metadata.generation,
+        replicas: 1,
+        updatedReplicas: 1,
+        readyReplicas: 1,
+      };
       save(object);
     }
     pods = deployments().map((object) =>
@@ -529,12 +561,41 @@ async function fixture(mode = "embedded", nodeEnrollment) {
   };
 }
 
+function preparedCodexConfig(f) {
+  const configurations = [...f.objects.values()].filter(
+    (object) =>
+      object.kind === "ConfigMap" &&
+      object.metadata.namespace === f.namespace &&
+      typeof object.data?.["config.toml"] === "string",
+  );
+  assert.equal(configurations.length, 1);
+  return configurations[0].data["config.toml"];
+}
+
+function preparedCodexManifest(f) {
+  const configurations = [...f.objects.values()].filter(
+    (object) =>
+      object.kind === "ConfigMap" &&
+      object.metadata.namespace === f.namespace &&
+      typeof object.data?.["runtime.json"] === "string",
+  );
+  assert.equal(configurations.length, 1);
+  return JSON.parse(configurations[0].data["runtime.json"]);
+}
+
 function preparedNativeDocument(f) {
   const configurations = [...f.objects.values()].filter(
     (object) => object.kind === "ConfigMap" && typeof object.data?.["openclaw.json"] === "string",
   );
   assert.equal(configurations.length, 1);
   return configurations[0].data["openclaw.json"];
+}
+
+function runtimeWrites(calls) {
+  return calls.filter(
+    ({ operation, kind }) =>
+      operation === "write" && (kind === "ConfigMap" || kind === "Deployment"),
+  );
 }
 
 function deepFreeze(value) {
@@ -637,15 +698,16 @@ test("Dedicated credential refresh preserves its enrolled workspace node", async
   const original = runtimeBinding();
   await f.driver.prepareRevision(f.revision, f.context([original]));
   f.markReady();
-  // Gateway readiness permits enrollment, then a separate observation admits the node.
-  assert.equal((await f.driver.prepareRevision(f.revision, f.context([original]))).ready, false);
-  f.markReady();
-  await f.driver.prepareRevision(f.revision, f.context([original]));
-  f.markReady();
-  assert.equal((await f.driver.prepareRevision(f.revision, f.context([original]))).ready, false);
-  // Recording the node ID updates the Gateway binding and requires its new generation.
-  f.markReady();
+  // Gateway readiness permits enrollment. The setup reaches the running Harness
+  // through its volume without replacing it, and this fixture pairs at once.
   assert.equal((await f.driver.prepareRevision(f.revision, f.context([original]))).ready, true);
+  // Without a status proxy the controller cannot read the Gateway's ack, so
+  // activation binds the recorded node ID into the Gateway's pod spec and waits.
+  await assert.rejects(
+    f.driver.activateRevision(f.revision, f.context([original])),
+    /gateway is not ready/,
+  );
+  f.markReady();
   await f.driver.activateRevision(f.revision, f.context([original]));
   const before = structuredClone(f.consumer());
   const nodeSecret = [...f.objects.values()].find(
@@ -678,13 +740,16 @@ test("Dedicated credential refresh preserves its enrolled workspace node", async
     container.volumeMounts.find((mount) => mount.subPath === nodeSecret.metadata.name),
     nodeMount,
   );
-  assert.deepEqual(
-    container.env.find(({ name }) => name === "OPENCLAW_NODE_SETUP_CODE"),
-    {
-      name: "OPENCLAW_NODE_SETUP_CODE",
-      valueFrom: { secretKeyRef: { name: nodeSecret.metadata.name, key: "setupCode" } },
-    },
+  assert.equal(
+    container.env.some(({ name }) => name === "OPENCLAW_NODE_SETUP_CODE"),
+    false,
+    "the setup code never enters the Harness environment",
   );
+  assert.deepEqual(
+    refreshed.spec.template.spec.volumes.find(({ name }) => name === "openclaw-node-setup"),
+    before.spec.template.spec.volumes.find(({ name }) => name === "openclaw-node-setup"),
+  );
+  assert.equal(nodeSecret.data.setupCode, undefined, "readiness removed the paired setup code");
   assert.deepEqual(
     f.objects.get(`Secret:${nodeSecret.metadata.namespace}:${nodeSecret.metadata.name}`),
     nodeSecret,
@@ -703,6 +768,41 @@ test("Dedicated credential refresh preserves its enrolled workspace node", async
     nodeSecret,
   );
   assert.equal(f.secrets().filter((secret) => secret.immutable).length, 1);
+});
+
+test("Kubernetes keeps original admission correlation out of runtime resources", async () => {
+  const f = await fixture("dedicated");
+  const admissionId = "1720000000000-12345678-1234-4234-8234-123456789abc";
+  const binding = { ...runtimeBinding(), admissionId };
+  // The Worker may carry its original attempt identity internally; it is not
+  // a credential and must not be exposed in the Agent's material resources.
+  await f.driver.prepareRevision(f.revision, f.context([binding]));
+  assert.equal(JSON.stringify([...f.objects.values()]).includes(admissionId), false);
+  await f.driver.prepareRevision(
+    f.revision,
+    f.context([
+      {
+        kind: "retained",
+        repositoryRef: binding.repositoryRef,
+        sessionId: binding.sessionId,
+        deadlineWallMs: binding.deadlineWallMs,
+        admissionId,
+      },
+    ]),
+  );
+  assert.equal(f.secrets().length, 1);
+
+  for (const invalid of ["", "bad\ncorrelation", "x".repeat(129), null]) {
+    const other = await fixture("dedicated");
+    await assert.rejects(
+      other.driver.prepareRevision(
+        other.revision,
+        other.context([{ ...binding, admissionId: invalid }]),
+      ),
+      { message: "Repository credential material is invalid." },
+    );
+    assert.deepEqual(other.apiCalls, []);
+  }
 });
 
 for (const mode of ["embedded", "dedicated"]) {
@@ -731,7 +831,7 @@ for (const mode of ["embedded", "dedicated"]) {
     const driverId = mode === "embedded" ? "openclaw-plugin" : "codex-plugin";
     f.revision.plugins = {
       driver: { id: driverId, implementation: `occ/${driverId}` },
-      plugins: { [pluginId]: { enabled: true, approvalMode: "auto" } },
+      plugins: { [pluginId]: { enabled: true, toolDefaults: { approval: "provider_default" } } },
     };
     let loseMaterialReadiness = false;
     let statusObserved = false;
@@ -964,6 +1064,214 @@ test("Dedicated retirement preserves the successor gateway, Agent and repository
   await f.driver.activateRevision(successor, f.context([replacement]));
 });
 
+test("Dedicated Codex repository bindings receive broker network policy centrally", async () => {
+  const f = await fixture("dedicated", undefined, {
+    repositoryNamespace: "123-control",
+  });
+  await f.driver.prepareRevision(
+    f.revision,
+    f.context([
+      runtimeBinding(
+        "session_custom_control",
+        undefined,
+        "https://git.123-control.svc.cluster.local",
+      ),
+    ]),
+  );
+  const config = preparedCodexConfig(f);
+  assert.match(config, /^\[features\]$/m);
+  assert.doesNotMatch(config, /^\[network_proxy\]$/m);
+  assert.doesNotMatch(config, /^\[\[network\.private_endpoints\]\]$/m);
+  assert.doesNotMatch(config, /privateEndpoints|private_endpoints|default_permissions/);
+  assert.deepEqual(preparedCodexManifest(f).repositoryBrokerNetworkPolicy, {
+    host: "git.123-control.svc.cluster.local",
+    domains: {},
+  });
+});
+
+test("Dedicated Codex repository policy is independent of preset shape", async (t) => {
+  for (const [name, configure] of [
+    ["default", () => {}],
+    [
+      "swe",
+      (configuration) => {
+        configuration.agents.defaults.instructions = "Handle software engineering work.";
+      },
+    ],
+    [
+      "custom",
+      (configuration) => {
+        configuration.plugins.entries.codex.config.appServer.networkProxy = {
+          enabled: true,
+          mode: "limited",
+          domains: { "github.com": "allow" },
+        };
+      },
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture("dedicated");
+      configure(f.revision.configuration);
+      await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+      const policy = preparedCodexManifest(f).repositoryBrokerNetworkPolicy;
+      assert.equal(policy.host, "git.credentials.svc.cluster.local");
+      if (name === "custom") {
+        assert.deepEqual(policy.domains, { "github.com": "allow" });
+      }
+    });
+  }
+});
+
+test("Dedicated Codex repository policy preserves compatible domain decisions", async () => {
+  const f = await fixture("dedicated");
+  f.revision.configuration.plugins.entries.codex.config.appServer.networkProxy = {
+    enabled: true,
+    mode: "limited",
+    domains: { "GitHub.COM ": "allow", "*.credentials.svc.cluster.local": "deny" },
+  };
+  await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+  assert.deepEqual(preparedCodexManifest(f).repositoryBrokerNetworkPolicy, {
+    host: "git.credentials.svc.cluster.local",
+    domains: { "github.com": "allow", "*.credentials.svc.cluster.local": "deny" },
+  });
+});
+
+test("Dedicated Codex repository policy preserves an explicitly disabled network proxy", async () => {
+  const f = await fixture("dedicated");
+  f.revision.configuration.plugins.entries.codex.config.appServer.networkProxy = { enabled: false };
+  await assert.rejects(
+    f.driver.prepareRevision(f.revision, f.context([runtimeBinding()])),
+    /explicitly disabled Codex network proxy/,
+  );
+  assert.deepEqual(
+    runtimeWrites(f.calls),
+    [],
+    "explicit network-proxy disablement must fail before runtime configuration or workload writes",
+  );
+});
+
+test("Dedicated Codex repository policy preserves explicit broker host denies", async () => {
+  const f = await fixture("dedicated");
+  f.revision.configuration.plugins.entries.codex.config.appServer.networkProxy ??= {};
+  f.revision.configuration.plugins.entries.codex.config.appServer.networkProxy.domains = {
+    " Git.Credentials.SVC.Cluster.Local ": "deny",
+    "git.credentials.svc.cluster.local": "allow",
+  };
+  await assert.rejects(
+    f.driver.prepareRevision(f.revision, f.context([runtimeBinding()])),
+    /broker host is explicitly denied/,
+  );
+  assert.deepEqual(
+    runtimeWrites(f.calls),
+    [],
+    "explicit administrative denies must fail before runtime configuration or workload writes",
+  );
+});
+
+test("Dedicated Codex repository policy accepts stock private-network settings", async (t) => {
+  for (const [name, networkProxy] of [
+    ["full mode", { enabled: true, mode: "full" }],
+    ["local binding", { enabled: true, mode: "limited", allowLocalBinding: true }],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture("dedicated");
+      f.revision.configuration.plugins.entries.codex.config.appServer.networkProxy = networkProxy;
+      await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+      assert.deepEqual(preparedCodexManifest(f).repositoryBrokerNetworkPolicy, {
+        host: "git.credentials.svc.cluster.local",
+        domains: {},
+      });
+    });
+  }
+});
+
+test("Dedicated Codex repository policy rejects malformed domain policy containers", async (t) => {
+  for (const [name, networkProxy, reason] of [
+    [
+      "domains array",
+      { enabled: true, mode: "limited", domains: ["github.com"] },
+      /network policy domains must be an object/,
+    ],
+    [
+      "domains scalar",
+      { enabled: true, mode: "limited", domains: "github.com" },
+      /network policy domains must be an object/,
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture("dedicated");
+      f.revision.configuration.plugins.entries.codex.config.appServer.networkProxy = networkProxy;
+      await assert.rejects(
+        f.driver.prepareRevision(f.revision, f.context([runtimeBinding()])),
+        reason,
+      );
+      assert.deepEqual(
+        runtimeWrites(f.calls),
+        [],
+        "malformed explicit domain policy containers must fail before runtime configuration or workload writes",
+      );
+    });
+  }
+});
+
+test("Dedicated Codex without repository bindings does not receive broker policy", async () => {
+  const f = await fixture("dedicated");
+  delete f.revision.repositoryCredentials;
+  await f.driver.prepareRevision(f.revision, f.context(undefined));
+  const config = preparedCodexConfig(f);
+  assert.doesNotMatch(config, /private_endpoints/);
+  assert.equal(preparedCodexManifest(f).repositoryBrokerNetworkPolicy, undefined);
+});
+
+test("Embedded OpenClaw repository bindings without Codex plugins do not receive broker policy", async () => {
+  const f = await fixture("embedded");
+  await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+  const codexRuntimeManifests = [...f.objects.values()].filter(
+    (object) =>
+      object.kind === "ConfigMap" &&
+      object.metadata.namespace === f.namespace &&
+      typeof object.data?.["runtime.json"] === "string",
+  );
+  assert.deepEqual(codexRuntimeManifests, []);
+});
+
+test("Embedded OpenClaw plugin runtime does not receive Codex broker policy", async () => {
+  const f = await fixture("embedded");
+  f.revision.plugins = openClawPluginState();
+  await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+  const manifest = preparedCodexManifest(f);
+  assert.equal(manifest.kind, "openclaw");
+  assert.equal(manifest.repositoryBrokerNetworkPolicy, undefined);
+});
+
+test("Embedded Codex plugin runtime receives broker network policy centrally", async () => {
+  const f = await fixture("embedded");
+  f.revision.plugins = codexPluginState();
+  await f.driver.prepareRevision(f.revision, f.context([runtimeBinding()]));
+  assert.deepEqual(preparedCodexManifest(f).repositoryBrokerNetworkPolicy, {
+    host: "git.credentials.svc.cluster.local",
+    domains: {},
+  });
+});
+
+test("Dedicated Codex repository material projects a combined broker CA bundle", async () => {
+  const f = await fixture("dedicated");
+  const publicCa = Buffer.from("-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n");
+  await f.driver.prepareRevision(
+    f.revision,
+    f.context([runtimeBinding("session_with_ca", publicCa)]),
+  );
+  const environment = Object.fromEntries(
+    f.consumer().spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]),
+  );
+  assert.match(
+    environment.SSL_CERT_FILE,
+    /^\/run\/oce\/repository-credentials\/sessions\/[a-f0-9]{64}\/ca-bundle\.pem$/,
+  );
+  assert.equal(environment.GIT_SSL_CAINFO, environment.SSL_CERT_FILE);
+  assert.equal(environment.NODE_EXTRA_CA_CERTS, environment.SSL_CERT_FILE);
+});
+
 test("Kubernetes projects the repository client into native exec paths without changing admitted configuration", async (t) => {
   for (const roster of ["list", "entries"]) {
     await t.test(roster, async () => {
@@ -1107,6 +1415,28 @@ test("Kubernetes rejects malformed repository exec configuration before any API 
   }
 });
 
+test("Kubernetes rejects invalid repository text before any API access", async (t) => {
+  for (const [name, content] of [
+    ["unpaired high surrogate", "\ud800"],
+    ["unpaired low surrogate", "\udfff"],
+    ["UTF-8 byte limit", "\u00e9".repeat(32 * 1024) + "a"],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      const binding = runtimeBinding();
+      binding.files["ca.pem"] = content;
+      const document = JSON.parse(binding.files["client.json"]);
+      document.hasPublicCa = true;
+      binding.files["client.json"] = JSON.stringify(document);
+      // No Secret or workload may observe text that cannot be stored losslessly.
+      await assert.rejects(f.driver.prepareRevision(f.revision, f.context([binding])), {
+        message: "Repository credential material is invalid.",
+      });
+      assert.deepEqual(f.apiCalls, []);
+    });
+  }
+});
+
 for (const mode of ["embedded", "dedicated"]) {
   test(`Kubernetes repository material lifecycle (${mode})`, async (t) => {
     await t.test(
@@ -1164,6 +1494,38 @@ for (const mode of ["embedded", "dedicated"]) {
         );
       },
     );
+
+    for (const publicCa of [undefined, Buffer.from("fixture-public-ca")]) {
+      await t.test(
+        `repository file ordering preserves the Pod template (public CA: ${publicCa !== undefined})`,
+        async () => {
+          const f = await fixture(mode);
+          const binding = runtimeBinding(undefined, publicCa);
+          await f.driver.prepareRevision(f.revision, f.context([binding]));
+          const originalTemplate = structuredClone(f.consumer().spec.template);
+          const originalGeneration = f.consumer().metadata.generation;
+
+          // JSON object members may return in a different order after storage.
+          // That must not restart an unchanged credential-consuming workload.
+          const secret = f.secrets()[0];
+          secret.data = Object.fromEntries(Object.entries(secret.data).reverse());
+          f.save(secret);
+          const { files, ...retained } = binding;
+          retained.kind = "retained";
+          await f.driver.prepareRevision(f.revision, f.context([retained]));
+          assert.deepEqual(f.consumer().spec.template, originalTemplate);
+          assert.equal(f.consumer().metadata.generation, originalGeneration);
+
+          const reordered = {
+            ...binding,
+            files: Object.fromEntries(Object.entries(files).reverse()),
+          };
+          await f.driver.prepareRevision(f.revision, f.context([reordered]));
+          assert.deepEqual(f.consumer().spec.template, originalTemplate);
+          assert.equal(f.consumer().metadata.generation, originalGeneration);
+        },
+      );
+    }
 
     await t.test(
       "Kubernetes reports exact missing retained material without silently creating new custody",
@@ -1336,6 +1698,8 @@ for (const mode of ["embedded", "dedicated"]) {
         const deployment = f.consumer();
         deployment.status = {
           observedGeneration: deployment.metadata.generation,
+          replicas: 1,
+          updatedReplicas: 1,
           readyReplicas: 1,
         };
         f.save(deployment);

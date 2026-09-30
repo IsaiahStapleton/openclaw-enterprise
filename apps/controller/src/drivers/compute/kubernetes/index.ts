@@ -4,7 +4,7 @@ import {
   numericErrorStatus,
   sha256Hex,
 } from "@openclaw-enterprise/utils";
-import { randomBytes } from "node:crypto";
+import { randomBytes, X509Certificate } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -28,15 +28,21 @@ import type {
   V1VolumeMount,
 } from "@kubernetes/client-node";
 import type {
+  AgentDeploymentDiagnostics,
   AgentRevision,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
   ComputeAgentProvisioningInput,
   ComputeDriver,
   ComputeAgentBinding,
+  ComputeAgentRevisionBinding,
   ComputeReadiness,
   ComputePreflightResult,
   ComputeRevisionContext,
+  CredentialGatewayDriver,
+  CredentialSource,
+  CredentialSourceAttachment,
+  CredentialSourceType,
   WorkspaceSetup,
   Driver,
   HarnessWorkloadRequirements,
@@ -56,7 +62,10 @@ import type {
   SecretBindings,
   SecretEnvironmentProjection,
   LoggingLevel,
+  RuntimeDiagnosticCheck,
+  RuntimeDiagnosticState,
   RuntimeFailureEvidence,
+  RuntimeImage,
   OpenClawConfigurationValue,
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
@@ -68,6 +77,7 @@ import {
   workspaceSetupVerifier,
 } from "../workspace-setup-runtime.ts";
 import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
+import { nodeProgramArguments } from "../node-program.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
@@ -80,6 +90,7 @@ import {
   PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT,
   PLUGIN_RUNTIME_READY_MARKER,
   PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT,
+  type CodexRepositoryBrokerNetworkPolicy,
   type PluginRuntimeSpec,
   pluginRuntimeConfigMapData,
   pluginRuntimeSpecForRevision,
@@ -90,6 +101,9 @@ import {
   AGENT_WITH_NODE_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
+  GATEWAY_STOP_TIMEOUT_MS,
+  NATIVE_WORKER_ENTRYPOINT,
+  NATIVE_WORKER_READINESS_ENTRYPOINT,
 } from "./runtime-entrypoints.ts";
 
 import {
@@ -104,6 +118,15 @@ import {
   completeKubernetesList,
   type RepositoryMaterialOwner,
 } from "./repository-material-store.ts";
+import {
+  NETWORK_PROFILE_LABEL,
+  ORDINARY_NETWORK_PROFILE,
+  PROVIDER_FENCED_NETWORK_PROFILE,
+  type NetworkProfile,
+  ordinaryNetworkPolicySelector,
+  profileNetworkPolicySelector,
+  withoutNetworkProfile,
+} from "./resources/network.ts";
 import {
   REPOSITORY_CLIENT_BIN,
   repositoryNativeConfiguration,
@@ -142,10 +165,15 @@ export interface KubernetesWorkloadPeer {
 
 export interface KubernetesGatewayRoutingOptions {
   readonly hostname?: string;
+  readonly endpointPort?: number;
   readonly gatewayName: string;
   readonly gatewayNamespace: string;
   readonly envoyNamespace: string;
   readonly envoyHttpsTargetPort?: number;
+  readonly sandbox?: {
+    readonly domain: string;
+    readonly publicPort?: number;
+  };
 }
 
 export type {
@@ -164,6 +192,11 @@ interface KubernetesApiClients {
 
 export const MINIMUM_KUBERNETES_VERSION = "1.35.0";
 const MINIMUM_KUBERNETES_VERSION_PARTS = [1, 35, 0] as const;
+/** The profile-free workspace-node selector written before explicit network
+ * profiles. Namespaces provisioned before the upgrade keep it. */
+const LEGACY_WORKSPACE_NODE_POLICY_SELECTOR: {
+  readonly matchLabels: Readonly<Record<string, string>>;
+} = { matchLabels: { "openclaw.dev/workload-role": "agent" } };
 
 interface LifecycleOwnerSelection {
   readonly driver: Driver;
@@ -237,6 +270,17 @@ export interface KubernetesComputeDriverOptions {
   readonly authentication:
     | { readonly mode: "inCluster" }
     | { readonly mode: "kubeconfig"; readonly kubeconfigPath: string; readonly context: string };
+  readonly executionCluster?: {
+    readonly authentication: KubernetesComputeDriverOptions["authentication"];
+    readonly harnessRouting: KubernetesGatewayRoutingOptions & { readonly hostname: string };
+    readonly network: {
+      readonly dns: KubernetesWorkloadPeer;
+      readonly harnessEndpointCidrs: readonly string[];
+      readonly gatewayEndpointCidrs: readonly string[];
+      readonly pluginStatusProxySourceCidrs: readonly string[];
+    };
+    readonly caBundle?: string;
+  };
   readonly images: {
     readonly gateway: string;
     readonly agent: string;
@@ -268,11 +312,16 @@ export interface KubernetesComputeDriverOptions {
   readonly runtime?: {
     readonly transportSecretPrefix: string;
     readonly gatewayStorageClassName: string;
+    readonly nativeOpenClawSessionCapacity?: number;
     readonly nodeSelector?: Readonly<Record<string, string>>;
     readonly gatewayNodeSelector?: Readonly<Record<string, string>>;
     readonly codexSeccompProfile?: string;
     readonly channels?: {
       readonly proxyUrl: string;
+      readonly managedProxy?: KubernetesWorkloadPeer & {
+        readonly hostname: string;
+        readonly port: number;
+      };
     };
   };
   readonly gatewayRouting?: KubernetesGatewayRoutingOptions;
@@ -312,8 +361,12 @@ interface GatewayConfigurationSnapshot {
   readonly annotations: Readonly<Record<string, string>>;
   readonly loggingLevel: LoggingLevel;
   readonly workspaceNodeId?: string;
-  readonly harnessNamespace?: string;
+  /** Agent-scoped ConfigMap that delivers workspaceNodeId to a dedicated Codex Gateway. */
+  readonly workspaceNodeBinding?: string;
+  readonly harnessNamespace?: KubernetesNamespaceAddress;
   readonly workspace: unknown;
+  readonly nativeWorkerProfile?: string;
+  readonly nativeWorkerNodeId?: string;
 }
 
 interface PluginRuntimeSnapshot {
@@ -340,14 +393,55 @@ interface PrivateStatusReadback {
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
+const REPOSITORY_BROKER_CA_ENVIRONMENT = [
+  "SSL_CERT_FILE",
+  "GIT_SSL_CAINFO",
+  "NODE_EXTRA_CA_CERTS",
+] as const;
+const REPOSITORY_BROKER_CA_BUNDLE = "ca-bundle.pem";
+
+function repositoryBrokerPublicCaPath(
+  material: ResolvedRepositoryMaterialSpec,
+): string | undefined {
+  const withCa = material.bindings.filter((binding) => Object.hasOwn(binding.files, "ca.pem"));
+  if (withCa.length === 0) {
+    return undefined;
+  }
+  if (
+    withCa.length !== material.bindings.length ||
+    withCa.some((binding) => binding.files["ca.pem"] !== withCa[0]?.files["ca.pem"])
+  ) {
+    throw new ConfigurationFailure(
+      "Repository credential broker CA material must be present and identical for every binding.",
+    );
+  }
+  return `${withCa[0]?.directory}/${REPOSITORY_BROKER_CA_BUNDLE}`;
+}
+
 interface RuntimeCredentialSecretSpec {
   readonly name: string;
   readonly keys: readonly string[];
 }
 
+interface KubernetesNamespaceAddress {
+  readonly name: string;
+  readonly plane: "control" | "execution";
+}
+
+interface TargetedKubernetesResource {
+  readonly namespace: KubernetesNamespaceAddress;
+  readonly resource: ManagedKubernetesObject;
+}
+
+/** How preparation widens Agent-scoped policies while another revision serves. */
+interface AgentPolicyPreparation {
+  readonly anyRevision?: boolean;
+  readonly unprofiledGateway?: boolean;
+}
+
 interface RuntimeCredentialContext {
   readonly namespaceId: string;
-  readonly namespace: string;
+  readonly namespace: KubernetesNamespaceAddress;
   readonly agentId: string;
   readonly suffix: string;
   readonly ownership: Ownership;
@@ -358,6 +452,12 @@ interface RuntimeCredentialContext {
 interface PreparedHarnessAuth {
   readonly loginMode: HarnessAuthSnapshot["method"];
   readonly environment: readonly V1EnvVar[];
+  /** Present when the Credential Gateway, not a Secret projection, supplies the credential. */
+  readonly credentialSource?: Readonly<CredentialSource>;
+}
+
+interface NativeRuntimeSnapshot {
+  readonly configuration: string;
 }
 
 /** One rendering step; neither credential values nor backend lookups belong here. */
@@ -379,6 +479,20 @@ function prepareHarnessAuth(
       secret(harnessModelAuthentication(configuration).environmentName, resolvedAuth.backendRef),
     );
   } else if (
+    resolvedAuth.method === "credential_source" &&
+    harness.mode === "dedicated" &&
+    (harness.id === "codex" || harness.id === "openclaw")
+  ) {
+    // The paired Sandbox supplies the credential environment; no Secret is projected here.
+    if (harness.id === "codex") {
+      environment.push({ name: "CODEX_LOGIN_MODE", value: resolvedAuth.loginMode });
+    }
+    return {
+      loginMode: resolvedAuth.loginMode,
+      environment,
+      credentialSource: resolvedAuth.source,
+    };
+  } else if (
     resolvedAuth.method === "codex_pat" &&
     harness.mode === "dedicated" &&
     harness.id === "codex"
@@ -399,7 +513,7 @@ function prepareHarnessAuth(
   } else {
     throw new ConfigurationFailure("Harness authentication method is unsupported.");
   }
-  if (harness.mode === "dedicated") {
+  if (harness.mode === "dedicated" && harness.id === "codex") {
     environment.push({ name: "CODEX_LOGIN_MODE", value: resolvedAuth.method });
   }
   return { loginMode: resolvedAuth.method, environment };
@@ -417,6 +531,7 @@ const PLUGIN_RUNTIME_VOLUME = "openclaw-plugin-runtime";
 const PLUGIN_RUNTIME_STATUS_PORT = 18_791;
 const PLUGIN_RUNTIME_STATUS_PATH = "/openclaw/plugin-runtime/status";
 const RUNTIME_STATUS_PATH = "/openclaw/runtime/status";
+const RUNTIME_DIAGNOSTICS_PATH = "/openclaw/runtime/diagnostics";
 const COMPUTE_PRIVATE_STATUS_ENVIRONMENT = new Set([
   "OPENCLAW_AGENT_REVISION_ID",
   "OPENCLAW_RUNTIME_STATUS_CONTAINER",
@@ -435,6 +550,11 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const WORKLOAD_TERMINATION_TIMEOUT_MS = 120_000;
 const WORKLOAD_TERMINATION_POLL_MS = 100;
 const AGENT_TRANSPORT_PORT = 18_790;
+const NATIVE_WORKER_INFERENCE_CONFIG_PATH = "/tmp/openclaw-native-inference.json";
+const NATIVE_WORKER_WORKSPACE_ROOT = "/home/node/.openclaw-node/node-host";
+const NATIVE_WORKER_PROFILE = "dedicated-native";
+const DEFAULT_NATIVE_OPENCLAW_SESSION_CAPACITY = 8;
+const NATIVE_WORKER_COMPILE_CACHE = "/home/node/.openclaw-node/.cache/node-compile";
 const AGENT_TRANSPORT_TOKEN_KEY = "app-server-token";
 const GATEWAY_PASSWORD_KEY = "gateway-password";
 const OPENCLAW_GATEWAY_PASSWORD = "OPENCLAW_GATEWAY_PASSWORD";
@@ -452,14 +572,39 @@ const RUNTIME_STATE_VOLUME_SIZE = "1Gi";
 const GATEWAY_PRIVATE_STATE_VOLUME = "openclaw-gateway-state";
 const GATEWAY_PRIVATE_STATE_SIZE = "10Gi";
 const NODE_STATE_VOLUME = "openclaw-node-state";
+// Harness kinds that can own a workspace node. Naming refuses any other kind,
+// so Agent deletion removes every node Secret preparation can create.
+const WORKSPACE_NODE_HARNESS_IDS: readonly string[] = ["codex", "openclaw"];
 const NODE_STATE_PATH = "/home/node/.openclaw-node";
+// A Deployment-backed Codex Harness reads its one-shot node setup code from an
+// optional Secret volume, so the Harness can start before the Secret exists.
+const NODE_SETUP_VOLUME = "openclaw-node-setup";
+const NODE_SETUP_DIRECTORY = "/run/openclaw-node-setup";
+const NODE_SETUP_FILE = "setup-code";
+// Changing this Pod annotation is a Pod update event: the kubelet syncs the Pod
+// and refreshes its Secret volumes at once instead of on its ~1 min resync.
+const NODE_SETUP_ANNOTATION = "openclaw.dev/workspace-node-setup";
+// A dedicated Codex Gateway learns its enrolled workspace node from an optional,
+// Agent-scoped ConfigMap instead of its pod spec, so enrollment and activation
+// do not replace the Gateway. The wrapper polls the file and hot-applies it.
+const WORKSPACE_NODE_BINDING_VOLUME = "openclaw-workspace-node";
+const WORKSPACE_NODE_BINDING_DIRECTORY = "/run/openclaw-workspace-node";
+const WORKSPACE_NODE_BINDING_FILE = "workspace-node.json";
+const WORKSPACE_NODE_BINDING_ANNOTATION = "openclaw.dev/workspace-node-binding";
+// Kubelet refresh after the Pod nudge (1.3-1.7 s on k3d, #612), then the
+// wrapper's 1 s poll, its config write and OpenClaw's plugin reload, confirmed
+// through OpenClaw's plugin list (about 2.5 s from the file in the runtime
+// image test), with margin. A slower Gateway retries on the next pass.
+const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 20_000;
+const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
+const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["state", "/home/node/.openclaw/state"],
   ["agent", "/home/node/.openclaw/agents/main/agent"],
   ["media", "/home/node/.openclaw/media"],
 ] as const);
-const SHARED_WORKSPACE_VOLUME = "openclaw-workspace";
-const SHARED_WORKSPACE_SIZE = "40Gi";
+const HARNESS_WORKSPACE_VOLUME = "openclaw-workspace";
+const HARNESS_WORKSPACE_SIZE = "40Gi";
 type WorkspaceRole = "agent" | "gateway";
 const HARNESS_WORKSPACE_CATEGORIES = Object.freeze([
   ["workspace", "/home/node/workspace"],
@@ -514,6 +659,69 @@ function validatePort(value: number, description: string): void {
   if (!Number.isInteger(value) || value < 1 || value > 65_535) {
     throw new ConfigurationFailure(`${description} must be a valid port.`);
   }
+}
+
+function repositoryCredentialBrokerOrigin(origin: string): URL {
+  let url: URL;
+  try {
+    url = new URL(required(origin, "Repository credential gateway origin"));
+  } catch {
+    throw new ConfigurationFailure("Repository credential gateway origin must be an HTTPS origin.");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.origin !== origin ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    url.hostname !== url.hostname.toLowerCase() ||
+    !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/.test(url.hostname) ||
+    (url.port !== "" && url.port !== "443")
+  ) {
+    throw new ConfigurationFailure("Repository credential gateway origin must be an HTTPS origin.");
+  }
+  return url;
+}
+
+function repositoryCredentialBrokerOriginFromMaterial(
+  material: ResolvedRepositoryMaterialSpec,
+): URL {
+  let origin: URL | undefined;
+  for (const binding of material.bindings) {
+    const next = repositoryCredentialBrokerOrigin(binding.client.gatewayOrigin);
+    if (origin !== undefined && origin.origin !== next.origin) {
+      throw new ConfigurationFailure(
+        "Repository credential broker origin must match across admitted runtime material.",
+      );
+    }
+    origin = next;
+  }
+  if (origin === undefined) {
+    throw new ConfigurationFailure("Repository credentials require resolved runtime material.");
+  }
+  return origin;
+}
+
+function normalizedNetworkHost(value: string, description: string): string {
+  const host = required(value, description).trim().toLowerCase();
+  if (host.length === 0) {
+    throw new ConfigurationFailure(`${description} must be nonempty.`);
+  }
+  return host;
+}
+
+function mergeDomainDecision(
+  domains: Record<string, "allow" | "deny">,
+  host: string,
+  decision: "allow" | "deny",
+): void {
+  if (domains[host] === "deny" || decision === "deny") {
+    domains[host] = "deny";
+    return;
+  }
+  domains[host] = "allow";
 }
 
 function validateResources(value: V1ResourceRequirements, description: string): void {
@@ -648,7 +856,14 @@ function labelsToSelector(labels: Readonly<Record<string, string>>): string {
     .join(",");
 }
 
-function channelProxy(value: unknown): { address: string; port: number } {
+type ChannelProxy =
+  | { readonly kind: "ip"; readonly address: string; readonly port: number }
+  | { readonly kind: "managed"; readonly peer: KubernetesWorkloadPeer; readonly port: number };
+
+function channelProxy(
+  value: unknown,
+  managedProxy?: KubernetesWorkloadPeer & { readonly hostname: string; readonly port: number },
+): ChannelProxy {
   const raw = required(value, "Channel proxy URL");
   let parsed: URL;
   try {
@@ -659,6 +874,42 @@ function channelProxy(value: unknown): { address: string; port: number } {
     );
   }
   const address = parsed.hostname.replace(/^\[|\]$/g, "");
+  const port = Number(parsed.port);
+  if (managedProxy !== undefined) {
+    validatePeer(managedProxy, "Managed channel proxy");
+    required(managedProxy.hostname, "Managed channel proxy hostname");
+    if (
+      !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\.svc$/.test(
+        managedProxy.hostname,
+      )
+    ) {
+      throw new ConfigurationFailure(
+        "Managed channel proxy hostname must be the exact namespace-qualified Service DNS name.",
+      );
+    }
+    if (
+      !Number.isInteger(managedProxy.port) ||
+      managedProxy.port < 1 ||
+      managedProxy.port > 65535
+    ) {
+      throw new ConfigurationFailure("Managed channel proxy port must be a valid TCP port.");
+    }
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.hostname !== managedProxy.hostname ||
+      port !== managedProxy.port ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new ConfigurationFailure(
+        "Managed channel proxy URL must match the exact configured Service host and port.",
+      );
+    }
+    return { kind: "managed", peer: managedProxy, port };
+  }
   if (
     !["http:", "https:"].includes(parsed.protocol) ||
     isIP(address) === 0 ||
@@ -673,10 +924,15 @@ function channelProxy(value: unknown): { address: string; port: number } {
       "Channel proxy URL must identify one credential-free HTTP(S) IP endpoint.",
     );
   }
-  return { address, port: Number(parsed.port) };
+  return { kind: "ip", address, port };
 }
 
 export function kubernetesNamespaceName(namespaceId: string): string {
+  const id = required(namespaceId, "Platform Namespace ID");
+  return `oce-${sha256Hex(id, 15)}`;
+}
+
+function previousKubernetesNamespaceName(namespaceId: string): string {
   const id = required(namespaceId, "Platform Namespace ID");
   const slug =
     id
@@ -686,6 +942,13 @@ export function kubernetesNamespaceName(namespaceId: string): string {
       .slice(0, 46)
       .replace(/-+$/g, "") || "ns";
   return `oce-${slug}-${sha256Hex(id, 12)}`;
+}
+
+function isManagedKubernetesNamespaceName(name: string, namespaceId: string): boolean {
+  return (
+    name === kubernetesNamespaceName(namespaceId) ||
+    name === previousKubernetesNamespaceName(namespaceId)
+  );
 }
 
 export function kubernetesGatewayNamespaceName(namespaceId: string): string {
@@ -735,7 +998,7 @@ function verifiedKubernetesNamespace(
   const external = annotations["openclaw.dev/namespace-lifecycle"] === "external";
   if (!external) {
     if (
-      name !== kubernetesNamespaceName(namespaceId) ||
+      !isManagedKubernetesNamespaceName(name, namespaceId) ||
       labels["app.kubernetes.io/managed-by"] !== MANAGER
     ) {
       throw new OwnershipFailure(
@@ -851,8 +1114,225 @@ function harnessModelAuthentication(configuration: OpenClawConfigurationDocument
   throw new ConfigurationFailure("Harness authentication requires a compatible model provider.");
 }
 
+function harnessModels(configuration: OpenClawConfigurationDocument): readonly string[] {
+  const agents = asRecord(configuration.agents);
+  const defaults = asRecord(agents?.defaults);
+  const entries = Object.values(asRecord(agents?.entries) ?? {});
+  const selections = [defaults?.model, ...entries.map((entry) => asRecord(entry)?.model)].filter(
+    (value) => value !== undefined,
+  );
+  const models = selections.flatMap((selection) => {
+    const value = asRecord(selection);
+    return typeof selection === "string"
+      ? [selection]
+      : [value?.primary, ...(Array.isArray(value?.fallbacks) ? value.fallbacks : [])];
+  });
+  if (models.some((model) => typeof model !== "string" || model.trim().length === 0)) {
+    throw new ConfigurationFailure("Harness authentication requires explicit model references.");
+  }
+  return [...new Set(models as string[])];
+}
+
+function nativeRuntimeConfiguration(configuration: OpenClawConfigurationDocument): object {
+  const models = harnessModels(configuration);
+  const configuredAgentIds = Object.keys(asRecord(asRecord(configuration.agents)?.entries) ?? {});
+  const agentIds = configuredAgentIds.length === 0 ? ["main"] : configuredAgentIds;
+  const providers = asRecord(asRecord(configuration.models)?.providers);
+  const openai = asRecord(providers?.openai);
+  if (openai === undefined || !Array.isArray(openai.models)) {
+    throw new ConfigurationFailure(
+      "Dedicated OpenClaw requires an explicit native OpenAI model catalog.",
+    );
+  }
+  if (openai.headers !== undefined) {
+    throw new ConfigurationFailure(
+      "Dedicated OpenClaw does not support provider headers from Agent Configuration.",
+    );
+  }
+  const entries = openai.models.map((value) => asRecord(value));
+  const runtimeModels = models.map((reference) => {
+    const [provider, id] = reference.split("/", 2);
+    if (provider !== "openai" || !id) {
+      throw new ConfigurationFailure(
+        "Dedicated OpenClaw currently requires explicit openai model references.",
+      );
+    }
+    const matches = entries.filter((entry) => entry?.id === id || entry?.id === reference);
+    if (matches.length !== 1) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw model metadata is missing or ambiguous for ${reference}.`,
+      );
+    }
+    const entry = matches[0]!;
+    if (entry.headers !== undefined) {
+      throw new ConfigurationFailure(
+        "Dedicated OpenClaw does not support model headers from Agent Configuration.",
+      );
+    }
+    const api = entry.api ?? openai.api;
+    const baseUrl = entry.baseUrl ?? openai.baseUrl;
+    const contextWindow = entry.contextWindow ?? openai.contextWindow;
+    const maxTokens = entry.maxTokens ?? openai.maxTokens;
+    const cost = asRecord(entry.cost ?? openai.cost);
+    if (
+      !isNonEmptyString(api) ||
+      !isNonEmptyString(baseUrl) ||
+      !Number.isSafeInteger(contextWindow) ||
+      (contextWindow as number) <= 0 ||
+      !Number.isSafeInteger(maxTokens) ||
+      (maxTokens as number) <= 0 ||
+      cost === undefined ||
+      ["input", "output", "cacheRead", "cacheWrite"].some(
+        (key) => typeof cost[key] !== "number" || !Number.isFinite(cost[key]) || cost[key] < 0,
+      )
+    ) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw requires API, endpoint, token limits, and cost metadata for ${reference}.`,
+      );
+    }
+    let endpoint: URL;
+    try {
+      endpoint = new URL(baseUrl as string);
+    } catch {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw endpoint metadata is invalid for ${reference}.`,
+      );
+    }
+    if (
+      endpoint.protocol !== "https:" ||
+      endpoint.hostname !== "api.openai.com" ||
+      endpoint.port !== "" ||
+      endpoint.username !== "" ||
+      endpoint.password !== "" ||
+      endpoint.search !== "" ||
+      endpoint.hash !== "" ||
+      endpoint.pathname.replace(/\/$/u, "") !== "/v1"
+    ) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw requires the approved OpenAI API endpoint for ${reference}.`,
+      );
+    }
+    if (entry.reasoning !== undefined && typeof entry.reasoning !== "boolean") {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw reasoning metadata is invalid for ${reference}.`,
+      );
+    }
+    const input = entry.input;
+    if (
+      input !== undefined &&
+      (!Array.isArray(input) ||
+        input.length === 0 ||
+        input.some((kind) => kind !== "text" && kind !== "image"))
+    ) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw input metadata is invalid for ${reference}.`,
+      );
+    }
+    const thinkingLevelMap = asRecord(entry.thinkingLevelMap);
+    if (
+      entry.thinkingLevelMap !== undefined &&
+      (thinkingLevelMap === undefined ||
+        Object.values(thinkingLevelMap).some(
+          (value) => value !== null && typeof value !== "string",
+        ))
+    ) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw thinking metadata is invalid for ${reference}.`,
+      );
+    }
+    return {
+      provider,
+      id,
+      api,
+      baseUrl,
+      ...(isNonEmptyString(entry.name) ? { name: entry.name } : {}),
+      contextWindow,
+      maxTokens,
+      ...(entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }),
+      ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
+      cost: {
+        input: cost.input,
+        output: cost.output,
+        cacheRead: cost.cacheRead,
+        cacheWrite: cost.cacheWrite,
+      },
+      ...(input === undefined ? {} : { input }),
+      apiKeyEnv: MODEL_API_KEY,
+    };
+  });
+  return {
+    models: runtimeModels,
+    workspaces: agentIds.map((id) => ({
+      id,
+      path: NATIVE_WORKER_WORKSPACE_ROOT,
+      scope: "subdirectories",
+      models,
+    })),
+  };
+}
+
+function nativeRuntimeSnapshot(revision: AgentRevision): NativeRuntimeSnapshot | undefined {
+  if (revision.harness.id !== "openclaw" || revision.harness.mode !== "dedicated") {
+    return undefined;
+  }
+  const defaults = asRecord(asRecord(revision.configuration.agents)?.defaults);
+  const embeddedAgent = asRecord(defaults?.embeddedAgent);
+  if (embeddedAgent?.runtimeServer !== undefined) {
+    throw new ConfigurationFailure(
+      "Dedicated OpenClaw runtime transport is owned by the selected Compute Driver.",
+    );
+  }
+  return {
+    configuration: JSON.stringify(nativeRuntimeConfiguration(revision.configuration)),
+  };
+}
+
+function requireNativeWorkerSandbox(
+  harness: RevisionHarnessDescriptor,
+  sandboxDriver: SandboxDriver | undefined,
+): void {
+  if (harness.id !== "openclaw" || harness.mode !== "dedicated") {
+    return;
+  }
+  const requiredFacets = ["networking", "filesystem", "process"] as const;
+  if (
+    sandboxDriver?.provisionHarness === undefined ||
+    requiredFacets.some((facet) => !sandboxDriver.facets.includes(facet))
+  ) {
+    throw new ConfigurationFailure(
+      "Dedicated OpenClaw requires a provisioning SandboxDriver with networking, filesystem, and process containment.",
+    );
+  }
+}
+
+function gatewayConfigurationDocument(
+  revision: AgentRevision,
+  nativeRuntime: NativeRuntimeSnapshot | undefined,
+): OpenClawConfigurationDocument {
+  if (nativeRuntime === undefined) {
+    return revision.configuration;
+  }
+  const cloudWorkers = asRecord(revision.configuration.cloudWorkers) ?? {};
+  const profiles = asRecord(cloudWorkers.profiles) ?? {};
+  if (profiles[NATIVE_WORKER_PROFILE] !== undefined) {
+    throw new ConfigurationFailure(
+      `Dedicated OpenClaw profile ${NATIVE_WORKER_PROFILE} is owned by the selected Compute Driver.`,
+    );
+  }
+  const document = structuredClone(revision.configuration);
+  const openai = asRecord(asRecord(asRecord(document.models)?.providers)?.openai);
+  if (openai !== undefined) {
+    delete openai.apiKey;
+  }
+  return document;
+}
+
 export class KubernetesComputeDriver implements ComputeDriver {
   readonly discoverHarnessModels = discoverHarnessModels;
+
+  requiresStoppedPredecessors(revision: AgentRevision): boolean {
+    return revision.harness.mode === "dedicated";
+  }
 
   static readonly configurationSchema = Object.freeze({
     type: "object",
@@ -867,6 +1347,56 @@ export class KubernetesComputeDriver implements ComputeDriver {
           mode: { enum: ["inCluster", "kubeconfig"] },
           kubeconfigPath: { type: "string" },
           context: { type: "string" },
+        },
+      },
+      executionCluster: {
+        type: "object",
+        required: ["authentication", "harnessRouting", "network"],
+        additionalProperties: false,
+        properties: {
+          authentication: {
+            type: "object",
+            required: ["mode"],
+            additionalProperties: false,
+            properties: {
+              mode: { enum: ["inCluster", "kubeconfig"] },
+              kubeconfigPath: { type: "string" },
+              context: { type: "string" },
+            },
+          },
+          harnessRouting: {
+            type: "object",
+            required: ["hostname", "gatewayName", "gatewayNamespace", "envoyNamespace"],
+            additionalProperties: false,
+            properties: {
+              hostname: { type: "string" },
+              gatewayName: { type: "string" },
+              gatewayNamespace: { type: "string" },
+              envoyNamespace: { type: "string" },
+              envoyHttpsTargetPort: { type: "integer", minimum: 1, maximum: 65535 },
+            },
+          },
+          caBundle: { type: "string", minLength: 1 },
+          network: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "dns",
+              "harnessEndpointCidrs",
+              "gatewayEndpointCidrs",
+              "pluginStatusProxySourceCidrs",
+            ],
+            properties: {
+              dns: WORKLOAD_PEER_SCHEMA,
+              harnessEndpointCidrs: { type: "array", minItems: 1, items: { type: "string" } },
+              gatewayEndpointCidrs: { type: "array", minItems: 1, items: { type: "string" } },
+              pluginStatusProxySourceCidrs: {
+                type: "array",
+                minItems: 1,
+                items: { type: "string" },
+              },
+            },
+          },
         },
       },
       images: {
@@ -935,6 +1465,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         properties: {
           transportSecretPrefix: { type: "string" },
           gatewayStorageClassName: { type: "string", minLength: 1 },
+          nativeOpenClawSessionCapacity: { type: "integer", minimum: 1, maximum: 1024 },
           nodeSelector: { type: "object", additionalProperties: { type: "string" } },
           gatewayNodeSelector: { type: "object", additionalProperties: { type: "string" } },
           codexSeccompProfile: { type: "string", minLength: 1 },
@@ -944,6 +1475,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
             additionalProperties: false,
             properties: {
               proxyUrl: { type: "string" },
+              managedProxy: {
+                type: "object",
+                required: ["hostname", "namespace", "podLabels", "port"],
+                additionalProperties: false,
+                properties: {
+                  hostname: { type: "string" },
+                  namespace: { type: "string" },
+                  podLabels: { type: "object", additionalProperties: { type: "string" } },
+                  port: { type: "integer" },
+                },
+              },
             },
           },
         },
@@ -954,10 +1496,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
         additionalProperties: false,
         properties: {
           hostname: { type: "string" },
+          endpointPort: { type: "integer", minimum: 1, maximum: 65535 },
           gatewayName: { type: "string" },
           gatewayNamespace: { type: "string" },
           envoyNamespace: { type: "string" },
           envoyHttpsTargetPort: { type: "integer", minimum: 1, maximum: 65535 },
+          sandbox: {
+            type: "object",
+            required: ["domain"],
+            additionalProperties: false,
+            properties: {
+              domain: { type: "string" },
+              publicPort: { type: "integer", minimum: 1, maximum: 65535 },
+            },
+          },
         },
       },
     },
@@ -967,17 +1519,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
   readonly capability = "compute" as const;
   readonly implementation: string;
   readonly supportsWorkspaceSetup = true as const;
+  readonly requiresAgentRuntimeCredentials?: true;
   readonly agentProvisioning = Object.freeze({
     executionModes: Object.freeze(["dedicated"] as const),
   });
   private readonly options: KubernetesComputeDriverOptions;
   private readonly sandboxDriver: SandboxDriver | undefined;
+  private readonly credentialGatewayDriver: CredentialGatewayDriver | undefined;
   private readonly nodeEnrollment: GatewayNodeEnrollment | undefined;
   private readonly readNodeCa: (() => Promise<string | undefined>) | undefined;
   private lifecycle: ComputeLifecycleDispatcher;
   private lifecycleOwners: readonly LifecycleOwnerSelection[];
   private lifecycleStarted = false;
   private apiClients: Promise<KubernetesApiClients> | undefined;
+  private executionApiClients: Promise<KubernetesApiClients> | undefined;
   private patchOptions:
     ReturnType<typeof import("@kubernetes/client-node").setHeaderOptions> | undefined;
   private mergePatchOptions:
@@ -1132,6 +1687,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       required(transportSecretPrefix, "Agent transport Secret name prefix");
       required(options.runtime.gatewayStorageClassName, "SQLite-compatible gateway storage class");
+      const nativeOpenClawSessionCapacity = options.runtime.nativeOpenClawSessionCapacity;
+      if (
+        nativeOpenClawSessionCapacity !== undefined &&
+        (!Number.isSafeInteger(nativeOpenClawSessionCapacity) ||
+          nativeOpenClawSessionCapacity < 1 ||
+          nativeOpenClawSessionCapacity > 1024)
+      ) {
+        throw new ConfigurationFailure(
+          "Native OpenClaw session capacity must be an integer between 1 and 1024.",
+        );
+      }
       if (options.runtime.codexSeccompProfile !== undefined) {
         validateCodexSeccompProfile(options.runtime.codexSeccompProfile);
       }
@@ -1139,7 +1705,67 @@ export class KubernetesComputeDriver implements ComputeDriver {
         if (asRecord(channels) === undefined) {
           throw new ConfigurationFailure("Channel runtime proxy must be explicitly configured.");
         }
-        channelProxy(channels.proxyUrl);
+        channelProxy(channels.proxyUrl, channels.managedProxy);
+      }
+    }
+    if (options.executionCluster !== undefined) {
+      const execution = options.executionCluster;
+      if (asRecord(execution) === undefined || execution.authentication?.mode !== "kubeconfig") {
+        throw new ConfigurationFailure(
+          "The execution cluster requires its own explicit kubeconfig.",
+        );
+      }
+      if (options.runtime === undefined || !options.gatewayRouting?.hostname) {
+        throw new ConfigurationFailure(
+          "Two-cluster execution requires runtime storage and an explicit CP routing hostname.",
+        );
+      }
+      const { executionCluster: _executionCluster, ...control } = options;
+      const { gatewayClients: _gatewayClients, ...network } = options.network;
+      KubernetesComputeDriver.validateConfiguration({
+        ...control,
+        authentication: execution.authentication,
+        gatewayRouting: execution.harnessRouting,
+        network: { ...network, dns: execution.network?.dns },
+      });
+      validateDnsHostname(
+        required(execution.harnessRouting?.hostname, "Harness routing hostname"),
+        "Harness routing hostname",
+      );
+      for (const [description, cidrs] of [
+        ["Harness endpoint", execution.network?.harnessEndpointCidrs],
+        ["Gateway endpoint", execution.network?.gatewayEndpointCidrs],
+        ["Execution status proxy", execution.network?.pluginStatusProxySourceCidrs],
+      ] as const) {
+        if (!Array.isArray(cidrs) || cidrs.length === 0) {
+          throw new ConfigurationFailure(`${description} CIDRs must be explicit and nonempty.`);
+        }
+        for (const cidr of cidrs) {
+          validateCidr(cidr, description);
+          if (cidr.endsWith("/0")) {
+            throw new ConfigurationFailure(`${description} must not allow all addresses.`);
+          }
+        }
+      }
+      if (execution.caBundle !== undefined) {
+        const certificates = execution.caBundle.match(
+          /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g,
+        );
+        if (
+          !certificates?.length ||
+          execution.caBundle
+            .replace(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g, "")
+            .trim()
+        ) {
+          throw new ConfigurationFailure("Execution trust must contain only PEM certificates.");
+        }
+        try {
+          for (const certificate of certificates) {
+            new X509Certificate(certificate);
+          }
+        } catch {
+          throw new ConfigurationFailure("Execution trust contains an invalid certificate.");
+        }
       }
     }
     if (options.gatewayRouting !== undefined) {
@@ -1157,6 +1783,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           validateDnsHostname(routing.hostname, "Gateway routing hostname");
         }
       }
+      validatePort(routing.endpointPort ?? 443, "Gateway routing endpoint port");
       validateKubernetesResourceName(
         required(routing.gatewayName, "Gateway routing Gateway name"),
         "Gateway routing Gateway name",
@@ -1170,6 +1797,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Gateway routing Envoy namespace",
       );
       validatePort(routing.envoyHttpsTargetPort ?? 10443, "Envoy HTTPS target port");
+      if (routing.sandbox !== undefined) {
+        validateDnsHostname(required(routing.sandbox.domain, "Sandbox domain"), "Sandbox domain");
+        validatePort(routing.sandbox.publicPort ?? 443, "Public sandbox port");
+        validatePort(options.network.gatewayPort + 1, "Gateway sandbox port");
+        if (options.runtime === undefined) {
+          throw new ConfigurationFailure("Sandbox routing requires a native Gateway runtime.");
+        }
+      }
     }
   }
 
@@ -1180,6 +1815,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       readonly implementation?: string;
       readonly lifecycleDrivers?: readonly Driver[];
       readonly sandboxDriver?: SandboxDriver;
+      readonly credentialGatewayDriver?: CredentialGatewayDriver;
       readonly nodeEnrollment?: GatewayNodeEnrollment;
       readonly readNodeCa?: () => Promise<string | undefined>;
     } = {},
@@ -1191,7 +1827,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "Kubernetes Compute Driver implementation",
     );
     this.options = options;
+    if (options.runtime !== undefined) {
+      this.requiresAgentRuntimeCredentials = true;
+    }
     this.sandboxDriver = selection.sandboxDriver;
+    if (selection.credentialGatewayDriver !== undefined && selection.sandboxDriver === undefined) {
+      throw new ConfigurationFailure(
+        "The Credential Gateway Driver requires a paired Sandbox Driver.",
+      );
+    }
+    this.credentialGatewayDriver = selection.credentialGatewayDriver;
     this.nodeEnrollment = selection.nodeEnrollment;
     this.readNodeCa = selection.readNodeCa;
     const lifecycleDrivers = selection.lifecycleDrivers ?? [];
@@ -1211,32 +1856,57 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   async preflight(): Promise<ComputePreflightResult> {
-    const clients = await this.clients();
-    const observedVersion = kubernetesVersion(
-      (await this.request(() => clients.version.getCode())).gitVersion,
-    );
-    const namespaces = await this.request(() =>
-      clients.core.listNamespace({
-        limit: 1,
-        timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
-      }),
-    );
-    if (!Array.isArray(namespaces.items)) {
-      throw new Error("The authenticated Kubernetes Namespace preflight returned invalid data.");
+    const warnings: { code: "KUBERNETES_VERSION_BELOW_MINIMUM"; message: string }[] = [];
+    let controlIdentity: string | undefined;
+    const planes =
+      this.options.executionCluster === undefined
+        ? (["control"] as const)
+        : (["control", "execution"] as const);
+    for (const plane of planes) {
+      const clients = await this.clients(plane);
+      const observedVersion = kubernetesVersion(
+        (await this.request(() => clients.version.getCode())).gitVersion,
+      );
+      const namespaces = await this.request(() =>
+        clients.core.listNamespace({
+          limit: 1,
+          timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+        }),
+      );
+      if (!Array.isArray(namespaces.items)) {
+        throw new Error("The authenticated Kubernetes Namespace preflight returned invalid data.");
+      }
+      if (versionIsOlder(observedVersion.parts, MINIMUM_KUBERNETES_VERSION_PARTS)) {
+        warnings.push({
+          code: "KUBERNETES_VERSION_BELOW_MINIMUM",
+          message: `Kubernetes ${observedVersion.normalized} is below the supported minimum ${MINIMUM_KUBERNETES_VERSION}.`,
+        });
+      }
+      if (this.options.executionCluster !== undefined) {
+        const system = await this.request(() =>
+          clients.core.readNamespace({ name: "kube-system" }),
+        );
+        const identity = required(system.metadata?.uid, "Kubernetes cluster identity");
+        if (plane === "control") {
+          controlIdentity = identity;
+        } else if (identity === controlIdentity) {
+          throw new ConfigurationFailure(
+            "The execution target must be a distinct Kubernetes cluster.",
+          );
+        }
+      }
     }
-    return {
-      warnings: versionIsOlder(observedVersion.parts, MINIMUM_KUBERNETES_VERSION_PARTS)
-        ? [
-            {
-              code: "KUBERNETES_VERSION_BELOW_MINIMUM",
-              message: `Kubernetes ${observedVersion.normalized} is below the supported minimum ${MINIMUM_KUBERNETES_VERSION}.`,
-            },
-          ]
-        : [],
-    };
+    return { warnings };
   }
 
   validateRepositoryCredentialSupport(sandboxDriverId?: string): void {
+    // TODO(two-cluster acceptance): qualify a routable, authenticated repository
+    // credential endpoint before allowing this currently cluster-local service.
+    if (this.options.executionCluster !== undefined) {
+      throw new ConfigurationFailure(
+        "Repository credential delivery is not supported by the experimental two-cluster profile.",
+      );
+    }
     if (
       this.options.runtime === undefined ||
       this.options.network.repositoryCredentials === undefined ||
@@ -1282,15 +1952,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
     auth: HarnessAuthSnapshot,
     configuration: OpenClawConfigurationDocument,
     secretBindings?: SecretBindings,
+    credentialSourceType?: CredentialSourceType,
   ): void {
-    const embedded = harness.mode === "embedded" && harness.id === "openclaw";
-    const dedicated = harness.mode === "dedicated" && harness.id === "codex";
+    requireNativeWorkerSandbox(harness, this.sandboxDriver);
+    const openclaw = harness.id === "openclaw";
+    const embedded = harness.mode === "embedded" && openclaw;
+    const dedicated = harness.mode === "dedicated";
+    const codex = dedicated && harness.id === "codex";
+    const native = dedicated && openclaw;
+    if (native && asRecord(configuration.cloudWorkers)?.requiredProfile !== undefined) {
+      throw new ConfigurationFailure(
+        `Dedicated OpenClaw required profile ${NATIVE_WORKER_PROFILE} is owned by the selected Compute Driver.`,
+      );
+    }
     if (
-      (!embedded && !dedicated) ||
+      (!embedded && !codex && !native) ||
       !auth ||
       (auth.method !== "api_key" &&
         auth.method !== "codex_pat" &&
-        auth.method !== "chatgpt_service_account") ||
+        auth.method !== "chatgpt_service_account" &&
+        auth.method !== "credential_source") ||
       (embedded && auth.method !== "api_key")
     ) {
       throw new ConfigurationFailure(
@@ -1308,6 +1989,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Harness authentication credential does not match the admitted account.",
       );
     }
+    if (auth.method === "credential_source") {
+      // The paired Sandbox injects the credential, so this path never projects a model Secret.
+      if (
+        this.sandboxDriver === undefined ||
+        this.credentialGatewayDriver === undefined ||
+        auth.credentialGatewayId !== this.credentialGatewayDriver.id ||
+        credentialSourceType?.type !== auth.sourceType ||
+        credentialSourceType.harnessAuth?.loginMode !== "api_key" ||
+        credentialSourceType.harnessAuth.modelProvider !== "openai"
+      ) {
+        throw new ConfigurationFailure(
+          "Credential-source Harness authentication requires the paired Sandbox and an OpenAI API key source.",
+        );
+      }
+    }
     const agents = asRecord(configuration.agents);
     const defaults = asRecord(agents?.defaults);
     const entries = Object.values(asRecord(agents?.entries) ?? {});
@@ -1320,10 +2016,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ? [selection]
         : [value?.primary, ...(Array.isArray(value?.fallbacks) ? value.fallbacks : [])];
     });
-    const native = harnessModelAuthentication(configuration);
-    const prefixes = embedded ? [`${native.providerId}/`] : ["openai/", "codex/"];
+    const authentication = harnessModelAuthentication(configuration);
+    const prefixes = embedded
+      ? [`${authentication.providerId}/`]
+      : native
+        ? ["openai/"]
+        : ["openai/", "codex/"];
     if (
-      (embedded && native.providerId === "codex") ||
+      (embedded && authentication.providerId === "codex") ||
       models.length === 0 ||
       models.some(
         (model) =>
@@ -1335,8 +2035,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Harness authentication requires a compatible model provider.",
       );
     }
-    if (embedded) {
+    if (openclaw) {
       harnessProbeConfiguration(configuration);
+    }
+    if (native) {
+      nativeRuntimeConfiguration(configuration);
     }
     const conflictingAuth = () =>
       new ConfigurationFailure("Model credentials must use the Harness authentication binding.");
@@ -1371,10 +2074,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (config?.apiKey === undefined) {
         continue;
       }
-      if (!embedded) {
+      if (!openclaw) {
         throw conflictingAuth();
       }
-      if (config.apiKey === `\${${native.environmentName}}`) {
+      if (config.apiKey === `\${${authentication.environmentName}}`) {
         continue;
       }
       const ref = asRecord(config.apiKey);
@@ -1386,10 +2089,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
         !ref ||
         Object.keys(ref).length !== 3 ||
         ref.source !== "env" ||
-        ref.id !== native.environmentName ||
+        ref.id !== authentication.environmentName ||
         source?.source !== "env" ||
         (source.allowlist !== undefined &&
-          (!Array.isArray(source.allowlist) || !source.allowlist.includes(native.environmentName)))
+          (!Array.isArray(source.allowlist) ||
+            !source.allowlist.includes(authentication.environmentName)))
       ) {
         throw conflictingAuth();
       }
@@ -1402,7 +2106,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (routing === undefined) {
       return undefined;
     }
-    return `wss://${this.gatewayRoutingHostname(routing)}${this.gatewayRoutePath(revision)}`;
+    const hostname = this.gatewayRoutingHostname(routing);
+    const authority =
+      routing.endpointPort === undefined || routing.endpointPort === 443
+        ? hostname
+        : `${hostname}:${routing.endpointPort}`;
+    return `wss://${authority}${this.gatewayRoutePath(revision)}`;
   }
 
   async getAgentRuntimeCredentialStatus(
@@ -1451,12 +2160,75 @@ export class KubernetesComputeDriver implements ComputeDriver {
     });
   }
 
+  async diagnoseAgentDeployment(
+    binding: ComputeAgentRevisionBinding,
+  ): Promise<AgentDeploymentDiagnostics> {
+    const revision = binding.revision;
+    if (
+      revision.namespaceId !== binding.namespace.id ||
+      revision.agentId !== binding.agent.id ||
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new ResourceConflictError("The Agent deployment diagnostic binding is invalid.");
+    }
+    const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const ownerSignal = currentComputeAbortSignal();
+    const signal = ownerSignal === undefined ? deadline : AbortSignal.any([ownerSignal, deadline]);
+    try {
+      return await withComputeAbortSignal(signal, async () => {
+        const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
+        const observedNamespace = await this.getNamespace(namespace);
+        if (observedNamespace === undefined || observedNamespace.status?.phase !== "Active") {
+          throw new DependencyUnavailableError(
+            "The Agent deployment Kubernetes namespace is unavailable.",
+          );
+        }
+        this.verifyNamespaceOwnership(
+          observedNamespace,
+          { namespaceId: revision.namespaceId },
+          external,
+        );
+        const reports = await Promise.all(
+          this.runtimeStatusContainers(revision).map(async (container) => {
+            const checks = await this.runtimeDiagnosticChecks(revision, namespace, container);
+            if (checks === undefined) {
+              return [
+                {
+                  component: container,
+                  check: "runtime-status",
+                  state: "unknown",
+                  checkedAt: null,
+                  code: "UNAVAILABLE",
+                } satisfies RuntimeDiagnosticCheck,
+              ];
+            }
+            return checks;
+          }),
+        );
+        return {
+          revisionId: revision.id,
+          observedAt: new Date().toISOString(),
+          checks: reports.flat().slice(0, 32),
+        };
+      });
+    } catch (error) {
+      if (ownerSignal?.aborted) {
+        throw ownerSignal.reason;
+      }
+      if (deadline.aborted) {
+        throw new DependencyUnavailableError("Runtime diagnostics timed out.");
+      }
+      throw error;
+    }
+  }
+
   async deleteAgentRuntimeCredentials(binding: ComputeAgentBinding): Promise<void> {
     await this.withRuntimeCredentialErrors(async () => {
       if (this.options.runtime === undefined) {
         const context = await this.agentResourceContext(binding);
         if (context !== undefined) {
-          await this.deleteSharedWorkspaceClaim(context.ownership, context.namespace);
+          await this.deleteHarnessWorkspaceClaim(context.ownership, context.namespace);
         }
         return;
       }
@@ -1467,11 +2239,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       // A draft mode edit does not describe historical runtime placement. Final
       // Agent deletion checks both targets, with ownership and UID fences.
-      const target = kubernetesGatewayNamespaceName(namespaceId);
-      const observed = await this.get("Namespace", target);
+      const target = this.controlNamespace(namespaceId);
+      const observed = await this.getNamespace(target);
       if (observed !== undefined) {
         this.verifyGatewayNamespace(observed, { namespaceId });
         await this.deleteGatewayPrivateStateClaim({ namespaceId, agentId }, target);
+        await this.deleteOwnedNamespacedResource(
+          "ConfigMap",
+          this.workspaceNodeBindingName(agentId),
+          { namespaceId, agentId },
+          target,
+        );
         for (const name of [
           `${this.options.runtime.transportSecretPrefix}-${sha256Hex(agentId, 12)}`,
           `gateway-password-${sha256Hex(agentId, 12)}`,
@@ -1493,16 +2271,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       // Only Agent deletion owns durable state. Revision retirement also runs after
       // stop, when no gateway remains to distinguish it from final teardown.
       await this.deleteGatewayPrivateStateClaim(context.ownership, context.namespace);
-      await this.deleteSharedWorkspaceClaim(context.ownership, context.namespace);
+      await this.deleteHarnessWorkspaceClaim(context.ownership, context.namespace);
+      await this.deleteWorkspaceNodes(agentId, context.ownership, context.namespace);
       const setupName = this.workspaceSetupSecretName(binding.agent.id);
       const setup = await this.getOwned("Secret", setupName, context.namespace, context.ownership);
       if (setup !== undefined) {
-        const clients = await this.clients();
+        const clients = await this.clients(context.namespace.plane);
         await this.request(
           () =>
             clients.core.deleteNamespacedSecret({
               name: setupName,
-              namespace: context.namespace,
+              namespace: context.namespace.name,
               body: {
                 preconditions: { uid: required(setup.metadata.uid, "Workspace setup Secret UID") },
               },
@@ -1529,8 +2308,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const serviceAccountId = required(input.serviceAccountId, "ServiceAccount ID");
     const accessToken = required(input.accessToken, "ServiceAccount access token");
     const workspaceId = required(input.workspaceId, "ServiceAccount workspace ID");
-    const namespace = kubernetesGatewayNamespaceName(namespaceId);
-    const observed = await this.get("Namespace", namespace);
+    const namespace = this.controlNamespace(namespaceId);
+    const observed = await this.getNamespace(namespace);
     if (observed === undefined || observed.status?.phase !== "Active") {
       throw new OwnershipFailure("The ServiceAccount Kubernetes namespace is unavailable.");
     }
@@ -1543,11 +2322,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("The ServiceAccount credential Secret already exists.");
     }
 
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     await this.request(
       () =>
         clients.core.createNamespacedSecret({
-          namespace,
+          namespace: namespace.name,
           body: {
             ...this.manifest("v1", "Secret", name, ownership, namespace),
             type: "Opaque",
@@ -1574,8 +2353,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new OwnershipFailure("Refusing another ServiceAccount's credential Secret.");
     }
 
-    const namespace = kubernetesGatewayNamespaceName(namespaceId);
-    const tenant = await this.get("Namespace", namespace);
+    const namespace = this.controlNamespace(namespaceId);
+    const tenant = await this.getNamespace(namespace);
     if (tenant === undefined) {
       return;
     }
@@ -1587,12 +2366,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (existing === undefined) {
       return;
     }
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     await this.request(
       () =>
         clients.core.deleteNamespacedSecret({
           name,
-          namespace,
+          namespace: namespace.name,
           ...(existing.metadata.uid === undefined
             ? {}
             : { body: { preconditions: { uid: existing.metadata.uid } } }),
@@ -1611,28 +2390,28 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const placement =
         selection === undefined
           ? await this.resolveNamespace(namespace.id)
-          : { name: selection, external: true };
+          : { name: { name: selection, plane: "execution" as const }, external: true };
       const { name, external: externallyManaged } = placement;
       if (externallyManaged && selection === undefined) {
         throw new OwnershipFailure(
-          `Existing Kubernetes namespace ${name} was not explicitly selected.`,
+          `Existing Kubernetes namespace ${name.name} was not explicitly selected.`,
         );
       }
       if (!externallyManaged) {
-        const desired = this.manifest("v1", "Namespace", name, ownership);
+        const desired = this.manifest("v1", "Namespace", name.name, ownership);
         desired.metadata.labels = {
           ...desired.metadata.labels,
-          ...this.gatewayMembershipLabels(),
+          ...this.gatewayMembershipLabels(this.options.executionCluster?.harnessRouting),
           "pod-security.kubernetes.io/enforce": "restricted",
           "pod-security.kubernetes.io/audit": "restricted",
           "pod-security.kubernetes.io/warn": "restricted",
         };
-        await this.reconcile(desired, ownership);
+        await this.reconcile(desired, ownership, name);
       }
-      const observed = await this.get("Namespace", name);
+      const observed = await this.getNamespace(name);
       if (observed === undefined) {
         if (externallyManaged) {
-          throw new OwnershipFailure(`Existing Kubernetes namespace ${name} does not exist.`);
+          throw new OwnershipFailure(`Existing Kubernetes namespace ${name.name} does not exist.`);
         }
         return result;
       }
@@ -1647,7 +2426,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         (externallyManaged && observed.metadata.deletionTimestamp !== undefined)
       ) {
         if (externallyManaged) {
-          throw new OwnershipFailure(`Existing Kubernetes namespace ${name} must be active.`);
+          throw new OwnershipFailure(`Existing Kubernetes namespace ${name.name} must be active.`);
         }
         return result;
       }
@@ -1673,10 +2452,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  private gatewayNamespace(revision: AgentRevision, harnessNamespace: string): string {
+  private gatewayNamespace(
+    revision: AgentRevision,
+    harnessNamespace: KubernetesNamespaceAddress,
+  ): KubernetesNamespaceAddress {
     return revision.harness.mode === "embedded"
       ? harnessNamespace
-      : kubernetesGatewayNamespaceName(revision.namespaceId);
+      : this.controlNamespace(revision.namespaceId);
   }
 
   private gatewayNamespaceManifest(ownership: Ownership): ManagedKubernetesObject<"Namespace"> {
@@ -1717,8 +2499,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private async deleteGatewayNamespace(ownership: Ownership): Promise<boolean> {
-    const name = kubernetesGatewayNamespaceName(ownership.namespaceId);
-    const existing = await this.get("Namespace", name);
+    const name = this.controlNamespace(ownership.namespaceId);
+    const existing = await this.getNamespace(name);
     if (existing === undefined) {
       return true;
     }
@@ -1726,33 +2508,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (existing.metadata.deletionTimestamp !== undefined) {
       return false;
     }
-    const clients = await this.clients();
+    const clients = await this.clients(name.plane);
     await this.request(
       () =>
         clients.core.deleteNamespace({
-          name,
+          name: name.name,
           body: {
             preconditions: { uid: required(existing.metadata.uid, "Gateway namespace UID") },
           },
         }),
       { mutating: true },
     );
-    return (await this.get("Namespace", name)) === undefined;
+    return (await this.getNamespace(name)) === undefined;
   }
 
   private async ensureGatewayNamespace(ownership: Ownership): Promise<boolean> {
     const desired = this.gatewayNamespaceManifest(ownership);
-    const name = desired.metadata.name;
-    const existing = await this.get("Namespace", name);
+    const name = this.controlNamespace(ownership.namespaceId);
+    const existing = await this.getNamespace(name);
     if (existing !== undefined) {
       this.verifyGatewayNamespace(existing, ownership);
     }
     // Namespace resources have a separate discovery label, so use their own exact metadata owner.
     if (existing === undefined) {
-      const clients = await this.clients();
+      const clients = await this.clients(name.plane);
       await this.request(() => clients.core.createNamespace({ body: desired }), { mutating: true });
     }
-    const observed = await this.get("Namespace", name);
+    const observed = await this.getNamespace(name);
     if (observed === undefined) {
       return false;
     }
@@ -1766,13 +2548,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async requireGatewayNamespace(
     revision: AgentRevision,
-    harnessNamespace: string,
-  ): Promise<string> {
+    harnessNamespace: KubernetesNamespaceAddress,
+  ): Promise<KubernetesNamespaceAddress> {
     const namespace = this.gatewayNamespace(revision, harnessNamespace);
     if (revision.harness.mode === "embedded") {
       return namespace;
     }
-    if (namespace === harnessNamespace) {
+    if (namespace.name === harnessNamespace.name && this.options.executionCluster === undefined) {
       throw new ConfigurationFailure("Gateway and Harness runtime targets must be separate.");
     }
     if (
@@ -1783,7 +2565,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Dedicated Gateways require runtime.gatewayNodeSelector for control-plane scheduling.",
       );
     }
-    const observed = await this.get("Namespace", namespace);
+    const observed = await this.getNamespace(namespace);
     if (observed === undefined) {
       throw new DependencyUnavailableError("The control-plane Gateway namespace is unavailable.");
     }
@@ -1794,7 +2576,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return namespace;
   }
 
-  private async prepareNamespaceInfrastructure(ownership: Ownership, name: string): Promise<void> {
+  private async prepareNamespaceInfrastructure(
+    ownership: Ownership,
+    name: KubernetesNamespaceAddress,
+  ): Promise<void> {
     await this.reconcile(
       {
         ...this.manifest("v1", "ResourceQuota", "openclaw-quota", ownership, name),
@@ -1828,20 +2613,23 @@ export class KubernetesComputeDriver implements ComputeDriver {
     this.lifecycleStarted = true;
     const result = { namespaceId: namespace.id, namespaceDeleted: false };
     try {
-      const clients = await this.clients();
+      const clients = await this.clients("execution");
       const { name, external } =
         namespace.existingNamespace === undefined
           ? await this.resolveNamespace(namespace.id)
-          : { name: namespace.existingNamespace, external: true };
+          : {
+              name: { name: namespace.existingNamespace, plane: "execution" as const },
+              external: true,
+            };
       const ownership = { namespaceId: namespace.id };
-      const existing = await this.get("Namespace", name);
+      const existing = await this.getNamespace(name);
       if (
         existing === undefined ||
         (external &&
           existing.metadata.labels?.["openclaw.dev/namespace"] === undefined &&
           existing.metadata.annotations?.["openclaw.dev/namespace-id"] === undefined)
       ) {
-        const gateway = await this.get("Namespace", kubernetesGatewayNamespaceName(namespace.id));
+        const gateway = await this.getNamespace(this.controlNamespace(namespace.id));
         if (gateway !== undefined) {
           this.verifyGatewayNamespace(gateway, ownership);
         }
@@ -1855,7 +2643,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ) {
         return result;
       }
-      const gateway = await this.get("Namespace", kubernetesGatewayNamespaceName(namespace.id));
+      const gateway = await this.getNamespace(this.controlNamespace(namespace.id));
       if (gateway !== undefined) {
         this.verifyGatewayNamespace(gateway, ownership);
       }
@@ -1877,7 +2665,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         if (!deleted) {
           return result;
         }
-        const remaining = await this.get("Namespace", name);
+        const remaining = await this.getNamespace(name);
         if (remaining !== undefined) {
           this.verifyNamespaceOwnership(remaining, ownership, true);
         }
@@ -1886,14 +2674,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       await this.request(
         () =>
           clients.core.deleteNamespace({
-            name,
+            name: name.name,
             ...(existing.metadata.uid === undefined
               ? {}
               : { body: { preconditions: { uid: existing.metadata.uid } } }),
           }),
         { mutating: true },
       );
-      const remaining = await this.get("Namespace", name);
+      const remaining = await this.getNamespace(name);
       if (remaining === undefined) {
         return { ...result, namespaceDeleted: true };
       }
@@ -1902,6 +2690,99 @@ export class KubernetesComputeDriver implements ComputeDriver {
     } catch (error) {
       return { ...result, failure: failure(error) };
     }
+  }
+
+  async getRuntimeImages(revision: AgentRevision): Promise<readonly RuntimeImage[]> {
+    if (
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new OwnershipFailure("The revision belongs to another Compute Driver.");
+    }
+    const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
+    const images: RuntimeImage[] = [];
+    for (const role of ["gateway", "agent"] as const) {
+      const targetNamespace =
+        role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+      const pods = await this.revisionPods(revision, targetNamespace, role);
+      // Old or external images can lack the metadata endpoint. Image identity
+      // still comes from Kubernetes; never infer a commit from a configured tag.
+      // Optional provenance must leave room within the console's request deadline.
+      const ownerSignal = currentComputeAbortSignal();
+      const metadataDeadline = AbortSignal.timeout(2_000);
+      const metadataSignal = ownerSignal
+        ? AbortSignal.any([ownerSignal, metadataDeadline])
+        : metadataDeadline;
+      const provenance =
+        pods.length === 0
+          ? undefined
+          : await withComputeAbortSignal(metadataSignal, () =>
+              this.privateStatusReadback(revision, namespace, role, "/openclaw/runtime/image"),
+            ).catch(() => undefined);
+      for (const pod of pods) {
+        const metadata = asRecord(pod.metadata)!;
+        if (metadata.deletionTimestamp !== undefined) {
+          continue;
+        }
+        const spec = asRecord(pod.spec);
+        const status = asRecord(pod.status);
+        const commit = asRecord(provenance?.status)?.commit;
+        const openclawCommit = asRecord(provenance?.status)?.openclawCommit;
+        const sameContainer =
+          provenance?.podUid === metadata.uid &&
+          provenance?.containerId !== undefined &&
+          provenance.containerId === this.podContainerId(pod, role);
+        const runtimeImageId = (
+          Array.isArray(status?.containerStatuses) ? status.containerStatuses : []
+        )
+          .map(asRecord)
+          .find((item) => item?.name === role)?.imageID;
+        for (const [containers, states] of [
+          [spec?.containers, status?.containerStatuses],
+          [spec?.initContainers, status?.initContainerStatuses],
+          [spec?.ephemeralContainers, status?.ephemeralContainerStatuses],
+        ]) {
+          if (!Array.isArray(containers)) {
+            continue;
+          }
+          for (const value of containers) {
+            const container = asRecord(value);
+            if (!isNonEmptyString(container?.name) || !isNonEmptyString(container?.image)) {
+              throw new DependencyUnavailableError(
+                "Kubernetes returned incomplete image identity.",
+              );
+            }
+            const observed = (Array.isArray(states) ? states : [])
+              .map(asRecord)
+              .find((item) => item?.name === container.name);
+            const imageId = isNonEmptyString(observed?.imageID) ? observed.imageID : null;
+            images.push({
+              workload: `${targetNamespace.name}/${metadata.name}`,
+              container: container.name,
+              image: container.image,
+              imageId,
+              commit:
+                sameContainer &&
+                imageId !== null &&
+                imageId === runtimeImageId &&
+                typeof commit === "string" &&
+                /^[a-f0-9]{40}$/.test(commit)
+                  ? commit
+                  : null,
+              openclawCommit:
+                sameContainer &&
+                imageId !== null &&
+                imageId === runtimeImageId &&
+                typeof openclawCommit === "string" &&
+                /^[a-f0-9]{40}$/.test(openclawCommit)
+                  ? openclawCommit
+                  : null,
+            });
+          }
+        }
+      }
+    }
+    return images;
   }
 
   async prepareRevision(
@@ -1942,17 +2823,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
       repositoryConsumer?.role !== "gateway"
         ? revision.configuration
         : repositoryNativeConfiguration(revision.configuration);
-    const admittedNativeConfiguration =
-      this.kubernetesGatewayConfigurationDocument(nativeConfiguration);
+    const admittedNativeConfiguration = this.gatewaySandboxConfiguration(
+      revision,
+      this.kubernetesGatewayConfigurationDocument(nativeConfiguration),
+    );
     const admittedRevision = { ...revision, configuration: admittedNativeConfiguration };
     const embedded = revision.harness.mode === "embedded";
     if (
       (embedded && revision.harness.id !== "openclaw") ||
-      (!embedded && (revision.harness.mode !== "dedicated" || revision.harness.id !== "codex"))
+      (!embedded &&
+        (revision.harness.mode !== "dedicated" ||
+          (revision.harness.id !== "codex" && revision.harness.id !== "openclaw")))
     ) {
       throw new ConfigurationFailure("AgentRevision Harness execution topology is unsupported.");
     }
     const sandboxDriver = this.sandboxDriverForRevision(revision);
+    requireNativeWorkerSandbox(revision.harness, sandboxDriver);
     if (sandboxDriver !== undefined && embedded) {
       throw new ConfigurationFailure("SandboxDriver support is limited to dedicated Harnesses.");
     }
@@ -1962,6 +2848,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       revision.harnessAuth,
       admittedRevision.configuration,
       revision.secretBindings,
+      await this.admittedCredentialSourceType(revision),
     );
     const channels = this.enabledChannels(admittedRevision);
     this.verifyGatewayRoutingConfiguration(admittedRevision);
@@ -1969,16 +2856,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const secretEnvironment = this.secretEnvironmentForRevision(
       revision,
       context,
-      kubernetesGatewayNamespaceName(revision.namespaceId),
+      this.controlNamespace(revision.namespaceId),
     );
     const harnessAuth = this.harnessAuthForRevision(
       admittedRevision,
       context,
-      kubernetesGatewayNamespaceName(revision.namespaceId),
+      this.controlNamespace(revision.namespaceId),
     );
     const gatewayNamespace = await this.requireGatewayNamespace(revision, namespace);
+    const nativeRuntime = nativeRuntimeSnapshot(admittedRevision);
     const tenantOwnership = { namespaceId: revision.namespaceId };
-    const observed = await this.get("Namespace", namespace);
+    const observed = await this.getNamespace(namespace);
     if (observed === undefined) {
       return result;
     }
@@ -2007,19 +2895,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
     const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
-    const pluginRuntime = this.pluginRuntimeSnapshot(admittedRevision);
     const pluginOwnership = this.pluginRuntimeOwnership(revision);
-    const hasEnabledPluginSelections =
-      pluginRuntime !== undefined &&
-      Object.values(pluginRuntime.runtime.selections).some((selection) => selection.enabled);
-    const pluginStatusContainer =
-      sandboxDriver?.provisionHarness === undefined &&
-      pluginRuntime !== undefined &&
-      hasEnabledPluginSelections
-        ? embedded
-          ? "gateway"
-          : "agent"
-        : undefined;
     const incomplete = async (): Promise<ComputeReadiness> => {
       const runtimeFailure = await this.safeRuntimeFailureObservation(
         revision,
@@ -2030,8 +2906,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
     const ready = async (
       expectedWarnings?: readonly PluginDeploymentWarning[],
+      statusContainer: "agent" | "gateway" | undefined = pluginStatusContainer,
     ): Promise<ComputeReadiness> => {
-      if (pluginStatusContainer === undefined) {
+      if (statusContainer === undefined) {
         await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
         return {
           ...result,
@@ -2044,13 +2921,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const status = await this.pluginRuntimeStatus(
         revision,
         namespace,
-        pluginStatusContainer,
+        statusContainer,
         expectedWarnings,
       );
       if (
         status !== undefined &&
-        repositoryMaterial !== undefined &&
-        !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
+        material?.kind === "ready" &&
+        !(await this.repositoryMaterialReady(revision, namespace, material.spec))
       ) {
         return incomplete();
       }
@@ -2066,7 +2943,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           };
     };
     await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace);
-    const document = JSON.stringify(admittedNativeConfiguration);
+    const document = JSON.stringify(gatewayConfigurationDocument(admittedRevision, nativeRuntime));
     const configuration = this.gatewayConfiguration(
       admittedRevision,
       await this.workspaceNodeDeviceId(admittedRevision, namespace),
@@ -2133,6 +3010,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
             "The active revision's workspace node binding cannot change.",
           );
         }
+        const delivered = await this.deliveredWorkspaceNodeBinding(
+          configuration,
+          gatewayNamespace,
+          gatewayOwnership,
+        );
+        if (
+          delivered?.revisionId === revision.id &&
+          delivered.deviceId !== configuration.workspaceNodeId
+        ) {
+          throw new ConfigurationFailure(
+            "The active revision's workspace node binding cannot change.",
+          );
+        }
       }
     }
     const material =
@@ -2143,6 +3033,25 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return { ...result, repositoryCredentialMaterialMissing: material.missing };
     }
     const repositoryMaterial = material?.spec;
+    const pluginRuntime = this.pluginRuntimeSnapshot(
+      admittedRevision,
+      this.codexRepositoryBrokerNetworkPolicy(
+        admittedRevision,
+        repositoryConsumer,
+        repositoryMaterial,
+      ),
+    );
+    const hasEnabledPluginSelections =
+      pluginRuntime !== undefined &&
+      Object.values(pluginRuntime.runtime.selections).some((selection) => selection.enabled);
+    const pluginStatusContainer =
+      sandboxDriver?.provisionHarness === undefined &&
+      pluginRuntime !== undefined &&
+      hasEnabledPluginSelections
+        ? embedded
+          ? "gateway"
+          : "agent"
+        : undefined;
     const snapshot = this.manifest(
       "v1",
       "ConfigMap",
@@ -2158,7 +3067,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
           annotations: { ...snapshot.metadata.annotations, ...configuration.annotations },
         },
         immutable: true,
-        data: { [CONFIGURATION_DOCUMENT]: document },
+        data: {
+          [CONFIGURATION_DOCUMENT]: document,
+          ...(this.options.executionCluster?.caBundle === undefined
+            ? {}
+            : { "execution-ca.pem": this.options.executionCluster.caBundle }),
+        },
       },
       gatewayOwnership,
       gatewayNamespace,
@@ -2186,13 +3100,38 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayAccountOwnership,
       gatewayNamespace,
     );
+    // Preparation observes the serving Gateway of another revision and never
+    // re-renders it; activation replaces it and re-applies these policies
+    // strictly. Until then a Gateway from a pre-profile template keeps its
+    // Gateway-side grants (model and repository egress when embedded; Harness
+    // transport and plugin status when dedicated).
+    // The Agent-scoped policies are shared by name across revisions, so while
+    // another revision serves they select every revision of this Agent.
+    const predecessorServes =
+      existingGateway !== undefined && existingGatewayRevisionId !== revision.id;
+    const preparation: AgentPolicyPreparation = {
+      anyRevision: predecessorServes,
+      unprofiledGateway:
+        predecessorServes &&
+        asRecord(asRecord(asRecord(existingGateway.spec?.template)?.metadata)?.labels)?.[
+          NETWORK_PROFILE_LABEL
+        ] !== ORDINARY_NETWORK_PROFILE,
+    };
     if (embedded) {
-      for (const policy of this.agentNetworkPolicies(revision, namespace)) {
-        await this.reconcile(policy, gatewayOwnership, policy.metadata.namespace);
+      for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
+        revision,
+        namespace,
+        preparation,
+      )) {
+        await this.reconcile(policy, gatewayOwnership, target);
       }
     } else if (this.options.runtime !== undefined) {
-      for (const policy of this.pluginStatusNetworkPolicies(revision, namespace)) {
-        await this.reconcile(policy, gatewayOwnership, policy.metadata.namespace);
+      for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
+        revision,
+        namespace,
+        preparation,
+      )) {
+        await this.reconcile(policy, gatewayOwnership, target);
       }
     }
     if (
@@ -2208,7 +3147,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (!embedded) {
       await this.reconcile(
-        this.sharedWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
+        this.harnessWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
         gatewayOwnership,
         namespace,
       );
@@ -2241,20 +3180,39 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     let launchPrepared = false;
     try {
-      const embeddedEnvironment = embedded
+      const gatewayEnvironment = embedded
         ? (await this.lifecycle.beforeWorkloadStart(revision)).environment
         : {};
       if (embedded) {
         launchPrepared = true;
       }
+      // A first dedicated deploy of a Deployment-backed Codex Harness creates its
+      // Gateway alongside the Harness. The Gateway reads Harness plugin status
+      // through the agent Service, which selects this revision from the first
+      // pass; its endpoints list only ready pods, so the Gateway waits (without
+      // a deadline) until the Harness reports. A redeploy keeps the Service on
+      // the serving revision until activation.
+      const initialDedicatedCodexGateway =
+        !embedded &&
+        this.options.runtime !== undefined &&
+        existingGateway === undefined &&
+        nativeRuntime === undefined &&
+        sandboxDriver?.provisionHarness === undefined;
       const deferInitialDedicatedGatewayForPluginStatus =
         !embedded &&
         this.options.runtime !== undefined &&
-        pluginStatusContainer !== undefined &&
+        pluginStatusContainer === "agent" &&
         existingGateway === undefined &&
-        workspaceSetup === undefined;
+        workspaceSetup === undefined &&
+        !initialDedicatedCodexGateway;
       const reconcileGatewayDeployment = async (environment: Record<string, string>) => {
         await this.reconcileChannelNetworkPolicy(revision, channels, gatewayNamespace);
+        await this.deliverWorkspaceNodeBinding(
+          revision,
+          configuration,
+          gatewayNamespace,
+          gatewayOwnership,
+        );
         await this.reconcile(
           this.deployment(
             gatewayName,
@@ -2275,17 +3233,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
             [],
             workspaceSetup,
             repositoryConsumer?.role === "gateway" ? repositoryMaterial : undefined,
+            undefined,
           ),
           gatewayOwnership,
           gatewayNamespace,
         );
       };
       if (
-        (existingGateway === undefined && !deferInitialDedicatedGatewayForPluginStatus) ||
+        (existingGateway === undefined &&
+          !deferInitialDedicatedGatewayForPluginStatus &&
+          !initialDedicatedCodexGateway) ||
         this.options.runtime === undefined ||
         existingGateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id
       ) {
-        await reconcileGatewayDeployment(embeddedEnvironment);
+        await reconcileGatewayDeployment(gatewayEnvironment);
       }
       const existingGatewayService = await this.getOwned(
         "Service",
@@ -2300,11 +3261,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
           asRecord(existingGatewayService.spec?.selector)?.["app.kubernetes.io/name"] ===
             `${gatewayName}-inactive`);
       await this.reconcile(
-        this.service(gatewayName, gatewayOwnership, gatewayNamespace, {
-          "app.kubernetes.io/name": inactiveEmbeddedGateway
-            ? `${gatewayName}-inactive`
-            : gatewayName,
-        }),
+        this.service(
+          gatewayName,
+          gatewayOwnership,
+          gatewayNamespace,
+          inactiveEmbeddedGateway
+            ? { "app.kubernetes.io/name": `${gatewayName}-inactive` }
+            : this.gatewayServiceSelector(revision, gatewayName),
+        ),
         gatewayOwnership,
         gatewayNamespace,
       );
@@ -2316,12 +3280,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayNamespace,
           gatewayOwnership,
         );
-        if (gateway === undefined || !this.deploymentReady(gateway)) {
+        if (
+          gateway === undefined ||
+          !this.deploymentReady(
+            gateway,
+            gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id,
+          )
+        ) {
           return incomplete();
         }
       } else if (
         embedded &&
-        !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))
+        !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace, revision.id))
       ) {
         return incomplete();
       }
@@ -2343,7 +3313,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
       );
       const existingService = await this.getOwned("Service", agentName, namespace, agentOwnership);
-      if (existingService === undefined) {
+      if (initialDedicatedCodexGateway) {
+        // No Gateway serves another revision yet, so the Service can select this
+        // revision's Harness before it is ready.
+        await this.reconcile(
+          this.service(
+            agentName,
+            agentOwnership,
+            namespace,
+            this.agentServiceSelector(revision, revisionName),
+          ),
+          agentOwnership,
+          namespace,
+        );
+      } else if (existingService === undefined) {
         await this.reconcile(
           this.service(agentName, agentOwnership, namespace, {
             "app.kubernetes.io/name": `${agentName}-inactive`,
@@ -2353,20 +3336,39 @@ export class KubernetesComputeDriver implements ComputeDriver {
         );
       }
       if (this.options.runtime !== undefined) {
-        await this.reconcile(
-          this.agentAuthenticationNetworkPolicy(revision, namespace),
-          agentOwnership,
-          namespace,
-        );
+        for (const policy of this.agentNetworkPolicies(revision, namespace, preparation)) {
+          await this.reconcile(policy.resource, gatewayOwnership, policy.namespace);
+        }
+        if (this.harnessNetworkProfile(revision) === ORDINARY_NETWORK_PROFILE) {
+          await this.reconcile(
+            this.agentAuthenticationNetworkPolicy(revision, namespace),
+            agentOwnership,
+            namespace,
+          );
+        }
+      }
+      await this.reconcileHarnessRoute(revision, namespace);
+      if (initialDedicatedCodexGateway) {
+        // The Service, the Harness route and the Agent policies the Gateway's
+        // peer read needs exist before the Gateway does.
+        await reconcileGatewayDeployment(gatewayEnvironment);
       }
       const launch = await this.lifecycle.beforeWorkloadStart(revision);
       launchPrepared = true;
-      const node = await this.prepareWorkspaceNode(revision, namespace);
+      // A Deployment-backed Codex Harness renders its node wiring from its first
+      // start and receives the setup code through a file, so enrollment does not
+      // replace the Harness or restart its Gateway. Native workers and
+      // SandboxDriver Harnesses still add the node once the setup exists.
+      const nodeSetupFile =
+        nativeRuntime === undefined && sandboxDriver?.provisionHarness === undefined;
+      const node = nodeSetupFile
+        ? await this.workspaceNodeWiring(revision, namespace)
+        : await this.prepareWorkspaceNode(revision, namespace);
       const agentDeployment = this.deployment(
         revisionName,
         revisionOwnership,
         namespace,
-        this.options.images.agent,
+        nativeRuntime === undefined ? this.options.images.agent : this.options.images.gateway,
         agentName,
         "agent",
         launch.environment,
@@ -2381,28 +3383,82 @@ export class KubernetesComputeDriver implements ComputeDriver {
         [],
         workspaceSetup,
         repositoryConsumer?.role === "agent" ? repositoryMaterial : undefined,
+        nativeRuntime,
       );
       if (node !== undefined) {
-        this.addWorkspaceNode(agentDeployment, node.name, node.ca, revision);
+        if (nativeRuntime === undefined) {
+          this.addWorkspaceNode(
+            agentDeployment,
+            node.name,
+            node.ca,
+            revision,
+            nodeSetupFile,
+            workspaceSetup,
+          );
+        } else {
+          this.addNativeWorker(agentDeployment, node.name, node.ca, revision);
+        }
+      }
+      if (nodeSetupFile) {
+        await this.prepareWorkspaceNode(revision, namespace, true);
       }
       if (sandboxDriver?.provisionHarness !== undefined) {
+        const sandboxContext = await this.sandboxNamespaceContext(
+          this.sandboxNamespaceForRevision(revision, namespace),
+          namespace,
+        );
+        const credentialContext =
+          harnessAuth.credentialSource === undefined
+            ? undefined
+            : {
+                namespace: sandboxContext.namespace,
+                revision,
+                sources: [harnessAuth.credentialSource],
+                signal: sandboxContext.signal,
+              };
+        const attachments =
+          credentialContext === undefined
+            ? []
+            : await this.requireCredentialGateway().attachForRevision(credentialContext);
         const requirements = this.harnessRequirementsFromDeployment(
           agentDeployment,
           harnessAuth.loginMode,
+          attachments,
         );
         const sandbox = await sandboxDriver.provisionHarness({
-          ...(await this.sandboxNamespaceContext(
-            this.sandboxNamespaceForRevision(revision, namespace),
-            namespace,
-          )),
+          ...sandboxContext,
           revision,
           requirements,
         });
         this.verifySandboxResourceRef(sandbox, revision, namespace);
-        return (await this.providerHarnessReady(revision, namespace, requirements.labels)) &&
-          (await this.workspaceNodeReady(revision, namespace))
-          ? ready()
-          : incomplete();
+        if (
+          !(await this.providerHarnessReady(revision, namespace, requirements.labels)) ||
+          !(await this.workspaceNodeReady(revision, namespace))
+        ) {
+          return incomplete();
+        }
+        if (credentialContext !== undefined) {
+          const statuses = await this.requireCredentialGateway().attachmentStatus({
+            ...credentialContext,
+            sandbox,
+          });
+          if (
+            statuses.some((status) =>
+              ["failed", "withheld", "revoked", "absent"].includes(status.state),
+            )
+          ) {
+            throw new DependencyUnavailableError(
+              "The Sandbox did not apply a required credential attachment.",
+            );
+          }
+          if (
+            statuses.length !== attachments.length ||
+            statuses.some((status) => status.state !== "ready")
+          ) {
+            return incomplete();
+          }
+        }
+        return ready();
       }
       await this.reconcile(agentDeployment, revisionOwnership, namespace);
       const deployment = await this.getOwned(
@@ -2424,10 +3480,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
         await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
       }
-      for (const policy of this.pluginStatusNetworkPolicies(revision, namespace)) {
-        await this.reconcile(policy, gatewayOwnership, policy.metadata.namespace);
+      for (const { resource: policy, namespace: target } of this.pluginStatusNetworkPolicies(
+        revision,
+        namespace,
+        preparation,
+      )) {
+        await this.reconcile(policy, gatewayOwnership, target);
       }
-      const agentReadiness = await ready();
+      const agentReadiness = await ready(
+        undefined,
+        pluginStatusContainer === "agent" ? "agent" : undefined,
+      );
       if (!agentReadiness.ready) {
         return agentReadiness;
       }
@@ -2437,6 +3500,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
           : incomplete();
       }
       if (existingGatewayRevisionId !== undefined && existingGatewayRevisionId !== revision.id) {
+        // The serving predecessor is observed like the embedded one: only a
+        // genuinely unready Gateway is repaired with the successor's template.
+        if (
+          !(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace, revision.id))
+        ) {
+          await reconcileGatewayDeployment({});
+          return incomplete();
+        }
         if (!(await this.workspaceNodeReady(revision, namespace))) {
           return incomplete();
         }
@@ -2447,12 +3518,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       const pluginWarnings = agentReadiness.warnings ?? [];
       await this.reconcile(
-        this.service(agentName, agentOwnership, namespace, {
-          "openclaw.dev/agent": revision.agentId,
-          "openclaw.dev/revision": revision.id,
-          "openclaw.dev/workload-role": "agent",
-          "app.kubernetes.io/name": revisionName,
-        }),
+        this.service(
+          agentName,
+          agentOwnership,
+          namespace,
+          this.agentServiceSelector(
+            revision,
+            sandboxDriver?.provisionHarness === undefined ? revisionName : undefined,
+          ),
+        ),
         agentOwnership,
         namespace,
       );
@@ -2461,6 +3535,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       if (!(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))) {
         return incomplete();
+      }
+      // Enrolling the workspace node replaces the Harness and restarts its
+      // Gateway. Wait for that Gateway before making enrollment RPCs.
+      const workspaceNodeIsReady = await this.workspaceNodeReady(revision, namespace);
+      if (pluginStatusContainer === "gateway") {
+        return ready(pluginWarnings, "gateway");
       }
       if (pluginRuntime?.runtime.kind === "codex" && hasEnabledPluginSelections) {
         const gatewayStatus = await this.pluginRuntimeStatus(
@@ -2473,7 +3553,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           return incomplete();
         }
       }
-      if (!(await this.workspaceNodeReady(revision, namespace))) {
+      if (!workspaceNodeIsReady) {
         return incomplete();
       }
       // Gateway plugin and node observations may outlive the material readiness observation.
@@ -2481,6 +3561,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
         repositoryMaterial !== undefined &&
         !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
       ) {
+        return incomplete();
+      }
+      if (nativeRuntime !== undefined && configuration.nativeWorkerNodeId === undefined) {
         return incomplete();
       }
       return agentReadiness;
@@ -2508,8 +3591,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       repositoryConsumer?.role !== "gateway"
         ? revision.configuration
         : repositoryNativeConfiguration(revision.configuration);
-    const admittedNativeConfiguration =
-      this.kubernetesGatewayConfigurationDocument(nativeConfiguration);
+    const admittedNativeConfiguration = this.gatewaySandboxConfiguration(
+      revision,
+      this.kubernetesGatewayConfigurationDocument(nativeConfiguration),
+    );
     const admittedRevision = { ...revision, configuration: admittedNativeConfiguration };
     if (this.options.runtime === undefined) {
       return;
@@ -2521,22 +3606,23 @@ export class KubernetesComputeDriver implements ComputeDriver {
       revision.harnessAuth,
       admittedRevision.configuration,
       revision.secretBindings,
+      await this.admittedCredentialSourceType(revision),
     );
     const channels = this.enabledChannels(admittedRevision);
-    const pluginRuntime = this.pluginRuntimeSnapshot(admittedRevision);
     const { name: namespace } = await this.resolveNamespace(revision.namespaceId);
     await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace);
     const secretEnvironment = this.secretEnvironmentForRevision(
       revision,
       context,
-      kubernetesGatewayNamespaceName(revision.namespaceId),
+      this.controlNamespace(revision.namespaceId),
     );
     const harnessAuth = this.harnessAuthForRevision(
       admittedRevision,
       context,
-      kubernetesGatewayNamespaceName(revision.namespaceId),
+      this.controlNamespace(revision.namespaceId),
     );
     const gatewayNamespace = await this.requireGatewayNamespace(revision, namespace);
+    const nativeRuntime = nativeRuntimeSnapshot(admittedRevision);
     const agentName = `agent-${sha256Hex(revision.agentId, 12)}`;
     const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
@@ -2576,6 +3662,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
         materialInput,
       );
+      const pluginRuntime = this.pluginRuntimeSnapshot(
+        admittedRevision,
+        this.codexRepositoryBrokerNetworkPolicy(
+          admittedRevision,
+          repositoryConsumer,
+          repositoryMaterial,
+        ),
+      );
       if (
         currentRevisionId !== revision.id ||
         annotations[REPOSITORY_MATERIAL_GENERATION] !== repositoryMaterial?.generation
@@ -2592,6 +3686,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayNamespace,
           secretEnvironment,
         );
+        await this.reconcileHarnessRoute(revision, namespace);
         const launch = await this.lifecycle.beforeWorkloadStart(revision);
         try {
           await this.reconcile(
@@ -2629,8 +3724,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
           throw error;
         }
       }
-      for (const policy of this.agentNetworkPolicies(revision, namespace)) {
-        await this.reconcile(policy, gatewayOwnership, namespace);
+      for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
+        revision,
+        namespace,
+      )) {
+        await this.reconcile(policy, gatewayOwnership, target);
       }
       await this.reconcile(
         this.service(gatewayName, gatewayOwnership, namespace, {
@@ -2658,6 +3756,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       namespace,
       materialInput,
     );
+    const pluginRuntime = this.pluginRuntimeSnapshot(
+      admittedRevision,
+      this.codexRepositoryBrokerNetworkPolicy(
+        admittedRevision,
+        repositoryConsumer,
+        repositoryMaterial,
+      ),
+    );
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
     const configuration = this.gatewayConfiguration(
       admittedRevision,
@@ -2676,7 +3782,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         revisionName,
         { ...ownership, revisionId: revision.id },
         namespace,
-        this.options.images.agent,
+        nativeRuntime === undefined ? this.options.images.agent : this.options.images.gateway,
         agentName,
         "agent",
         environment,
@@ -2691,6 +3797,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         [],
         workspaceSetup,
         repositoryMaterial,
+        nativeRuntime,
       );
     if (sandboxDriver?.provisionHarness === undefined) {
       let deployment = await this.getOwned("Deployment", revisionName, namespace, {
@@ -2706,9 +3813,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
         const launch = await this.lifecycle.beforeWorkloadStart(revision);
         try {
           const replacement = renderAgentDeployment(launch.environment);
-          const node = await this.prepareWorkspaceNode(revision, namespace);
+          const nodeSetupFile = nativeRuntime === undefined;
+          const node = nodeSetupFile
+            ? await this.workspaceNodeWiring(revision, namespace)
+            : await this.prepareWorkspaceNode(revision, namespace);
           if (node !== undefined) {
-            this.addWorkspaceNode(replacement, node.name, node.ca, revision);
+            if (nativeRuntime === undefined) {
+              this.addWorkspaceNode(
+                replacement,
+                node.name,
+                node.ca,
+                revision,
+                nodeSetupFile,
+                workspaceSetup,
+              );
+            } else {
+              this.addNativeWorker(replacement, node.name, node.ca, revision);
+            }
+          }
+          if (nodeSetupFile) {
+            await this.prepareWorkspaceNode(revision, namespace, true);
           }
           await this.reconcile(replacement, { ...ownership, revisionId: revision.id }, namespace);
         } catch (error) {
@@ -2748,7 +3872,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     await this.reconcileChannelNetworkPolicy(revision, channels, gatewayNamespace);
     await this.reconcile(
-      this.sharedWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
+      this.harnessWorkspaceClaim(revision.agentId, gatewayOwnership, namespace),
       gatewayOwnership,
       namespace,
     );
@@ -2756,6 +3880,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
       this.gatewayPrivateStateClaim(revision.agentId, gatewayOwnership, gatewayNamespace),
       gatewayOwnership,
       gatewayNamespace,
+    );
+    // Written before the Deployment so a replacement Gateway starts with its node,
+    // and a running one of this revision applies it without a restart.
+    await this.deliverWorkspaceNodeBinding(
+      revision,
+      configuration,
+      gatewayNamespace,
+      gatewayOwnership,
     );
     await this.reconcile(
       this.deployment(
@@ -2781,30 +3913,44 @@ export class KubernetesComputeDriver implements ComputeDriver {
       gatewayNamespace,
     );
     await this.reconcile(
-      this.service(gatewayName, gatewayOwnership, gatewayNamespace, {
-        "app.kubernetes.io/name": gatewayName,
-      }),
+      this.service(
+        gatewayName,
+        gatewayOwnership,
+        gatewayNamespace,
+        this.gatewayServiceSelector(revision, gatewayName),
+      ),
       gatewayOwnership,
       gatewayNamespace,
     );
     await this.reconcileGatewayRoute(revision, gatewayOwnership, gatewayNamespace);
     await this.reconcile(
-      this.service(agentName, ownership, namespace, {
-        "openclaw.dev/agent": revision.agentId,
-        "openclaw.dev/revision": revision.id,
-        "openclaw.dev/workload-role": "agent",
-        ...(sandboxDriver?.provisionHarness === undefined
-          ? { "app.kubernetes.io/name": revisionName }
-          : {}),
-      }),
+      this.service(
+        agentName,
+        ownership,
+        namespace,
+        this.agentServiceSelector(
+          revision,
+          sandboxDriver?.provisionHarness === undefined ? revisionName : undefined,
+        ),
+      ),
       ownership,
       namespace,
     );
-    for (const policy of this.agentNetworkPolicies(revision, namespace)) {
-      await this.reconcile(policy, gatewayOwnership, policy.metadata.namespace);
+    await this.reconcileHarnessRoute(revision, namespace);
+    for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
+      revision,
+      namespace,
+    )) {
+      await this.reconcile(policy, gatewayOwnership, target);
     }
     if (!(await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))) {
       throw new Error("The exact AgentRevision gateway is not ready.");
+    }
+    if (!(await this.workspaceNodeBindingApplied(revision, namespace, configuration))) {
+      throw new Error("The exact AgentRevision gateway has not applied its workspace node.");
+    }
+    if (!(await this.workspaceNodeReady(revision, namespace))) {
+      throw new Error("The exact AgentRevision Harness node is not ready.");
     }
   }
 
@@ -2854,13 +4000,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }),
       ownership,
       namespace,
-      { serviceSelector: { "openclaw.dev/revision": revision.id } },
+      {
+        serviceSelector: {
+          "openclaw.dev/agent": revision.agentId,
+          "openclaw.dev/revision": revision.id,
+          "openclaw.dev/workload-role": "agent",
+        },
+      },
     );
   }
 
   private async deleteRevisionAgentDeployment(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const sandboxDriver = this.sandboxDriverForRevision(revision);
     if (sandboxDriver?.provisionHarness !== undefined) {
@@ -2876,12 +4028,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (deployment === undefined) {
       return;
     }
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     await this.request(
       () =>
         clients.apps.deleteNamespacedDeployment({
           name,
-          namespace,
+          namespace: namespace.name,
           ...(deployment.metadata.uid === undefined
             ? {}
             : { body: { preconditions: { uid: deployment.metadata.uid } } }),
@@ -2904,12 +4056,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     if (gatewayNamespace !== namespace) {
-      const gatewayTarget = await this.get("Namespace", gatewayNamespace);
+      const gatewayTarget = await this.getNamespace(gatewayNamespace);
       if (gatewayTarget !== undefined) {
         this.verifyGatewayNamespace(gatewayTarget, { namespaceId: revision.namespaceId });
       }
     }
-    const existingNamespace = await this.get("Namespace", namespace);
+    const existingNamespace = await this.getNamespace(namespace);
     if (existingNamespace === undefined) {
       await this.lifecycle.beforeWorkloadStop(revision);
       await this.removeStoppedGateway(revision, namespace);
@@ -2950,12 +4102,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const { name: namespace, external } = await this.resolveNamespace(revision.namespaceId);
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     if (gatewayNamespace !== namespace) {
-      const gatewayTarget = await this.get("Namespace", gatewayNamespace);
+      const gatewayTarget = await this.getNamespace(gatewayNamespace);
       if (gatewayTarget !== undefined) {
         this.verifyGatewayNamespace(gatewayTarget, { namespaceId: revision.namespaceId });
       }
     }
-    const existingNamespace = await this.get("Namespace", namespace);
+    const existingNamespace = await this.getNamespace(namespace);
     if (existingNamespace === undefined) {
       await this.lifecycle.beforeWorkloadStop(revision);
       await this.removeRetiredGateway(revision, namespace);
@@ -2974,7 +4126,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     await this.lifecycle.beforeWorkloadStop(revision);
     await this.shutdownRevisionRuntime(revision, namespace);
-    await this.retireWorkspaceNode(revision, namespace);
+    await this.retireLegacyWorkspaceNode(revision, namespace);
     await this.removeRetiredGateway(revision, namespace);
     if (revision.repositoryCredentials !== undefined) {
       await this.waitForRevisionPodsToTerminate(
@@ -2986,7 +4138,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  private async shutdownRevisionRuntime(revision: AgentRevision, namespace: string): Promise<void> {
+  private async shutdownRevisionRuntime(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
     if (revision.harness.mode === "embedded") {
       return;
     }
@@ -3010,11 +4165,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  private async removeStoppedGateway(revision: AgentRevision, namespace: string): Promise<void> {
+  private async removeStoppedGateway(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
     namespace = this.gatewayNamespace(revision, namespace);
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    await this.deleteGatewayNodeRoute(name, ownership, namespace, revision.id);
+    await this.deleteGatewayUnauthenticatedRoutes(name, ownership, namespace, revision.id);
     await this.deleteGatewayRoute(name, ownership, namespace, revision.id);
     await this.deleteNamedRuntimeResources(name, ownership, namespace, revision.id);
     await this.waitForRevisionPodsToTerminate(revision, namespace, "gateway");
@@ -3022,10 +4180,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async waitForRevisionPodsToTerminate(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     role: "agent" | "gateway",
   ): Promise<void> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const signal = this.operationSignal();
     const labels = {
       "openclaw.dev/namespace": revision.namespaceId,
@@ -3033,13 +4191,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "openclaw.dev/revision": revision.id,
       "openclaw.dev/workload-role": role,
     };
-    const deadline = Date.now() + WORKLOAD_TERMINATION_TIMEOUT_MS;
+    const timeoutMs =
+      role === "gateway"
+        ? GATEWAY_STOP_TIMEOUT_MS + REQUEST_TIMEOUT_MS
+        : WORKLOAD_TERMINATION_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
     for (;;) {
       signal.throwIfAborted();
       const observed = asRecord(
         await this.request(() =>
           clients.core.listNamespacedPod({
-            namespace,
+            namespace: namespace.name,
             labelSelector: labelsToSelector(labels),
             timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
           }),
@@ -3070,7 +4232,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           (pod.kind !== undefined && pod.kind !== "Pod") ||
           podMetadata === undefined ||
           !isNonEmptyString(podMetadata.name) ||
-          podMetadata.namespace !== namespace ||
+          podMetadata.namespace !== namespace.name ||
           podLabels === undefined ||
           Object.entries(labels).some(([key, value]) => podLabels[key] !== value)
         ) {
@@ -3089,13 +4251,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  private async removeRetiredGateway(revision: AgentRevision, namespace: string): Promise<void> {
+  private async removeRetiredGateway(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
     const harnessNamespace = namespace;
     namespace = this.gatewayNamespace(revision, harnessNamespace);
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const gateway = await this.getOwned("Deployment", name, namespace, ownership);
-    await this.deleteGatewayNodeRoute(name, ownership, namespace, revision.id);
+    await this.deleteGatewayUnauthenticatedRoutes(name, ownership, namespace, revision.id);
     if (gateway === undefined) {
       // A missing Deployment can mean stop or external loss. Preserve shared Agent resources
       // whenever surviving route or Service evidence belongs to a newer revision.
@@ -3140,7 +4305,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async deleteRetiredAgentResources(
     revision: AgentRevision,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
@@ -3163,13 +4328,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async hasOtherGatewayRevision(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<boolean> {
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const otherTarget =
       revision.harness.mode === "dedicated"
         ? namespace
-        : kubernetesGatewayNamespaceName(revision.namespaceId);
+        : this.controlNamespace(revision.namespaceId);
     const name = `gateway-${sha256Hex(revision.agentId, 12)}`;
     for (const kind of this.options.gatewayRouting === undefined
       ? (["Deployment"] as const)
@@ -3187,7 +4352,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async deleteRetiredRevisionArtifacts(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     await this.deleteOwnedNamespacedResource(
@@ -3225,7 +4390,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async deleteRetiredAgentPolicies(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     preserveHarness: boolean,
   ): Promise<void> {
     const suffix = sha256Hex(revision.agentId, 12);
@@ -3277,24 +4442,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async deleteGatewayRoute(
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     revisionId: string,
   ): Promise<void> {
     await this.deleteGatewayRoutingResource("HTTPRoute", name, ownership, namespace, revisionId);
   }
 
-  private async deleteGatewayNodeRoute(
+  private async deleteGatewayUnauthenticatedRoutes(
     gatewayName: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     revisionId: string,
   ): Promise<void> {
     // Remove the endpoint before deleting its route-specific authentication policy.
-    const name = `${gatewayName}-node`;
-    await this.deleteGatewayRoutingResource("HTTPRoute", name, ownership, namespace, revisionId);
+    for (const suffix of ["node", "sandbox"]) {
+      const name = `${gatewayName}-${suffix}`;
+      await this.deleteGatewayRoutingResource("HTTPRoute", name, ownership, namespace, revisionId);
+      await this.deleteGatewayRoutingResource(
+        "SecurityPolicy",
+        name,
+        ownership,
+        namespace,
+        revisionId,
+      );
+    }
     await this.deleteGatewayRoutingResource(
-      "SecurityPolicy",
-      name,
+      "NetworkPolicy",
+      `${gatewayName}-sandbox`,
       ownership,
       namespace,
       revisionId,
@@ -3302,10 +4476,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private async deleteGatewayRoutingResource(
-    kind: "HTTPRoute" | "SecurityPolicy",
+    kind: "HTTPRoute" | "SecurityPolicy" | "NetworkPolicy",
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     revisionId: string,
   ): Promise<void> {
     if (this.options.gatewayRouting === undefined) {
@@ -3326,15 +4500,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
         `${kind} ${name} UID and resourceVersion must be explicitly observed before delete.`,
       );
     }
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     await this.request(
       () =>
         clients.objects.delete(
           {
-            apiVersion:
-              kind === "HTTPRoute" ? GATEWAY_API_VERSION : GATEWAY_SECURITY_POLICY_API_VERSION,
+            apiVersion: {
+              HTTPRoute: GATEWAY_API_VERSION,
+              SecurityPolicy: GATEWAY_SECURITY_POLICY_API_VERSION,
+              NetworkPolicy: "networking.k8s.io/v1",
+            }[kind],
             kind,
-            metadata: { name, namespace },
+            metadata: { name, namespace: namespace.name },
           },
           undefined,
           undefined,
@@ -3355,7 +4532,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async gatewayRouteForRevision(
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     revisionId: string,
   ): Promise<ManagedKubernetesObject<"HTTPRoute"> | undefined> {
     if (this.options.gatewayRouting === undefined) {
@@ -3373,10 +4550,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async deleteNamedRuntimeResources(
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     stoppedRevisionId?: string,
   ): Promise<void> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     if (stoppedRevisionId !== undefined) {
       const gateway = await this.getOwned("Deployment", name, namespace, ownership);
       if (gateway !== undefined) {
@@ -3394,7 +4571,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           () =>
             clients.apps.deleteNamespacedDeployment({
               name,
-              namespace,
+              namespace: namespace.name,
               body: {
                 preconditions: {
                   uid,
@@ -3419,7 +4596,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const uid = required(existing.metadata.uid, `${kind} UID`);
       const request = {
         name,
-        namespace,
+        namespace: namespace.name,
         body: { preconditions: { uid } },
       };
       await this.request(
@@ -3441,7 +4618,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     kind: "ConfigMap" | "ServiceAccount" | "NetworkPolicy" | "Secret",
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const existing = await this.getOwned(kind, name, namespace, ownership);
     if (existing === undefined) {
@@ -3449,10 +4626,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     const request = {
       name,
-      namespace,
+      namespace: namespace.name,
       body: { preconditions: { uid: required(existing.metadata.uid, `${kind} UID`) } },
     };
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     await this.request(
       async () => {
         if (kind === "ConfigMap") {
@@ -3493,16 +4670,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private async repositoryMaterialStore(namespace: string): Promise<RepositoryMaterialStore> {
-    const clients = await this.clients();
-    return new RepositoryMaterialStore(namespace, clients.core, (operation, options) =>
+  private async repositoryMaterialStore(
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<RepositoryMaterialStore> {
+    const clients = await this.clients(namespace.plane);
+    return new RepositoryMaterialStore(namespace.name, clients.core, (operation, options) =>
       this.request(operation, options),
     );
   }
 
   private async prepareRepositoryMaterialForActivation(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     input: RepositoryMaterialSpec | undefined,
   ): Promise<ResolvedRepositoryMaterialSpec | undefined> {
     if (input === undefined) {
@@ -3519,17 +4698,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async repositoryMaterialReferences(
     owner: RepositoryMaterialOwner,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<Set<string>> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const labels = this.ownershipMetadata(owner).labels;
     const labelSelector = labelsToSelector(labels);
     const pods = completeKubernetesList(
-      await this.request(() => clients.core.listNamespacedPod({ namespace, labelSelector })),
+      await this.request(() =>
+        clients.core.listNamespacedPod({ namespace: namespace.name, labelSelector }),
+      ),
     );
     // Read current templates too: a replacement can reference material before its Pod exists.
     const deployments = completeKubernetesList(
-      await this.request(() => clients.apps.listNamespacedDeployment({ namespace, labelSelector })),
+      await this.request(() =>
+        clients.apps.listNamespacedDeployment({ namespace: namespace.name, labelSelector }),
+      ),
     );
     const names = new Set<string>();
     const collect = (spec: unknown) => {
@@ -3562,7 +4745,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
     for (const pod of pods) {
       if (
-        pod.metadata?.namespace !== namespace ||
+        pod.metadata?.namespace !== namespace.name ||
         !isNonEmptyString(pod.metadata.name) ||
         Object.entries(labels).some(([key, value]) => pod.metadata?.labels?.[key] !== value)
       ) {
@@ -3572,7 +4755,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     for (const deployment of deployments) {
       if (
-        deployment.metadata?.namespace !== namespace ||
+        deployment.metadata?.namespace !== namespace.name ||
         !isNonEmptyString(deployment.metadata.name) ||
         Object.entries(labels).some(([key, value]) => deployment.metadata?.labels?.[key] !== value)
       ) {
@@ -3585,7 +4768,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async repositoryMaterialReady(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     material: ResolvedRepositoryMaterialSpec,
   ): Promise<boolean> {
     const consumer = this.repositoryConsumer(revision);
@@ -3607,16 +4790,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ...this.ownershipMetadata({ ...consumer.owner, revisionId: revision.id }).labels,
       "openclaw.dev/workload-role": consumer.role,
     };
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const pods = completeKubernetesList(
       await this.request(() =>
-        clients.core.listNamespacedPod({ namespace, labelSelector: labelsToSelector(labels) }),
+        clients.core.listNamespacedPod({
+          namespace: namespace.name,
+          labelSelector: labelsToSelector(labels),
+        }),
       ),
     );
     let ready = 0;
     for (const pod of pods) {
       if (
-        pod.metadata?.namespace !== namespace ||
+        pod.metadata?.namespace !== namespace.name ||
         !isNonEmptyString(pod.metadata.name) ||
         Object.entries(labels).some(([key, value]) => pod.metadata?.labels?.[key] !== value)
       ) {
@@ -3637,7 +4823,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async cleanupRepositoryMaterial(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     material: ResolvedRepositoryMaterialSpec,
   ): Promise<void> {
     const owner = {
@@ -3657,7 +4843,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async removeRepositoryMaterial(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const owner = {
       namespaceId: revision.namespaceId,
@@ -3677,9 +4863,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async resolveNamespace(
     namespaceId: string,
-  ): Promise<{ readonly name: string; readonly external: boolean }> {
-    const clients = await this.clients();
-    return this.request(() => resolveKubernetesNamespace(clients.core, namespaceId));
+  ): Promise<{ readonly name: KubernetesNamespaceAddress; readonly external: boolean }> {
+    const clients = await this.clients("execution");
+    const resolved = await this.request(() =>
+      resolveKubernetesNamespace(clients.core, namespaceId),
+    );
+    return { ...resolved, name: { name: resolved.name, plane: "execution" } };
   }
 
   private validRuntimeCredentialInput(
@@ -3711,8 +4900,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
     validateKubernetesResourceName(transportName, "Agent runtime credential Secret name");
     const dedicated = binding.agent.executionMode === "dedicated";
     const namespace = dedicated
-      ? (await resolveKubernetesControlNamespace((await this.clients()).core, context.namespaceId))
-          .name
+      ? {
+          name: (
+            await resolveKubernetesControlNamespace(
+              (await this.clients("control")).core,
+              context.namespaceId,
+            )
+          ).name,
+          plane: "control" as const,
+        }
       : context.namespace;
     return {
       ...context,
@@ -3743,7 +4939,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ResourceConflictError("The Agent runtime credential binding is invalid.");
     }
     const { name: namespace, external } = await this.resolveNamespace(namespaceId);
-    const observed = await this.get("Namespace", namespace);
+    const observed = await this.getNamespace(namespace);
     if (observed === undefined) {
       return undefined;
     }
@@ -3828,14 +5024,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     context: RuntimeCredentialContext,
     dedicated: boolean,
   ): Promise<void> {
-    const clients = await this.clients();
     const targets = dedicated
       ? [(await this.resolveNamespace(context.namespaceId)).name, context.namespace]
       : [context.namespace];
     for (const namespace of targets) {
+      const clients = await this.clients(namespace.plane);
       const observed = await this.request(() =>
         clients.apps.listNamespacedDeployment({
-          namespace,
+          namespace: namespace.name,
           labelSelector: labelsToSelector({
             "openclaw.dev/namespace": context.namespaceId,
             "openclaw.dev/agent": context.agentId,
@@ -3858,7 +5054,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private listedRuntimeCredentialDeployment(
     item: unknown,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject<"Deployment"> {
     const record = asRecord(item);
     const metadata = asRecord(record?.metadata);
@@ -3870,7 +5066,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       record.kind !== "Deployment" ||
       typeof name !== "string" ||
       name.length === 0 ||
-      metadata.namespace !== namespace
+      metadata.namespace !== namespace.name
     ) {
       throw new ResourceConflictError("The Agent runtime workload preflight conflicted.");
     }
@@ -3883,7 +5079,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       kind: "Deployment",
       metadata: {
         name,
-        namespace,
+        namespace: namespace.name,
         ...(typeof metadata.uid === "string" ? { uid: metadata.uid } : {}),
         ...(labels === undefined ? {} : { labels }),
         ...(annotations === undefined ? {} : { annotations }),
@@ -3913,11 +5109,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     spec: RuntimeCredentialSecretSpec,
     values: Readonly<Record<string, string>>,
   ): Promise<void> {
-    const clients = await this.clients();
+    const clients = await this.clients(context.namespace.plane);
     await this.request(
       () =>
         clients.core.createNamespacedSecret({
-          namespace: context.namespace,
+          namespace: context.namespace.name,
           body: {
             ...this.manifest("v1", "Secret", spec.name, context.ownership, context.namespace),
             type: "Opaque",
@@ -3984,7 +5180,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
         `Existing Kubernetes namespace ${namespace.metadata.name} belongs to another tenant.`,
       );
     }
-    const requiredLabels = this.gatewayMembershipLabels();
+    const requiredLabels = this.gatewayMembershipLabels(
+      this.options.executionCluster?.harnessRouting,
+    );
     const hasGatewayMembership = Object.entries(requiredLabels).every(
       ([key, value]) => labels[key] === value,
     );
@@ -3995,8 +5193,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
-  private async verifyUniqueExistingNamespace(name: string, ownership: Ownership): Promise<void> {
-    const clients = await this.clients();
+  private async verifyUniqueExistingNamespace(
+    name: KubernetesNamespaceAddress,
+    ownership: Ownership,
+  ): Promise<void> {
+    const clients = await this.clients(name.plane);
     const observed = await this.request(() =>
       clients.core.listNamespace({
         labelSelector: `openclaw.dev/namespace=${ownership.namespaceId}`,
@@ -4006,7 +5207,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (
       !Array.isArray(observed?.items) ||
       observed.items.length > 1 ||
-      (observed.items.length === 1 && observed.items[0]?.metadata?.name !== name)
+      (observed.items.length === 1 && observed.items[0]?.metadata?.name !== name.name)
     ) {
       throw new OwnershipFailure(
         `Another Kubernetes namespace already claims tenant ${ownership.namespaceId}.`,
@@ -4027,7 +5228,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         `Existing Kubernetes namespace ${namespace.metadata.name} requires a resource version.`,
       );
     }
-    const clients = await this.clients();
+    const clients = await this.clients("execution");
     try {
       await this.request(
         () =>
@@ -4042,7 +5243,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   resourceVersion,
                   labels: {
                     "openclaw.dev/namespace": ownership.namespaceId,
-                    ...this.gatewayMembershipLabels(),
+                    ...this.gatewayMembershipLabels(this.options.executionCluster?.harnessRouting),
                   },
                   annotations: { "openclaw.dev/namespace-id": ownership.namespaceId },
                 },
@@ -4058,7 +5259,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (numericErrorStatus(error) !== 409) {
         throw error;
       }
-      const current = await this.get("Namespace", namespace.metadata.name);
+      const current = await this.getNamespace({
+        name: namespace.metadata.name,
+        plane: "execution",
+      });
       if (current === undefined) {
         throw new OwnershipFailure(
           `Existing Kubernetes namespace ${namespace.metadata.name} does not exist.`,
@@ -4068,7 +5272,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw error;
       }
     }
-    const current = await this.get("Namespace", namespace.metadata.name);
+    const current = await this.getNamespace({ name: namespace.metadata.name, plane: "execution" });
     if (current === undefined) {
       throw new OwnershipFailure(
         `Existing Kubernetes namespace ${namespace.metadata.name} does not exist.`,
@@ -4078,21 +5282,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private async verifyExistingNetworkPolicies(
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     ownership: Ownership,
   ): Promise<void> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const observed = asRecord(
       await this.request(() =>
         clients.networking.listNamespacedNetworkPolicy({
-          namespace,
+          namespace: namespace.name,
           timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
         }),
       ),
     );
     if (!Array.isArray(observed?.items)) {
       throw new OwnershipFailure(
-        `The existing Kubernetes namespace ${namespace} returned invalid NetworkPolicies.`,
+        `The existing Kubernetes namespace ${namespace.name} returned invalid NetworkPolicies.`,
       );
     }
     for (const item of observed.items) {
@@ -4103,11 +5307,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
         metadata === undefined ||
         typeof metadata.name !== "string" ||
         metadata.name.length === 0 ||
-        metadata.namespace !== namespace ||
+        metadata.namespace !== namespace.name ||
         (policy.kind !== undefined && policy.kind !== "NetworkPolicy")
       ) {
         throw new OwnershipFailure(
-          `The existing Kubernetes namespace ${namespace} returned an invalid NetworkPolicy.`,
+          `The existing Kubernetes namespace ${namespace.name} returned an invalid NetworkPolicy.`,
         );
       }
       this.verifyOwnership(
@@ -4123,10 +5327,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   private async deleteOwnedNamespaceResources(
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     ownership: Ownership,
   ): Promise<boolean> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const infrastructure = [
       ["ResourceQuota", "openclaw-quota"],
       ["LimitRange", "openclaw-limits"],
@@ -4147,7 +5351,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     for (const resource of resources) {
       const request = {
         name: resource.metadata.name,
-        namespace,
+        namespace: namespace.name,
         ...(resource.metadata.uid === undefined
           ? {}
           : { body: { preconditions: { uid: resource.metadata.uid } } }),
@@ -4183,16 +5387,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return true;
   }
 
-  private async clients(): Promise<KubernetesApiClients> {
-    if (this.apiClients === undefined) {
-      this.apiClients = this.createClients();
+  private controlNamespace(namespaceId: string): KubernetesNamespaceAddress {
+    return { name: kubernetesGatewayNamespaceName(namespaceId), plane: "control" };
+  }
+
+  private async clients(plane: KubernetesNamespaceAddress["plane"]): Promise<KubernetesApiClients> {
+    if (plane === "execution" && this.options.executionCluster !== undefined) {
+      this.executionApiClients ??= this.createClients(this.options.executionCluster.authentication);
+      return this.executionApiClients;
     }
+    this.apiClients ??= this.createClients(this.options.authentication);
     return this.apiClients;
   }
 
-  private async createClients(): Promise<KubernetesApiClients> {
+  private async createClients(
+    authentication: KubernetesComputeDriverOptions["authentication"],
+  ): Promise<KubernetesApiClients> {
     const { sdk, clientConfiguration } = await createKubernetesClientConfiguration(
-      this.options.authentication,
+      authentication,
       (message) => new ConfigurationFailure(message),
     );
     this.patchOptions = sdk.setHeaderOptions("Content-Type", APPLY_CONTENT_TYPE);
@@ -4245,24 +5457,52 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return currentComputeAbortSignal() ?? new AbortController().signal;
   }
 
+  async resolveSandboxNamespace(namespace: Readonly<Namespace>): Promise<Readonly<Namespace>> {
+    const placement =
+      namespace.existingNamespace === undefined
+        ? await this.resolveNamespace(namespace.id)
+        : {
+            name: { name: namespace.existingNamespace, plane: "execution" as const },
+            external: true,
+          };
+    if (placement.external && namespace.existingNamespace === undefined) {
+      throw new OwnershipFailure(
+        `Existing Kubernetes namespace ${placement.name.name} was not explicitly selected.`,
+      );
+    }
+    return Object.freeze({ ...namespace, name: placement.name.name });
+  }
+
   private sandboxNamespaceContext(
     namespace: Readonly<Namespace>,
-    namespaceName: string,
+    namespaceName: KubernetesNamespaceAddress,
   ): Promise<SandboxNamespaceContext> {
-    return this.clients().then(({ objects: kubernetes }) => ({
-      namespace: { ...namespace, name: namespaceName },
+    return this.clients(namespaceName.plane).then(({ objects: kubernetes }) => ({
+      namespace: { ...namespace, name: namespaceName.name },
       kubernetes,
       signal: this.operationSignal(),
     }));
   }
 
-  private sandboxNamespaceForRevision(revision: AgentRevision, namespaceName: string): Namespace {
+  private sandboxNamespaceForRevision(
+    revision: AgentRevision,
+    namespaceName: KubernetesNamespaceAddress,
+  ): Namespace {
     return {
       id: revision.namespaceId,
-      name: namespaceName,
+      name: namespaceName.name,
       status: "ready",
       createdAt: revision.createdAt,
     };
+  }
+
+  /** The profile of the revision's Harness Pod. A SandboxDriver that provisions
+   * the Harness fences its egress, so Compute grants that Pod ingress only. */
+  private harnessNetworkProfile(revision: AgentRevision): NetworkProfile {
+    return revision.harness.mode === "dedicated" &&
+      this.sandboxDriverForRevision(revision)?.provisionHarness !== undefined
+      ? PROVIDER_FENCED_NETWORK_PROFILE
+      : ORDINARY_NETWORK_PROFILE;
   }
 
   private sandboxDriverForRevision(revision: AgentRevision): SandboxDriver | undefined {
@@ -4282,10 +5522,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private verifySandboxResourceRef(
     sandbox: SandboxResourceRef,
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): void {
     if (
-      sandbox.namespaceName !== namespace ||
+      sandbox.namespaceName !== namespace.name ||
       sandbox.agentId !== revision.agentId ||
       sandbox.revisionId !== revision.id ||
       typeof sandbox.resourceName !== "string" ||
@@ -4297,14 +5537,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async providerHarnessReady(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     labels: Readonly<Record<string, string>>,
   ): Promise<boolean> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const pods = asRecord(
       await this.request(() =>
         clients.core.listNamespacedPod({
-          namespace,
+          namespace: namespace.name,
           // Observe every Pod the active Agent Service could route to, even if an
           // additional provider requirement label is missing or contradictory.
           labelSelector: labelsToSelector({
@@ -4388,7 +5628,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       }
       if (
-        metadata.namespace !== namespace ||
+        metadata.namespace !== namespace.name ||
         deletedAt !== undefined ||
         podLabels?.["openclaw.dev/agent"] !== revision.agentId ||
         podLabels?.["openclaw.dev/revision"] !== revision.id ||
@@ -4407,10 +5647,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async revisionPods(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     role: "agent" | "gateway",
   ): Promise<readonly KubernetesRecord[]> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const labels = {
       "openclaw.dev/agent": revision.agentId,
       "openclaw.dev/revision": revision.id,
@@ -4419,7 +5659,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const pods = asRecord(
       await this.request(() =>
         clients.core.listNamespacedPod({
-          namespace,
+          namespace: namespace.name,
           labelSelector: labelsToSelector(labels),
           timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
         }),
@@ -4448,7 +5688,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           (pod.kind !== undefined && pod.kind !== "Pod") ||
           podMetadata === undefined ||
           !isNonEmptyString(podMetadata.name) ||
-          podMetadata.namespace !== namespace ||
+          podMetadata.namespace !== namespace.name ||
           podLabels === undefined ||
           Object.entries(labels).some(([key, value]) => podLabels[key] !== value)
         ) {
@@ -4514,9 +5754,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return revision.harness.mode === "embedded" ? ["gateway"] : ["agent", "gateway"];
   }
 
+  private async runtimeDiagnosticChecks(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    container: "agent" | "gateway",
+  ): Promise<readonly RuntimeDiagnosticCheck[] | undefined> {
+    const readback = await this.privateStatusReadback(
+      revision,
+      namespace,
+      container,
+      RUNTIME_DIAGNOSTICS_PATH,
+    );
+    if (readback === undefined) {
+      return undefined;
+    }
+    return this.validRuntimeDiagnosticChecks(readback.status, revision, container, readback.podUid);
+  }
+
   private async privateStatusReadback(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     container: "agent" | "gateway",
     path: string,
   ): Promise<PrivateStatusReadback | undefined> {
@@ -4537,11 +5794,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const containerId = this.podContainerId(pod, container);
     let parsed: unknown;
     try {
-      const clients = await this.clients();
+      const clients = await this.clients(namespace.plane);
       const raw = await this.request(() =>
         clients.core.connectGetNamespacedPodProxyWithPath({
           name: `${podName}:${PLUGIN_RUNTIME_STATUS_PORT}`,
-          namespace,
+          namespace: namespace.name,
           path: path.slice(1),
         }),
       );
@@ -4598,6 +5855,55 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return value;
   }
 
+  private validRuntimeDiagnosticChecks(
+    value: unknown,
+    revision: AgentRevision,
+    container: "agent" | "gateway",
+    podUid: string,
+  ): readonly RuntimeDiagnosticCheck[] {
+    const status = asRecord(value);
+    if (
+      status === undefined ||
+      status.revisionId !== revision.id ||
+      status.container !== container ||
+      status.podUid !== podUid ||
+      !this.validIsoTimestamp(status.observedAt) ||
+      !Array.isArray(status.checks) ||
+      status.checks.length > 32
+    ) {
+      throw new DependencyUnavailableError("Runtime status returned invalid data.");
+    }
+    return Object.freeze(status.checks.map((check) => this.validRuntimeDiagnosticCheck(check)));
+  }
+
+  private validRuntimeDiagnosticCheck(value: unknown): RuntimeDiagnosticCheck {
+    const check = asRecord(value);
+    const state = check?.state;
+    const checkedAt = check?.checkedAt;
+    if (
+      check === undefined ||
+      !this.validRuntimeStatusIdentifier(check.component) ||
+      !this.validRuntimeStatusIdentifier(check.check) ||
+      !this.validRuntimeDiagnosticState(state) ||
+      (checkedAt !== null &&
+        (typeof checkedAt !== "string" || !this.validIsoTimestamp(checkedAt))) ||
+      (check.code !== undefined && !this.validRuntimeStatusIdentifier(check.code))
+    ) {
+      throw new DependencyUnavailableError("Runtime status returned invalid diagnostic data.");
+    }
+    return {
+      component: check.component,
+      check: check.check,
+      state,
+      checkedAt,
+      ...(check.code === undefined ? {} : { code: check.code }),
+    };
+  }
+
+  private validRuntimeDiagnosticState(value: unknown): value is RuntimeDiagnosticState {
+    return value === "succeeded" || value === "failed" || value === "unknown";
+  }
+
   private runtimeFailureEvidence(value: unknown): RuntimeFailureEvidence | undefined {
     if (value === undefined) {
       return undefined;
@@ -4648,7 +5954,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async safeRuntimeFailureObservation(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     workspaceSetup = false,
   ): Promise<RuntimeFailureEvidence | undefined> {
     if (this.options.runtime === undefined) {
@@ -4720,7 +6026,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async pluginRuntimeStatus(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     container: "agent" | "gateway",
     expectedWarnings?: readonly PluginDeploymentWarning[],
   ): Promise<PluginRuntimeStatus | undefined> {
@@ -4789,9 +6095,33 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
+  /** Dispatch revalidates against the paired gateway's current catalog, not admission's copy. */
+  private async admittedCredentialSourceType(
+    revision: AgentRevision,
+  ): Promise<CredentialSourceType | undefined> {
+    if (revision.harnessAuth.method !== "credential_source") {
+      return undefined;
+    }
+    const sourceType = revision.harnessAuth.sourceType;
+    const catalog = await this.requireCredentialGateway().listSourceTypes({
+      signal: this.operationSignal(),
+    });
+    return catalog.find((entry) => entry.type === sourceType);
+  }
+
+  private requireCredentialGateway(): CredentialGatewayDriver {
+    if (this.credentialGatewayDriver === undefined) {
+      throw new ConfigurationFailure(
+        "The admitted revision requires the Credential Gateway Driver.",
+      );
+    }
+    return this.credentialGatewayDriver;
+  }
+
   private harnessRequirementsFromDeployment(
     deployment: ManagedKubernetesObject,
     loginMode: HarnessWorkloadRequirements["loginMode"],
+    credentialAttachments: readonly CredentialSourceAttachment[] = [],
   ): HarnessWorkloadRequirements {
     const template = asRecord(deployment.spec?.template);
     const metadata = asRecord(template?.metadata);
@@ -4838,6 +6168,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("Dedicated Harness labels must include exact revision scope.");
     }
+    if (harnessLabels[NETWORK_PROFILE_LABEL] !== ORDINARY_NETWORK_PROFILE) {
+      throw new ConfigurationFailure("Dedicated Harness requires the ordinary network profile.");
+    }
+    // The provider fences the Harness egress itself. The provider-fenced profile
+    // keeps Compute's DNS, model and authentication egress grants off the Pod.
+    harnessLabels[NETWORK_PROFILE_LABEL] = PROVIDER_FENCED_NETWORK_PROFILE;
     return {
       image,
       command: command as readonly string[],
@@ -4845,16 +6181,35 @@ export class KubernetesComputeDriver implements ComputeDriver {
       serviceAccountToken,
       workspaceMounts,
       environment,
+      credentialAttachments: Object.freeze([...credentialAttachments]),
       loginMode,
       labels: harnessLabels,
     };
   }
 
-  private workspaceNodeName(revision: AgentRevision): string {
-    return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`;
+  // Node identity belongs to the Agent and its Harness kind, not the revision.
+  // OpenClaw never rewrites a session's recorded device, so a replacement must
+  // reconnect as the same device. Dedicated predecessors are stopped, and their
+  // Pods gone, before a successor is prepared, so one Harness holds it at a time.
+  private workspaceNodeName(revision: {
+    readonly agentId: string;
+    readonly harness: { readonly id: string };
+  }): string {
+    if (!WORKSPACE_NODE_HARNESS_IDS.includes(revision.harness.id)) {
+      throw new ConfigurationFailure(
+        "Workspace nodes are limited to Codex and OpenClaw Harnesses.",
+      );
+    }
+    return `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(`harness:${revision.harness.id}`, 12)}`;
   }
 
-  private async retireWorkspaceNode(revision: AgentRevision, namespace: string): Promise<void> {
+  // Before Agent scoping, each revision enrolled its own node Secret. Remove
+  // one left by an upgraded installation when that revision retires.
+  private async retireLegacyWorkspaceNode(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    // Revision-scoped Secrets existed only for routed dedicated Harnesses.
     if (
       this.nodeEnrollment === undefined ||
       this.options.runtime === undefined ||
@@ -4863,29 +6218,325 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       return;
     }
-    const ownership = this.pluginRuntimeOwnership(revision);
-    const name = this.workspaceNodeName(revision);
-    const secret = await this.getOwned("Secret", name, namespace, ownership);
-    // The node's saved identity stays on the Harness claim until Agent deletion.
-    // Each revision mounts only its own subdirectory.
-    if (secret !== undefined) {
-      const uid = required(secret.metadata.uid, "Workspace node Secret UID");
-      const clients = await this.clients();
-      await this.request(
-        () =>
-          clients.core.deleteNamespacedSecret({
-            name,
-            namespace,
-            body: { preconditions: { uid } },
-          }),
-        { mutating: true },
+    await this.deleteOwnedNamespacedResource(
+      "Secret",
+      `workspace-node-${sha256Hex(revision.agentId, 12)}-${sha256Hex(revision.id, 12)}`,
+      this.pluginRuntimeOwnership(revision),
+      namespace,
+    );
+  }
+
+  private workspaceNodeOwnership(revision: AgentRevision): Ownership {
+    return { namespaceId: revision.namespaceId, agentId: revision.agentId };
+  }
+
+  private async deleteWorkspaceNodes(
+    agentId: string,
+    ownership: Ownership,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    for (const id of WORKSPACE_NODE_HARNESS_IDS) {
+      await this.deleteOwnedNamespacedResource(
+        "Secret",
+        this.workspaceNodeName({ agentId, harness: { id } }),
+        ownership,
+        namespace,
       );
+    }
+  }
+
+  // The node wiring a Harness template carries. It depends only on the Agent
+  // and the controller trust bundle, never on the setup Secret, so a
+  // file-delivered Harness renders the same template before and after enrollment.
+  private async workspaceNodeWiring(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<{ readonly name: string; readonly ca?: string } | undefined> {
+    if (
+      this.nodeEnrollment === undefined ||
+      this.options.runtime === undefined ||
+      this.getGatewayEndpoint(revision) === undefined
+    ) {
+      return undefined;
+    }
+    // The namespace policy lets the Harness reach its Gateway once the setup lands.
+    await this.reconcileWorkspaceNodeNetworkPolicy(revision, namespace);
+    const ca = await this.readNodeCa?.();
+    return { name: this.workspaceNodeName(revision), ...(ca === undefined ? {} : { ca }) };
+  }
+
+  // Only a Deployment-backed Codex Harness reads its setup code from a file.
+  // Native workers and SandboxDriver Harnesses keep the environment reference,
+  // which needs the key for as long as the Harness may restart.
+  private workspaceNodeSetupFile(revision: AgentRevision): boolean {
+    return (
+      revision.harness.id !== "openclaw" &&
+      this.sandboxDriverForRevision(revision)?.provisionHarness === undefined
+    );
+  }
+
+  private async reconcileWorkspaceNodeNetworkPolicy(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    const namespaceOwnership = { namespaceId: revision.namespaceId };
+    const nodePolicy = this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace);
+    const existingNodePolicy = await this.getOwned(
+      "NetworkPolicy",
+      nodePolicy.metadata.name,
+      namespace,
+      namespaceOwnership,
+    );
+    // allow-node-gateway is namespace-wide but written while preparing one
+    // Agent. Narrowing a pre-profile policy here would strip workspace-node
+    // egress from every other Agent's unprofiled Pods, so it keeps its exact
+    // legacy selector until the namespace is recreated.
+    const legacy =
+      existingNodePolicy !== undefined &&
+      isDeepStrictEqual(
+        existingNodePolicy.spec?.podSelector,
+        LEGACY_WORKSPACE_NODE_POLICY_SELECTOR,
+      );
+    await this.reconcile(
+      legacy
+        ? {
+            ...nodePolicy,
+            spec: {
+              ...nodePolicy.spec,
+              podSelector: structuredClone(LEGACY_WORKSPACE_NODE_POLICY_SELECTOR),
+            },
+          }
+        : nodePolicy,
+      namespaceOwnership,
+      namespace,
+    );
+  }
+
+  // Sync the running Harness Pods now so their optional setup volume shows the
+  // new code within seconds. Without this update event the kubelet refreshes
+  // the volume only on its periodic resync (measured 58-84 s on k3d, #612).
+  private async refreshWorkspaceNodeSetup(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    setupId: string,
+  ): Promise<void> {
+    const clients = await this.clients(namespace.plane);
+    for (const pod of await this.revisionPods(revision, namespace, "agent")) {
+      const name = required(asRecord(pod.metadata)?.name, "Harness Pod name");
+      try {
+        await this.request(
+          () =>
+            clients.core.patchNamespacedPod(
+              {
+                name,
+                namespace: namespace.name,
+                // The value only has to change per setup; it names no secret.
+                body: {
+                  metadata: { annotations: { [NODE_SETUP_ANNOTATION]: sha256Hex(setupId, 12) } },
+                },
+              },
+              this.mergePatchOptions,
+            ),
+          { mutating: true },
+        );
+      } catch (error) {
+        // A Pod that is already gone mounts the current Secret when it is replaced.
+        if (numericErrorStatus(error) !== 404) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  // Activation must read OpenClaw's ack from the Gateway's private status. An
+  // install whose controller cannot read it keeps the node in the pod spec,
+  // which OpenClaw applies before the Gateway ever becomes ready.
+  private usesWorkspaceNodeBinding(revision: AgentRevision): boolean {
+    return (
+      revision.harness.mode === "dedicated" &&
+      revision.harness.id !== "openclaw" &&
+      this.nodeEnrollment !== undefined &&
+      this.options.runtime !== undefined &&
+      this.getGatewayEndpoint(revision) !== undefined &&
+      this.gatewayPrivateStatusReachable()
+    );
+  }
+
+  private workspaceNodeBindingName(agentId: string): string {
+    return `gateway-${sha256Hex(agentId, 12)}-workspace-node`;
+  }
+
+  private async deliveredWorkspaceNodeBinding(
+    configuration: GatewayConfigurationSnapshot,
+    namespace: KubernetesNamespaceAddress,
+    ownership: Ownership,
+  ): Promise<{ readonly revisionId?: unknown; readonly deviceId?: unknown } | undefined> {
+    if (configuration.workspaceNodeBinding === undefined) {
+      return undefined;
+    }
+    const existing = await this.getOwned(
+      "ConfigMap",
+      configuration.workspaceNodeBinding,
+      namespace,
+      ownership,
+    );
+    const document = existing?.data?.[WORKSPACE_NODE_BINDING_FILE];
+    if (document === undefined) {
+      return undefined;
+    }
+    try {
+      return asRecord(JSON.parse(document)) ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  // The binding holds identifiers only: the revision it belongs to and the
+  // enrolled device. Only the controller writes it, under Agent ownership.
+  private async deliverWorkspaceNodeBinding(
+    revision: AgentRevision,
+    configuration: GatewayConfigurationSnapshot,
+    namespace: KubernetesNamespaceAddress,
+    ownership: Ownership,
+  ): Promise<void> {
+    const name = configuration.workspaceNodeBinding;
+    const deviceId = configuration.workspaceNodeId;
+    if (name === undefined || deviceId === undefined) {
+      return;
+    }
+    if (!WORKSPACE_NODE_ID_PATTERN.test(deviceId)) {
+      throw new DependencyUnavailableError("The workspace node device ID is invalid.");
+    }
+    const document = JSON.stringify({ revisionId: revision.id, deviceId });
+    const existing = await this.getOwned("ConfigMap", name, namespace, ownership);
+    if (existing?.data?.[WORKSPACE_NODE_BINDING_FILE] === document) {
+      return;
+    }
+    if (existing !== undefined && existing.immutable === true) {
+      throw new OwnershipFailure(`Refusing immutable workspace node binding ${name}.`);
+    }
+    const clients = await this.clients(namespace.plane);
+    await this.request(
+      () =>
+        clients.core.patchNamespacedConfigMap(
+          {
+            name,
+            namespace: required(namespace.name, "ConfigMap namespace"),
+            body: {
+              ...this.manifest("v1", "ConfigMap", name, ownership, namespace),
+              data: { [WORKSPACE_NODE_BINDING_FILE]: document },
+            },
+            fieldManager: FIELD_MANAGER,
+            force: false,
+          },
+          this.patchOptions,
+        ),
+      { mutating: true },
+    );
+    await this.refreshWorkspaceNodeBinding(revision, namespace, document);
+  }
+
+  // Like the Harness setup nudge: a Pod update event makes the kubelet refresh
+  // the optional ConfigMap volume now instead of on its periodic resync.
+  private async refreshWorkspaceNodeBinding(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    document: string,
+  ): Promise<void> {
+    const clients = await this.clients(namespace.plane);
+    for (const pod of await this.revisionPods(revision, namespace, "gateway")) {
+      const name = required(asRecord(pod.metadata)?.name, "Gateway Pod name");
+      try {
+        await this.request(
+          () =>
+            clients.core.patchNamespacedPod(
+              {
+                name,
+                namespace: namespace.name,
+                body: {
+                  metadata: {
+                    annotations: { [WORKSPACE_NODE_BINDING_ANNOTATION]: sha256Hex(document, 12) },
+                  },
+                },
+              },
+              this.mergePatchOptions,
+            ),
+          { mutating: true },
+        );
+      } catch (error) {
+        // A Pod that is already gone mounts the current binding when it is replaced.
+        if (numericErrorStatus(error) !== 404) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  // The Gateway's private status reports the node OpenClaw applied. It is
+  // readable only through the control plane's API server proxy, which needs the
+  // control source CIDRs: a dedicated Gateway always runs in the control
+  // namespace. (An execution cluster's own status CIDRs are required nonempty.)
+  private gatewayPrivateStatusReachable(): boolean {
+    return (this.options.network.pluginStatusProxySourceCidrs ?? []).length > 0;
+  }
+
+  private async workspaceNodeBindingApplied(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    configuration: GatewayConfigurationSnapshot,
+  ): Promise<boolean> {
+    if (
+      configuration.workspaceNodeBinding === undefined ||
+      configuration.workspaceNodeId === undefined
+    ) {
+      return true;
+    }
+    const signal = this.operationSignal();
+    const deadline = Date.now() + WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS;
+    for (;;) {
+      signal.throwIfAborted();
+      const readback = await this.privateStatusReadback(
+        revision,
+        namespace,
+        "gateway",
+        RUNTIME_STATUS_PATH,
+      );
+      if (readback !== undefined) {
+        const status = asRecord(readback.status);
+        if (
+          status === undefined ||
+          status.revisionId !== revision.id ||
+          status.container !== "gateway" ||
+          status.podUid !== readback.podUid ||
+          (status.workspaceNodeId !== undefined && typeof status.workspaceNodeId !== "string")
+        ) {
+          throw new DependencyUnavailableError("Runtime status returned invalid data.");
+        }
+        if (status.workspaceNodeId === configuration.workspaceNodeId) {
+          return true;
+        }
+        if (status.workspaceNodeFailure !== undefined) {
+          const failure = asRecord(status.workspaceNodeFailure);
+          if (failure === undefined || !this.validRuntimeStatusIdentifier(failure.code)) {
+            throw new DependencyUnavailableError("Runtime status returned invalid data.");
+          }
+          // OpenClaw did not load the node: say why instead of timing out.
+          throw new DependencyUnavailableError(
+            `The exact AgentRevision gateway could not apply its workspace node (${failure.code}).`,
+          );
+        }
+      }
+      if (Date.now() >= deadline) {
+        return false;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, WORKSPACE_NODE_BINDING_ACK_POLL_MS));
     }
   }
 
   private async prepareWorkspaceNode(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
+    setupFile = false,
   ): Promise<{ readonly name: string; readonly ca?: string } | undefined> {
     const enrollment = this.nodeEnrollment;
     const url = this.getGatewayEndpoint(revision);
@@ -4893,15 +6544,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return undefined;
     }
     const name = this.workspaceNodeName(revision);
-    const ownership = this.pluginRuntimeOwnership(revision);
-    const namespaceOwnership = { namespaceId: revision.namespaceId };
-    await this.reconcile(
-      this.workspaceNodeNetworkPolicy(namespaceOwnership, namespace),
-      namespaceOwnership,
-      namespace,
-    );
+    const ownership = this.workspaceNodeOwnership(revision);
+    if (!setupFile) {
+      await this.reconcileWorkspaceNodeNetworkPolicy(revision, namespace);
+    }
     const existing = await this.getOwned("Secret", name, namespace, ownership);
-    if (existing === undefined) {
+    const expired =
+      existing !== undefined &&
+      Number(Buffer.from(existing.data?.expiresAtMs ?? "", "base64").toString("utf8")) <=
+        Date.now();
+    // A file-delivered node that has paired reconnects with its saved device
+    // token and no setup code (readiness removed the code), so it needs no new setup.
+    const paired =
+      setupFile && Buffer.from(existing?.data?.deviceId ?? "", "base64").toString("utf8") !== "";
+    if (existing === undefined || (expired && !paired)) {
       const gatewayOwnership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
       const gatewayName = `gateway-${sha256Hex(revision.agentId, 12)}`;
       // Plugin initialization can precede the first Gateway. Start the Harness
@@ -4911,30 +6567,81 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayOwnership,
           gatewayName,
           this.gatewayNamespace(revision, namespace),
+          revision.id,
         ))
       ) {
         return undefined;
       }
+      // An expired setup may already have been redeemed before readiness
+      // recorded its device. Re-minting would drop that completion, so record
+      // the device from the old setup first.
+      const decode = (value: string | undefined) =>
+        Buffer.from(value ?? "", "base64").toString("utf8");
+      const observed =
+        existing !== undefined && !decode(existing.data?.deviceId)
+          ? await enrollment.observeSetup(
+              url,
+              required(decode(existing.data?.setupId), "Workspace node setup ID"),
+              this.operationSignal(),
+            )
+          : undefined;
       const setup = await enrollment.createSetup(url, `${url}/node`, this.operationSignal());
-      const clients = await this.clients();
-      // Persist before launching. An uncertain create is not replayed here; the
-      // next reconciliation reads the exact revision-owned Secret first.
-      await this.request(
-        () =>
-          clients.core.createNamespacedSecret({
-            namespace,
-            body: {
-              ...this.manifest("v1", "Secret", name, ownership, namespace),
-              type: "Opaque",
-              stringData: {
-                setupId: setup.setupId,
-                setupCode: setup.setupCode,
-                expiresAtMs: String(setup.expiresAtMs),
+      const setupData = {
+        setupId: setup.setupId,
+        setupCode: setup.setupCode,
+        expiresAtMs: String(setup.expiresAtMs),
+        ...(observed === undefined ? {} : { deviceId: observed.deviceId }),
+      };
+      const clients = await this.clients(namespace.plane);
+      if (existing === undefined) {
+        // Persist before launching. An uncertain create is not replayed here; the
+        // next reconciliation reads the exact Agent-owned Secret first.
+        await this.request(
+          () =>
+            clients.core.createNamespacedSecret({
+              namespace: namespace.name,
+              body: {
+                ...this.manifest("v1", "Secret", name, ownership, namespace),
+                type: "Opaque",
+                stringData: setupData,
               },
-            },
-          }),
-        { mutating: true },
-      );
+            }),
+          { mutating: true },
+        );
+      } else {
+        // The identity outlives revisions, but the native connect entrypoint
+        // refuses an expired setup code. Replace only the setup: a recorded
+        // deviceId stays, and the node reconnects with its persisted device
+        // token, so the new bootstrap token only lets the code decode. A device
+        // observed on the expired setup above is recorded in the same write.
+        required(existing.metadata.resourceVersion, "Workspace node Secret resource version");
+        await this.request(
+          () =>
+            clients.core.replaceNamespacedSecret({
+              name,
+              namespace: namespace.name,
+              body: {
+                apiVersion: "v1",
+                kind: "Secret",
+                metadata: existing.metadata,
+                type: "Opaque",
+                data: {
+                  ...existing.data,
+                  ...Object.fromEntries(
+                    Object.entries(setupData).map(([key, value]) => [
+                      key,
+                      Buffer.from(value, "utf8").toString("base64"),
+                    ]),
+                  ),
+                },
+              },
+            }),
+          { mutating: true },
+        );
+      }
+      if (setupFile) {
+        await this.refreshWorkspaceNodeSetup(revision, namespace, setup.setupId);
+      }
     }
     const ca = await this.readNodeCa?.();
     return { name, ...(ca === undefined ? {} : { ca }) };
@@ -4945,30 +6652,114 @@ export class KubernetesComputeDriver implements ComputeDriver {
     name: string,
     ca: string | undefined,
     revision: AgentRevision,
+    setupFile: boolean,
+    workspaceSetup: WorkspaceSetup | undefined,
   ): void {
+    const { container, variables } = this.addNodeEnrollmentState(
+      deployment,
+      name,
+      ca,
+      revision,
+      setupFile,
+    );
+    const defaults = asRecord(asRecord(revision.configuration.agents)?.defaults);
+    variables.push({
+      name: "OPENCLAW_WORKSPACE_BOOTSTRAP",
+      // Copy only initialization options; Gateway configuration can contain secrets.
+      value: JSON.stringify({
+        skipBootstrap: defaults?.skipBootstrap,
+        skipOptionalBootstrapFiles: defaults?.skipOptionalBootstrapFiles,
+      }),
+    });
+    // Independent restarts can orphan descendants of a failed wrapper. Tini
+    // reaps them, including when a Sandbox provider runs this below PID 1.
+    container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
+    // Keep the workspace setup completion guard the plain Harness program runs:
+    // container restarts do not rerun the initializing initContainer.
+    container.args = nodeProgramArguments(
+      (workspaceSetup === undefined
+        ? ""
+        : workspaceSetupVerifier(workspaceSetup, "/home/node/workspace")) +
+        AGENT_WITH_NODE_ENTRYPOINT,
+    );
+  }
+
+  private addNativeWorker(
+    deployment: ManagedKubernetesObject,
+    name: string,
+    ca: string | undefined,
+    revision: AgentRevision,
+  ): void {
+    const { container, variables } = this.addNodeEnrollmentState(
+      deployment,
+      name,
+      ca,
+      revision,
+      false,
+    );
+    variables.push(
+      { name: "TMPDIR", value: "/tmp/openclaw-native-worker" },
+      { name: "NODE_COMPILE_CACHE", value: NATIVE_WORKER_COMPILE_CACHE },
+      // TODO(native-worker-idle-retirement): Configure upstream idle worker
+      // retirement once node hosts expose a supported policy.
+      {
+        name: "OPENCLAW_NATIVE_WORKER_CAPACITY",
+        value: String(
+          this.options.runtime?.nativeOpenClawSessionCapacity ??
+            DEFAULT_NATIVE_OPENCLAW_SESSION_CAPACITY,
+        ),
+      },
+    );
+    container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
+    container.args = nodeProgramArguments(NATIVE_WORKER_ENTRYPOINT);
+  }
+
+  private addNodeEnrollmentState(
+    deployment: ManagedKubernetesObject,
+    name: string,
+    ca: string | undefined,
+    revision: AgentRevision,
+    setupFile: boolean,
+  ): { readonly container: KubernetesRecord; readonly variables: V1EnvVar[] } {
     const pod = asRecord(asRecord(deployment.spec?.template)?.spec)!;
     const container = (pod.containers as KubernetesRecord[])[0]!;
     const variables = container.env as V1EnvVar[];
-    const defaults = asRecord(asRecord(revision.configuration.agents)?.defaults);
     variables.push(
-      {
-        name: "OPENCLAW_WORKSPACE_BOOTSTRAP",
-        // Copy only initialization options; Gateway configuration can contain secrets.
-        value: JSON.stringify({
-          skipBootstrap: defaults?.skipBootstrap,
-          skipOptionalBootstrapFiles: defaults?.skipOptionalBootstrapFiles,
-        }),
-      },
-      {
-        name: "OPENCLAW_NODE_SETUP_CODE",
-        valueFrom: { secretKeyRef: { name, key: "setupCode" } },
-      },
+      setupFile
+        ? { name: "OPENCLAW_NODE_SETUP_PATH", value: `${NODE_SETUP_DIRECTORY}/${NODE_SETUP_FILE}` }
+        : {
+            name: "OPENCLAW_NODE_SETUP_CODE",
+            valueFrom: { secretKeyRef: { name, key: "setupCode" } },
+          },
       { name: "OPENCLAW_NODE_STATE_DIR", value: NODE_STATE_PATH },
       ...(ca === undefined ? [] : [{ name: "OPENCLAW_NODE_CA_PEM", value: ca }]),
     );
+    if (setupFile) {
+      // The Secret may not exist yet: optional lets the Harness start without it,
+      // and the kubelet adds or removes the file as the key comes and goes.
+      // Only setupCode is projected; the setup and device ids stay in the API.
+      // Secret files are root-owned and the kubelet grants the Pod fsGroup read
+      // access, so 0400 would still behave as 0440; say 0440 plainly. Codex runs
+      // as the same uid and gid and can read the code. It is one-shot, expires,
+      // and readiness removes it from the Secret once the device is recorded.
+      (pod.volumes as V1Volume[]).push({
+        name: NODE_SETUP_VOLUME,
+        secret: {
+          secretName: name,
+          optional: true,
+          defaultMode: 0o440,
+          items: [{ key: "setupCode", path: NODE_SETUP_FILE }],
+        },
+      });
+      (container.volumeMounts as V1VolumeMount[]).push({
+        name: NODE_SETUP_VOLUME,
+        mountPath: NODE_SETUP_DIRECTORY,
+        readOnly: true,
+      });
+    }
     (pod.volumes as V1Volume[]).push({
       name: NODE_STATE_VOLUME,
-      persistentVolumeClaim: { claimName: this.sharedWorkspaceClaimName(revision.agentId) },
+      persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(revision.agentId) },
     });
     // Create the private subdirectory as the runtime user before kubelet mounts it.
     // A kubelet-created subPath is root-owned; native setup cannot tighten its mode.
@@ -4977,25 +6768,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
       name: NODE_STATE_VOLUME,
       mountPath: "/workspace-node-state",
     });
-    (initialization.args as string[])[0] +=
-      `\nmkdirSync(${JSON.stringify(`/workspace-node-state/${name}`)}, { recursive: true, mode: 0o700 });`;
-    // Reuse Harness storage outside the project directory. Revision-specific
-    // subpaths preserve restart identity without sharing another node's token.
+    const nodeStatePath = `/workspace-node-state/${name}`;
+    (initialization.args as string[])[0] += `
+mkdirSync(${JSON.stringify(nodeStatePath)}, { recursive: true, mode: 0o700 });
+chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
+    // Reuse Harness storage outside the project directory. The Agent-scoped
+    // subpath preserves node identity across Pod and AgentRevision replacement.
     (container.volumeMounts as V1VolumeMount[]).push({
       name: NODE_STATE_VOLUME,
       mountPath: NODE_STATE_PATH,
       subPath: name,
       readOnly: false,
     });
-    // Independent restarts can orphan descendants of a failed wrapper. Tini
-    // reaps them, including when a Sandbox provider runs this below PID 1.
-    container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
-    container.args = [AGENT_WITH_NODE_ENTRYPOINT];
+    return { container, variables };
   }
 
   private async workspaceNodeDeviceId(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<string | undefined> {
     if (
       revision.harness.mode === "embedded" ||
@@ -5009,13 +6799,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "Secret",
       this.workspaceNodeName(revision),
       namespace,
-      this.pluginRuntimeOwnership(revision),
+      this.workspaceNodeOwnership(revision),
     );
     const deviceId = Buffer.from(secret?.data?.deviceId ?? "", "base64").toString("utf8");
     return deviceId || undefined;
   }
 
-  private async workspaceNodeReady(revision: AgentRevision, namespace: string): Promise<boolean> {
+  private async workspaceNodeReady(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<boolean> {
     const enrollment = this.nodeEnrollment;
     const url = this.getGatewayEndpoint(revision);
     if (enrollment === undefined || this.options.runtime === undefined || url === undefined) {
@@ -5026,47 +6819,74 @@ export class KubernetesComputeDriver implements ComputeDriver {
       "Secret",
       name,
       namespace,
-      this.pluginRuntimeOwnership(revision),
+      this.workspaceNodeOwnership(revision),
     );
     if (secret === undefined) {
       return false;
     }
     const read = (key: string) => Buffer.from(secret.data?.[key] ?? "", "base64").toString("utf8");
     const deviceId = read("deviceId");
+    // A file-delivered setup code is readable by every process in the Harness,
+    // Codex included. Once the device is recorded the node reconnects with its
+    // saved device token, so drop the code; the kubelet then removes the file.
+    const dropSetupCode = this.workspaceNodeSetupFile(revision);
+    const withoutSetupCode = (data: Record<string, string>) =>
+      dropSetupCode
+        ? Object.fromEntries(Object.entries(data).filter(([key]) => key !== "setupCode"))
+        : data;
+    const clients = await this.clients(namespace.plane);
+    const replaceSecret = (data: Record<string, string>) => {
+      required(secret.metadata.resourceVersion, "Workspace node Secret resource version");
+      return this.request(
+        () =>
+          clients.core.replaceNamespacedSecret({
+            name,
+            namespace: namespace.name,
+            body: {
+              apiVersion: "v1",
+              kind: "Secret",
+              metadata: secret.metadata,
+              type: "Opaque",
+              data,
+            },
+          }),
+        { mutating: true },
+      );
+    };
+    // Nudge the running Harness Pods as on setup, so the kubelet removes the
+    // file now rather than on its ~1 min resync (#612).
+    const setupCodeRemoved = async () => {
+      if (dropSetupCode && secret.data?.setupCode !== undefined) {
+        await this.refreshWorkspaceNodeSetup(revision, namespace, `${read("setupId")}:removed`);
+      }
+    };
     if (deviceId) {
+      if (dropSetupCode && secret.data?.setupCode !== undefined) {
+        await replaceSecret(withoutSetupCode(secret.data));
+        await setupCodeRemoved();
+      }
       return enrollment.isConnected(url, deviceId, this.operationSignal());
     }
     const setupId = required(read("setupId"), "Workspace node setup ID");
     const observation = await enrollment.observeSetup(url, setupId, this.operationSignal());
     if (observation === undefined) {
-      // TODO(workspace-node-enrollment): renew an unredeemed expired setup and
-      // reconcile a completion missed beyond native status retention before
-      // enabling this path in published runtime images.
+      // No completion is visible: the setup was never redeemed, or its
+      // completion aged out of native status retention. Preparation renews an
+      // expired setup; readiness does not.
+      // TODO(workspace-node-enrollment): reconcile a completion missed beyond
+      // native status retention before enabling this path in published images.
       if (Number(read("expiresAtMs")) <= Date.now()) {
-        throw new Error("Workspace node setup expired before its identity was recorded.");
+        throw new Error("Workspace node setup expired without an observed enrollment.");
       }
       return false;
     }
-    required(secret.metadata.resourceVersion, "Workspace node Secret resource version");
-    const clients = await this.clients();
-    await this.request(
-      () =>
-        clients.core.replaceNamespacedSecret({
-          name,
-          namespace,
-          body: {
-            apiVersion: "v1",
-            kind: "Secret",
-            metadata: secret.metadata,
-            type: "Opaque",
-            data: {
-              ...secret.data,
-              deviceId: Buffer.from(observation.deviceId, "utf8").toString("base64"),
-            },
-          },
-        }),
-      { mutating: true },
+    await replaceSecret(
+      withoutSetupCode({
+        ...secret.data,
+        deviceId: Buffer.from(observation.deviceId, "utf8").toString("base64"),
+      }),
     );
+    await setupCodeRemoved();
     return observation.connected;
   }
 
@@ -5162,7 +6982,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   ): readonly SandboxWorkspaceMount[] {
     const observedVolumes = Array.isArray(volumes) ? volumes : [];
     const workspaceVolume = observedVolumes.find(
-      (item) => asRecord(item)?.name === SHARED_WORKSPACE_VOLUME,
+      (item) => asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME,
     );
     const claimName = required(
       asRecord(asRecord(workspaceVolume)?.persistentVolumeClaim)?.claimName,
@@ -5170,7 +6990,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
     const observedMounts = Array.isArray(volumeMounts) ? volumeMounts : [];
     const workspaceMounts = observedMounts
-      .filter((item) => asRecord(item)?.name === SHARED_WORKSPACE_VOLUME)
+      .filter((item) => asRecord(item)?.name === HARNESS_WORKSPACE_VOLUME)
       .map((item) => {
         const mount = asRecord(item);
         return {
@@ -5217,7 +7037,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         mount.readOnly !== false
       ) {
         throw new ConfigurationFailure(
-          "Harness node state must preserve its revision directory on the Harness claim.",
+          "Harness node state must preserve its Agent node directory on the Harness claim.",
         );
       }
       workspaceMounts.push({
@@ -5230,12 +7050,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return workspaceMounts;
   }
 
+  /**
+   * With `preparingRevisionId`, a Gateway Deployment annotated for another
+   * revision is the serving predecessor: preparation (embedded or dedicated)
+   * observes it but does not re-render it, and activation replaces it. It may predate the
+   * explicit network profile, so it is judged without the profile requirement.
+   * Every template rendered for the revision itself still needs the profile.
+   */
   private async gatewayReady(
     ownership: Ownership,
     gatewayName: string,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
+    preparingRevisionId?: string,
   ): Promise<boolean> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const deployment = await this.getOwned("Deployment", gatewayName, namespace, ownership);
     if (deployment === undefined) {
       return false;
@@ -5243,7 +7071,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (deployment.spec?.replicas !== 1) {
       return false;
     }
-    if (!this.deploymentReady(deployment)) {
+    const predecessor =
+      preparingRevisionId !== undefined &&
+      deployment.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] !== preparingRevisionId;
+    if (!this.deploymentReady(deployment, !predecessor)) {
+      return false;
+    }
+    if (!this.deploymentRolledOut(deployment)) {
       return false;
     }
     const service = await this.getOwned("Service", gatewayName, namespace, ownership);
@@ -5253,7 +7087,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const slices = asRecord(
       await this.request(() =>
         clients.discovery.listNamespacedEndpointSlice({
-          namespace,
+          namespace: namespace.name,
           labelSelector: `kubernetes.io/service-name=${gatewayName}`,
           timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
         }),
@@ -5290,12 +7124,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
     });
   }
 
-  private deploymentReady(deployment: ManagedKubernetesObject): boolean {
+  private deploymentReady(deployment: ManagedKubernetesObject, requireProfile = true): boolean {
+    const template = asRecord(deployment.spec?.template);
+    const labels = asRecord(asRecord(template?.metadata)?.labels);
     const replicas = deployment.spec?.replicas;
     const generation = deployment.metadata.generation;
     const observed = deployment.status?.observedGeneration;
     const ready = deployment.status?.readyReplicas;
     return (
+      (!requireProfile || labels?.[NETWORK_PROFILE_LABEL] === ORDINARY_NETWORK_PROFILE) &&
       typeof replicas === "number" &&
       replicas > 0 &&
       typeof generation === "number" &&
@@ -5303,6 +7140,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
       observed >= generation &&
       typeof ready === "number" &&
       ready >= replicas
+    );
+  }
+
+  private deploymentRolledOut(deployment: ManagedKubernetesObject): boolean {
+    const replicas = deployment.spec?.replicas;
+    return (
+      typeof replicas === "number" &&
+      replicas > 0 &&
+      deployment.status?.replicas === replicas &&
+      deployment.status.updatedReplicas === replicas &&
+      deployment.status.readyReplicas === replicas
     );
   }
 
@@ -5378,14 +7226,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     kind: Kind,
     name: string,
     ownership: Ownership,
-    namespace?: string,
+    namespace?: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject<Kind> {
     return {
       apiVersion,
       kind,
       metadata: {
         name,
-        ...(namespace === undefined ? {} : { namespace }),
+        ...(namespace === undefined ? {} : { namespace: namespace.name }),
         ...this.ownershipMetadata(ownership),
       },
     };
@@ -5398,7 +7246,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private networkPolicies(ownership: Ownership, namespace: string): ManagedKubernetesObject[] {
+  private networkPolicies(
+    ownership: Ownership,
+    namespace: KubernetesNamespaceAddress,
+  ): ManagedKubernetesObject[] {
     const network = this.options.network;
     const routing = this.options.gatewayRouting;
     const gatewayIngressPeers =
@@ -5420,11 +7271,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return [
       policy("default-deny", { podSelector: {}, policyTypes: ["Ingress", "Egress"] }),
       policy("allow-dns", {
-        podSelector: {},
+        podSelector: ordinaryNetworkPolicySelector(),
         policyTypes: ["Egress"],
         egress: [
           {
-            to: [this.peer(network.dns)],
+            to: [
+              this.peer(
+                namespace.plane === "execution"
+                  ? (this.options.executionCluster?.network.dns ?? network.dns)
+                  : network.dns,
+              ),
+            ],
             ports: [
               { protocol: "UDP", port: 53 },
               { protocol: "TCP", port: 53 },
@@ -5433,7 +7290,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ],
       }),
       policy("allow-gateway-ingress", {
-        podSelector: { matchLabels: { "openclaw.dev/workload-role": "gateway" } },
+        podSelector: ordinaryNetworkPolicySelector({ "openclaw.dev/workload-role": "gateway" }),
         policyTypes: ["Ingress"],
         ingress: [
           {
@@ -5447,7 +7304,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private workspaceNodeNetworkPolicy(
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject<"NetworkPolicy"> {
     const routing = this.options.gatewayRouting!;
     return {
@@ -5459,23 +7316,36 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
       ),
       spec: {
-        podSelector: { matchLabels: { "openclaw.dev/workload-role": "agent" } },
+        podSelector: ordinaryNetworkPolicySelector({ "openclaw.dev/workload-role": "agent" }),
         policyTypes: ["Egress"],
         egress: [
           {
-            to: [
-              this.peer({
-                namespace: routing.envoyNamespace,
-                podLabels: {
-                  "app.kubernetes.io/component": "proxy",
-                  "app.kubernetes.io/managed-by": "envoy-gateway",
-                  "app.kubernetes.io/name": "envoy",
-                  "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
-                  "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
-                },
-              }),
+            to:
+              this.options.executionCluster !== undefined
+                ? this.options.executionCluster.network.gatewayEndpointCidrs.map((cidr) => ({
+                    ipBlock: { cidr },
+                  }))
+                : [
+                    this.peer({
+                      namespace: routing.envoyNamespace,
+                      podLabels: {
+                        "app.kubernetes.io/component": "proxy",
+                        "app.kubernetes.io/managed-by": "envoy-gateway",
+                        "app.kubernetes.io/name": "envoy",
+                        "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+                        "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+                      },
+                    }),
+                  ],
+            ports: [
+              {
+                protocol: "TCP",
+                port:
+                  this.options.executionCluster === undefined
+                    ? (routing.envoyHttpsTargetPort ?? 10443)
+                    : 443,
+              },
             ],
-            ports: [{ protocol: "TCP", port: routing.envoyHttpsTargetPort ?? 10443 }],
           },
         ],
       },
@@ -5518,7 +7388,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async deliverWorkspaceSetup(
     revision: AgentRevision,
     setup: WorkspaceSetup | undefined,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     completed = false,
   ): Promise<void> {
     if (setup === undefined) {
@@ -5575,12 +7445,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
         type: "Opaque",
         data: { "setup.json": Buffer.from(JSON.stringify(payload)).toString("base64") },
       };
-      const clients = await this.clients();
+      const clients = await this.clients(namespace.plane);
       await this.request(
         () =>
           existing === undefined
-            ? clients.core.createNamespacedSecret({ namespace, body })
-            : clients.core.replaceNamespacedSecret({ name, namespace, body }),
+            ? clients.core.createNamespacedSecret({ namespace: namespace.name, body })
+            : clients.core.replaceNamespacedSecret({ name, namespace: namespace.name, body }),
         { mutating: true },
       );
     } catch {
@@ -5591,7 +7461,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private gatewayConfiguration(
     revision: AgentRevision,
     workspaceNodeId?: string,
-    harnessNamespace?: string,
+    harnessNamespace?: KubernetesNamespaceAddress,
   ): GatewayConfigurationSnapshot {
     const nativeConfiguration = this.kubernetesGatewayConfigurationDocument(revision.configuration);
     const gateway = asRecord(nativeConfiguration.gateway);
@@ -5619,10 +7489,69 @@ export class KubernetesComputeDriver implements ComputeDriver {
       },
       loggingLevel: admittedLoggingLevel(nativeConfiguration),
       ...(workspaceNodeId === undefined ? {} : { workspaceNodeId }),
+      ...(this.usesWorkspaceNodeBinding(revision)
+        ? { workspaceNodeBinding: this.workspaceNodeBindingName(revision.agentId) }
+        : {}),
+      ...(revision.harness.id === "openclaw" && revision.harness.mode === "dedicated"
+        ? { nativeWorkerProfile: NATIVE_WORKER_PROFILE }
+        : {}),
+      ...(revision.harness.id === "openclaw" &&
+      revision.harness.mode === "dedicated" &&
+      workspaceNodeId !== undefined
+        ? { nativeWorkerNodeId: workspaceNodeId }
+        : {}),
       workspace:
         asRecord(asRecord(asRecord(nativeConfiguration.agents)?.entries)?.main)?.workspace ??
         asRecord(asRecord(nativeConfiguration.agents)?.defaults)?.workspace ??
         "/home/node/.openclaw/workspace",
+    };
+  }
+
+  private gatewaySandboxOrigin(revision: AgentRevision): string | undefined {
+    const sandbox = this.options.gatewayRouting?.sandbox;
+    if (sandbox === undefined || revision.harness.mode !== "dedicated") {
+      return undefined;
+    }
+    const host = `agent-${sha256Hex(`${revision.namespaceId}/${revision.agentId}`, 32)}.${sandbox.domain}`;
+    const port = sandbox.publicPort ?? 443;
+    return `https://${host}${port === 443 ? "" : `:${port}`}`;
+  }
+
+  private gatewaySandboxConfiguration(
+    revision: AgentRevision,
+    configuration: OpenClawConfigurationDocument,
+  ): OpenClawConfigurationDocument {
+    const origin = this.gatewaySandboxOrigin(revision);
+    if (origin === undefined) {
+      return configuration;
+    }
+    const mcp = asRecord(configuration.mcp);
+    const apps = asRecord(mcp?.apps);
+    if (
+      (configuration.mcp !== undefined && mcp === undefined) ||
+      (mcp?.apps !== undefined && apps === undefined)
+    ) {
+      throw new ConfigurationFailure("Native MCP Apps configuration must be an object.");
+    }
+    const port = this.options.network.gatewayPort + 1;
+    if (
+      (apps?.sandboxOrigin !== undefined && apps.sandboxOrigin !== origin) ||
+      (apps?.sandboxPort !== undefined && apps.sandboxPort !== port)
+    ) {
+      throw new ConfigurationFailure(
+        "Native sandbox origin and port must match the Compute-owned sandbox route.",
+      );
+    }
+    return {
+      ...configuration,
+      mcp: {
+        ...(mcp as Record<string, OpenClawConfigurationValue> | undefined),
+        apps: {
+          ...(apps as Record<string, OpenClawConfigurationValue> | undefined),
+          sandboxOrigin: origin,
+          sandboxPort: port,
+        },
+      },
     };
   }
 
@@ -5751,8 +7680,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
-  private gatewayMembershipLabels(): Record<string, string> {
-    const routing = this.options.gatewayRouting;
+  private gatewayMembershipLabels(routing = this.options.gatewayRouting): Record<string, string> {
     if (routing === undefined) {
       return {};
     }
@@ -5762,6 +7690,94 @@ export class KubernetesComputeDriver implements ComputeDriver {
         12,
       ),
     };
+  }
+
+  private harnessRoutePath(ownership: Ownership): string {
+    return `/namespaces/${ownership.namespaceId}/agents/${required(ownership.agentId, "Harness Agent ID")}`;
+  }
+
+  private executionProxyPeer(): KubernetesWorkloadPeer {
+    const routing = this.options.executionCluster!.harnessRouting;
+    return {
+      namespace: routing.envoyNamespace,
+      podLabels: {
+        "app.kubernetes.io/component": "proxy",
+        "app.kubernetes.io/managed-by": "envoy-gateway",
+        "app.kubernetes.io/name": "envoy",
+        "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+        "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+      },
+    };
+  }
+
+  private async reconcileHarnessRoute(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    const execution = this.options.executionCluster;
+    if (execution === undefined) {
+      return;
+    }
+    const ownership = {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+      servicePrincipalId: revision.servicePrincipalId,
+    };
+    const name = `agent-${sha256Hex(revision.agentId, 12)}`;
+    const service = await this.getOwned("Service", name, namespace, ownership);
+    if (service === undefined) {
+      throw new DependencyUnavailableError("Harness Service is unavailable.");
+    }
+    const route = this.manifest(GATEWAY_API_VERSION, "HTTPRoute", name, ownership, namespace);
+    await this.reconcile(
+      {
+        ...route,
+        metadata: {
+          ...route.metadata,
+          ownerReferences: [
+            {
+              apiVersion: "v1",
+              kind: "Service",
+              name,
+              uid: required(service.metadata.uid, "Harness Service UID"),
+              controller: false,
+              blockOwnerDeletion: false,
+            },
+          ],
+        },
+        spec: {
+          hostnames: [execution.harnessRouting.hostname],
+          parentRefs: [
+            {
+              group: "gateway.networking.k8s.io",
+              kind: "Gateway",
+              namespace: execution.harnessRouting.gatewayNamespace,
+              name: execution.harnessRouting.gatewayName,
+              sectionName: GATEWAY_LISTENER_SECTION,
+            },
+          ],
+          rules: [
+            { path: this.harnessRoutePath(ownership), upstream: "/", port: AGENT_TRANSPORT_PORT },
+            {
+              path: `${this.harnessRoutePath(ownership)}/plugin-status`,
+              upstream: "/openclaw/plugin-runtime/remote-status",
+              port: PLUGIN_RUNTIME_STATUS_PORT,
+            },
+          ].map(({ path, upstream, port }) => ({
+            matches: [{ path: { type: "Exact", value: path } }],
+            filters: [
+              {
+                type: "URLRewrite",
+                urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: upstream } },
+              },
+            ],
+            backendRefs: [{ group: "", kind: "Service", name, port }],
+          })),
+        },
+      },
+      ownership,
+      namespace,
+    );
   }
 
   private gatewayRouteName(agentId: string): string {
@@ -5775,7 +7791,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     )}`;
   }
 
-  private gatewayRouteHeaderFilter(access: "operator" | "node"): KubernetesRecord {
+  private gatewayRouteHeaderFilter(
+    access: "operator" | "node" | "node-transfer",
+  ): KubernetesRecord {
     return {
       type: "RequestHeaderModifier",
       requestHeaderModifier: {
@@ -5789,12 +7807,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
           },
         ],
         remove: [
-          "authorization",
+          ...(access === "node-transfer" ? [] : ["authorization"]),
           "cookie",
           "forwarded",
           "x-forwarded-for",
           "x-openclaw-scopes",
-          ...(access === "node"
+          ...(access === "node" || access === "node-transfer"
             ? [
                 "x-occ-identity",
                 "x-api-key",
@@ -5831,6 +7849,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private verifyGatewayRoutingConfiguration(
     revision: Pick<AgentRevision, "configuration" | "harness">,
   ): void {
+    if (this.options.executionCluster !== undefined && revision.harness.mode !== "dedicated") {
+      throw new ConfigurationFailure("Two-cluster execution supports only dedicated Harnesses.");
+    }
     if (
       this.options.runtime !== undefined &&
       revision.harness.mode === "dedicated" &&
@@ -5896,15 +7917,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private gatewayRoute(
     revision: AgentRevision,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     service: ManagedKubernetesObject<"Service">,
-    access: "operator" | "node" = "operator",
+    access: "operator" | "node" | "sandbox" = "operator",
   ): ManagedKubernetesObject<"HTTPRoute"> | undefined {
     const routing = this.options.gatewayRouting;
     if (routing === undefined) {
       return undefined;
     }
-    const name = `${this.gatewayRouteName(revision.agentId)}${access === "node" ? "-node" : ""}`;
+    const sandboxOrigin = this.gatewaySandboxOrigin(revision);
+    if (access === "sandbox" && sandboxOrigin === undefined) {
+      return undefined;
+    }
+    const name = `${this.gatewayRouteName(revision.agentId)}${access === "operator" ? "" : `-${access}`}`;
     const route = this.manifest(GATEWAY_API_VERSION, "HTTPRoute", name, ownership, namespace);
     return {
       ...route,
@@ -5931,55 +7956,135 @@ export class KubernetesComputeDriver implements ComputeDriver {
             }),
       },
       spec: {
-        hostnames: [this.gatewayRoutingHostname(routing)],
+        hostnames: [
+          access === "sandbox"
+            ? new URL(sandboxOrigin!).hostname
+            : this.gatewayRoutingHostname(routing),
+        ],
         parentRefs: [
           {
             group: "gateway.networking.k8s.io",
             kind: "Gateway",
             namespace: routing.gatewayNamespace,
             name: routing.gatewayName,
-            sectionName: GATEWAY_LISTENER_SECTION,
+            sectionName: access === "sandbox" ? "sandbox" : GATEWAY_LISTENER_SECTION,
           },
         ],
-        rules: [
-          {
-            matches: [
-              {
-                path: {
-                  type: "Exact",
-                  value: `${this.gatewayRoutePath(revision)}${access === "node" ? "/node" : ""}`,
-                },
-              },
-            ],
-            filters: [
-              {
-                type: "URLRewrite",
-                urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: "/" } },
-              },
-              this.gatewayRouteHeaderFilter(access),
-            ],
-            backendRefs: [this.gatewayRouteBackendRef(service)],
-          },
-          ...(access === "operator"
+        rules:
+          access === "sandbox"
             ? [
                 {
+                  // This origin serves only upstream's public shell/renderer listener.
+                  // It must never fall through to the administrative Gateway backend.
+                  matches: ["GET", "HEAD"].map((method) => ({
+                    method,
+                    path: { type: "PathPrefix", value: "/" },
+                  })),
+                  filters: [this.gatewayRouteHeaderFilter("node")],
+                  backendRefs: [
+                    {
+                      group: "",
+                      kind: "Service",
+                      name: service.metadata.name,
+                      port: this.options.network.gatewayPort + 1,
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
                   matches: [
-                    { path: { type: "PathPrefix", value: `${this.gatewayRoutePath(revision)}/` } },
+                    {
+                      path: {
+                        type: "Exact",
+                        value: `${this.gatewayRoutePath(revision)}${access === "node" ? "/node" : ""}`,
+                      },
+                    },
                   ],
                   filters: [
                     {
                       type: "URLRewrite",
-                      urlRewrite: {
-                        path: { type: "ReplacePrefixMatch", replacePrefixMatch: "/" },
-                      },
+                      urlRewrite: { path: { type: "ReplaceFullPath", replaceFullPath: "/" } },
                     },
                     this.gatewayRouteHeaderFilter(access),
                   ],
                   backendRefs: [this.gatewayRouteBackendRef(service)],
                 },
-              ]
-            : []),
-        ],
+                ...(access === "node"
+                  ? [
+                      {
+                        matches: [
+                          {
+                            path: {
+                              type: "Exact",
+                              value: `${this.gatewayRoutePath(revision)}/node/__openclaw__/worker`,
+                            },
+                          },
+                        ],
+                        filters: [
+                          {
+                            type: "URLRewrite",
+                            urlRewrite: {
+                              path: {
+                                type: "ReplaceFullPath",
+                                replaceFullPath: "/__openclaw__/worker",
+                              },
+                            },
+                          },
+                          this.gatewayRouteHeaderFilter("node"),
+                        ],
+                        backendRefs: [this.gatewayRouteBackendRef(service)],
+                      },
+                      ...["worker-bundle/v1", "worker-transfer/v1"].map((transferPath) => ({
+                        matches: [
+                          {
+                            path: {
+                              type: "PathPrefix",
+                              value: `${this.gatewayRoutePath(revision)}/node/__openclaw__/${transferPath}/`,
+                            },
+                          },
+                        ],
+                        filters: [
+                          {
+                            type: "URLRewrite",
+                            urlRewrite: {
+                              path: {
+                                type: "ReplacePrefixMatch",
+                                replacePrefixMatch: `/__openclaw__/${transferPath}/`,
+                              },
+                            },
+                          },
+                          this.gatewayRouteHeaderFilter("node-transfer"),
+                        ],
+                        backendRefs: [this.gatewayRouteBackendRef(service)],
+                      })),
+                    ]
+                  : []),
+                ...(access === "operator"
+                  ? [
+                      {
+                        matches: [
+                          {
+                            path: {
+                              type: "PathPrefix",
+                              value: `${this.gatewayRoutePath(revision)}/`,
+                            },
+                          },
+                        ],
+                        filters: [
+                          {
+                            type: "URLRewrite",
+                            urlRewrite: {
+                              path: { type: "ReplacePrefixMatch", replacePrefixMatch: "/" },
+                            },
+                          },
+                          this.gatewayRouteHeaderFilter(access),
+                        ],
+                        backendRefs: [this.gatewayRouteBackendRef(service)],
+                      },
+                    ]
+                  : []),
+              ],
       },
     };
   }
@@ -5987,7 +8092,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async reconcileGatewayRoute(
     revision: AgentRevision,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     if (this.options.gatewayRouting === undefined) {
       return;
@@ -6019,40 +8124,174 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (!Number.isSafeInteger(gatewayRevision) || gatewayRevision < 1) {
       throw new OwnershipFailure("The serving Gateway has an invalid revision.");
     }
-    const nodeRoute = this.gatewayRoute(revision, ownership, namespace, service, "node");
-    if (nodeRoute === undefined) {
-      return;
+    for (const access of ["node", "sandbox"] as const) {
+      const publicRoute = this.gatewayRoute(revision, ownership, namespace, service, access);
+      if (publicRoute === undefined) {
+        continue;
+      }
+      publicRoute.metadata.annotations = {
+        ...publicRoute.metadata.annotations,
+        [AGENT_REVISION_ID_ANNOTATION]: gatewayRevisionId,
+        [AGENT_REVISION_ANNOTATION]: String(gatewayRevision),
+      };
+      // Envoy Gateway v1.6.7 replaces the entire inherited SecurityPolicy at a
+      // more specific route scope. Nodes authenticate with native device credentials;
+      // sandbox routes serve only public shell assets on a separate listener.
+      const policy: ManagedKubernetesObject<"SecurityPolicy"> = {
+        apiVersion: GATEWAY_SECURITY_POLICY_API_VERSION,
+        kind: "SecurityPolicy",
+        metadata: { ...publicRoute.metadata },
+        spec: {
+          targetRefs: [
+            {
+              group: "gateway.networking.k8s.io",
+              kind: "HTTPRoute",
+              name: publicRoute.metadata.name,
+            },
+          ],
+        },
+      };
+      if (access === "sandbox") {
+        const routing = this.options.gatewayRouting;
+        // Preview access belongs to the Agent lifecycle, including enabling it
+        // after the tenant namespace has already been provisioned.
+        await this.reconcile(
+          this.gatewaySandboxNetworkPolicy(revision, publicRoute.metadata, routing, gateway),
+          ownership,
+          namespace,
+        );
+      }
+      await this.reconcile(policy, ownership, namespace);
+      await this.reconcile(publicRoute, ownership, namespace);
     }
-    nodeRoute.metadata.annotations = {
-      ...nodeRoute.metadata.annotations,
-      [AGENT_REVISION_ID_ANNOTATION]: gatewayRevisionId,
-      [AGENT_REVISION_ANNOTATION]: String(gatewayRevision),
-    };
-    // Envoy Gateway v1.6.7 replaces the entire inherited SecurityPolicy at a
-    // more specific route scope. Native device credentials authenticate this
-    // route; the Harness never receives the shared administrative API key.
-    const policy: ManagedKubernetesObject<"SecurityPolicy"> = {
-      apiVersion: GATEWAY_SECURITY_POLICY_API_VERSION,
-      kind: "SecurityPolicy",
-      metadata: { ...nodeRoute.metadata },
+  }
+
+  /** Admits public preview traffic to the serving Gateway's sandbox listener.
+   * A serving Gateway from a pre-profile template keeps the profile-free grant
+   * until activation replaces it and this route is reconciled again. */
+  private gatewaySandboxNetworkPolicy(
+    revision: AgentRevision,
+    metadata: ManagedKubernetesObject["metadata"],
+    routing: KubernetesGatewayRoutingOptions,
+    servingGateway: ManagedKubernetesObject,
+  ): ManagedKubernetesObject {
+    const selector = ordinaryNetworkPolicySelector({
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/workload-role": "gateway",
+    });
+    const unprofiled =
+      asRecord(asRecord(asRecord(servingGateway.spec?.template)?.metadata)?.labels)?.[
+        NETWORK_PROFILE_LABEL
+      ] !== ORDINARY_NETWORK_PROFILE;
+    return {
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: { ...metadata },
       spec: {
-        targetRefs: [
+        podSelector: unprofiled ? withoutNetworkProfile(selector) : selector,
+        policyTypes: ["Ingress"],
+        ingress: [
           {
-            group: "gateway.networking.k8s.io",
-            kind: "HTTPRoute",
-            name: nodeRoute.metadata.name,
+            from: [
+              this.peer({
+                namespace: routing.envoyNamespace,
+                podLabels: {
+                  "gateway.envoyproxy.io/owning-gateway-namespace": routing.gatewayNamespace,
+                  "gateway.envoyproxy.io/owning-gateway-name": routing.gatewayName,
+                },
+              }),
+            ],
+            ports: [{ protocol: "TCP", port: this.options.network.gatewayPort + 1 }],
           },
         ],
       },
     };
-    await this.reconcile(policy, ownership, namespace);
-    await this.reconcile(nodeRoute, ownership, namespace);
   }
 
-  private pluginRuntimeSnapshot(revision: AgentRevision): PluginRuntimeSnapshot | undefined {
+  private codexRepositoryBrokerNetworkPolicy(
+    revision: AgentRevision,
+    repositoryConsumer: { readonly role: "gateway" | "agent" } | undefined,
+    repositoryMaterial: ResolvedRepositoryMaterialSpec | undefined,
+  ): CodexRepositoryBrokerNetworkPolicy | undefined {
+    const dedicatedCodex =
+      revision.harness.id === "codex" &&
+      revision.harness.mode === "dedicated" &&
+      repositoryConsumer?.role === "agent";
+    const embeddedCodex =
+      revision.harness.id === "openclaw" &&
+      revision.harness.mode === "embedded" &&
+      repositoryConsumer?.role === "gateway" &&
+      revision.plugins?.driver.implementation === "occ/codex-plugin";
+    if (!dedicatedCodex && !embeddedCodex) {
+      return undefined;
+    }
+    if (this.options.network.repositoryCredentials === undefined) {
+      throw new ConfigurationFailure(
+        "Repository credentials require a configured credential endpoint.",
+      );
+    }
+    if (repositoryMaterial === undefined) {
+      throw new ConfigurationFailure(
+        "Dedicated Codex repository credentials require resolved repository material.",
+      );
+    }
+    const origin = repositoryCredentialBrokerOriginFromMaterial(repositoryMaterial);
+    const brokerHost = normalizedNetworkHost(origin.hostname, "Repository credential broker host");
+    const networkProxy = asRecord(
+      asRecord(asRecord(asRecord(revision.configuration.plugins)?.entries)?.codex)?.config,
+    )?.appServer;
+    const policy = asRecord(asRecord(networkProxy)?.networkProxy);
+    if (policy?.enabled === false) {
+      throw new ConfigurationFailure(
+        "Repository credential broker host is blocked by an explicitly disabled Codex network proxy.",
+      );
+    }
+    if (policy?.mode !== undefined && policy.mode !== "limited" && policy.mode !== "full") {
+      throw new ConfigurationFailure(
+        "Repository credential broker network policy has an unsupported Codex network mode.",
+      );
+    }
+    if (policy?.allowLocalBinding !== undefined && typeof policy.allowLocalBinding !== "boolean") {
+      throw new ConfigurationFailure(
+        "Repository credential broker network policy has an unsupported local binding policy.",
+      );
+    }
+    const domainsInput = policy?.domains === undefined ? undefined : asRecord(policy.domains);
+    if (policy?.domains !== undefined && domainsInput === undefined) {
+      throw new ConfigurationFailure(
+        "Repository credential broker network policy domains must be an object.",
+      );
+    }
+    const domains: Record<string, "allow" | "deny"> = {};
+    for (const [host, decision] of Object.entries(domainsInput ?? {})) {
+      if (decision !== "allow" && decision !== "deny") {
+        throw new ConfigurationFailure(
+          "Repository credential broker network policy has an unsupported domain decision.",
+        );
+      }
+      mergeDomainDecision(
+        domains,
+        normalizedNetworkHost(host, "Repository credential broker network domain"),
+        decision,
+      );
+    }
+    if (domains[brokerHost] === "deny") {
+      throw new ConfigurationFailure(
+        "Repository credential broker host is explicitly denied by Codex network proxy policy.",
+      );
+    }
+    return {
+      host: brokerHost,
+      domains,
+    };
+  }
+  private pluginRuntimeSnapshot(
+    revision: AgentRevision,
+    repositoryBrokerNetworkPolicy?: CodexRepositoryBrokerNetworkPolicy,
+  ): PluginRuntimeSnapshot | undefined {
     let runtime: PluginRuntimeSpec | undefined;
     try {
-      runtime = pluginRuntimeSpecForRevision(revision);
+      runtime = pluginRuntimeSpecForRevision(revision, repositoryBrokerNetworkPolicy);
     } catch (error) {
       throw new ConfigurationFailure(
         error instanceof Error
@@ -6081,7 +8320,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private pluginRuntimeConfigMap(
     snapshot: PluginRuntimeSnapshot,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject<"ConfigMap"> {
     return {
       ...this.manifest("v1", "ConfigMap", snapshot.name, ownership, namespace),
@@ -6090,7 +8329,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private sharedWorkspaceClaimName(agentId: string): string {
+  private harnessWorkspaceClaimName(agentId: string): string {
     return `workspace-${sha256Hex(agentId, 12)}`;
   }
 
@@ -6098,22 +8337,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return `gateway-state-${sha256Hex(agentId, 12)}`;
   }
 
-  private sharedWorkspaceClaim(
+  private harnessWorkspaceClaim(
     agentId: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject<"PersistentVolumeClaim"> {
     return {
       ...this.manifest(
         "v1",
         "PersistentVolumeClaim",
-        this.sharedWorkspaceClaimName(agentId),
+        this.harnessWorkspaceClaimName(agentId),
         ownership,
         namespace,
       ),
       spec: {
-        accessModes: ["ReadWriteMany"],
-        resources: { requests: { storage: SHARED_WORKSPACE_SIZE } },
+        accessModes: ["ReadWriteOnce"],
+        resources: { requests: { storage: HARNESS_WORKSPACE_SIZE } },
       },
     };
   }
@@ -6121,7 +8360,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private gatewayPrivateStateClaim(
     agentId: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject<"PersistentVolumeClaim"> {
     return {
       ...this.manifest(
@@ -6151,10 +8390,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const expectedModes = Array.isArray(desired.spec?.accessModes) ? desired.spec.accessModes : [];
     const requests = asRecord(asRecord(claim.spec?.resources)?.requests);
     const expectedRequests = asRecord(asRecord(desired.spec?.resources)?.requests);
+    // Keep existing Agent workspace data on its original RWX claim. Never patch
+    // an immutable PVC access mode or broaden Gateway private-state acceptance.
+    const agentId = desired.metadata.annotations?.["openclaw.dev/agent-id"];
+    const existingWorkspace =
+      agentId !== undefined &&
+      desired.metadata.name === this.harnessWorkspaceClaimName(agentId) &&
+      accessModes.length === 1 &&
+      accessModes[0] === "ReadWriteMany";
     if (
       claim.metadata.deletionTimestamp !== undefined ||
-      accessModes.length !== expectedModes.length ||
-      accessModes.some((mode, index) => mode !== expectedModes[index]) ||
+      (!existingWorkspace &&
+        (accessModes.length !== expectedModes.length ||
+          accessModes.some((mode, index) => mode !== expectedModes[index]))) ||
       requests?.storage !== expectedRequests?.storage ||
       (claim.spec?.volumeMode ?? "Filesystem") !== (desired.spec?.volumeMode ?? "Filesystem") ||
       (desired.spec?.storageClassName !== undefined &&
@@ -6166,7 +8414,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private harnessWorkspaceVolumeMounts(): V1VolumeMount[] {
     return HARNESS_WORKSPACE_CATEGORIES.map(([subPath, mountPath]) => ({
-      name: SHARED_WORKSPACE_VOLUME,
+      name: HARNESS_WORKSPACE_VOLUME,
       mountPath,
       subPath,
       readOnly: false,
@@ -6211,8 +8459,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
           ]
         : HARNESS_WORKSPACE_CATEGORIES.map(([, mountPath]) => mountPath);
     return [
-      ...new Set(paths.map((mountPath) => mountPath.slice(0, mountPath.lastIndexOf("/")))),
-    ].filter((directory) => directory !== "/home/node");
+      "/runtime-state/home",
+      "/runtime-temporary/tmp",
+      ...[...new Set(paths.map((mountPath) => mountPath.slice(0, mountPath.lastIndexOf("/"))))]
+        .filter((directory) => directory !== "/home/node")
+        .map((directory) => directory.replace(/^\/home\/node/u, "/runtime-state/home")),
+    ];
   }
 
   private privateStateInitContainer(
@@ -6222,7 +8474,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     writableConfiguration = false,
   ): KubernetesRecord {
     const directories = this.privateStateDirectories(role);
-    const volumeMounts: V1VolumeMount[] = [{ name: "runtime-state", mountPath: "/home/node" }];
+    const volumeMounts: V1VolumeMount[] = [
+      { name: "runtime-state", mountPath: "/runtime-state" },
+      { name: "runtime-temporary", mountPath: "/runtime-temporary" },
+    ];
     if (writableConfiguration) {
       volumeMounts.push({
         name: CONFIGURATION_VOLUME,
@@ -6235,17 +8490,21 @@ export class KubernetesComputeDriver implements ComputeDriver {
       volumeMounts.push({ name: GATEWAY_PRIVATE_STATE_VOLUME, mountPath: "/gateway-state" });
       directories.push(
         ...GATEWAY_PRIVATE_STATE_CATEGORIES.map(([subPath]) => `/gateway-state/${subPath}`),
-        "/home/node/gateway-codex-home",
+        "/runtime-state/home/gateway-codex-home",
       );
       directories.push(embedded ? "/gateway-state/workspace" : "/gateway-state/sessions");
     }
     const script = [
       writableConfiguration
         ? 'const { chmodSync, copyFileSync, mkdirSync } = require("node:fs");'
-        : 'const { mkdirSync } = require("node:fs");',
+        : 'const { chmodSync, mkdirSync } = require("node:fs");',
       `for (const path of ${JSON.stringify(directories)}) {`,
       "  mkdirSync(path, { recursive: true });",
+      "  chmodSync(path, 0o700);",
       "}",
+      // The emptyDir root is group-writable under fsGroup, without /tmp's sticky
+      // bit. Mount a private child so native safe-temp admission needs no privilege.
+      'mkdirSync("/runtime-temporary/tmp", { recursive: true, mode: 0o700 });',
       ...(writableConfiguration
         ? [
             `copyFileSync(${JSON.stringify(
@@ -6270,10 +8529,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     };
   }
 
-  private async deleteSharedWorkspaceClaim(ownership: Ownership, namespace: string): Promise<void> {
-    const agentId = required(ownership.agentId, "Shared workspace Agent ID");
+  private async deleteHarnessWorkspaceClaim(
+    ownership: Ownership,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    const agentId = required(ownership.agentId, "Harness workspace Agent ID");
     await this.deletePersistentVolumeClaim(
-      this.sharedWorkspaceClaim(agentId, ownership, namespace),
+      this.harnessWorkspaceClaim(agentId, ownership, namespace),
       ownership,
       namespace,
     );
@@ -6281,7 +8543,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async deleteGatewayPrivateStateClaim(
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const agentId = required(ownership.agentId, "Gateway private state Agent ID");
     await this.deletePersistentVolumeClaim(
@@ -6294,7 +8556,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async deletePersistentVolumeClaim(
     desired: ManagedKubernetesObject<"PersistentVolumeClaim">,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const name = desired.metadata.name;
     const existing = await this.getOwned("PersistentVolumeClaim", name, namespace, ownership);
@@ -6303,12 +8565,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     this.verifyPersistentVolumeClaim(existing, desired);
     const uid = required(existing.metadata.uid, "PersistentVolumeClaim UID");
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     await this.request(
       () =>
         clients.core.deleteNamespacedPersistentVolumeClaim({
           name,
-          namespace,
+          namespace: namespace.name,
           body: { preconditions: { uid } },
         }),
       { mutating: true },
@@ -6317,12 +8579,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private agentAuthenticationNetworkPolicy(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject {
     const runtime = this.agentNetworkPolicies(revision, namespace).find(
-      ({ metadata }) => metadata.name === `allow-agent-runtime-${sha256Hex(revision.agentId, 12)}`,
+      ({ resource }) =>
+        resource.metadata.name === `allow-agent-runtime-${sha256Hex(revision.agentId, 12)}`,
     );
-    const egress = runtime?.spec?.egress;
+    const egress = runtime?.resource.spec?.egress;
     if (!Array.isArray(egress) || egress.length === 0) {
       throw new ConfigurationFailure(
         "Agent authentication requires an approved model egress policy.",
@@ -6342,16 +8605,39 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
       ),
       spec: {
-        podSelector: {
-          matchLabels: {
-            "openclaw.dev/workload-role": "agent",
-            "openclaw.dev/agent": revision.agentId,
-            "openclaw.dev/revision": revision.id,
-          },
-        },
+        podSelector: ordinaryNetworkPolicySelector({
+          "openclaw.dev/workload-role": "agent",
+          "openclaw.dev/agent": revision.agentId,
+          "openclaw.dev/revision": revision.id,
+        }),
         policyTypes: ["Egress"],
         egress,
       },
+    };
+  }
+
+  private agentServiceSelector(
+    revision: AgentRevision,
+    workloadName?: string,
+  ): Record<string, string> {
+    return {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/revision": revision.id,
+      "openclaw.dev/workload-role": "agent",
+      ...(workloadName === undefined ? {} : { "app.kubernetes.io/name": workloadName }),
+    };
+  }
+
+  private gatewayServiceSelector(
+    revision: AgentRevision,
+    workloadName: string,
+  ): Record<string, string> {
+    return {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/agent": revision.agentId,
+      "openclaw.dev/workload-role": "gateway",
+      "app.kubernetes.io/name": workloadName,
     };
   }
 
@@ -6461,11 +8747,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private channelNetworkPolicy(
     revision: AgentRevision,
     enabled: readonly ChannelRequirements[],
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): ManagedKubernetesObject {
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
     const proxy = enabled.some(({ egress }) => egress === "https-proxy")
-      ? channelProxy(this.options.runtime?.channels?.proxyUrl)
+      ? channelProxy(
+          this.options.runtime?.channels?.proxyUrl,
+          this.options.runtime?.channels?.managedProxy,
+        )
       : undefined;
     return {
       ...this.manifest(
@@ -6476,21 +8765,23 @@ export class KubernetesComputeDriver implements ComputeDriver {
         namespace,
       ),
       spec: {
-        podSelector: {
-          matchLabels: {
-            "openclaw.dev/workload-role": "gateway",
-            "openclaw.dev/agent": revision.agentId,
-          },
-        },
+        podSelector: ordinaryNetworkPolicySelector({
+          "openclaw.dev/workload-role": "gateway",
+          "openclaw.dev/agent": revision.agentId,
+        }),
         policyTypes: ["Egress"],
         egress:
           proxy !== undefined
             ? [
                 {
                   to: [
-                    {
-                      ipBlock: { cidr: `${proxy.address}/${isIP(proxy.address) === 4 ? 32 : 128}` },
-                    },
+                    proxy.kind === "managed"
+                      ? this.peer(proxy.peer)
+                      : {
+                          ipBlock: {
+                            cidr: `${proxy.address}/${isIP(proxy.address) === 4 ? 32 : 128}`,
+                          },
+                        },
                   ],
                   ports: [{ protocol: "TCP", port: proxy.port }],
                 },
@@ -6503,7 +8794,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async reconcileChannelNetworkPolicy(
     revision: AgentRevision,
     enabled: readonly ChannelRequirements[],
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<void> {
     const policy = this.channelNetworkPolicy(revision, enabled, namespace);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
@@ -6521,57 +8812,69 @@ export class KubernetesComputeDriver implements ComputeDriver {
     await this.reconcile(policy, ownership, namespace);
   }
 
+  /** Only preparation passes `preparation`, while a Gateway of another revision
+   * serves. `unprofiledGateway` widens every Gateway-side selector to the
+   * Agent's Gateway Pods with or without the profile (a pre-profile Gateway).
+   * `anyRevision` drops the revision from every Agent-scoped selector: these
+   * policies have one name per Agent, so pinning them to the candidate would
+   * cut the serving predecessor off until activation pins them again. */
   private pluginStatusNetworkPolicies(
     revision: AgentRevision,
-    namespace: string,
-  ): ManagedKubernetesObject[] {
+    namespace: KubernetesNamespaceAddress,
+    preparation: AgentPolicyPreparation = {},
+  ): TargetedKubernetesResource[] {
+    const { unprofiledGateway = false } = preparation;
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const agent = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "agent",
-        "openclaw.dev/agent": revision.agentId,
-        "openclaw.dev/revision": revision.id,
-      },
-    };
-    const gateway = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "gateway",
-        "openclaw.dev/agent": revision.agentId,
-      },
-    };
-    const policy = (name: string, spec: KubernetesRecord): ManagedKubernetesObject => ({
-      ...this.manifest(
-        "networking.k8s.io/v1",
-        "NetworkPolicy",
-        `${name}-${suffix}`,
-        ownership,
+    const revisionScope =
+      preparation.anyRevision === true ? {} : { "openclaw.dev/revision": revision.id };
+    const agent = profileNetworkPolicySelector(this.harnessNetworkProfile(revision), {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "agent",
+      "openclaw.dev/agent": revision.agentId,
+      ...revisionScope,
+    });
+    const profiledGateway = ordinaryNetworkPolicySelector({
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "gateway",
+      "openclaw.dev/agent": revision.agentId,
+    });
+    const gateway = unprofiledGateway ? withoutNetworkProfile(profiledGateway) : profiledGateway;
+    const policy = (name: string, spec: KubernetesRecord): TargetedKubernetesResource => {
+      const target =
         name === "allow-gateway-agent" || name === "allow-plugin-status-gateway"
           ? gatewayNamespace
-          : namespace,
-      ),
-      spec,
-    });
-    const statusProxySourceCidrs = this.options.network.pluginStatusProxySourceCidrs ?? [];
+          : namespace;
+      return {
+        namespace: target,
+        resource: {
+          ...this.manifest(
+            "networking.k8s.io/v1",
+            "NetworkPolicy",
+            `${name}-${suffix}`,
+            ownership,
+            target,
+          ),
+          spec,
+        },
+      };
+    };
+    const statusProxySourceCidrs =
+      this.options.executionCluster?.network.pluginStatusProxySourceCidrs ??
+      this.options.network.pluginStatusProxySourceCidrs ??
+      [];
     const enabledPluginIds = Object.entries(revision.plugins?.plugins ?? {})
       .filter(([, selection]) => selection.enabled)
       .map(([pluginId]) => pluginId);
-    if (enabledPluginIds.length === 0) {
-      return [];
-    }
     const policies =
       statusProxySourceCidrs.length > 0
         ? [
             policy("allow-plugin-status-proxy", {
-              podSelector: {
-                matchLabels: {
-                  "openclaw.dev/agent": revision.agentId,
-                  "openclaw.dev/revision": revision.id,
-                },
-              },
+              podSelector: ordinaryNetworkPolicySelector({
+                "openclaw.dev/agent": revision.agentId,
+                ...revisionScope,
+              }),
               policyTypes: ["Ingress"],
               ingress: [
                 {
@@ -6582,16 +8885,38 @@ export class KubernetesComputeDriver implements ComputeDriver {
             }),
           ]
         : [];
-    if (revision.harness.mode === "embedded" || this.options.runtime === undefined) {
-      return policies;
-    }
+    const controlProxyCidrs = this.options.network.pluginStatusProxySourceCidrs ?? [];
     const gatewayProxyPolicies =
-      gatewayNamespace === namespace
+      gatewayNamespace === namespace || controlProxyCidrs.length === 0
         ? []
         : policies.map((item) => ({
-            ...item,
-            metadata: { ...item.metadata, namespace: gatewayNamespace },
+            namespace: gatewayNamespace,
+            resource: {
+              ...item.resource,
+              metadata: { ...item.resource.metadata, namespace: gatewayNamespace.name },
+              spec: {
+                ...item.resource.spec,
+                ingress: [
+                  {
+                    from: controlProxyCidrs.map((cidr) => ({ ipBlock: { cidr } })),
+                    ports: [{ protocol: "TCP", port: PLUGIN_RUNTIME_STATUS_PORT }],
+                  },
+                ],
+              },
+            },
           }));
+    if (revision.harness.id === "openclaw") {
+      return [...policies, ...gatewayProxyPolicies];
+    }
+    // The private runtime diagnostics endpoint uses the same proxy even when
+    // no plugins are enabled; its ingress must follow workload placement.
+    if (
+      enabledPluginIds.length === 0 ||
+      revision.harness.mode === "embedded" ||
+      this.options.runtime === undefined
+    ) {
+      return [...policies, ...gatewayProxyPolicies];
+    }
     return [
       ...policies,
       ...gatewayProxyPolicies,
@@ -6600,8 +8925,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
         policyTypes: ["Egress"],
         egress: [
           {
-            to: [this.peer({ namespace, podLabels: agent.matchLabels })],
-            ports: [{ protocol: "TCP", port: PLUGIN_RUNTIME_STATUS_PORT }],
+            to:
+              this.options.executionCluster === undefined
+                ? [this.peer({ namespace: namespace.name, podLabels: agent.matchLabels })]
+                : this.options.executionCluster.network.harnessEndpointCidrs.map((cidr) => ({
+                    ipBlock: { cidr },
+                  })),
+            ports: [
+              {
+                protocol: "TCP",
+                port:
+                  this.options.executionCluster === undefined ? PLUGIN_RUNTIME_STATUS_PORT : 443,
+              },
+            ],
           },
         ],
       }),
@@ -6610,7 +8946,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
         policyTypes: ["Ingress"],
         ingress: [
           {
-            from: [this.peer({ namespace: gatewayNamespace, podLabels: gateway.matchLabels })],
+            from: [
+              this.peer(
+                this.options.executionCluster === undefined
+                  ? { namespace: gatewayNamespace.name, podLabels: gateway.matchLabels }
+                  : this.executionProxyPeer(),
+              ),
+            ],
             ports: [{ protocol: "TCP", port: PLUGIN_RUNTIME_STATUS_PORT }],
           },
         ],
@@ -6620,39 +8962,46 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private agentNetworkPolicies(
     revision: AgentRevision,
-    namespace: string,
-  ): ManagedKubernetesObject[] {
+    namespace: KubernetesNamespaceAddress,
+    preparation: AgentPolicyPreparation = {},
+  ): TargetedKubernetesResource[] {
+    const { unprofiledGateway = false } = preparation;
     const gatewayNamespace = this.gatewayNamespace(revision, namespace);
     const suffix = sha256Hex(revision.agentId, 12);
     const ownership = { namespaceId: revision.namespaceId, agentId: revision.agentId };
-    const agent = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "agent",
-        "openclaw.dev/agent": revision.agentId,
-        "openclaw.dev/revision": revision.id,
-      },
-    };
-    const gateway = {
-      matchLabels: {
-        "openclaw.dev/namespace": revision.namespaceId,
-        "openclaw.dev/workload-role": "gateway",
-        "openclaw.dev/agent": revision.agentId,
-      },
-    };
-    const policy = (name: string, spec: KubernetesRecord): ManagedKubernetesObject => ({
-      ...this.manifest(
-        "networking.k8s.io/v1",
-        "NetworkPolicy",
-        `${name}-${suffix}`,
-        ownership,
+    const harnessProfile = this.harnessNetworkProfile(revision);
+    const agent = profileNetworkPolicySelector(harnessProfile, {
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "agent",
+      "openclaw.dev/agent": revision.agentId,
+      ...(preparation.anyRevision === true ? {} : { "openclaw.dev/revision": revision.id }),
+    });
+    const profiledGateway = ordinaryNetworkPolicySelector({
+      "openclaw.dev/namespace": revision.namespaceId,
+      "openclaw.dev/workload-role": "gateway",
+      "openclaw.dev/agent": revision.agentId,
+    });
+    const gateway = unprofiledGateway ? withoutNetworkProfile(profiledGateway) : profiledGateway;
+    const policy = (name: string, spec: KubernetesRecord): TargetedKubernetesResource => {
+      const target =
         name === "allow-gateway-agent" || name === "allow-plugin-status-gateway"
           ? gatewayNamespace
-          : namespace,
-      ),
-      spec,
-    });
-    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace);
+          : namespace;
+      return {
+        namespace: target,
+        resource: {
+          ...this.manifest(
+            "networking.k8s.io/v1",
+            "NetworkPolicy",
+            `${name}-${suffix}`,
+            ownership,
+            target,
+          ),
+          spec,
+        },
+      };
+    };
+    const statusPolicies = this.pluginStatusNetworkPolicies(revision, namespace, preparation);
     const runtime = this.options.runtime;
     if (runtime === undefined) {
       return statusPolicies;
@@ -6699,19 +9048,41 @@ export class KubernetesComputeDriver implements ComputeDriver {
         podSelector: gateway,
         policyTypes: ["Egress"],
         egress: [
-          { to: [this.peer({ namespace, podLabels: agent.matchLabels })], ports: transport },
+          {
+            to:
+              this.options.executionCluster === undefined
+                ? [this.peer({ namespace: namespace.name, podLabels: agent.matchLabels })]
+                : this.options.executionCluster.network.harnessEndpointCidrs.map((cidr) => ({
+                    ipBlock: { cidr },
+                  })),
+            ports:
+              this.options.executionCluster === undefined
+                ? transport
+                : [{ protocol: "TCP", port: 443 }],
+          },
         ],
       }),
       policy("allow-agent-runtime", {
         podSelector: agent,
-        policyTypes: ["Ingress", "Egress"],
+        // A provider-fenced Harness keeps only the Gateway transport ingress; its
+        // provider's egress fence must not be unioned with model egress.
+        policyTypes:
+          harnessProfile === ORDINARY_NETWORK_PROFILE ? ["Ingress", "Egress"] : ["Ingress"],
         ingress: [
           {
-            from: [this.peer({ namespace: gatewayNamespace, podLabels: gateway.matchLabels })],
+            from: [
+              this.peer(
+                this.options.executionCluster === undefined
+                  ? { namespace: gatewayNamespace.name, podLabels: gateway.matchLabels }
+                  : this.executionProxyPeer(),
+              ),
+            ],
             ports: transport,
           },
         ],
-        egress: [...modelEgress, ...repositoryEgress],
+        ...(harnessProfile === ORDINARY_NETWORK_PROFILE
+          ? { egress: [...modelEgress, ...repositoryEgress] }
+          : {}),
       }),
       ...statusPolicies,
     ];
@@ -6720,7 +9091,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private harnessAuthForRevision(
     revision: AgentRevision,
     context: ComputeRevisionContext | undefined,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): PreparedHarnessAuth {
     const auth = context?.harnessAuth;
     if (auth === undefined || auth.method !== revision.harnessAuth.method) {
@@ -6733,7 +9104,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (
         !isDeepStrictEqual(snapshot, revision.harnessAuth) ||
         auth.source.namespaceId !== revision.namespaceId ||
-        backendRef.namespaceName !== namespace ||
+        backendRef.namespaceName !== namespace.name ||
         !backendRef.name?.trim() ||
         !backendRef.key?.trim() ||
         !backendRef.uid?.trim()
@@ -6741,6 +9112,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw new OwnershipFailure(
           "Harness authentication Secret does not match the admitted source.",
         );
+      }
+    } else if (auth.method === "credential_source") {
+      const { source, ...snapshot } = auth;
+      if (
+        !isDeepStrictEqual(snapshot, revision.harnessAuth) ||
+        source.id !== snapshot.sourceId ||
+        source.namespaceId !== revision.namespaceId ||
+        source.driverId !== snapshot.credentialGatewayId ||
+        source.type !== snapshot.sourceType ||
+        source.state !== "ready"
+      ) {
+        throw new OwnershipFailure("Harness credential source does not match the admitted source.");
       }
     } else {
       if (!isDeepStrictEqual(auth, revision.harnessAuth)) {
@@ -6756,7 +9139,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       environment: [
         ...prepared.environment,
         { name: "OPENCLAW_HARNESS_MODEL", value: harnessPrimaryModel(revision.configuration) },
-        ...(revision.harness.mode === "embedded"
+        ...(revision.harness.id === "openclaw"
           ? [
               { name: "OPENCLAW_HARNESS_PROVIDER", value: native.providerId },
               { name: "OPENCLAW_HARNESS_CREDENTIAL_ENV", value: native.environmentName },
@@ -6773,7 +9156,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private secretEnvironmentForRevision(
     revision: AgentRevision,
     context: ComputeRevisionContext | undefined,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): readonly SecretEnvironmentProjection[] {
     let bindings: ReturnType<typeof normalizeSecretBindings>;
     try {
@@ -6812,7 +9195,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         projection.namespaceId !== binding.source.namespaceId ||
         projection.namespaceId !== revision.namespaceId ||
         projection.agentId !== revision.agentId ||
-        projection.backendRef.namespaceName !== namespace ||
+        projection.backendRef.namespaceName !== namespace.name ||
         projection.backendRef.name.trim().length === 0 ||
         projection.backendRef.key.trim().length === 0 ||
         projection.backendRef.uid.trim().length === 0
@@ -6838,9 +9221,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     revision: AgentRevision,
     context: ComputeRevisionContext | undefined,
     prepared: PreparedHarnessAuth,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<PreparedHarnessAuth> {
-    const sourceNamespace = kubernetesGatewayNamespaceName(revision.namespaceId);
+    const sourceNamespace = this.controlNamespace(revision.namespaceId);
     const sources: SecretEnvironmentProjection[] = [];
     const auth = context?.harnessAuth;
     if (auth === undefined) {
@@ -6872,7 +9255,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         agentId: revision.agentId,
         secretId: auth.method === "api_key" || auth.method === "codex_pat" ? auth.source.id : name,
         backendRef: {
-          namespaceName: sourceNamespace,
+          namespaceName: sourceNamespace.name,
           name,
           key: ref.key,
           uid: required(source.metadata.uid, "Harness credential UID"),
@@ -6898,7 +9281,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         agentId: revision.agentId,
         secretId: name,
         backendRef: {
-          namespaceName: sourceNamespace,
+          namespaceName: sourceNamespace.name,
           name,
           key: AGENT_TRANSPORT_TOKEN_KEY,
           uid: required(source.metadata.uid, "Transport credential UID"),
@@ -6929,8 +9312,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async deliverGatewaySecrets(
     revision: AgentRevision,
-    harnessNamespace: string,
-    gatewayNamespace: string,
+    harnessNamespace: KubernetesNamespaceAddress,
+    gatewayNamespace: KubernetesNamespaceAddress,
     projections: readonly SecretEnvironmentProjection[],
   ): Promise<readonly SecretEnvironmentProjection[]> {
     // Dedicated Gateways consume the canonical control-plane sources directly.
@@ -6938,7 +9321,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       for (const projection of projections) {
         const ref = projection.backendRef;
         if (
-          ref.namespaceName !== gatewayNamespace ||
+          ref.namespaceName !== gatewayNamespace.name ||
           projection.namespaceId !== revision.namespaceId ||
           projection.agentId !== revision.agentId
         ) {
@@ -6967,7 +9350,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private async projectRuntimeSecrets(
     revision: AgentRevision,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     name: string,
     projections: readonly SecretEnvironmentProjection[],
   ): Promise<readonly SecretEnvironmentProjection[]> {
@@ -6976,12 +9359,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     try {
       const ownership = this.pluginRuntimeOwnership(revision);
-      const sourceNamespace = kubernetesGatewayNamespaceName(revision.namespaceId);
+      const sourceNamespace = this.controlNamespace(revision.namespaceId);
       const data: Record<string, string> = {};
       for (const projection of projections) {
         const ref = projection.backendRef;
         if (
-          ref.namespaceName !== sourceNamespace ||
+          ref.namespaceName !== sourceNamespace.name ||
           projection.namespaceId !== revision.namespaceId ||
           projection.agentId !== revision.agentId
         ) {
@@ -6991,7 +9374,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         if (
           source === undefined ||
           source.metadata.uid !== ref.uid ||
-          source.metadata.namespace !== sourceNamespace ||
+          source.metadata.namespace !== sourceNamespace.name ||
           source.metadata.deletionTimestamp !== undefined
         ) {
           throw new OwnershipFailure("The admitted Secret is unavailable.");
@@ -7017,13 +9400,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
         type: "Opaque",
         data,
       };
-      const clients = await this.clients();
+      const clients = await this.clients(namespace.plane);
       if (existing === undefined || !isDeepStrictEqual(existing.data, data)) {
         await this.request(
           () =>
             existing === undefined
-              ? clients.core.createNamespacedSecret({ namespace, body })
-              : clients.core.replaceNamespacedSecret({ namespace, name, body }),
+              ? clients.core.createNamespacedSecret({ namespace: namespace.name, body })
+              : clients.core.replaceNamespacedSecret({ namespace: namespace.name, name, body }),
           { mutating: true },
         );
       }
@@ -7034,7 +9417,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return projections.map((projection) => ({
         ...projection,
         backendRef: {
-          namespaceName: namespace,
+          namespaceName: namespace.name,
           name,
           key: projection.name,
           uid: required(observed.metadata.uid, "Runtime Secret UID"),
@@ -7050,7 +9433,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private deployment(
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     image: string,
     serviceAccountName: string,
     role: "gateway" | "agent",
@@ -7066,7 +9449,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
     pluginWarnings: readonly PluginDeploymentWarning[] = [],
     workspaceSetup?: WorkspaceSetup,
     repositoryMaterial?: ResolvedRepositoryMaterialSpec,
+    nativeRuntime?: NativeRuntimeSnapshot,
   ): ManagedKubernetesObject {
+    if (nativeRuntime !== undefined && (embedded || role !== "agent")) {
+      throw new ConfigurationFailure(
+        "Dedicated OpenClaw runtime requires a dedicated Harness workload.",
+      );
+    }
     const metadata = this.ownershipMetadata(ownership);
     const workloadMetadata =
       workloadServicePrincipalId === undefined
@@ -7111,7 +9500,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
         name: CONFIGURATION_VOLUME,
         configMap: {
           name: configuration.name,
-          items: [{ key: CONFIGURATION_DOCUMENT, path: CONFIGURATION_DOCUMENT }],
+          items: [
+            { key: CONFIGURATION_DOCUMENT, path: CONFIGURATION_DOCUMENT },
+            ...(this.options.executionCluster?.caBundle === undefined
+              ? []
+              : [{ key: "execution-ca.pem", path: "execution-ca.pem" }]),
+          ],
           optional: false,
         },
       });
@@ -7128,21 +9522,55 @@ export class KubernetesComputeDriver implements ComputeDriver {
           ? WRITABLE_CONFIGURATION_PATH
           : `${CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
       });
-      if (configuration.workspaceNodeId !== undefined) {
+      // A native worker profile is a placement control that must hold before the
+      // Gateway serves, so it stays in the pod spec, as does the node of a Gateway
+      // whose runtime status the controller cannot read. Otherwise a Codex Gateway
+      // reads its node from the optional binding volume and applies it while running.
+      if (
+        configuration.workspaceNodeId !== undefined &&
+        configuration.workspaceNodeBinding === undefined
+      ) {
         variables.push({
           name: "OPENCLAW_WORKSPACE_NODE_ID",
           value: configuration.workspaceNodeId,
         });
       }
+      if (configuration.workspaceNodeBinding !== undefined) {
+        volumes.push({
+          name: WORKSPACE_NODE_BINDING_VOLUME,
+          configMap: {
+            name: configuration.workspaceNodeBinding,
+            items: [{ key: WORKSPACE_NODE_BINDING_FILE, path: WORKSPACE_NODE_BINDING_FILE }],
+            optional: true,
+          },
+        });
+        volumeMounts.push({
+          name: WORKSPACE_NODE_BINDING_VOLUME,
+          mountPath: WORKSPACE_NODE_BINDING_DIRECTORY,
+          readOnly: true,
+        });
+        variables.push({
+          name: "OPENCLAW_WORKSPACE_NODE_PATH",
+          value: `${WORKSPACE_NODE_BINDING_DIRECTORY}/${WORKSPACE_NODE_BINDING_FILE}`,
+        });
+      }
+      if (configuration.nativeWorkerProfile !== undefined) {
+        variables.push({
+          name: "OPENCLAW_NATIVE_WORKER_PROFILE",
+          value: configuration.nativeWorkerProfile,
+        });
+      }
     }
     const needsPluginRuntime =
       pluginRuntime !== undefined &&
-      ((pluginRuntime.runtime.kind === "openclaw" && role === "gateway" && embedded) ||
-        (pluginRuntime.runtime.kind === "codex" && role === "agent" && runtime !== undefined) ||
+      ((pluginRuntime.runtime.kind === "openclaw" && role === "gateway") ||
         (pluginRuntime.runtime.kind === "codex" &&
           role === "gateway" &&
-          !embedded &&
-          Object.keys(pluginRuntime.runtime.selections).length > 0));
+          embedded &&
+          (Object.keys(pluginRuntime.runtime.selections).length > 0 ||
+            pluginRuntime.runtime.repositoryBrokerNetworkPolicy !== undefined)) ||
+        (pluginRuntime.runtime.kind === "codex" && role === "agent" && runtime !== undefined) ||
+        (pluginRuntime.runtime.kind === "codex" && role === "gateway" && !embedded));
     const hasEnabledPlugins =
       pluginRuntime !== undefined &&
       Object.values(pluginRuntime.runtime.selections).some((selection) => selection.enabled);
@@ -7269,10 +9697,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       variables.push(...Object.entries(environment).map(([name, value]) => ({ name, value })));
     }
     if (role === "agent") {
-      variables.push(
-        { name: "LOG_FORMAT", value: "json" },
-        { name: "RUST_LOG", value: `${loggingLevel},codex_otel=off` },
-      );
+      variables.push({ name: "LOG_FORMAT", value: "json" });
+      if (nativeRuntime === undefined) {
+        variables.push({ name: "RUST_LOG", value: `${loggingLevel},codex_otel=off` });
+      }
     }
     if (secretEnvironment.length > 0) {
       if (role !== "gateway") {
@@ -7293,17 +9721,29 @@ export class KubernetesComputeDriver implements ComputeDriver {
         { name: "runtime-temporary", emptyDir: { sizeLimit: "64Mi" } },
       );
       volumeMounts.push(
-        { name: "runtime-state", mountPath: "/home/node" },
-        { name: "runtime-temporary", mountPath: "/tmp" },
+        { name: "runtime-state", mountPath: "/home/node", subPath: "home" },
+        { name: "runtime-temporary", mountPath: "/tmp", subPath: "tmp" },
       );
     }
     if (dedicated && role === "agent") {
       const agentId = required(ownership.agentId, "Harness workspace Agent ID");
       volumes.push({
-        name: SHARED_WORKSPACE_VOLUME,
-        persistentVolumeClaim: { claimName: this.sharedWorkspaceClaimName(agentId) },
+        name: HARNESS_WORKSPACE_VOLUME,
+        persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(agentId) },
       });
       volumeMounts.push(...this.harnessWorkspaceVolumeMounts());
+      const initialization = initContainers[0]!;
+      (initialization.volumeMounts as V1VolumeMount[]).push({
+        name: HARNESS_WORKSPACE_VOLUME,
+        mountPath: "/harness-workspace-state",
+      });
+      (initialization.args as string[])[0] += `
+for (const path of ${JSON.stringify(
+        HARNESS_WORKSPACE_CATEGORIES.map(([subPath]) => `/harness-workspace-state/${subPath}`),
+      )}) {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  chmodSync(path, 0o700);
+}`;
     }
     if (dedicated && role === "gateway") {
       // This is the logical workspace key; file access goes through the paired node.
@@ -7318,7 +9758,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       volumeMounts.push(...this.gatewayPrivateStateVolumeMounts(embedded), {
         name: "runtime-state",
         mountPath: "/home/node/.openclaw/agents/main/agent/codex-home",
-        subPath: "gateway-codex-home",
+        subPath: "home/gateway-codex-home",
       });
     }
     if (runtime !== undefined) {
@@ -7341,7 +9781,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           },
         },
       });
-      if (!embedded) {
+      if (!embedded && nativeRuntime === undefined) {
         variables.push(
           secret("APP_SERVER_TOKEN", runtime.transportSecretPrefix, AGENT_TRANSPORT_TOKEN_KEY),
         );
@@ -7352,11 +9792,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
             name: "HOME",
             value: "/home/node",
           });
-        } else {
+        } else if (nativeRuntime === undefined) {
           // TODO(workload-transport-mtls): Replace per-Agent capability-token ws:// with mTLS.
           variables.push({
             name: "APP_SERVER_URL",
-            value: `ws://agent-${suffix}.${required(configuration?.harnessNamespace, "Harness namespace")}.svc:${AGENT_TRANSPORT_PORT}`,
+            value:
+              this.options.executionCluster === undefined
+                ? `ws://agent-${suffix}.${required(configuration?.harnessNamespace?.name, "Harness namespace")}.svc:${AGENT_TRANSPORT_PORT}`
+                : `wss://${this.options.executionCluster.harnessRouting.hostname}${this.harnessRoutePath(ownership)}`,
           });
         }
         if (configuration?.usesGatewayPasswordEnv === true) {
@@ -7377,14 +9820,26 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       } else {
         variables.push(
-          { name: "CODEX_HOME", value: "/home/node/.codex" },
           { name: "HOME", value: "/home/node" },
           {
             name: "PATH",
             value: `${repositoryMaterial === undefined ? "" : `${REPOSITORY_CLIENT_BIN}:`}/app/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
           },
-          { name: "APP_SERVER_PORT", value: String(AGENT_TRANSPORT_PORT) },
         );
+        if (nativeRuntime === undefined) {
+          variables.push(
+            { name: "APP_SERVER_PORT", value: String(AGENT_TRANSPORT_PORT) },
+            { name: "CODEX_HOME", value: "/home/node/.codex" },
+          );
+        } else {
+          variables.push(
+            { name: "OPENCLAW_NATIVE_INFERENCE_CONFIG", value: nativeRuntime.configuration },
+            {
+              name: "OPENCLAW_NATIVE_INFERENCE_CONFIG_PATH",
+              value: NATIVE_WORKER_INFERENCE_CONFIG_PATH,
+            },
+          );
+        }
       }
     }
     if (role === "agent" || embedded) {
@@ -7392,6 +9847,24 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw new ConfigurationFailure("Harness authentication preparation is missing.");
       }
       variables.push(...harnessAuth.environment);
+    }
+    if (role === "agent" && repositoryMaterial !== undefined) {
+      const brokerCa = repositoryBrokerPublicCaPath(repositoryMaterial);
+      if (brokerCa !== undefined) {
+        const existingCaPolicy = variables.find((variable) =>
+          REPOSITORY_BROKER_CA_ENVIRONMENT.includes(
+            variable.name as (typeof REPOSITORY_BROKER_CA_ENVIRONMENT)[number],
+          ),
+        );
+        if (existingCaPolicy !== undefined) {
+          throw new ConfigurationFailure(
+            `Repository credential broker CA delivery cannot replace explicit ${existingCaPolicy.name} environment configuration.`,
+          );
+        }
+        variables.push(
+          ...REPOSITORY_BROKER_CA_ENVIRONMENT.map((name) => ({ name, value: brokerCa })),
+        );
+      }
     }
     if (workspaceSetup !== undefined && (embedded || role === "agent")) {
       const workspace = embedded
@@ -7408,6 +9881,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         name: "initialize-workspace",
         image: this.options.images.gateway,
         imagePullPolicy: "IfNotPresent",
+        // Native setup loads the Gateway CLI and needs its configured resource budget.
+        resources: this.options.resources.gateway,
         command: ["node", "-e"],
         args: [WORKSPACE_SETUP_RUNTIME],
         env: [
@@ -7424,7 +9899,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
               "runtime-state",
               "runtime-temporary",
               GATEWAY_PRIVATE_STATE_VOLUME,
-              SHARED_WORKSPACE_VOLUME,
+              HARNESS_WORKSPACE_VOLUME,
               CONFIGURATION_VOLUME,
             ].includes(name),
           ),
@@ -7436,6 +9911,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
           capabilities: { drop: ["ALL"] },
         },
       });
+    }
+    if (dedicated && this.options.executionCluster !== undefined) {
+      if (role === "gateway") {
+        variables.push({
+          name: "OPENCLAW_PEER_PLUGIN_STATUS_URL",
+          value: `https://${this.options.executionCluster.harnessRouting.hostname}${this.harnessRoutePath(ownership)}/plugin-status`,
+        });
+        if (this.options.executionCluster.caBundle !== undefined) {
+          variables.push({
+            name: "NODE_EXTRA_CA_CERTS",
+            value: `${configuration?.usesWritableNativeAdminConfig ? MANAGED_CONFIGURATION_DIRECTORY : CONFIGURATION_DIRECTORY}/execution-ca.pem`,
+          });
+        }
+      } else {
+        variables.push({ name: "OPENCLAW_REMOTE_PLUGIN_STATUS", value: "true" });
+      }
     }
     const names = new Set<string>();
     for (const variable of variables) {
@@ -7464,7 +9955,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     const runtimeNodeSelector = selectedNodes === undefined ? {} : { nodeSelector: selectedNodes };
     const codexSeccompProfile =
-      role === "agent" && runtime?.codexSeccompProfile !== undefined
+      role === "agent" && nativeRuntime === undefined && runtime?.codexSeccompProfile !== undefined
         ? {
             seccompProfile: {
               type: "Localhost",
@@ -7507,11 +9998,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
               ...revisionLabels,
               ...selector,
               "openclaw.dev/workload-role": role,
+              [NETWORK_PROFILE_LABEL]: ORDINARY_NETWORK_PROFILE,
             },
           },
           spec: {
             serviceAccountName,
             automountServiceAccountToken: false,
+            ...(role === "gateway"
+              ? { terminationGracePeriodSeconds: GATEWAY_STOP_TIMEOUT_MS / 1000 }
+              : {}),
             ...runtimeNodeSelector,
             ...(volumes.length === 0 ? {} : { volumes }),
             ...(initContainers.length === 0 ? {} : { initContainers }),
@@ -7519,7 +10014,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
               runAsNonRoot: true,
               runAsUser: 1000,
               runAsGroup: 1000,
-              ...(privateHome ? { fsGroup: 1000 } : {}),
+              // OnRootMismatch skips the recursive ownership walk of 10-40Gi claims on
+              // every start once the volume root already carries fsGroup ownership.
+              ...(privateHome ? { fsGroup: 1000, fsGroupChangePolicy: "OnRootMismatch" } : {}),
               seccompProfile: { type: "RuntimeDefault" },
             },
             containers: [
@@ -7530,6 +10027,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 ...(variables.length === 0 ? {} : { env: variables }),
                 ports: [
                   { containerPort: port, name: role === "agent" && runtime ? "websocket" : "http" },
+                  ...(role === "gateway" && this.options.gatewayRouting?.sandbox !== undefined
+                    ? [{ containerPort: this.options.network.gatewayPort + 1, name: "sandbox" }]
+                    : []),
                   ...(needsPrivateStatus
                     ? [{ containerPort: PLUGIN_RUNTIME_STATUS_PORT, name: "plugin-status" }]
                     : []),
@@ -7543,12 +10043,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
                             "-e",
                             role === "gateway"
                               ? GATEWAY_READINESS_ENTRYPOINT
-                              : AGENT_READINESS_ENTRYPOINT,
+                              : nativeRuntime === undefined
+                                ? AGENT_READINESS_ENTRYPOINT
+                                : NATIVE_WORKER_READINESS_ENTRYPOINT,
                           ],
                         },
                       }
                     : { httpGet: { path: "/readyz", port } }),
                   periodSeconds: 2,
+                  ...(nativeRuntime === undefined ? {} : { timeoutSeconds: 3 }),
                 },
                 resources:
                   role === "gateway"
@@ -7565,7 +10068,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                   ? {}
                   : {
                       command: ["node", "-e"],
-                      args: [
+                      args: nodeProgramArguments(
                         (workspaceSetup === undefined || (!embedded && role === "gateway")
                           ? ""
                           : workspaceSetupVerifier(
@@ -7576,8 +10079,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
                             )) +
                           (role === "gateway"
                             ? GATEWAY_RUNTIME_ENTRYPOINT
-                            : AGENT_RUNTIME_ENTRYPOINT),
-                      ],
+                            : nativeRuntime === undefined
+                              ? AGENT_RUNTIME_ENTRYPOINT
+                              : NATIVE_WORKER_ENTRYPOINT),
+                      ),
                     }),
               },
             ],
@@ -7590,7 +10095,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private service(
     name: string,
     ownership: Ownership,
-    namespace: string,
+    namespace: KubernetesNamespaceAddress,
     selector: Record<string, string>,
   ): ManagedKubernetesObject {
     const runtimeAgentService =
@@ -7617,6 +10122,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 },
               ]
             : []),
+          ...(!runtimeAgentService && this.options.gatewayRouting?.sandbox !== undefined
+            ? [
+                {
+                  name: "sandbox",
+                  port: this.options.network.gatewayPort + 1,
+                  targetPort: this.options.network.gatewayPort + 1,
+                },
+              ]
+            : []),
         ],
       },
     };
@@ -7625,10 +10139,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async reconcile(
     desired: ManagedKubernetesObject,
     ownership: Ownership,
-    namespace?: string,
+    namespace: KubernetesNamespaceAddress,
     precondition?: ReconcilePrecondition,
   ): Promise<void> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     const existing = await this.getOwned(desired.kind, desired.metadata.name, namespace, ownership);
     if (precondition !== undefined && desired.kind !== "Service") {
       throw new ConfigurationFailure(
@@ -7687,49 +10201,52 @@ export class KubernetesComputeDriver implements ComputeDriver {
             return;
           case "ConfigMap":
             await clients.core.patchNamespacedConfigMap(
-              { ...request, namespace: required(namespace, "ConfigMap namespace") },
+              { ...request, namespace: required(namespace.name, "ConfigMap namespace") },
               this.patchOptions,
             );
             return;
           case "ServiceAccount":
             await clients.core.patchNamespacedServiceAccount(
-              { ...request, namespace: required(namespace, "ServiceAccount namespace") },
+              { ...request, namespace: required(namespace.name, "ServiceAccount namespace") },
               this.patchOptions,
             );
             return;
           case "Service":
             await clients.core.patchNamespacedService(
-              { ...request, namespace: required(namespace, "Service namespace") },
+              { ...request, namespace: required(namespace.name, "Service namespace") },
               this.patchOptions,
             );
             return;
           case "ResourceQuota":
             await clients.core.patchNamespacedResourceQuota(
-              { ...request, namespace: required(namespace, "ResourceQuota namespace") },
+              { ...request, namespace: required(namespace.name, "ResourceQuota namespace") },
               this.patchOptions,
             );
             return;
           case "LimitRange":
             await clients.core.patchNamespacedLimitRange(
-              { ...request, namespace: required(namespace, "LimitRange namespace") },
+              { ...request, namespace: required(namespace.name, "LimitRange namespace") },
               this.patchOptions,
             );
             return;
           case "PersistentVolumeClaim":
             await clients.core.patchNamespacedPersistentVolumeClaim(
-              { ...request, namespace: required(namespace, "PersistentVolumeClaim namespace") },
+              {
+                ...request,
+                namespace: required(namespace.name, "PersistentVolumeClaim namespace"),
+              },
               this.patchOptions,
             );
             return;
           case "Deployment":
             await clients.apps.patchNamespacedDeployment(
-              { ...request, namespace: required(namespace, "Deployment namespace") },
+              { ...request, namespace: required(namespace.name, "Deployment namespace") },
               this.patchOptions,
             );
             return;
           case "NetworkPolicy":
             await clients.networking.patchNamespacedNetworkPolicy(
-              { ...request, namespace: required(namespace, "NetworkPolicy namespace") },
+              { ...request, namespace: required(namespace.name, "NetworkPolicy namespace") },
               this.patchOptions,
             );
             return;
@@ -7756,10 +10273,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
+  private getNamespace(namespace: KubernetesNamespaceAddress) {
+    return this.get("Namespace", namespace.name, namespace);
+  }
+
   private async getOwned<Kind extends ReadableResourceKind>(
     kind: Kind,
     name: string,
-    namespace: string | undefined,
+    namespace: KubernetesNamespaceAddress,
     ownership: Ownership,
   ): Promise<ManagedKubernetesObject<Kind> | undefined> {
     const object = await this.get(kind, name, namespace);
@@ -7772,9 +10293,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async get<Kind extends ReadableResourceKind>(
     kind: Kind,
     name: string,
-    namespace?: string,
+    namespace: KubernetesNamespaceAddress,
   ): Promise<ManagedKubernetesObject<Kind> | undefined> {
-    const clients = await this.clients();
+    const clients = await this.clients(namespace.plane);
     try {
       const value = asRecord(
         await this.request(async () => {
@@ -7784,52 +10305,52 @@ export class KubernetesComputeDriver implements ComputeDriver {
             case "Pod":
               return clients.core.readNamespacedPod({
                 name,
-                namespace: required(namespace, "Pod namespace"),
+                namespace: required(namespace.name, "Pod namespace"),
               });
             case "ConfigMap":
               return clients.core.readNamespacedConfigMap({
                 name,
-                namespace: required(namespace, "ConfigMap namespace"),
+                namespace: required(namespace.name, "ConfigMap namespace"),
               });
             case "Secret":
               return clients.core.readNamespacedSecret({
                 name,
-                namespace: required(namespace, "Secret namespace"),
+                namespace: required(namespace.name, "Secret namespace"),
               });
             case "ServiceAccount":
               return clients.core.readNamespacedServiceAccount({
                 name,
-                namespace: required(namespace, "ServiceAccount namespace"),
+                namespace: required(namespace.name, "ServiceAccount namespace"),
               });
             case "Service":
               return clients.core.readNamespacedService({
                 name,
-                namespace: required(namespace, "Service namespace"),
+                namespace: required(namespace.name, "Service namespace"),
               });
             case "ResourceQuota":
               return clients.core.readNamespacedResourceQuota({
                 name,
-                namespace: required(namespace, "ResourceQuota namespace"),
+                namespace: required(namespace.name, "ResourceQuota namespace"),
               });
             case "LimitRange":
               return clients.core.readNamespacedLimitRange({
                 name,
-                namespace: required(namespace, "LimitRange namespace"),
+                namespace: required(namespace.name, "LimitRange namespace"),
               });
             case "PersistentVolumeClaim":
               return clients.core.readNamespacedPersistentVolumeClaim({
                 name,
-                namespace: required(namespace, "PersistentVolumeClaim namespace"),
+                namespace: required(namespace.name, "PersistentVolumeClaim namespace"),
               });
             case "Deployment":
               return clients.apps.readNamespacedDeployment({
                 name,
-                namespace: required(namespace, "Deployment namespace"),
+                namespace: required(namespace.name, "Deployment namespace"),
               });
             case "NetworkPolicy":
               return clients.networking.readNamespacedNetworkPolicy({
                 name,
-                namespace: required(namespace, "NetworkPolicy namespace"),
+                namespace: required(namespace.name, "NetworkPolicy namespace"),
               });
             case "HTTPRoute":
             case "SecurityPolicy":
@@ -7837,7 +10358,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
                 apiVersion:
                   kind === "HTTPRoute" ? GATEWAY_API_VERSION : GATEWAY_SECURITY_POLICY_API_VERSION,
                 kind,
-                metadata: { name, namespace: required(namespace, `${kind} namespace`) },
+                metadata: { name, namespace: required(namespace.name, `${kind} namespace`) },
               });
             default: {
               const unsupported: never = kind;
@@ -7855,7 +10376,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         value.kind !== kind ||
         metadata === undefined ||
         metadata.name !== name ||
-        (namespace !== undefined && metadata.namespace !== namespace)
+        (kind !== "Namespace" && metadata.namespace !== namespace.name)
       ) {
         throw new Error(`The Kubernetes client returned an invalid or ambiguous ${kind} ${name}.`);
       }

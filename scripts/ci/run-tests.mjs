@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
+import { startAgentNamespaceCapture } from "./k3d-diagnostics.mjs";
 import { loadTestSuites } from "./test-suites.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -334,6 +336,7 @@ function shouldRemoveInheritedEnv(name) {
     name === "NODE_TEST_CONTEXT" ||
     name === "NODE_TEST_WORKER_ID" ||
     name.startsWith("OCC_TEST_") ||
+    name.startsWith("OCC_PROBE_") ||
     name.endsWith("_KEEP") ||
     name.endsWith("_DEBUG")
   );
@@ -379,6 +382,36 @@ function sanitizeError(error) {
     name: error?.name,
     code: error?.code,
   };
+}
+
+// Preparation errors may contain command arguments, credentials and child output.
+// Only this closed diagnostic contract is safe to include in CI artifacts.
+function sanitizePreparationError(error) {
+  const result = { name: "Error" };
+  const { code, stage, failure, exitCode, signal, timedOut } = error ?? {};
+  if (
+    code !== "CI_PREPARATION_COMMAND_FAILED" ||
+    !["database-create", "database-schema", "database-migrate"].includes(stage) ||
+    !["spawn", "exit", "signal", "timeout"].includes(failure)
+  ) {
+    return result;
+  }
+  result.code = code;
+  result.stage = stage;
+  result.failure = failure;
+  if (exitCode === null || (Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255)) {
+    result.exitCode = exitCode;
+  }
+  if (
+    signal === null ||
+    (typeof signal === "string" && Object.hasOwn(osConstants.signals, signal))
+  ) {
+    result.signal = signal;
+  }
+  if (typeof timedOut === "boolean") {
+    result.timedOut = timedOut;
+  }
+  return result;
 }
 
 function validatePreparedEnv(value) {
@@ -442,6 +475,35 @@ function emptyFileResult(path, issues) {
   };
 }
 
+function imageDigests(env) {
+  const names = {
+    controller: "OCC_TEST_PRODUCTION_CONTROLLER_IMAGE",
+    runtime: "OCC_TEST_KUBERNETES_RUNTIME_IMAGE",
+    controllerUpgrade: "OCC_TEST_PRODUCTION_UPGRADE_CONTROLLER_IMAGE",
+    runtimeUpgrade: "OCC_TEST_PRODUCTION_UPGRADE_RUNTIME_IMAGE",
+    repositoryCredentials: "OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE",
+    postgres: "OCC_TEST_PRODUCTION_POSTGRES_IMAGE",
+    node: "OCC_TEST_PRODUCTION_NODE_IMAGE",
+    fixture: "OCC_TEST_KUBERNETES_IMAGE",
+    gateway: "OCC_TEST_KUBERNETES_GATEWAY_IMAGE",
+    codex: "OCC_TEST_KUBERNETES_AGENT_IMAGE",
+    collector: "OCC_TEST_OBSERVABILITY_COLLECTOR_IMAGE",
+    prometheus: "OCC_TEST_OBSERVABILITY_PROMETHEUS_IMAGE",
+    grafana: "OCC_TEST_OBSERVABILITY_GRAFANA_IMAGE",
+    loki: "OCC_TEST_OBSERVABILITY_LOKI_IMAGE",
+    pairController: "OCC_PROBE_CONTROLLER_IMAGE",
+    pairBroker: "OCC_PROBE_BROKER_IMAGE",
+    pairOldController: "OCC_PROBE_OLD_CONTROLLER_IMAGE",
+    pairOldBroker: "OCC_PROBE_OLD_BROKER_IMAGE",
+  };
+  return Object.fromEntries(
+    Object.entries(names).flatMap(([role, name]) => {
+      const digest = env[name]?.match(/@(sha256:[a-f0-9]{64})$/)?.[1];
+      return digest ? [[role, digest]] : [];
+    }),
+  );
+}
+
 async function runFile(root, lane, file, statePath, prepareFile) {
   const issues = [];
   const relativePath = repoRelativePath(root, file.path);
@@ -473,7 +535,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       issues.push(
         issue("prepare-failed", `prepareFile failed for ${relativePath}`, {
           file: relativePath,
-          error: sanitizeError(error),
+          error: sanitizePreparationError(error),
         }),
       );
       return emptyFileResult(relativePath, issues);
@@ -494,8 +556,16 @@ async function runFile(root, lane, file, statePath, prepareFile) {
 
   let nodeResult = null;
   let tests = [];
+  let fileFailure;
+  let agentActivity;
+  let measurements = [];
   try {
     if (issues.length === 0) {
+      agentActivity = await startAgentNamespaceCapture({
+        statePath,
+        lane: lane.name,
+        file: relativePath,
+      }).catch(() => undefined);
       nodeResult = spawnSync(
         process.execPath,
         ["--test", "--test-reporter", reporterPath, absolutePath],
@@ -508,7 +578,28 @@ async function runFile(root, lane, file, statePath, prepareFile) {
         },
       );
 
-      tests = parseReporter(nodeResult.stdout)
+      const events = parseReporter(nodeResult.stdout);
+      const rootFailure = events.find(
+        (event) =>
+          event.type === "test:fail" &&
+          event.data?.file === absolutePath &&
+          event.data.name === absolutePath,
+      );
+      if (rootFailure) {
+        fileFailure = {
+          error: rootFailure.data.error,
+          ...(events.some(
+            (event) =>
+              event.type === "test:diagnostic" && event.data?.kind === "post-test-async-activity",
+          )
+            ? { diagnosticKind: "post-test-async-activity" }
+            : {}),
+        };
+      }
+      measurements = events
+        .filter((event) => event.type === "test:diagnostic" && event.data?.kind === "measurement")
+        .map((event) => event.data.measurement);
+      tests = events
         .filter((event) => isRealTestEvent(event, absolutePath))
         .map((event) => ({
           name: event.data.name,
@@ -530,6 +621,8 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       }),
     );
   } finally {
+    // Capture before cleanup so passing k3d runs keep their Agent Pod timeline.
+    await agentActivity?.finish();
     if (prepared.cleanup) {
       try {
         await prepared.cleanup();
@@ -594,13 +687,10 @@ async function runFile(root, lane, file, statePath, prepareFile) {
     }
   }
 
-  const counts = {
-    passed: tests.filter((testCase) => testCase.status === "passed").length,
-    failed: tests.filter((testCase) => testCase.status === "failed").length,
-    skipped: tests.filter((testCase) => testCase.status === "skipped").length,
-    todo: tests.filter((testCase) => testCase.status === "todo").length,
-    total: tests.length,
-  };
+  const counts = { passed: 0, failed: 0, skipped: 0, todo: 0, total: tests.length };
+  for (const testCase of tests) {
+    counts[testCase.status] += 1;
+  }
   const nodeExitCode = nodeResult ? (nodeResult.status ?? (nodeResult.signal ? 1 : 0)) : null;
 
   return {
@@ -608,10 +698,13 @@ async function runFile(root, lane, file, statePath, prepareFile) {
     status: nodeExitCode === 0 && issues.length === 0 ? "passed" : "failed",
     nodeExitCode,
     signal: nodeResult?.signal ?? null,
+    ...(fileFailure ? { fileFailure } : {}),
     counts,
     tests,
+    ...(measurements.length > 0 ? { measurements } : {}),
     issues,
     cleanup: cleanupResult,
+    imageDigests: imageDigests(env),
   };
 }
 

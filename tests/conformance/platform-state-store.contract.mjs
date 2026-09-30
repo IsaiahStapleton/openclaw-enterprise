@@ -59,7 +59,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     namespaceId: namespace.id,
     name: `Agent ${randomUUID()}`,
     configurationId: configuration.id,
-    providerId: null,
+    backendId: null,
     harnessAuth: apiKeyBinding,
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
@@ -74,7 +74,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     namespaceId: namespace.id,
     agentId: agent.id,
     revision: 1,
-    providerId: null,
+    backendId: null,
     configurationId: configuration.id,
     configurationKind: configuration.kind,
     configurationGeneration: configuration.generation,
@@ -168,7 +168,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     "teardown work naming its Namespace instead of its Agent must be refused",
   );
 
-  const providerConfiguration = {
+  const backendConfiguration = {
     id: identifier("cfg"),
     namespaceId: namespace.id,
     kind: "agent",
@@ -178,13 +178,13 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
   const providerAgent = {
     ...agent,
     id: identifier("agt"),
-    name: `Provider owner ${randomUUID()}`,
-    configurationId: providerConfiguration.id,
-    providerId: "provider-a",
+    name: `Backend owner ${randomUUID()}`,
+    configurationId: backendConfiguration.id,
+    backendId: "provider-a",
     servicePrincipalId: identifier("service-agent"),
   };
   await store.transact(async (transaction) => {
-    await transaction.configurations.createConfiguration(providerConfiguration);
+    await transaction.configurations.createConfiguration(backendConfiguration);
     await transaction.agents.createAgent(providerAgent);
   });
   await assert.rejects(
@@ -193,12 +193,12 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
         ...revision,
         id: identifier("rev"),
         agentId: providerAgent.id,
-        configurationId: providerConfiguration.id,
-        providerId: "provider-b",
+        configurationId: backendConfiguration.id,
+        backendId: "provider-b",
         servicePrincipalId: providerAgent.servicePrincipalId,
       }),
     ),
-    "AgentRevision Provider snapshots must match the owning Agent.",
+    "AgentRevision Backend snapshots must match the owning Agent.",
   );
   await store.read(async (state) => {
     assert.deepEqual(await state.revisions.listRevisions(namespace.id, providerAgent.id), []);
@@ -208,12 +208,12 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       await transaction.agents.updateConfiguration(
         namespace.id,
         providerAgent.id,
-        providerConfiguration.id,
+        backendConfiguration.id,
         providerAgent.executionMode,
         undefined,
         null,
       ),
-      { ...providerAgent, providerId: null },
+      { ...providerAgent, backendId: null },
     );
   });
 
@@ -722,7 +722,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     namespaceId: accountNamespace.id,
     name: "Account agent " + randomUUID(),
     configurationId: accountConfiguration.id,
-    providerId: null,
+    backendId: null,
     executionMode: "dedicated",
     servicePrincipalId: identifier("service-agent"),
     harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
@@ -749,8 +749,8 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       method: "chatgpt_service_account",
       serviceAccountId: account.id,
       credential,
-      providerBinding: {
-        providerId: "chatgpt-contract",
+      backendBinding: {
+        backendId: "chatgpt-contract",
         driverId: "service-account-contract",
         workspaceId: "workspace-contract",
         credentialIssued: true,
@@ -838,7 +838,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       snapshot.harnessAuth,
       snapshot.harnessAuth.credential,
       snapshot.harnessAuth.credential.secretRef,
-      snapshot.harnessAuth.providerBinding,
+      snapshot.harnessAuth.backendBinding,
     ]) {
       assert.ok(Object.isFrozen(value));
     }
@@ -1208,6 +1208,17 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     "teardown work for an absent Agent must be refused",
   );
 
+  await verifyCredentialSourceContract(store, {
+    namespace,
+    harnessSecret,
+    accountNamespace,
+    accountConfiguration,
+    accountAgent,
+    revision,
+  });
+
+  await verifyDeletedResourceAccessBindingContract(store, revision);
+
   return {
     installation,
     namespace,
@@ -1223,4 +1234,474 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     lifecycleNamespace,
     deletedAt,
   };
+}
+
+// Deleting a Configuration, Preset, Secret, credential source or ServiceAccount
+// removes the AccessBindings that grant on it, so none outlives its target or
+// keeps the Role it references from being deleted.
+async function verifyDeletedResourceAccessBindingContract(store, revision) {
+  const createdAt = new Date().toISOString();
+  const namespace = {
+    id: identifier("ns"),
+    name: "Binding cleanup " + randomUUID(),
+    status: "ready",
+    createdAt,
+  };
+  const secretFor = (name) => ({
+    id: identifier("sec"),
+    namespaceId: namespace.id,
+    name: name + " " + randomUUID(),
+    driverId: "secret-contract",
+    backendRef: {
+      namespaceName: "contract",
+      name: "binding-cleanup",
+      key: "value",
+      uid: randomUUID(),
+    },
+    createdAt,
+  });
+  const configurationFor = () => ({
+    id: identifier("cfg"),
+    namespaceId: namespace.id,
+    kind: "agent",
+    generation: 1,
+    createdAt,
+  });
+  const agentConfiguration = configurationFor();
+  const agentSecret = secretFor("Agent key");
+  const agent = {
+    id: identifier("agt"),
+    namespaceId: namespace.id,
+    name: "Binding subject " + randomUUID(),
+    configurationId: agentConfiguration.id,
+    backendId: null,
+    harnessAuth: {
+      method: "api_key",
+      source: { kind: "secret", namespaceId: namespace.id, id: agentSecret.id },
+    },
+    executionMode: "embedded",
+    servicePrincipalId: identifier("service-agent"),
+    desiredRuntimeState: "stopped",
+    status: "active",
+    createdAt,
+  };
+  const configuration = configurationFor();
+  const secret = secretFor("Bound secret");
+  const preset = {
+    id: identifier("pre"),
+    namespaceId: namespace.id,
+    name: "Bound preset " + randomUUID(),
+    createdAt,
+    template: {
+      variables: {},
+      agent: { name: "Assistant", executionMode: "embedded" },
+      configuration: { values: {} },
+    },
+  };
+  const source = {
+    id: identifier("cs"),
+    namespaceId: namespace.id,
+    name: "Bound source " + randomUUID(),
+    type: "openai",
+    config: { base_url: "https://api.openai.com/v1" },
+    secrets: { api_key: { kind: "secret", namespaceId: namespace.id, id: secret.id } },
+    driverId: "credential-gateway-contract",
+    state: "ready",
+    createdAt,
+  };
+  const account = {
+    id: identifier("sa"),
+    namespaceId: namespace.id,
+    name: "Bound " + randomUUID(),
+  };
+  const role = {
+    id: identifier("role"),
+    namespaceId: namespace.id,
+    permissions: [{ action: "read", resourceKind: "configuration" }],
+  };
+  const bindingOn = (resourceKind, resourceId) => ({
+    id: identifier("binding"),
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: agent.servicePrincipalId,
+    roleId: role.id,
+    resourceKind,
+    resourceId,
+  });
+  const surviving = bindingOn("configuration", agentConfiguration.id);
+
+  await store.transact(async (transaction) => {
+    await transaction.namespaces.createNamespace(namespace);
+    await transaction.configurations.createConfiguration(agentConfiguration);
+    await transaction.configurations.createConfiguration(configuration);
+    await transaction.secrets.createSecret(agentSecret);
+    await transaction.secrets.createSecret(secret);
+    await transaction.agents.createAgent(agent);
+    await transaction.revisions.createRevision({
+      ...revision,
+      id: identifier("rev"),
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: agentConfiguration.id,
+      servicePrincipalId: agent.servicePrincipalId,
+      harnessAuth: { ...agent.harnessAuth, secretDriverId: agentSecret.driverId },
+    });
+    await transaction.presets.createPreset(preset);
+    await transaction.credentialSources.createCredentialSource(source);
+    await transaction.serviceAccounts.createServiceAccount(account);
+    await transaction.iamPolicy.createRole(role);
+    for (const binding of [
+      bindingOn("configuration", configuration.id),
+      bindingOn("preset", preset.id),
+      bindingOn("secret", secret.id),
+      bindingOn("credential_source", source.id),
+      bindingOn("service_account", account.id),
+      surviving,
+    ]) {
+      await transaction.iamPolicy.createAccessBinding(binding);
+    }
+  });
+
+  // The credential source references the Secret, so it goes first.
+  await store.transact(async (transaction) => {
+    assert.equal(
+      await transaction.credentialSources.deleteCredentialSource(namespace.id, source.id),
+      true,
+    );
+    assert.equal(await transaction.secrets.deleteSecret(namespace.id, secret.id), true);
+    assert.equal(
+      await transaction.configurations.deleteConfiguration(namespace.id, configuration.id),
+      true,
+    );
+    assert.equal(await transaction.presets.deletePreset(namespace.id, preset.id), true);
+    assert.equal(
+      await transaction.serviceAccounts.deleteServiceAccount(namespace.id, account.id),
+      true,
+    );
+  });
+
+  await store.read(async (state) => {
+    assert.deepEqual(await state.iamPolicy.listAccessBindings(namespace.id), [surviving]);
+  });
+  // Only the binding on a live resource still holds the Role.
+  await assert.rejects(
+    store.transact((transaction) => transaction.iamPolicy.deleteRole(namespace.id, role.id)),
+    /referenced by an AccessBinding/,
+  );
+  await store.transact(async (transaction) => {
+    assert.equal(await transaction.iamPolicy.deleteAccessBinding(namespace.id, surviving.id), true);
+    assert.equal(await transaction.iamPolicy.deleteRole(namespace.id, role.id), true);
+  });
+}
+
+async function verifyCredentialSourceContract(
+  store,
+  { namespace, harnessSecret, accountNamespace, accountConfiguration, accountAgent, revision },
+) {
+  const sourceNamespace = {
+    id: identifier("ns"),
+    name: "Credential sources " + randomUUID(),
+    status: "ready",
+    createdAt: new Date().toISOString(),
+  };
+  const sourceConfiguration = {
+    id: identifier("cfg"),
+    namespaceId: sourceNamespace.id,
+    kind: "agent",
+    generation: 1,
+    createdAt: new Date().toISOString(),
+  };
+  const sourceSecret = {
+    id: identifier("sec"),
+    namespaceId: sourceNamespace.id,
+    name: "Gateway input " + randomUUID(),
+    driverId: "secret-contract",
+    backendRef: {
+      namespaceName: "contract",
+      name: "gateway-input",
+      key: "value",
+      uid: randomUUID(),
+    },
+    createdAt: new Date().toISOString(),
+  };
+  const source = {
+    id: identifier("cs"),
+    namespaceId: sourceNamespace.id,
+    name: "OpenAI gateway " + randomUUID(),
+    type: "openai",
+    config: { base_url: "https://api.openai.com/v1" },
+    secrets: {
+      api_key: { kind: "secret", namespaceId: sourceNamespace.id, id: sourceSecret.id },
+    },
+    driverId: "credential-gateway-contract",
+    state: "ready",
+    createdAt: new Date().toISOString(),
+  };
+  const sourceBinding = { method: "credential_source", sourceId: source.id };
+  const sourceAgent = {
+    id: identifier("agt"),
+    namespaceId: sourceNamespace.id,
+    name: "Credential source agent " + randomUUID(),
+    configurationId: sourceConfiguration.id,
+    backendId: null,
+    harnessAuth: sourceBinding,
+    executionMode: "embedded",
+    servicePrincipalId: identifier("service-agent"),
+    desiredRuntimeState: "stopped",
+    status: "active",
+    createdAt: new Date().toISOString(),
+  };
+  const sourceRevision = {
+    ...revision,
+    id: identifier("rev"),
+    namespaceId: sourceNamespace.id,
+    agentId: sourceAgent.id,
+    configurationId: sourceConfiguration.id,
+    configurationGeneration: sourceConfiguration.generation,
+    servicePrincipalId: sourceAgent.servicePrincipalId,
+    harnessAuth: {
+      ...sourceBinding,
+      credentialGatewayId: "openshell-contract",
+      sourceType: source.type,
+      loginMode: "api_key",
+    },
+  };
+  const sourceReferences = (transaction) =>
+    transaction.credentialSources.hasReferences(sourceNamespace.id, source.id);
+
+  await store.transact(async (transaction) => {
+    await transaction.namespaces.createNamespace(sourceNamespace);
+    await transaction.configurations.createConfiguration(sourceConfiguration);
+    await transaction.secrets.createSecret(sourceSecret);
+    assert.equal(await transaction.namespaces.hasCredentialSources(sourceNamespace.id), false);
+    assert.deepEqual(await transaction.credentialSources.createCredentialSource(source), source);
+    assert.equal(await transaction.namespaces.hasCredentialSources(sourceNamespace.id), true);
+    assert.deepEqual(
+      await transaction.credentialSources.lockCredentialSource(sourceNamespace.id, source.id),
+      source,
+    );
+  });
+
+  await store.read(async (state) => {
+    // Secret inputs round-trip as exact same-Namespace references, never values.
+    assert.deepEqual(
+      await state.credentialSources.findCredentialSource(sourceNamespace.id, source.id),
+      source,
+    );
+    assert.deepEqual(await state.credentialSources.listCredentialSources(sourceNamespace.id), [
+      source,
+    ]);
+    assert.equal(
+      await state.credentialSources.findCredentialSource(namespace.id, source.id),
+      undefined,
+      "A credential source cannot be read from another Namespace.",
+    );
+    assert.deepEqual(await state.credentialSources.listCredentialSources(namespace.id), []);
+  });
+
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.credentialSources.createCredentialSource({ ...source, id: identifier("cs") }),
+    ),
+    "Credential source names must be unique within their Namespace.",
+  );
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.credentialSources.createCredentialSource({
+        ...source,
+        id: identifier("cs"),
+        name: "Foreign input " + randomUUID(),
+        secrets: {
+          api_key: { kind: "secret", namespaceId: sourceNamespace.id, id: harnessSecret.id },
+        },
+      }),
+    ),
+    "A credential source cannot use a Secret owned by another Namespace.",
+  );
+
+  // Names are Namespace-scoped; a source without Secret inputs is valid.
+  const namesakeSource = {
+    ...source,
+    id: identifier("cs"),
+    namespaceId: accountNamespace.id,
+    config: {},
+    secrets: {},
+  };
+  await store.transact(async (transaction) => {
+    assert.deepEqual(
+      await transaction.credentialSources.createCredentialSource(namesakeSource),
+      namesakeSource,
+    );
+  });
+
+  // Registration is recorded before the gateway write: a registering source becomes ready
+  // exactly once, may instead move to deleting, and never returns to registering.
+  const registeringSource = {
+    ...namesakeSource,
+    id: identifier("cs"),
+    name: "Registering gateway " + randomUUID(),
+    state: "registering",
+  };
+  const abandonedSource = {
+    ...registeringSource,
+    id: identifier("cs"),
+    name: "Abandoned gateway " + randomUUID(),
+  };
+  await store.transact(async (transaction) => {
+    await transaction.credentialSources.createCredentialSource(registeringSource);
+    await transaction.credentialSources.createCredentialSource(abandonedSource);
+    assert.deepEqual(
+      await transaction.credentialSources.markCredentialSourceReady(
+        accountNamespace.id,
+        registeringSource.id,
+      ),
+      { ...registeringSource, state: "ready" },
+    );
+    assert.equal(
+      await transaction.credentialSources.markCredentialSourceReady(
+        accountNamespace.id,
+        registeringSource.id,
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      await transaction.credentialSources.markCredentialSourceDeleting(
+        accountNamespace.id,
+        abandonedSource.id,
+      ),
+      { ...abandonedSource, state: "deleting" },
+    );
+    assert.equal(
+      await transaction.credentialSources.markCredentialSourceReady(
+        accountNamespace.id,
+        abandonedSource.id,
+      ),
+      undefined,
+    );
+    for (const { id } of [registeringSource, abandonedSource]) {
+      assert.equal(
+        await transaction.credentialSources.deleteCredentialSource(accountNamespace.id, id),
+        true,
+      );
+    }
+  });
+
+  // A registered source keeps its Secret inputs; deleting one would strand the gateway copy.
+  await store.transact(async (transaction) => {
+    assert.equal(
+      await transaction.secrets.hasReferences(sourceNamespace.id, sourceSecret.id),
+      true,
+    );
+  });
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.secrets.deleteSecret(sourceNamespace.id, sourceSecret.id),
+    ),
+    "A Secret used by a credential source cannot be deleted.",
+  );
+
+  await store.transact(async (transaction) => {
+    assert.equal(await sourceReferences(transaction), false);
+    await transaction.agents.createAgent(sourceAgent);
+    // The Agent draft binding alone retains the source.
+    assert.equal(await sourceReferences(transaction), true);
+    assert.deepEqual(await transaction.revisions.createRevision(sourceRevision), sourceRevision);
+    await transaction.agents.updateConfiguration(
+      sourceNamespace.id,
+      sourceAgent.id,
+      sourceConfiguration.id,
+      undefined,
+      null,
+    );
+    // An inactive historical snapshot does not retain the source.
+    assert.equal(await sourceReferences(transaction), false);
+    await transaction.agents.compareAndSetActiveRevision(
+      sourceNamespace.id,
+      sourceAgent.id,
+      undefined,
+      sourceRevision.id,
+    );
+    assert.equal(await sourceReferences(transaction), true);
+  });
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.credentialSources.deleteCredentialSource(sourceNamespace.id, source.id),
+    ),
+    "An active revision's credential source cannot be deleted.",
+  );
+  await store.transact(async (transaction) => {
+    await transaction.agents.compareAndClearActiveRevision(
+      sourceNamespace.id,
+      sourceAgent.id,
+      sourceRevision.id,
+    );
+    assert.equal(await sourceReferences(transaction), false);
+    // A queued deployment will attach the source, so it must survive until that work settles.
+    await transaction.operations.append({
+      kind: "agent_revision",
+      action: "reconcile",
+      namespaceId: sourceNamespace.id,
+      resourceId: sourceRevision.id,
+      actorId: "principal-platform-state-contract",
+    });
+    assert.equal(await sourceReferences(transaction), true);
+    assert.equal(
+      await transaction.credentialSources.hasReferences(accountNamespace.id, source.id),
+      false,
+    );
+  });
+
+  // Deletion is two-phase: a deleting source stays recorded and blocks Namespace
+  // teardown, but new bindings refuse it.
+  await store.transact(async (transaction) => {
+    const deleting = await transaction.credentialSources.markCredentialSourceDeleting(
+      accountNamespace.id,
+      namesakeSource.id,
+    );
+    assert.deepEqual(deleting, { ...namesakeSource, state: "deleting" });
+    assert.equal(
+      await transaction.credentialSources.markCredentialSourceDeleting(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      undefined,
+    );
+    assert.equal(await transaction.namespaces.hasCredentialSources(accountNamespace.id), true);
+  });
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.agents.updateConfiguration(
+        accountNamespace.id,
+        accountAgent.id,
+        accountConfiguration.id,
+        undefined,
+        { method: "credential_source", sourceId: namesakeSource.id },
+      ),
+    ),
+    "A deleting credential source cannot be newly bound.",
+  );
+  await store.transact(async (transaction) => {
+    assert.equal(
+      await transaction.credentialSources.deleteCredentialSource(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      true,
+    );
+    assert.equal(
+      await transaction.credentialSources.findCredentialSource(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      undefined,
+    );
+    assert.equal(await transaction.namespaces.hasCredentialSources(accountNamespace.id), false);
+    assert.equal(
+      await transaction.credentialSources.deleteCredentialSource(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      false,
+    );
+  });
 }

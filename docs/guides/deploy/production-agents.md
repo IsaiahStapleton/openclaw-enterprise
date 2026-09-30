@@ -1,11 +1,17 @@
 # Deploy and verify production Agents
 
-Deploy an Agent into a ready Namespace and verify that its model answers. Complete
+Deploy an Agent into a ready Namespace and verify model execution. Complete
 [control-plane installation](production-installation.md) and its authenticated
-API check first. Run commands from the repository root in the same operator shell,
-retaining its credentials and Kubernetes context. For an OpenAI API key, you or
-an Installation administrator must also [grant the Agent access to the model
-Secret](#grant-the-agent-access-to-its-model-secret) before deployment.
+API check. Run commands from the repository root, retaining credentials and
+Kubernetes context. For Secret-backed authentication, you or an Installation
+administrator must [grant the Agent access to the model Secret](#grant-the-agent-access-to-its-model-secret)
+before deployment.
+
+The command path below uses Bash, Python 3, kubectl, the OCC CLI, and Node.js 24
+or newer for transport provisioning. If Node is unavailable, use the
+[console deployment workflow](../../reference/console/create-and-deploy.md) after
+preparing the Namespace. Its **Deploy new version** action provisions transport
+credentials and deploys the Agent; do not also submit the CLI deployment below.
 
 ## Prepare each Namespace
 
@@ -19,11 +25,9 @@ occ namespace list
 export NAMESPACE_ID='<ID shown for default>'
 ```
 
-The worker creates
-the backing Kubernetes namespace and labels it with
-`openclaw.dev/namespace=$NAMESPACE_ID`. This is separate from Kubernetes'
-built-in `default` namespace. Once the worker has created it, discover and
-export its name for the tenant RoleBindings:
+The worker creates a Kubernetes namespace labeled
+`openclaw.dev/namespace=$NAMESPACE_ID`, separate from Kubernetes' built-in
+`default` namespace. Discover and export its name for tenant RoleBindings:
 
 ```bash
 TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
@@ -34,11 +38,15 @@ TENANT_NAMESPACE="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT"
 If no backing namespace is found, check the worker logs and repeat discovery
 after creation. Complete the tenant RoleBindings below, then wait until
 `GET /namespaces/$NAMESPACE_ID` reports `ready` before creating Configurations.
+If it reports `failed`, inspect audit evidence and worker logs.
+[Exhausted lease recovery](../../reference/controller/reconciliation.md#deferred-namespace-and-agent-convergence)
+stops provisioning permanently.
 
 ### Grant tenant RoleBindings
 
-Grant the worker runtime role in the data plane. The API needs list-only
-Deployment access there for dedicated credential preflight. Replace the `oce-` prefix if the Helm release name differs:
+Grant the worker runtime role in the data plane. The API lists Deployments for
+credential preflight and reads Pods through the proxy for on-demand diagnostics.
+Replace the `oce-` prefix if the Helm release name differs:
 
 ```bash
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
@@ -68,14 +76,13 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   --clusterrole=oce-openclaw-tenant-configuration --serviceaccount=openclaw-system:openclaw-enterprise-api
 ```
 
-The Secret RoleBinding grants tenant-local Secret access and list-only
-Deployment access to the API. The API lists Deployments to check for existing
-Agent workloads before provisioning initial runtime credentials. This binding
-does not replace OCC IAM grants for bound Secrets. Worker permissions in both
-targets allow admitted credential delivery. Workload ServiceAccounts receive no
-Secret API access. For separately supported embedded execution, the API also
-needs the tenant-api role in the data plane to provision its combined transport
-bundle. Wait for Namespace `ready` only after granting both targets.
+The Secret RoleBinding grants Secret access, Deployment list access for preflight,
+and Pod read/proxy access for Gateway diagnostics. The data-plane observer grants
+Deployment list and Pod read/proxy access for Agent diagnostics. OCC IAM grants
+remain required. Worker permissions in both targets allow credential delivery.
+Workload ServiceAccounts receive no Secret API access. Embedded execution also
+needs the tenant-api role in the data plane for its combined transport bundle.
+Wait for Namespace `ready` only after granting both targets.
 
 ## Prepare each Agent
 
@@ -271,18 +278,20 @@ export CONFIGURATION_ID
 Create the Agent with the captured Configuration ID and the matching execution
 mode. Mismatched Harness and mode pairs fail before deployment. Create a
 [Namespace-owned OCC Secret](../../reference/drivers/kubernetes-secret.md#create-a-namespace-owned-secret)
-containing the protected OpenAI key first, then set `HARNESS_SECRET_ID` to its
-returned `data.id`. That example uses this shell's `OCC_URL` and protected
-`OCC_SERVICE_KEY_FILE`. The caller needs exact Secret `operate` to bind it.
-For the alternative ChatGPT method, select an already issued same-Namespace
-account and matching Provider as described in [Agent harness authentication](../../reference/agents.md#harness-authentication).
+containing the credential; set `HARNESS_SECRET_ID` to its `data.id`. Choose
+`api_key`, or `codex_pat` for Dedicated Codex with an externally issued
+[Codex service-account token](../../reference/console/create-and-deploy.md#create-an-agent).
+Neither requires a Backend. The caller needs exact Secret `operate`.
+For OCE-managed accounts, use the account/Backend binding in
+[Harness authentication](../../reference/agents.md#harness-authentication).
 
 ```bash
 : "${AGENT_EXECUTION_MODE:?choose embedded or dedicated above}"
-: "${HARNESS_SECRET_ID:?set the OCC Secret ID containing the key}"
+: "${HARNESS_SECRET_ID:?set the OCC Secret ID containing the credential}"
 export HARNESS_SECRET_ID
-printf '{"name":"production-agent","configurationId":"%s","executionMode":"%s","harnessAuth":{"method":"api_key","source":{"kind":"secret","namespaceId":"%s","id":"%s"}}}\n' \
-  "$CONFIGURATION_ID" "$AGENT_EXECUTION_MODE" "$NAMESPACE_ID" "$HARNESS_SECRET_ID" > agent.json
+export HARNESS_AUTH_METHOD='api_key' # Or codex_pat for Dedicated Codex.
+printf '{"name":"production-agent","configurationId":"%s","executionMode":"%s","harnessAuth":{"method":"%s","source":{"kind":"secret","namespaceId":"%s","id":"%s"}}}\n' \
+  "$CONFIGURATION_ID" "$AGENT_EXECUTION_MODE" "$HARNESS_AUTH_METHOD" "$NAMESPACE_ID" "$HARNESS_SECRET_ID" > agent.json
 AGENT_RESPONSE="$(occ agent create --file agent.json --output json)" &&
 AGENT_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')" &&
 AGENT_SERVICE_PRINCIPAL_ID="$(printf '%s' "$AGENT_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["servicePrincipalId"])')" &&
@@ -354,46 +363,50 @@ override a matching Restriction. See [Namespace IAM policy](../../reference/auth
 
 ### Prepare transport credentials and deploy
 
-For an Agent without any revisions, the console can generate initial transport
-credentials through the exact-Agent API. It stores Slack tokens separately as
-Namespace Secrets and binds them to the Agent; see [initial runtime
-credentials](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
-and the [Slack setup guide](../integrations/slack.md). The operator commands
-below can supply transport credentials externally. Do not use both paths to
-replace an existing transport bundle.
-
-Create the tenant transport Secret using the Agent ID suffix. Kubernetes
-gateways use trusted-proxy authentication; dedicated Codex separately requires
-`app-server-token`. Compute renders the gateway authentication from trusted
-Installation settings. To verify model responses through an
-operator's local Kubernetes connection, configure the `gateway-password` Secret
-reference and enable the native HTTP endpoint as described in
-[Model response verification](../operate/model-verification.md). The initial
-credential API generates this password too; it never returns it in an API response.
+For a draft Agent, **Deploy new version** generates missing transport
+credentials before its first revision. API clients may call the endpoint below
+first. Keep `OCC_URL` and
+`OCC_SERVICE_KEY_FILE` from Installation bootstrap. The API derives the correct
+Secret placement for the Agent's execution mode and never returns credential
+values. It never rotates credentials.
 
 ```bash
-umask 077
-AGENT_SUFFIX="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "${AGENT_ID:?}")" &&
-SECRET_DIRECTORY="$(mktemp -d /tmp/occ-agent-transport.XXXXXXXX)" &&
-python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_hex(32))' > "$SECRET_DIRECTORY/app-server-token" &&
-python3 -c 'import secrets,sys; sys.stdout.write(secrets.token_hex(32))' > "$SECRET_DIRECTORY/gateway-password" &&
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
-  -n "$TENANT_NAMESPACE" create secret generic "openclaw-agent-transport-$AGENT_SUFFIX" \
-  --from-file=app-server-token="$SECRET_DIRECTORY/app-server-token" \
-  --from-file=gateway-password="$SECRET_DIRECTORY/gateway-password"
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
-  label secret "openclaw-agent-transport-$AGENT_SUFFIX" \
-  app.kubernetes.io/managed-by=openclaw-enterprise "openclaw.dev/namespace=$NAMESPACE_ID" "openclaw.dev/agent=$AGENT_ID"
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$TENANT_NAMESPACE" \
-  annotate secret "openclaw-agent-transport-$AGENT_SUFFIX" \
-  "openclaw.dev/namespace-id=$NAMESPACE_ID" "openclaw.dev/agent-id=$AGENT_ID"
+node --input-type=module <<'NODE'
+import { readFile } from "node:fs/promises";
+const { OCC_URL, OCC_SERVICE_KEY_FILE, NAMESPACE_ID, AGENT_ID } = process.env;
+if (![OCC_URL, OCC_SERVICE_KEY_FILE, NAMESPACE_ID, AGENT_ID].every(Boolean)) {
+  throw new Error("Set OCC_URL, OCC_SERVICE_KEY_FILE, NAMESPACE_ID, and AGENT_ID.");
+}
+const { data: { key } } = JSON.parse(await readFile(OCC_SERVICE_KEY_FILE, "utf8"));
+const response = await fetch(new URL(
+  `/namespaces/${encodeURIComponent(NAMESPACE_ID)}/agents/${encodeURIComponent(AGENT_ID)}/runtime-credentials`,
+  OCC_URL,
+), {
+  method: "POST",
+  redirect: "error",
+  headers: { "x-api-key": key, "content-type": "application/json" },
+  body: "{}",
+});
+if (!response.ok) throw new Error(`Credential provisioning failed: HTTP ${response.status}`);
+const { data } = await response.json();
+if (data.transportConfigured !== true) throw new Error("Transport credentials are not configured.");
+console.log("Agent transport credentials are configured.");
+NODE
 ```
 
-The gateway password enables the optional direct loopback checks below; the
-app-server token authenticates dedicated Codex transport. Model authentication comes
-from the saved `harnessAuth` binding.
-Kubernetes projects its source only into the model-executing workload; initial
-transport/channel provisioning does not accept model keys. Keep credential values
+If the request fails after creating a Secret, inspect the Agent's credential
+status before retrying; the API reuses complete, owned credential groups.
+See [initial runtime credentials](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
+for permissions and conflicts. Dedicated Agents keep the canonical transport
+token and Gateway password in separate control-plane Kubernetes Secrets. Compute
+projects only the app-server token to the Harness. Embedded Agents use their tenant-local bundle.
+
+Kubernetes gateways use trusted-proxy authentication. For direct operator
+loopback checks, explicitly select the generated Gateway password and native HTTP
+endpoint as described in [Model response verification](../operate/model-verification.md).
+Model authentication comes from the saved `harnessAuth` binding and is projected
+only into the model-executing workload. Slack tokens use separate Namespace
+Secrets; follow [Slack setup](../integrations/slack.md). Keep credential values
 out of Helm values, Installation YAML, Configurations, shell history, and this
 repository.
 
@@ -411,7 +424,9 @@ AgentRevision for structured output. If `configuration.json` includes OCC
 `secretBindings`, the caller and Agent service principal must have `operate` on
 every selected Secret before deploy. Binding changes are authorized by OCC IAM;
 Kubernetes RoleBindings only allow the API to materialize backing tenant
-Secrets.
+Secrets. Wait for this revision's [deployment status](../../reference/agents.md#deployment-status)
+to become `succeeded` before the checks below; admission and an active revision
+alone do not prove workspace connectivity.
 
 ## Verify workspace access
 
@@ -425,24 +440,12 @@ permission; saving also requires `operate`.
 An empty editor after an error is not evidence of an empty workspace. A missing
 file is a separate result: the file API can create or replace a file, but cannot
 delete it. Verify access before creating a missing file. See [workspace-file errors](../../reference/agents.md#workspace-files).
-Do not treat this setup as complete merely because a revision is active or
-credentials are stored. Keep model verification as a separate check below.
-
-## Open Control UI
-
-Complete [native admin setup](native-admin.md#steps) for the Installation, then
-[configure this Agent's origin](native-admin.md#configure-each-agent) using an
-OCE browser session with exact Agent `administer` permission. The first active
-revision makes its stable origin discoverable; copy that origin into
-`gateway.controlUi.allowedOrigins`, save the Configuration, and deploy a new
-revision. Do not use a wildcard, the Console origin, or host-header fallback.
-
-On the Agent detail page, select **Refresh access** in **Native admin UI**.
-Expect **available**, open **Open native admin UI**, and verify the native
-Control UI loads on the returned Agent HTTPS host. Model verification below is
-separate from this browser-access check.
+Next, verify a model response from the same revision.
 
 ## Verify production workloads
+
+Verify NetworkPolicies against the
+[platform access matrix](../../testing/production-network-access.md).
 
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
 expected `activeRevisionId`, then require a real model response from that
@@ -451,104 +454,15 @@ TUI](#attach-with-the-openclaw-tui), or [verify rejection of an unauthenticated
 request and a real model response](../operate/model-verification.md) over an
 operator's local Kubernetes connection.
 
-A Helm release, ready controller, or active revision does not show that the
-Agent can reach its model.
+If model access fails, check the Pod's
+[network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles):
+model egress requires an explicit grant. See [what each check establishes](../operate/model-verification.md#what-each-check-establishes).
 
 ## Attach with the OpenClaw TUI
 
-Use the requested `REVISION_ID`. This Bash function waits up to five minutes
-for OCC to select it and for exactly one Ready gateway Pod to mount its
-immutable ConfigMap. A previous revision cannot satisfy both checks:
-
-```bash
-# Embedded stays in the tenant target; dedicated uses the prepared Gateway target.
-GATEWAY_NAMESPACE="$TENANT_NAMESPACE"
-if [ "${AGENT_EXECUTION_MODE:?}" = dedicated ]; then
-  GATEWAY_NAMESPACE="${GATEWAY_RUNTIME_NAMESPACE:?}"
-fi
-export GATEWAY_NAMESPACE
-find_gateway_for_revision() {
-  local agent agent_suffix revision_suffix expected_configmap pods pod status attempt
-  if [ "${OCC_NAMESPACE:?}" != "${NAMESPACE_ID:?}" ]; then
-    printf '%s\n' 'OCC_NAMESPACE must match NAMESPACE_ID.' >&2
-    return 1
-  fi
-  agent_suffix="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "${AGENT_ID:?}")" || return 1
-  revision_suffix="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "${REVISION_ID:?}")" || return 1
-  expected_configmap="gateway-$agent_suffix-rev-$revision_suffix"
-  for ((attempt = 1; attempt <= 60; attempt++)); do
-    agent="$(occ agent get "$AGENT_ID" --output json)" || return 1
-    if printf '%s' "$agent" | python3 -c '
-import json, sys
-agent = json.load(sys.stdin)
-if agent.get("activeRevisionId") != sys.argv[1]:
-    sys.exit(3)
-' "$REVISION_ID"; then
-      pods="$(kubectl --kubeconfig "${KUBECONFIG_FILE:?}" --context "${CONTEXT:?}" \
-        -n "${GATEWAY_NAMESPACE:?}" get pods \
-        -l "app.kubernetes.io/managed-by=openclaw-enterprise,openclaw.dev/workload-role=gateway,openclaw.dev/namespace=$NAMESPACE_ID,openclaw.dev/agent=$AGENT_ID,openclaw.dev/revision=$REVISION_ID" \
-        -o json)" || return 1
-      if pod="$(printf '%s' "$pods" | python3 -c '
-import json, sys
-expected = sys.argv[1]
-ready = [
-    pod for pod in json.load(sys.stdin)["items"]
-    if not pod["metadata"].get("deletionTimestamp")
-    and pod.get("status", {}).get("phase") == "Running"
-    and any(c.get("type") == "Ready" and c.get("status") == "True"
-            for c in pod.get("status", {}).get("conditions", []))
-    and any(v.get("configMap", {}).get("name") == expected
-            for v in pod["spec"].get("volumes", []))
-]
-if len(ready) > 1:
-    sys.exit("Multiple Ready Pods match the requested revision; refusing to choose.")
-if not ready:
-    sys.exit(3)
-print(ready[0]["metadata"]["name"])
-' "$expected_configmap")"; then
-        printf '%s\n' "$pod"
-        return 0
-      else
-        status=$?
-        if [ "$status" -ne 3 ]; then return "$status"; fi
-      fi
-    else
-      status=$?
-      if [ "$status" -ne 3 ]; then return "$status"; fi
-    fi
-    if [ "$attempt" -lt 60 ]; then sleep 5; fi
-  done
-  printf '%s\n' 'No unique Ready gateway Pod for the requested active revision.' >&2
-  return 1
-}
-```
-
-Attach only after the lookup succeeds. If it times out, check [deployment
-status](../../reference/agents.md#deployment-status) and retry; do not use a
-previous Pod or the Agent-wide Service.
-
-```bash
-if GATEWAY_POD="$(find_gateway_for_revision)"; then
-  TUI_SESSION="production-tui-$(date +%Y%m%d%H%M%S)" &&
-  NONCE="$(python3 -c 'import secrets; print("OPENCLAW_TUI_" + secrets.token_hex(8))')" &&
-  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$GATEWAY_NAMESPACE" \
-    exec -it "$GATEWAY_POD" -c gateway -- env -u OPENAI_API_KEY \
-    OPENCLAW_STATE_DIR=/tmp/occ-tui-client node /app/openclaw.mjs tui \
-    --session "$TUI_SESSION" --message "Reply exactly: $NONCE"
-else
-  false
-fi
-```
-
-Confirm the model replies with the exact nonce. The TUI uses the Pod-local
-WebSocket listener and configured gateway password. The extra client process unsets
-`OPENAI_API_KEY`; model access stays in the serving gateway path. Ctrl+D exits
-only the client.
-
-This Pod-local TUI procedure requires the optional password SecretRef shown
-above. Trusted-proxy authentication remains active for routed requests. Use the
-[HTTP password check](../operate/model-verification.md) for a noninteractive
-model response, and the OCC file API for workspace-file administration.
+Follow [TUI verification](production-tui.md) to select exactly one Ready gateway
+Pod for `REVISION_ID`, send a fresh nonce, and verify its reply. Keep the same
+operator environment and return here to clean up temporary credentials.
 
 ## End the operator session
 
@@ -586,6 +500,14 @@ unset SECRET_DIRECTORY
 
 This does not revoke the service key or delete the Kubernetes Secrets. Keep
 the original in protected bootstrap storage; bootstrap will not reissue it.
+
+## Open Control UI
+
+After model verification, optionally [enable native admin access](native-admin.md)
+and [configure this Agent's exact origin](native-admin.md#configure-each-agent).
+You need a browser session with exact-Agent `administer` permission. Add the
+returned origin to `gateway.controlUi.allowedOrigins` and deploy again; then
+open **Native admin UI** and verify the native UI loads.
 
 ## Related
 

@@ -35,9 +35,14 @@ async function ensureInstallation(state, createDevelopmentIAMState, createAuthPr
   };
   state.setBootstrapNativeIAM(
     createDevelopmentIAMState(
-      createAuthPrincipalSeed(installation.id, "worker-stale-claim-integration", {
-        id: `account-worker-${randomUUID()}`,
-      }),
+      createAuthPrincipalSeed(
+        installation.id,
+        "worker-stale-claim-integration",
+        {
+          id: `account-worker-${randomUUID()}`,
+        },
+        { grant: "administrator" },
+      ),
     ),
   );
   await state.transact((unit) => unit.installations.createInstallation(installation));
@@ -74,7 +79,7 @@ function codexPluginRevisionState(pluginId) {
     plugins: {
       [pluginId]: {
         enabled: true,
-        approvalMode: "auto",
+        toolDefaults: { approval: "provider_default" },
       },
     },
   };
@@ -323,7 +328,7 @@ test(
       namespaceId: namespace.id,
       name: `stale-plugin-${randomUUID()}`,
       configurationId: `cfg_${randomUUID()}`,
-      providerId: null,
+      backendId: null,
       harnessAuth: { method: "runtime" },
       executionMode: "embedded",
       servicePrincipalId: `service-agent-${randomUUID()}`,
@@ -336,7 +341,7 @@ test(
       namespaceId: namespace.id,
       agentId: owner.id,
       revision: 1,
-      providerId: null,
+      backendId: null,
       configuration: { revision: "1" },
       configurationId: owner.configurationId,
       configurationKind: "agent",

@@ -1,8 +1,22 @@
-# Drivers, Providers, and repository boundaries
+# Drivers, Backends, and repository boundaries
 
-This page owns the drivers, providers, and repository boundaries portion of the authoritative
-[platform target design](../design.md). Read it with the other design chapters;
-the [current architecture](../ARCHITECTURE.md) describes implementation status.
+This chapter defines requirements within the authoritative
+[platform architecture](../design.md). The implementation status below separates
+current behavior from remaining design work.
+
+## Implementation status
+
+Compute, IAM, Configuration, Secret, ServiceAccount, Plugin, Repo, Channel,
+optional Sandbox, and Credential Gateway integrations have current contracts. The
+`InferenceDriver` and general `SandboxPolicy` enforcement described below remain
+planned. Current Channel operations validate credentials and look up provider
+directories; runtime messaging is not a general OCC dispatch contract. Current
+Sandbox is optional, can provision the dedicated Harness, and
+exposes containment facets rather than the full policy interface in this design.
+Stock OpenShell deployment remains unsupported. See
+[Driver development](../contributing/driver-development.md),
+[Sandbox](../reference/drivers/sandbox.md), and
+[OpenShell limits](../reference/drivers/openshell-sandbox.md) for current contracts.
 
 ## ComputeDriver
 
@@ -74,7 +88,7 @@ Restrictions. OCC activates the revision only after that containment is
 ready. `SandboxDriver` does not provision workloads, own resources, select
 another identity, grant permissions, or replace an Agent's gateway.
 
-## Drivers and Providers
+## Drivers and Backends
 
 A **Driver** is the common integration boundary for a selected platform
 capability. OCC selects each Driver implementation through Installation
@@ -85,15 +99,16 @@ execution Driver receives admitted intent only after OCC verifies that
 authorization. A Driver reports its decision, readiness, or operational result
 without acquiring platform-resource ownership or permission to select itself.
 
-| Driver contract        | Responsibility                                                                                                                                                                                                        |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IAMDriver`            | Evaluate the exact platform action and resource using its selected native or external authority. `OCCIAMDriver` evaluates OCC-owned roles and bindings.                                                               |
-| `ServiceAccountDriver` | Create upstream service accounts and separately issue their credentials after exact OCC authorization; privately own provider bindings and credential lifecycle while the provider retains its independent authority. |
-| `InferenceDriver`      | Perform authorized inference against an admitted external-provider model or local model source without exposing provider credentials, secret values, or reusable model credentials to Agent workloads.                |
-| `ComputeDriver`        | Ensure Namespace infrastructure, store authorized account credentials, and reconcile each Agent's gateway and Harness in their selected runtime targets with exact Namespace, Agent, and revision ownership.          |
-| `SandboxDriver`        | Enforce and verify the complete admitted containment policy before an Agent workload can execute Agent turns.                                                                                                         |
-| `SecretDriver`         | Store Namespace-owned secret material and validate safe delivery references. KubernetesSecretDriver is the default; broker/substitution delivery is deferred.                                                         |
-| `ChannelDriver`        | Realize authorized Namespace-local messaging operations while the messaging provider retains independent authorization and credentials.                                                                               |
+| Driver contract           | Responsibility                                                                                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IAMDriver`               | Evaluate the exact platform action and resource using its selected native or external authority. `OCCIAMDriver` evaluates OCC-owned roles and bindings.                                                                   |
+| `ServiceAccountDriver`    | Create upstream service accounts and separately issue their credentials after exact OCC authorization; privately own Backend bindings and credential lifecycle while the provider retains its independent authority.      |
+| `InferenceDriver`         | Perform authorized inference against an admitted external-provider model or local model source without exposing provider credentials, secret values, or reusable model credentials to Agent workloads.                    |
+| `ComputeDriver`           | Ensure Namespace infrastructure, store authorized account credentials, and reconcile each Agent's gateway and Harness in their selected runtime targets with exact Namespace, Agent, and revision ownership.              |
+| `SandboxDriver`           | Enforce and verify the complete admitted containment policy before an Agent workload can execute Agent turns.                                                                                                             |
+| `SecretDriver`            | Store Namespace-owned secret material and validate safe delivery references. KubernetesSecretDriver is the default.                                                                                                       |
+| `CredentialGatewayDriver` | Hold registered credential sources outside Agent workloads and issue per-revision attachments that only its paired `SandboxDriver` can apply. The OpenShell implementation shares one Backend with the OpenShell Sandbox. |
+| `ChannelDriver`           | Realize authorized Namespace-local messaging operations while the messaging provider retains independent authorization and credentials.                                                                                   |
 
 One implementation may satisfy multiple Driver contracts, but OCC selects each
 role explicitly. Authority for one role does not grant another role, resource
@@ -107,26 +122,27 @@ relevant Driver enforces applicable platform Restrictions, and unsupported or
 unverifiable enforcement fails closed.
 
 `ChatGPTServiceAccountDriver` is one concrete implementation of the
-`ServiceAccountDriver` capability. It receives `Provider<ChatGPTClient>`; the
+`ServiceAccountDriver` capability. It receives `Backend<ChatGPTClient>`; the
 client owns the configured workspace, trusted transport, and mounted admin
-credential. `provider[].drivers` declares the exact related Driver selections,
-and composition injects the Provider into its concrete member. The generic Driver
-contract has no Provider identity field. All related Drivers are required. The current ChatGPT Provider requires the selected ServiceAccount
-Driver; installed-package Provider injection is deferred. Only the API
+credential. `backend[].drivers` declares the exact related Driver selections,
+and composition injects the Backend into its concrete member. The generic Driver
+contract has no Backend identity field. All related Drivers are required. The current ChatGPT Backend requires the selected ServiceAccount
+Driver; installed-package Backend injection is deferred. Only the API
 entrypoint initializes the client and concrete Driver. The worker shares
-nonsecret Provider metadata but receives neither the admin credential nor a
-runtime Provider object. The [Provider reference](../reference/providers.md) owns
-the current configuration and lifecycle contract.
+nonsecret Backend metadata but receives neither the admin credential nor a
+runtime Backend object. The [Backend reference](../reference/backends.md) owns
+the experimental configuration and lifecycle contract.
 
 OCC authorizes account creation and credential issuance separately before any
 provider or Kubernetes side effect. The concrete Driver creates the provider
-account, then privately binds its Provider, Driver, account, and workspace
+account, then privately binds its Backend, Driver, account, and workspace
 identifiers to the exact OCC account and Namespace. Credential issuance persists the provider credential
 identifier privately for exact deletion and future rotation or reconciliation;
 the public account contains only a generic credential kind and opaque
 same-Namespace Secret reference. API-side Compute creates the account-owned
-Secret, and Kubernetes projects its token and workspace directly into the exact
-dedicated Codex workload. Provider-backed operations fail closed when provider
+canonical Secret. Worker-side Compute materializes the admitted token and
+workspace into a revision-owned runtime Secret for the exact dedicated Codex
+workload; see [Secret delivery](safeguards.md#secret-access). Operations through a Backend fail closed when provider
 authority, the exact private binding, tenant-local Secret authority, or
 compatible dedicated execution is unavailable. OAuth refresh and automated
 rotation remain deferred.
@@ -148,41 +164,14 @@ subject to immediate revocation.
 
 ## Repository layout
 
-Capability directories contain Driver implementations; shared provider clients
-are Installation-scoped integration dependencies rather than Driver
-capabilities. Packages own platform contracts and state; applications provide
-control-plane product entry points.
+[Repository layout](../layout.md) owns the current source tree. The controller
+application contains API and worker entrypoints, console assets, composition,
+Drivers, and Backend clients. Packages own shared contracts, platform state,
+IAM, and audit. Separate access-gateway, broker, and inference applications or
+packages are not implemented boundaries; the API and console already exist.
 
-```text
-apps/
-  controller/
-  access-gateway/
-  console/
-packages/
-  contracts/
-  occ/
-  iam/
-  broker/
-  audit/
-drivers/
-  iam/
-  service-accounts/
-  inference/
-    openai/
-    local/
-  compute/
-  sandbox/
-  secrets/
-  channels/
-tests/
-  conformance/
-  integration/
-```
-
-The application directories name controller, access-gateway, and console
-components; they do not define OCC API or OCC Console contracts, which remain
-deferred. External providers, provider-side accounts and service accounts,
-and provider resources remain owned by their respective external systems
-rather than becoming platform resources. An OCC-owned native `ServiceAccount`
-remains only a platform representation; it never acquires ownership of a
-provider account.
+Capability ownership does not require a separate top-level directory. Shared
+Backend clients are Installation-scoped dependencies rather than Driver
+capabilities. External providers, accounts, and resources retain their own
+owners; an OCC ServiceAccount remains a platform representation of an upstream
+account.

@@ -8,15 +8,19 @@ after the command exits.
 ## Before you start
 
 - Complete [Local setup](quickstart.md) and leave the installation running.
+- Start Local setup without the OpenShell Sandbox Driver, using
+  `OCC_DEVELOPMENT_SANDBOX_DRIVER=none`.
 - Use the same checkout and development state directory. If you set
   `OCC_DEVELOPMENT_STATE_DIRECTORY` during setup, use the same value here.
 - Have an OpenAI API key that can use [`gpt-6-astra`](https://developers.openai.com/api/docs/models/gpt-6-astra), the default model. To use a
   different model available to your project, set `OPENCLAW_FIRST_AGENT_MODEL`
   to its plain ID, without `openai/`.
-- Keep the key out of commands, Configuration JSON, and chat. The interactive
-  command prompts for it without echoing it. For automation, set
-  `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
-  `OPENAI_API_KEY` through your environment's secret manager.
+- Keep the key out of commands, Configuration JSON, and chat. For automation,
+  set `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
+  `OPENAI_API_KEY` through your environment's secret manager; setting both
+  fails. The command prompts for the key without echoing it only when neither
+  is set. An exported key is used as is, so clear a stale one with
+  `env -u OPENAI_API_KEY` to be prompted instead.
 
 The walkthrough runs from the repository root on your own development
 installation. If you followed [Kubernetes Setup](kubernetes-setup.md) on an
@@ -58,17 +62,17 @@ Agent access to its Secret, and requests the first deployment. It then waits
 for the gateway and sends a verification prompt before sending your own. Initial
 startup can take several minutes.
 
-This starter answers model prompts only. Tools are disabled, so it cannot read
-or edit files or run shell commands. The command refuses to reuse it if you
-change its Configuration elsewhere. For an Agent that can use tools, create a
-separate Agent; see [Agent Configuration](../reference/configuration.md) and
-[Plugins](../reference/agent-plugins.md).
+This starter answers model prompts only. Tools and the native admin UI are
+disabled. The command refuses to reuse it if you change its Configuration
+elsewhere. For an Agent that can use tools or the native admin UI, create a
+separate console-managed Agent; see [Agent Configuration](../reference/configuration.md),
+[Plugins](../reference/agent-plugins.md), and [local native admin setup](quickstart.md#open-an-agents-native-admin-ui).
 
 Keep the command running until it prints `Model response verified:` followed by
 the phrase it asked the model to repeat. Under `Agent response:`, it then prints
 the model's answer to your question. It also prints the Agent ID, active
-revision, and console URL. A deployment being accepted or a revision showing
-as active does not establish that the model responded; the returned answer does.
+revision, and console URL. These returned responses complete the model check; see
+[what each check establishes](operate/model-verification.md#what-each-check-establishes).
 
 <span id="4-check-what-actually-deployed"></span>
 <span id="4.-check-what-actually-deployed"></span>
@@ -76,12 +80,11 @@ as active does not establish that the model responded; the returned answer does.
 ### 3. Find your Agent in the console
 
 Open the console link from the command and sign in with the local credentials
-from [Local setup](quickstart.md#open-the-platform-console). Under
-**Configuration**, **Selected revision** shows the active revision. The console
-has no browser chat or live health view; use the model response printed by the
-command as verification. This local setup does not configure browser access to
-workspace files. For that capability, use [Kubernetes Setup](kubernetes-setup.md),
-which includes private routing and a workspace-file verification step.
+from [Local setup](quickstart.md#open-the-platform-console). **Current version**
+shows the revision selected by OCC; **Deployment activity** shows persisted
+deployment progress. Use the terminal command for further model prompts. For
+browser access to the Agent's files, follow
+[workspace verification](deploy/workspace-routing.md#verify-routing-and-file-access).
 
 The Agent remains available after the command exits. Run the same command with
 the same Agent name and a different `--prompt` to ask another question; you do
@@ -104,3 +107,6 @@ with `dev down` [deletes the installation and its Agents](quickstart.md#clean-up
   supply the new key when prompted. An active revision without
   `Model response verified` is not a successful model check. See
   [Troubleshoot Agents](topics/agent-troubleshoot.md).
+- **The selected setup uses OpenShell:** stop that development environment and
+  start [Local setup](quickstart.md) without OpenShell. The current OpenShell
+  development profile does not support this first-Agent model-turn workflow.

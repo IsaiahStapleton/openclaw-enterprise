@@ -2,6 +2,7 @@ package occclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json/jsontext"
@@ -21,10 +22,13 @@ type Config struct {
 	ServiceKeyFile string
 	CABundle       string
 	Timeout        time.Duration
+	// Context cancels in-flight requests, for example on Ctrl-C. Nil means no cancellation.
+	Context context.Context
 }
 
 // Client exposes supported OpenClaw Control Plane resource operations.
 type Client struct {
+	ctx        context.Context
 	baseURL    *url.URL
 	serviceKey string
 	http       *http.Client
@@ -67,7 +71,13 @@ func New(config Config) (*Client, error) {
 		return nil, err
 	}
 
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	return &Client{
+		ctx:        ctx,
 		baseURL:    baseURL,
 		serviceKey: serviceKey,
 		http: &http.Client{
@@ -83,6 +93,11 @@ func New(config Config) (*Client, error) {
 // GetInstallation fetches the singleton Installation.
 func (client *Client) GetInstallation() (any, error) {
 	return client.get("installation")
+}
+
+// GetInstallationDeploymentInventory fetches the complete authorized Agent deployment inventory.
+func (client *Client) GetInstallationDeploymentInventory() (any, error) {
+	return client.get("installation", "deployment-inventory")
 }
 
 // CreateNamespace creates a Namespace.
@@ -207,6 +222,33 @@ func (client *Client) DeleteSecret(namespaceID, secretID string) error {
 	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "secrets", secretID})
 }
 
+// CreateCredentialSource registers a Namespace Secret with the selected Credential Gateway.
+func (client *Client) CreateCredentialSource(namespaceID string, body jsontext.Value) (any, error) {
+	return client.send(
+		http.MethodPost,
+		[]string{"namespaces", namespaceID, "credential-sources"},
+		body,
+	)
+}
+
+// ListCredentialSources lists credential sources without live gateway status.
+func (client *Client) ListCredentialSources(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "credential-sources")
+}
+
+// GetCredentialSource fetches a credential source with its live gateway status.
+func (client *Client) GetCredentialSource(namespaceID, sourceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "credential-sources", sourceID)
+}
+
+// DeleteCredentialSource removes an unreferenced credential source and its gateway copy.
+func (client *Client) DeleteCredentialSource(namespaceID, sourceID string) error {
+	return client.sendEmpty(
+		http.MethodDelete,
+		[]string{"namespaces", namespaceID, "credential-sources", sourceID},
+	)
+}
+
 // CreateAgent creates an Agent in a Namespace.
 func (client *Client) CreateAgent(namespaceID string, body jsontext.Value) (any, error) {
 	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "agents"}, body)
@@ -215,6 +257,11 @@ func (client *Client) CreateAgent(namespaceID string, body jsontext.Value) (any,
 // ListAgents lists Agents in a Namespace.
 func (client *Client) ListAgents(namespaceID string) (any, error) {
 	return client.get("namespaces", namespaceID, "agents")
+}
+
+// ListRepositoryOptions lists repositories admitted for Agent creation.
+func (client *Client) ListRepositoryOptions(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", "repository-options")
 }
 
 // GetAgent fetches an Agent.
@@ -227,12 +274,38 @@ func (client *Client) UpdateAgent(namespaceID, agentID string, body jsontext.Val
 	return client.send(http.MethodPatch, []string{"namespaces", namespaceID, "agents", agentID}, body)
 }
 
+// GetAgentRuntimeCredentials fetches runtime credential metadata for an Agent.
+func (client *Client) GetAgentRuntimeCredentials(namespaceID, agentID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", agentID, "runtime-credentials")
+}
+
+// ProvisionAgentRuntimeCredentials provisions initial runtime credentials for an Agent.
+func (client *Client) ProvisionAgentRuntimeCredentials(namespaceID, agentID string) (any, error) {
+	return client.send(
+		http.MethodPost,
+		[]string{"namespaces", namespaceID, "agents", agentID, "runtime-credentials"},
+		map[string]any{},
+	)
+}
+
 // DeployAgent deploys an Agent and creates an immutable revision.
 func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 	return client.send(
 		http.MethodPost,
 		[]string{"namespaces", namespaceID, "agents", agentID, "deploy"},
 		nil,
+	)
+}
+
+// GetAgentDeployment fetches durable deployment status for one Agent revision.
+func (client *Client) GetAgentDeployment(namespaceID, agentID, deploymentID string) (any, error) {
+	return client.get(
+		"namespaces",
+		namespaceID,
+		"agents",
+		agentID,
+		"deployments",
+		deploymentID,
 	)
 }
 
@@ -307,7 +380,7 @@ func (client *Client) execute(method string, segments []string, body any) (int, 
 		requestBody = bytes.NewReader(encoded)
 	}
 
-	request, err := http.NewRequest(method, resourceURL.String(), requestBody)
+	request, err := http.NewRequestWithContext(client.ctx, method, resourceURL.String(), requestBody)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to create OCC request: %w", err)
 	}

@@ -62,7 +62,7 @@ server-approved version, explicit Agent execution mode, and Compute
 implementation. The required Agent `harnessAuth` selects either an OCC Secret
 API-key source or an issued managed ChatGPT account. The revision freezes the
 Secret reference and selected Driver, or the account's exact access-token
-reference and verified private Provider binding. OCC separately authorizes the
+reference and verified private Backend binding. OCC separately authorizes the
 Configuration and harness source before queueing one revision operation in the
 same transaction. The source Configuration identity and generation remain pinned even when the
 admitted copy differs. Later Configuration, account, or Agent placement changes
@@ -74,7 +74,7 @@ Before processing that operation, the worker reloads current IAM policy,
 reauthorizes the original actor for the exact Agent and Configuration, and
 checks the frozen harness source. API-key delivery requires exact Secret
 `operate` for both actor and Agent service principal; managed ChatGPT delivery
-requires actor `read` on the exact account and matching credential/Provider
+requires actor `read` on the exact account and matching credential/Backend
 ownership. It also checks the owning ready Namespace, stable Agent service
 principal, and approved Harness, version, mode, and Compute implementation.
 These checks use the immutable revision, not a later Agent draft. Revoked source
@@ -89,11 +89,13 @@ active revision, activates the Kubernetes route when applicable, and retires the
 prior revision. Its live claim remains unfinished until it atomically records
 one attributable activation audit and completes the durable operation.
 Already-active recovery repeats route activation and predecessor retirement
-before that audit and finalization. Idle dedicated app-servers can overlap,
-but normal reconciliation routes requests only to the active revision. This does
-not fence independent processes during Kubernetes node partitions or manual
-replacement. The single-replica gateway can also interrupt serving during
-replacement; see the [gateway rollout limitation](../drivers/kubernetes-compute.md#execution-modes).
+before that audit and finalization. Kubernetes dedicated replacement stops all
+earlier runtimes before preparing the candidate and reuses the Harness-only RWO
+claim. This interrupts serving, including the gateway; a failed candidate needs
+retry or a new revision, not automatic rollback. See the
+[exclusive replacement contract](../drivers/compute.md#production-revision-stages).
+Pod termination does not fence independent processes during node partitions or
+manual replacement.
 See the
 [Harness execution topology flow](../../flows/harness-execution-topology.md) for the
 full placement, runtime, and recovery sequence.
@@ -152,6 +154,8 @@ stateDiagram-v2
 - **`failed_permanent`:** Processing stopped because authorization failed, an
   unrecoverable error occurred, or the retry limit was exhausted. The failure
   is audited, and the terminal operation is never retried automatically.
+  The initiating caller can explicitly [retry Agent deletion](../agents.md#deletion)
+  or [Namespace deletion](../namespaces.md#failure-semantics-and-limitations).
 
 ### Terminal results
 
@@ -186,7 +190,9 @@ Actual dependency failures instead use `retry()`, which also returns work to
 exhausted, the operation becomes `failed_permanent`. Pending convergence has
 its own limit: `OCC_WORKER_CONVERGENCE_TIMEOUT_MS`, measured from the original
 operation creation time. Exceeding it fails the operation with
-`CONVERGENCE_DEADLINE_EXCEEDED`. See the
+`CONVERGENCE_DEADLINE_EXCEEDED`. A runtime that reports a deterministic
+credential rejection fails the deployment earlier with
+`RUNTIME_AUTHENTICATION_FAILED`. See the
 [worker configuration reference](../settings/operations.md#controller-worker-environment) for
 defaults and supported overrides.
 
@@ -202,7 +208,11 @@ available or restore it automatically.
 If a worker exits or stops renewing its lease, stale-claim recovery either
 requeues the operation or marks it `failed_permanent` after its final attempt.
 Recovery can also terminalize an already queued operation whose attempts are
-exhausted.
+exhausted. When that work targets Namespace creation, recovery changes a still
+`provisioning` Namespace to `failed` in the same atomic statement as the terminal
+work state and audit evidence. Retryable recovery leaves it `provisioning`;
+Agent work, Namespace deletion work, and Namespaces already past provisioning
+do not change Namespace status through this recovery path.
 
 ## Authorization, retries, and scope
 

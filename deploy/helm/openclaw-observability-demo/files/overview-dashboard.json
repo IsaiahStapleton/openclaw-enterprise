@@ -1,0 +1,20 @@
+{
+  "uid": "occ-observability",
+  "title": "OCC observability",
+  "description": "Open the OCC metrics and operational logs views.",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["occ"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Available views",
+      "type": "text",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "Choose a view to inspect OCC telemetry.\n\n- [Metrics](./d/occ-development) — API, worker, and Agent lifecycle metrics.\n- [Operational logs](./d/occ-logs) — filtered OCC and runtime events."
+      }
+    }
+  ]
+}

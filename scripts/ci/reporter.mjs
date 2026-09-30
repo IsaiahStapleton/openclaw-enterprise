@@ -38,6 +38,61 @@ const safeRepositoryPlatformSetupStages = new Set([
   "controller-restart",
 ]);
 
+const postTestAsyncActivityPrefix =
+  "Error: A resource generated asynchronous activity after the test ended.";
+
+// Tests publish timings with t.diagnostic(`${measurementPrefix}${JSON}`). Only the
+// allowlisted shape below survives; anything else is dropped like other diagnostics.
+const measurementPrefix = "openclaw-ci-measurement ";
+
+function safeMeasurement(message) {
+  let value;
+  try {
+    value = JSON.parse(message.slice(measurementPrefix.length));
+  } catch {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    value.kind !== "kubelet-volume-refresh" ||
+    !["secret", "configmap"].includes(value.volume) ||
+    !["none", "pod-annotation"].includes(value.nudge) ||
+    !Number.isInteger(value.sample) ||
+    value.sample < 0 ||
+    value.sample > 99 ||
+    typeof value.seconds !== "number" ||
+    !Number.isFinite(value.seconds) ||
+    value.seconds < -60 ||
+    value.seconds > 3_600
+  ) {
+    return undefined;
+  }
+  return {
+    kind: value.kind,
+    volume: value.volume,
+    nudge: value.nudge,
+    sample: value.sample,
+    seconds: Math.round(value.seconds * 10) / 10,
+  };
+}
+
+const safeRuntimeImageStockBrokerStages = new Set([
+  "material-init",
+  "native-git-init",
+  "config-patch",
+  "fixture-reachability",
+  "initialize",
+  "proxy-env",
+  "broker-denial",
+  "outside-home-read",
+  "outside-home-shadow-write",
+  "outside-home-read-after-shadow-write",
+  "git-proof",
+  "explicit-deny",
+  "unrelated-private-host",
+  "direct-private-host",
+]);
+
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -304,6 +359,40 @@ function failureDiagnostic(error) {
         }
       : undefined;
   }
+  if (diagnostic.kind === "runtime-image-stock-broker") {
+    const stage = diagnostic.stage;
+    return typeof stage === "string" && safeRuntimeImageStockBrokerStages.has(stage)
+      ? { kind: "runtime-image-stock-broker", stage }
+      : undefined;
+  }
+  if (diagnostic.kind === "metrics-monitoring") {
+    const stages = ["prometheus-up", "occ-request", "grafana-health", "grafana-datasource"];
+    const reasons = ["timeout", "container-exited", "query-error"];
+    if (!stages.includes(diagnostic.stage) || !reasons.includes(diagnostic.reason)) {
+      return undefined;
+    }
+    return {
+      kind: "metrics-monitoring",
+      stage: diagnostic.stage,
+      reason: diagnostic.reason,
+      container: ["server", "agent", "grafana"].includes(diagnostic.container)
+        ? diagnostic.container
+        : undefined,
+      exitCode:
+        Number.isInteger(diagnostic.exitCode) &&
+        diagnostic.exitCode >= 0 &&
+        diagnostic.exitCode <= 255
+          ? diagnostic.exitCode
+          : undefined,
+      lastHttpStatus: safeStatus(diagnostic.lastHttpStatus),
+    };
+  }
+  if (diagnostic.kind === "observability-log-export") {
+    // Which attributed source never reached the OTLP receiver; no record content.
+    return typeof diagnostic.api === "boolean" && typeof diagnostic.worker === "boolean"
+      ? { kind: "observability-log-export", api: diagnostic.api, worker: diagnostic.worker }
+      : undefined;
+  }
   if (diagnostic.kind !== "controller-http") {
     return undefined;
   }
@@ -346,6 +435,7 @@ function upstreamDiagnostic(value) {
 function location(data = {}) {
   const error = data.details?.error;
   const cause = error?.cause ?? error;
+  const fileFailure = typeof data.file === "string" && data.name === data.file;
   // Only retain coordinates in the known test file, never arbitrary stack text.
   const frame =
     typeof cause?.stack === "string" && typeof data.file === "string"
@@ -372,6 +462,19 @@ function location(data = {}) {
       ? {
           code: error.code === "ERR_TEST_FAILURE" ? "ERR_TEST_FAILURE" : undefined,
           name: "Error",
+          failureType:
+            fileFailure && error.failureType === "testCodeFailure" ? "testCodeFailure" : undefined,
+          exitCode:
+            fileFailure &&
+            Number.isInteger(error.exitCode) &&
+            error.exitCode >= 0 &&
+            error.exitCode <= 255
+              ? error.exitCode
+              : undefined,
+          signal:
+            fileFailure && ["SIGABRT", "SIGKILL", "SIGTERM"].includes(error.signal)
+              ? error.signal
+              : undefined,
           cause:
             cause?.code === "ERR_ASSERTION" && cause?.name === "AssertionError"
               ? { code: "ERR_ASSERTION", name: "AssertionError" }
@@ -388,6 +491,27 @@ function location(data = {}) {
 
 export default async function* jsonLinesReporter(source) {
   for await (const event of source) {
+    if (event.type === "test:diagnostic") {
+      // Node diagnostics can quote thrown errors; retain only this fixed failure category.
+      if (
+        typeof event.data?.message === "string" &&
+        event.data.message.startsWith(postTestAsyncActivityPrefix)
+      ) {
+        yield '{"type":"test:diagnostic","data":{"kind":"post-test-async-activity"}}\n';
+      } else if (
+        typeof event.data?.message === "string" &&
+        event.data.message.startsWith(measurementPrefix)
+      ) {
+        const measurement = safeMeasurement(event.data.message);
+        if (measurement) {
+          yield `${JSON.stringify({
+            type: "test:diagnostic",
+            data: { kind: "measurement", measurement },
+          })}\n`;
+        }
+      }
+      continue;
+    }
     if (!["test:pass", "test:fail", "test:start"].includes(event.type)) {
       continue;
     }

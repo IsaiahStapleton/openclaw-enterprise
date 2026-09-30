@@ -54,7 +54,7 @@ async function createFixture(options = {}) {
     password: readerPassword,
     name: "Tenant A Reader",
   });
-  const readerSeed = adminAuth.auth.principalSeed(readerAccount);
+  const readerSeed = adminAuth.auth.principalSeed(readerAccount, { grant: "none" });
   const tenantAReader = readerSeed.principal;
   const identities = options.identities ?? [administrator, tenantAReader];
   const identityIds = new Set(identities.map(({ id }) => id));
@@ -943,7 +943,7 @@ test("mutations are attributable and authorization failures never leak credentia
 
   const secret = "sk-security-provider-credential-123456789";
   fixture.iamDriver.authorize = async () => {
-    throw new Error(`Provider credentials failed: ${secret}`);
+    throw new Error(`Backend credentials failed: ${secret}`);
   };
   const denied = await request(fixture.app, "/namespaces", {
     body: { name: "Must fail closed" },

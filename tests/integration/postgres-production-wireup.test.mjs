@@ -149,7 +149,7 @@ test(
       ? false
       : "Set OCC_PRODUCTION_WIREUP_DATABASE_URL for real PostgreSQL production bootstrap proof.",
   },
-  async () => {
+  async (t) => {
     const environment = {
       ...process.env,
       NODE_ENV: "production",
@@ -480,13 +480,14 @@ test(
       assert.equal((await serviceAuthorized.json()).data.id, installation.rows[0].id);
 
       // Prove all production ServiceAccount grants through the real cookie-authenticated HTTP boundary.
-      async function request(method, path, payload) {
+      async function request(method, path, payload, caller = session) {
         const response = await fetch(`${endpoint}${path}`, {
           method,
-          headers: authenticatedHeaders(
-            session,
-            payload === undefined ? {} : { "content-type": "application/json" },
-          ),
+          headers: authenticatedHeaders(caller, {
+            // This fixture configures port 0 before listening on an ephemeral port.
+            origin: authBaseURL,
+            ...(payload === undefined ? {} : { "content-type": "application/json" }),
+          }),
           ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
         });
         return {
@@ -498,11 +499,14 @@ test(
       const presetPath = `/namespaces/${defaultNamespace[0].id}/presets`;
       const defaults = await request("GET", presetPath);
       assert.equal(defaults.status, 200);
-      assert.deepEqual(
-        defaults.data.map((preset) => preset.name),
-        ["standard-codex"],
-      );
-      const copied = defaults.data[0];
+      assert.deepEqual(defaults.data.map((preset) => preset.name).sort(), [
+        "Standard Codex",
+        "Standard OpenClaw",
+      ]);
+      const copied = defaults.data.find((preset) => preset.name === "Standard Codex");
+      const copiedOpenClaw = defaults.data.find((preset) => preset.name === "Standard OpenClaw");
+      assert.ok(copied, "missing Standard Codex");
+      assert.ok(copiedOpenClaw, "missing Standard OpenClaw");
       const worker = createControllerWorker({
         pool: new pg.Pool({ connectionString: databaseUrl }),
         mode: "production",
@@ -545,17 +549,35 @@ test(
       });
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
       const afterRestart = await request("GET", presetPath);
-      assert.deepEqual(afterRestart.data, [customized.data]);
+      assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
+        "Standard Codex",
+        "Standard OpenClaw",
+      ]);
+      assert.deepEqual(
+        afterRestart.data.find((preset) => preset.name === "Standard Codex"),
+        customized.data,
+      );
+      assert.deepEqual(
+        afterRestart.data.find((preset) => preset.name === "Standard OpenClaw"),
+        copiedOpenClaw,
+      );
       const newNamespace = await request("POST", "/namespaces", {
         name: "Preset startup namespace",
       });
       assert.equal(newNamespace.status, 201);
       const newPresets = await request("GET", `/namespaces/${newNamespace.data.id}/presets`);
-      assert.deepEqual(
-        newPresets.data.map((preset) => preset.name),
-        ["standard-codex"],
+      assert.deepEqual(newPresets.data.map((preset) => preset.name).sort(), [
+        "Standard Codex",
+        "Standard OpenClaw",
+      ]);
+      assert.notEqual(
+        newPresets.data.find((preset) => preset.name === "Standard Codex").id,
+        copied.id,
       );
-      assert.notEqual(newPresets.data[0].id, copied.id);
+      assert.notEqual(
+        newPresets.data.find((preset) => preset.name === "Standard OpenClaw").id,
+        copiedOpenClaw.id,
+      );
 
       const defaultConfiguration = await request(
         "POST",
@@ -676,6 +698,183 @@ test(
         }),
       });
       assert.equal(publicSignup.status, 404);
+
+      await t.test(
+        "persisted sharing follows real cookie sessions across restart and revocation",
+        async () => {
+          // Account enrollment is a precondition, not the behavior under test. Seed an
+          // existing Installation-reader Role, then provision people through the real API.
+          // Their initial Role grants no Namespace, Agent, or policy administration access.
+          const readerRoleId = `role-reader-${randomUUID()}`;
+          await pool.query(
+            "INSERT INTO occ.iam_roles (id, name, permissions) VALUES ($1, $2, $3)",
+            [
+              readerRoleId,
+              "Installation reader",
+              JSON.stringify([{ action: "read", resourceKind: "installation" }]),
+            ],
+          );
+          const people = [];
+          for (const label of ["recipient", "unaffected"]) {
+            const email = `${label}-${randomUUID()}@example.test`;
+            const personPassword = `sharing-${randomUUID()}`;
+            const created = await request("POST", "/api/auth/accounts", {
+              email,
+              password: personPassword,
+              name: label,
+              roleId: readerRoleId,
+            });
+            assert.equal(created.status, 201);
+            const personSession = await signInWithEmailPassword({
+              origin: endpoint,
+              email,
+              password: personPassword,
+            });
+            people.push({ principalId: created.data.principalId, session: personSession });
+            assert.deepEqual(
+              (await request("GET", "/namespaces", undefined, personSession)).data,
+              [],
+            );
+          }
+          const namespaceId = defaultNamespace[0].id;
+          const agentId = defaultAgent.data.id;
+          const agentsPath = `/namespaces/${namespaceId}/agents`;
+          const policyPath = `/namespaces/${namespaceId}/iam`;
+          const sibling = await request("POST", agentsPath, {
+            name: `private-sibling-${randomUUID()}`,
+            configurationId: defaultConfiguration.data.id,
+          });
+          assert.equal(sibling.status, 201);
+          const discoveryRole = await request("POST", `${policyPath}/roles`, {
+            name: "Namespace discovery",
+            permissions: [{ action: "read", resourceKind: "namespace" }],
+          });
+          const agentRole = await request("POST", `${policyPath}/roles`, {
+            name: "Agent native administration",
+            permissions: [
+              { action: "read", resourceKind: "agent" },
+              { action: "administer", resourceKind: "agent" },
+            ],
+          });
+          assert.equal(discoveryRole.status, 201);
+          assert.equal(agentRole.status, 201);
+          const bindings = [];
+          for (const person of people) {
+            assert.equal(
+              (await request("GET", `${agentsPath}/${agentId}`, undefined, person.session)).status,
+              403,
+            );
+            // Use the same exact-scope API sequence as Console sharing. An account's
+            // ability to sign in does not by itself grant discovery or sibling access.
+            for (const [resourceKind, resourceId, roleId] of [
+              ["namespace", namespaceId, discoveryRole.data.id],
+              ["agent", agentId, agentRole.data.id],
+            ]) {
+              const binding = await request("POST", `${policyPath}/access-bindings`, {
+                subjectKind: "identity",
+                subjectId: person.principalId,
+                roleId,
+                resourceKind,
+                resourceId,
+              });
+              assert.equal(binding.status, 201);
+              if (resourceKind === "agent") {
+                bindings.push(binding.data);
+              }
+            }
+          }
+
+          // A fresh application and IAM instance must reconstruct both authority and
+          // sessions from PostgreSQL. Keep the same cookies; do not mint fixture sessions.
+          await app.close();
+          app = await composeProduction({
+            mode: "production",
+            host: "127.0.0.1",
+            databaseUrl,
+            authSecret,
+            authBaseURL,
+            drivers: await productionDrivers(),
+            logger: apiLog.logger,
+          });
+          endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
+          for (const person of people) {
+            const namespaces = await request("GET", "/namespaces", undefined, person.session);
+            assert.equal(namespaces.status, 200);
+            assert.deepEqual(
+              namespaces.data.map(({ id }) => id),
+              [namespaceId],
+            );
+            const agents = await request("GET", agentsPath, undefined, person.session);
+            assert.equal(agents.status, 200);
+            assert.deepEqual(
+              agents.data.map(({ id }) => id),
+              [agentId],
+            );
+            assert.equal(
+              (await request("GET", `${agentsPath}/${agentId}`, undefined, person.session)).status,
+              200,
+            );
+            assert.equal(
+              (await request("GET", `${agentsPath}/${sibling.data.id}`, undefined, person.session))
+                .status,
+              403,
+            );
+            assert.equal(
+              (
+                await request(
+                  "GET",
+                  `/namespaces/${namespaceId}/configurations/${defaultConfiguration.data.id}`,
+                  undefined,
+                  person.session,
+                )
+              ).status,
+              403,
+            );
+            assert.equal(
+              (await request("GET", `${policyPath}/roles`, undefined, person.session)).status,
+              403,
+            );
+          }
+
+          const [recipient, unaffected] = people;
+          const revoked = await request(
+            "DELETE",
+            `${policyPath}/access-bindings/${bindings[0].id}`,
+          );
+          assert.equal(revoked.status, 204);
+          // Check the next real authenticated HTTP request, not a manufactured abort or
+          // changed cookie. This does not claim closure of an already-open native stream.
+          assert.equal(
+            (await request("GET", `${agentsPath}/${agentId}`, undefined, recipient.session)).status,
+            403,
+          );
+          assert.deepEqual(
+            (await request("GET", agentsPath, undefined, recipient.session)).data,
+            [],
+          );
+          assert.deepEqual(
+            (await request("GET", "/namespaces", undefined, recipient.session)).data.map(
+              ({ id }) => id,
+            ),
+            [namespaceId],
+          );
+          assert.equal(
+            (await request("GET", `${agentsPath}/${agentId}`, undefined, unaffected.session))
+              .status,
+            200,
+          );
+          const remaining = await request("GET", `${policyPath}/access-bindings`);
+          assert.equal(remaining.status, 200);
+          assert.equal(
+            remaining.data.some(({ id }) => id === bindings[0].id),
+            false,
+          );
+          assert.equal(
+            remaining.data.some(({ id }) => id === bindings[1].id),
+            true,
+          );
+        },
+      );
     } finally {
       if (app !== undefined) {
         await app.close();

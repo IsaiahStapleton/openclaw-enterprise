@@ -1,10 +1,10 @@
 # Create an Agent from a Preset
 
 Use a Preset to reuse Agent settings across a Namespace. An operator creates the
-Preset through the HTTP API; users select it in the console and fill its
+Preset through the HTTP API or [Installation-linked JSON files](../../reference/presets.md#installation-defaults); users select it in the console and fill its
 variables. Each saved Agent gets its own Configuration and identity.
 
-For a dedicated Codex starting point with an empty tool-network allowlist and
+For a dedicated Codex starting point with an explicit network allowlist and
 cached search, [install the standard Codex Preset](standard-codex-preset.md).
 
 ## Create a Preset
@@ -47,23 +47,77 @@ The example supplies a name and execution mode. It leaves model, credentials,
 and native Configuration at the console's normal defaults for review.
 To reuse more settings, add fields from the [Preset contract](../../reference/presets.md#contents).
 
+## Use the Slack team example
+
+The [Slack team Preset](../../../deploy/examples/slack-team-preset.json) supplies
+settings for an OpenClaw gateway, dedicated Codex execution, and a mention-only
+Slack channel.
+It targets an Installation with Kubernetes Compute and Namespace Secrets. From
+the repository root, use `--data-binary @deploy/examples/slack-team-preset.json`
+in the creation request above. Then choose **slack-team** in the console.
+
+Fill the Preset variables with:
+
+- A unique Agent name and the current Namespace ID.
+- A model supported by your installed Codex runtime and model credential,
+  without a provider prefix; the template adds `codex/`.
+- Existing Secret IDs for the model API key, Slack app token, and Slack bot
+  token. All three Secrets must belong to that Namespace. Enter their IDs,
+  never credential values.
+- The owner's Slack user ID, a channel ID where the bot is already invited,
+  and an IANA timezone. The timezone defaults to `UTC`.
+
+Configure the Installation's [Slack channel proxy](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
+and use compatible gateway, Codex plugin, and Codex app-server images before deployment.
+
+The owner is initially the only allowed channel user. DMs and bot messages are
+disabled, and channel messages require a mention. Review the copied Configuration
+to admit other users. Codex starts with the console's read-only sandbox and
+on-request approval policy. Model credentials go only to Codex; Slack credentials
+go only to the gateway.
+
+**Create Agent** starts first-time provisioning on supported Dedicated runtimes,
+including transport credentials and access to the selected Secrets. If the console
+saves an ordinary draft instead, complete [transport credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
+and grant the Agent access through
+[Namespace IAM](../../reference/authorization.md#manage-namespace-policy).
+Kubernetes Compute supplies trusted-proxy authentication from the Installation
+settings. The template references its generated gateway password through
+`OPENCLAW_GATEWAY_PASSWORD`; it does not supply credential values.
+The Preset does not create Secrets, Slack apps, infrastructure, or account
+enrollment. It relies on OCE's workspace routing and leaves additional plugins,
+embedding-backed memory, and scheduling configuration to the operator.
+
+Local template rendering passes, but this example has no live deployment or Slack
+acceptance result. Verify an actual reply and workspace access on your
+selected runtime before relying on it.
+
 ## Use it in the console
 
 1. Sign in, select the same Namespace, and open **Agents → Create Agent**.
    You need `read` on the Preset and the normal Agent/Configuration creation
    permissions. An administrator can grant exact Preset access through
    [Namespace IAM](../../reference/authorization.md#manage-namespace-policy).
-2. Choose **embedded-agent** in **Preset template**, enter the `name` variable,
+2. Choose your Preset in **Preset template**, fill its variables,
    and select **Use Preset**. The chooser closes and the Agent form opens with
    the rendered copy. To use standard defaults, select **Start without Preset**.
 3. Review the model, execution mode, native Configuration JSON, authentication,
-   plugin selections, and Secret bindings. Edit any copied setting and fill
+   plugin selections, and workspace files under Advanced settings. Configure Slack
+   Secrets in its channel drawer. Edit any copied setting and fill
    missing values. Enter credentials only in password variables or credential
    fields; never in ordinary variables or native JSON.
-4. Select **Create Agent**. Then follow [credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
-   for that saved Agent. Creating the draft does not start a workload.
+4. Select **Create Agent**. Supported Dedicated runtimes start first-time
+   provisioning and deployment. For an ordinary draft, follow
+   [credentials and deployment](../../reference/console/create-and-deploy.md#initial-runtime-credentials)
+   for that saved Agent; saving a draft alone does not start a workload.
+
+Variables with defaults are prefilled and can be changed. A model password
+variable offers **Create new Secret** or **Use existing Secret** in the same
+Namespace. Enter a token only in new mode; it is stored when you create the Agent.
+Existing mode reuses the selected reference without reading credential bytes.
 
 Variables are used once to fill the form. Edit the resulting fields directly.
+You can navigate away and return to your [unsaved Console draft](../../reference/console/create-and-deploy.md#create-an-agent); reenter any new credentials.
 Before saving, to choose another Preset or supply different variables, select **Start over**
 and confirm that the unsaved draft can be discarded. A supplied
 `configuration.values` replaces the entire native JSON editor.
