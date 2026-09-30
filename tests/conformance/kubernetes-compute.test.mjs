@@ -9723,7 +9723,15 @@ for (const dualCluster of [false, true]) {
       ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("oauth-bootstrap-"),
     );
     assert.ok(bootstrap);
-    assert.equal(bootstrap.spec.template.spec.automountServiceAccountToken, false);
+    const seedPod = bootstrap.spec.template.spec;
+    assert.equal(seedPod.automountServiceAccountToken, false);
+    // Containment rests on the missing profile label: namespace default-deny then applies.
+    assert.equal(
+      bootstrap.spec.template.metadata.labels["openclaw.dev/network-profile"],
+      undefined,
+    );
+    assert.equal(seedPod.containers[0].securityContext.readOnlyRootFilesystem, true);
+    assert.deepEqual(seedPod.containers[0].securityContext.capabilities.drop, ["ALL"]);
     assert.equal(
       records.some(
         ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"),
@@ -9747,6 +9755,7 @@ for (const dualCluster of [false, true]) {
     assert.equal(envelope.phase, "consumed");
     assert.equal(envelope.agentId, revision.agentId);
     assert.equal(envelope.credential, undefined);
+    assert.equal(envelope.privateState, undefined);
     const consumeIndex = records.findIndex(
       ({ kind, metadata }) =>
         kind === "Secret" && metadata.annotations?.["openclaw.dev/oauth-phase"] === "consumed",
@@ -9760,6 +9769,10 @@ for (const dualCluster of [false, true]) {
       false,
     );
     const harness = records[launchIndex];
+    assert.equal(
+      harness.spec.template.metadata.labels["openclaw.dev/network-profile"],
+      "broad-egress-v1",
+    );
     const pod = harness.spec.template.spec;
     const native = pod.containers[0];
     assert.equal(native.env.find(({ name }) => name === "CODEX_LOGIN_MODE").value, "oauth");
