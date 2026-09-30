@@ -215,6 +215,41 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   assert.match(long.records[0].message, /…\[truncated\]$/);
 });
 
+test("the sanitizer keeps bracket-tagged text lines but withholds malformed JSON arrays", () => {
+  const stream = { source: "agent", pod: "agent-0", container: "agent" };
+  const canary = `array-canary-${randomUUID()}`;
+  const tagged = [
+    "[node-host] advertised commands: dir.list, file.create, file.fetch",
+    "[DF3-P10] bracket-prefixed operational line",
+    "[gateway/ws] reconnecting",
+    "[plugins]",
+  ];
+  const arrays = [
+    "[",
+    `["${canary}",`,
+    `[{"role":"user","text":"${canary}"}`,
+    `[ "${canary}" ] trailing`,
+    `[null, "${canary}"`,
+    `[true] ${canary}`,
+    `[${canary}`,
+  ];
+  const page = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [...tagged, ...arrays].map((raw, index) => ({ time: lineTime(index), raw })),
+  });
+  assert.deepEqual(
+    page.records.map(({ type, kind, message, reason, count }) =>
+      type === "line" ? { kind, message } : { reason, count },
+    ),
+    [
+      ...tagged.map((message) => ({ kind: "text", message })),
+      { reason: "malformed", count: arrays.length },
+    ],
+  );
+  assert.equal(JSON.stringify(page).includes(canary), false);
+});
+
 // The redactor runs synchronously on workload-controlled lines of up to 32 KiB, before
 // the 8 KiB output cut. A pattern that backtracks quadratically on such a line would stall
 // the API replica's event loop for every caller, so each hostile shape has a budget.
