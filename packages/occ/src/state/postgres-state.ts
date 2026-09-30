@@ -93,6 +93,7 @@ import {
 } from "./agent-provisioning.ts";
 import {
   assertHarnessAuthAvailable,
+  assertSameCredentialSourceFields,
   harnessAuthMatches,
   namespaceRoleGrantsBeyondRead,
   validHarnessAuthSnapshot,
@@ -2434,6 +2435,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         if (current === undefined || current.state !== "ready") {
           return undefined;
         }
+        assertSameCredentialSourceFields(current.secrets, secrets);
         const inputs = Object.entries(secrets);
         if (
           inputs.some(
@@ -2444,8 +2446,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             "Credential source Secret inputs must reference exact Secrets.",
           );
         }
-        // The Secret foreign key rejects a missing or foreign Secret; the row count rejects a
-        // changed field set.
+        // The Secret foreign key rejects a missing or foreign Secret.
         const updated = await client.query(
           `UPDATE occ.credential_source_secrets AS css SET secret_id = input.secret_id
            FROM unnest($3::text[], $4::text[]) AS input(field, secret_id)
@@ -2458,11 +2459,10 @@ export class PostgresPlatformState implements PlatformStateStore {
             inputs.map(([, reference]) => reference.id),
           ],
         );
-        if (
-          updated.rowCount !== inputs.length ||
-          inputs.length !== Object.keys(current.secrets).length
-        ) {
-          throw new ScopeViolationError("Credential source Secret fields cannot change.");
+        if (updated.rowCount !== inputs.length) {
+          throw new DependencyUnavailableError(
+            "Persisted credential source Secret fields are invalid.",
+          );
         }
         return findCredentialSource(namespaceId, credentialSourceId);
       },

@@ -789,6 +789,24 @@ function agentKey(namespaceId: string, agentId: string): string {
   return `${namespaceId}\u0000${agentId}`;
 }
 
+/**
+ * Defensive: the controller already matches the type's catalog fields before any gateway call.
+ * Both stores refuse a replacement that would change a source's Secret field set.
+ */
+export function assertSameCredentialSourceFields(
+  current: Readonly<Record<string, SecretReference>>,
+  replacement: Readonly<Record<string, SecretReference>>,
+): void {
+  const fields = Object.keys(current).sort();
+  const replaced = Object.keys(replacement).sort();
+  if (
+    fields.length !== replaced.length ||
+    fields.some((field, index) => field !== replaced[index])
+  ) {
+    throw new ScopeViolationError("Credential source Secret fields cannot change.");
+  }
+}
+
 function operationIdempotencyKey(operation: Readonly<PlatformOperation>): string {
   if (operation.kind === "agent") {
     return `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`;
@@ -1693,10 +1711,7 @@ function repositories(
       if (current === undefined || current.state !== "ready") {
         return undefined;
       }
-      const fields = Object.keys(current.secrets).sort();
-      if (JSON.stringify(Object.keys(secrets).sort()) !== JSON.stringify(fields)) {
-        throw new ScopeViolationError("Credential source Secret fields cannot change.");
-      }
+      assertSameCredentialSourceFields(current.secrets, secrets);
       for (const reference of Object.values(secrets)) {
         if (
           reference.kind !== "secret" ||
