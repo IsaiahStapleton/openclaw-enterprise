@@ -8299,6 +8299,12 @@ for (const cutover of ["already deployed", "during Deployment deletion", "during
         async readNamespacedServiceAccount() {
           return read("ServiceAccount");
         },
+        async readNamespacedConfigMap() {
+          throw missing();
+        },
+        async readNamespacedSecret() {
+          throw missing();
+        },
         async deleteNamespacedService({ body }) {
           remove("Service", body);
         },
@@ -8419,6 +8425,9 @@ test("stopping a containment-only Kubernetes revision removes its workload befor
   const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
   driver.apiClients = Promise.resolve({
     core: {
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
       async readNamespacedSecret() {
         throw notFound();
       },
@@ -8548,6 +8557,9 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
   const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
   driver.apiClients = Promise.resolve({
     core: {
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
       async readNamespacedSecret() {
         throw notFound();
       },
@@ -10048,6 +10060,46 @@ for (const method of ["api_key", "codex_pat"]) {
       ingress.spec.ingress[0].from[0].podSelector.matchLabels["openclaw.dev/agent"],
       revision.agentId,
     );
+  });
+}
+
+for (const embedded of [true, false]) {
+  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} stop removes the stopped revision's credential copies and snapshots`, async () => {
+    const { driver, revision, namespace, context, objects } = workspaceSetupFixture(embedded);
+    revision.harnessAuth = { ...revision.harnessAuth, method: "api_key" };
+    context.harnessAuth = { ...context.harnessAuth, method: "api_key" };
+    await driver.prepareRevision(revision, context);
+    const revisionSuffix = `${digest(revision.agentId)}-${digest(revision.id)}`;
+    const revisionScoped = () =>
+      [...objects.values()]
+        .filter(
+          ({ kind, metadata }) =>
+            (kind === "Secret" || kind === "ConfigMap") &&
+            metadata.name.endsWith(digest(revision.id)),
+        )
+        .map(({ kind, metadata }) => `${kind}:${metadata.name}`)
+        .sort();
+    assert.ok(
+      revisionScoped().includes(`Secret:harness-secrets-${revisionSuffix}`),
+      "preparation projects the model credential into a per-revision Secret",
+    );
+    assert.ok(
+      revisionScoped().includes(
+        `ConfigMap:gateway-${digest(revision.agentId)}-rev-${digest(revision.id)}`,
+      ),
+    );
+    await driver.stopRevision(revision);
+    // A stopped revision keeps no copy of its credentials; preparing it again re-projects them.
+    assert.deepEqual(revisionScoped(), []);
+    assert.ok(objects.has(`Namespace::${namespace}`));
+    assert.ok(
+      [...objects.values()].some(
+        ({ kind, metadata }) => kind === "Secret" && metadata.name === "occ-model-key",
+      ),
+      "the canonical control-plane source is retained",
+    );
+    await driver.prepareRevision(revision, context);
+    assert.ok(revisionScoped().includes(`Secret:harness-secrets-${revisionSuffix}`));
   });
 }
 
