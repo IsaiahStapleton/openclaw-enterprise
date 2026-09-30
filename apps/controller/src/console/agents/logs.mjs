@@ -5,8 +5,10 @@ const STATUS_POLL_MS = 10_000;
 const FOLLOW_POLL_MS = 2_000;
 const MAX_ROWS = 5_000;
 const TAIL_LINES = 200;
-// A 403 is audited; remember it for this page session instead of re-asking every poll.
+// A 403 is audited; remember it for this page session instead of re-asking every poll
+// or every time the Logs tab reopens.
 const deniedLogViews = new Set();
+const deniedStatusViews = new Set();
 
 const SOURCE_LABELS = {
   gateway: "Gateway",
@@ -29,9 +31,10 @@ const WITHHELD_LABELS = {
 
 function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
+    // Name both grants: without status the Logs section never says what log text needs.
     return tier === "logs"
       ? "Log text requires Agent read_logs (or administer) and read access plus read access to this version."
-      : "Runtime status requires Agent operate and read access plus read access to this version.";
+      : "Runtime status requires Agent operate and read access plus read access to this version. Log text needs Agent read_logs (or administer) and read access plus read access to this version.";
   }
   if (error.status === 501) {
     return "This Compute Driver does not expose runtime status or logs, or an operator turned them off.";
@@ -220,6 +223,7 @@ function downloadFileName(agentId, revisionId, source, pod) {
 export function renderAgentLogs(context, { agent, revisionId }) {
   const base = `${namespacePath(context.namespaceId)}/agents/${encodeURIComponent(agent.id)}/deployments/${encodeURIComponent(revisionId)}/runtime`;
   const deniedKey = `${context.namespaceId}/${agent.id}`;
+  const statusKey = `${deniedKey}/${revisionId}`;
   const section = element("section", { className: "agent-logs" });
   const strip = element("div", { className: "runtime-strip", "aria-live": "polite" });
   const stripStatus = element(
@@ -269,6 +273,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   filterInput.addEventListener("input", () => applyFilters());
   const filterStatus = element("p", { className: "hint", role: "status" });
   const retention = element("p", { className: "hint" });
+  const sourceHint = element("p", { className: "hint", role: "note", hidden: true });
   const logStatus = element("p", { className: "muted", role: "status" });
   const logError = element("p", { className: "error", role: "alert", hidden: true });
   const pane = element("div", {
@@ -366,6 +371,15 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       podSelect.value = chosenPod;
     }
     retention.textContent = source?.retention ?? "";
+    // A dedicated Gateway logs connection errors to a Harness that never came up; its
+    // own source holds the cause (for example a failed model probe).
+    const harnessDown =
+      source?.id === "gateway" &&
+      description.pods.some(({ role, ready }) => role === "agent" && !ready);
+    sourceHint.hidden = !harnessDown;
+    sourceHint.textContent = harnessDown
+      ? "The Agent (Harness) Pod is not ready. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: read the Agent (Harness) source for the cause."
+      : "";
     const pod = selectedPod();
     previous.disabled = logsDenied || !pod || pod.restartCount === 0;
     if (previous.disabled) {
@@ -381,6 +395,10 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   async function loadStatus() {
     clearTimeout(statusTimer);
     if (!current()) {
+      return;
+    }
+    if (deniedStatusViews.has(statusKey)) {
+      stripStatus.textContent = runtimeErrorText({ status: 403 }, "status");
       return;
     }
     if (!document.hidden) {
@@ -406,6 +424,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
         stripStatus.textContent = withRequestId(runtimeErrorText(error, "status"), error);
         // Authorization and support failures do not change on their own.
         if ([403, 404, 501].includes(error.status)) {
+          if (error.status === 403) {
+            deniedStatusViews.add(statusKey);
+          }
           return;
         }
       }
@@ -669,6 +690,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     ),
     filterStatus,
     retention,
+    sourceHint,
     logStatus,
     logError,
     pane,
