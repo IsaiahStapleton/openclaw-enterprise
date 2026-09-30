@@ -228,9 +228,7 @@ test("an operator without administer sees status but no log text and is never re
 
   await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
   await page
-    .getByText(
-      "Log text requires Agent read_logs (or administer) and read access plus read access to this version.",
-    )
+    .getByText("Log text requires Agent read_logs (or administer) and read access.")
     .waitFor();
   assert.equal(await page.getByText("operator must not see this").count(), 0);
   assert.equal(await page.getByRole("button", { name: "Follow" }).isDisabled(), true);
@@ -310,6 +308,18 @@ test("a log reader without operate reads log text in the Logs tab without runtim
   // A source this version does not have is explained, not a generic failure.
   await page.locator("#runtime-log-source").selectOption("sandbox");
   await page.getByText(/This version has no sandbox log source/).waitFor();
+
+  // Reopening the tab remembers the status denial and still reads log text; with no
+  // Pod list there is no Harness hint.
+  const statusReads = () =>
+    requests.filter(({ path }) => path.endsWith(`/deployments/${revisionId}/runtime`)).length;
+  const before = statusReads();
+  await page.getByRole("button", { name: "Configuration", exact: true }).click();
+  await page.getByRole("button", { name: "Logs", exact: true }).click();
+  await pane.getByText("log reader can see this").waitFor();
+  assert.equal(await page.locator("#runtime-log-source").isDisabled(), false);
+  assert.equal(statusReads(), before);
+  assert.equal(await page.getByRole("note").count(), 0);
 });
 
 test("the Logs tab explains cluster RBAC, unsupported Drivers and unavailable reads", async (t) => {
@@ -463,4 +473,163 @@ test("the Sandbox source shows redacted policy decisions without a Pod picker", 
   await page
     .getByText(/grant the OpenClaw Enterprise gateway identity the sandbox:read scope/)
     .waitFor();
+});
+
+test("a Gateway view points at an unready Harness Pod instead of reading as a network fault", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  computeDriver.state.harnessPod = { ready: false };
+  computeDriver.state.lines = [
+    line(1, "codex app-server remote WebSocket connection failed: connect ECONNREFUSED"),
+  ];
+  computeDriver.state.harnessLines = [line(2, "Harness model authentication probe failed.")];
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  await page.locator("#runtime-log-source").selectOption("gateway");
+  await page
+    .getByRole("log", { name: "Runtime log output" })
+    .getByText(/ECONNREFUSED/)
+    .waitFor();
+  const hint = page.getByRole("note").filter({ hasText: "The Agent (Harness) Pod is not ready" });
+  await hint.waitFor();
+  assert.match(await hint.textContent(), /read the Agent \(Harness\) source for the cause/);
+
+  await page.locator("#runtime-log-source").selectOption("agent");
+  await hint.waitFor({ state: "hidden" });
+  await page
+    .getByRole("log", { name: "Runtime log output" })
+    .getByText("Harness model authentication probe failed.")
+    .waitFor();
+  assert.equal(await page.getByText(/ECONNREFUSED/).count(), 0);
+
+  // A ready Harness adds no hint to the Gateway view.
+  computeDriver.state.harnessPod = { ready: true };
+  await page.reload();
+  await page.locator("#runtime-log-source").selectOption("gateway");
+  await page
+    .getByRole("log", { name: "Runtime log output" })
+    .getByText(/ECONNREFUSED/)
+    .waitFor();
+  assert.equal(await hint.count(), 0);
+});
+
+test("the Gateway hint skips a rollout's old Harness Pod and covers a Harness with no Pod", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  // A rollout keeps an unready old Harness Pod beside a ready one: no hint.
+  computeDriver.state.harnessPod = { ready: true, stale: true };
+  computeDriver.state.lines = [
+    line(1, "codex app-server remote WebSocket connection failed: connect ECONNREFUSED"),
+  ];
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  await page
+    .locator(".runtime-pod")
+    .getByText(`agent-${revisionId.slice(4, 12)}-old`)
+    .waitFor();
+  await page.locator("#runtime-log-source").selectOption("gateway");
+  await page
+    .getByRole("log", { name: "Runtime log output" })
+    .getByText(/ECONNREFUSED/)
+    .waitFor();
+  assert.equal(await page.getByRole("note").count(), 0);
+
+  // A dedicated Harness whose Pod does not exist yet still explains the Gateway errors.
+  computeDriver.state.harnessPod = { created: false };
+  await page.reload();
+  await page.locator("#runtime-log-source").selectOption("gateway");
+  const missing = page.getByRole("note").filter({ hasText: "The Agent (Harness) has no Pod yet" });
+  await missing.waitFor();
+  assert.match(await missing.textContent(), /see Deployment activity/);
+});
+
+test("a reader without operate learns what log text needs and is asked for status once per page", async (t) => {
+  const { fixture, namespace, agent, revisionId } = await logsFixture(t);
+  const reader = await fixture.createAccountWithPolicy("runtime-reader", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-runtime-reader",
+      namespaceId: namespace.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "read", resourceKind: "agent_revision" },
+      ],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-runtime-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-runtime-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search, reader.credentials);
+
+  await page
+    .getByText(
+      /Runtime status requires Agent operate .* Log text needs Agent read_logs \(or administer\) and read access\./,
+    )
+    .waitFor();
+  const statusReads = () =>
+    requests.filter(({ path }) => path.endsWith(`/deployments/${revisionId}/runtime`)).length;
+  assert.equal(statusReads(), 1);
+
+  // Every denied read is an audited authorization denial: reopening the tab does not ask again.
+  await page.getByRole("button", { name: "Configuration", exact: true }).click();
+  await page.getByRole("button", { name: "Logs", exact: true }).click();
+  await page.getByText(/Log text needs Agent read_logs/).waitFor();
+  await page.waitForTimeout(500);
+  assert.equal(statusReads(), 1);
+});
+
+test("a status denial for one operator does not carry over to the next sign-in on the tab", async (t) => {
+  const { fixture, namespace, agent, revisionId } = await logsFixture(t);
+  const reader = await fixture.createAccountWithPolicy("runtime-switch-reader", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-runtime-switch-reader",
+      namespaceId: namespace.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "read", resourceKind: "agent_revision" },
+      ],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-runtime-switch-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-runtime-switch-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search, reader.credentials);
+  await page.getByText(/Runtime status requires Agent operate/).waitFor();
+
+  // Sign out and in as the administrator without reloading the page.
+  await page.getByRole("button", { name: "OpenClaw Enterprise", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Logout" }).click();
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login", exact: true }).click();
+  await page.waitForURL(/\/console\/agents/);
+  const statusReads = () =>
+    requests.filter(({ path }) => path.endsWith(`/deployments/${revisionId}/runtime`)).length;
+  const before = statusReads();
+  await page.evaluate((target) => {
+    globalThis.history.pushState(null, "", target);
+    globalThis.dispatchEvent(new globalThis.PopStateEvent("popstate"));
+  }, url.pathname + url.search);
+
+  await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
+  await page.getByRole("log", { name: "Runtime log output" }).waitFor();
+  assert.ok(statusReads() > before);
+  assert.equal(await page.getByText(/Runtime status requires Agent operate/).count(), 0);
 });

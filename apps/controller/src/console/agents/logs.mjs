@@ -5,8 +5,10 @@ const STATUS_POLL_MS = 10_000;
 const FOLLOW_POLL_MS = 2_000;
 const MAX_ROWS = 5_000;
 const TAIL_LINES = 200;
-// A 403 is audited; remember it for this page session instead of re-asking every poll.
+// A 403 is audited; remember it for this page session instead of re-asking every poll
+// or every time the Logs tab reopens.
 const deniedLogViews = new Set();
+const deniedStatusViews = new Set();
 
 const SOURCE_LABELS = {
   gateway: "Gateway",
@@ -29,9 +31,10 @@ const WITHHELD_LABELS = {
 
 function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
+    // Name both grants: without status the Logs section never says what log text needs.
     return tier === "logs"
-      ? "Log text requires Agent read_logs (or administer) and read access plus read access to this version."
-      : "Runtime status requires Agent operate and read access plus read access to this version.";
+      ? "Log text requires Agent read_logs (or administer) and read access."
+      : "Runtime status requires Agent operate and read access plus read access to this version. Log text needs Agent read_logs (or administer) and read access.";
   }
   if (error.status === 501) {
     return "This Compute Driver does not expose runtime status or logs, or an operator turned them off.";
@@ -245,7 +248,14 @@ function downloadFileName(agentId, revisionId, source, pod) {
 /** Logs tab: runtime status strip, source picker, bounded log pane and follow. */
 export function renderAgentLogs(context, { agent, revisionId }) {
   const base = `${namespacePath(context.namespaceId)}/agents/${encodeURIComponent(agent.id)}/deployments/${encodeURIComponent(revisionId)}/runtime`;
-  const deniedKey = `${context.namespaceId}/${agent.id}`;
+  // Denials are per signed-in operator: another user signing in on this tab asks again.
+  const deniedKey = JSON.stringify([context.operatorId ?? null, context.namespaceId, agent.id]);
+  const statusKey = JSON.stringify([
+    context.operatorId ?? null,
+    context.namespaceId,
+    agent.id,
+    revisionId,
+  ]);
   const section = element("section", { className: "agent-logs" });
   const strip = element("div", { className: "runtime-strip", "aria-live": "polite" });
   const stripStatus = element(
@@ -295,6 +305,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   filterInput.addEventListener("input", () => applyFilters());
   const filterStatus = element("p", { className: "hint", role: "status" });
   const retention = element("p", { className: "hint" });
+  const sourceHint = element("p", { className: "hint", role: "note", hidden: true });
   const logStatus = element("p", { className: "muted", role: "status" });
   const logError = element("p", { className: "error", role: "alert", hidden: true });
   const pane = element("div", {
@@ -395,6 +406,24 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       podSelect.value = chosenPod;
     }
     retention.textContent = source?.retention ?? "";
+    // A dedicated Gateway logs connection errors to a Harness that never came up; its
+    // own source holds the cause (for example a failed model probe).
+    // Only a revision with a dedicated Harness lists an "agent" source; the hint fires
+    // when no Harness Pod is ready (none created yet, or every one unready), not while a
+    // ready replacement serves beside an old Pod during a rollout. Without status the
+    // Pod list is unknown, so there is no hint.
+    const harnessPods = description.pods.filter(({ role }) => role === "agent");
+    const harnessDown =
+      !statusDenied &&
+      source?.id === "gateway" &&
+      description.sources.some(({ id }) => id === "agent") &&
+      !harnessPods.some(({ ready }) => ready);
+    sourceHint.hidden = !harnessDown;
+    sourceHint.textContent = !harnessDown
+      ? ""
+      : harnessPods.length === 0
+        ? "The Agent (Harness) has no Pod yet. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: see Deployment activity for why it has not started."
+        : "The Agent (Harness) Pod is not ready. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: read the Agent (Harness) source for the cause.";
     const pod = selectedPod();
     const restarts = pod
       ? pod.restartCount
@@ -412,9 +441,27 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     followButton.disabled = !readable || previous.checked;
   }
 
+  // Status is denied, but log text has its own grant: offer the log reads anyway.
+  function offerLogsWithoutStatus() {
+    if (description !== null) {
+      return;
+    }
+    statusDenied = true;
+    description = unobservedDescription();
+    renderPickers();
+    if (!logsDenied) {
+      void readLogs({ restart: true });
+    }
+  }
+
   async function loadStatus() {
     clearTimeout(statusTimer);
     if (!current()) {
+      return;
+    }
+    if (deniedStatusViews.has(statusKey)) {
+      stripStatus.textContent = runtimeErrorText({ status: 403 }, "status");
+      offerLogsWithoutStatus();
       return;
     }
     if (!document.hidden) {
@@ -438,17 +485,14 @@ export function renderAgentLogs(context, { agent, revisionId }) {
           return;
         }
         stripStatus.textContent = withRequestId(runtimeErrorText(error, "status"), error);
-        if (error.status === 403 && description === null) {
-          // Status is denied, but log text has its own grant: offer the log reads anyway.
-          statusDenied = true;
-          description = unobservedDescription();
-          renderPickers();
-          if (!logsDenied) {
-            void readLogs({ restart: true });
-          }
+        if (error.status === 403) {
+          offerLogsWithoutStatus();
         }
         // Authorization and support failures do not change on their own.
         if ([403, 404, 501].includes(error.status)) {
+          if (error.status === 403) {
+            deniedStatusViews.add(statusKey);
+          }
           return;
         }
       }
@@ -716,6 +760,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     ),
     filterStatus,
     retention,
+    sourceHint,
     logStatus,
     logError,
     pane,

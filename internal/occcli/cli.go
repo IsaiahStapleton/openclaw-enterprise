@@ -1103,7 +1103,7 @@ func (app *application) agentLogsCommand() *cobra.Command {
 		Short: "Print redacted container or sandbox output for an Agent revision",
 		Long: "Print one bounded, redacted page of Gateway or Harness container output, or of the\n" +
 			"Agent's sandbox policy decisions (--source sandbox).\n" +
-			"Requires Agent read_logs (or administer) and read, and read on the revision. Each view is audited.\n" +
+			"Requires Agent read_logs (or administer) and read. Each view is audited.\n" +
 			"--follow polls every 2 seconds with the view's cursor until interrupted.",
 		Args:        idArgs(agentIDArg),
 		Annotations: map[string]string{outputFormatsAnnotation: "text,json"},

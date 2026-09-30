@@ -195,6 +195,9 @@ preparation starts the replacement Gateway itself before activation. If the Gate
 of a revision that never served (its Service still selects no Pod) is unready,
 for example after rejected model authentication, the next revision's preparation
 repairs it with its own template instead of waiting on the failed predecessor.
+The repair also deletes that predecessor's per-revision Secret and ConfigMap copies,
+such as its model API key, because no Gateway runs it any more; they no longer
+wait for stop or deletion.
 
 The worker commits the database `activeRevisionId` with an exact compare-and-set
 before Kubernetes default after-commit activation.
@@ -302,6 +305,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 ## Changelog
 
 - 2026-09-30 09:30: Include the Harness network profile in Service selectors for EKS policy resolution. (authoring-run/1373b7f3-e273-466a-b9da-bb197bdb469e - 0d00e8970b69)
+
+- 2026-09-30 21:00: Delete a repaired embedded predecessor's Secret and ConfigMap copies at repair time. (fix/dogfood3b-1)
 
 - 2026-09-30 10:30: Repair a never-served unready embedded Gateway during redeploy with pending workspace setup. (fix-dogfood-1)
 
