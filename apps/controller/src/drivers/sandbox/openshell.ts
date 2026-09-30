@@ -1,5 +1,6 @@
 import { asRecord, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
 import { KubernetesObjectApi, type KubernetesObject, PatchStrategy } from "@kubernetes/client-node";
+import { SandboxRevisionUnsupportedError } from "@openclaw-enterprise/occ";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   AgentRevision,
@@ -281,7 +282,8 @@ function environment(requirements: HarnessWorkloadRequirements): Record<string, 
   const result: Record<string, string> = {};
   for (const entry of requirements.environment) {
     if ("valueFrom" in entry) {
-      throw new OpenShellSandboxConfigurationFailure(
+      throw new SandboxRevisionUnsupportedError(
+        "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
         `OpenShell v0.1.0 cannot receive secretKeyRef environment ${entry.name}; upstream Secret projection support is required.`,
       );
     }
@@ -1116,7 +1118,8 @@ export class OpenShellSandboxDriver implements SandboxDriver {
       context.revision.harness.mode !== "dedicated" ||
       (context.revision.harness.id !== "codex" && context.revision.harness.id !== "openclaw")
     ) {
-      throw new OpenShellSandboxConfigurationFailure(
+      throw new SandboxRevisionUnsupportedError(
+        "SANDBOX_HARNESS_UNSUPPORTED",
         "OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.",
       );
     }

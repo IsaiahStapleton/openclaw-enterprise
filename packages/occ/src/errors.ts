@@ -120,6 +120,18 @@ export class ScopeViolationError extends Error {
   }
 }
 
+/**
+ * Admitted Configuration content cannot select a supported Harness runtime. The
+ * caller can already see the Configuration, so HTTP reports the static message as
+ * an invalid request instead of hiding it as a scope miss.
+ */
+export class ConfigurationHarnessError extends ScopeViolationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigurationHarnessError";
+  }
+}
+
 export class ResourceConflictError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
@@ -155,6 +167,21 @@ export class NativeWorkerSupportError extends Error {
       "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See docs/reference/harness-execution.md#native-worker-support.",
     );
     this.name = "NativeWorkerSupportError";
+  }
+}
+
+/**
+ * A Sandbox Driver cannot run this exact AgentRevision with the installed
+ * driver. Retrying cannot change the outcome, so the worker fails the deployment
+ * with `code`. The message stays in the controller; status shows a fixed text.
+ */
+export class SandboxRevisionUnsupportedError extends Error {
+  readonly code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED" | "SANDBOX_HARNESS_UNSUPPORTED";
+
+  constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
+    super(message);
+    this.name = "SandboxRevisionUnsupportedError";
+    this.code = code;
   }
 }
 

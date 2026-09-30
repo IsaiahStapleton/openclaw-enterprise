@@ -863,31 +863,43 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
   ): Promise<RecordValue> {
     signal.throwIfAborted();
     const { grpc, client } = await this.ensureClient();
+    signal.throwIfAborted();
     const headers = await metadata(grpc, this.options.auth);
+    signal.throwIfAborted();
     return new Promise<RecordValue>((resolve, reject) => {
       let call: ClientUnaryCall | undefined;
       const abort = () => {
+        signal.removeEventListener("abort", abort);
         call?.cancel();
         reject(signal.reason ?? new Error("OpenShell gateway request aborted."));
       };
       signal.addEventListener("abort", abort, { once: true });
-      call = client[method](
-        request,
-        headers,
-        { deadline: deadline(this.requestTimeoutMs) },
-        (error, response) => {
-          signal.removeEventListener("abort", abort);
-          if (signal.aborted) {
-            reject(signal.reason ?? new Error("OpenShell gateway request aborted."));
-            return;
-          }
-          if (error !== null) {
-            reject(error);
-            return;
-          }
-          resolve(asRecord(response) ?? {});
-        },
-      );
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+      try {
+        call = client[method](
+          request,
+          headers,
+          { deadline: deadline(this.requestTimeoutMs) },
+          (error, response) => {
+            signal.removeEventListener("abort", abort);
+            if (signal.aborted) {
+              reject(signal.reason ?? new Error("OpenShell gateway request aborted."));
+              return;
+            }
+            if (error !== null) {
+              reject(error);
+              return;
+            }
+            resolve(asRecord(response) ?? {});
+          },
+        );
+      } catch (error) {
+        signal.removeEventListener("abort", abort);
+        throw error;
+      }
     });
   }
 

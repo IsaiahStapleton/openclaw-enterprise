@@ -6,6 +6,7 @@ import {
   AuthorizationDeniedError,
   ChannelDirectoryError,
   ChannelCredentialError,
+  ConfigurationHarnessError,
   DependencyUnavailableError,
   ModelDiscoveryError,
   PluginDiscoveryError,
@@ -246,6 +247,9 @@ export function requestFailure(error: unknown): RequestFailure {
           "The plugin service is unavailable. Retry discovery.",
         );
     }
+  }
+  if (error instanceof ConfigurationHarnessError) {
+    return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof NativeWorkerSupportError) {
     return failure(400, "INVALID_REQUEST", error.message);
