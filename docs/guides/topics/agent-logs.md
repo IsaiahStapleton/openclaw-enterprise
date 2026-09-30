@@ -19,9 +19,10 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
    **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
    for dedicated execution), or **Sandbox (policy decisions)** (see
    [Sandbox source](#sandbox-source)). Choose a **Pod** when a version has more
-   than one. While the Harness Pod is not ready, the Gateway logs failed
+   than one. While no Harness Pod is ready, the Gateway logs failed
    connections to it (`ECONNREFUSED`); the console then points you to the
-   **Agent (Harness)** source, which holds the cause, such as a failed model probe.
+   **Agent (Harness)** source, which holds the cause, such as a failed model
+   probe, or to Deployment activity when the Harness Pod does not exist yet.
 4. Select **Follow** to poll for new lines every 2 seconds. Following pauses while
    the browser tab is hidden or you scroll up, and stops after a permission denial.
 5. Select **Previous instance** after a restart to read the output of the

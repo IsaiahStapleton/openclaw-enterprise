@@ -417,6 +417,36 @@ test("a Gateway view points at an unready Harness Pod instead of reading as a ne
   assert.equal(await hint.count(), 0);
 });
 
+test("the Gateway hint skips a rollout's old Harness Pod and covers a Harness with no Pod", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  // A rollout keeps an unready old Harness Pod beside a ready one: no hint.
+  computeDriver.state.harnessPod = { ready: true, stale: true };
+  computeDriver.state.lines = [
+    line(1, "codex app-server remote WebSocket connection failed: connect ECONNREFUSED"),
+  ];
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  await page
+    .locator(".runtime-pod")
+    .getByText(`agent-${revisionId.slice(4, 12)}-old`)
+    .waitFor();
+  await page.locator("#runtime-log-source").selectOption("gateway");
+  await page
+    .getByRole("log", { name: "Runtime log output" })
+    .getByText(/ECONNREFUSED/)
+    .waitFor();
+  assert.equal(await page.getByRole("note").count(), 0);
+
+  // A dedicated Harness whose Pod does not exist yet still explains the Gateway errors.
+  computeDriver.state.harnessPod = { created: false };
+  await page.reload();
+  await page.locator("#runtime-log-source").selectOption("gateway");
+  const missing = page.getByRole("note").filter({ hasText: "The Agent (Harness) has no Pod yet" });
+  await missing.waitFor();
+  assert.match(await missing.textContent(), /see Deployment activity/);
+});
+
 test("a reader without operate learns what log text needs and is asked for status once per page", async (t) => {
   const { fixture, namespace, agent, revisionId } = await logsFixture(t);
   const reader = await fixture.createAccountWithPolicy("runtime-reader", (principal) => {
@@ -458,4 +488,52 @@ test("a reader without operate learns what log text needs and is asked for statu
   await page.getByText(/Log text needs Agent read_logs/).waitFor();
   await page.waitForTimeout(500);
   assert.equal(statusReads(), 1);
+});
+
+test("a status denial for one operator does not carry over to the next sign-in on the tab", async (t) => {
+  const { fixture, namespace, agent, revisionId } = await logsFixture(t);
+  const reader = await fixture.createAccountWithPolicy("runtime-switch-reader", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-runtime-switch-reader",
+      namespaceId: namespace.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "read", resourceKind: "agent_revision" },
+      ],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-runtime-switch-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-runtime-switch-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search, reader.credentials);
+  await page.getByText(/Runtime status requires Agent operate/).waitFor();
+
+  // Sign out and in as the administrator without reloading the page.
+  await page.getByRole("button", { name: "OpenClaw Enterprise", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Logout" }).click();
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login", exact: true }).click();
+  await page.waitForURL(/\/console\/agents/);
+  const statusReads = () =>
+    requests.filter(({ path }) => path.endsWith(`/deployments/${revisionId}/runtime`)).length;
+  const before = statusReads();
+  await page.evaluate((target) => {
+    globalThis.history.pushState(null, "", target);
+    globalThis.dispatchEvent(new globalThis.PopStateEvent("popstate"));
+  }, url.pathname + url.search);
+
+  await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
+  await page.getByRole("log", { name: "Runtime log output" }).waitFor();
+  assert.ok(statusReads() > before);
+  assert.equal(await page.getByText(/Runtime status requires Agent operate/).count(), 0);
 });

@@ -222,8 +222,14 @@ function downloadFileName(agentId, revisionId, source, pod) {
 /** Logs tab: runtime status strip, source picker, bounded log pane and follow. */
 export function renderAgentLogs(context, { agent, revisionId }) {
   const base = `${namespacePath(context.namespaceId)}/agents/${encodeURIComponent(agent.id)}/deployments/${encodeURIComponent(revisionId)}/runtime`;
-  const deniedKey = `${context.namespaceId}/${agent.id}`;
-  const statusKey = `${deniedKey}/${revisionId}`;
+  // Denials are per signed-in operator: another user signing in on this tab asks again.
+  const deniedKey = JSON.stringify([context.operatorId ?? null, context.namespaceId, agent.id]);
+  const statusKey = JSON.stringify([
+    context.operatorId ?? null,
+    context.namespaceId,
+    agent.id,
+    revisionId,
+  ]);
   const section = element("section", { className: "agent-logs" });
   const strip = element("div", { className: "runtime-strip", "aria-live": "polite" });
   const stripStatus = element(
@@ -373,13 +379,20 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     retention.textContent = source?.retention ?? "";
     // A dedicated Gateway logs connection errors to a Harness that never came up; its
     // own source holds the cause (for example a failed model probe).
+    // Only a revision with a dedicated Harness lists an "agent" source; the hint fires
+    // when no Harness Pod is ready (none created yet, or every one unready), not while a
+    // ready replacement serves beside an old Pod during a rollout.
+    const harnessPods = description.pods.filter(({ role }) => role === "agent");
     const harnessDown =
       source?.id === "gateway" &&
-      description.pods.some(({ role, ready }) => role === "agent" && !ready);
+      description.sources.some(({ id }) => id === "agent") &&
+      !harnessPods.some(({ ready }) => ready);
     sourceHint.hidden = !harnessDown;
-    sourceHint.textContent = harnessDown
-      ? "The Agent (Harness) Pod is not ready. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: read the Agent (Harness) source for the cause."
-      : "";
+    sourceHint.textContent = !harnessDown
+      ? ""
+      : harnessPods.length === 0
+        ? "The Agent (Harness) has no Pod yet. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: see Deployment activity for why it has not started."
+        : "The Agent (Harness) Pod is not ready. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: read the Agent (Harness) source for the cause.";
     const pod = selectedPod();
     previous.disabled = logsDenied || !pod || pod.restartCount === 0;
     if (previous.disabled) {
