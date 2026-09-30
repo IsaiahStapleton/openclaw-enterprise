@@ -107,6 +107,10 @@
                     "label": "Console Walkthrough"
                   },
                   {
+                    "page": "guides/console/channels-and-credentials",
+                    "label": "Channels and Credentials"
+                  },
+                  {
                     "page": "guides/console/agent-sharing",
                     "label": "Share Agents"
                   },
@@ -439,6 +443,10 @@
                     "label": "Image Upgrades"
                   },
                   {
+                    "page": "guides/deploy/production-upgrade-recovery",
+                    "label": "Upgrade Recovery"
+                  },
+                  {
                     "page": "guides/deploy/auth-maintenance",
                     "label": "Sign-in Maintenance"
                   },
@@ -529,6 +537,10 @@
                   {
                     "page": "guides/observability/demo",
                     "label": "Demo Stack"
+                  },
+                  {
+                    "page": "guides/observability/demo-cleanup",
+                    "label": "Demo Cleanup"
                   },
                   {
                     "page": "reference/metrics",
@@ -777,6 +789,10 @@
                         "label": "CI"
                       },
                       {
+                        "page": "testing/ci-manual-integration",
+                        "label": "Manual Integration Lanes"
+                      },
+                      {
                         "page": "testing/metrics",
                         "label": "Metrics Dashboard"
                       }
@@ -887,6 +903,7 @@
               "flows/repository-credential-configuration",
               "testing/repository-credentials",
               "testing/repository-credentials-platform",
+              "testing/repository-credentials-artifacts",
               "flows/agent-presets"
             ]
           }
