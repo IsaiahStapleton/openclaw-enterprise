@@ -430,13 +430,14 @@ test(
     await t.test("password sign-in and the recovery lane still work with Google", async () => {
       const passwordResponse = await passwordSignIn(app, origin, member, address());
       assert.equal(passwordResponse.statusCode, 200, passwordResponse.body);
-      const lane = await assertReservedLane(app, pool, {
+      const lane = await assertReservedLane(app, {
         origin,
         holder: admin,
         former: member,
         label: "google",
       });
-      assert.deepEqual(lane, { fresh: 429, former: 429, holder: 200, held: [401, 401, 401, 401] });
+      // The member neither holds recovery nor administers, so its spent email refuses it.
+      assert.deepEqual(lane, { fresh: 429, former: 429, holder: 200 });
       // A Google provider outage leaves password sign-in working.
       google.mode = "error";
       try {
@@ -465,7 +466,16 @@ test(
       assert.equal(detached.statusCode, 200, detached.body);
       assert.equal(await currentSession(app, cookie), null, "the Google session ends");
       await assertGoogleRefused({ subject: memberSubject }, "detached subject");
-      assert.equal((await passwordSignIn(app, origin, member, address())).statusCode, 200);
+      // The reserved-lane check above spent the member's email budget. The browser's
+      // known-device cookie from its Google sign-in keeps its own lane for password fallback.
+      const fallback = await app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress: address(),
+        headers: { origin, cookie },
+        payload: { email: member.email, password: member.password },
+      });
+      assert.equal(fallback.statusCode, 200, fallback.body);
     });
 
     await t.test("a disabled account is refused Google sign-in", async () => {

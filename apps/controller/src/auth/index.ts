@@ -171,12 +171,12 @@ export interface ControllerAuthOptions {
   /** Trusted proxies whose client-address header keys sign-in admission. */
   readonly clientAddress?: ClientAddressConfiguration;
   /**
-   * Password-only profile: whether a user administers the Installation. Once the shared
-   * budget is spent, only administrators' passwords are still checked (slowly). Without it
-   * no account is.
+   * Whether a user administers the Installation. Once the shared budget is spent, only
+   * administrators' passwords (and, with an external provider, the recovery account's) are
+   * still checked (slowly). Without it no administrator is.
    */
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
-  /** Password-only profile: replaces the in-memory failure-counting admission. */
+  /** Replaces the in-memory failure-counting password admission (both profiles). */
   readonly passwordAdmission?: PasswordSignInAdmission;
   /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
   readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
@@ -945,39 +945,49 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     },
   });
   const api = auth.api;
-  // The known-device cookie is host-only (__Host-) whenever the origin is HTTPS.
-  const knownDeviceSecure = secureOrigin && options.secureCookies !== false;
-  // Password-only profile: failure-counting admission keyed on email and, behind a trusted
-  // proxy, client address; administrators are slowed, never refused (see admission.ts).
+  // The known-device cookie is host-only (__Host-) whenever the origin is HTTPS. With an
+  // external provider its name follows the curated endpoints that issue it.
+  const knownDeviceSecure =
+    humanLogin?.knownDeviceSecure ?? (secureOrigin && options.secureCookies !== false);
+  // Failure-counting admission for password sign-in in both profiles, keyed on email (or a
+  // known device) and, behind a trusted proxy, client address. Reserved accounts are slowed,
+  // never refused (see admission.ts).
   const passwordAdmission =
-    humanLogin !== undefined
-      ? undefined
-      : (options.passwordAdmission ??
-        passwordFailureAdmission({
-          ...passwordFailureBudget,
-          countsAsFailure: countsAsSignInFailure,
-          ...(options.onOperationalEvent === undefined
-            ? {}
-            : {
-                onLimited: ({ lane, key }) =>
-                  options.onOperationalEvent!({
-                    event: "authentication.sign-in-limited",
-                    lane,
-                    ...(key === undefined
-                      ? {}
-                      : { keyHash: signInLimitKeyHash(options.secret, key) }),
-                  }),
+    options.passwordAdmission ??
+    passwordFailureAdmission({
+      ...passwordFailureBudget,
+      countsAsFailure: countsAsSignInFailure,
+      ...(options.onOperationalEvent === undefined
+        ? {}
+        : {
+            onLimited: ({ lane, key }) =>
+              options.onOperationalEvent!({
+                event: "authentication.sign-in-limited",
+                lane,
+                ...(key === undefined ? {} : { keyHash: signInLimitKeyHash(options.secret, key) }),
               }),
-          // Timing differences here are hidden by the slow lane's floor. Lookup failures
-          // propagate, so an outage is 503 rather than a refusal.
-          async isReserved(email) {
-            if (options.passwordAdministrator === undefined) {
-              return false;
-            }
-            const found = await (await auth.$context).internalAdapter.findUserByEmail(email);
-            return found !== null && (await options.passwordAdministrator(found.user.id));
-          },
-        }));
+          }),
+      // Timing differences here are hidden by the slow lane's floor. Lookup failures
+      // propagate, so an outage is 503 rather than a refusal.
+      async isReserved(email) {
+        if (humanLogin !== undefined) {
+          // The recovery account is the documented way in when a provider is down, so
+          // strangers spending its email can slow it but never refuse it.
+          if (humanLogin.isRecoveryEmail(email)) {
+            return true;
+          }
+          // Recovery-only: every other password is refused unread, reserved or not.
+          if (humanLogin.passwordSignIn === "recovery-only") {
+            return false;
+          }
+        }
+        if (options.passwordAdministrator === undefined) {
+          return false;
+        }
+        const found = await (await auth.$context).internalAdapter.findUserByEmail(email);
+        return found !== null && (await options.passwordAdministrator(found.user.id));
+      },
+    });
 
   /** Validates and hashes a new password account without writing it. */
   async function prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount> {
@@ -1218,9 +1228,6 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         const input = authBody(request);
         const body = ensureEmailPassword(input);
-        if (humanLogin) {
-          return runPrivateEndpoint(request, "/oce/password", body);
-        }
         // Read from the validated input, not the credential pair, so the admission key
         // is plainly derived from the email alone.
         const email = String(input.email).trim().toLowerCase();
@@ -1235,7 +1242,14 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           email,
           ...(device === undefined ? {} : { knownDevice: device.deviceKey }),
         };
-        return passwordAdmission!.admit(attempt, async () => {
+        if (humanLogin) {
+          // The curated endpoint checks the password, issues the session and marks the
+          // browser as a known device; only credential rejections spend budget.
+          return passwordAdmission.admit(attempt, () =>
+            runPrivateEndpoint(request, "/oce/password", body),
+          );
+        }
+        return passwordAdmission.admit(attempt, async () => {
           const result = await api.signInEmail({
             body: { ...body, rememberMe: true },
             headers: authHeaders(request.headers),
@@ -1568,11 +1582,12 @@ export async function createPostgresControllerAuth(
           ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
         },
         options.baseURL,
+        { trustedClientAddress: controllerOptions.clientAddress !== undefined },
       );
   const auth = createControllerAuth({
     ...controllerOptions,
     ...(humanLogin === undefined ? {} : { humanLogin }),
-    ...(humanLogin !== undefined || iamDriver === undefined
+    ...(iamDriver === undefined
       ? {}
       : {
           passwordAdministrator: (userId: string) =>

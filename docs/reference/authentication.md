@@ -111,10 +111,11 @@ pins each tab's key this way.
 Sign-in takes `{"email": "...", "password": "..."}`. The session arrives only
 through `Set-Cookie`.
 
-Without an external provider, after 10 failed sign-ins per minute per email, or 20
+In both profiles, after 10 failed sign-ins per minute per email, or 20
 per client address with [`api.trustedProxy`](settings/production.md#github-sign-in-and-trusted-proxies),
 attempts wait 1–8 s and return `429` with `Retry-After`, whether or not the email
-exists; an Installation administrator's correct password still signs in. Without
+exists; an Installation administrator's correct password still signs in, and so does
+the recovery account's with an external provider. Successful sign-ins spend nothing. Without
 one, browsers share the ingress address and startup logs
 `authentication.sign-in-limit-warning`. A successful sign-in within the budget
 clears that email's failures, not the address's; an administrator's success in
@@ -136,8 +137,7 @@ a random nonce, so every sign-in gets its own entry; it never carries the email.
 entry spends that browser's own budget, the size of the email's, instead of the
 email's, and does not wait for the email's slowed slots. Strangers who spend an
 email's budget therefore cannot refuse or crowd out a browser that signed in to
-that account before, including an administrator's. In the external-provider
-profile the same applies to the email and recovery lanes.
+that account before, including an administrator's or the recovery account's.
 
 The cookie never authenticates: a wrong password with it is `401` and spends the
 browser's lane, and the address lane and global caps still apply. Tampered,

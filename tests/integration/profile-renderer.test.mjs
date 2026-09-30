@@ -775,7 +775,7 @@ test("preflight warns, without failing, when no trusted proxy is set", () => {
   assert.equal(github.summary.ok, true);
   assert.match(
     github.preflight.warnings.join("\n"),
-    /controlPlane\.trustedProxy is not set: .*every browser shares one address budget/,
+    /controlPlane\.trustedProxy is not set: .*GitHub or Google sign-in starts have no per-client limit/,
   );
   assert.doesNotMatch(github.values, /trustedProxy:/);
   const password = render("openclaw", baseInput());

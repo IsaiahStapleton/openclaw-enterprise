@@ -137,7 +137,7 @@ in its HttpOnly cookie and is omitted from session-inspection responses.
 under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
 public user identity. Console compares it to invalidate retained views and drafts
 after a new session, including for the same user. Sign-out revokes the session,
-and public signup is disabled. Without an external provider,
+and public signup is disabled. In both profiles
 `auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins; a
 success within the budget clears the email's failures (a slowed-lane success
 does not), and its `onLimited` hook logs
@@ -201,7 +201,10 @@ Google's signing keys through the same bounded transport, verifies the RS256 ID 
 signature, issuer, audience, expiry, and nonce (plus `hd` and `email_verified` when
 allowed domains are set), and returns only `sub`. Tokens and email are discarded.
 
-Password and external-provider work have separate bounded process-local admission; GitHub and Google share one budget. Provider HTTP shares a deadline and
+Password sign-in is admitted by the controller route before `/oce/password` runs, with the
+recovery email reserved like an administrator's. Start, callback, and result each have
+bounded process-local admission (`keyedAdmission`), shared by GitHub and Google, keyed on
+the client address only behind a trusted proxy and otherwise on the browser's cookies. Provider HTTP shares a deadline and
 limits streamed response bytes; State bounds pending attempts and expired cleanup.
 State sets the five-minute attempt and eight-hour session deadlines. Cookie
 Max-Age subtracts monotonic elapsed work from that persisted lifetime; expired
