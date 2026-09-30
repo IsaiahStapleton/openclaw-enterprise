@@ -617,7 +617,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["reference/postgres-auth-binding"]
           },
           {
             "tab": "Contribute",
