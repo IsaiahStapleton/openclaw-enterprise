@@ -413,7 +413,36 @@ test("unusable base policy cannot select documentation", (t) => {
   shallowBootstrap(t, f).expect("full");
 });
 
-test("workflow selection flows through gate and source-bound aggregate for docs and mixed PRs", (t) => {
+test("documentation workflow selects documentation checks and omits product tests", () => {
+  const workflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const job = (name) => {
+    const match = new RegExp(
+      `^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:|(?![\\s\\S]))`,
+      "m",
+    ).exec(workflow);
+    assert.ok(match, `workflow contains ${name}`);
+    return match[1];
+  };
+  const docs = job("docs-checks");
+  assert.match(docs, /needs\.impact\.outputs\.mode == 'docs'/);
+  for (const command of ["format:check", "docs:check", "docs:build"]) {
+    assert.match(docs, new RegExp(`\\bpnpm ${command}\\b`));
+  }
+  // Keep the documentation route free of product-test and lane invocations.
+  assert.doesNotMatch(
+    docs,
+    /run-ci-lane|run-tests\.mjs\s+(?:run|aggregate)|\b(?:pnpm|npm)\s+(?:run\s+)?test(?::|\b)|\bnode\s+--test\b|\bgo\s+test\b/,
+  );
+  for (const name of ["checks-baseline", "pr-safe", "runtime-image-fixture"]) {
+    assert.match(job(name), /needs\.impact\.outputs\.mode == 'full'/, name);
+  }
+  const required = job("ci-required");
+  const aggregate = required.split("      - name: Aggregate CI results\n")[1];
+  assert.ok(aggregate, "required job contains aggregation");
+  assert.match(aggregate, /if:.*needs\.impact\.outputs\.mode == 'full'/);
+});
+
+test("workflow selection flows through the gate and full-mode source-bound aggregate", (t) => {
   const lanes = [
     "checks-baseline",
     "postgres",
@@ -447,8 +476,42 @@ test("workflow selection flows through gate and source-bound aggregate for docs 
     assert.equal(mode, expected);
     assert.equal(bootstrap.run("verify", mode).status, 0);
 
-    // Small local test cases produce genuine runner artifacts for every selected lane.
     const root = bootstrap.checkout;
+    const needs = {
+      impact: { result: "success", outputs: { mode } },
+      audit: { result: "success", outputs: {} },
+      "docs-checks": { result: mode === "docs" ? "success" : "skipped", outputs: {} },
+      "checks-baseline": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
+      "pr-safe": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
+      "runtime-image-fixture": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
+    };
+    const raw = join(root, "raw-needs.json");
+    const expanded = join(root, "needs.json");
+    const runGate = () => {
+      writeFileSync(raw, JSON.stringify(needs));
+      return spawnSync(
+        process.execPath,
+        [gate, "--needs", raw, "--mode", mode, "--output", expanded],
+        { encoding: "utf8" },
+      );
+    };
+    const gateResult = runGate();
+    assert.equal(gateResult.status, 0, gateResult.stderr);
+    if (mode === "docs") {
+      // An omitted product lane must not be represented by a successful receipt.
+      const output = JSON.parse(readFileSync(expanded, "utf8"));
+      for (const lane of lanes) {
+        assert.notEqual(output[lane]?.result, "success", lane);
+      }
+      needs["docs-checks"].result = "failure";
+      assert.notEqual(runGate().status, 0);
+      needs["docs-checks"].result = "success";
+      needs["checks-baseline"].result = "success";
+      assert.notEqual(runGate().status, 0);
+      continue;
+    }
+
+    // Full mode produces genuine runner artifacts for every selected lane.
     mkdirSync(join(root, "tests/integration"), { recursive: true });
     mkdirSync(join(root, "results"));
     const manifest = { version: 1, lanes: {}, groups: { ci: lanes } };
@@ -477,41 +540,13 @@ test("workflow selection flows through gate and source-bound aggregate for docs 
         "--results",
         join(root, `results/${lane}.json`),
       ]);
-    const selectedLanes = mode === "docs" ? ["checks-baseline"] : lanes;
-    for (const lane of selectedLanes) {
+    for (const lane of lanes) {
       const result = runLane(lane);
       assert.equal(result.status, 0, `${lane}: ${result.stderr} ${result.stdout}`);
     }
-    const needs = {
-      impact: { result: "success", outputs: { mode } },
-      audit: { result: "success", outputs: {} },
-      "checks-baseline": { result: "success", outputs: {} },
-      "pr-safe": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
-      "runtime-image-fixture": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
-    };
-    const raw = join(root, "raw-needs.json");
-    const expanded = join(root, "needs.json");
-    const runGate = () => {
-      writeFileSync(raw, JSON.stringify(needs));
-      return spawnSync(
-        process.execPath,
-        [gate, "--needs", raw, "--mode", mode, "--output", expanded],
-        { encoding: "utf8" },
-      );
-    };
-    const gateResult = runGate();
-    assert.equal(gateResult.status, 0, gateResult.stderr);
     const aggregate = (sha = f.tested) =>
       invoke(
-        [
-          "aggregate",
-          mode === "docs" ? "checks-baseline" : "ci",
-          ...common,
-          "--results-dir",
-          "results",
-          "--needs",
-          "needs.json",
-        ],
+        ["aggregate", "ci", ...common, "--results-dir", "results", "--needs", "needs.json"],
         sha,
       );
     const passed = aggregate();
@@ -527,7 +562,7 @@ test("workflow selection flows through gate and source-bound aggregate for docs 
     );
     command(root, "git", ["checkout", "-q", "--detach", f.tested]);
 
-    if (mode === "full") {
+    {
       const lane = "postgres";
       const artifact = join(root, `results/${lane}.json`);
       const original = readFileSync(artifact);

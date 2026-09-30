@@ -1,14 +1,14 @@
 ---
 created: 2026-09-04
 updated: 2026-09-30
-last_updated_session: authoring-run/5e0d97eb-d171-45a3-8d25-24825b3545ef
+last_updated_session: authoring-run/ac4af003-ce47-4e8d-83af-040e227a7673
 ---
 
 # GitHub Actions testing flow
 
 ## Overview
 
-GitHub Actions selects explicit test lanes, prepares disposable resources, runs the real Node test runner, and rejects missing or skipped required coverage. This flow ends at the aggregate check and resource cleanup. Full CI covers twelve noncredentialed lanes; it does not establish that protected model or service integrations passed. The source implements a reduced documentation-only PR selection, but hosted validation of that selection is not yet established.
+GitHub Actions selects coverage for each event and ends at `CI Required` and resource cleanup. Full CI runs twelve noncredentialed test lanes, prepares disposable resources, and rejects missing or skipped required coverage. A verified documentation-only PR runs Suite Audit and documentation checks without product tests. Neither route establishes protected model or service integrations. Hosted validation of the documentation route remains pending.
 
 ## Entry Points
 
@@ -20,35 +20,27 @@ GitHub Actions selects explicit test lanes, prepares disposable resources, runs 
 
 ```mermaid
 graph TD
-  subgraph Actions["GitHub Actions"]
-    A["PR or other CI event"] --> S["Select impact mode"]
-    S -->|full| B["Eleven other CI lanes"]
-    S -->|docs| L
-    A --> Q["Baseline lane"]
-    A --> N["Suite audit"]
-    N --> L
-    Q --> F
-    C["Manual integration dispatch"] --> D["Environment protection preflight"]
-    D -->|main-only provider or approved other lane| E["Protected jobs"]
-    D -->|missing protection| X["Failed check"]
-  end
-  subgraph Runner["Disposable job runner"]
-    B --> F["Prepare lane resources"]
-    E --> F
-    F -->|prepared| G["Prepare file prerequisites"]
-    G --> H["Node tests and structured reporter"]
-    H --> I["Case and skip validation"]
-    F -->|fixture cluster startup fails| P["Save bounded setup diagnostics"]
-    P --> J["Owned-resource cleanup"]
-    F -->|other preparation fails| J
-    I --> J
-  end
-  subgraph Results["Check results"]
-    I --> K["Sanitized lane result"]
-    J --> L["Aggregate expected jobs and results"]
-    K --> L
-    L --> M["Pass or fail for named coverage"]
-  end
+  A["PR or other CI event"] --> S["Select impact mode"]
+  A --> N["Suite Audit"]
+  S -->|docs| D["Documentation checks"]
+  S -->|full| B["Twelve CI test lanes"]
+  B --> F["Prepare owned resources"]
+  F -->|prepared| H["Run tests and validate cases"]
+  F -->|preparation fails| J["Owned-resource cleanup"]
+  H --> J
+  H --> K["Sanitized lane results"]
+  J --> G["CI Required: verify mode and job states"]
+  S --> G
+  N --> G
+  D --> G
+  K --> G
+  G -->|full| L["Aggregate same-source lane results"]
+  G -->|docs| M["Documentation coverage result"]
+  L --> R["Full CI coverage result"]
+  C["Manual integration dispatch"] --> P["Environment protection preflight"]
+  P -->|approved| E["Protected test jobs"]
+  P -->|missing protection| X["Failed check"]
+  E --> T["Owned preparation, tests, cleanup and aggregation"]
 ```
 
 ## Execution Trace
@@ -65,9 +57,9 @@ coverage groups. `loadTestSuites` loads each referenced
 its test inventory, environment, required inputs, and preparation settings. The
 runner and preparation tools consume the assembled map.
 
-The CI workflow uses the event checkout and supplies no external service credentials. Impact, Suite Audit and `checks-baseline` start independently on ephemeral runners. The ten-lane matrix and separate `runtime-image-fixture` job depend on impact and run only in full mode. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` also uses that runner. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404`; the remaining lanes and audit use `blacksmith-8vcpu-ubuntu-2404`. `CI Required` uses `ubuntu-22.04` and requires successful impact, audit and baseline jobs. In full mode it also requires every other lane in the `ci` group, including `k3d-observability` and `runtime-image-fixture`. A failed audit fails `CI Required` even when the lanes pass.
+The CI workflow uses the event checkout and supplies no external service credentials. Impact and Suite Audit start independently. Once impact selects a mode, `docs-checks` runs in docs mode; `checks-baseline`, the ten-lane matrix, and `runtime-image-fixture` run in full mode. The documentation job checks the checkout source identity, formatting, and the documentation install, check, and build. It runs no conformance, integration, browser, Go, or other product tests. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` also uses that runner. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404`; the remaining lanes and audit use `blacksmith-8vcpu-ubuntu-2404`.
 
-For a pull request, the selector checks the tested checkout and its merge parents against the event's base and head, then compares the base and tested trees. Only nonempty changes to allowlisted regular Markdown files select docs mode. Code, configuration, workflow, mixed or unknown changes and non-PR events select full. Missing or unverifiable policy or source evidence selects full or fails the check closed. The selector policy is taken from the verified PR base; if that base does not yet contain the policy, selection falls back to full. `CI Required` independently verifies the selected mode and checks expected job states and same-revision result artifacts. The complete baseline and Suite Audit remain required in docs mode; skipped lanes are outside its coverage.
+For a pull request, the selector checks the tested checkout and its merge parents against the event's base and head, then compares the base and tested trees. Only nonempty changes to allowlisted regular Markdown files select docs mode. Code, configuration, workflow, mixed or unknown changes and non-PR events select full. Missing or unverifiable policy or source evidence selects full or fails the check closed. The selector policy is taken from the verified PR base; if that base does not yet contain the policy, selection falls back to full. `CI Required` independently verifies the mode and job outcomes. Docs mode requires successful impact, audit and documentation jobs and skipped full test jobs; full mode requires successful impact, audit and all twelve lanes and a skipped documentation job. Missing, failed, cancelled, or unexpectedly skipped selected jobs fail the gate. Full mode retains same-source test-result aggregation; docs mode does not run that aggregator or invent test artifacts.
 
 The `pull_request` workflow definition itself comes from the PR merge checkout and can be changed by the PR. Loading policy from the base does not protect against a changed workflow that bypasses or replaces these steps. A separately trusted required workflow or equivalent external enforcement is a deployment decision, not an established property of this source. Hosted behavior, including fork and required-check enforcement, remains unverified.
 
@@ -77,7 +69,7 @@ PostgreSQL migration and application suites own separate servers. Each of the th
 
 The native IAM barrier test receives its own migrated PostgreSQL database through the application lane's per-file preparer. Only that test receives the matching application and migrator connection details, and the CLI refuses to write those details to `GITHUB_ENV`. The test installs its unregistered supplier only in that disposable database. This fixture does not establish that production writers participate in the barrier.
 
-Both workflows call the shared [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) after checkout. It owns tool and dependency setup, baseline checks when selected, lane preparation, execution, unconditional cleanup, and sanitized result upload. Callers keep the source revision, timeout, protected environment and explicit credentials.
+The full CI and Full Integration test jobs call the shared [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) after checkout. It owns tool and dependency setup, baseline checks when selected, lane preparation, execution, unconditional cleanup, and sanitized result upload. Callers keep the source revision, timeout, protected environment and explicit credentials.
 
 Ordinary PR dependency caches may be restored and saved within GitHub's PR merge-ref scope. Main jobs use main-scoped caches. Test results and credential-bearing state are not dependency caches, and protected jobs do not promote PR build artifacts.
 
@@ -153,7 +145,7 @@ aggregate's required test results.
 
 Per-file cleanup releases its disposable database. Job cleanup removes only the state-owned resources. A whole owned `k3d-cluster` resource owns Kubernetes API object deletion for its Collector Namespace and RBAC. Logging cleanup cleans the local Docker backend container and JSONL/config directory independently, so a dead Kubernetes API does not block local log backend teardown. Cleanup failure fails the check and keeps the private state file usable only while that runner host and path remain available. User databases, contexts, unrelated containers and global images remain outside that ownership.
 
-The aggregate runs after success or failure and checks expected job outcomes plus same-revision lane results. Case validation belongs to the runner; the aggregate checks lane identity and success, required evidence, and cleanup outcomes without interpreting cases again. Missing, failed, cancelled or skipped selected jobs cannot pass. In docs mode, the gate expects the other CI jobs to be skipped and the aggregate requires the complete baseline result. In full mode it requires every CI lane. The docs-only result proves only that selected coverage. A Full Integration result accounts for every lane selected by its `full` group or the requested lane. The explicitly selected `ssh-host` lane remains outside the automatic groups until an operator prepares its disposable host; see [SSH raw-host testing](../testing/ssh.md#ssh-raw-hosts). Abrupt hosted-runner loss can prevent teardown and also loses the private `RUNNER_TEMP` state at job end. External resource reconciliation is deferred until an approved resource ledger exists.
+`CI Required` checks job outcomes even after failures. In full mode, the aggregate also checks same-revision lane results. Case validation belongs to the runner; the aggregate checks lane identity and success, required evidence, and cleanup outcomes without interpreting cases again. Docs mode verifies the documentation and audit job outcomes and that all test jobs were skipped; it does not aggregate test results. The docs-only result proves only the selected checks. A Full Integration result accounts for every lane selected by its `full` group or the requested lane. The explicitly selected `ssh-host` lane remains outside the automatic groups until an operator prepares its disposable host; see [SSH raw-host testing](../testing/ssh.md#ssh-raw-hosts). Abrupt hosted-runner loss can prevent teardown and also loses the private `RUNNER_TEMP` state at job end. External resource reconciliation is deferred until an approved resource ledger exists.
 
 ## Debugging and Verification
 
@@ -176,6 +168,8 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 02:03: Describe the documentation-only checks and required gate in the accompanying changes. (authoring-run/ac4af003-ce47-4e8d-83af-040e227a7673 - 20c06dffda90748e5ea16348eaa04feb79d551ab)
 
 - 2026-09-30 01:24: Describe implemented CI selection and its workflow trust boundary in the accompanying changes. (authoring-run/5e0d97eb-d171-45a3-8d25-24825b3545ef - f2c9f98b0b89762cc9edda189c102ed8c593c678)
 

@@ -37,7 +37,8 @@ function main(args) {
   const expected = {
     impact: "success",
     audit: "success",
-    "checks-baseline": "success",
+    "docs-checks": mode === "docs" ? "success" : "skipped",
+    "checks-baseline": mode === "docs" ? "skipped" : "success",
     "pr-safe": mode === "docs" ? "skipped" : "success",
     "runtime-image-fixture": mode === "docs" ? "skipped" : "success",
   };

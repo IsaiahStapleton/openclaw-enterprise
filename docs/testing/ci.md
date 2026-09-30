@@ -22,26 +22,11 @@ Compare per-file `wallDurationMs`, preparation `[ci-timing]` phases and Actions 
 
 `checks-baseline` runs `pnpm docs:check` and the [dependency policy](repository-boundaries.md). Pages above 1,500 visible words require review; above 2,500 fail except the approved [API reference](../reference/api.md) and `AGENTS.md` files. The generated API, site build, navigation, and links must pass. Run `pnpm docs:check-length` for word counts alone.
 
-CI Impact, Suite Audit and `checks-baseline` start independently. The ten-lane
-matrix and `runtime-image-fixture` depend on the impact result and run in full
-mode. The complete baseline runs in both modes.
-Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge
-netfilter support. The repository credential platform lane uses
-`blacksmith-16vcpu-ubuntu-2404` because it builds the delivered runtime image and
-the repository platform fixture in one job; other lanes and the audit use
-`blacksmith-8vcpu-ubuntu-2404`; `runtime-image-fixture` uses `ubuntu-22.04`.
-`CI Required` uses `ubuntu-22.04` and requires the impact, audit and baseline
-jobs to pass. Full mode also requires all eleven other lanes and their result
-artifacts; docs mode expects those jobs to be skipped.
+CI Impact and Suite Audit start independently. In full mode, `checks-baseline`, the ten-lane matrix, and `runtime-image-fixture` run; `CI Required` requires their outcomes and same-source result artifacts. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404` because it builds the delivered runtime image and the repository platform fixture in one job; other lanes and the audit use `blacksmith-8vcpu-ubuntu-2404`; `runtime-image-fixture` and `CI Required` use `ubuntu-22.04`.
 
-The source implements docs mode for a verified documentation-only PR merge tree.
-The selector loads its policy from the verified PR base, and `CI Required`
-independently checks the mode and selected job states against the tested source
-and result artifacts. Code, configuration, workflow, mixed or unknown changes and
-non-PR events select full; unavailable or unverifiable selection evidence selects
-full or fails closed. A base that does not yet contain the selector also selects
-full. Docs mode reports only baseline and audit coverage. Hosted validation of
-this behavior is not yet established.
+For a verified documentation-only PR merge tree, `docs-checks` verifies its checkout source identity and runs formatting, `docs:install`, `docs:check`, and `docs:build`. The documentation check covers word limits, links and navigation. No conformance, integration, browser, Go, or other product tests run in docs mode. `CI Required` verifies the mode and requires successful impact, audit and documentation jobs, with all full test jobs skipped. Missing, failed, cancelled or unexpectedly skipped selected jobs fail. It does not run the test-result aggregator or require test artifacts in docs mode.
+
+The selector loads its policy from the verified PR base. Code, configuration, workflow, mixed or unknown changes and non-PR events select full; unavailable or unverifiable selection evidence selects full or fails closed. A base that does not yet contain the selector also selects full. Hosted validation of this behavior is not yet established.
 
 The `pull_request` workflow itself is PR-controlled. Base-controlled selector
 policy does not prevent a changed workflow from bypassing these checks. A trusted
@@ -153,7 +138,7 @@ See the [execution flow](../flows/github-actions-testing.md) for entrypoints, re
 Failed browser tests upload
 [diagnostics](local.md#browser-failure-diagnostics).
 
-A lane retry replaces its result artifact; other lanes keep theirs. Preserve a failed result before retrying if needed; earlier logs remain available. Reruns still require every selected lane and the aggregate to pass.
+A lane retry replaces its result artifact; other lanes keep theirs. Preserve a failed result before retrying if needed; earlier logs remain available. Full-mode reruns still require every selected lane and the aggregate to pass.
 
 ### Select immutable images for local preparation
 

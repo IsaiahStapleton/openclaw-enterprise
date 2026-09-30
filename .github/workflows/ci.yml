@@ -99,8 +99,36 @@ jobs:
       - name: Audit suite manifest and workflows
         run: node scripts/ci/run-tests.mjs audit
 
+  docs-checks:
+    name: Documentation Checks
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'docs' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify checkout source
+        run: test "$(git rev-parse --verify 'HEAD^{commit}')" = "$GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: read-write
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Check and build documentation
+        run: pnpm docs:install && pnpm docs:check && pnpm docs:build
+
   checks-baseline:
     name: Checks, Conformance, Browser
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'full' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -209,6 +237,7 @@ jobs:
     needs:
       - impact
       - audit
+      - docs-checks
       - checks-baseline
       - pr-safe
       - runtime-image-fixture
@@ -259,12 +288,6 @@ jobs:
             [ "$EXPECTED_MODE" = full ] || exit 1
             printf 'CI impact: full (trusted base policy unavailable)\n'
           fi
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: always()
-        with:
-          pattern: ci-results-*
-          path: ${{ runner.temp }}/results
-          merge-multiple: true
       - name: Validate selected job state
         if: always()
         env:
@@ -273,14 +296,13 @@ jobs:
         run: |
           printf '%s' "$NEEDS_JSON" > "$RUNNER_TEMP/raw-needs.json"
           node scripts/ci/impact-gate.mjs --needs "$RUNNER_TEMP/raw-needs.json" --mode "$EXPECTED_MODE" --output "$RUNNER_TEMP/needs.json"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: ${{ always() && needs.impact.outputs.mode == 'full' }}
+        with:
+          pattern: ci-results-*
+          path: ${{ runner.temp }}/results
+          merge-multiple: true
       - name: Aggregate CI results
-        if: always()
-        env:
-          EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
+        if: ${{ always() && needs.impact.outputs.mode == 'full' }}
         run: |
-          case "$EXPECTED_MODE" in
-            docs) target=checks-baseline ;;
-            full) target=ci ;;
-            *) exit 1 ;;
-          esac
-          node scripts/ci/run-tests.mjs aggregate "$target" --results-dir "$RUNNER_TEMP/results" --needs "$RUNNER_TEMP/needs.json"
+          node scripts/ci/run-tests.mjs aggregate ci --results-dir "$RUNNER_TEMP/results" --needs "$RUNNER_TEMP/needs.json"
