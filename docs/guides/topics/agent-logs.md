@@ -1,0 +1,126 @@
+# View Agent runtime status and logs
+
+The **Logs** tab on an Agent version shows its Pods, restarts, recent Kubernetes
+Events and a bounded, redacted page of container output. Use it to find out why a
+version crashes, restarts or stops serving. Nothing is stored or exported: each
+read fetches one page from the cluster through the Compute Driver.
+
+Runtime status and logs are available for **Kubernetes Compute** only. Docker and
+SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
+"driver"`), answer `501 NOT_IMPLEMENTED`.
+
+## Open the Logs tab
+
+1. Open the Agent and select a deployed version (drafts have no runtime).
+2. Select **Logs**. The runtime strip refreshes every 10 seconds.
+3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
+   **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
+   for dedicated execution). Choose a **Pod** when a version has more than one.
+4. Select **Follow** to poll for new lines every 2 seconds. Following pauses while
+   the browser tab is hidden or you scroll up, and stops after a permission denial.
+5. Select **Previous instance** after a restart to read the output of the
+   container that exited. Following is off for the previous instance.
+
+The HTTP API has the same two reads:
+
+```sh
+GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{revisionId}/runtime
+GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{revisionId}/runtime/logs?source=gateway&tailLines=200
+```
+
+`runtime/logs` accepts only `source` (`gateway` or `agent`), `pod`, `previous`,
+`tailLines` (1 to 1000, default 200), `sinceSeconds` (1 to 86400) and `cursor`.
+Pass the returned `cursor` to read only newer lines of the same view. See the
+[API reference](../../reference/api.md).
+
+## Who can see what
+
+| Read                                                                       | Required grants                                          | Audited                                              |
+| -------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
+| Runtime status: Pods, phase, readiness, restarts, last termination, Events | Agent `operate` and `read`, and `read` on the version    | No, like [diagnostics](../../reference/agents.md)    |
+| Log text                                                                   | Agent `administer` and `read`, and `read` on the version | Once per view as `openclaw.agents.runtime_logs.view` |
+
+Installation administrators hold Agent `administer`. The same principals can
+already open the [native admin UI](../../reference/agent-native-admin.md), whose
+Logs page shows Gateway log text. Service principals may call both routes under
+the same grants. Every request, including each follow poll, is authorized again,
+so revoking a grant stops the next poll. See
+[authorization](../../reference/authorization.md).
+
+## What the output contains
+
+OCC classifies every line against an allowlist of operational output before
+returning it:
+
+- **wrapper**: runtime startup and model-probe events, with fixed fields only.
+- **openclaw**: Gateway JSON console records (level, subsystem, message and a
+  short list of operational fields such as `status`, `method` and `durationMs`).
+  Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are
+  dropped.
+- **codex**: Codex tracing records (level, target, message).
+- **text**: plain lines up to 4 KiB.
+
+Any other structured output, including Codex JSON-RPC protocol traffic, is
+**withheld**: the page shows a count, never the content. Oversized and malformed
+structured lines are withheld the same way.
+
+Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
+and cookie header values, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
+`github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
+query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
+long base64 or hex runs with `[redacted:<pattern>]`. Redaction is best-effort
+pattern masking: do not rely on it to make a runtime that prints secrets safe.
+Control characters are removed and messages are capped at 8 KiB.
+
+Every line carries `contentClass: "operational"`. The `content` class (message
+text, prompts, tool output) is reserved and never returned.
+
+## Gaps, limits and retention
+
+A page never silently skips output. It labels what it could see:
+
+| Row                 | Meaning                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| Container restarted | The Pod or container instance changed since the last page.         |
+| Lines skipped       | New output exceeded one page between polls.                        |
+| View resumed        | The cursor was older than one hour; reading restarted at the tail. |
+| Page limit reached  | The page hit its byte limit; later lines were not read.            |
+
+Limits per request: 1000 lines, 1 MiB read from the cluster, 32 KiB per input
+line, 512 KiB per response, 100 Events per Pod, 10 seconds overall. Each API
+replica allows each principal 2 requests per second per Agent with a burst of
+10 (`429` with `Retry-After`) and 16 concurrent reads (`503`).
+
+Kubernetes keeps only the current and the previous instance of each container.
+Output from deleted Pods and older restarts is gone. For history, use your
+[observability backend](../observability.md).
+
+## Errors
+
+| Response                             | Meaning and action                                                                            |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `403 FORBIDDEN`                      | Missing grants for that tier. The console stops asking and shows which grants are needed.     |
+| `400 RUNTIME_LOGS_CURSOR_INVALID`    | The cursor belongs to another principal, version or source, or was altered. Start a new view. |
+| `400 RUNTIME_LOGS_POD_INVALID`       | The Pod is not a current Pod of this version and source.                                      |
+| `429 RUNTIME_LOGS_RATE_LIMITED`      | Wait for `Retry-After`.                                                                       |
+| `501 NOT_IMPLEMENTED`                | The Compute Driver does not expose runtime logs, or an operator disabled them.                |
+| `503 RUNTIME_LOGS_CLUSTER_RBAC`      | The cluster denied the read. An operator must enable the roles below.                         |
+| `503 RUNTIME_LOGS_AUDIT_UNAVAILABLE` | The view could not be audited, so nothing was read. Retry.                                    |
+| `503 RUNTIME_LOGS_UNAVAILABLE`       | The runtime or cluster is unreachable. Retry.                                                 |
+| `504 RUNTIME_LOGS_TIMEOUT`           | The read exceeded 10 seconds. Retry or read fewer lines.                                      |
+
+## Enable or disable (operators)
+
+The `openclaw-enterprise` chart value `agentRuntimeLogs.enabled` (default `true`)
+grants `pods/log get` and `events get,list` to the tenant API and Gateway observer
+roles and sets `OCC_AGENT_RUNTIME_LOGS_ENABLED`. Set it to `false` to remove the
+grants; both routes then answer `501`. Tenant RoleBindings you create by hand
+need the same rules; see [production Agents](../deploy/production-agents.md).
+Two-cluster installs set the same value on the `openclaw-execution` chart, which
+also grants `pods get,list` to its tenant API role.
+
+These grants are read-only and namespace-scoped through your RoleBindings.
+Kubernetes RBAC cannot tell Agents apart, so OCC reads only Pods that carry the
+exact Agent and version labels. The
+[security reference](../../reference/security.md#console-and-api-runtime-log-reads)
+describes the boundary.

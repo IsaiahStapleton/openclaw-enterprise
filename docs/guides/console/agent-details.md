@@ -74,6 +74,11 @@ not change deployment history, activate a version, repeat the startup model
 probe, or prove message delivery. You need Agent `read` and `operate` plus
 read access to that version.
 
+**Logs** on a deployed version shows its Pods, restarts, recent warning Events
+and redacted container output, and can follow new lines. Status needs the same
+grants as diagnostics; log text needs Agent `administer` instead of `operate`.
+See [Agent logs](../topics/agent-logs.md).
+
 There is no rollback or redeploy-old-revision button. See
 [Agent Revisions](../topics/agent-revisions.md) for the lifecycle.
 

@@ -78,7 +78,10 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
 
 The Secret RoleBinding grants Secret access, Deployment list access for preflight,
 and Pod read/proxy access for Gateway diagnostics. The data-plane observer grants
-Deployment list and Pod read/proxy access for Agent diagnostics. OCC IAM grants
+Deployment list and Pod read/proxy access for Agent diagnostics. With
+`agentRuntimeLogs.enabled` (default), both roles also grant `pods/log get` and
+`events get,list` for [Agent logs](../topics/agent-logs.md); roles you write by
+hand need the same rules, and missing ones return `503 RUNTIME_LOGS_CLUSTER_RBAC`. OCC IAM grants
 remain required. Worker permissions in both targets allow credential delivery.
 Workload ServiceAccounts receive no Secret API access. Embedded execution also
 needs the tenant-api role in the data plane for its combined transport bundle.

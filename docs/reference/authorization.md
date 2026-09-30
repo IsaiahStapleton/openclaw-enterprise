@@ -271,6 +271,12 @@ does not expose every Agent in the Namespace. First deployment additionally
 checks Agent `read` and `operate` if Compute must generate missing transport
 credentials.
 
+[Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two
+tiers on the exact Agent and revision: Pod status and Events need Agent
+`operate` and `read` plus revision `read`; container log text needs Agent
+`administer` and `read` plus revision `read`. Each follow poll is authorized
+again, so revoking a grant stops the next poll.
+
 The selected IAM Driver loads current authoritative policy for each identity
 lookup and authorization decision. Account and permission changes become
 visible across controller instances without restarting or replacing the Driver.
