@@ -348,6 +348,12 @@ If any of these conditions are unavailable, OpenShell-selected deployments must
 fail closed instead of launching an unsandboxed or incorrectly credentialed
 Harness.
 
+## Sandbox log reads
+
+`readSandboxLogs` calls only `GetSandboxLogs`. The OCC gateway identity needs
+the `sandbox:read` scope and Workspace role `user`. See
+[Agent logs](../../guides/topics/agent-logs.md#sandbox-source).
+
 ## Troubleshooting
 
 Common fail-closed errors include:

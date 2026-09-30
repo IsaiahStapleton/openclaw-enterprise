@@ -3246,8 +3246,8 @@ Read Pod status, restarts, Events and log sources for one exact Agent revision
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.sources` | `array<object>` | Yes | max items: 4 |
 | `data.sources[].available` | `boolean` | Yes | — |
-| `data.sources[].id` | `"gateway" or "agent"` | Yes | — |
-| `data.sources[].kind` | `"container"` | Yes | — |
+| `data.sources[].id` | `"gateway" or "agent" or "sandbox"` | Yes | — |
+| `data.sources[].kind` | `"container" or "sandbox"` | Yes | — |
 | `data.sources[].pods` | `array<object>` | Yes | max items: 16 |
 | `data.sources[].pods[].container` | `string` | Yes | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
 | `data.sources[].pods[].name` | `string` | Yes | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
@@ -3278,7 +3278,7 @@ Read one bounded, redacted page of container output for one exact Agent revision
 
 | Name | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
-| `source` | query | `"gateway" or "agent"` | Yes | — |
+| `source` | query | `"gateway" or "agent" or "sandbox"` | Yes | — |
 | `pod` | query | `string` | No | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
 | `previous` | query | `"true" or "false"` | No | — |
 | `tailLines` | query | `string` | No | pattern: `^(?:[1-9][0-9]{0,2}\|1000)$` |
@@ -3313,7 +3313,7 @@ Read one bounded, redacted page of container output for one exact Agent revision
 | `data.observedAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.records` | `array<object or object or object>` | Yes | max items: 1100 |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.source` | `"gateway" or "agent"` | Yes | — |
+| `data.source` | `"gateway" or "agent" or "sandbox"` | Yes | — |
 | `data.stream` | `object or null` | Yes | — |
 | `data.truncated` | `boolean` | Yes | — |
 | `data.withheld` | `integer` | Yes | minimum: 0 |

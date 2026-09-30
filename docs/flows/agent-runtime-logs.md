@@ -1,7 +1,7 @@
 ---
 created: 2026-09-30
 updated: 2026-09-30
-last_updated_session: build-2/agent-logs-slice-2
+last_updated_session: build-logs-3/agent-logs-slice-3
 ---
 
 # Agent runtime logs flow
@@ -94,6 +94,18 @@ drops lines already delivered at the cursor time, emits `stream_replaced`,
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
 `SanitizedRuntimeLogRecord`.
 
+`source=sandbox` skips the Compute description. `OpenClawController.readSandboxLogs`
+lists the source only when the selected Sandbox Driver provisioned the revision
+and implements `readSandboxLogs`, resolves Compute's placement with
+`resolveSandboxNamespace`, and runs `runtime-logs/sandbox.ts:readSandboxLogPage`.
+`OpenShellSandboxDriver.readSandboxLogs` derives the Sandbox name from the
+revision and calls `GetSandboxLogs` through `openShellSandboxLogReader`, which
+exposes nothing else. A resume sends the last delivered time as `since_time`; if
+the last delivered line is gone and nothing older came back, OCC emits
+`buffer_lost` or, when the window was full, `window_exceeded`. Lines naming two
+Sandbox IDs are refused; a new Sandbox ID emits `stream_replaced`.
+`sanitizeSandboxLogLines` parses the OCSF shorthand into allowlisted fields.
+
 A download (`download=true`) forces `tailLines` to 1000, rejects a `cursor` with
 `400`, and always starts a new view; `apps/controller/src/index.ts:auditAction`
 names its audit event, and any denial, `openclaw.agents.runtime_logs.download`.
@@ -119,6 +131,9 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
   tiers, cursors and failures; `kubernetes-compute.test.mjs` covers plane
   selection, Event filtering and the typed `403`. These use in-memory Kubernetes
   responses; `agent-runtime-logs-k3d-real.test.mjs` reads a real cluster.
+  `runtime-logs-sandbox.test.mjs` drives the sandbox source through the real
+  handler and OpenShell Driver with a gateway client that answers only
+  `GetSandboxLogs`; `openshell-gateway-wire.test.mjs` checks the wire shape.
 
 ## Related docs
 
@@ -134,3 +149,4 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 
 - 2026-09-30 08:30: Document runtime status and container log reads for Kubernetes Compute. (build-1/agent-logs-slice-1 - 0918be781)
 - 2026-09-30 11:40: Add downloads, console filters and the `occ agent runtime|logs` callers. (build-2/agent-logs-slice-2)
+- 2026-09-30 13:00: Add the OpenShell sandbox source. (build-logs-3/agent-logs-slice-3)
