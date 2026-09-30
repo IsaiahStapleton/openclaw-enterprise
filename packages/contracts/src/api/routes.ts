@@ -1340,7 +1340,7 @@ export const occApiRoutes = [
     method: "GET",
     path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime/logs",
     action: "openclaw.agents.runtime_logs.view",
-    iamAction: "administer",
+    iamAction: "read_logs",
     resourceKind: "agent",
     authorizationTarget: "agent_deployment_runtime_logs",
     summary: "Read one bounded, redacted page of container output for one exact Agent revision",

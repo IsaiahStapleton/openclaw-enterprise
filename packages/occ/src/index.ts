@@ -85,6 +85,7 @@ import {
   normalizeInitialWorkspaceFiles,
   normalizeWorkspaceDefaultsId,
   DRIVER_CAPABILITIES,
+  PERMISSION_ACTIONS,
   RESOURCE_KINDS,
   SANDBOX_FACETS,
   admitLoggingConfiguration,
@@ -376,6 +377,11 @@ export type {
 } from "./auth-persistence/schema-auth-boundary-v1.ts";
 
 export const BOOTSTRAP_DEFAULT_NAMESPACE_NAME = "default";
+
+/** The Agent action that admitted a runtime log read, recorded on its access audit event. */
+export interface RuntimeLogReadGrant {
+  readonly action: "read_logs" | "administer";
+}
 
 export interface ControllerOptions {
   readonly authorize?: (
@@ -2427,8 +2433,9 @@ export class OpenClawController {
   }
 
   /**
-   * Tier 2: one bounded, redacted page of container output (Agent administer + read).
-   * `admitView` writes the view audit event before the first Driver log read.
+   * Tier 2: one bounded, redacted page of container output (Agent `read_logs` or
+   * `administer`, plus `read`). `admitView` writes the view audit event before the first
+   * Driver log read and names the action that admitted the caller.
    */
   async readAgentRuntimeLogs(
     principalId: string,
@@ -2436,19 +2443,27 @@ export class OpenClawController {
     agentId: string,
     deploymentId: string,
     query: RuntimeLogQuery,
-    options: {
+    requested: {
       readonly codec: RuntimeLogCursorCodec;
-      readonly admitView: (admission: RuntimeLogViewAdmission) => Promise<void>;
+      readonly admitView: (
+        admission: RuntimeLogViewAdmission,
+        grant: RuntimeLogReadGrant,
+      ) => Promise<void>;
       readonly signal?: AbortSignal;
     },
   ): Promise<Readonly<RuntimeLogPage>> {
-    const { binding, driver } = await this.runtimeLogTarget(
+    const { binding, driver, grant } = await this.runtimeLogTarget(
       principalId,
       namespaceId,
       agentId,
       deploymentId,
-      "administer",
+      "logs",
     );
+    const options = {
+      codec: requested.codec,
+      ...(requested.signal === undefined ? {} : { signal: requested.signal }),
+      admitView: (admission: RuntimeLogViewAdmission) => requested.admitView(admission, grant!),
+    };
     const source = query.source;
     if (source === "sandbox") {
       return this.readSandboxLogs(principalId, agentId, driver, binding, query, options);
@@ -2640,11 +2655,21 @@ export class OpenClawController {
     namespaceId: string,
     agentId: string,
     deploymentId: string,
-    tier: "operate" | "administer",
-  ): Promise<{ binding: ComputeAgentRevisionBinding; driver: ComputeDriver }> {
+    tier: "operate" | "logs",
+  ): Promise<{
+    binding: ComputeAgentRevisionBinding;
+    driver: ComputeDriver;
+    grant?: RuntimeLogReadGrant;
+  }> {
     const revision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
-    await this.authorize(principalId, tier, { kind: "agent", id: agentId, namespaceId });
-    await this.authorize(principalId, "read", { kind: "agent", id: agentId, namespaceId });
+    const agent: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+    let grant: RuntimeLogReadGrant | undefined;
+    if (tier === "operate") {
+      await this.authorize(principalId, "operate", agent);
+    } else {
+      grant = await this.authorizeRuntimeLogRead(principalId, agent);
+    }
+    await this.authorize(principalId, "read", agent);
     const binding = await this.read(async (state) => {
       const namespace = await this.exactNamespace(state, namespaceId);
       const agent = await state.agents.findAgent(namespace.id, agentId);
@@ -2674,7 +2699,34 @@ export class OpenClawController {
         "The selected Compute Driver does not expose runtime status or logs.",
       );
     }
-    return { binding, driver };
+    return { binding, driver, ...(grant === undefined ? {} : { grant }) };
+  }
+
+  /**
+   * Log text needs the delegable `read_logs` or, as before it existed, `administer`. A
+   * Restriction on `read_logs` denies outright; the `administer` path cannot bypass it.
+   */
+  private async authorizeRuntimeLogRead(
+    principalId: string,
+    agent: ResourceRef,
+  ): Promise<RuntimeLogReadGrant> {
+    const delegated = await this.authorizationDecision(principalId, "read_logs", agent);
+    if (delegated.decision.allowed) {
+      return Object.freeze({ action: "read_logs" });
+    }
+    if (delegated.decision.evidence.restrictionIds.length === 0) {
+      const administer = await this.authorizationDecision(principalId, "administer", agent);
+      if (administer.decision.allowed) {
+        return Object.freeze({ action: "administer" });
+      }
+    }
+    throw new AuthorizationDeniedError(
+      isNonEmptyString(delegated.decision.reason)
+        ? delegated.decision.reason
+        : "The exact operation was denied.",
+      delegated.decision.evidence,
+      { action: "read_logs", resource: agent },
+    );
   }
 
   private async runtimeLogOperation<T>(
@@ -7117,9 +7169,7 @@ export class OpenClawController {
           typeof permission !== "object" ||
           permission === null ||
           Array.isArray(permission) ||
-          !["create", "read", "update", "delete", "deploy", "operate", "administer"].includes(
-            permission.action,
-          ) ||
+          !PERMISSION_ACTIONS.includes(permission.action) ||
           !RESOURCE_KINDS.includes(permission.resourceKind)
         ) {
           throw new ScopeViolationError("IAM Role Permissions are invalid.");

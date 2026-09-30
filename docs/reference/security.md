@@ -217,12 +217,15 @@ change the Collector boundary above; nothing is stored, cached, logged or sent
 to the Collector, and responses carry `Cache-Control: no-store`.
 
 - **Access.** Pod status and Events need Agent `operate` and `read` plus
-  revision `read`. Log text needs Agent `administer` and `read` plus revision
-  `read`, the audience that already reaches Gateway logs through the native admin
-  UI. Every poll is authorized again; a denial is audited and reaches no Driver.
+  revision `read`. Log text needs Agent `read_logs` or `administer`, Agent `read`
+  and revision `read`. `administer` is the audience that already reaches Gateway
+  logs through the native admin UI; `read_logs` delegates log text alone and is
+  never granted by bootstrap. A `read_logs` Restriction also blocks
+  `administer`. Every poll is authorized again; a denial is audited and reaches
+  no Driver.
 - **Audit.** OCC writes `openclaw.agents.runtime_logs.view` before the first log
   read of a view, and `openclaw.agents.runtime_logs.download` before every
-  download. If that write fails the request returns `503` with no content.
+  download, both with audit kind `access`. If that write fails the request returns `503` with no content.
   A download is the same sanitized page in a text serializer; it needs the
   same grants and is not stored on the server.
 - **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
