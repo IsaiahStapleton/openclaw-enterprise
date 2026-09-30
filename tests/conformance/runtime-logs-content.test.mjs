@@ -178,6 +178,29 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
   assert.equal(logs.data.records.at(-1).reason, "truncated");
 });
 
+test("the wrapper's fixed plain-text failure line is a wrapper error, not unknown text", () => {
+  const stream = { source: "agent", pod: "gateway-0", container: "agent" };
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: "Harness model authentication probe failed." },
+      { time: lineTime(2), raw: "Harness model authentication probe failed. extra" },
+    ],
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message }) => ({ kind, level, message })),
+    [
+      { kind: "wrapper", level: "error", message: "Harness model authentication probe failed." },
+      {
+        kind: "text",
+        level: "unknown",
+        message: "Harness model authentication probe failed. extra",
+      },
+    ],
+  );
+});
+
 test("the sanitizer drops a partial final line and bounds oversized input", () => {
   const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
   const fragment = randomBytes(10).toString("hex");
@@ -213,6 +236,41 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   assert.equal(long.records[0].truncated, true);
   assert.ok(Buffer.byteLength(long.records[0].message) <= 8 * 1024);
   assert.match(long.records[0].message, /…\[truncated\]$/);
+});
+
+test("the sanitizer keeps bracket-tagged text lines but withholds malformed JSON arrays", () => {
+  const stream = { source: "agent", pod: "agent-0", container: "agent" };
+  const canary = `array-canary-${randomUUID()}`;
+  const tagged = [
+    "[node-host] advertised commands: dir.list, file.create, file.fetch",
+    "[DF3-P10] bracket-prefixed operational line",
+    "[gateway/ws] reconnecting",
+    "[plugins]",
+  ];
+  const arrays = [
+    "[",
+    `["${canary}",`,
+    `[{"role":"user","text":"${canary}"}`,
+    `[ "${canary}" ] trailing`,
+    `[null, "${canary}"`,
+    `[true] ${canary}`,
+    `[${canary}`,
+  ];
+  const page = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [...tagged, ...arrays].map((raw, index) => ({ time: lineTime(index), raw })),
+  });
+  assert.deepEqual(
+    page.records.map(({ type, kind, message, reason, count }) =>
+      type === "line" ? { kind, message } : { reason, count },
+    ),
+    [
+      ...tagged.map((message) => ({ kind: "text", message })),
+      { reason: "malformed", count: arrays.length },
+    ],
+  );
+  assert.equal(JSON.stringify(page).includes(canary), false);
 });
 
 // The redactor runs synchronously on workload-controlled lines of up to 32 KiB, before

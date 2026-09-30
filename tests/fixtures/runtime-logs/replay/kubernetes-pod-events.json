@@ -29,7 +29,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.initContainers{prepare-private-state}"
       }
     },
     {
@@ -45,7 +46,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.initContainers{prepare-private-state}"
       }
     },
     {
@@ -61,7 +63,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.initContainers{prepare-private-state}"
       }
     },
     {
@@ -77,7 +80,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.containers{gateway}"
       }
     },
     {
@@ -93,7 +97,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.containers{gateway}"
       }
     },
     {
@@ -109,7 +114,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.containers{gateway}"
       }
     },
     {
@@ -125,7 +131,8 @@
         "kind": "Pod",
         "namespace": "oce-0123456789abcde",
         "name": "gateway-000000000000-0000000000-2fkbx",
-        "uid": "00000000-0000-4000-8000-000000000001"
+        "uid": "00000000-0000-4000-8000-000000000001",
+        "fieldPath": "spec.containers{gateway}"
       }
     },
     {
