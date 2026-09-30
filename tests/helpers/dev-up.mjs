@@ -500,6 +500,9 @@ if (command === engine) {
   if (args[0] === "context" && args[1] === "show") output("fixture-context");
   else if (args[0] === "context" && args[1] === "inspect") output(JSON.stringify([{ Endpoints: { docker: { Host: "unix:///fixture/owned-docker.sock" } } }]));
   else if (args[0] === "info" && args.includes("{{.Host.RemoteSocket.Path}}")) output("/fixture/owned-podman.sock");
+  // Kubernetes endpoint discovery reads the whole inventory; a local service
+  // reports the host socket directly.
+  else if (engine === "podman" && args[0] === "info" && args.includes("json")) output(JSON.stringify({ host: { serviceIsRemote: false, remoteSocket: { path: "unix:///fixture/owned-podman.sock", exists: true } } }));
   else if (args[0] === "info") output("/var/lib/docker");
   else if (args[0] === "network" && args[1] === "inspect" && args[2] === "k3d-occ-dev-owned") {
     output(JSON.stringify([{ Name: "k3d-occ-dev-owned", IPAM: { Config: [{ Subnet: "fd00:42::/64" }, { Subnet: "172.30.42.0/24", Gateway: "172.30.42.1" }] } }]));
