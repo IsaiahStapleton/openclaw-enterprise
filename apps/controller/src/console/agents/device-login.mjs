@@ -149,23 +149,25 @@ export function createDeviceLogin({ context, agentId, initial, onChange, hint })
     }
   }
 
-  // TODO(oauth-cancellation): Clear the selectable source or block owner submission
-  // while discard is pending. Deferred beyond the first-deploy MVP.
   async function discard() {
     if (busy || disabled || !login) {
       return;
     }
+    // Withdraw the source before the request so a concurrent save cannot submit it.
+    const discarded = login;
+    login = null;
+    onChange?.(null);
     busy = true;
     error = "";
     update();
     try {
-      await context.request(`${base}/${encodeURIComponent(login.source.id)}`, {
+      await context.request(`${base}/${encodeURIComponent(discarded.source.id)}`, {
         method: "DELETE",
         expectedStatus: 204,
       });
-      login = null;
-      onChange?.(null);
     } catch (failure) {
+      login = discarded;
+      onChange?.(discarded.status === "ready" ? discarded.source : null);
       fail(failure);
     } finally {
       busy = false;

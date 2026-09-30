@@ -214,6 +214,34 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
   assert.equal(replaced.method, "oauth");
   assert.notEqual(replaced.source.id, originalAuth.source.id);
   assert.notEqual(replaced.source.id, independent.body.oauthLogin.id);
+
+  // Discard withdraws a staged login before the server confirms it, so a save racing the
+  // request keeps the saved credential instead of binding a source about to be cancelled.
+  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  await page
+    .getByText("ChatGPT login ready. Credentials are stored on the server.", { exact: true })
+    .waitFor();
+  const releaseDiscard = Promise.withResolvers();
+  await page.route("**/device-authorizations/*", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await releaseDiscard.promise;
+    }
+    await route.fallback();
+  });
+  const slowDiscard = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      response.url().includes("/device-authorizations/"),
+  );
+  await page.getByRole("button", { name: "Discard staged login", exact: true }).click();
+  const racedSave = page.waitForResponse(
+    (response) => response.url().endsWith(agentPath) && response.request().method() === "PATCH",
+  );
+  await page.getByRole("button", { name: "Save authentication source", exact: true }).click();
+  assert.equal((await racedSave).status(), 200);
+  releaseDiscard.resolve();
+  assert.equal((await slowDiscard).status(), 204);
+  assert.deepEqual((await fixture.request("GET", agentPath)).data.harnessAuth, replaced);
   assert.doesNotMatch(
     JSON.stringify(requests),
     /oauth-access-browser|oauth-refresh-browser|private-device-id|private-verifier/,
