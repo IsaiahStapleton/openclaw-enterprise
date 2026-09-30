@@ -11589,6 +11589,29 @@ test("Kubernetes runtime description reads each plane's Pods and only their own 
   );
 });
 
+test("Kubernetes runtime description for a log read lists one source's Pods and no Events", async () => {
+  const fixture = runtimeLogDriverFixture({ twoCluster: true });
+  const description = await fixture.driver.describeAgentRuntime(
+    fixture.binding,
+    new AbortController().signal,
+    { source: "gateway", events: false },
+  );
+  assert.deepEqual(
+    description.sources.map(({ id }) => id),
+    ["gateway"],
+  );
+  assert.deepEqual(
+    description.pods.map(({ role, events }) => ({ role, events })),
+    [{ role: "gateway", events: [] }],
+  );
+  assert.deepEqual(
+    fixture.calls
+      .filter(({ call }) => ["listNamespacedPod", "listNamespacedEvent"].includes(call))
+      .map(({ plane, call }) => ({ plane, call })),
+    [{ plane: "control", call: "listNamespacedPod" }],
+  );
+});
+
 test("Kubernetes runtime log reads are bounded, timestamped and re-check the Pod", async () => {
   const fixture = runtimeLogDriverFixture();
   fixture.state.logs.gateway =

@@ -15,7 +15,7 @@ export {
   type RuntimeLogQuery,
   type RuntimeLogViewAdmission,
 } from "./read.ts";
-export { redactRuntimeLogText } from "./redact.ts";
+export { maskRuntimeEventText, redactRuntimeLogText } from "./redact.ts";
 export {
   sanitizeRuntimeLogChunk,
   type SanitizedRuntimeLogChunk,

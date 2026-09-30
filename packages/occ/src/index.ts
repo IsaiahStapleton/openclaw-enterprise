@@ -6,6 +6,7 @@ import type {
   AgentRevisionRead,
   InitialWorkspaceFiles,
   AgentDeploymentDiagnostics,
+  AgentRuntimeDescribeOptions,
   AgentRuntimeDescription,
   ComputeAgentRevisionBinding,
   AgentRevision,
@@ -206,6 +207,7 @@ export {
 } from "./errors.ts";
 export {
   createRuntimeLogCursorCodec,
+  maskRuntimeEventText,
   redactRuntimeLogText,
   RUNTIME_LOG_DEFAULT_TAIL_LINES,
   RUNTIME_LOG_LIMIT_BYTES,
@@ -2423,7 +2425,12 @@ export class OpenClawController {
       );
     }
     return this.runtimeLogOperation(options.signal, async (deadline) => {
-      const description = await this.describedAgentRuntime(driver, binding, deadline);
+      // Every follow poll describes the runtime again for the ownership re-check; it
+      // needs only the requested source's Pods, not their Events.
+      const description = await this.describedAgentRuntime(driver, binding, deadline, {
+        source: query.source,
+        events: false,
+      });
       try {
         return await readRuntimeLogPage({
           description,
@@ -2525,10 +2532,11 @@ export class OpenClawController {
     driver: ComputeDriver,
     binding: ComputeAgentRevisionBinding,
     signal: AbortSignal,
+    options?: AgentRuntimeDescribeOptions,
   ): Promise<Readonly<AgentRuntimeDescription>> {
     let described: unknown;
     try {
-      described = await driver.describeAgentRuntime!(binding, signal);
+      described = await driver.describeAgentRuntime!(binding, signal, options);
     } catch (error) {
       throw this.runtimeLogDriverFailure(error, signal);
     }

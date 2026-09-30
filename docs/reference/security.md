@@ -224,8 +224,15 @@ to the Collector, and responses carry `Cache-Control: no-store`.
   Codex protocol traffic and payload keys such as `prompt` and `content`, is
   withheld and counted. Retained text passes pattern redaction, which is
   best-effort. The `content` class has no producer.
-- **Errors.** Driver and cluster error text, node names, image digests and
-  Secret names never reach a client; failures map to fixed codes.
+- **Events.** Pod Event reasons and messages reach the `operate` audience after
+  credential redaction. Node names, image references and Secret and ConfigMap
+  names are masked in the standard scheduler and kubelet message shapes; the
+  masking is best-effort, so other Event text can still name cluster objects.
+- **Errors.** Driver and cluster error text never reaches a client; failures map
+  to fixed codes.
+- **Ordering.** The operator switch (`501`) and the per-principal rate limit
+  run before authorization, so a principal without grants learns only whether
+  the feature is on and can spend only its own request budget.
 - **Cluster access.** The tenant API, Gateway observer and execution tenant API
   roles gain read-only `pods/log get` and `events get,list` through
   `agentRuntimeLogs.enabled`. RBAC cannot separate Agents, so OCC reads only

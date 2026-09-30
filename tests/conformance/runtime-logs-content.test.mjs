@@ -3,7 +3,11 @@ import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { sanitizeRuntimeLogChunk } from "../../packages/occ/src/index.ts";
+import {
+  maskRuntimeEventText,
+  redactRuntimeLogText,
+  sanitizeRuntimeLogChunk,
+} from "../../packages/occ/src/index.ts";
 import {
   createRuntimeLogComputeDriver,
   createRuntimeLogFixture,
@@ -191,4 +195,112 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   assert.equal(long.records[0].truncated, true);
   assert.ok(Buffer.byteLength(long.records[0].message) <= 8 * 1024);
   assert.match(long.records[0].message, /…\[truncated\]$/);
+});
+
+// The redactor runs synchronously on workload-controlled lines of up to 32 KiB, before
+// the 8 KiB output cut. A pattern that backtracks quadratically on such a line would stall
+// the API replica's event loop for every caller, so each hostile shape has a budget.
+test("redaction stays linear on hostile 32 KiB lines", () => {
+  const budgetMs = 100;
+  const line = (unit, suffix = "") =>
+    unit.repeat(Math.ceil((32 * 1024) / unit.length)).slice(0, 32 * 1024 - suffix.length) + suffix;
+  redactRuntimeLogText(line("warm-up "));
+  maskRuntimeEventText(line("warm-up "));
+  const units = ["a-", "a.", "-", "--a-", "=/", "(/", '"a-', "a0a", "tokena-", "bearer "];
+  for (const unit of units) {
+    for (const suffix of ["", "?", "token", "=x"]) {
+      const input = line(unit, suffix);
+      const started = performance.now();
+      redactRuntimeLogText(input);
+      maskRuntimeEventText(input);
+      const elapsed = performance.now() - started;
+      assert.ok(
+        elapsed < budgetMs,
+        `${JSON.stringify(unit)} + ${JSON.stringify(suffix)} took ${elapsed.toFixed(0)} ms`,
+      );
+    }
+  }
+  // A whole page of such messages stays well inside one request's budget.
+  const started = performance.now();
+  sanitizeRuntimeLogChunk({
+    stream: { source: "gateway", pod: "gateway-0", container: "gateway" },
+    truncated: false,
+    lines: Array.from({ length: 50 }, (_, index) => ({
+      time: lineTime(index),
+      raw: JSON.stringify({ level: "info", message: "a-".repeat(15 * 1024) }),
+    })),
+  });
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 50 * budgetMs, `50 hostile lines took ${elapsed.toFixed(0)} ms`);
+});
+
+test("bounded key and path patterns still mask the shapes they did before", () => {
+  const value = `v${randomString(20)}`;
+  for (const [input, expected] of [
+    [`github_token=${value} next`, "github_token=[redacted:key-value] next"],
+    [`--db-password ${value}`, "--db-password [redacted:key-value]"],
+    [`--api-key=${value}`, "--api-key=[redacted:key-value]"],
+    [`spring.datasource.password: ${value}`, "spring.datasource.password: [redacted:key-value]"],
+    // A key prefix longer than the affix bound still masks: the match starts at the keyword.
+    [`${"x".repeat(100)}_password=${value}`, `${"x".repeat(100)}_password=[redacted:key-value]`],
+    [`{"client_secret":"${value}"}`, '{"client_secret":"[redacted:key-value]"}'],
+    [
+      `GET /hooks?token=${value}&a=1 HTTP/1.1`,
+      "GET /hooks?token=[redacted:query]&a=[redacted:query] HTTP/1.1",
+    ],
+    [`url=/cb?code=${value}`, "url=/cb?code=[redacted:query]"],
+    [`call(/cb?code=${value}`, "call(/cb?code=[redacted:query]"],
+    [`"/cb?${value}"`, '"/cb?[redacted:query]"'],
+    ["see /a#b?c", "see /a#b?c"],
+    [`bearer token ${value} for upstream`, "bearer token [redacted:bearer] for upstream"],
+    ["bearer authentication failed", "bearer authentication failed"],
+  ]) {
+    assert.equal(redactRuntimeLogText(input), expected, input);
+  }
+});
+
+test("Event messages hide node names, image references and Secret names", async () => {
+  const node = `ip-10-0-${randomInt(255)}-${randomInt(255)}.ec2.internal`;
+  const image = `registry.example.com/team-${randomString(8).toLowerCase()}/gateway:1.2.3`;
+  const secret = `db-creds-${randomString(8).toLowerCase()}`;
+  const messages = [
+    `Successfully assigned tenant/gateway-0 to ${node}`,
+    `Pulling image "${image}"`,
+    `Failed to pull image "${image}": rpc error: code = NotFound desc = failed to resolve reference "${image}": not found`,
+    `Error: pull access denied for ${image}, repository does not exist`,
+    `MountVolume.SetUp failed for volume "creds" : secret "${secret}" not found`,
+    `Error: couldn't find key password in Secret tenant/${secret}`,
+    `configmap "${secret}" not found`,
+    `Preempted by a higher priority Pod on node ${node}`,
+    `nodes "${node}" not found`,
+  ];
+  for (const message of messages) {
+    const masked = maskRuntimeEventText(message);
+    for (const name of [node, image, secret]) {
+      assert.equal(masked.includes(name), false, `${name} survived in ${masked}`);
+    }
+  }
+  assert.equal(
+    maskRuntimeEventText("Back-off restarting failed container gateway in pod gateway-0"),
+    "Back-off restarting failed container gateway in pod gateway-0",
+  );
+
+  // The Tier 1 route applies the masking to every Event message.
+  const computeDriver = createRuntimeLogComputeDriver();
+  const fixture = await createRuntimeLogFixture({ computeDriver });
+  const target = await fixture.deployAgent();
+  computeDriver.state.events = messages.map((message) => ({
+    type: "Warning",
+    reason: "Failed",
+    message,
+    count: 1,
+    lastObservedAt: "2026-09-30T11:59:00Z",
+  }));
+  const runtime = await fixture.request("GET", target.runtimePath);
+  assert.equal(runtime.status, 200, runtime.text);
+  assert.equal(runtime.data.pods[0].events.length, messages.length);
+  for (const name of [node, image, secret]) {
+    assert.equal(runtime.text.includes(name), false, `${name} reached the runtime route`);
+  }
+  assert.match(runtime.data.pods[0].events[0].message, /to \[redacted:node\]$/);
 });

@@ -1376,6 +1376,14 @@ export interface AgentRuntimeDescription {
   readonly sources: readonly AgentRuntimeLogSource[];
 }
 
+/** Narrows a description for a log read, which needs one source's Pods and no Events. */
+export interface AgentRuntimeDescribeOptions {
+  /** Describe only this source's Pods; other sources are omitted. */
+  readonly source?: RuntimeLogSourceId;
+  /** `false` skips Pod Event lists; each Pod then carries no Events. */
+  readonly events?: boolean;
+}
+
 export interface AgentRuntimeLogRequest {
   readonly source: RuntimeLogSourceId;
   readonly pod: string;
@@ -1473,6 +1481,7 @@ export interface ComputeDriver extends Driver {
   describeAgentRuntime?(
     binding: ComputeAgentRevisionBinding,
     signal: AbortSignal,
+    options?: AgentRuntimeDescribeOptions,
   ): Promise<AgentRuntimeDescription>;
   /** Bounded raw container output; `request.pod` was listed by `describeAgentRuntime`. */
   readAgentRuntimeLogs?(

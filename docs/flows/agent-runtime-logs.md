@@ -68,17 +68,21 @@ and Agent `read`, then rejects a Driver without `describeAgentRuntime` or with
 lists Pods by the exact Agent, revision and workload-role labels: dedicated
 Gateways in the control-plane Gateway namespace, Harnesses and embedded Gateways
 in the tenant namespace on the execution plane. It lists Events by
-`involvedObject.uid`, keeps only that Pod's Events and caps them at 100. Each
+`involvedObject.uid`, keeps only that Pod's Events and caps them at 100. A log
+read passes `{ source, events: false }`, so it lists only that source's Pods and
+no Events. Each
 Kubernetes call has a five-second deadline; a `403` becomes
 `RuntimeLogsForbiddenByClusterError`. `runtime-logs/description.ts:validRuntimeDescription`
-checks names, UIDs and counts and redacts reasons and Event messages.
+checks names, UIDs and counts, masks node, image and Secret names in Event
+messages (`runtime-logs/redact.ts:maskRuntimeEventText`) and redacts reasons and
+Event messages.
 
 ### 3. Read one page
 
 `runtime-logs/read.ts:readRuntimeLogPage` verifies the HMAC cursor
 (`runtime-logs/cursor.ts`) against the principal, Agent, revision and source,
 and accepts only a Pod the description listed. A request without a cursor, or
-with one older than an hour, starts a view: the controller appends
+with one older than an hour, or a cursor whose Pod is gone, starts a view: the controller appends
 `openclaw.agents.runtime_logs.view` before any log read. The Driver re-checks
 Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 `previous`, a 1 MiB `limitBytes` and timestamps, and re-reads the Pod. OCC

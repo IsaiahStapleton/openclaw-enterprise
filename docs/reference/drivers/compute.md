@@ -158,11 +158,11 @@ unavailable; Drivers unable to collect safe evidence should omit the method.
 
 ### Optional runtime status and logs
 
-`describeAgentRuntime(binding, signal)` returns Pod status, restarts, Pod Events
-and log sources for an exact revision; `readAgentRuntimeLogs(binding, request)`
-returns bounded **raw** lines from a Pod it listed. Drivers re-check Pod
-ownership and raise `RuntimeLogsForbiddenByClusterError` for a cluster `403`;
-OCC [redacts and bounds](../../guides/topics/agent-logs.md) output. Without them,
+`describeAgentRuntime(binding, signal, options)` returns Pod status, restarts,
+Events and log sources of a revision, or one source without Events;
+`readAgentRuntimeLogs(binding, request)` returns bounded **raw** lines from a
+listed Pod. Drivers re-check ownership and raise
+`RuntimeLogsForbiddenByClusterError` for a cluster `403`; OCC [redacts and bounds](../../guides/topics/agent-logs.md) output. Without them,
 or with `runtimeLogging: "driver"`, both routes answer `501`.
 
 ### Runtime logging ownership

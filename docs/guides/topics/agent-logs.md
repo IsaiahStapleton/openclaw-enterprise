@@ -11,7 +11,8 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 ## Open the Logs tab
 
-1. Open the Agent and select a deployed version (drafts have no runtime).
+1. Open the Agent and select a deployed version. The editable draft is not a
+   version and has no runtime; a version without a running Pod shows no Pod.
 2. Select **Logs**. The runtime strip refreshes every 10 seconds.
 3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
    **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
@@ -65,12 +66,19 @@ Any other structured output, including Codex JSON-RPC protocol traffic, is
 structured lines are withheld the same way.
 
 Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
-and cookie header values, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
+and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
 `github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
 query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
 long base64 or hex runs with `[redacted:<pattern>]`. Redaction is best-effort
-pattern masking: do not rely on it to make a runtime that prints secrets safe.
+pattern masking: an opaque token under 40 characters with no known prefix and no
+key name or `Bearer` next to it stays visible. Do not rely on redaction to make
+a runtime that prints secrets safe.
 Control characters are removed and messages are capped at 8 KiB.
+
+Kubernetes Event messages in the runtime status are redacted the same way, and
+node names, image references and Secret and ConfigMap names are masked in the
+standard scheduler and kubelet messages. Other Event text can still name cluster
+objects.
 
 Every line carries `contentClass: "operational"`. The `content` class (message
 text, prompts, tool output) is reserved and never returned.
@@ -89,7 +97,9 @@ A page never silently skips output. It labels what it could see:
 Limits per request: 1000 lines, 1 MiB read from the cluster, 32 KiB per input
 line, 512 KiB per response, 100 Events per Pod, 10 seconds overall. Each API
 replica allows each principal 2 requests per second per Agent with a burst of
-10 (`429` with `Retry-After`) and 16 concurrent reads (`503`).
+10 (`429` with `Retry-After`) and 16 concurrent reads (`503`). The limit and the
+operator switch are checked before authorization, so a caller without grants can
+spend only its own budget and learns only whether the feature is on.
 
 Kubernetes keeps only the current and the previous instance of each container.
 Output from deleted Pods and older restarts is gone. For history, use your

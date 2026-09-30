@@ -65,9 +65,9 @@ export function createRuntimeLogComputeDriver(options = {}) {
     ...(options.withoutDescribe
       ? {}
       : {
-          async describeAgentRuntime(binding, signal) {
+          async describeAgentRuntime(binding, signal, options = {}) {
             assert.ok(signal instanceof AbortSignal);
-            calls.push({ operation: "describe", revisionId: binding.revision.id });
+            calls.push({ operation: "describe", revisionId: binding.revision.id, options });
             if (state.describeError !== undefined) {
               throw state.describeError;
             }
@@ -105,7 +105,7 @@ export function createRuntimeLogComputeDriver(options = {}) {
                           },
                   },
                 ],
-                events: pod.name === name ? state.events : [],
+                events: pod.name === name && options.events !== false ? state.events : [],
               })),
               sources: [
                 {

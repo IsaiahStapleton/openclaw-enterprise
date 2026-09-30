@@ -6,6 +6,7 @@ import type {
   AgentRuntimePodStatus,
   RuntimeLogSourceId,
 } from "@openclaw-enterprise/contracts";
+import { maskRuntimeEventText } from "./redact.ts";
 import { sanitizeRuntimeLogText } from "./sanitize.ts";
 
 const KUBERNETES_NAME = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
@@ -113,7 +114,11 @@ function event(value: unknown): AgentRuntimeEvent {
   return Object.freeze({
     type: item.type,
     reason: text(item.reason, 128),
-    message: text(item.message, 2048),
+    // Event messages name nodes, images and Secrets; mask those before redaction.
+    message: text(
+      typeof item.message === "string" ? maskRuntimeEventText(item.message) : item.message,
+      2048,
+    ),
     count: Math.max(1, observed),
     lastObservedAt: time(item.lastObservedAt),
   });

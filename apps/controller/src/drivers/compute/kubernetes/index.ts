@@ -31,6 +31,7 @@ import type {
   AgentDeploymentDiagnostics,
   AgentRevision,
   AgentRuntimeContainerStatus,
+  AgentRuntimeDescribeOptions,
   AgentRuntimeDescription,
   AgentRuntimeEvent,
   AgentRuntimeLogChunk,
@@ -2261,12 +2262,18 @@ export class KubernetesComputeDriver implements ComputeDriver {
   async describeAgentRuntime(
     binding: ComputeAgentRevisionBinding,
     signal: AbortSignal,
+    options: AgentRuntimeDescribeOptions = {},
   ): Promise<AgentRuntimeDescription> {
     const revision = this.runtimeLogRevision(binding);
     const namespace = await this.runtimeLogNamespace(revision, signal);
     const pods: AgentRuntimePodStatus[] = [];
     const sources: AgentRuntimeLogSource[] = [];
-    for (const role of this.runtimeStatusContainers(revision)) {
+    // A log read (every follow poll) asks for one source and no Events, which keeps
+    // it to the Namespace read and one Pod list.
+    const roles = this.runtimeStatusContainers(revision).filter(
+      (role) => options.source === undefined || role === options.source,
+    );
+    for (const role of roles) {
       const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
       // Terminating Pods are being replaced; their output is not offered as a source.
       const observed = (
@@ -2277,9 +2284,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       const described = await Promise.all(
         observed.map(async (pod) => {
           const status = this.runtimePodStatus(pod, role, target);
-          const events = await this.runtimeLogStep(signal, () =>
-            this.runtimePodEvents(target, status.uid),
-          );
+          const events =
+            options.events === false
+              ? []
+              : await this.runtimeLogStep(signal, () => this.runtimePodEvents(target, status.uid));
           return { ...status, events };
         }),
       );

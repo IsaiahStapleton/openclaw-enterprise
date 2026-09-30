@@ -182,9 +182,11 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   }
   const resume = sameStream && prior.lastTime !== null ? prior : undefined;
   // A view is audited once, before its first Driver read. Cursor polls inside a
-  // view are not re-audited; an expired cursor starts a new view.
-  const viewId = prior?.viewId ?? newRuntimeLogViewId();
-  if (prior === undefined) {
+  // view are not re-audited; an expired cursor starts a new view, and so does a
+  // cursor whose Pod is gone (the audit row names the Pod that is read).
+  const continuesView = prior !== undefined && prior.pod === pod.name;
+  const viewId = continuesView ? prior.viewId : newRuntimeLogViewId();
+  if (!continuesView) {
     await input.admitView({
       viewId,
       revisionId: description.revisionId,

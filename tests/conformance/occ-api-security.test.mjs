@@ -1214,6 +1214,92 @@ test("an expired runtime log cursor starts a new audited view with a labelled ga
   );
 });
 
+test("a cursor whose Pod is gone starts a new audited view of the Pod that is read", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  const state = fixture.computeDriver.state;
+  state.lines = [runtimeLogLine(1)];
+  const replacement = "gateway-replacement-0";
+  state.extraPods = [{ name: replacement, uid: "4a1b2c3d-0000-4000-8000-000000000002" }];
+  const views = () =>
+    fixture.auditSink.events.filter(({ action }) => action === "openclaw.agents.runtime_logs.view");
+
+  const first = await fixture.request("GET", target.logsPath(`source=gateway&pod=${replacement}`));
+  assert.equal(first.status, 200, first.text);
+  assert.equal(views().length, 1);
+  assert.equal(views()[0].details.runtimeLogs.pod, replacement);
+
+  // The cursor's Pod disappears; the next poll falls back to the remaining Pod.
+  state.extraPods = [];
+  const next = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&cursor=${encodeURIComponent(first.data.cursor)}`),
+  );
+  assert.equal(next.status, 200, next.text);
+  assert.equal(next.data.records[0].reason, "stream_replaced");
+  const primary = fixture.computeDriver.podName({ id: target.revisionId });
+  assert.equal(next.data.stream.pod, primary);
+  assert.equal(views().length, 2, "reading another Pod is a new view");
+  assert.equal(views()[1].details.runtimeLogs.pod, primary);
+  assert.notEqual(views()[1].details.runtimeLogs.viewId, views()[0].details.runtimeLogs.viewId);
+
+  // Polls of the new view are not re-audited.
+  const again = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&cursor=${encodeURIComponent(next.data.cursor)}`),
+  );
+  assert.equal(again.status, 200, again.text);
+  assert.equal(views().length, 2);
+});
+
+test("runtime routes reject the Agent draft and unknown revisions without a Driver call", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.calls.length = 0;
+  const base = `/namespaces/${target.namespace.id}/agents/${target.agent.id}/deployments`;
+  const unknown = target.revisionId.replace(/[0-9a-f]{12}$/, "000000000000");
+  // The editable draft is not a revision: its id fails the route contract.
+  for (const [revision, status, code] of [
+    ["draft", 400, "INVALID_REQUEST"],
+    [unknown, 404, "NOT_FOUND"],
+  ]) {
+    for (const path of [
+      `${base}/${revision}/runtime`,
+      `${base}/${revision}/runtime/logs?source=gateway`,
+    ]) {
+      const response = await fixture.request("GET", path);
+      assert.equal(response.status, status, `${path}: ${response.text}`);
+      assert.equal(response.body.error.code, code);
+    }
+  }
+  assert.equal(fixture.computeDriver.calls.length, 0);
+});
+
+test("log polls describe only the requested source and skip Event lists", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [runtimeLogLine(1)];
+  fixture.computeDriver.state.events = [
+    {
+      type: "Warning",
+      reason: "BackOff",
+      message: "Back-off restarting failed container",
+      count: 1,
+      lastObservedAt: "2026-09-30T11:59:00Z",
+    },
+  ];
+  const status = await fixture.request("GET", target.runtimePath);
+  assert.equal(status.status, 200, status.text);
+  assert.equal(status.data.pods[0].events.length, 1);
+  const logs = await fixture.request("GET", target.logsPath());
+  assert.equal(logs.status, 200, logs.text);
+  const describes = fixture.computeDriver.calls.filter(({ operation }) => operation === "describe");
+  assert.deepEqual(
+    describes.map(({ options }) => options),
+    [{}, { source: "gateway", events: false }],
+  );
+});
+
 test("runtime log failures are fixed, content-free and never read after an audit failure", async () => {
   const auditSink = new InMemoryAuditSink();
   const append = auditSink.append.bind(auditSink);
@@ -1277,6 +1363,25 @@ test("runtime log reads are rate limited per principal and Agent with Retry-Afte
   assert.ok(limited, "the burst of 10 is exhausted within 12 immediate requests");
   assert.equal(limited.body.error.code, "RUNTIME_LOGS_RATE_LIMITED");
   assert.match(limited.headers.get("retry-after") ?? "", /^[1-9][0-9]*$/);
+
+  // The limiter runs before authorization (documented): an unauthorized principal can
+  // only spend its own bucket, never another principal's, and never reaches the Driver.
+  const outsider = await fixture.createPrincipal("runtime-outsider", target, []);
+  fixture.computeDriver.calls.length = 0;
+  const statuses = [];
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    statuses.push(
+      (await fixture.request("GET", target.runtimePath, { session: outsider.session })).status,
+    );
+  }
+  assert.ok(statuses.includes(403));
+  assert.equal(statuses.at(-1), 429);
+  assert.equal(fixture.computeDriver.calls.length, 0);
+  const operator = await fixture.createPrincipal("runtime-limit-operator", target, operateGrants);
+  const unaffected = await fixture.request("GET", target.runtimePath, {
+    session: operator.session,
+  });
+  assert.equal(unaffected.status, 200, unaffected.text);
 });
 
 test("runtime routes answer 501 when the Driver, its logging owner or the operator switch opts out", async () => {
@@ -1299,5 +1404,15 @@ test("runtime routes answer 501 when the Driver, its logging owner or the operat
       assert.equal(response.body.error.code, "NOT_IMPLEMENTED");
     }
     assert.equal(fixture.computeDriver.calls.length, 0, label);
+    if (label === "feature disabled") {
+      // The operator switch is checked before authorization (documented), so a
+      // principal without grants learns only that the feature is off.
+      const outsider = await fixture.createPrincipal("runtime-disabled-outsider", target, []);
+      const response = await fixture.request("GET", target.runtimePath, {
+        session: outsider.session,
+      });
+      assert.equal(response.status, 501);
+      assert.equal(fixture.computeDriver.calls.length, 0);
+    }
   }
 });
