@@ -49,20 +49,20 @@ graph TD
 
 ### 1. scripts/dev-up: host preflight and runtime image selection
 
-`scripts/dev-up:require_command`, `internal/occdev/compose.go:AnalyzeCompose`,
+`scripts/dev-up:require_command`, `internal/occdev/up.go:Up`,
+`internal/occdev/compose.go:AnalyzeCompose`,
 `deploy/runtime/Dockerfile`
 
-The helper requires the checkout-local `bin/occ` from `pnpm cli:build`, accepts
-`--key-output`, and forwards arguments after `--` to Compose. This section traces
-the default `OCC_DEVELOPMENT_COMPUTE_DRIVER=docker`. OpenShell requires
-Kubernetes Compute. Kubernetes Compute also defaults to the Compose control
+The helper requires `bin/occ` (`pnpm cli:build`), accepts `--key-output`, and
+forwards arguments after `--` to Compose. This section traces Docker Compute.
+OpenShell requires Kubernetes Compute, which defaults to the Compose control
 plane; explicitly select `OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` for
 [local Kubernetes-only development](../../guides/deploy/local-kubernetes-development.md).
+Without a Sandbox Driver, Compose Kubernetes startup requires Node before creating resources.
 
-The Docker Compute path first probes a running Docker Engine and the JSON
-configuration capability required from Docker Compose. If that probe fails, it
-selects `podman` directly; a `docker` compatibility alias is neither required
-nor treated as Docker merely because of its name. Podman requires the standalone
+Docker Compute probes Docker Engine and Compose JSON configuration support.
+On failure it selects `podman`; a `docker` compatibility alias is neither
+required nor sufficient. Podman requires the standalone
 `podman-compose` provider and `yq` v4; the helper pins that provider so status
 and stopped one-shot container behavior stay consistent.
 
@@ -374,7 +374,7 @@ external key if a later OpenShell readiness step fails.
 
 ## Changelog
 
-- 2026-09-29 20:40: Bound k3d readiness with the configured startup timeout in both control-plane profiles. (89a4ccd7-3974-43c6-b08a-be02269a8d01 - cc96e34f33868555d4a89cb44bc022859d76c815)
+- 2026-09-29 20:40: Bound k3d startup timeouts and preflight Node for Compose sandbox preparation. (89a4ccd7-3974-43c6-b08a-be02269a8d01 - cc96e34f33868555d4a89cb44bc022859d76c815)
 
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 

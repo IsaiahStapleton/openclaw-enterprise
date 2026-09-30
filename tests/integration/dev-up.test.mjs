@@ -860,6 +860,29 @@ test("Kubernetes Compute defaults to the Compose control plane", async (t) => {
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
+test("Compose Kubernetes startup rejects missing Node before creating resources", async (t) => {
+  const fixture = await createFixture(t);
+  await prepareLifecycleCommands(fixture);
+  // Invoke the compiled CLI directly: a host may have the CLI and container
+  // tools installed without the Node runtime required by sandbox preparation.
+  const result = spawnSync(fixture.cli, ["dev", "up"], {
+    cwd: fixture.fixtureRepository,
+    env: {
+      ...fixture.env,
+      PATH: join(fixture.directory, "bin"),
+      OCC_DEVELOPMENT_COMPUTE_DRIVER: "kubernetes",
+      OCC_DEVELOPMENT_CONTROL_PLANE: "compose",
+      OCC_DEVELOPMENT_SANDBOX_DRIVER: "none",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /node is required on PATH/);
+  assert.deepEqual(await readJsonLines(fixture.env.SAFETY_LOG), []);
+  await assert.rejects(stat(fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY), { code: "ENOENT" });
+});
+
 test("Kubernetes dev-up forwards an explicit K3s image and startup timeout to k3d", async (t) => {
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS = "37";

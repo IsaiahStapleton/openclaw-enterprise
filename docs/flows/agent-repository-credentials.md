@@ -192,7 +192,7 @@ pending closure blocks replacement until bounded retry or continuation confirms
 disposal.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
-mounts Secrets only in the first init container. Sorted projections avoid key-order rollouts; session replacement still rolls.
+mounts Secrets only in the first initializer. Sorted projections prevent key-order rollouts; session replacement still rolls.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-init.ts:REPOSITORY_MATERIAL_INIT_ENTRYPOINT`
 validates the complete projection, then writes mode-0700 directories and
 mode-0600 files in memory. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts the
@@ -204,15 +204,15 @@ Both gate startup; the consumer mount is read-only. Metadata and gateway
 bearers remain separate.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.activateRevision`
-replaces the consumer when material changes, including within one revision.
+replaces consumers on material changes, even within one revision.
 Readiness requires role, revision, generation and current deadlines.
 Dedicated replacement preserves enrollment and revision-private storage.
 `KubernetesComputeDriver.prepareRevision` rechecks material after plugin,
 gateway and node observations; changed generation, lost readiness or expiry
 returns incomplete. Activation rechecks deadlines after final observations.
-A dedicated gateway receives no repository material or repository-gateway egress.
-Embedded and dedicated consumers receive the CA bundle in
-`SSL_CERT_FILE`, `GIT_SSL_CAINFO` and `NODE_EXTRA_CA_CERTS`; explicit CA overrides are rejected.
+Dedicated gateways lack repository material and repository-gateway egress.
+Both consumers trust CAs through `SSL_CERT_FILE`, `GIT_SSL_CAINFO` and
+`NODE_EXTRA_CA_CERTS`; overrides fail.
 Compute grants consumer egress; Helm admits consumers through
 [credential-sidecar ingress selectors](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking). Native preparation
 writes aggregate `gitconfig` without reading bearers. System Git includes

@@ -64,7 +64,11 @@ func Up(ctx context.Context, opts Options) (result error) {
 	if err := validateComposeArgs(opts.ComposeArgs, opts.Repository); err != nil {
 		return err
 	}
-	for _, name := range []string{"k3d", "kubectl"} {
+	required := []string{"k3d", "kubectl"}
+	if sandboxDriver == "none" {
+		required = append(required, "node")
+	}
+	for _, name := range required {
 		if _, err := exec.LookPath(name); err != nil {
 			return fmt.Errorf("%s is required on PATH", name)
 		}
