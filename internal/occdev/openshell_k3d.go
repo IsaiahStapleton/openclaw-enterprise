@@ -108,8 +108,11 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 		KeyOwned:          opts.KeyOutput == "",
 		directory:         directory,
 	}
-	if !clusterName.MatchString(state.Cluster) || len(state.Cluster) > 63 || !namespaceName.MatchString(state.PlatformNamespace) {
-		return fmt.Errorf("invalid Kubernetes cluster or platform Namespace name")
+	if err := validateClusterName(state.Cluster); err != nil {
+		return err
+	}
+	if !namespaceName.MatchString(state.PlatformNamespace) {
+		return fmt.Errorf("invalid OCC_DEVELOPMENT_KUBERNETES_NAMESPACE %q: the name must match %s", state.PlatformNamespace, namespaceName)
 	}
 	if state.KeyOwned {
 		state.KeyPath = filepath.Join(directory, "initial-admin-service-key.json")
