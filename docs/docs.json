@@ -617,7 +617,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["reference/postgres-auth-binding"]
           },
           {
             "tab": "Contribute",
@@ -810,10 +811,6 @@
                   {
                     "page": "base-driver-docs-template",
                     "label": "Driver Docs"
-                  },
-                  {
-                    "page": "documentation-inventory",
-                    "label": "Historical Inventory"
                   }
                 ]
               }
@@ -821,6 +818,7 @@
             "hidden": [
               "contributing/rfc-template",
               "guides/deploy/local-repository-credentials",
+              "guides/deploy/local-compose-kubernetes",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
@@ -884,19 +882,6 @@
               "testing/plugins",
               "testing/openshell",
               "testing/openshell-pre5-local-experiment",
-              "driver-docs-inventory",
-              "documentation-inventory/quality-audit-2026-09-29",
-              "documentation-inventory/gaps",
-              "documentation-inventory/getting-started",
-              "documentation-inventory/topics",
-              "documentation-inventory/integrations-reference",
-              "documentation-inventory/contribute-design",
-              "documentation-inventory/contribute-flows",
-              "documentation-inventory/contribute-development",
-              "documentation-inventory/repository-guidance",
-              "documentation-inventory/repository-specs-1",
-              "documentation-inventory/repository-specs-2",
-              "documentation-inventory/repository-specs-3",
               "flows/agent-repository-credentials",
               "flows/repository-credentials",
               "flows/repository-credential-configuration",

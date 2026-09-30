@@ -6133,6 +6133,61 @@ test(
 );
 
 test(
+  "a CPU-starved startup model probe fails deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("cpu-starved-runtime");
+    const candidate = await fixture.revision(owner, 1);
+    let observations = 0;
+
+    // Under the default 900-second deadline a plain probe timeout stays pending;
+    // a probe that ran out of CPU at the container's limit ends the deployment.
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        observations += 1;
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: {
+            component: "gateway",
+            check: "model-probe",
+            checkedAt: "2026-09-30T08:00:00.000Z",
+            code: observations === 1 ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_CPU_STARVED",
+          },
+        };
+      },
+    });
+
+    const failed = await fixture.work(candidate, "failed_permanent");
+    assert.equal(observations, 2);
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [{ reason_code: "RUNTIME_CPU_STARVED", result_data: null }]);
+    const active = await fixture.observerPool.query(
+      "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [fixture.namespace.id, owner.id],
+    );
+    assert.equal(active.rows[0].active_revision_id, null);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "RUNTIME_CPU_STARVED",
+      message: "Deployment runtime did not get enough CPU to start.",
+    });
+  },
+);
+
+test(
   "plugin startup warnings complete deployment and remain visible in status",
   requiresPostgres,
   async (context) => {

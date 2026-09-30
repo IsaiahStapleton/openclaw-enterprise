@@ -425,6 +425,8 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment convergence deadline exceeded.";
     case "RUNTIME_AUTHENTICATION_FAILED":
       return "Deployment runtime credentials were rejected.";
+    case "RUNTIME_CPU_STARVED":
+      return "Deployment runtime did not get enough CPU to start.";
     case "REVISION_SUPERSEDED":
       return "Deployment was superseded by a newer revision.";
     default:

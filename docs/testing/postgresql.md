@@ -381,3 +381,27 @@ through its loopback proxy. It rejects nonloopback targets and TLS connections
 before mutation: inspecting encrypted protocol completion is unsupported, and
 TLS intent is never silently downgraded. Use the ordinary disposable non-TLS
 loopback setup above for this test.
+
+## Authentication binding
+
+With matching dependencies, check construction, public type contracts, and sanitized failures:
+
+```sh
+node --test tests/conformance/postgres-auth-binding.test.mjs tests/conformance/postgres-controller-auth-binding.test.mjs tests/conformance/schema-auth-boundary-v1.test.mjs
+```
+
+These checks do not prove SQL persistence. `pnpm typecheck` checks Controller composition.
+With a migrated disposable database and `OCC_TEST_DATABASE_URL` (setup above), run:
+
+```sh
+node --test --test-concurrency=1 tests/integration/postgres-auth-binding.test.mjs tests/integration/postgres-auth-accounts.test.mjs tests/integration/postgres-service-api-keys.test.mjs
+```
+
+These cover isolation, rollback, pool reuse, account provisioning, and service-key
+persistence. Fresh bootstrap requires no Installation; missing database
+configuration explicitly skips PostgreSQL coverage.
+
+Construction errors require checking OCC/Drizzle dependencies. Later dependency
+errors require checking connectivity and application-role permissions; successful
+construction does not establish connectivity. See the
+[binding reference](../reference/postgres-auth-binding.md) for ownership and transaction boundaries.
