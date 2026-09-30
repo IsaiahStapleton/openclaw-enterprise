@@ -263,8 +263,12 @@ export function createHumanLogin(
   }
 
   // The state a known-device entry is bound to; a failed read only skips the marking.
-  function knownDeviceState(email: string): Promise<string | undefined> {
-    return state.knownDeviceState(email.trim().toLowerCase()).catch(() => undefined);
+  async function knownDeviceState(email: string): Promise<string | undefined> {
+    try {
+      return await state.knownDeviceState(email.trim().toLowerCase());
+    } catch {
+      return undefined;
+    }
   }
 
   // Callback denials say whether the attempt, the provider, or the identity failed.
