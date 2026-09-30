@@ -352,7 +352,8 @@ test("the linear jwt scan matches the reference regex on random runs", () => {
 });
 
 test("bounded key and path patterns still mask the shapes they did before", () => {
-  const value = `v${randomString(20)}`;
+  // The digit keeps the value inside the digit-gated `bearer` rule on every run.
+  const value = `v7${randomString(20)}`;
   for (const [input, expected] of [
     [`github_token=${value} next`, "github_token=[redacted:key-value] next"],
     [`--db-password ${value}`, "--db-password [redacted:key-value]"],
