@@ -1123,6 +1123,46 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
   await assert.rejects(stat(directory), { code: "ENOENT" });
 });
 
+test("Kubernetes-only dev-up keeps PostgreSQL and its egress policy valid across a cluster restart", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
+  fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+  fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
+  fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
+
+  const result = runDevUp([], fixture.env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const directory = fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY;
+  // `k3d cluster stop` and `start` (or a host reboot) delete bare Pods, so a
+  // controller must own PostgreSQL for it to come back with its claim.
+  const postgres = JSON.parse(await readFile(join(directory, "postgres.json"), "utf8"));
+  assert.equal(postgres.kind, "StatefulSet");
+  assert.equal(postgres.spec.replicas, 1);
+  assert.deepEqual(postgres.spec.selector.matchLabels, { app: "postgres" });
+  assert.equal(postgres.spec.template.metadata.labels.app, "postgres");
+  assert.deepEqual(postgres.spec.template.spec.volumes[0], {
+    name: "data",
+    persistentVolumeClaim: { claimName: "postgres-data" },
+  });
+  // The PostgreSQL Pod and the k3d node receive new addresses after a restart.
+  // Egress must follow the node's Pod CIDR and the k3d network, not /32 pins.
+  const values = JSON.parse(await readFile(join(directory, "helm-values.json"), "utf8"));
+  assert.deepEqual(values.database.cidrs, ["10.42.0.0/24"]);
+  assert.deepEqual(values.cluster.cidrs, ["172.30.42.0/24"]);
+  assert.equal(values.cluster.port, 6443);
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  assert.ok(
+    commands.some(
+      ({ command, args }) =>
+        command === "kubectl" && args.includes("rollout") && args.includes("statefulset/postgres"),
+    ),
+  );
+
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
 test("Kubernetes dev-up can keep the OCC control plane in Compose with OpenShell", async (t) => {
   const fixture = await kubernetesFixture(t);
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";

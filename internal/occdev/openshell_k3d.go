@@ -506,18 +506,25 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 	if err := r.waitPodSucceeded(ctx, namespace, "bootstrap-password-prepare", timeout); err != nil {
 		return err
 	}
+	// A StatefulSet, not a bare Pod: k3d cluster stop/start and host reboots
+	// delete bare Pods, and the controller recreates PostgreSQL on its claim.
+	postgresLabels := map[string]string{"app": "postgres", "app.kubernetes.io/managed-by": "openclaw-development"}
 	postgres := map[string]any{
-		"apiVersion": "v1", "kind": "Pod", "metadata": kubernetesMetadata("postgres", namespace, map[string]string{"app": "postgres", "app.kubernetes.io/managed-by": "openclaw-development"}),
+		"apiVersion": "apps/v1", "kind": "StatefulSet", "metadata": kubernetesMetadata("postgres", namespace, labels),
 		"spec": map[string]any{
-			"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 999, "runAsGroup": 999, "fsGroup": 999, "seccompProfile": map[string]string{"type": "RuntimeDefault"}},
-			"containers": []any{map[string]any{
-				"name": "postgres", "image": postgresImage, "imagePullPolicy": "Never", "resources": resources,
-				"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}},
-				"env":             []any{map[string]string{"name": "POSTGRES_DB", "value": "openclaw_enterprise"}, map[string]any{"name": "POSTGRES_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]string{"name": "postgres-bootstrap", "key": "password"}}}},
-				"volumeMounts":    []any{map[string]any{"name": "data", "mountPath": "/var/lib/postgresql"}, map[string]any{"name": "init", "mountPath": "/docker-entrypoint-initdb.d", "readOnly": true}},
-				"readinessProbe":  map[string]any{"exec": map[string]any{"command": []string{"pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"}}, "initialDelaySeconds": 2, "periodSeconds": 2},
+			"replicas": 1, "serviceName": "postgres",
+			"selector": map[string]any{"matchLabels": map[string]string{"app": "postgres"}},
+			"template": map[string]any{"metadata": map[string]any{"labels": postgresLabels}, "spec": map[string]any{
+				"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 999, "runAsGroup": 999, "fsGroup": 999, "seccompProfile": map[string]string{"type": "RuntimeDefault"}},
+				"containers": []any{map[string]any{
+					"name": "postgres", "image": postgresImage, "imagePullPolicy": "Never", "resources": resources,
+					"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}},
+					"env":             []any{map[string]string{"name": "POSTGRES_DB", "value": "openclaw_enterprise"}, map[string]any{"name": "POSTGRES_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]string{"name": "postgres-bootstrap", "key": "password"}}}},
+					"volumeMounts":    []any{map[string]any{"name": "data", "mountPath": "/var/lib/postgresql"}, map[string]any{"name": "init", "mountPath": "/docker-entrypoint-initdb.d", "readOnly": true}},
+					"readinessProbe":  map[string]any{"exec": map[string]any{"command": []string{"pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"}}, "initialDelaySeconds": 2, "periodSeconds": 2},
+				}},
+				"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "postgres-data"}}, map[string]any{"name": "init", "secret": map[string]any{"secretName": "postgres-bootstrap", "items": []any{map[string]string{"key": "init.sql", "path": "init.sql"}}}}},
 			}},
-			"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "postgres-data"}}, map[string]any{"name": "init", "secret": map[string]any{"secretName": "postgres-bootstrap", "items": []any{map[string]string{"key": "init.sql", "path": "init.sql"}}}}},
 		},
 	}
 	if err := r.writeAndApply(ctx, state, "postgres", postgres); err != nil {
@@ -530,16 +537,22 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 	if err := r.writeAndApply(ctx, state, "postgres-service", postgresService); err != nil {
 		return err
 	}
-	if err := r.run(ctx, "kubectl", "-n", namespace, "wait", "--for=condition=Ready", "pod/postgres", "--timeout", timeout.String()); err != nil {
+	if err := r.run(ctx, "kubectl", "-n", namespace, "rollout", "status", "statefulset/postgres", "--timeout", timeout.String()); err != nil {
 		return err
 	}
-	postgresIP, err := r.output(ctx, "kubectl", "-n", namespace, "get", "pod", "postgres", "-o", "jsonpath={.status.podIP}")
-	if err != nil || len(postgresIP) == 0 {
-		return fmt.Errorf("resolve PostgreSQL Pod IP: %w", err)
+	// Pod and node addresses change across restarts. Allow the node's Pod CIDR
+	// for PostgreSQL and the owned k3d network for the Kubernetes API instead.
+	podCIDR, err := r.developmentNodePodCIDR(ctx, state)
+	if err != nil {
+		return fmt.Errorf("resolve k3d Pod CIDR: %w", err)
 	}
 	clusterIP, err := r.output(ctx, "kubectl", "-n", "default", "get", "endpoints", "kubernetes", "-o", "jsonpath={.subsets[0].addresses[0].ip}")
 	if err != nil || len(clusterIP) == 0 {
 		return fmt.Errorf("resolve Kubernetes API endpoint IP: %w", err)
+	}
+	clusterSubnet, err := r.developmentNodeSubnet(ctx, state, string(clusterIP))
+	if err != nil {
+		return fmt.Errorf("resolve k3d network subnet: %w", err)
 	}
 	clusterPortData, err := r.output(ctx, "kubectl", "-n", "default", "get", "endpoints", "kubernetes", "-o", "jsonpath={.subsets[0].ports[0].port}")
 	if err != nil {
@@ -568,8 +581,8 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 		"installation": map[string]string{"name": "Kubernetes development"},
 		"auth":         map[string]string{"baseUrl": fmt.Sprintf("http://127.0.0.1:%d", state.APIPort)},
 		"bootstrap":    map[string]any{"adminEmail": "admin@development.openclaw.invalid", "password": map[string]string{"claimName": "bootstrap-password"}},
-		"database":     map[string]any{"cidrs": []string{string(postgresIP) + "/32"}},
-		"cluster":      map[string]any{"cidrs": []string{string(clusterIP) + "/32"}, "port": clusterPort},
+		"database":     map[string]any{"cidrs": []string{podCIDR}},
+		"cluster":      map[string]any{"cidrs": []string{clusterSubnet}, "port": clusterPort},
 		"api":          map[string]any{"clients": []any{map[string]any{"namespace": namespace, "podLabels": map[string]string{"app.kubernetes.io/name": "occ-kubernetes-dev-client"}}}},
 		"resources":    resources,
 	}

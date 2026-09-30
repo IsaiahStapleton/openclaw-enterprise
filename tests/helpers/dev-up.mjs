@@ -481,6 +481,9 @@ if (command === "docker") {
   if (args[0] === "context" && args[1] === "show") output("fixture-context");
   else if (args[0] === "context" && args[1] === "inspect") output(JSON.stringify([{ Endpoints: { docker: { Host: "unix:///fixture/owned-docker.sock" } } }]));
   else if (args[0] === "info") output("/var/lib/docker");
+  else if (args[0] === "network" && args[1] === "inspect" && args[2] === "k3d-occ-dev-owned") {
+    output(JSON.stringify([{ Name: "k3d-occ-dev-owned", IPAM: { Config: [{ Subnet: "fd00:42::/64" }, { Subnet: "172.30.42.0/24", Gateway: "172.30.42.1" }] } }]));
+  }
   else if (args[0] === "network" && args[1] === "inspect") {
     if (!state.compose) process.exit(1);
     output(JSON.stringify([{ IPAM: { Config: [{ Subnet: "172.30.41.0/24" }] } }]));
@@ -542,7 +545,8 @@ if (command === "docker") {
   else if (args[0] === "-n" && args.includes("pod") && args.includes("bootstrap-password-prepare")) output("Succeeded");
   else if (args[0] === "-n" && args.includes("pod") && args.includes("postgres")) output("10.42.0.20");
   else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes") && args.includes("jsonpath={.subsets[0].ports[0].port}")) output("6443");
-  else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes")) output("10.43.0.1");
+  else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes")) output("172.30.42.3");
+  else if (args[0] === "get" && args[1] === "node" && args.includes("json")) output(JSON.stringify({ spec: { podCIDR: "10.42.0.0/24" } }));
   else if (args[0] === "get" && args[1] === "service" && args[2] === "kubernetes") output(JSON.stringify({ spec: { clusterIP: "10.43.0.1" } }));
   else if (args[0] === "get" && args[1] === "endpoints" && args[2] === "kubernetes") output(JSON.stringify({ subsets: [{ addresses: [{ ip: "172.30.41.4" }] }] }));
   else if (args[0] === "get" && args[1] === "namespaces") output(JSON.stringify({ items: [{ metadata: { name: "oce-123456789012345", labels: { "openclaw.dev/namespace": "namespace_fixture" }, annotations: { "openclaw.dev/namespace-id": "namespace_fixture" } } }] }));
