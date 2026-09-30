@@ -178,6 +178,29 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
   assert.equal(logs.data.records.at(-1).reason, "truncated");
 });
 
+test("the wrapper's fixed plain-text failure line is a wrapper error, not unknown text", () => {
+  const stream = { source: "agent", pod: "gateway-0", container: "agent" };
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: "Harness model authentication probe failed." },
+      { time: lineTime(2), raw: "Harness model authentication probe failed. extra" },
+    ],
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message }) => ({ kind, level, message })),
+    [
+      { kind: "wrapper", level: "error", message: "Harness model authentication probe failed." },
+      {
+        kind: "text",
+        level: "unknown",
+        message: "Harness model authentication probe failed. extra",
+      },
+    ],
+  );
+});
+
 test("the sanitizer drops a partial final line and bounds oversized input", () => {
   const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
   const fragment = randomBytes(10).toString("hex");

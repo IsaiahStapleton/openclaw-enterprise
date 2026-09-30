@@ -14,7 +14,8 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 1. Open the Agent and select a deployed version. The editable draft is not a
    version and has no runtime; a version without a running Pod shows no Pod.
-2. Select **Logs**. The runtime strip refreshes every 10 seconds.
+2. Select **Logs**. The runtime strip refreshes every 10 seconds. Each Pod card
+   lists its recent warning Events, prefixed with the container they concern.
 3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
    **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
    for dedicated execution), or **Sandbox (policy decisions)** (see
@@ -62,7 +63,8 @@ always reads 1000 lines, and cannot be combined with `cursor` (`400`). See the
 
 ## Command line
 
-`occ agent runtime AGENT_ID` prints the Pods and sources; `occ agent logs
+`occ agent runtime AGENT_ID` prints the Pods, sources and Events (with the
+container each concerns); `occ agent logs
 AGENT_ID --source gateway` prints one page, and `--follow` keeps polling every
 2 seconds until Ctrl-C:
 
@@ -103,6 +105,9 @@ OCC classifies every line against an allowlist of operational output before
 returning it:
 
 - **wrapper**: runtime startup and model-probe events, with fixed fields only.
+  The wrapper's fixed plain line
+  `Harness model authentication probe failed.` is also a wrapper `error`. A
+  line's `code` field shows on the collapsed row.
 - **openclaw**: Gateway JSON console records (level, subsystem, message and a
   short list of operational fields such as `status`, `method` and `durationMs`).
   Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are

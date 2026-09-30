@@ -962,6 +962,17 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "container": {
+                            "anyOf": [
+                              {
+                                "maxLength": 253,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "count": { "minimum": 1, "type": "integer" },
                           "lastObservedAt": {
                             "anyOf": [
@@ -982,7 +993,14 @@
                             ]
                           }
                         },
-                        "required": ["type", "reason", "message", "count", "lastObservedAt"],
+                        "required": [
+                          "type",
+                          "container",
+                          "reason",
+                          "message",
+                          "count",
+                          "lastObservedAt"
+                        ],
                         "type": "object"
                       },
                       "maxItems": 100,
@@ -11059,6 +11077,17 @@
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
+                                    "container": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 253,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
                                     "count": { "minimum": 1, "type": "integer" },
                                     "lastObservedAt": {
                                       "anyOf": [
@@ -11081,6 +11110,7 @@
                                   },
                                   "required": [
                                     "type",
+                                    "container",
                                     "reason",
                                     "message",
                                     "count",

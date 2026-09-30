@@ -34,6 +34,12 @@ const WRAPPER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freez
   "runtime.workspace_node": ["container", "outcome", "code"],
 });
 
+// Fixed plain-text failure lines the runtime wrapper prints next to its structured
+// events (`runtime-entrypoints.ts`). They are wrapper errors, not `unknown` text.
+const WRAPPER_ERROR_LINES: ReadonlySet<string> = new Set([
+  "Harness model authentication probe failed.",
+]);
+
 // Operational keys only. Anything else, and every free-text or payload key
 // (`args`, `payload`, `body`, `prompt`, `messages`, `content`, `text`, `transcript`,
 // `headers`, `env`), never leaves OCC.
@@ -255,6 +261,9 @@ function classify(line: string): Classified {
   }
   if (byteLength(text) > RUNTIME_LOG_MAX_TEXT_BYTES) {
     return { type: "withheld", reason: "oversized" };
+  }
+  if (WRAPPER_ERROR_LINES.has(trimmed)) {
+    return { type: "line", kind: "wrapper", level: "error", message: trimmed };
   }
   return { type: "line", kind: "text", level: "unknown", message: text };
 }
