@@ -611,6 +611,16 @@ const RUNTIME_LOG_MAX_PODS = 8;
 const RUNTIME_LOG_MAX_EVENTS = 100;
 const RUNTIME_LOG_RETENTION =
   "Kubernetes keeps only the current and the previous instance of each container; older output and output from deleted Pods is gone.";
+// Kubelet Events name their container as `spec.containers{name}` (or init/ephemeral).
+const RUNTIME_EVENT_CONTAINER_FIELD_PATH =
+  /^spec\.(?:containers|initContainers|ephemeralContainers)\{([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)\}$/;
+
+function runtimeEventContainer(fieldPath: unknown): string | null {
+  return typeof fieldPath === "string"
+    ? (RUNTIME_EVENT_CONTAINER_FIELD_PATH.exec(fieldPath)?.[1] ?? null)
+    : null;
+}
+
 const WORKLOAD_TERMINATION_TIMEOUT_MS = 120_000;
 const WORKLOAD_TERMINATION_POLL_MS = 100;
 const AGENT_TRANSPORT_PORT = 18_790;
@@ -2583,6 +2593,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         const series = asRecord(event.series);
         return {
           type: event.type as "Normal" | "Warning",
+          container: runtimeEventContainer(asRecord(event.involvedObject)?.fieldPath),
           reason: isNonEmptyString(event.reason) ? event.reason : "Unknown",
           message: typeof event.message === "string" ? event.message : "",
           count: Math.max(

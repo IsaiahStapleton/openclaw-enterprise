@@ -73,7 +73,9 @@ and Agent `read`, then rejects a Driver without `describeAgentRuntime` or with
 lists Pods by the exact Agent, revision and workload-role labels: dedicated
 Gateways in the control-plane Gateway namespace, Harnesses and embedded Gateways
 in the tenant namespace on the execution plane. It lists Events by
-`involvedObject.uid`, keeps only that Pod's Events and caps them at 100. A log
+`involvedObject.uid`, keeps only that Pod's Events, caps them at 100 and takes each
+Event's `container` from `involvedObject.fieldPath` (`spec.containers{name}` or
+the init or ephemeral form; `null` for Pod-level Events such as `Scheduled`). A log
 read passes `{ source, events: false }`, so it lists only that source's Pods and
 no Events. Each
 Kubernetes call has a five-second deadline; a `403` becomes
@@ -95,7 +97,9 @@ Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 drops lines already delivered at the cursor time, emits `stream_replaced`,
 `window_exceeded`, `cursor_expired` or `truncated` gaps, and passes the rest to
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
-`SanitizedRuntimeLogRecord`.
+`SanitizedRuntimeLogRecord`. It classifies the whole page first, so
+`runtime-logs/redact.ts:maskPemBlockLines` can mask a PEM block whose BEGIN,
+body and END lines arrive as separate plain-text lines.
 
 `source=sandbox` skips the Compute description. `OpenClawController.readSandboxLogs`
 lists the source only when the selected Sandbox Driver provisioned the revision

@@ -262,6 +262,83 @@ export function redactRuntimeLogText(value: string): string {
   return text;
 }
 
+// Multi-line PEM blocks. The `pem` rule above masks a block inside one string; a runtime
+// that prints a key over several lines puts BEGIN, the body and END on separate lines.
+const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]{0,64}-----/g;
+const PEM_END = /-----END [A-Z0-9 ]{0,64}-----/;
+// RFC 7468 body lines (base64, `=` padding), RFC 1421 headers such as
+// `DEK-Info: AES-128-CBC,...`, and blank lines. Tested on trimmed text: a `\s*` on both
+// sides of an optional group backtracks quadratically on long whitespace runs.
+const PEM_BODY_LINE = /^(?:[A-Za-z0-9+/=]*|[A-Za-z][A-Za-z0-9-]{0,63}:.{0,512})$/;
+const isPemBodyLine = (text: string) => PEM_BODY_LINE.test(text.trim());
+
+function opensPemBlock(text: string): boolean {
+  let last = -1;
+  for (const match of text.matchAll(PEM_BEGIN)) {
+    last = match.index + match[0].length;
+  }
+  return last !== -1 && !PEM_END.test(text.slice(last));
+}
+
+function maskPemEnd(text: string): string {
+  const end = PEM_END.exec(text)!;
+  return `${mark("pem")}${text.slice(end.index + end[0].length)}`;
+}
+
+/**
+ * Masks the lines of PEM blocks that span several log lines. Input is one page of line
+ * texts in order (`undefined` for a line that is not shown). After a line that opens a
+ * block without closing it, every PEM-shaped line up to and including the END line is
+ * replaced by `[redacted:pem]`; text after END stays and is redacted as usual. The first
+ * line that is not PEM-shaped ends the block, so a BEGIN marker quoted in prose hides
+ * nothing else. A page that starts inside a block has no BEGIN: an END line without one
+ * masks itself and the PEM-shaped lines directly above it. Returns the replacement text
+ * per masked line index. Each line is visited at most twice.
+ */
+export function maskPemBlockLines(
+  lines: readonly (string | undefined)[],
+): ReadonlyMap<number, string> {
+  const masked = new Map<number, string>();
+  let open = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const text = lines[index];
+    if (text === undefined) {
+      continue;
+    }
+    if (open) {
+      if (PEM_END.test(text)) {
+        masked.set(index, maskPemEnd(text));
+        open = false;
+        continue;
+      }
+      if (isPemBodyLine(text)) {
+        masked.set(index, mark("pem"));
+        continue;
+      }
+      open = false;
+    }
+    if (opensPemBlock(text)) {
+      open = true;
+      continue;
+    }
+    const end = PEM_END.exec(text);
+    if (end !== null && !/-----BEGIN [A-Z0-9 ]{0,64}-----/.test(text.slice(0, end.index))) {
+      masked.set(index, maskPemEnd(text));
+      for (let above = index - 1; above >= 0 && !masked.has(above); above -= 1) {
+        const previous = lines[above];
+        if (previous === undefined) {
+          continue;
+        }
+        if (previous.trim().length === 0 || !isPemBodyLine(previous)) {
+          break;
+        }
+        masked.set(above, mark("pem"));
+      }
+    }
+  }
+  return masked;
+}
+
 // Command-line flags whose next argument (or attached / `=` value) is a credential.
 // `--password X`, `--token=X` and friends are also caught by the key-value rules above;
 // these are the short and single-dash forms those rules cannot see.

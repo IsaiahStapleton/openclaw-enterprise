@@ -187,8 +187,8 @@
         "restartCount": 0
       },
       "contentClass": "operational",
-      "kind": "text",
-      "level": "unknown",
+      "kind": "wrapper",
+      "level": "error",
       "message": "Harness model authentication probe failed."
     }
   ]

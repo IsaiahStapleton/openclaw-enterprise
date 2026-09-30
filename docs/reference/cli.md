@@ -76,7 +76,7 @@ input is not supported. The server validates document fields against the
 | `occ agent runtime-credentials get ID`           | Reads whether generated runtime credentials are configured for the Agent.                                                                                        |
 | `occ agent runtime-credentials provision ID`     | Creates the initial generated runtime credential bundle (empty request body).                                                                                    |
 | `occ agent stop ID`                              | Requests a stop while retaining revisions and persistent state.                                                                                                  |
-| `occ agent runtime ID`                           | Reads Pod status, restarts, last termination and log sources for a revision. See [runtime logs](#runtime-status-and-logs).                                       |
+| `occ agent runtime ID`                           | Reads Pod status, restarts, last termination, log sources and Events for a revision. See [runtime logs](#runtime-status-and-logs).                               |
 | `occ agent logs ID --source SOURCE`              | Prints one redacted page of container output, or follows it. See [runtime logs](#runtime-status-and-logs).                                                       |
 
 Use the [HTTP API](api.md) to work with ServiceAccounts and configured
@@ -107,7 +107,9 @@ claimed.
 `occ agent runtime AGENT_ID` and `occ agent logs AGENT_ID` read the
 [Agent logs](../guides/topics/agent-logs.md) routes. Both use the Agent's active
 revision unless you pass `--revision ID`. `runtime` accepts `-o table|json|yaml`
-and needs Agent `operate` and `read` plus `read` on the revision. `logs` needs
+and needs Agent `operate` and `read` plus `read` on the revision. Its table output
+ends with each Pod's Events (`POD`, `CONTAINER`, `TYPE`, `REASON`, `COUNT`,
+`LAST SEEN`, `MESSAGE`); `CONTAINER` is `-` for Pod-level Events. `logs` needs
 Agent `administer` and `read` plus `read` on the revision, and each view is
 audited.
 

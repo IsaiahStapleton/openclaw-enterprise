@@ -33,7 +33,7 @@ function kubeletLines(text) {
 
 // A simplified copy of the Kubernetes Compute Driver's private Event projection
 // (`runtimePodEvents`): this Pod's Events only, newest first, count from the series when
-// present. It omits the driver's Namespace check, safe-integer guard and Event cap, and
+// present, container from `involvedObject.fieldPath`. It omits the driver's Namespace check, safe-integer guard and Event cap, and
 // it is not the product code, so this replay only exercises `validRuntimeDescription`
 // (the node, image and object masking); it proves nothing about the driver's filter.
 function driverEvents(items, podUid) {
@@ -47,6 +47,10 @@ function driverEvents(items, podUid) {
     )
     .map((event) => ({
       type: event.type,
+      container:
+        /^spec\.(?:containers|initContainers|ephemeralContainers)\{([a-z0-9-]+)\}$/.exec(
+          event.involvedObject.fieldPath ?? "",
+        )?.[1] ?? null,
       reason: event.reason || "Unknown",
       message: typeof event.message === "string" ? event.message : "",
       count: Math.max(1, event.series?.count ?? event.count ?? 1),
@@ -164,7 +168,7 @@ test("real Gateway, wrapper and Codex output is classified, not withheld", async
     [
       ["wrapper", "error", "openclaw.model_probe"],
       ["wrapper", "error", "runtime.startup_phase"],
-      ["text", "unknown", "Harness model authentication probe failed."],
+      ["wrapper", "error", "Harness model authentication probe failed."],
     ],
   );
   assert.equal(wrapper.records[0].fields.code, "AUTHENTICATION_FAILED");
