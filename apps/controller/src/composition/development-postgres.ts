@@ -197,6 +197,9 @@ export async function composePostgresDevelopment(
       defaultPresets: drivers?.defaultPresets ?? [],
       ...(loggingLevel === undefined ? {} : { loggingLevel }),
       ...(drivers === undefined ? {} : { backends: drivers.installation.backend }),
+      ...(drivers?.installation.runtime === undefined
+        ? {}
+        : { nativeWorkerSupport: drivers.installation.runtime.nativeWorkerSupport }),
     });
     controller.registerDriver(iamDriver);
     controller.selectDriver("iam", driverId);

@@ -103,15 +103,15 @@ queue guarantees.
 The Agent's [harnessAuth binding](agents.md#harness-authentication) is the sole
 model-auth selector. Kubernetes supports these combinations:
 
-| Binding                                               | Topology                                         | Credential consumer                                                                                               |
-| ----------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `api_key` with an OCC Secret                          | Embedded OpenClaw                                | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
-| `api_key` with an OCC Secret                          | Dedicated OpenClaw                               | Only the native Harness receives `OPENAI_API_KEY`.                                                                |
-| `api_key` with an OCC Secret                          | Dedicated Codex                                  | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
-| `codex_pat` with an OCC Secret                        | Dedicated Codex                                  | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
-| `oauth` with a device-login Secret (**Experimental**) | Compute-owned dedicated Codex, no Sandbox Driver | Codex owns the full native credential bundle on private persistent storage after one-time handoff.                |
-| `chatgpt_service_account`                             | Dedicated Codex                                  | Only Codex receives the account token and forced workspace.                                                       |
-| `credential_source`                                   | Dedicated Harness                                | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
+| Binding                        | Topology                           | Credential consumer                                                                                               |
+| ------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `api_key` with an OCC Secret   | Embedded OpenClaw                  | Combined gateway/Harness receives `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, selected by its native model provider. |
+| `api_key` with an OCC Secret   | Dedicated OpenClaw                 | Only the native Harness receives `OPENAI_API_KEY`.                                                                |
+| `api_key` with an OCC Secret   | Dedicated Codex                    | Only Codex receives `OPENAI_API_KEY` and logs in through stdin.                                                   |
+| `codex_pat` with an OCC Secret | Dedicated Codex                    | Only Codex receives `CODEX_ACCESS_TOKEN`; native login validates its account identity.                            |
+| `oauth` (**Experimental**)     | Dedicated Codex, no Sandbox Driver | Codex owns its credential bundle on [private storage](drivers/kubernetes-compute/codex-oauth-storage.md).         |
+| `chatgpt_service_account`      | Dedicated Codex                    | Only Codex receives the account token and forced workspace.                                                       |
+| `credential_source`            | Dedicated Harness                  | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
 
 Kubernetes workload rendering prepares one explicit login mode and exact Secret
 projections. The selected Sandbox consumes the same already-rendered workload
@@ -135,7 +135,7 @@ Codex rejects missing or conflicting runtime inputs before starting its app
 server. After login, a bounded native model turn must succeed before the server
 starts; local credential storage alone does not prove provider acceptance.
 API-key and PAT login state stays in its
-bounded ephemeral home; OAuth uses [private persistent storage](drivers/kubernetes-compute/codex-oauth-storage.md). Gateway transport and workload identity credentials
+bounded ephemeral home. Gateway transport and workload identity credentials
 remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
@@ -181,7 +181,8 @@ Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
 per startup phase, such as login, model probe, peer plugin status, plugin
 install, workspace setup, and native process spawn, with its container, phase name, `ok` or `failed` outcome,
 duration, and time since the wrapper started. A Gateway also logs
-`peer-status-changed` before it exits to restart for a replaced Harness. These
+`peer-status-changed` when its Harness is replaced, then `gateway-respawn` once
+the OpenClaw process it restarts in place serves again. These
 logs carry no provider, model, credential, or path values.
 
 On a first dedicated Codex deploy the controller creates the Gateway alongside
@@ -291,13 +292,18 @@ its admitted configuration. The upstream gateway must still
 support the app-server token Secret reference and projected workload identity
 required by the admitted workload. Stock OpenShell incompatibilities
 fail explicitly; test bridges do not establish turnkey production support.
-The pinned OpenClaw runtime image cannot run dedicated native OpenClaw yet. It
-rejects the required worker placement and native worker inference settings, so
-the Gateway and Harness refuse to start rather than run sessions on the Gateway.
-See the [runtime image recipe](../../deploy/runtime/README.md).
 There is no current command-level `exec` facet or per-tool sandbox admission.
 See [SandboxDriver](drivers/sandbox.md) and [OpenShell](drivers/openshell-sandbox.md)
 for the complete capability and upstream compatibility boundaries.
+
+### Native worker support
+
+The pinned OpenClaw [runtime image](../../deploy/runtime/README.md) lacks required
+worker placement (`cloudWorkers.requiredProfile`) and native worker inference.
+Deploy and provisioning therefore refuse dedicated native OpenClaw with
+`400 INVALID_REQUEST`, and the console withholds that choice. An operator whose
+runtime image is built from an OpenClaw source with both features can declare
+[`runtime.nativeWorkerSupport`](configuration.md#installation-startup-configuration).
 
 ## Related
 

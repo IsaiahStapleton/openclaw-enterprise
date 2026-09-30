@@ -2733,8 +2733,67 @@ for (const collection of ["secrets", "configurations", "agents"]) {
   });
 }
 
-test("Agent creation preserves unrelated edited JSON across model changes and resets to the selected template", async (t) => {
+test("Agent creation withholds Dedicated OpenClaw unless the Installation reports native worker support", async (t) => {
   const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Pinned runtime", { ready: true });
+  const installation = await fixture.request("GET", "/installation");
+  assert.equal(installation.data.capabilities?.nativeWorkers, undefined);
+  const { page } = await newPage(t, fixture);
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByText("Checking installation capabilities…").waitFor({ state: "detached" });
+  const mode = page.getByLabel("Execution mode");
+  await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
+  assert.equal(await mode.inputValue(), "embedded");
+  assert.equal(await mode.locator('option[value="dedicated"]').isDisabled(), true);
+  // Codex keeps Dedicated execution; only native OpenClaw depends on the runtime.
+  await page.getByLabel("Harness", { exact: true }).selectOption("codex");
+  assert.equal(await mode.locator('option[value="dedicated"]').isDisabled(), false);
+
+  // The API refuses the same choice at deploy admission, naming the missing support. The
+  // operator declaration is startup-only: an Agent Configuration cannot carry it in.
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Refused native",
+    { ...nativeValues("refused"), runtime: { nativeWorkerSupport: "custom-image" } },
+    { executionMode: "dedicated" },
+  );
+  const deployed = await fixture.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deploy`,
+  );
+  assert.equal(deployed.status, 400, JSON.stringify(deployed.body));
+  assert.equal(deployed.body.error.code, "INVALID_REQUEST");
+  assert.match(
+    deployed.body.error.message,
+    /required worker placement \(cloudWorkers\.requiredProfile\).*docs\/reference\/harness-execution\.md#native-worker-support/,
+  );
+  assert.equal(
+    (await fixture.request("GET", "/installation")).data.capabilities?.nativeWorkers,
+    undefined,
+  );
+
+  // Bootstrap, the only Installation write, cannot declare the capability either.
+  const other = await createConsoleAppFixture(t);
+  const declared = await other.request("POST", "/installation/bootstrap", {
+    body: {
+      name: "Declared runtime",
+      capabilities: { nativeWorkers: { support: "custom-image" } },
+    },
+  });
+  assert.equal(declared.status, 400, JSON.stringify(declared.body));
+  await other.bootstrap();
+  assert.equal(
+    (await other.request("GET", "/installation")).data.capabilities?.nativeWorkers,
+    undefined,
+  );
+});
+
+test("Agent creation preserves unrelated edited JSON across model changes and resets to the selected template", async (t) => {
+  const fixture = await createConsoleAppFixture(t, { nativeWorkerSupport: "custom-image" });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Template edits", { ready: true });
   const { page, artifacts } = await newPage(t, fixture);

@@ -1520,8 +1520,8 @@ test("a first dedicated deploy pins its workload starts through activation", asy
     read("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id)).spec.template,
     gateway,
   );
-  // A Gateway container restarts in place when its Harness peer restarts
-  // (GATEWAY_RUNTIME_ENTRYPOINT peer poll). The Gateway starts alongside the
+  // A Gateway respawns its OpenClaw process in place when its Harness peer
+  // restarts (GATEWAY_RUNTIME_ENTRYPOINT peer poll). The Gateway starts alongside the
   // first Harness, whose status it waits for, and the Harness template never
   // changes afterwards, so there is no such restart.
   const inPodGatewayRestarts = templates.filter(({ name }) => name === agentName).slice(1).length;
