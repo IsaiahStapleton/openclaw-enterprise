@@ -175,6 +175,7 @@ test(
         assert.deepEqual(providers.json().data, {
           github: false,
           google: true,
+          password: true,
           sessionBinding: true,
         });
         assert.deepEqual(
@@ -497,6 +498,7 @@ test(
       assert.deepEqual((await app.inject({ url: "/api/auth/providers" })).json().data, {
         github: true,
         google: true,
+        password: true,
         sessionBinding: true,
       });
       await assertGoogleRefused({ subject: disabledSubject }, "disabled after restart");

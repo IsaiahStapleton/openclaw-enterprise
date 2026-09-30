@@ -32,6 +32,7 @@ console uses the current origin and has no separate environment settings.
 - `OCC_AUTH_GITHUB_CLIENT_ID` — Optional GitHub App client ID, not App ID; selects the provider instance. Requires PostgreSQL, native IAM, and both GitHub settings below; see [GitHub sign-in](../authentication/external-sign-in.md#github-sign-in-for-existing-accounts).
 - `OCC_AUTH_GITHUB_CLIENT_SECRET` — Protected server-side client secret for the configured GitHub App; its private key stays with the repository credential consumer.
 - `OCC_AUTH_GITHUB_RECOVERY_USER_ID` — Existing local password administrator protected for recovery when GitHub or Google sign-in is enabled.
+- `OCC_AUTH_PASSWORD_SIGN_IN` — `all` (default) or `recovery-only`, which lets only the recovery account sign in with a password; requires GitHub or Google sign-in. See [recovery-only password sign-in](../authentication/external-sign-in.md#recovery-only-password-sign-in).
 - `OCC_AUTH_GOOGLE_CLIENT_ID` — Optional Google OAuth web client ID; selects the provider instance. Requires the client secret and the recovery user ID; see [Google sign-in](../../guides/deploy/google-sign-in.md).
 - `OCC_AUTH_GOOGLE_CLIENT_SECRET` — Protected server-side client secret for the configured Google OAuth client.
 - `OCC_AUTH_GOOGLE_ALLOWED_DOMAINS` — Optional comma-separated Google Workspace hosted domains; when set, sign-in requires a matching `hd` claim and a verified email.

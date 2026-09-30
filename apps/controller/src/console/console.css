@@ -206,6 +206,16 @@ p {
   width: 100%;
   margin-top: 16px;
 }
+.auth .auth-recovery {
+  display: block;
+  margin: 20px auto 0;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: underline;
+}
 .error {
   color: var(--danger);
   margin-top: 18px;

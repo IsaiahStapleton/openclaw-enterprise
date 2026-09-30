@@ -461,6 +461,9 @@
       "path": "tests/integration/google-login-transport.test.mjs"
     },
     {
+      "path": "tests/integration/password-sign-in-policy.test.mjs"
+    },
+    {
       "path": "tests/integration/client-address.test.mjs"
     },
     {

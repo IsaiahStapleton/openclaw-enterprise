@@ -134,7 +134,9 @@ Debug runtime disclosures follow the same validation and retain expanded state.
 A changed user or session key clears retained views and drafts before further
 private reads. Missing sessions open login; failed reads offer Retry.
 `showLogin` reads `GET /api/auth/providers`; true `github`/`google` flags add their **Continue
-with** buttons, and discovery failure keeps password login. Pending login disables
+with** buttons, and discovery failure keeps password login. `password: false`
+(recovery-only) hides the form behind **Recovery sign-in** and changes the
+provider-error advice from "use your password" to asking an administrator. Pending login disables
 all; generations reject late redirects. With `sessionBinding`, `loadPage`
 exchanges the button's stored `attemptId` once for its key. Tabs then send
 their pinned `x-occ-session-key`, so a replaced cookie yields login.

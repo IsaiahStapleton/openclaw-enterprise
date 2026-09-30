@@ -14,6 +14,9 @@
 {{- if and $recoveryUserId (not (regexMatch "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" $recoveryUserId)) -}}{{- fail "auth.recoveryUserId must be the existing local password administrator's user ID" -}}{{- end -}}
 {{- $google := .Values.auth.google -}}
 {{- if and $recoveryUserId (not (or (and $github $github.enabled) (and $google $google.enabled))) -}}{{- fail "auth.recoveryUserId requires auth.github.enabled or auth.google.enabled" -}}{{- end -}}
+{{- $passwordSignIn := toString (default "all" .Values.auth.passwordSignIn) -}}
+{{- if not (has $passwordSignIn (list "all" "recovery-only")) -}}{{- fail "auth.passwordSignIn must be all or recovery-only" -}}{{- end -}}
+{{- if and (eq $passwordSignIn "recovery-only") (not (or (and $github $github.enabled) (and $google $google.enabled))) -}}{{- fail "auth.passwordSignIn: recovery-only requires auth.github.enabled or auth.google.enabled" -}}{{- end -}}
 {{- if and $github $github.enabled -}}
 {{- if not $recoveryUserId -}}{{- fail "auth.github.enabled requires auth.recoveryUserId: install without GitHub first, then upgrade with the administrator's user ID" -}}{{- end -}}
 {{- if or (not $github.secretName) (not $github.clientIdKey) (not $github.clientSecretKey) -}}{{- fail "auth.github requires a dedicated operator-created Secret name, client ID key, and client secret key" -}}{{- end -}}

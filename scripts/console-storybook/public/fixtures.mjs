@@ -472,6 +472,7 @@ export function installFixture(scenario, evidence) {
       return response({
         github: scenario.githubEnabled === true,
         google: scenario.googleEnabled === true,
+        password: scenario.passwordRecoveryOnly !== true,
         sessionBinding: scenario.githubEnabled === true || scenario.googleEnabled === true,
       });
     }
