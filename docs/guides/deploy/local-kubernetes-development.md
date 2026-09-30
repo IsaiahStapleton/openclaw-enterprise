@@ -333,8 +333,8 @@ Restarts keep it; deleting the cluster, volume, or profile destroys it.
 Local-path storage is node-bound; use a portable StorageClass for workloads that
 move between nodes.
 
-PostgreSQL is a StatefulSet, and egress uses the node Pod CIDR and k3d subnet,
-not Pod or node IPs, so the profile survives `k3d cluster stop`/`start`.
+PostgreSQL is a StatefulSet, and a launcher NetworkPolicy allows egress by its
+Pod label and the k3d subnet, so the profile survives `k3d cluster stop`/`start`.
 
 The `local-path` reclaim policy is `Delete`: deleting a claim may delete its
 backing directory. PostgreSQL lives in the owned cluster; this does not back up

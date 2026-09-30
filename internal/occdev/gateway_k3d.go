@@ -188,13 +188,6 @@ func (r *runner) installDevelopmentRoutingControllers(ctx context.Context, state
 	if err := r.run(ctx, "kubectl", "wait", "--for=condition=Accepted", "gatewayclass/eg", "--timeout", timeout.String()); err != nil {
 		return "", err
 	}
-	return r.developmentNodePodCIDR(ctx, state)
-}
-
-// developmentNodePodCIDR returns the Pod CIDR allocated to the single k3d
-// server. The allocation is stored on the Node object, so it survives a
-// `k3d cluster stop` and `start`, while individual Pod addresses do not.
-func (r *runner) developmentNodePodCIDR(ctx context.Context, state *developmentState) (string, error) {
 	nodeData, err := r.output(ctx, "kubectl", "get", "node", "k3d-"+state.Cluster+"-server-0", "-o", "json")
 	if err != nil {
 		return "", err
@@ -212,52 +205,6 @@ func (r *runner) developmentNodePodCIDR(ctx context.Context, state *developmentS
 		return "", fmt.Errorf("k3d node must have a canonical bounded IPv4 Pod CIDR")
 	}
 	return prefix.String(), nil
-}
-
-// developmentNodeSubnet returns the IPv4 subnet of the owned k3d network that
-// contains the Kubernetes API endpoint. The engine may give the node a new
-// address in that subnet when the cluster or host restarts.
-func (r *runner) developmentNodeSubnet(ctx context.Context, state *developmentState, endpoint string) (string, error) {
-	address, err := netip.ParseAddr(endpoint)
-	if err != nil || !address.Is4() {
-		return "", fmt.Errorf("Kubernetes API endpoint must be an IPv4 address")
-	}
-	data, err := r.output(ctx, r.engine, "network", "inspect", "k3d-"+state.Cluster)
-	if err != nil {
-		return "", err
-	}
-	// Docker reports IPAM.Config[].Subnet; Podman reports subnets[].subnet.
-	var networks []struct {
-		IPAM struct {
-			Config []struct {
-				Subnet string `json:"Subnet"`
-			} `json:"Config"`
-		} `json:"IPAM"`
-		Subnets []struct {
-			Subnet string `json:"subnet"`
-		} `json:"subnets"`
-	}
-	if err := json.Unmarshal(data, &networks); err != nil || len(networks) != 1 {
-		return "", fmt.Errorf("invalid k3d network information")
-	}
-	var subnets []string
-	for _, entry := range networks[0].IPAM.Config {
-		subnets = append(subnets, entry.Subnet)
-	}
-	for _, entry := range networks[0].Subnets {
-		subnets = append(subnets, entry.Subnet)
-	}
-	for _, subnet := range subnets {
-		prefix, err := netip.ParsePrefix(subnet)
-		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || !prefix.Contains(address) {
-			continue
-		}
-		if prefix.Bits() < 16 {
-			return "", fmt.Errorf("k3d network subnet %s is broader than /16", prefix)
-		}
-		return prefix.String(), nil
-	}
-	return "", fmt.Errorf("k3d network k3d-%s has no IPv4 subnet containing the Kubernetes API endpoint", state.Cluster)
 }
 
 // Configure routing before bootstrap so the initial Namespace receives the

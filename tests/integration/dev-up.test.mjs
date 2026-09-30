@@ -1145,12 +1145,53 @@ test("Kubernetes-only dev-up keeps PostgreSQL and its egress policy valid across
     name: "data",
     persistentVolumeClaim: { claimName: "postgres-data" },
   });
-  // The PostgreSQL Pod and the k3d node receive new addresses after a restart.
-  // Egress must follow the node's Pod CIDR and the k3d network, not /32 pins.
+  // The chart admits PostgreSQL and the Kubernetes API only as /32 hosts, and
+  // both addresses change on restart. The launcher adds egress that does not.
   const values = JSON.parse(await readFile(join(directory, "helm-values.json"), "utf8"));
-  assert.deepEqual(values.database.cidrs, ["10.42.0.0/24"]);
-  assert.deepEqual(values.cluster.cidrs, ["172.30.42.0/24"]);
+  assert.deepEqual(values.database.cidrs, ["10.42.0.20/32"]);
+  assert.deepEqual(values.cluster.cidrs, ["172.30.42.3/32"]);
   assert.equal(values.cluster.port, 6443);
+  const restartEgress = JSON.parse(await readFile(join(directory, "restart-egress.json"), "utf8"));
+  const policy = (name) => restartEgress.items.find(({ metadata }) => metadata.name === name).spec;
+  const database = policy("openclaw-development-postgres-egress");
+  assert.deepEqual(database.podSelector.matchExpressions[0].values, [
+    "api",
+    "worker",
+    "initialization",
+  ]);
+  assert.deepEqual(database.egress, [
+    {
+      to: [{ podSelector: { matchLabels: { app: "postgres" } } }],
+      ports: [{ protocol: "TCP", port: 5432 }],
+    },
+  ]);
+  const cluster = policy("openclaw-development-kubernetes-egress");
+  assert.deepEqual(cluster.podSelector.matchExpressions[0].values, [
+    "api",
+    "worker",
+    "initialization",
+    "collector",
+  ]);
+  assert.deepEqual(cluster.egress, [
+    { to: [{ ipBlock: { cidr: "172.30.42.0/24" } }], ports: [{ protocol: "TCP", port: 6443 }] },
+  ]);
+  // The generated values must still satisfy the chart's own validation.
+  const rendered = spawnSync(
+    process.env.OCC_HELM_BIN ?? "helm",
+    [
+      "template",
+      "openclaw-enterprise",
+      "deploy/helm/openclaw-enterprise",
+      "--namespace",
+      "oce-system",
+      "-f",
+      join(directory, "helm-values.json"),
+    ],
+    { cwd: new URL("../..", import.meta.url), encoding: "utf8" },
+  );
+  if (rendered.error?.code !== "ENOENT") {
+    assert.equal(rendered.status, 0, rendered.stderr);
+  }
   const commands = await readJsonLines(fixture.env.SAFETY_LOG);
   assert.ok(
     commands.some(
