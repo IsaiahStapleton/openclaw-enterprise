@@ -188,6 +188,7 @@ export {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  SandboxRevisionUnsupportedError,
   ScopeViolationError,
 } from "./errors.ts";
 export {
