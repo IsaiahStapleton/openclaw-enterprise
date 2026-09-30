@@ -57,6 +57,13 @@ approval or approval-comment requirement. Complete these prerequisites first.
   packages to exist. Use the manual [marker bootstrap](#bootstrap-ghcr-packages)
   for missing packages, then make any new marker packages public before publishing
   source images or the chart.
+  Before converting an existing private package, inventory its retained versions
+  and access grants. Confirm that every retained image layer or chart is intended
+  for public distribution; a public source repository alone does not establish
+  that. [Changing package visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+  exposes all retained versions and cannot be reversed to private. If any retained
+  content must stay private, leave that package private and choose separate public
+  destinations before publishing. The workflow does not perform this conversion.
 - Set environment variables `GHCR_CONTROLLER_IMAGE` and `GHCR_RUNTIME_IMAGE`
   to their full `ghcr.io/openclaw/...` names without tags or digests. They must be
   different packages. There is no alternate destination fallback.
