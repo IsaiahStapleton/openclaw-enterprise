@@ -92,25 +92,11 @@ Diagnostics explain setup failures without establishing coverage.
 
 The `k3d-model`, `gateway-routing`, `slack`, and `k3d-otel` lanes prepare the controller image and workspace routing for dedicated Harness node enrollment. Supply an immutable `NODE_BASE_IMAGE` for the build. Preparation supplies the imported controller digest and private routing CA paths; Slack still requires approved runtime images and credentials.
 
-Routing, OpenShell, and logging have CI preparation contracts. Routing installs
-pinned Gateway API, cert-manager v1.18.4 and Envoy Gateway v1.6.7 manifests and
-generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster,
-installs a matched kubectl, configures and smoke-tests the selected RuntimeClass
-with the cluster's `runc` handler, installs CLI/chart and Agent Sandbox assets,
-and imports gateway and supervisor images. Only that disposable cluster exempts
-the selected RuntimeClass from Pod Security Admission; preparation proves an
-ordinary violating Pod is rejected and the same Pod is admitted with that class.
-The full OpenShell suite proves provider-owned supervisor filesystem, endpoint/L7
-network, and process enforcement while the sidecar policy remains binary-unaware.
-Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence;
-`OCC_TEST_OTEL_LOGS_URL` is no longer an external input. The Collector and
-Docker-model jobs use [setup-test-docker](../../.github/actions/setup-test-docker/action.yml)
-to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. It replaces
-the preinstalled daemon and shares `/var/run/docker.sock` across the CLI, Compose,
-and Driver; other jobs keep the runner daemon. Full-suite acceptance requires
-main-only protected hosted execution of every selected lane. See the
+Routing, OpenShell, and logging have concrete CI preparation contracts. The
+[preparation flow](../flows/github-actions-testing/preparation.md) records their
+pinned infrastructure, admission checks, Docker setup, and proof limits. See the
 [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
-for proof boundaries and live gaps.
+for remaining protected hosted coverage.
 
 Each lane runs whole test files. The runner validates Node case results and required names; skips, TODOs, missing results, zero cases, failures and cleanup errors fail the selected lane. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use the approved event commit and do not promote PR build artifacts.
 
@@ -174,6 +160,14 @@ manual dispatch, using the requested lane or `all`, not on pushes or merges. The
 `k3d-model` branch exception below does not enable other lanes outside `main`.
 `provider-account` remains manual because its configured admin credential cannot
 authenticate from the hosted runner.
+
+### Verify ClawSweeper dispatch
+
+Follow the [upstream installation instructions](https://github.com/openclaw/clawsweeper/blob/main/docs/target-dispatcher.md#target-repository-dispatcher) to install the `clawsweeper` GitHub App on this repository and confirm its installation on `openclaw/clawsweeper`. Grant the [workflow token permissions](../flows/clawsweeper-dispatch.md#entry-points) and add its private key as this repository's Actions secret `CLAWSWEEPER_APP_PRIVATE_KEY`. Keep one dispatcher for these events.
+
+After the first eligible issue, pull request, or command event following merge, inspect the **ClawSweeper Dispatch** Actions run. Admission and dispatch must succeed. Check the matching ClawSweeper receiver run and final review or command outcome for the same item; an acknowledgement alone does not prove completion.
+
+If admission warns or token creation fails, check the Actions secret and both App installations and permissions. Restore the missing setup and rerun or trigger a fresh eligible event, then repeat both checks. The [dispatch flow](../flows/clawsweeper-dispatch.md#debugging-and-verification) explains step behavior.
 
 ### Run Kubernetes model tests before merge
 
