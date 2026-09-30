@@ -127,8 +127,10 @@ Call the Diffs tool with before: "old line", after: "new line",
 path: "example.txt", and mode: "view".
 ```
 
-In the client's tool activity, check that `diffs` returns
-`Diff viewer ready.` A model reply alone does not prove it called the tool.
+In the client's tool activity, check the actual `diffs` call and a successful
+result for the requested file and view mode. Runtime versions may return a
+structured result rather than `Diff viewer ready.` A model reply alone does
+not prove it called the tool.
 The [Chat Completions check](../operate/model-verification.md) reads only
 assistant text; it cannot verify that Diffs ran. The OCC console has no chat.
 Use the TUI's tool activity for this verification.
@@ -137,6 +139,29 @@ For `failed`, use the returned error and the
 [deployment status reference](../../reference/agents.md#deployment-status). Check
 the plugin ID and supported [approval policies](../../reference/agent-plugins.md#approval-policy)
 before deploying a corrected update.
+
+## Verify Linear and approval behavior
+
+For dedicated Codex with the curated Linear app enabled, verify a direct issue
+read and a separate search/list call through the Agent's actual plugin tools.
+Use an authorized issue and do not modify it. Record the discovered tool name,
+arguments, native result and any error code for each call. A successful direct
+lookup or `linear_list_issues` call does not establish that an advertised
+`linear_search` tool works.
+
+Distinguish missing authentication, missing tool discovery, invalid arguments
+and backend dispatch errors. For example, `Tool search not found` with
+`INVALID_ARGUMENT` and JSON-RPC `-32602` is a failed search dispatch; do not
+summarize it as no Linear access when another authenticated Linear call succeeds.
+Do not substitute another API and label the advertised tool successful.
+
+To check write approval, use a uniquely named disposable issue with
+`toolDefaults.approval: write_actions` and `reviewer: human`. Confirm the native
+UI presents the request, select **Deny**, and verify the native result records
+that denial. Do not retry the mutation through another tool. In contrast,
+`toolDefaults.enabled: false` disables the plugin's tools; it blocks the write
+without offering an approval prompt. These are distinct policies, as defined
+in [Agent plugin approval](../../reference/agent-plugins.md#approval-policy).
 
 ## Disable or remove a plugin
 

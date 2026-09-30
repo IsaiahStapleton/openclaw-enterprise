@@ -7,7 +7,8 @@ machine. The OpenClaw Control Plane (OCC), PostgreSQL, and Agent workloads run
 in a local Kubernetes cluster created with k3d. This setup is for development
 and uses loopback addresses. This guide explicitly selects the Kubernetes-only
 profile; without a selection, startup uses a Compose control-plane preview that
-cannot deploy Agents. To install OCC itself in a cluster you already operate,
+cannot deploy Agents. A separate [Compose OCC with Kubernetes compute profile](deploy/local-kubernetes-development.md#run-occ-in-compose-with-kubernetes-compute)
+has fewer configured capabilities. To install OCC itself in a cluster you already operate,
 use [Kubernetes Setup](kubernetes-setup.md).
 
 ## Before you start

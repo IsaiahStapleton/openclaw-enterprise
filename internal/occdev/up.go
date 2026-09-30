@@ -178,7 +178,12 @@ func Up(ctx context.Context, opts Options) (result error) {
 	fmt.Fprintf(r.opts.Out, "Creating k3d cluster %s...\n", state.Cluster)
 	clusterAttempted = true
 	clusterImage := r.setting("OCC_DEVELOPMENT_K3S_IMAGE", "+v1.35")
-	clusterArgs := []string{"cluster", "create", state.Cluster}
+	clusterArgs := []string{"cluster", "create", state.Cluster, "--timeout", (time.Duration(timeout) * time.Second).String(), "--env", "IPTABLES_MODE=legacy@server:0"}
+	resolverArgs, err := r.prepareDevelopmentResolver(state)
+	if err != nil {
+		return err
+	}
+	clusterArgs = append(clusterArgs, resolverArgs...)
 	if sandboxDriver == "openshell" {
 		clusterImage = openShellK3sImage
 		admissionPath, err := prepareOpenShellAdmission(directory)
@@ -213,7 +218,14 @@ func Up(ctx context.Context, opts Options) (result error) {
 			return err
 		}
 	}
-	if err := writeInstallation(state, reference, openShellAssets, ""); err != nil {
+	var codexSeccompProfile string
+	if sandboxDriver == "none" {
+		codexSeccompProfile, err = r.prepareDevelopmentCodexSandbox(ctx, state, reference, timeout)
+		if err != nil {
+			return err
+		}
+	}
+	if err := writeInstallation(state, reference, openShellAssets, codexSeccompProfile); err != nil {
 		return err
 	}
 	fmt.Fprintln(r.opts.Out, "Starting the Compose controller and Kubernetes worker...")

@@ -1,8 +1,9 @@
 # Local Kubernetes development
 
 Run OpenClaw Enterprise (OCE) against a disposable, loopback-only k3d cluster.
-This guide covers the Kubernetes-only profile, which runs PostgreSQL, the
-OpenClaw Control Plane (OCC), and Agent workloads in the owned cluster.
+Start with the Kubernetes-only profile below, which runs PostgreSQL, the
+OpenClaw Control Plane (OCC), and Agent workloads in the owned cluster. The
+Compose alternative has fewer configured capabilities.
 
 ## Start the profile
 
@@ -25,6 +26,14 @@ Rootful describes the virtual machine; keep running `podman` as your normal
 host user. Rootful and rootless keep separate container storage, so the first
 start after switching rebuilds the images. On Linux, run Podman as root or
 delegate `cpuset` to your user session.
+
+Docker inside a containerized development host also needs `cpuset` delegated
+by the outer host. If node logs show `failed to find cpuset cgroup (v2)`, inspect
+`/sys/fs/cgroup/cgroup.controllers` inside the k3d server. A running Docker daemon
+does not prove this prerequisite. If delegation changes fail, check the host
+management service and its documented delegation procedure before concluding
+that an outer-host change is required. Restore any paused management service
+and verify its health before continuing; do not disable the K3s check.
 
 Startup resolves the engine's host API socket itself. Do not export
 `DOCKER_HOST` or `CONTAINER_HOST` from the path `podman info` reports: on a
@@ -60,6 +69,31 @@ runtime, kernel, or image change by recreating the local installation.
 To enable GitHub repository credentials during a fresh start, prepare the
 [local repository inputs](local-repository-credentials.md) before running the
 launcher. This requires an approved App key, repository policy, and egress CIDRs.
+
+### Run OCC in Compose with Kubernetes compute
+
+To select the hybrid profile on a fresh state directory:
+
+```bash
+export OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes
+export OCC_DEVELOPMENT_CONTROL_PLANE=compose
+export OCC_DEVELOPMENT_SANDBOX_DRIVER=none
+./scripts/dev-up
+```
+
+Expect `Control plane: Compose` and `Compute Driver: Kubernetes`. PostgreSQL,
+OCC, and its worker run in Compose; Agents run in k3d. Keep these exports for
+cleanup. This profile does not configure the Kubernetes-only browser endpoint,
+private workspace routing or repository service. It includes both default Presets,
+the Codex Plugin Driver, and the same Codex seccomp preparation. Dedicated Codex
+requires [hybrid private routing](local-compose-kubernetes.md) before deployment.
+Follow that procedure before creating Agent Namespaces; it also describes the
+Compose repository and Slack service connections.
+
+If the default K3s channel lookup times out, set
+`OCC_DEVELOPMENT_K3S_IMAGE` to an approved explicit Kubernetes 1.35-or-newer
+image before retrying. After a failed creation, run `./scripts/dev-down` with
+the same state directory first. See [profile settings](../../reference/settings/development.md).
 
 ### Start the OpenShell fail-closed profile
 
@@ -111,15 +145,19 @@ startup uses the Compose control-plane preview with Docker Compute.
 State and credentials are written to the private
 `/tmp/openclaw-development` directory by default. Set the absolute
 `OCC_DEVELOPMENT_STATE_DIRECTORY` before both startup and cleanup to use
-another location. Startup refuses an existing state directory or cluster. To pick up source changes, [rebuild the running services](#rebuild-after-a-source-edit);
+another location. `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` bounds k3d readiness as well as each
+subsequent startup wait. A cluster timeout triggers owned-resource rollback;
+follow the printed cleanup instruction if state is retained.
+Startup refuses an existing state directory or cluster. To pick up source changes, [rebuild the running services](#rebuild-after-a-source-edit);
 cleanup is for discarding the Installation. The state directory remains mode
 `0700`; the generated files
 mounted into the non-root controller and worker are container-readable but
 remain inaccessible to other host users through that private directory. The
 helper does not modify the default kubeconfig or current kubectl context.
 
-For separate stacks, select distinct state directories, cluster names, and
-published API ports. Generated runtime workloads have a 2 GiB memory limit
+For separate stacks, select distinct state directories, cluster names, bridge
+subnets and published ports. Compose also needs a distinct `OCC_POSTGRES_PORT`;
+changing the API port alone leaves PostgreSQL on port 55432. Generated runtime workloads have a 2 GiB memory limit
 each; size the local engine VM for OCC plus the Agents you run. Keep each
 stack's resources under the helper's lifecycle until cleanup.
 
@@ -345,7 +383,7 @@ discovering or deleting an unrelated cluster.
 
 ## Limits
 
-The Kubernetes-only node uses K3s legacy iptables mode. Without OpenShell,
+Both local k3d profiles use K3s legacy iptables mode. Without OpenShell,
 startup checks policy traffic before configuring gateway proxy trust and again
 against the initial Gateway Namespace. These checks establish only the tested
 single-node traffic at startup; they do not monitor later policy failures.

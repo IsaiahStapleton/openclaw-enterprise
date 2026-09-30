@@ -792,7 +792,10 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   );
   // A newly bootstrapped local installation must pass the real Compute startup
   // contract while trusting only Pod loopback, never an assumed cluster CIDR.
-  const compute = loadYaml(config).drivers.compute.configuration;
+  const installation = loadYaml(config);
+  assert.equal(installation.presets.includeDefaults, true);
+  assert.equal(installation.drivers.plugin.id, "codex-plugin");
+  const compute = installation.drivers.compute.configuration;
   KubernetesComputeDriver.validateConfiguration(compute);
   assert.deepEqual(compute.network.gatewayTrustedProxyCidrs, ["127.0.0.1/32"]);
   assert.match(config, /transportSecretPrefix: openclaw-agent-transport/);
@@ -803,6 +806,11 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   );
   assert.ok(clusterCreate, "Kubernetes development must create its owned k3d cluster");
   assert.equal(clusterCreate.args[clusterCreate.args.indexOf("--image") + 1], "+v1.35");
+  // Match the Kubernetes-only profile so nested nftables restore limits cannot leave stale policies.
+  assert.equal(
+    clusterCreate.args[clusterCreate.args.indexOf("--env") + 1],
+    "IPTABLES_MODE=legacy@server:0",
+  );
 
   const duplicate = fixture.start();
   assert.notEqual(duplicate.status, 0);
@@ -852,8 +860,10 @@ test("Kubernetes Compute defaults to the Compose control plane", async (t) => {
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
-test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
+test("Kubernetes dev-up forwards an explicit K3s image and startup timeout to k3d", async (t) => {
   const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS = "37";
+  fixture.env.OCC_DEVELOPMENT_K3D_DNS_RESOLVER = "192.0.2.53";
   fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
   const result = fixture.start();
   assert.equal(result.status, 0, result.stderr);
@@ -866,12 +876,18 @@ test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
     clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
     "rancher/k3s:v1.35.8-k3s1",
   );
+  // A failed node must not leave cluster creation waiting without a deadline.
+  assert.equal(clusterCreate.args[clusterCreate.args.indexOf("--timeout") + 1], "37s");
+  assert.ok(
+    clusterCreate.args.some((argument) => argument.includes(":/etc/resolv.conf:ro@server:0")),
+  );
   const cleaned = runDevDown(fixture.env);
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
 test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before reporting readiness", async (t) => {
   const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS = "41";
   fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
   fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
@@ -994,6 +1010,7 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
     clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
     /rancher\/k3s:v1\.36\.4-k3s1@sha256:/,
   );
+  assert.equal(clusterCreate.args[clusterCreate.args.indexOf("--timeout") + 1], "41s");
   assert.ok(clusterCreate.args.includes("--volume"));
   assert.ok(clusterCreate.args.includes("--port"));
   assert.equal(clusterCreate.args.includes("--network"), false);

@@ -9,8 +9,8 @@ last_updated_session: "authoring-run/00e5c01e-b8c9-46df-a8ac-45aa0e6932da"
 ## Overview
 
 The Console lists approved repositories; admission saves selections and deployment
-freezes grants. The worker delivers sessions to Kubernetes embedded OpenClaw
-or dedicated Codex with compatible Harness authentication and no Sandbox Driver.
+freezes grants. Sessions reach embedded OpenClaw or dedicated Codex with compatible
+Harness authentication and no Sandbox Driver.
 See [service forwarding and retirement](repository-credentials.md) and
 [runtime qualification](../testing/repository-credentials.md).
 
@@ -192,8 +192,7 @@ pending closure blocks replacement until bounded retry or continuation confirms
 disposal.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
-mounts Secrets only in the first initializer. Sorted projection items prevent
-key-order rollouts; session replacement still causes one.
+mounts Secrets only in the first init container. Sorted projections avoid key-order rollouts; session replacement still rolls.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-init.ts:REPOSITORY_MATERIAL_INIT_ENTRYPOINT`
 validates the complete projection, then writes mode-0700 directories and
 mode-0600 files in memory. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts the
@@ -211,26 +210,26 @@ Dedicated replacement preserves enrollment and revision-private storage.
 `KubernetesComputeDriver.prepareRevision` rechecks material after plugin,
 gateway and node observations; changed generation, lost readiness or expiry
 returns incomplete. Activation rechecks deadlines after final observations.
-The gateway receives no repository material or repository-gateway egress.
+A dedicated gateway receives no repository material or repository-gateway egress.
+Embedded and dedicated consumers receive the CA bundle in
+`SSL_CERT_FILE`, `GIT_SSL_CAINFO` and `NODE_EXTRA_CA_CERTS`; explicit CA overrides are rejected.
 Compute grants consumer egress; Helm admits consumers through
 [credential-sidecar ingress selectors](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking). Native preparation
 writes aggregate `gitconfig` without reading bearers. System Git includes
 `/run/oce/repository-credentials/gitconfig`, preserving HOME/global configuration.
 Embedded `repositoryNativeConfiguration` keeps the `gh` router first in
 `tools.exec.pathPrepend`. `AGENT_RUNTIME_ENTRYPOINT` sets Codex's
-`allow_login_shell=false` and `shell_environment_policy.set.PATH`. The Harness
-model environment remains intact. App keys, JWTs, installation tokens and the
-control socket never enter this material set. Selected Codex plugins can read `/app/node_modules/openclaw`,
+`allow_login_shell=false` and `shell_environment_policy.set.PATH`. Model authentication remains intact. App keys, JWTs, installation tokens and the
+control socket never enter consumer material. Selected Codex plugins can read `/app/node_modules/openclaw`,
 `/home/node/.openclaw/plugin-skills` and `/home/node/openclaw-runtime-assets/plugin-skills`
 for the stock app-server and published skills inside sandboxed Codex tools. Repository-bound Codex consumers additionally receive stock Codex
 `allow_local_binding = true`, `mode = "full"`, and the exact broker hostname
 allowance; explicit denies prevail. That repository profile also grants
 read-only access to `/opt/oce/repository-credentials` and
 `/run/oce/repository-credentials` so the native binary, Git helper, and generated
-session material remain reachable inside sandboxed Codex tools. The
+session material remain reachable. The
 [networking contract](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
-defines dedicated/embedded eligibility. Unbound policy and broker authorization remain unchanged.
-Compute supplies CA trust; TLS verification stays enabled.
+defines dedicated/embedded eligibility. Unbound policy, broker authorization and TLS verification remain unchanged.
 
 ### 5. Authenticate native Git and route GitHub CLI commands
 
@@ -348,6 +347,8 @@ Ready Pods and commands do not prove live writes.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 05:21: Deliver broker CA settings to both repository consumers. (01a0ed9e-6c22-7671-9ee1-a58e1df39acd - ab0a1838)
 
 - 2026-09-30 03:57: Recheck material deadlines. (authoring-run/00e5c01e-b8c9-46df-a8ac-45aa0e6932da - 5334a55faf3ced4bf9e0971daad6fd34ad2fe982)
 
