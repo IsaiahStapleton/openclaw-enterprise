@@ -255,3 +255,57 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
     false,
   );
 });
+
+test("Codex OAuth console without the installation opt-in reports the method unavailable and creates nothing", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("OAuth disabled", { ready: true });
+  const originalFetch = globalThis.fetch;
+  const providerRequests = [];
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.startsWith("https://auth.openai.com/") || url.startsWith("https://chatgpt.com/")) {
+      providerRequests.push(url);
+      return new Response(null, { status: 500 });
+    }
+    return originalFetch(input, init);
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  // The option stays listed (the Console reads no installation capability); signing in is refused.
+  await page.getByLabel("Authentication method").selectOption("oauth");
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().endsWith("/device-authorizations"),
+  );
+  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  assert.equal((await started).status(), 501);
+  await page
+    .getByText("ChatGPT sign-in is not enabled for this Installation.", { exact: false })
+    .waitFor();
+  assert.equal(await page.getByRole("link", { name: "Open Codex sign-in" }).isVisible(), false);
+  assert.equal(
+    await page.getByRole("button", { name: "Cancel login", exact: true }).isVisible(),
+    false,
+  );
+  assert.deepEqual(providerRequests, []);
+
+  await page.getByLabel("Agent name", { exact: true }).fill("OAuth Agent");
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
+  await page.getByRole("button", { name: "Create Agent", exact: true }).click();
+  await page
+    .getByText("Complete ChatGPT sign-in before creating the Agent.", { exact: true })
+    .waitFor();
+  assert.equal(
+    requests.some(
+      (request) =>
+        request.method === "POST" && request.path === `/namespaces/${namespace.id}/agents`,
+    ),
+    false,
+  );
+  const listed = await fixture.request("GET", `/namespaces/${namespace.id}/agents`);
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.data, []);
+});
