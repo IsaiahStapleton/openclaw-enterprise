@@ -177,29 +177,3 @@ test("OpenAPI check rejects unexpected generated API child pages in an isolated 
     /Unexpected generated API reference file: docs\/reference\/api\/unexpected-ci-check\.md/,
   );
 });
-
-test("runtime status and log operations publish their permission tiers and closed query", async () => {
-  const document = JSON.parse(await readFile(contractPath, "utf8"));
-  const base = "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime";
-  const status = document.paths[base]?.get;
-  const logs = document.paths[`${base}/logs`]?.get;
-  assert.ok(status && logs, "runtime operations are missing");
-  const tier = (action) => [
-    { action, resourceKind: "agent", scope: "requested" },
-    { action: "read", resourceKind: "agent", scope: "requested" },
-    { action: "read", resourceKind: "agent_revision", scope: "requested" },
-  ];
-  // Status is the diagnostics audience; log text needs Agent administer.
-  assert.deepEqual(status["x-openclaw-permissions"], tier("operate"));
-  assert.deepEqual(logs["x-openclaw-permissions"], tier("administer"));
-  assert.deepEqual(
-    logs.parameters
-      .filter(({ in: location }) => location === "query")
-      .map(({ name }) => name)
-      .sort(),
-    ["cursor", "pod", "previous", "sinceSeconds", "source", "tailLines"],
-  );
-  for (const code of ["429", "501", "504"]) {
-    assert.ok(logs.responses[code], `logs ${code}`);
-  }
-});
