@@ -953,9 +953,30 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	withdraw := &cobra.Command{
-		Use:   "withdraw-credential-source AGENT_ID SOURCE_ID",
-		Short: "Revoke a credential source from an Agent's active revision",
+	command.AddCommand(
+		create,
+		list,
+		get,
+		update,
+		deploy,
+		deploymentStatus,
+		stop,
+		deleteAgent,
+		app.agentRuntimeCredentialsCommand(),
+		app.agentCredentialWithdrawalCommand(),
+	)
+	return command
+}
+
+func (app *application) agentCredentialWithdrawalCommand() *cobra.Command {
+	command := commandGroup(
+		"credential-withdrawal",
+		"Revoke a credential source from an Agent's active revision",
+	)
+
+	request := &cobra.Command{
+		Use:   "request AGENT_ID SOURCE_ID",
+		Short: "Request revocation; the worker revokes it from the running revision",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
@@ -974,9 +995,9 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	withdrawal := &cobra.Command{
-		Use:   "credential-withdrawal AGENT_ID SOURCE_ID",
-		Short: "Show whether a credential source is revoked from an Agent's active revision",
+	get := &cobra.Command{
+		Use:   "get AGENT_ID SOURCE_ID",
+		Short: "Show whether the source is revoked and why a revocation is still pending",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
@@ -995,19 +1016,7 @@ func (app *application) agentCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(
-		create,
-		list,
-		get,
-		update,
-		deploy,
-		deploymentStatus,
-		stop,
-		withdraw,
-		withdrawal,
-		deleteAgent,
-		app.agentRuntimeCredentialsCommand(),
-	)
+	command.AddCommand(request, get)
 	return command
 }
 

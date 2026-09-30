@@ -149,7 +149,7 @@ function positiveInteger(value: number, name: string): number {
 
 function workOperation(claim: ClaimedWork): string {
   if (isCredentialWithdrawalWork(claim)) {
-    return "agent_revision.credentials_withdraw";
+    return "agent_revision.credential_withdrawal";
   }
   if (claim.revisionId !== undefined) {
     return "agent_revision.reconcile";
