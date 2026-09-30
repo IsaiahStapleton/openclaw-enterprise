@@ -213,7 +213,7 @@ test("an operator without administer sees status but no log text and is never re
   await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
   await page
     .getByText(
-      "Log text requires Agent administer and read access plus read access to this version.",
+      "Log text requires Agent read_logs (or administer) and read access plus read access to this version.",
     )
     .waitFor();
   assert.equal(await page.getByText("operator must not see this").count(), 0);

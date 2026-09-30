@@ -47,6 +47,7 @@ import {
   normalizePluginApprovers,
   normalizeHarnessAuthBinding,
   normalizeSecretBindings,
+  PERMISSION_ACTIONS as PLATFORM_PERMISSION_ACTIONS,
   RESOURCE_KINDS as PLATFORM_RESOURCE_KINDS,
   validPluginRevisionState,
   validPluginApprovers,
@@ -152,15 +153,7 @@ interface TransactionContext {
   installationLoaded: boolean;
 }
 
-const PERMISSION_ACTIONS = new Set([
-  "create",
-  "read",
-  "update",
-  "delete",
-  "deploy",
-  "operate",
-  "administer",
-]);
+const PERMISSION_ACTIONS = new Set<string>(PLATFORM_PERMISSION_ACTIONS);
 const RESOURCE_KINDS = new Set<string>(PLATFORM_RESOURCE_KINDS);
 const AUDIT_METADATA_KEY = "__occAuditMetadata";
 const SECRET_IDENTIFIER =
@@ -750,7 +743,7 @@ function auditFromRow(row: PostgresRow, installationId: string): Readonly<AuditE
   if (
     !RESOURCE_KINDS.has(resourceKind) ||
     !["success", "denied", "failure"].includes(outcome) ||
-    !["bootstrap", "mutation", "authorization_denial"].includes(kind)
+    !["bootstrap", "mutation", "access", "authorization_denial"].includes(kind)
   ) {
     throw new DependencyUnavailableError("Persisted audit evidence contains an invalid event.");
   }

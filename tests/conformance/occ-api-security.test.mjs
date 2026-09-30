@@ -1013,9 +1013,10 @@ test("runtime status and log reads enforce their permission tiers before any Dri
     session: operator.session,
   });
   assert.equal(operatorLogs.status, 403);
+  // Without either log grant the denial names the delegable read_logs permission.
   assert.deepEqual(fixture.auditSink.events.at(-1).authorization, {
     principalId: operator.principal.id,
-    action: "administer",
+    action: "read_logs",
     resource: { kind: "agent", id: target.agent.id, namespaceId: target.namespace.id },
   });
   const missingRead = await fixture.request("GET", target.logsPath(), {
@@ -1054,6 +1055,106 @@ test("runtime status and log reads enforce their permission tiers before any Dri
   assert.equal(serviceLogs.status, 200, serviceLogs.text);
 });
 
+test("a delegated read_logs principal reads and downloads logs without administer", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [runtimeLogLine(1)];
+  const logReader = [
+    { action: "read_logs", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent_revision" },
+  ];
+  const delegate = await fixture.createPrincipal("runtime-log-reader", target, logReader);
+  const accessEvents = () =>
+    fixture.auditSink.events.filter(
+      ({ action, actor }) =>
+        action.startsWith("openclaw.agents.runtime_logs.") &&
+        actor?.principalId === delegate.principal.id,
+    );
+
+  // read_logs admits log text but nothing the administer tier also covers.
+  const logs = await fixture.request("GET", target.logsPath(), { session: delegate.session });
+  assert.equal(logs.status, 200, logs.text);
+  assert.equal(logs.data.records[0].message, "gateway output 1");
+  const download = await fixture.request("GET", target.logsPath("source=gateway&download=true"), {
+    session: delegate.session,
+  });
+  assert.equal(download.status, 200, download.text);
+  assert.match(download.text, /gateway output 1/);
+  const nativeAdmin = await fixture.request(
+    "GET",
+    `/namespaces/${target.namespace.id}/agents/${target.agent.id}/native-admin`,
+    { session: delegate.session },
+  );
+  assert.equal(nativeAdmin.status, 403);
+  // Runtime status stays with the operate audience.
+  const status = await fixture.request("GET", target.runtimePath, { session: delegate.session });
+  assert.equal(status.status, 403);
+
+  // Each read is an access event that names the delegated grant, never the text.
+  const [view, downloaded] = accessEvents().filter(({ kind }) => kind === "access");
+  assert.deepEqual(
+    [view, downloaded].map(({ kind, action, outcome, authorization }) => [
+      kind,
+      action,
+      outcome,
+      authorization.action,
+    ]),
+    [
+      ["access", "openclaw.agents.runtime_logs.view", "success", "read_logs"],
+      ["access", "openclaw.agents.runtime_logs.download", "success", "read_logs"],
+    ],
+  );
+  assert.equal(JSON.stringify(accessEvents()).includes("gateway output 1"), false);
+
+  // The grant is still exact-Agent: a sibling Agent's logs are denied.
+  const sibling = await fixture.deployAgent("runtime-log-sibling");
+  const siblingLogs = await fixture.request("GET", sibling.logsPath(), {
+    session: delegate.session,
+  });
+  assert.equal(siblingLogs.status, 403);
+
+  // A read_logs Restriction wins even over administer, so it cannot be bypassed.
+  const both = await fixture.createPrincipal("runtime-log-both", target, [
+    ...logReader,
+    { action: "administer", resourceKind: "agent" },
+  ]);
+  fixture.policy.restrictions.push({
+    id: `restriction-read-logs-${target.agent.id}`,
+    namespaceId: target.namespace.id,
+    action: "read_logs",
+    resourceKind: "agent",
+    resourceId: target.agent.id,
+    effect: "deny",
+  });
+  const reads = driverReads(fixture).length;
+  for (const principal of [delegate, both]) {
+    const restricted = await fixture.request("GET", target.logsPath(), {
+      session: principal.session,
+    });
+    assert.equal(restricted.status, 403);
+    const denial = fixture.auditSink.events.at(-1);
+    assert.equal(denial.kind, "authorization_denial");
+    assert.equal(denial.authorization.action, "read_logs");
+    assert.deepEqual(denial.details.iamEvidence.restrictionIds, [
+      `restriction-read-logs-${target.agent.id}`,
+    ]);
+  }
+  assert.equal(driverReads(fixture).length, reads);
+
+  // Revocation between polls is honoured for the delegated grant too.
+  fixture.policy.restrictions.length = 0;
+  const again = await fixture.request("GET", target.logsPath(), { session: delegate.session });
+  assert.equal(again.status, 200, again.text);
+  delegate.revoke("read_logs", "agent");
+  const revoked = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&cursor=${encodeURIComponent(again.data.cursor)}`),
+    { session: delegate.session },
+  );
+  assert.equal(revoked.status, 403);
+});
+
 test("runtime log cursors bind one principal and view and are re-authorized on every poll", async () => {
   const fixture = await createRuntimeLogFixture();
   const target = await fixture.deployAgent();
@@ -1069,7 +1170,8 @@ test("runtime log cursors bind one principal and view and are re-authorized on e
     fixture.auditSink.events.filter(({ action }) => action === "openclaw.agents.runtime_logs.view");
   assert.equal(views().length, 1);
   const view = views()[0];
-  assert.equal(view.kind, "mutation");
+  assert.equal(view.kind, "access");
+  assert.equal(view.authorization.action, "administer");
   assert.equal(view.actor.principalId, viewer.principal.id);
   assert.deepEqual(
     { ...view.details.runtimeLogs, viewId: typeof view.details.runtimeLogs.viewId },
@@ -1428,7 +1530,7 @@ test("runtime routes answer 501 when the Driver, its logging owner or the operat
   }
 });
 
-test("runtime log downloads use the administer tier and are audited once per download", async () => {
+test("runtime log downloads use the log tier and are audited once per download", async () => {
   const fixture = await createRuntimeLogFixture();
   const target = await fixture.deployAgent();
   fixture.computeDriver.state.lines = [
@@ -1455,7 +1557,7 @@ test("runtime log downloads use the administer tier and are audited once per dow
   });
   assert.equal(denied.status, 403);
   assert.equal(fixture.auditSink.events.at(-1).kind, "authorization_denial");
-  assert.equal(fixture.auditSink.events.at(-1).authorization.action, "administer");
+  assert.equal(fixture.auditSink.events.at(-1).authorization.action, "read_logs");
   // The denial names the download, not a view.
   assert.equal(fixture.auditSink.events.at(-1).action, "openclaw.agents.runtime_logs.download");
   assert.equal(driverReads(fixture).length, 0);
@@ -1481,12 +1583,12 @@ test("runtime log downloads use the administer tier and are audited once per dow
   assert.equal(driverReads(fixture).at(-1).tailLines, 1000);
 
   await fixture.request("GET", path, { session: administrator.session });
-  const granted = () => downloads().filter(({ kind }) => kind === "mutation");
+  const granted = () => downloads().filter(({ kind }) => kind === "access");
   assert.equal(downloads().length, deniedDownloads + 2);
   assert.equal(granted().length, 2, "every download is audited");
   assert.equal(views().length, 0, "a download is not a view");
   const [audit] = granted();
-  assert.equal(audit.kind, "mutation");
+  assert.equal(audit.kind, "access");
   assert.equal(audit.actor.principalId, administrator.principal.id);
   assert.equal(audit.details.runtimeLogs.tailLines, 1000);
   assert.equal(audit.details.runtimeLogs.pod, pod);

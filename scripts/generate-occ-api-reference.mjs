@@ -206,7 +206,9 @@ function operationReference(path, method, operation, document, { headingLevel = 
                 ? " (when selecting an existing namespace)"
                 : condition === "bound_secret"
                   ? " (when bound)"
-                  : "";
+                  : condition === "read_logs_alternative"
+                    ? " (instead of `read_logs`)"
+                    : "";
           return `| \`${action}\` | \`${resourceKind}\` | \`${scope}\`${qualifier} |`;
         }),
       ].join("\n"),
