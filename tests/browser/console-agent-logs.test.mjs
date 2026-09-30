@@ -228,9 +228,7 @@ test("an operator without administer sees status but no log text and is never re
 
   await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
   await page
-    .getByText(
-      "Log text requires Agent read_logs (or administer) and read access plus read access to this version.",
-    )
+    .getByText("Log text requires Agent read_logs (or administer) and read access.")
     .waitFor();
   assert.equal(await page.getByText("operator must not see this").count(), 0);
   assert.equal(await page.getByRole("button", { name: "Follow" }).isDisabled(), true);
@@ -573,7 +571,7 @@ test("a reader without operate learns what log text needs and is asked for statu
 
   await page
     .getByText(
-      /Runtime status requires Agent operate .* Log text needs Agent read_logs \(or administer\) and read access plus read access to this version\./,
+      /Runtime status requires Agent operate .* Log text needs Agent read_logs \(or administer\) and read access\./,
     )
     .waitFor();
   const statusReads = () =>

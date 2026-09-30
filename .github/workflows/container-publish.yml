@@ -117,7 +117,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish exact OCI digests to private GHCR
+    name: Publish exact OCI digests to public GHCR
     if: ${{ inputs.publish }}
     needs: [validate, assemble]
     runs-on: ubuntu-24.04
@@ -144,7 +144,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y skopeo
           skopeo --version | grep -Fx 'skopeo version 1.13.3'
-      - name: Revalidate private packages, CI and bytes before transfer
+      - name: Revalidate public packages, CI and bytes before transfer
         env:
           GH_TOKEN: ${{ github.token }}
           CI_ATTEMPT: ${{ needs.validate.outputs.ci_attempt }}

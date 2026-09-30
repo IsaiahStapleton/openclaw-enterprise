@@ -24,9 +24,9 @@ their source revisions, and sets `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` for this
 runbook. It also explains how to select the matching source checkout and chart.
 Complete it before generating configuration; then skip the build section below.
 
-Configure pull credentials for control-plane and tenant Pods. Workstation
-`docker login` does not authenticate cluster nodes. For registry copies and
-published charts, follow [private-registry delivery](private-registry-images.md).
+Public GHCR pulls need no pull Secret. For private registry copies, configure
+pull credentials for control-plane and tenant Pods; workstation `docker login`
+does not authenticate cluster nodes.
 
 ## Build and publish production images
 
@@ -85,8 +85,9 @@ fi
 ```
 
 Before installation, [check each digest](../../testing/images.md#check-published-images)
-on native hosts for every target architecture, without skips. Use these digests in
-YAML and configure pull credentials for control-plane and tenant Pods.
+on native hosts for every target architecture, without skips. Use these digests
+in YAML. Configure pull credentials only when the selected registry requires
+them.
 
 ## Configure the Installation
 
@@ -404,8 +405,8 @@ helm upgrade --install oce deploy/helm/openclaw-enterprise \
 
 For an explicitly [published chart release](../../../.github/chart-publication.md#pull-and-install)
 (created with `publish_chart: true`),
-authenticate Helm, verify its receipt, then use
-`oci://ghcr.io/openclaw/charts/openclaw-enterprise` with `--version "$OCE_VERSION"`.
+verify its receipt, then use `oci://ghcr.io/openclaw/charts/openclaw-enterprise`
+with `--version "$OCE_VERSION"`.
 
 Helm owns migration and bootstrap ordering through its initialization hook.
 Readiness covers the API and worker probes, not authenticated API access, Agent

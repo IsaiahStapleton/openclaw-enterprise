@@ -211,7 +211,9 @@ The Role and target must exist in the path Namespace. Exact targets and Role
 permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
 `credential_source`, `preset`, `secret`, or `service_account`. `namespace`
 permissions support only `read`, and for a `namespace` target, `resourceId` must
-equal the Namespace ID in the path. A ServiceAccount
+equal the Namespace ID in the path. A binding applies only the Role permissions
+whose kind equals its target kind: an `agent_revision` permission bound to an
+Agent target grants nothing, so revision `read` is bound per AgentRevision. A ServiceAccount
 resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
 and extra fields are rejected. Native IAM commits validated policy and its
 attributable audit event together; later requests on other replicas see it
@@ -276,7 +278,8 @@ credentials.
 [Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two
 tiers on the exact Agent and revision: Pod status and Events need Agent
 `operate` and `read` plus revision `read`; container log text needs Agent
-`read_logs` or `administer`, Agent `read`, and revision `read`. A matching
+`read_logs` or `administer` and Agent `read`, which cover every revision of that
+Agent, including later deployments. A matching
 `read_logs` Restriction denies log text even to a holder of `administer`. Each
 follow poll is authorized again, so revoking a grant stops the next poll.
 

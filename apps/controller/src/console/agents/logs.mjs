@@ -33,8 +33,8 @@ function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
     // Name both grants: without status the Logs section never says what log text needs.
     return tier === "logs"
-      ? "Log text requires Agent read_logs (or administer) and read access plus read access to this version."
-      : "Runtime status requires Agent operate and read access plus read access to this version. Log text needs Agent read_logs (or administer) and read access plus read access to this version.";
+      ? "Log text requires Agent read_logs (or administer) and read access."
+      : "Runtime status requires Agent operate and read access plus read access to this version. Log text needs Agent read_logs (or administer) and read access.";
   }
   if (error.status === 501) {
     return "This Compute Driver does not expose runtime status or logs, or an operator turned them off.";

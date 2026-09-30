@@ -736,7 +736,6 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
         condition: "read_logs_alternative",
       },
       { action: "read", resourceKind: "agent", scope: "requested" },
-      { action: "read", resourceKind: "agent_revision", scope: "requested" },
     ];
   }
 

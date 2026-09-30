@@ -55,7 +55,7 @@ jobs:
         run: node scripts/ci/container-resume.mjs validate
 
   publish:
-    name: Resume exact OCI digests to private GHCR
+    name: Resume exact OCI digests to public GHCR
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
