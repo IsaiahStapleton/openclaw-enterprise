@@ -130,6 +130,21 @@ export class NativeWorkerSupportError extends Error {
   }
 }
 
+/**
+ * A Sandbox Driver cannot run this exact AgentRevision with the installed
+ * driver. Retrying cannot change the outcome, so the worker fails the deployment
+ * with `code`. The message stays in the controller; status shows a fixed text.
+ */
+export class SandboxRevisionUnsupportedError extends Error {
+  readonly code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED" | "SANDBOX_HARNESS_UNSUPPORTED";
+
+  constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
+    super(message);
+    this.name = "SandboxRevisionUnsupportedError";
+    this.code = code;
+  }
+}
+
 export class DriverSelectionError extends Error {
   constructor(message: string) {
     super(message);

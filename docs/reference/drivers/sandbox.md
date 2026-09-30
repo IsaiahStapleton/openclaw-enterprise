@@ -105,6 +105,14 @@ revision cleanup remains retryable. Unsupported topology, missing prerequisites,
 ambiguous resources, failed identity checks, or unavailable containment must
 prevent progress rather than weakening isolation.
 
+The worker retries driver errors as `DEPENDENCY_UNAVAILABLE`. When a driver
+cannot run an exact revision and a retry cannot change that, it throws
+`SandboxRevisionUnsupportedError` from `@openclaw-enterprise/occ` with a closed
+code. The worker then fails the deployment with that code and a fixed message
+at once. The driver's own message stays in the controller:
+`SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED` (Secret-backed environment) and
+`SANDBOX_HARNESS_UNSUPPORTED` (unsupported Harness).
+
 ## Limits
 
 - Supported facets are `networking`, `filesystem`, and `process`; there is no
