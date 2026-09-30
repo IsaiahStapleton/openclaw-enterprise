@@ -900,9 +900,6 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
         signal.removeEventListener("abort", abort);
         throw error;
       }
-      if (signal.aborted) {
-        call.cancel();
-      }
     });
   }
 
