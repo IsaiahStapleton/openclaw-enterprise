@@ -116,7 +116,9 @@ Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
 `github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
 query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
-long base64 or hex runs with `[redacted:<pattern>]`. Redaction is best-effort
+long base64 or hex runs with `[redacted:<pattern>]`. A PEM block printed over
+several lines is masked on every line from BEGIN through END; the block ends early
+at the first line that is not base64, a PEM header or blank. Redaction is best-effort
 pattern masking: an opaque token under 40 characters with no known prefix and no
 key name or `Bearer` next to it stays visible. Do not rely on redaction to make
 a runtime that prints secrets safe.
