@@ -6,11 +6,11 @@ explicitly marked for alignment are not settled product decisions. This proposal
 does not establish implemented or deployed support.
 
 This feature specification follows the [platform design](../../docs/design.md).
-It builds on [Agent plugin drivers](../plans/tasks/16-plugin-driver.md), retaining Agent-owned
+It builds on [Agent plugin drivers](../plans/16-plugin-driver.md), retaining Agent-owned
 selections and immutable revision snapshots while proposing new policy vocabulary
 and validation before save. When accepted, it replaces the category-policy and
 approval-mode proposals in [Native OpenClaw plugin tool policies](35-native-plugin-tool-policy.md).
-Those earlier documents remain historical records. [Console plugin selection](../plans/tasks/27-console-agent-plugins.md)
+Those earlier documents remain historical records. [Console plugin selection](../plans/27-console-agent-plugins.md)
 is an earlier proposal for the separate discovery and UI workstream; its API
 shape does not define the forthcoming discovery contract.
 

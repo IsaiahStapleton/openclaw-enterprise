@@ -43,17 +43,31 @@ specs/
   rfcs/
     0042-runtime-trust.md
   plans/
-    rfcs/
-      0042-runtime-trust.md
-    tasks/
-      0042-credential-cleanup.md
+    0042-runtime-trust.md
+    0042-credential-cleanup.md
 ```
 
 **RFC numbers and task-plan numbers are independent sequences.** Use the full
 identifiers `RFC-0042` and `TASK-0042` in conversation and links. An RFC plan
 reuses its RFC's number and topic; it does not allocate another number. Keep one
 primary plan per RFC, with milestones inside it. Link additional relevant RFCs
-as dependencies.
+as dependencies. All plans share `specs/plans/`; use the document's ID to
+identify its numbering sequence, not its directory or the presence of an RFC link.
+
+When a plan relates to an RFC, set `rfc` in its YAML frontmatter to a path
+relative to the plan file. For example, in `specs/plans/0042-runtime-trust.md`:
+
+```yaml
+---
+rfc: ../rfcs/0042-runtime-trust.md
+---
+```
+
+For `specs/plans/0042-runtime-trust/index.md`, the link would be
+`../../rfcs/0042-runtime-trust.md`. If the RFC uses a folder, include its
+`index.md` in the path. Omit `rfc` when no RFC applies. Keep this relationship
+in the plan's frontmatter and use body links for specific requirements or other
+RFC dependencies; the frontmatter link does not imply acceptance.
 
 For each sequence, allocate one above its highest used number, with at least
 four digits. Inspect existing files, the index, and Git history so deleted or
@@ -78,10 +92,10 @@ back to it. This applies to RFCs, RFC-linked plans, and standalone task plans:
 specs/rfcs/0042-runtime-trust/
   index.md
   architecture.svg
-specs/plans/rfcs/0042-runtime-trust/
+specs/plans/0042-runtime-trust/
   index.md
   qualification.md
-specs/plans/tasks/0042-credential-cleanup/
+specs/plans/0042-credential-cleanup/
   index.md
   inventory.md
 ```

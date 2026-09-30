@@ -9,19 +9,20 @@ selects its architectural owner.
 Read `AGENTS.md`, `docs/contributing/specifications.md`, and `specs/README.md`.
 Follow the specification process for numbering and historical exceptions:
 
-- With an owning RFC, reuse its number and topic under `specs/plans/rfcs/`.
+- With an owning RFC, reuse its number and topic under `specs/plans/`.
   Update its existing primary plan instead of allocating a second one.
-- Without an RFC, allocate an independent task ID under `specs/plans/tasks/`.
+- Without an RFC, allocate an independent task ID under `specs/plans/`.
   An implementation plan does not require an artificial RFC.
 - Search for the existing owner first. Resolve an explicit ID exactly; if a
   historical number names multiple documents, use the topic/path or ask. If an
   explicit RFC cannot be found, clarify rather than silently creating a task.
 - An existing task plan that later gains an RFC keeps its ID and path. Link the
-  relationship and preserve the work instead of duplicating or relocating it.
+  relationship in frontmatter and preserve the work instead of duplicating or
+  relocating it.
+- Use document IDs to identify the numbering sequence; all plans share one directory.
 
 Use one Markdown file by default. When companions are needed, use
-`<number>-<topic>/index.md` under the selected plan directory and put companions
-beside it. When converting an existing single file, preserve its ID and content,
+`specs/plans/<number>-<topic>/index.md` and put companions beside it. When converting an existing single file, preserve its ID and content,
 update incoming and relative links, and remove the former top-level file.
 Recheck number and path collisions before writing. Do not change the archive
 during normal plan authoring.
@@ -44,6 +45,11 @@ proceed alongside RFC review subject to actual holds.
 Start from the bundled `./assets/plan-template.md` (relative to `SKILL.md`).
 Remove optional prompts that do not apply. For a new plan use delivery status
 **Planned** and the allocated ID; retain an existing plan's evidence-backed status.
+Set `rfc` in YAML frontmatter to the relevant RFC's path relative to the plan
+file. Include `index.md` for an RFC in a folder. Omit the key (and an otherwise
+empty frontmatter block) when no RFC applies. Preserve other existing metadata.
+Adjust this link when moving either document; do not infer a relationship merely
+from matching numbers. Keep additional RFC dependencies as body links.
 
 1. State the observable outcome and selected scope. Link the RFC's requirements
    instead of repeating its rationale and complete design. For an independent

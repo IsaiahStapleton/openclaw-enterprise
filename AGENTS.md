@@ -178,10 +178,10 @@ Use the [documentation map](docs/README.md) and keep these ownership boundaries:
 - Use short Title Case sidebar labels and descriptive sentence-case article
   titles. Use nested groups when they clarify the reader's task; give menus a
   useful overview and list prerequisite steps before actions that need them.
-- `specs/rfcs/` records architectural proposals and decisions. `specs/plans/rfcs/`
-  holds their implementation plans; `specs/plans/tasks/` holds independent plans
-  and historical delivery records. Completed specifications do not override
-  current feature reference.
+- `specs/rfcs/` records architectural proposals and decisions. `specs/plans/`
+  holds all implementation plans and historical delivery records. Plans link
+  relevant RFCs through `rfc` frontmatter. Completed specifications do not
+  override current feature reference.
 
 Keep `docs/design.md` and its chapters about system structure, ownership,
 trust boundaries, and major interactions; update them for architectural changes
@@ -278,10 +278,11 @@ boundaries or intentional architecture as temporary.
 
 Follow the [specification process](docs/contributing/specifications.md) for
 document choice, numbering, status, and preservation. Write architectural RFCs
-under `specs/rfcs/`. Put RFC-linked implementation plans under `specs/plans/rfcs/`
-with the RFC's number and topic, and independently numbered task plans under
-`specs/plans/tasks/`. Use one Markdown file by default. When companions are
-needed, use `<number>-<topic>/index.md` for the main document and keep supporting
+under `specs/rfcs/` and all implementation plans directly under `specs/plans/`.
+Link a relevant RFC through the plan's `rfc` frontmatter field, using a path
+relative to the plan file. Preserve RFC-linked and independent task numbering.
+Use one Markdown file by default. When companions are needed, use
+`<number>-<topic>/index.md` for the main document and keep supporting
 files in that folder, without a separate top-level Markdown file.
 A larger feature with an RFC needs a separate implementation plan;
 an independent plan can build on the existing architecture without a new RFC.

@@ -126,21 +126,20 @@ Do not install dependencies as a verification side effect.
 
 ## Documentation placement
 
-| Location                              | Use it for                                                                   |
-| ------------------------------------- | ---------------------------------------------------------------------------- |
-| Root `README.md` and `docs/README.md` | Project orientation and the documentation map.                               |
-| `docs/layout.md`                      | Repository organization and file-placement conventions.                      |
-| `docs/design.md` and `docs/design/`   | Authoritative architecture, design requirements, and implementation status.  |
-| `docs/reference/`                     | Living supported-feature specifications and Driver contracts.                |
-| `docs/guides/`                        | Product user and operator procedures, including console, CLI, and API tasks. |
-| `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.    |
-| `docs/flows/`                         | Source-backed runtime execution traces.                                      |
-| `docs/testing/`                       | Contributor test setup, environments, fixtures, and proof limits.            |
-| `specs/README.md`                     | Shared index of RFCs, plans, and historical records.                         |
-| `specs/rfcs/`                         | Architectural proposals and decisions.                                       |
-| `specs/plans/rfcs/`                   | Implementation plans numbered with their owning RFC.                         |
-| `specs/plans/tasks/`                  | Independently numbered implementation plans and historical delivery records. |
-| `docs/assets/`                        | Documentation images and other shared assets.                                |
+| Location                              | Use it for                                                                                         |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Root `README.md` and `docs/README.md` | Project orientation and the documentation map.                                                     |
+| `docs/layout.md`                      | Repository organization and file-placement conventions.                                            |
+| `docs/design.md` and `docs/design/`   | Authoritative architecture, design requirements, and implementation status.                        |
+| `docs/reference/`                     | Living supported-feature specifications and Driver contracts.                                      |
+| `docs/guides/`                        | Product user and operator procedures, including console, CLI, and API tasks.                       |
+| `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.                          |
+| `docs/flows/`                         | Source-backed runtime execution traces.                                                            |
+| `docs/testing/`                       | Contributor test setup, environments, fixtures, and proof limits.                                  |
+| `specs/README.md`                     | Shared index of RFCs, plans, and historical records.                                               |
+| `specs/rfcs/`                         | Architectural proposals and decisions.                                                             |
+| `specs/plans/`                        | All implementation plans and historical delivery records; relevant RFCs are linked in frontmatter. |
+| `docs/assets/`                        | Documentation images and other shared assets.                                                      |
 
 Use stable feature names for living references. Follow
 [RFCs and implementation plans](contributing/specifications.md) for numbering,

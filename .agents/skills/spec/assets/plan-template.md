@@ -1,3 +1,7 @@
+---
+rfc: null
+---
+
 # Implementation plan: [outcome]
 
 - **ID:** [RFC-NNNN or TASK-NNNN]

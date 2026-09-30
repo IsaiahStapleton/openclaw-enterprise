@@ -235,7 +235,7 @@ reads the existing projection and does not refresh it from CP. See
 Deleting a source or runtime Secret does not revoke bytes a process loaded or a
 provider accepted.
 Transport rotation, finite token TTL and immediate revocation remain open; see
-[follow-up tracking](../../../../specs/plans/tasks/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
+[follow-up tracking](../../../../specs/plans/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
 Embedded execution retains its combined workload and transport bundle; CP-backed
 model/configuration sources are delivered to that workload as needed. It is
 outside the dedicated trust-boundary acceptance scope.

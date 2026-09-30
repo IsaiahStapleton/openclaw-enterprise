@@ -156,8 +156,8 @@ Per-file cleanup releases its disposable database; job cleanup removes only stat
 
 - [Testing guide](../testing/README.md)
 - [CI suite map](../../scripts/ci/test-suites.json)
-- [Integration implementation specification](../../specs/plans/tasks/19-github-actions-test-coverage/index.md)
-- [Upstream infrastructure report](../../specs/plans/tasks/19-github-actions-test-coverage/source-audit.md)
+- [Integration implementation specification](../../specs/plans/19-github-actions-test-coverage/index.md)
+- [Upstream infrastructure report](../../specs/plans/19-github-actions-test-coverage/source-audit.md)
 
 ## Manual Notes
 

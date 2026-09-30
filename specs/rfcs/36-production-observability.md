@@ -1,10 +1,10 @@
 # Default production observability
 
 Status: Implemented locally on 2026-09-23; default k3d acceptance passed.
-See the [qualification report](../plans/rfcs/36-production-observability/qualification.md)
+See the [qualification report](../plans/36-production-observability/qualification.md)
 for separate model-turn, hosted CI, and review status.
-The [unchanged local baseline](../plans/rfcs/36-production-observability/baseline.md)
-was verified before code changes. See the [implementation plan](../plans/rfcs/36-production-observability/index.md).
+The [unchanged local baseline](../plans/36-production-observability/baseline.md)
+was verified before code changes. See the [implementation plan](../plans/36-production-observability/index.md).
 
 ## Outcome and ownership
 
