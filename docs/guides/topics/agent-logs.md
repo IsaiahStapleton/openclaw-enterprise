@@ -22,7 +22,10 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
    **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
    for dedicated execution), or **Sandbox (policy decisions)** (see
    [Sandbox source](#sandbox-source)). Choose a **Pod** when a version has more
-   than one.
+   than one. While no Harness Pod is ready, the Gateway logs failed
+   connections to it (`ECONNREFUSED`); the console then points you to the
+   **Agent (Harness)** source, which holds the cause, such as a failed model
+   probe, or to Deployment activity when the Harness Pod does not exist yet.
 4. Select **Follow** to poll for new lines every 2 seconds. Following pauses while
    the browser tab is hidden or you scroll up, and stops after a permission denial.
 5. Select **Previous instance** after a restart to read the output of the
@@ -251,7 +254,7 @@ The logs cannot tell you, and you should not infer:
 
 | Response                              | Meaning and action                                                                            |
 | ------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `403 FORBIDDEN`                       | Missing grants for that tier. The console stops asking and shows which grants are needed.     |
+| `403 FORBIDDEN`                       | Missing grants for that tier. The console names the grants and stops asking for this page.    |
 | `400 RUNTIME_LOGS_CURSOR_INVALID`     | The cursor belongs to another principal, version or source, or was altered. Start a new view. |
 | `400 RUNTIME_LOGS_POD_INVALID`        | The Pod is not a current Pod of this version and source.                                      |
 | `400 RUNTIME_LOGS_SOURCE_UNAVAILABLE` | This version has no such source, for example no Sandbox log or no dedicated Harness.          |
