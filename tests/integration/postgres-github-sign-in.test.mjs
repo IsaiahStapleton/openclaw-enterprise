@@ -351,6 +351,7 @@ test(
     assert.deepEqual((await app.inject({ url: "/api/auth/providers" })).json().data, {
       github: true,
       google: false,
+      password: true,
       sessionBinding: true,
     });
     const googleAttach = await app.inject({

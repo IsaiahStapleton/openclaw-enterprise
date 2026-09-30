@@ -49,6 +49,11 @@ auth:
   # auth.google; it designates the recovery account when the API first starts with
   # external sign-in.
   recoveryUserId: ""
+  # Who may sign in with a password once auth.github or auth.google is enabled: "all"
+  # (every enrolled account) or "recovery-only" (only the recovery account; everyone else
+  # uses GitHub or Google). Attach every ordinary account's external identity first:
+  # accounts without one cannot sign in until an administrator attaches it.
+  passwordSignIn: all
   # Optional GitHub browser sign-in for existing password accounts (API Pod only).
   # Needs an HTTPS baseUrl, auth.recoveryUserId and agentNativeAdmin.enabled: false.
   # Create the dedicated Secret first.

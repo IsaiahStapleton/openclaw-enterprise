@@ -3028,9 +3028,13 @@
                       "properties": {
                         "github": { "type": "boolean" },
                         "google": { "type": "boolean" },
+                        "password": {
+                          "description": "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+                          "type": "boolean"
+                        },
                         "sessionBinding": { "type": "boolean" }
                       },
-                      "required": ["github", "google", "sessionBinding"],
+                      "required": ["github", "google", "password", "sessionBinding"],
                       "type": "object"
                     },
                     "meta": {

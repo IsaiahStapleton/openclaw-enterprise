@@ -3430,10 +3430,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           response: responses({
             type: "object",
             additionalProperties: false,
-            required: ["github", "google", "sessionBinding"],
+            required: ["github", "google", "password", "sessionBinding"],
             properties: {
               github: { type: "boolean" },
               google: { type: "boolean" },
+              password: {
+                type: "boolean",
+                description:
+                  "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+              },
               sessionBinding: { type: "boolean" },
             },
           }),
@@ -3443,8 +3448,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         reply.header("cache-control", "no-store");
         const github = options.auth.githubEnabled === true;
         const google = options.auth.googleEnabled === true;
+        const password = options.auth.passwordSignIn !== "recovery-only";
         return {
-          data: { github, google, sessionBinding: github || google },
+          data: { github, google, password, sessionBinding: github || google },
           meta: { requestId: request.id },
         };
       },

@@ -149,7 +149,9 @@ later rerender. Adding `controlPlane.github` or `controlPlane.google` (`{}` uses
 the chart's Secret defaults) renders `auth.github` or `auth.google` with
 `enabled: true` and `agentNativeAdmin.enabled: false`; remove
 `agentNativeAdminDomain` and `sharedCookieDomain`. `recoveryUserId` and an HTTPS
-`authBaseUrl` are required. Follow
+`authBaseUrl` are required. Optional `passwordSignIn: "recovery-only"` renders
+[`auth.passwordSignIn`](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in);
+preflight lists attaching every ordinary account's identity first. Follow
 [Enable GitHub browser sign-in](production-installation.md#enable-github-browser-sign-in).
 Behind a proxy that adds forwarded headers, such as ingress-nginx, set
 `trustedProxy` ([presets](../../reference/settings/production.md#github-sign-in-and-trusted-proxies));

@@ -449,6 +449,44 @@ export const scenarios = {
     actions: [click("Continue with GitHub")],
     description: "Admission refusal asks the user to wait without automatically retrying.",
   },
+  recoveryOnlyLogin: {
+    group: "Pages/Sign in",
+    name: "Recovery-only password",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    googleEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "With OCC_AUTH_PASSWORD_SIGN_IN=recovery-only, ordinary accounts continue with GitHub or Google. The password form stays behind Recovery sign-in for the recovery account.",
+  },
+  recoveryOnlyForm: {
+    group: "Pages/Sign in",
+    name: "Recovery sign-in form",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
+    actions: [
+      click("Recovery sign-in"),
+      { selector: "#username", value: "member@example.com" },
+      { selector: "#password", value: "demo-only" },
+      click("Login"),
+    ],
+    description:
+      "Recovery sign-in reveals the password form. A refused password explains that only the recovery account can use one.",
+  },
+  recoveryOnlyCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "Recovery-only GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "Without a password to fall back on, a rejected callback points the user to an administrator.",
+  },
   githubCallbackRejected: {
     group: "Pages/Sign in",
     name: "GitHub callback rejected",

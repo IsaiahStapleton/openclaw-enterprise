@@ -558,6 +558,7 @@ List configured browser sign-in methods
 | `data` | `object` | Yes | — |
 | `data.github` | `boolean` | Yes | — |
 | `data.google` | `boolean` | Yes | — |
+| `data.password` | `boolean` | Yes | False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password. |
 | `data.sessionBinding` | `boolean` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |

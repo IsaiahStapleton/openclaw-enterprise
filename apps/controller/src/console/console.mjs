@@ -41,6 +41,15 @@ const externalProviders = {
 };
 const bindingValue = /^[A-Za-z0-9_-]{43}$/;
 
+// A failed provider sign-in. Where password sign-in is recovery-only, ordinary users
+// have no password to fall back on, so the advice depends on provider discovery.
+function providerFailure(label) {
+  return (password) =>
+    password
+      ? `Could not sign in with ${label}. Try again or use your password.`
+      : `Could not sign in with ${label}. Try again, or ask an administrator to attach your ${label} identity to your account.`;
+}
+
 function pinSessionKey(value) {
   pinnedSessionKey = typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -280,6 +289,8 @@ function clearDrafts() {
 }
 
 function showLogin(message = "", returnPath = null) {
+  // A message may depend on whether ordinary accounts can use a password.
+  const describe = typeof message === "function" ? message : () => message;
   clearDrafts();
   const loginView = resetReads();
   clearPrivate();
@@ -308,14 +319,21 @@ function showLogin(message = "", returnPath = null) {
     autocomplete: "current-password",
     required: "",
   });
-  const feedback = element("p", { className: "error", role: "alert" }, message);
+  const feedback = element("p", { className: "error", role: "alert" }, describe(true));
+  const usernameHint = element(
+    "span",
+    { id: "username-hint", className: "hint" },
+    "Use your account email",
+  );
+  // Recovery-only password sign-in hides the form until the recovery path is chosen.
+  let recoveryOnly = false;
   const submit = element("button", { type: "submit", className: "primary" }, "Login");
   const form = element(
     "form",
     {},
     element("label", { for: "username" }, "Username"),
     username,
-    element("span", { id: "username-hint", className: "hint" }, "Use your account email"),
+    usernameHint,
     element("label", { for: "password" }, "Password"),
     password,
     feedback,
@@ -354,7 +372,9 @@ function showLogin(message = "", returnPath = null) {
         feedback.textContent =
           error.status === 429
             ? "Too many attempts. Please try again later."
-            : `${label} sign-in is unavailable. Try again or use your password.`;
+            : recoveryOnly
+              ? `${label} sign-in is unavailable. Please try again later.`
+              : `${label} sign-in is unavailable. Try again or use your password.`;
         pending = false;
         setDisabled(false);
       }
@@ -363,6 +383,17 @@ function showLogin(message = "", returnPath = null) {
   };
   const github = providerButton("github");
   const google = providerButton("google");
+  const recovery = button(
+    "Recovery sign-in",
+    () => {
+      recovery.hidden = true;
+      feedback.textContent = "";
+      form.insertBefore(feedback, submit);
+      form.hidden = false;
+      username.focus();
+    },
+    { className: "auth-recovery", hidden: true },
+  );
   function setDisabled(disabled) {
     submit.disabled = disabled;
     github.disabled = disabled;
@@ -400,7 +431,9 @@ function showLogin(message = "", returnPath = null) {
         error.status === 429
           ? "Too many attempts. Please try again later."
           : error.status === 400 || error.status === 401 || error.status === 403
-            ? "Could not sign in. Check your username and password."
+            ? recoveryOnly
+              ? "Could not sign in. Only the recovery account can use a password; other accounts continue with their external sign-in."
+              : "Could not sign in. Check your username and password."
             : "Sign-in is unavailable. Please retry.";
     } finally {
       if (lifetime.isCurrent(active)) {
@@ -423,6 +456,7 @@ function showLogin(message = "", returnPath = null) {
       element("p", { className: "muted" }, "Sign in to your Installation."),
       form,
       providers,
+      recovery,
     ),
   );
   void request("/api/auth/providers")
@@ -434,6 +468,18 @@ function showLogin(message = "", returnPath = null) {
         }
         if (available?.google === true) {
           providers.append(google);
+        }
+        // Only an explicit false hides the form: failed or older discovery keeps it.
+        if (available?.password === false && (available.github || available.google)) {
+          recoveryOnly = true;
+          const shown = feedback.textContent;
+          if (shown === describe(true)) {
+            feedback.textContent = describe(false);
+          }
+          form.hidden = true;
+          providers.after(feedback);
+          usernameHint.textContent = "Use the recovery account's email";
+          recovery.hidden = false;
         }
       }
     })
@@ -507,7 +553,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     } catch {
       if (lifetime.isCurrent(active)) {
         showLogin(
-          `Could not sign in with ${externalProviders[externalAttempt.provider].label}. Try again or use your password.`,
+          providerFailure(externalProviders[externalAttempt.provider].label),
           "/console/agents",
         );
       }
@@ -537,7 +583,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
             : pageUrl(current.target, current.namespace);
       showLogin(
         providerError !== null
-          ? `Could not sign in with ${providerError.label}. Try again or use your password.`
+          ? providerFailure(providerError.label)
           : current.feature !== "login" &&
               current.url.pathname !== "/console/" &&
               current.url.pathname !== "/console"

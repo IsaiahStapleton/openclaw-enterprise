@@ -504,6 +504,8 @@ Activation is one-way: the database refuses older images' sessions and
 For enrollment, obtain the numeric subject with `gh api user --jq .id` as the
 intended GitHub user; verify ownership through your identity process, not
 email or usernames. Follow the reference's attachment and unknown-outcome handling.
+Once every ordinary account has an identity, set `auth.passwordSignIn: recovery-only`
+([recovery-only sign-in](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in)).
 Loopback tests do not qualify production stop/drain, cookies, logging, or GitHub registration.
 
 ## Related

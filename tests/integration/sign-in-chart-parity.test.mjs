@@ -242,6 +242,37 @@ test(
         },
         egress: ["github", "google"],
       },
+      {
+        label: "GitHub and Google, recovery-only password sign-in",
+        values: {
+          ...githubUpgradeValues(recoveryUserId),
+          ...googleUpgradeValues(recoveryUserId),
+          "auth.passwordSignIn": "recovery-only",
+        },
+        settings: {
+          ...githubUpgradeSettings(recoveryUserId),
+          ...googleUpgradeSettings(recoveryUserId),
+          OCC_AUTH_PASSWORD_SIGN_IN: "recovery-only",
+        },
+        parsed: {
+          github: {
+            clientId: secrets["occ-github-login/client-id"],
+            clientSecret: secrets["occ-github-login/client-secret"],
+            recoveryUserId,
+          },
+          google: { ...google, allowedDomains: [] },
+          passwordSignIn: "recovery-only",
+        },
+        egress: ["github", "google"],
+      },
+      {
+        // The default is not rendered: the API reads an absent setting as "all".
+        label: "Google, password sign-in for every account",
+        values: { ...googleUpgradeValues(recoveryUserId), "auth.passwordSignIn": "all" },
+        settings: googleUpgradeSettings(recoveryUserId),
+        parsed: { google: { ...google, allowedDomains: [] } },
+        egress: ["google"],
+      },
     ];
     await Promise.all(
       cases.map(async ({ label, values, settings, parsed, egress }) => {
@@ -374,6 +405,22 @@ const invalid = [
       OCC_AGENT_NATIVE_ADMIN_DOMAIN: "agents.oce.example.internal",
       OCC_AUTH_COOKIE_DOMAIN: "oce.example.internal",
     },
+  },
+  {
+    name: "recovery-only password sign-in without GitHub or Google",
+    values: { "auth.passwordSignIn": "recovery-only" },
+    chart:
+      /auth\.passwordSignIn: recovery-only requires auth\.github\.enabled or auth\.google\.enabled/,
+    env: { OCC_AUTH_PASSWORD_SIGN_IN: "recovery-only" },
+    parser: /OCC_AUTH_PASSWORD_SIGN_IN=recovery-only requires GitHub or Google sign-in/,
+  },
+  {
+    name: "an unknown password sign-in policy",
+    values: { ...githubOn, "agentNativeAdmin.enabled": "false", "auth.passwordSignIn": "none" },
+    chart: /auth\.passwordSignIn must be all or recovery-only/,
+    github: true,
+    env: { OCC_AUTH_PASSWORD_SIGN_IN: "none" },
+    parser: /OCC_AUTH_PASSWORD_SIGN_IN must be all or recovery-only/,
   },
   {
     name: "Google without a recovery user",

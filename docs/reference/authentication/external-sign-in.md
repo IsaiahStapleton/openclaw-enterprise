@@ -65,7 +65,8 @@ user, email association, signup, identity transfer, and self-service linking are
 rejected. For unknown identities, follow the
 [enrollment procedure](../../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
-`GET /api/auth/providers` returns `github`, `google`, and `sessionBinding` as `true` when enabled. A
+`GET /api/auth/providers` returns `github`, `google`, and `sessionBinding` as `true` when enabled,
+and `password` as `false` only when [password sign-in is recovery-only](#recovery-only-password-sign-in). A
 same-origin `POST /api/auth/providers/github/start` returns `data.url` and a public
 `data.attemptId`, and sets a browser-binding cookie. Other provider names return `404`; callers cannot select
 callback or return destinations. The [Console flow](../../flows/platform-console.md#2-resolve-the-session-before-private-reads)
@@ -79,6 +80,40 @@ to `/console/?authError=github` without automatic retry. The starting tab sends 
 `attemptId` with the configured Origin to `POST /api/auth/providers/github/result`,
 which returns the callback session's `sessionKey` once, only while that session's
 cookie is current. It never issues or extends a session.
+
+## Recovery-only password sign-in
+
+By default every enrolled account can still sign in with its password once a
+provider is enabled, so strangers who know an email can spend that account's
+password sign-in budget. `OCC_AUTH_PASSWORD_SIGN_IN=recovery-only` (Helm
+`auth.passwordSignIn: recovery-only`; default `all`) removes that surface:
+only the recovery account signs in with a password, and every other account uses
+its attached GitHub or Google identity. It is the target posture once every
+ordinary account has an external identity. It requires a configured provider;
+startup and Helm refuse it otherwise, and any other value.
+
+Every other email, existing or not, receives the ordinary `401` bad-credential
+answer after the same password hashing, audited as `INVALID_CREDENTIALS`; no
+account is read, so the answer reveals nothing. `GET /api/auth/providers`
+reports `password: false`, and the Console shows provider buttons with the
+password form behind **Recovery sign-in**. During a provider outage only the
+recovery account can sign in.
+
+An account without an identity for a configured provider cannot sign in until an
+administrator attaches one. Each startup with `recovery-only` logs
+`authentication.password-sign-in-warning` (`EXTERNAL_IDENTITY_MISSING`) with the
+enabled accounts, other than the recovery account, that lack one, in the
+`skippedUserIds` fields that the activation warning also uses. To switch:
+
+1. Keep `all`. As an Installation administrator, attach an identity to every
+   ordinary account ([attachment](#github-sign-in-for-existing-accounts)), and
+   have each person sign in with it once.
+2. Set `recovery-only` and upgrade. If the warning lists accounts, attach their
+   identities; that takes effect without a restart. Setting `all` again and upgrading restores
+   passwords.
+
+New accounts need an identity too: create them with `github.subject`, or attach
+one straight after creation.
 
 ## Session and recovery controls
 

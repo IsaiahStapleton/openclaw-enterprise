@@ -78,6 +78,8 @@ export interface HumanLoginProviders {
   readonly recoveryUserId: string;
   readonly github?: ProviderClient;
   readonly google?: GoogleLoginConfiguration;
+  /** `recovery-only` admits only the recovery account's password; absent admits every one. */
+  readonly passwordSignIn?: "recovery-only";
 }
 
 // What one external provider contributes to the shared start/callback/result flow.
@@ -374,6 +376,7 @@ export function createHumanLogin(
     { concurrent: 8, reserved: 0 },
   );
   let recoveryEmail: string | undefined;
+  const recoveryOnly = config.passwordSignIn === "recovery-only";
   function designateRecovery(email: string): void {
     recoveryEmail = email.trim().toLowerCase();
   }
@@ -553,6 +556,14 @@ export function createHumanLogin(
           if (password.length < 12 || password.length > 128) {
             throw rejected();
           }
+          if (recoveryOnly && (recoveryEmail === undefined || email !== recoveryEmail)) {
+            // Ordinary accounts sign in with their external identity. The refusal is the
+            // bad-credential answer and reads no account, so it is the same for every
+            // email other than the recovery one, whether or not an account exists.
+            await ctx.context.password.hash(password);
+            await state.recordDenied("INVALID_CREDENTIALS");
+            throw rejected();
+          }
           const snapshot = await state.snapshotPassword(email);
           if (!snapshot?.proof.passwordHash) {
             await ctx.context.password.hash(password);
@@ -647,5 +658,6 @@ export function createHumanLogin(
     ...(githubLogin === undefined ? {} : { githubProviderId: githubLogin.providerId }),
     ...(googleLogin === undefined ? {} : { googleProviderId: googleLogin.providerId }),
     designateRecovery,
+    passwordSignIn: recoveryOnly ? ("recovery-only" as const) : ("all" as const),
   };
 }
