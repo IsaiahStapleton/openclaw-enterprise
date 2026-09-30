@@ -106,11 +106,12 @@ returning it:
   Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are
   dropped.
 - **codex**: Codex tracing records (level, target, message).
-- **text**: plain lines up to 4 KiB.
+- **text**: plain lines up to 4 KiB, including lines that start with a bracketed
+  component tag such as `[node-host] advertised commands: ...`.
 
 Any other structured output, including Codex JSON-RPC protocol traffic, is
-**withheld**: the page shows a count, never the content. Oversized and malformed
-structured lines are withheld the same way.
+**withheld**: the page shows a count, never the content. Oversized lines, and
+malformed lines that start like a JSON object or array, are withheld the same way.
 
 Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
