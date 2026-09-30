@@ -38,7 +38,7 @@ import type {
   AgentRuntimeLogRequest,
   AgentRuntimeLogSource,
   AgentRuntimePodStatus,
-  RuntimeLogSourceId,
+  RuntimeLogContainerSourceId,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
   ComputeAgentProvisioningInput,
@@ -2489,7 +2489,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
 
   private runtimePodStatus(
     pod: KubernetesRecord,
-    role: RuntimeLogSourceId,
+    role: RuntimeLogContainerSourceId,
     namespace: KubernetesNamespaceAddress,
   ): Omit<AgentRuntimePodStatus, "events"> {
     const metadata = asRecord(pod.metadata) ?? {};

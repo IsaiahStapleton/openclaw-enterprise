@@ -998,7 +998,15 @@ export const AgentDeploymentDiagnosticsResponse = Type.Object(
   { $id: "AgentDeploymentDiagnosticsResponse", additionalProperties: false },
 );
 
-const RuntimeLogSourceIdSchema = Type.Union([Type.Literal("gateway"), Type.Literal("agent")]);
+const RuntimeLogContainerSourceIdSchema = Type.Union([
+  Type.Literal("gateway"),
+  Type.Literal("agent"),
+]);
+const RuntimeLogSourceIdSchema = Type.Union([
+  Type.Literal("gateway"),
+  Type.Literal("agent"),
+  Type.Literal("sandbox"),
+]);
 const KubernetesObjectName = Type.String({
   minLength: 1,
   maxLength: 253,
@@ -1023,6 +1031,7 @@ export const RuntimeLogStreamSchema = Type.Object(
     podUid: Type.Optional(KubernetesUid),
     container: Type.Optional(KubernetesObjectName),
     restartCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    sandbox: Type.Optional(KubernetesObjectName),
   },
   { additionalProperties: false },
 );
@@ -1042,6 +1051,7 @@ export const RuntimeLogRecordSchema = Type.Union([
         Type.Literal("wrapper"),
         Type.Literal("openclaw"),
         Type.Literal("codex"),
+        Type.Literal("sandbox"),
         Type.Literal("text"),
       ]),
       level: Type.Union([
@@ -1073,6 +1083,7 @@ export const RuntimeLogRecordSchema = Type.Union([
         Type.Literal("window_exceeded"),
         Type.Literal("cursor_expired"),
         Type.Literal("truncated"),
+        Type.Literal("buffer_lost"),
       ]),
       remedy: Type.String({ maxLength: 512 }),
     },
@@ -1101,7 +1112,7 @@ export const AgentRuntimeDescriptionSchema = Type.Object(
     pods: Type.Array(
       Type.Object(
         {
-          role: RuntimeLogSourceIdSchema,
+          role: RuntimeLogContainerSourceIdSchema,
           cluster: Type.Union([Type.Literal("control"), Type.Literal("execution")]),
           name: KubernetesObjectName,
           uid: KubernetesUid,
@@ -1160,7 +1171,7 @@ export const AgentRuntimeDescriptionSchema = Type.Object(
       Type.Object(
         {
           id: RuntimeLogSourceIdSchema,
-          kind: Type.Literal("container"),
+          kind: Type.Union([Type.Literal("container"), Type.Literal("sandbox")]),
           pods: Type.Array(
             Type.Object(
               {

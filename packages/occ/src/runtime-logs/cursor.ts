@@ -3,7 +3,7 @@ import type { RuntimeLogSourceId } from "@openclaw-enterprise/contracts";
 
 const PURPOSE = "occ-runtime-logs-cursor";
 export const RUNTIME_LOG_CURSOR_TTL_MS = 60 * 60 * 1000;
-const MAX_HASHES = 16;
+const MAX_HASHES = 48;
 
 /** Identity a cursor is bound to; a cursor never crosses principals, Agents or revisions. */
 export interface RuntimeLogCursorBinding {
@@ -19,9 +19,15 @@ export interface RuntimeLogCursorPosition {
   readonly podUid: string;
   readonly restartCount: number;
   readonly previous: boolean;
-  /** Kubelet time of the newest line delivered, or null before any line. */
+  /**
+   * Kubelet time of the newest line delivered, or null before any line. The sandbox
+   * source stores its resume time here instead, which trails the newest line.
+   */
   readonly lastTime: string | null;
-  /** Hashes of the raw lines delivered at `lastTime`, for overlap de-duplication. */
+  /**
+   * Hashes of the raw lines delivered at `lastTime` (sandbox: at or after it, one per
+   * occurrence), for overlap de-duplication.
+   */
   readonly lastHashes: readonly string[];
   readonly issuedAt: number;
 }

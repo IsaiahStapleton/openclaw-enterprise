@@ -196,6 +196,11 @@ const RUNTIME_LOG_FAILURES: Readonly<
     message:
       "The cluster denied the runtime log read. Ask a platform operator to enable agentRuntimeLogs and the documented roles.",
   },
+  RUNTIME_LOGS_SANDBOX_NOT_FOUND: {
+    status: 503,
+    message:
+      "OpenShell reports no such sandbox for OpenClaw Enterprise: it is not provisioned yet or was removed, or the gateway identity is not a member of its Workspace.",
+  },
   RUNTIME_LOGS_UNAVAILABLE: {
     status: 503,
     message: "Runtime status or logs are unavailable. Retry later.",
