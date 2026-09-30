@@ -359,7 +359,7 @@ test("sandbox reads reject mixed Sandbox IDs, Pods and previous instances, and m
   const mixed = await request("GET", target.logsPath("source=sandbox"));
   assert.equal(mixed.status, 503, mixed.text);
   assert.equal(mixed.body.error.code, "RUNTIME_LOGS_UNAVAILABLE");
-  assert.equal(mixed.text.includes("a.example.com"), false);
+  assert.equal(mixed.body.data, undefined, "a refused chunk returns no records");
 
   const pod = await request("GET", target.logsPath("source=sandbox&pod=gateway-x-0"));
   assert.equal(pod.status, 400, pod.text);
