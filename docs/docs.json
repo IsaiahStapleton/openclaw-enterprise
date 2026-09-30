@@ -880,6 +880,7 @@
               "flows/workspace-files",
               "flows/pr-24-ssh-compute",
               "flows/github-actions-testing",
+              "flows/clawsweeper-dispatch",
               "flows/container-package-bootstrap",
               "flows/container-publication",
               "flows/cli-publication",

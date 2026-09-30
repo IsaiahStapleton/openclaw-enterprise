@@ -51,4 +51,5 @@ from each trace; for commands to run locally, see [Testing](../testing/README.md
 ## Continuous integration
 
 - [GitHub Actions testing](../flows/github-actions-testing.md) and [test preparation](../flows/github-actions-testing/preparation.md)
+- [ClawSweeper dispatch](../flows/clawsweeper-dispatch.md): hosted admission and review handoff
 - [Run and diagnose CI checks](../testing/ci.md)
