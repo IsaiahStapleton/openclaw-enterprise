@@ -83,7 +83,8 @@ File existence alone is not proof of successful initialization.
 
 Cookie-authenticated controller API mutations must include an
 `Origin` matching the origin of `OCC_AUTH_BASE_URL`. This includes sign-out. A missing,
-malformed, or different origin is rejected with `403`. If `Sec-Fetch-Site` is
+malformed, or different origin is rejected with `403`, and the error message says
+that a trusted browser origin is required. If `Sec-Fetch-Site` is
 present, it must be `same-origin`. Safe reads do not require an Origin.
 
 Sign-in rejects an explicitly untrusted or malformed Origin and also rejects
