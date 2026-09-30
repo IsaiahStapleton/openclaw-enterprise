@@ -2481,6 +2481,18 @@ async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
     });
   const before = `OCC-OPENSHELL-BEFORE-${randomUUID()}`;
   assert.match((await turn(`Reply with exactly ${before}.`)).assistant, new RegExp(before));
+  // The same Pod and containers must serve both turns: revocation reaches the running Harness.
+  const harnessProcess = async () => {
+    const pod = await resource("pod", harnessPod.metadata.name, topology.placement);
+    return {
+      uid: pod.metadata.uid,
+      restarts: (pod.status?.containerStatuses ?? []).map(({ name, restartCount }) => [
+        name,
+        restartCount,
+      ]),
+    };
+  };
+  const servingBefore = await harnessProcess();
 
   // A bare update re-sends the current Secret value; a replacement switches the source's Secret.
   const resynced = await request(
@@ -2545,6 +2557,11 @@ async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
     "a revoked turn must not expose the model key",
   );
   assert.equal(rejected, true, "a turn must not complete after credential withdrawal");
+  assert.deepEqual(
+    await harnessProcess(),
+    servingBefore,
+    "withdrawal must revoke from the running Harness without replacing or restarting it",
+  );
 
   // The active revision still references the source, so it cannot be deleted yet.
   const deletion = await request(
