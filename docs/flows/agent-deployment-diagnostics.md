@@ -81,6 +81,10 @@ status, startup evidence, plugin warnings, and Agent state unchanged.
 - `403` indicates missing exact permission; `404` indicates the path does not
   identify that Agent revision. `503 DEPENDENCY_UNAVAILABLE` indicates missing
   Driver support, collection failure, or invalid evidence.
+- Checks that are all `unknown` with code `UNAVAILABLE` mean the runtime did
+  not answer, usually because the Gateway is stopped, starting, or failed to
+  start. The console says so and names a failed deployment's recorded error
+  code, because these checks do not test model credentials.
 - The focused API test covers exact permissions and sanitized Driver failures.
   The Kubernetes conformance test covers Pod proxy placement, revision and Pod
   identity, and missing-Pod behavior. These tests do not prove a live Slack

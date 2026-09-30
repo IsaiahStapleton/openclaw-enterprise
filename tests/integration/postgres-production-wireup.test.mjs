@@ -578,6 +578,15 @@ test(
         newPresets.data.find((preset) => preset.name === "Standard OpenClaw").id,
         copiedOpenClaw.id,
       );
+      // Only unmodified seeded defaults remain, so deletion removes them with the Namespace.
+      const deletedNamespace = await request("DELETE", `/namespaces/${newNamespace.data.id}`);
+      assert.equal(deletedNamespace.status, 202);
+      assert.equal(deletedNamespace.data.status, "deleting");
+      const remainingPresets = await pool.query(
+        "SELECT id FROM occ.presets WHERE namespace_id = $1",
+        [newNamespace.data.id],
+      );
+      assert.deepEqual(remainingPresets.rows, []);
 
       const defaultConfiguration = await request(
         "POST",

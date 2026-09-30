@@ -3,7 +3,11 @@ import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compu
 /** Construct the production Kubernetes Driver without starting clients or contacting a cluster. */
 export function createTestKubernetesComputeDriver(
   id,
-  { repositoryCredentials = false, codexDeviceLogin = false } = {},
+  {
+    repositoryCredentials = false,
+    codexDeviceLogin = false,
+    authentication = { mode: "inCluster" },
+  } = {},
 ) {
   const resources = {
     requests: { cpu: "100m", memory: "64Mi" },
@@ -12,7 +16,7 @@ export function createTestKubernetesComputeDriver(
 
   return new KubernetesComputeDriver(
     {
-      authentication: { mode: "inCluster" },
+      authentication,
       images: { gateway: "gateway:local", agent: "agent:local", requireImmutableDigest: false },
       resources: {
         gateway: resources,

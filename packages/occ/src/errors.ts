@@ -34,6 +34,34 @@ export class AuthorizationDeniedError extends Error {
 }
 
 /**
+ * The Agent's own service principal, not the caller, lacks a grant that deployment needs.
+ * The caller is already authorized for the Agent, so naming the principal and the missing
+ * grant tells an operator exactly what to bind without disclosing anything new.
+ */
+export class AgentPrincipalAuthorizationError extends AuthorizationDeniedError {
+  readonly principalId: string;
+  declare readonly authorization: {
+    readonly action: AuthorizationRequest["action"];
+    readonly resource: ResourceRef;
+  };
+
+  constructor(
+    principalId: string,
+    action: AuthorizationRequest["action"],
+    resource: ResourceRef,
+    evidence?: AuthorizationEvidence,
+  ) {
+    super(
+      `The Agent service principal ${principalId} is not authorized to ${action} ${resource.kind} ${resource.id}. Grant that principal ${action} on the ${resource.kind}, then deploy again.`,
+      evidence,
+      { action, resource },
+    );
+    this.name = "AgentPrincipalAuthorizationError";
+    this.principalId = principalId;
+  }
+}
+
+/**
  * Authority and audit outages fail closed as authorization failures while
  * remaining distinguishable from explicit denials for HTTP and audit handling.
  */
@@ -92,6 +120,18 @@ export class ScopeViolationError extends Error {
   }
 }
 
+/**
+ * Admitted Configuration content cannot select a supported Harness runtime. The
+ * caller can already see the Configuration, so HTTP reports the static message as
+ * an invalid request instead of hiding it as a scope miss.
+ */
+export class ConfigurationHarnessError extends ScopeViolationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigurationHarnessError";
+  }
+}
+
 export class ResourceConflictError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
@@ -107,9 +147,13 @@ export class AgentDeletingError extends ResourceConflictError {
 }
 
 export class NamespaceNotEmptyError extends ResourceConflictError {
-  constructor(message = "The Namespace must be empty before deletion.") {
-    super(message);
+  /** Public resource kinds that still occupy the Namespace, such as "Presets". */
+  readonly contents: readonly string[];
+
+  constructor(contents: readonly string[] = []) {
+    super("The Namespace must be empty before deletion.");
     this.name = "NamespaceNotEmptyError";
+    this.contents = Object.freeze([...contents]);
   }
 }
 
@@ -130,6 +174,21 @@ export class NativeWorkerSupportError extends Error {
   }
 }
 
+/**
+ * A Sandbox Driver cannot run this exact AgentRevision with the installed
+ * driver. Retrying cannot change the outcome, so the worker fails the deployment
+ * with `code`. The message stays in the controller; status shows a fixed text.
+ */
+export class SandboxRevisionUnsupportedError extends Error {
+  readonly code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED" | "SANDBOX_HARNESS_UNSUPPORTED";
+
+  constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
+    super(message);
+    this.name = "SandboxRevisionUnsupportedError";
+    this.code = code;
+  }
+}
+
 export class DriverSelectionError extends Error {
   constructor(message: string) {
     super(message);
@@ -144,6 +203,52 @@ export class NotImplementedError extends Error {
     super(message);
     this.name = "NotImplementedError";
     this.operation = operation;
+  }
+}
+
+/** The cluster denied `pods/log` or `events`: an operator must grant the documented roles. */
+export class RuntimeLogsForbiddenByClusterError extends Error {
+  constructor() {
+    super("The cluster denied a runtime log or Event read.");
+    this.name = "RuntimeLogsForbiddenByClusterError";
+  }
+}
+
+/**
+ * OpenShell answered NOT_FOUND for the revision's Sandbox. It gives the same answer when
+ * the Sandbox is not provisioned (yet) and when OCC's identity is not a member of its
+ * Workspace, so the two cannot be told apart and neither is reported as "no lines".
+ */
+export class RuntimeLogsSandboxNotFoundError extends Error {
+  constructor() {
+    super("OpenShell reported the Sandbox as not found.");
+    this.name = "RuntimeLogsSandboxNotFoundError";
+  }
+}
+
+export type RuntimeLogsErrorCode =
+  | "RUNTIME_LOGS_CURSOR_INVALID"
+  | "RUNTIME_LOGS_POD_INVALID"
+  | "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+  | "RUNTIME_LOGS_RATE_LIMITED"
+  | "RUNTIME_LOGS_CLUSTER_RBAC"
+  | "RUNTIME_LOGS_SANDBOX_NOT_FOUND"
+  | "RUNTIME_LOGS_UNAVAILABLE"
+  | "RUNTIME_LOGS_AUDIT_UNAVAILABLE"
+  | "RUNTIME_LOGS_TIMEOUT";
+
+/** A fixed-message runtime log failure; Driver and cluster error text never reaches it. */
+export class RuntimeLogsError extends Error {
+  readonly code: RuntimeLogsErrorCode;
+  readonly retryAfterSeconds?: number;
+
+  constructor(code: RuntimeLogsErrorCode, retryAfterSeconds?: number) {
+    super(`Runtime log request failed: ${code}.`);
+    this.name = "RuntimeLogsError";
+    this.code = code;
+    if (retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
   }
 }
 

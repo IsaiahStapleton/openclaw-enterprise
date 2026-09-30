@@ -1142,7 +1142,15 @@ test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespac
     controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
       body: { permissions },
     });
-  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+  for (const action of [
+    "create",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ]) {
     const rejected = await createRole([
       { action: "read", resourceKind: "namespace" },
       { action, resourceKind: "namespace" },
@@ -1229,7 +1237,15 @@ test("OCC rejects Namespace lifecycle Role Permissions before any IAM Driver or 
       body: { permissions },
     });
 
-  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+  for (const action of [
+    "create",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ]) {
     const rejected = await createRole([{ action, resourceKind: "namespace" }]);
     assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
     assert.equal(rejected.body.error.code, "NOT_FOUND");

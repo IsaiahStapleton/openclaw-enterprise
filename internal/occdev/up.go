@@ -53,8 +53,11 @@ func Up(ctx context.Context, opts Options) (result error) {
 	}
 	state := &developmentState{Repository: opts.Repository, Version: 3, ComputeDriver: "kubernetes", SandboxDriver: sandboxDriver, ComposeProject: r.setting("OCC_DEVELOPMENT_COMPOSE_PROJECT", "openclaw-enterprise-development-kubernetes"), Cluster: r.setting("OCC_DEVELOPMENT_KUBERNETES_CLUSTER", "occ-dev-"+strings.ToLower(rand.Text()[:10])), directory: directory, KeyPath: opts.KeyOutput, KeyOwned: opts.KeyOutput == ""}
 
-	if !clusterName.MatchString(state.Cluster) || !projectName.MatchString(state.ComposeProject) {
-		return fmt.Errorf("invalid Kubernetes cluster or Compose project name")
+	if err := validateClusterName(state.Cluster); err != nil {
+		return err
+	}
+	if !projectName.MatchString(state.ComposeProject) {
+		return fmt.Errorf("invalid OCC_DEVELOPMENT_COMPOSE_PROJECT %q: the name must match %s", state.ComposeProject, projectName)
 	}
 	if state.KeyOwned {
 		state.KeyPath = filepath.Join(directory, "initial-admin-service-key.json")

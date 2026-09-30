@@ -254,16 +254,15 @@ and permitted transport depend on the selected Driver and admitted topology.
 The [Kubernetes security reference](security.md) defines its concrete credential
 exceptions and enforcement limitations; Docker has its own narrower boundaries.
 
-A replacement can be prepared while its predecessor serves. Embedded preparation
-does not validate replacement credentials; its activation can interrupt service
-as described above. Guarded activation publishes the replacement before the
-prior revision is retired, and retries cannot allow an older operation to
-overwrite a newer active revision. OCC records one active revision and routes
-new requests to it during normal reconciliation.
-Kubernetes Deployments do not guarantee a physical process singleton during node
-partitions or manual replacement; see the
-[gateway rollout limitation](drivers/kubernetes-compute.md#execution-modes).
-The worker records one
+Embedded preparation runs while its predecessor serves but does not validate
+replacement credentials; activation can interrupt service as described above.
+Dedicated replacement stops every earlier revision, even a healthy Gateway,
+before preparation, leaving the Agent unavailable until the replacement is
+ready. Guarded activation publishes the replacement before retiring the prior
+revision; an older retry never overwrites a newer active revision, and OCC
+routes to one active revision. Kubernetes cannot guarantee a process singleton
+during node partitions or manual replacement; see [execution
+modes](drivers/kubernetes-compute.md#execution-modes). The worker records one
 activation audit when durable completion succeeds; recovery repeats safe effects
 under the current claim. Exact ordering and failure handling are explained in
 the [worker flow](../flows/controller-worker.md).

@@ -108,6 +108,17 @@ export async function routeRuntimeCredentials(page, fixture, namespaceId, agentI
   );
 }
 
+// Browser storage the console wrote, except the tab-scoped Installation-access probe answer
+// (session owner key, admin flag and observability URL), which never holds drafts or
+// credentials.
+export async function consoleStorage(page) {
+  return page.evaluate(() => {
+    const session = { ...sessionStorage };
+    delete session["occ.console.installationAccess"];
+    return { local: { ...localStorage }, session };
+  });
+}
+
 export function nonAuthWriteRequests(requests) {
   return requests.filter(
     (request) => request.method !== "GET" && !request.path.startsWith("/api/auth/sign-"),

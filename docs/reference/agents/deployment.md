@@ -53,8 +53,10 @@ Each Agent explicitly records how its selected Harness runs:
 The Agent's native Configuration selects a Harness through model/provider
 `agentRuntime.id` policy. The [Harness execution reference](../harness-execution.md)
 owns supported runtime selections, model catalogs, transport, and credential
-boundaries. OCC rejects conflicting, unknown, or mode-incompatible selections
-before admitting a revision. A selected SandboxDriver currently requires
+boundaries. OCC rejects conflicting, unknown, missing, or mode-incompatible
+selections before admitting a revision: deploy returns `400 INVALID_REQUEST`
+with the specific reason, such as "The configured Agent model requires an
+explicit supported Harness runtime." A selected SandboxDriver currently requires
 `dedicated` Codex execution; it does not support embedded OpenClaw.
 
 An Agent update may include `executionMode`, `harnessAuth`, and `backendId`
@@ -115,8 +117,10 @@ Codex workload with its separate ServiceAccount, or one embedded combined
 gateway/Harness. Without a SandboxDriver, Compute owns the Codex Deployment;
 with one selected, that Driver provisions the dedicated Harness workload.
 Both embedded and dedicated modes are supported in production, subject to the
-selected Drivers' mode constraints. A replacement must preserve
-its predecessor's Service selector until activation succeeds. Without an
+selected Drivers' mode constraints. Unless Compute requests
+[exclusive replacement](../drivers/compute.md#production-revision-stages), as
+Kubernetes does for dedicated Agents, a replacement must preserve its
+predecessor's Service selector until activation succeeds. Without an
 eligible worker, revision work remains queued.
 
 When creation included [initial workspace files](../agents.md#initial-contents-at-creation),
@@ -128,6 +132,16 @@ or Harness runs. A `202` deployment response does not establish that this gate
 has passed. After activation, OCC clears staged contents and retains setup
 identity and completion metadata. Later revisions check completion without
 reapplying the original text, preserving edits made in the live workspace.
+
+Deployment admission checks what the Installation supports before it checks
+the Agent service principal's grants. An unsupported topology, such as
+dedicated native OpenClaw without
+[native worker support](../harness-execution.md#native-worker-support), is
+refused with its capability error even when the Agent principal also lacks a
+grant. When only the Agent principal's grant is missing, the `403` names that
+`servicePrincipalId`, the action, and the exact Secret or credential source,
+for example `The Agent service principal <id> is not authorized to operate
+secret <id>`. Denials of your own permissions stay generic.
 
 Revision list and read operations are scoped beneath the exact Namespace and
 Agent. Each returned revision requires its own authorized read; substituting a

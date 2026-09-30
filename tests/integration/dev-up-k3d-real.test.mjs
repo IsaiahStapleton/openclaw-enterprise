@@ -553,7 +553,7 @@ test(
         )
       ).stdout,
     );
-    assert.ok(pods.items.some(({ metadata }) => metadata.name === "postgres"));
+    assert.ok(pods.items.some(({ metadata }) => metadata.labels?.app === "postgres"));
     assert.ok(pods.items.some(({ metadata }) => metadata.name.startsWith("openclaw-enterprise")));
     if (environment.OCC_DEVELOPMENT_REPOSITORY_INPUT_DIRECTORY) {
       const worker = pods.items.find(

@@ -86,6 +86,8 @@
 ### Agent deployments
 
 - [`getAgentDeployment`](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentid): Get the durable deployment status for one admitted Agent revision.
+- [`getAgentDeploymentRuntime`](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntime): Read Pod status, restarts, Events and log sources for one exact Agent revision.
+- [`getAgentDeploymentRuntimeLogs`](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntimelogs): Read one bounded, redacted page of container output for one exact Agent revision.
 - [`diagnoseAgentDeployment`](../api.md#post-namespacesnamespaceidagentsagentiddeploymentsdeploymentiddiagnostics): Run explicit current-runtime diagnostics for one exact Agent revision.
 
 ### Agent revisions

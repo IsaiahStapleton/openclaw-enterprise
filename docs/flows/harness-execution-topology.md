@@ -1,7 +1,7 @@
 ---
 created: 2026-08-21
-updated: 2026-09-28
-last_updated_session: oce-pr-440-sync
+updated: 2026-09-30
+last_updated_session: authoring-run/1373b7f3-e273-466a-b9da-bb197bdb469e
 ---
 
 # Harness Execution Topology Flow
@@ -120,18 +120,19 @@ validates direct references to canonical CP sources for dedicated Gateways;
 `deliverHarnessAuth` creates the selected DP runtime projection. Dedicated app-server
 DNS includes the Harness namespace, and NetworkPolicy peers combine namespace
 and exact Agent/revision selectors. The active dedicated Harness Service selector
-carries the same Namespace, Agent, revision, and workload-role labels before
+carries the selected Harness network profile and the same Namespace, Agent, revision,
+and workload-role labels before
 adding a Compute-owned workload-name selector, so Service-IP traffic remains
 compatible with NetworkPolicy implementations that check Service selectors before
 destination translation. Active Gateway Services carry the Namespace, Agent, and
 gateway workload-role labels, satisfying gateway policy selectors without tying
 the stable Gateway route to a revision. `runtime.gatewayNodeSelector`
 independently places the Gateway Pod and private-state initializer on trusted nodes.
-During a dedicated replacement, preparation keeps a healthy predecessor Gateway in place while
-the candidate Harness enrolls its workspace node. If the predecessor Gateway is the same Agent but
-cannot become ready, preparation starts the candidate Gateway after the candidate Harness is
-otherwise ready. That candidate Gateway provides the bootstrap endpoint; the revision remains
-not ready until the workspace node is enrolled and observed.
+Before preparing a dedicated replacement, the worker stops every earlier revision, including its
+Gateway, so a redeploy interrupts service until the replacement is ready. Because the predecessor
+Gateway is stopped or otherwise not ready, preparation starts the candidate Gateway after the
+candidate Harness is otherwise ready. That candidate Gateway provides the bootstrap endpoint; the
+revision remains not ready until the workspace node is enrolled and observed.
 
 Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
 Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
@@ -189,6 +190,11 @@ Gateway repair in step 2 changes no unrelated Gateway and never activates a
 revision without its exact workspace node.
 Embedded preparation does not validate the replacement's credentials. See the
 [authentication flow](native-service-account-credential-delivery.md#5-authenticate-during-runtime-startup).
+While first-deploy [workspace setup](workspace-files.md) is pending, embedded
+preparation starts the replacement Gateway itself before activation. If the Gateway
+of a revision that never served (its Service still selects no Pod) is unready,
+for example after rejected model authentication, the next revision's preparation
+repairs it with its own template instead of waiting on the failed predecessor.
 
 The worker commits the database `activeRevisionId` with an exact compare-and-set
 before Kubernetes default after-commit activation.
@@ -258,6 +264,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
   provisioned application-role PostgreSQL database.
 - Check dedicated Gateway repair after an unready predecessor:
   `pnpm test:files --test-name-pattern='dedicated replacement starts a candidate Gateway' -- tests/conformance/kubernetes-compute.test.mjs`.
+- Check embedded Gateway repair after a never-served unready predecessor:
+  `pnpm test:files --test-name-pattern='never-served unready Gateway' -- tests/conformance/kubernetes-compute.test.mjs`.
 - Run real disposable-k3d Kubernetes coverage for both production topologies, exact identity and
   model-key placement, authenticated dedicated transport, isolated networking, and active routing;
   an HTTP fixture or skipped cluster scenario is not model-turn proof.
@@ -292,6 +300,12 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 09:30: Include the Harness network profile in Service selectors for EKS policy resolution. (authoring-run/1373b7f3-e273-466a-b9da-bb197bdb469e - 0d00e8970b69)
+
+- 2026-09-30 10:30: Repair a never-served unready embedded Gateway during redeploy with pending workspace setup. (fix-dogfood-1)
+
+- 2026-09-30 09:54: Correct dedicated replacement: the worker stops the predecessor Gateway before preparation, so redeploys interrupt service. (authoring-run/a37a9c9b-9e94-4bd2-88c5-dfa5c5f94d12 - 90899dc55ab7)
 
 - 2026-09-28 02:55: Trace dedicated native OpenClaw on paired node hosts with full-facet Sandbox provisioning. (oce-pr-440-sync - e2b739f51f89)
 

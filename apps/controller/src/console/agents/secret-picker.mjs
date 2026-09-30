@@ -178,6 +178,8 @@ export function createSecretReferenceField({
   let listboxOpen = false;
   let activeOptionIndex = -1;
   let searchQuery = "";
+  // Closing the create dialog returns focus to the input; that must not reopen the listbox.
+  let suppressFocusOpen = false;
 
   function isCurrent() {
     return typeof context.isCurrent !== "function" || context.isCurrent();
@@ -463,13 +465,20 @@ export function createSecretReferenceField({
       feedback,
       element("div", { className: "form-actions" }, cancel, submit),
     );
+    const dismiss = () => {
+      suppressFocusOpen = true;
+      dialog.close();
+      dialog.remove();
+      setTimeout(() => {
+        suppressFocusOpen = false;
+      }, 0);
+    };
     const close = () => {
       if (creating) {
         return;
       }
       value.value = "";
-      dialog.close();
-      dialog.remove();
+      dismiss();
       input.value = currentSecretLabel();
     };
     form.querySelector(".channel-drawer-head button").addEventListener("click", close);
@@ -500,8 +509,7 @@ export function createSecretReferenceField({
         });
         await bindSecret(createdSecret);
         if (currentSecretId() === createdSecret.id) {
-          dialog.close();
-          dialog.remove();
+          dismiss();
         } else {
           submit.disabled = false;
           cancel.disabled = false;
@@ -606,6 +614,10 @@ export function createSecretReferenceField({
   input.addEventListener("focus", () => {
     searchQuery = "";
     input.select();
+    if (suppressFocusOpen) {
+      suppressFocusOpen = false;
+      return;
+    }
     openListbox();
   });
   input.addEventListener("input", () => {

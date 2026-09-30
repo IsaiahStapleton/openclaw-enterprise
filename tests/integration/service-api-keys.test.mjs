@@ -471,7 +471,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     );
 
     const deleting = await run(occCli, ["agent", "delete", agent.data.id], { env });
-    assert.match(deleting.stdout, /STATUS/);
+    assert.match(deleting.stdout, /LIFECYCLE/);
     assert.match(deleting.stdout, new RegExp(`${agent.data.id}.*deleting`));
     const deletingAgent = await run(occCli, ["agent", "get", agent.data.id, "--output", "json"], {
       env,

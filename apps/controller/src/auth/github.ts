@@ -15,9 +15,10 @@ import {
   signLoginReceipt,
   verifyLoginReceipt,
 } from "./session-binding.ts";
-import type {
-  PostgresHumanAuthentication,
-  HumanAuthenticationProof,
+import {
+  knownDeviceAccountState,
+  type PostgresHumanAuthentication,
+  type HumanAuthenticationProof,
 } from "@openclaw-enterprise/occ";
 import {
   exchangeGoogleSubject,
@@ -32,6 +33,12 @@ import {
   type ProviderExchange,
 } from "./provider-transport.ts";
 import { admissionKey, keyedAdmission } from "./admission.ts";
+import {
+  issueKnownDevice,
+  knownDeviceCookieAttributes,
+  knownDeviceCookieName,
+  knownDeviceFromCookieHeader,
+} from "./known-device.ts";
 
 export interface GitHubLoginConfiguration {
   readonly clientId: string;
@@ -71,6 +78,8 @@ export interface HumanLoginProviders {
   readonly recoveryUserId: string;
   readonly github?: ProviderClient;
   readonly google?: GoogleLoginConfiguration;
+  /** `recovery-only` admits only the recovery account's password; absent admits every one. */
+  readonly passwordSignIn?: "recovery-only";
 }
 
 // What one external provider contributes to the shared start/callback/result flow.
@@ -204,10 +213,20 @@ function googleProvider(config: GoogleLoginConfiguration, baseURL: string): Exte
   };
 }
 
+export interface HumanLoginAdmissionOptions {
+  /**
+   * True when `x-occ-client-ip` was resolved through a configured trusted proxy. Without
+   * one it is the socket peer, which every browser behind an ingress shares, so the external
+   * lanes key on the browser's own cookies instead of the address.
+   */
+  readonly trustedClientAddress?: boolean;
+}
+
 export function createHumanLogin(
   state: PostgresHumanAuthentication,
   config: HumanLoginProviders,
   baseURL: string,
+  admission: HumanLoginAdmissionOptions = {},
 ) {
   if (config.github === undefined && config.google === undefined) {
     throw new Error("Guarded human sign-in requires a configured external sign-in provider.");
@@ -223,6 +242,34 @@ export function createHumanLogin(
   const receiptAttributes = { httpOnly: true, secure, sameSite: "strict" as const, path: "/" };
   const receipts = receiptLedger();
   const cookieAttributes = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
+  const knownDeviceCookie = knownDeviceCookieName(secure);
+
+  // A successful sign-in marks this browser as a known device for the account's email,
+  // bound to the account's current sign-in state, keeping the browser's entries for up to
+  // two other accounts.
+  function knownDeviceValue(
+    headers: Headers | undefined,
+    authSecret: string,
+    email: string,
+    accountState: string,
+  ): string {
+    return issueKnownDevice(
+      authSecret,
+      email.trim().toLowerCase(),
+      accountState,
+      Date.now(),
+      knownDeviceFromCookieHeader(headers?.get("cookie"), secure),
+    );
+  }
+
+  // The state a known-device entry is bound to; a failed read only skips the marking.
+  async function knownDeviceState(email: string): Promise<string | undefined> {
+    try {
+      return await state.knownDeviceState(email.trim().toLowerCase());
+    } catch {
+      return undefined;
+    }
+  }
 
   // Callback denials say whether the attempt, the provider, or the identity failed.
   async function rejectExternal(
@@ -337,20 +384,36 @@ export function createHumanLogin(
     };
   }
 
-  // Single-controller admission keeps a bounded table of hashed client-address and email keys,
-  // each with a one-minute budget and an active-request cap, under concurrency-only global lanes.
-  // The recovery account keeps a reserved password lane during provider outage or login floods.
-  const admitPassword = keyedAdmission(
-    { perMinute: 10, concurrent: 2 },
-    { concurrent: 4, reserved: 1 },
-    { perMinute: 20, concurrent: 2 },
-  );
-  // Every external provider shares one budget, so enabling another does not raise it.
-  const admitExternal = keyedAdmission(
-    { perMinute: 30, concurrent: 4 },
-    { concurrent: 8, reserved: 0 },
-  );
+  // Password sign-in is admitted by the controller's failure-counting admission before it
+  // reaches /oce/password (see index.ts), as in the password-only profile.
+  //
+  // External sign-in: start, callback and result each keep their own single-controller budget
+  // (a bounded table of hashed keys, 30 per minute and four active per key, eight active per
+  // step), so one sign-in spends one unit of each and junk requests at one step cannot starve
+  // another. Every provider shares these budgets, so enabling another does not raise them.
+  // Behind a trusted proxy the key is the client address. Without one the address is shared
+  // by every browser behind the ingress, so it is never a key: callback and result key on the
+  // browser's own attempt and receipt cookies, which a stranger cannot spend, and start (which
+  // has no browser state yet) is bounded by its concurrency cap and State's pending-attempt
+  // capacity instead of an Installation-wide budget.
+  const externalBudget = { perMinute: 30, concurrent: 4 } as const;
+  const externalGlobal = { concurrent: 8 } as const;
+  const admitStart = keyedAdmission(externalBudget, externalGlobal);
+  const admitCallback = keyedAdmission(externalBudget, externalGlobal);
+  const admitResult = keyedAdmission(externalBudget, externalGlobal);
+  const trustedClientAddress = admission.trustedClientAddress === true;
+  // `browserCookie` is the attempt or receipt cookie; start has none yet.
+  function externalKeys(
+    headers: Headers | undefined,
+    browserCookie?: () => string | null | undefined,
+  ): string[] {
+    if (trustedClientAddress) {
+      return [admissionKey("ip", headers?.get("x-occ-client-ip"))];
+    }
+    return browserCookie === undefined ? [] : [admissionKey("browser", browserCookie())];
+  }
   let recoveryEmail: string | undefined;
+  const recoveryOnly = config.passwordSignIn === "recovery-only";
   function designateRecovery(email: string): void {
     recoveryEmail = email.trim().toLowerCase();
   }
@@ -359,7 +422,7 @@ export function createHumanLogin(
   function externalProviderEndpoints(name: "github" | "google", provider: ExternalProvider) {
     return {
       start: createAuthEndpoint(`/oce/providers/${name}/start`, { method: "POST" }, async (ctx) =>
-        admitExternal.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
+        admitStart.admit(externalKeys(ctx.headers), async () => {
           const attemptState = secret();
           const browser = secret();
           const codeVerifier = secret();
@@ -391,8 +454,8 @@ export function createHumanLogin(
         `/oce/providers/${name}/callback`,
         { method: "GET", requireRequest: true },
         async (ctx) =>
-          admitExternal.admit(
-            [admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))],
+          admitCallback.admit(
+            externalKeys(ctx.headers, () => ctx.getCookie(bindingCookie)),
             async () => {
               const parameters = new URL(ctx.request!.url).searchParams;
               const stateValue = parameters.get("state");
@@ -458,6 +521,21 @@ export function createHumanLogin(
               await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
                 maxAge,
               });
+              // An external sign-in also marks the browser, for password fallback. An
+              // account without a password has no fallback to mark.
+              const deviceState = await knownDeviceState(snapshot.user.email);
+              if (deviceState !== undefined) {
+                ctx.setCookie(
+                  knownDeviceCookie,
+                  knownDeviceValue(
+                    ctx.headers,
+                    ctx.context.secret,
+                    snapshot.user.email,
+                    deviceState,
+                  ),
+                  knownDeviceCookieAttributes(secure),
+                );
+              }
               // The redirect carries no secret. The starting tab exchanges this
               // receipt for the key of exactly the session this attempt created.
               ctx.setCookie(
@@ -474,31 +552,38 @@ export function createHumanLogin(
           ),
       ),
       result: createAuthEndpoint(`/oce/providers/${name}/result`, { method: "POST" }, async (ctx) =>
-        admitExternal.admit([admissionKey("ip", ctx.headers?.get("x-occ-client-ip"))], async () => {
-          const body = ctx.body as { attemptId?: unknown } | undefined;
-          const now = Date.now();
-          const receipt = verifyLoginReceipt(ctx.context.secret, ctx.getCookie(receiptCookie), now);
-          if (
-            !receipt ||
-            !isBindingValue(body?.attemptId) ||
-            body.attemptId !== receipt.attemptId
-          ) {
-            throw rejected();
-          }
-          const token = await ctx.getSignedCookie(
-            ctx.context.authCookies.sessionToken.name,
-            ctx.context.secret,
-          );
-          const current = token ? await state.currentSession(token) : undefined;
-          // The receipt names the session its callback created. A cookie replaced by
-          // another sign-in, or a revoked session, cannot adopt this attempt's key.
-          if (!current || current.id !== receipt.sessionId || !receipts.consume(receipt, now)) {
-            throw rejected();
-          }
-          ctx.setCookie(receiptCookie, "", { ...receiptAttributes, maxAge: 0 });
-          // This exchange neither issues nor extends a session.
-          return ctx.json({ sessionKey: sessionBindingKey(ctx.context.secret, current.id) });
-        }),
+        admitResult.admit(
+          externalKeys(ctx.headers, () => ctx.getCookie(receiptCookie)),
+          async () => {
+            const body = ctx.body as { attemptId?: unknown } | undefined;
+            const now = Date.now();
+            const receipt = verifyLoginReceipt(
+              ctx.context.secret,
+              ctx.getCookie(receiptCookie),
+              now,
+            );
+            if (
+              !receipt ||
+              !isBindingValue(body?.attemptId) ||
+              body.attemptId !== receipt.attemptId
+            ) {
+              throw rejected();
+            }
+            const token = await ctx.getSignedCookie(
+              ctx.context.authCookies.sessionToken.name,
+              ctx.context.secret,
+            );
+            const current = token ? await state.currentSession(token) : undefined;
+            // The receipt names the session its callback created. A cookie replaced by
+            // another sign-in, or a revoked session, cannot adopt this attempt's key.
+            if (!current || current.id !== receipt.sessionId || !receipts.consume(receipt, now)) {
+              throw rejected();
+            }
+            ctx.setCookie(receiptCookie, "", { ...receiptAttributes, maxAge: 0 });
+            // This exchange neither issues nor extends a session.
+            return ctx.json({ sessionKey: sessionBindingKey(ctx.context.secret, current.id) });
+          },
+        ),
       ),
     };
   }
@@ -518,52 +603,62 @@ export function createHumanLogin(
         ) {
           throw rejected();
         }
+        // Reached only through the controller's sign-in route, which admits it first.
         const email = body.email.trim().toLowerCase();
         const password = body.password;
-        const work = async () => {
-          if (password.length < 12 || password.length > 128) {
-            throw rejected();
-          }
-          const snapshot = await state.snapshotPassword(email);
-          if (!snapshot?.proof.passwordHash) {
-            await ctx.context.password.hash(password);
-            await state.recordDenied("INVALID_CREDENTIALS");
-            throw rejected();
-          }
-          if (
-            !(await ctx.context.password.verify({
-              password,
-              hash: snapshot.proof.passwordHash,
-            }))
-          ) {
-            await state.recordDenied("INVALID_CREDENTIALS");
-            throw rejected();
-          }
-          const startedAt = performance.now();
-          const session = await proofScope.run({ proof: snapshot.proof }, () =>
-            ctx.context.internalAdapter.createSession(snapshot.user.id, false),
-          );
-          if (!session) {
-            throw rejected();
-          }
-          const maxAge = cookieLifetime(session.createdAt, session.expiresAt, startedAt);
-          await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
-            maxAge,
-          });
-          return ctx.json({
-            authenticated: true,
-            sessionKey: sessionBindingKey(ctx.context.secret, session.id),
-          });
-        };
-        return recoveryEmail !== undefined && email === recoveryEmail
-          ? admitPassword.admitRecovery(work)
-          : admitPassword.admit(
-              [
-                admissionKey("ip", ctx.headers?.get("x-occ-client-ip")),
-                admissionKey("email", email),
-              ],
-              work,
-            );
+        if (password.length < 12 || password.length > 128) {
+          throw rejected();
+        }
+        if (recoveryOnly && (recoveryEmail === undefined || email !== recoveryEmail)) {
+          // Ordinary accounts sign in with their external identity. The refusal is the
+          // bad-credential answer and reads no account, so it is the same for every
+          // email other than the recovery one, whether or not an account exists.
+          await ctx.context.password.hash(password);
+          await state.recordDenied("INVALID_CREDENTIALS");
+          throw rejected();
+        }
+        const snapshot = await state.snapshotPassword(email);
+        if (!snapshot?.proof.passwordHash) {
+          await ctx.context.password.hash(password);
+          await state.recordDenied("INVALID_CREDENTIALS");
+          throw rejected();
+        }
+        if (
+          !(await ctx.context.password.verify({
+            password,
+            hash: snapshot.proof.passwordHash,
+          }))
+        ) {
+          await state.recordDenied("INVALID_CREDENTIALS");
+          throw rejected();
+        }
+        const startedAt = performance.now();
+        const session = await proofScope.run({ proof: snapshot.proof }, () =>
+          ctx.context.internalAdapter.createSession(snapshot.user.id, false),
+        );
+        if (!session) {
+          throw rejected();
+        }
+        const maxAge = cookieLifetime(session.createdAt, session.expiresAt, startedAt);
+        await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
+          maxAge,
+        });
+        // The proof's versions were rechecked when the session was issued, so the entry
+        // is bound to the account state this sign-in proved.
+        ctx.setCookie(
+          knownDeviceCookie,
+          knownDeviceValue(
+            ctx.headers,
+            ctx.context.secret,
+            email,
+            knownDeviceAccountState(snapshot.proof),
+          ),
+          knownDeviceCookieAttributes(secure),
+        );
+        return ctx.json({
+          authenticated: true,
+          sessionKey: sessionBindingKey(ctx.context.secret, session.id),
+        });
       }),
       oceSignOut: createAuthEndpoint(
         "/oce/sign-out",
@@ -602,5 +697,12 @@ export function createHumanLogin(
     ...(githubLogin === undefined ? {} : { githubProviderId: githubLogin.providerId }),
     ...(googleLogin === undefined ? {} : { googleProviderId: googleLogin.providerId }),
     designateRecovery,
+    /** Whether `email` (normalized) is the recovery account's; its password stays reserved. */
+    isRecoveryEmail: (email: string) => recoveryEmail !== undefined && email === recoveryEmail,
+    /** Whether the known-device cookie uses its host-only (__Host-) name. */
+    knownDeviceSecure: secure,
+    /** The account state known-device entries are bound to (see known-device.ts). */
+    knownDeviceState: (email: string) => state.knownDeviceState(email),
+    passwordSignIn: recoveryOnly ? ("recovery-only" as const) : ("all" as const),
   };
 }

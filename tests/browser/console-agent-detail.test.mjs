@@ -457,6 +457,22 @@ test("Gateway password access saves the generated reference without changing adm
   await page.getByLabel("Available versions").selectOption(first.revision.id);
   await page.getByRole("button", { name: "Edit current Configuration", exact: true }).waitFor();
   assert.equal(await enable.count(), 0);
+
+  // A fresh Agent whose v1 was admitted from this exact Configuration generation needs no redeploy.
+  const fresh = await fixture.createAgent(namespace.id, "Gateway password fresh Agent", expected);
+  const freshV1 = await fixture.seedActiveAgentRevision(namespace.id, fresh.id);
+  assert.deepEqual(
+    freshV1.revision.configuration.gateway.auth.password,
+    expected.gateway.auth.password,
+  );
+  const freshUrl = detailUrl(fixture, namespace.id, fresh.id, "draft", "configuration");
+  await page.goto(`${fixture.origin}${freshUrl.pathname}${freshUrl.search}`);
+  await page
+    .getByText(
+      `Gateway password access is enabled in the saved Configuration and included in v${freshV1.revision.revision}.`,
+    )
+    .waitFor();
+  assert.equal(await page.getByText(/Deploy a new version to apply it/).count(), 0);
 });
 
 test("Agent detail preserves admitted revision history while draft edits change current configuration", async (t) => {
@@ -2810,12 +2826,27 @@ test("Agent sharing grants existing people exact discovery and native access, th
   );
 
   const recipient = (await newPage(t, fixture, browserOptions)).page;
+  const recipientRequests = apiRequests(recipient, fixture.origin);
   await login(recipient, fixture, `${detail.pathname}${detail.search}`, person.credentials);
-  await recipient
-    .getByText("Sharing policy requires Installation administration.", { exact: false })
-    .waitFor();
   await recipient.getByRole("heading", { name: "Configuration unavailable" }).waitFor();
+  // The policy reads are denied, so the sharing card is hidden instead of showing an error.
+  await recipient.locator(".agent-access").waitFor({ state: "hidden" });
+  assert.equal(
+    await recipient
+      .getByText("Sharing policy requires Installation administration.", { exact: false })
+      .count(),
+    0,
+  );
   await recipient.getByRole("link", { name: "Open native admin UI" }).waitFor();
+  // A non-administrator never reads sharing policy: each denial would be audited.
+  assert.equal(
+    await recipient.getByRole("region", { name: "Share Agent", exact: true }).count(),
+    0,
+  );
+  assert.deepEqual(
+    recipientRequests.filter((request) => request.path.includes("/iam/")),
+    [],
+  );
   await recipient.screenshot({
     path: join(artifacts, "agent-sharing-recipient.png"),
     fullPage: true,
@@ -2946,6 +2977,37 @@ test("Agent sharing reconciles a truncated committed response without replaying 
   await page.getByText("Your session has expired").waitFor();
   await page.getByRole("button", { name: "Login", exact: true }).waitFor();
   assert.equal(await panel.count(), 0);
+});
+
+test("Agent sharing rejects emails locally and names an unknown Principal ID", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Sharing subject checks");
+  const agent = await fixture.createAgent(namespace.id, "Subject Agent", nativeValues("subject"));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+  const principal = panel.getByLabel("Existing person’s Principal ID");
+  const writes = () =>
+    nonAuthWriteRequests(requests).filter((request) => request.path.includes("/iam/"));
+  await principal.fill("carol@example.invalid");
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("not an email address", { exact: false }).waitFor();
+  assert.equal(writes().length, 0);
+
+  await principal.fill("prn_00000000-0000-4000-8000-000000000000");
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel
+    .getByText("No existing person with that Principal ID can be granted access here", {
+      exact: false,
+    })
+    .waitFor();
+  assert.equal(await panel.getByText("Resource unavailable", { exact: false }).count(), 0);
+  const bindings = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.deepEqual(bindings.data, []);
 });
 
 test("Agent sharing creates exact Roles instead of reusing strict superset Roles", async (t) => {

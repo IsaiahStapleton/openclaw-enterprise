@@ -2614,9 +2614,42 @@ test("Agent creation withholds Dedicated OpenClaw unless the Installation report
   await page.getByLabel("Harness", { exact: true }).selectOption("openclaw");
   assert.equal(await mode.inputValue(), "embedded");
   assert.equal(await mode.locator('option[value="dedicated"]').isDisabled(), true);
+  // The disabled option explains itself instead of claiming Dedicated is supported.
+  const harnessHint = page.locator("#agent-harness-hint");
+  assert.match(await harnessHint.textContent(), /Embedded execution only; choose Codex/);
+  assert.doesNotMatch(await harnessHint.textContent(), /supports Dedicated/);
+  const modeHint = page.locator("#execution-mode-hint");
+  assert.match(await modeHint.textContent(), /Dedicated OpenClaw is unavailable/);
+  assert.doesNotMatch(await modeHint.textContent(), /supports Dedicated/);
+  // The blocking alert is reserved for a Dedicated selection; Embedded remains creatable.
+  assert.equal(
+    await page.getByText(/Dedicated OpenClaw is unavailable: this installation/).isHidden(),
+    true,
+  );
+  // Status and the collapsed Runtime details name the Embedded draft path.
+  await page
+    .getByText(
+      "Embedded Agents are saved as drafts. Deploy them from the Agent page after creation.",
+    )
+    .waitFor();
+  assert.equal(
+    await page.locator(".launch-runtime > summary").textContent(),
+    "Runtime details · Embedded",
+  );
+  // Slack is simply unavailable for Embedded Agents, not an error.
+  const embeddedChannelNote = page.getByText(
+    "Channels require Dedicated execution. Embedded Agents can only keep channels disabled.",
+  );
+  await embeddedChannelNote.waitFor();
+  assert.equal(await embeddedChannelNote.getAttribute("class"), "hint");
   // Codex keeps Dedicated execution; only native OpenClaw depends on the runtime.
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   assert.equal(await mode.locator('option[value="dedicated"]').isDisabled(), false);
+  assert.match(await modeHint.textContent(), /OpenClaw supports Dedicated or Embedded/);
+  assert.equal(
+    await page.locator(".launch-runtime > summary").textContent(),
+    "Runtime details · Dedicated",
+  );
 
   // The API refuses the same choice at deploy admission, naming the missing support. The
   // operator declaration is startup-only: an Agent Configuration cannot carry it in.

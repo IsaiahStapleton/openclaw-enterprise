@@ -37,6 +37,7 @@ test(
       assert.equal(observed.materialReady, false, "Compute must reject the expired observation");
       assert.equal(observed.ready, false, "Compute must not report expired material ready");
       assert.equal(observed.activations, 0);
+      const materialSelector = `openclaw.dev/agent=${agent.id},openclaw.dev/repository-material=session`;
       const claimed = await fixture.pool.query(
         "SELECT idempotency_key FROM occ.controller_work WHERE revision_id=$1 AND state='claimed'",
         [revision.id],
@@ -67,6 +68,9 @@ test(
       const beforeStop = await gate.inspect();
       assert.equal(beforeStop.state, "resumed");
       assert.equal(beforeStop.activations, 0);
+      const materialSecrets = await kube.resources("secrets", placement, "-l", materialSelector);
+      assert.equal(materialSecrets.length, 1, "the revision must have an owned material Secret");
+      assert.ok(materialSecrets[0].metadata.uid, "the material Secret must have a Kubernetes UID");
       assert.equal(
         fixture.events
           .slice(eventCursor)
@@ -87,9 +91,12 @@ test(
             `openclaw.dev/agent=${agent.id}`,
           );
           const attempts = await fixture.attempts(revision);
+          const secrets = await kube.resources("secrets", placement, "-l", materialSelector);
           return (
+            current.desiredRuntimeState === "stopped" &&
             current.activeRevisionId === undefined &&
             pods.length === 0 &&
+            secrets.length === 0 &&
             attempts.length > 0 &&
             attempts.every(({ phase }) => phase === "disposed" || phase === "invalidated")
           );

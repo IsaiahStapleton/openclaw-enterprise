@@ -29,6 +29,8 @@ import {
   type InitialWorkspaceFiles,
   ErrorResponse,
   AgentDeploymentDiagnosticsResponse,
+  AgentRuntimeLogsResponse,
+  AgentRuntimeResponse,
   AgentRuntimeCredentialResponse,
   JsonValue,
   PluginDesiredSelectionSchema,
@@ -47,6 +49,7 @@ import {
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
   type AuditEvent,
+  type AuditEventKind,
   type AuthorizationEvidence,
   type ConfigurationDriver,
   type ChannelDriver,
@@ -67,6 +70,7 @@ import {
   type SecretReference,
   type UpdateWorkspaceFileBody,
   type WorkspaceFileName,
+  type AgentRuntimeLogsQuery,
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
@@ -76,6 +80,8 @@ import {
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
   UserAlreadyExistsError,
+  RuntimeLogsError,
+  createRuntimeLogCursorCodec,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
   type DeployAgentAuthorization,
@@ -84,6 +90,16 @@ import {
   type OpenClawController,
 } from "@openclaw-enterprise/occ";
 import type { AdmittedCaller } from "./admission/admission-verifier.ts";
+import {
+  isRuntimeLogDownload,
+  RUNTIME_LOG_DOWNLOAD_ACTION,
+  RuntimeLogLimiter,
+  runtimeLogDownloadBody,
+  runtimeLogDownloadFileName,
+  runtimeLogPageBody,
+  runtimeLogQuery,
+  type AgentRuntimeLogsConfig,
+} from "./http/runtime-logs.ts";
 import {
   hostnameMatchesSharedCookieDomain,
   normalizeSharedCookieDomain,
@@ -162,6 +178,8 @@ export interface ControllerAppOptions {
   readonly workspaceFileRequestTimeoutMs?: number;
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
+  /** Absent or disabled: both runtime routes answer 501. */
+  readonly agentRuntimeLogs?: AgentRuntimeLogsConfig;
   readonly publicOrigin?: string;
   /** Writes the prepared account with its Principal, bindings and enrolment atomically. */
   readonly provisionAuthAccount?: (
@@ -222,7 +240,8 @@ interface RequiredPermission {
     | "iam_binding_target"
     | "provisioning_work"
     | "missing_runtime_credentials"
-    | "authenticated_plugin_discovery";
+    | "authenticated_plugin_discovery"
+    | "read_logs_alternative";
 }
 
 interface DocumentedFastifySchema extends FastifySchema {
@@ -721,6 +740,28 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
+  if (operation.operationId === "getAgentDeploymentRuntime") {
+    return [
+      { action: "operate", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
+  if (operation.operationId === "getAgentDeploymentRuntimeLogs") {
+    return [
+      { action: "read_logs", resourceKind: "agent", scope: "requested" },
+      {
+        action: "administer",
+        resourceKind: "agent",
+        scope: "requested",
+        condition: "read_logs_alternative",
+      },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
   switch (operation.authorizationTarget) {
     case "namespace_collection":
       return [{ ...permission, scope: "namespace" }];
@@ -806,6 +847,9 @@ function permissionDescription(
       }
       if (condition === "authenticated_plugin_discovery") {
         return `Requires ${action} permission on the Agent's bound ${name} when the selected Plugin Driver requires a discovery credential.`;
+      }
+      if (condition === "read_logs_alternative") {
+        return `Without read_logs, ${action} permission on the requested ${name} also admits the read.`;
       }
       if (condition === "iam_binding_target") {
         return `Requires ${action} permission on the request body ${name} when the AccessBinding targets that resource kind.`;
@@ -1198,11 +1242,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       503: { description: "Service Unavailable", ...nativeAdminErrorSchema },
     },
   } as DocumentedFastifySchema;
+  const runtimeLogLimiter = new RuntimeLogLimiter();
+  const runtimeLogCursor =
+    options.agentRuntimeLogs?.enabled === true
+      ? createRuntimeLogCursorCodec(options.agentRuntimeLogs.cursorSecret)
+      : undefined;
   function event(
     operation: OccApiRoute,
     request: FastifyRequest,
     resource: ResourceRef,
-    kind: "bootstrap" | "mutation" | "authorization_denial",
+    kind: AuditEventKind,
     context?: RequestContext,
     evidence?: AuthorizationEvidence,
     result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
@@ -1210,8 +1259,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     validatedAuthorization?: Readonly<DeployAgentAuthorization>,
   ): AuditEvent {
     const authorizationEvidence = validatedAuthorization?.decision.evidence ?? evidence;
-    const outcome =
-      result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied");
+    const outcome = result?.outcome ?? (kind === "authorization_denial" ? "denied" : "success");
     return factory.create({
       installationId,
       ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
@@ -1262,7 +1310,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   },
                 }),
           }),
-      action: operation.action,
+      action: auditAction(operation, request),
       resource,
       outcome,
       ...(result?.reasonCode === undefined
@@ -1271,6 +1319,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           : {}
         : { reasonCode: result.reasonCode }),
     });
+  }
+
+  /** Log views and downloads share a route and permissions but not an audit action. */
+  function auditAction(operation: OccApiRoute, request: FastifyRequest): string {
+    return operation.operationId === "getAgentDeploymentRuntimeLogs" &&
+      isRuntimeLogDownload(request.query as AgentRuntimeLogsQuery)
+      ? RUNTIME_LOG_DOWNLOAD_ACTION
+      : operation.action;
   }
 
   function selectedIAMDriver(): IAMDriver {
@@ -1817,7 +1873,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     if (
       Object.keys(request.query as Record<string, unknown>).length > 0 &&
       operation.operationId !== "listRepositoryOptions" &&
-      operation.operationId !== "listAgentRepositoryOptions"
+      operation.operationId !== "listAgentRepositoryOptions" &&
+      operation.operationId !== "getAgentDeploymentRuntimeLogs"
     ) {
       throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
     }
@@ -2996,6 +3053,99 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (
+      operation.operationId === "getAgentDeploymentRuntime" ||
+      operation.operationId === "getAgentDeploymentRuntimeLogs"
+    ) {
+      if (runtimeLogCursor === undefined) {
+        throw failure(
+          501,
+          "NOT_IMPLEMENTED",
+          "Agent runtime status and logs are disabled for this Installation.",
+        );
+      }
+      runtimeLogLimiter.admit(context.actorId, agentId);
+      // A client that disconnects cancels its Driver reads.
+      const disconnected = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) {
+          disconnected.abort();
+        }
+      };
+      reply.raw.once("close", onClose);
+      try {
+        if (operation.operationId === "getAgentDeploymentRuntime") {
+          const description = await runtimeLogLimiter.run(() =>
+            controller!.describeAgentRuntime(
+              context.actorId,
+              namespaceId,
+              agentId,
+              params.deploymentId as string,
+              disconnected.signal,
+            ),
+          );
+          reply.send({ data: description, meta: { requestId: request.id } });
+          return;
+        }
+        const target: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+        const query = request.query as AgentRuntimeLogsQuery;
+        const download = isRuntimeLogDownload(query);
+        // A download is a fresh snapshot; it never continues a follow view.
+        if (download && query.cursor !== undefined) {
+          throw failure(
+            400,
+            "INVALID_REQUEST",
+            "The request does not match the operation contract.",
+          );
+        }
+        const page = await runtimeLogLimiter.run(() =>
+          controller!.readAgentRuntimeLogs(
+            context.actorId,
+            namespaceId,
+            agentId,
+            params.deploymentId as string,
+            runtimeLogQuery(query),
+            {
+              codec: runtimeLogCursor,
+              signal: disconnected.signal,
+              // Once per view or download, before the first Driver read; failure means
+              // no content.
+              admitView: async (admission, grant) => {
+                const base = event(
+                  operation,
+                  request,
+                  target,
+                  "access",
+                  context,
+                  undefined,
+                  undefined,
+                  { action: grant.action, resource: target },
+                );
+                await options.auditSink.append({
+                  ...base,
+                  details: { ...base.details, runtimeLogs: { ...admission } },
+                });
+              },
+            },
+          ),
+        );
+        if (download) {
+          reply
+            .header("content-type", "text/plain; charset=utf-8")
+            .header(
+              "content-disposition",
+              `attachment; filename="${runtimeLogDownloadFileName(page, agentId)}"`,
+            )
+            .send(runtimeLogDownloadBody(page, agentId));
+          return;
+        }
+        reply.send({ data: runtimeLogPageBody(page), meta: { requestId: request.id } });
+        return;
+      } finally {
+        reply.raw.off("close", onClose);
+      }
+    }
+
     if (operation.operationId === "diagnoseAgentDeployment") {
       const diagnostics = await controller.diagnoseAgentDeployment(
         context.actorId,
@@ -3421,10 +3571,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           response: responses({
             type: "object",
             additionalProperties: false,
-            required: ["github", "google", "sessionBinding"],
+            required: ["github", "google", "password", "sessionBinding"],
             properties: {
               github: { type: "boolean" },
               google: { type: "boolean" },
+              password: {
+                type: "boolean",
+                description:
+                  "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+              },
               sessionBinding: { type: "boolean" },
             },
           }),
@@ -3434,8 +3589,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         reply.header("cache-control", "no-store");
         const github = options.auth.githubEnabled === true;
         const google = options.auth.googleEnabled === true;
+        const password = options.auth.passwordSignIn !== "recovery-only";
         return {
-          data: { github, google, sessionBinding: github || google },
+          data: { github, google, password, sessionBinding: github || google },
           meta: { requestId: request.id },
         };
       },
@@ -3599,6 +3755,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       summary: "Inspect current human account state",
       schema: {},
     } as unknown as OccApiRoute;
+    // Account state and its controls live in the guarded external sign-in profile; the
+    // password-only profile has no account version, disabled state, or bound sessions.
+    function accountControlsUnsupported(): RequestFailure {
+      return failure(
+        409,
+        "RESOURCE_CONFLICT",
+        "Account controls require GitHub or Google sign-in; the password-only profile does not support them.",
+      );
+    }
     async function humanAccountActor(
       request: FastifyRequest,
       operation: OccApiRoute,
@@ -3697,6 +3862,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             }),
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
+            409: { description: "Conflict", ...error },
           },
         },
         onRequest: async (request) => admit(request, accountReadOperation),
@@ -3704,10 +3870,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.readAccount) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const actor = await humanAccountActor(request, accountReadOperation, context);
+        if (!options.auth.readAccount) {
+          throw accountControlsUnsupported();
+        }
         const { userId } = request.params as { userId: string };
         const account = await options.auth.readAccount(userId, actor);
         reply
@@ -3823,11 +3992,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
         async (request, reply) => {
           const context = contexts.get(request);
-          if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
+          if (!context) {
             throw dependencyUnavailable();
           }
           const { userId } = request.params as { userId: string };
           const actor = await humanAccountActor(request, operation, context, userId);
+          if (!options.auth.readAccount || !options.auth.changeAccount) {
+            throw accountControlsUnsupported();
+          }
           const { expectedVersion } = request.body as { expectedVersion: number };
           if (operationName === "github") {
             if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
@@ -3894,6 +4066,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             ...responses(recoveryResponse),
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
+            409: { description: "Conflict", ...error },
           },
         },
         onRequest: async (request) => admit(request, recoveryReadOperation),
@@ -3901,10 +4074,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.readRecovery) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const actor = await humanAccountActor(request, recoveryReadOperation, context);
+        if (!options.auth.readRecovery) {
+          throw accountControlsUnsupported();
+        }
         const recovery = await options.auth.readRecovery(actor);
         reply
           .header("cache-control", "no-store")
@@ -3963,7 +4139,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.replaceRecovery) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const { userId, expectedCurrentUserId, expectedVersion } = request.body as {
@@ -3980,6 +4156,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
           expectedCurrentUserId,
         );
+        if (!options.auth.replaceRecovery) {
+          throw accountControlsUnsupported();
+        }
         // The new holder must administer the Installation, as startup requires of the seed. This
         // check runs before the State transaction. That is sound because Installation-scoped access
         // bindings have no online revocation path (deleteAccessBinding is Namespace-scoped), and
@@ -4072,10 +4251,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.enrolAccount) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const actor = await humanAccountActor(request, enrolOperation, context);
+        if (!options.auth.enrolAccount) {
+          throw accountControlsUnsupported();
+        }
         const { userId } = request.params as { userId: string };
         const enrolled = await options.auth.enrolAccount(userId, actor);
         reply.send({ data: { userId, ...enrolled }, meta: { requestId: request.id } });
@@ -4089,7 +4271,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "signInEmail",
           summary: "Sign in with email and password",
           description:
-            "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are delayed and return 429 with Retry-After.",
+            "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub or Google sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.",
           tags: ["Authentication"],
           security: [],
           body: {
@@ -4318,6 +4500,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   void app.register(async (routes) => {
     routes.addSchema(ErrorResponse);
     routes.addSchema(AgentDeploymentDiagnosticsResponse);
+    routes.addSchema(AgentRuntimeResponse);
+    routes.addSchema(AgentRuntimeLogsResponse);
     routes.addSchema(AgentRuntimeCredentialResponse);
     routes.addSchema(SecretResponse);
     routes.addSchema(CredentialSourceResponse);
@@ -4694,6 +4878,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   app.setErrorHandler(async (error, request, reply) => {
     let mapped = requestFailure(error);
+    if (error instanceof RuntimeLogsError && error.retryAfterSeconds !== undefined) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+    }
     if (isAuthorizationDenied(error) && !isDependencyUnavailable(error)) {
       const context = contexts.get(request);
       if (context) {

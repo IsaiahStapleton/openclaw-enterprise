@@ -194,20 +194,16 @@ test(
     });
 
     await t.test(
-      "the new holder has the reserved lane and the former holder does not",
+      "the new holder keeps a checkable password when strangers spend its email",
       async () => {
-        const lane = await assertReservedLane(app, pool, {
+        const lane = await assertReservedLane(app, {
           origin,
           holder,
           former: admin,
           label: "online",
         });
-        assert.deepEqual(lane, {
-          fresh: 429,
-          former: 429,
-          holder: 200,
-          held: [401, 401, 401, 401],
-        });
+        // The former holder still administers the Installation, so it stays reserved too.
+        assert.deepEqual(lane, { fresh: 429, former: 200, holder: 200 });
         assert.equal(
           (
             await app.inject({
@@ -241,23 +237,19 @@ test(
           log.events
             .filter(({ event }) => event.startsWith("authentication."))
             .map(({ event }) => event),
-          ["authentication.recovery-seed-warning"],
+          // The fixture sets no trusted proxy, so startup also warns about the shared address.
+          ["authentication.recovery-seed-warning", "authentication.sign-in-limit-warning"],
         );
         assert.deepEqual(await designations(), [holder.id]);
         adminHeaders = await signedInHeaders(app, origin, admin, address());
         assert.equal((await readRecovery(adminHeaders)).userId, holder.id);
-        const lane = await assertReservedLane(app, pool, {
+        const lane = await assertReservedLane(app, {
           origin,
           holder,
           former: admin,
           label: "restarted",
         });
-        assert.deepEqual(lane, {
-          fresh: 429,
-          former: 429,
-          holder: 200,
-          held: [401, 401, 401, 401],
-        });
+        assert.deepEqual(lane, { fresh: 429, former: 200, holder: 200 });
       },
     );
   },

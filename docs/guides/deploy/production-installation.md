@@ -470,7 +470,7 @@ during stopped maintenance. Install without GitHub as above, then enable it with
 
 Activation is one-way: the database refuses older images' sessions and
 `auth.github` must stay set. Never `helm rollback` past activation
-([rollback](production-upgrade.md#roll-back-across-human-sign-in));
+([rollback](production-upgrade-recovery.md#roll-back-across-human-sign-in));
 [stopped maintenance](auth-maintenance.md) deactivates it.
 
 1. Verify password recovery ([replaceable](../../reference/authentication/external-sign-in.md#session-and-recovery-controls)
@@ -504,6 +504,8 @@ Activation is one-way: the database refuses older images' sessions and
 For enrollment, obtain the numeric subject with `gh api user --jq .id` as the
 intended GitHub user; verify ownership through your identity process, not
 email or usernames. Follow the reference's attachment and unknown-outcome handling.
+Once every ordinary account has an identity, set `auth.passwordSignIn: recovery-only`
+([recovery-only sign-in](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in)).
 Loopback tests do not qualify production stop/drain, cookies, logging, or GitHub registration.
 
 ## Related

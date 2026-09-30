@@ -993,6 +993,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     submit,
   );
   const channelEditor = element("div", { className: "create-channels" });
+  // The collapsed Runtime details still name the selected execution mode.
+  const runtimeModeSummary = element("span", { className: "muted" });
   let repositories;
   const form = element(
     "form",
@@ -1004,7 +1006,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     element(
       "details",
       { className: "launch-runtime" },
-      element("summary", {}, "Runtime details"),
+      element("summary", {}, "Runtime details", runtimeModeSummary),
       field(
         "Execution mode",
         mode,
@@ -1289,6 +1291,23 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       capabilityDiscoveryDone && !nativeWorkersAvailable && harness.value === "openclaw";
     mode.querySelector('[value="dedicated"]').disabled = nativeRefused;
     nativeWorkersUnavailable.hidden = !nativeRefused || mode.value !== "dedicated";
+    runtimeModeSummary.textContent = ` · ${mode.value === "dedicated" ? "Dedicated" : "Embedded"}`;
+    const modeHint = form.querySelector("#execution-mode-hint");
+    if (modeHint) {
+      modeHint.textContent = nativeRefused
+        ? "Codex uses Dedicated execution. Dedicated OpenClaw is unavailable because this installation's OpenClaw runtime lacks native worker support, so OpenClaw uses Embedded execution. Slack requires Codex."
+        : "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Codex.";
+    }
+    if (capabilityDiscoveryDone) {
+      const nextStatus = shouldProvision()
+        ? "Dedicated Agents are provisioned and deployed when created."
+        : mode.value === "embedded"
+          ? "Embedded Agents are saved as drafts. Deploy them from the Agent page after creation."
+          : "This installation creates draft Agents for later deployment.";
+      if (capabilityStatus.textContent !== nextStatus) {
+        capabilityStatus.textContent = nextStatus;
+      }
+    }
     nativeHarnessWarning.hidden =
       harness.value !== "openclaw" || mode.value !== "dedicated" || nativeRefused;
     const codexOption = harness.querySelector('[value="codex"]');
@@ -1297,7 +1316,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     harnessHint.textContent =
       harness.disabled && usesPat
         ? "This saved service account token requires Codex. Create a new draft without a Preset to use OpenClaw with an API key."
-        : "OpenClaw is available for both providers. With OpenAI it supports Dedicated or Embedded execution; Anthropic uses Embedded OpenClaw.";
+        : nativeRefused
+          ? "OpenClaw is available for both providers. This installation runs OpenClaw with Embedded execution only; choose Codex for Dedicated execution."
+          : "OpenClaw is available for both providers. With OpenAI it supports Dedicated or Embedded execution; Anthropic uses Embedded OpenClaw.";
     if (binding?.method === "runtime") {
       harnessHint.textContent =
         "This Preset's operator-managed credentials require the OpenClaw harness.";
@@ -1449,9 +1470,6 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         provisionableExecutionModes.add(executionMode);
       }
       capabilityDiscoveryDone = true;
-      capabilityStatus.textContent = provisionableExecutionModes.has("dedicated")
-        ? "Dedicated Agents are provisioned and deployed when created."
-        : "This installation creates draft Agents for later deployment.";
     } catch (error) {
       if (!context.isCurrent()) {
         return;

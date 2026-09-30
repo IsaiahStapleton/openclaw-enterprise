@@ -505,6 +505,10 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
   const ciWorkflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
   const matrixLanes = (source) =>
     [...source.matchAll(/- lane: ([a-z0-9-]+)/g)].map((match) => match[1]);
+  const suiteIndex = JSON.parse(
+    readFileSync(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
+  );
+  assert.deepEqual([...suiteIndex.groups.ci].sort(), [...lanes].sort());
   assert.deepEqual(
     ["checks-baseline", "runtime-image-fixture", ...matrixLanes(ciWorkflow)].sort(),
     [...lanes].sort(),
@@ -571,11 +575,18 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
       continue;
     }
 
-    // Full mode produces genuine runner artifacts for every selected lane.
+    // Two synthetic lanes cover cross-lane aggregation and failures.
+    // The inventory checks above still require every production CI lane.
+    const fixtureLanes = ["checks-baseline", "postgres"];
+    const selectedNeeds = JSON.parse(readFileSync(expanded, "utf8"));
+    assert.deepEqual(Object.keys(selectedNeeds).sort(), ["impact", "audit", ...lanes].sort());
+    for (const lane of lanes) {
+      assert.equal(selectedNeeds[lane].result, "success", lane);
+    }
     mkdirSync(join(root, "tests/integration"), { recursive: true });
     mkdirSync(join(root, "results"));
-    const manifest = { version: 1, lanes: {}, groups: { ci: lanes } };
-    for (const lane of lanes) {
+    const manifest = { version: 1, lanes: {}, groups: { ci: fixtureLanes } };
+    for (const lane of fixtureLanes) {
       const path = `tests/integration/${lane}.test.mjs`;
       writeFileSync(
         join(root, path),
@@ -600,7 +611,7 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
         "--results",
         join(root, `results/${lane}.json`),
       ]);
-    for (const lane of lanes) {
+    for (const lane of fixtureLanes) {
       const result = runLane(lane);
       assert.equal(result.status, 0, `${lane}: ${result.stderr} ${result.stdout}`);
     }

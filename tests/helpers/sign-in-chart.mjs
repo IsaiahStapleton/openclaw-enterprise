@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -50,6 +53,36 @@ export async function renderChart(overrides = {}) {
     child.stdin.end(stdout);
   });
   return parsed.trim().split("\n").map(JSON.parse);
+}
+
+/**
+ * The api.trustedProxy notice that NOTES.txt prints on install and upgrade. `helm template`
+ * does not render NOTES.txt, so a copy of the chart renders the same named template into a
+ * probe ConfigMap.
+ */
+export async function trustedProxyNotice(overrides = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "occ-chart-notice-"));
+  try {
+    const chart = join(directory, "openclaw-enterprise");
+    await cp(join(repository, "deploy/helm/openclaw-enterprise"), chart, { recursive: true });
+    assert.match(
+      await readFile(join(chart, "templates/NOTES.txt"), "utf8"),
+      /include "openclaw\.trustedProxy\.notice"/,
+    );
+    await writeFile(
+      join(chart, "templates/notice-probe.yaml"),
+      'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notice-probe\ndata:\n  notice: {{ include "openclaw.trustedProxy.notice" . | quote }}\n',
+    );
+    const args = templateArguments(overrides);
+    args[2] = chart;
+    args.push("--show-only", "templates/notice-probe.yaml");
+    const { stdout } = await execute(helm, args, { cwd: repository, maxBuffer: 2_000_000 });
+    const match = /notice: (".*")/.exec(stdout);
+    assert.ok(match, stdout);
+    return JSON.parse(match[1]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 /** The chart's refusal message for values it must not render. */

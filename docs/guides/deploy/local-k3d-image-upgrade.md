@@ -277,6 +277,6 @@ database migrations. If OCC succeeds but a runtime deployment fails, the fleet
 can be mixed: runtime rollout is **not transactional**. Inspect each dispatch,
 deployment status, and revision before retrying; an uncertain request may have
 already created a revision. Check compatibility before selecting an older image
-or restoring state, and follow [partial-failure recovery](production-upgrade.md#recover-from-a-partial-failure).
+or restoring state, and follow [partial-failure recovery](production-upgrade-recovery.md).
 Do not delete the cluster, database volume, Namespaces, Agents, revisions,
 Secrets, bootstrap volume, or Agent PVCs to force an upgrade or recovery.
