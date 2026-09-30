@@ -430,13 +430,14 @@ test(
     await t.test("password sign-in and the recovery lane still work with Google", async () => {
       const passwordResponse = await passwordSignIn(app, origin, member, address());
       assert.equal(passwordResponse.statusCode, 200, passwordResponse.body);
-      const lane = await assertReservedLane(app, pool, {
+      const lane = await assertReservedLane(app, {
         origin,
         holder: admin,
         former: member,
         label: "google",
       });
-      assert.deepEqual(lane, { fresh: 429, former: 429, holder: 200, held: [401, 401, 401, 401] });
+      // The member neither holds recovery nor administers, so its spent email refuses it.
+      assert.deepEqual(lane, { fresh: 429, former: 429, holder: 200 });
       // A Google provider outage leaves password sign-in working.
       google.mode = "error";
       try {

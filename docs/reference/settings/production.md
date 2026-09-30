@@ -139,16 +139,13 @@ for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
 `https://api.github.com/meta`, and update them when GitHub changes them.
 
 `api.trustedProxy` is off by default: the API rejects `Forwarded`,
-`X-Forwarded-*`, and `X-Real-IP` with `403`. Sign-in limits then key on the
-socket peer with GitHub or Google, and on email alone in the password-only
-profile. Either way startup logs `authentication.sign-in-limit-warning`, and
-Helm's install notes and the profile renderer warn; none of them fail.
-
-With GitHub or Google behind a proxy that does not preserve client addresses,
-every browser shares the proxy's address, so the whole Installation gets one
-budget: 10 password sign-in attempts and 30 external sign-in requests (about 10
-sign-ins) per minute. Set `api.trustedProxy` unless the API sees each client's
-own address. Presets:
+`X-Forwarded-*`, and `X-Real-IP` with `403`. Failed password sign-ins are then
+limited per email only, because every browser behind a proxy shares its address.
+With GitHub or Google, start, callback, and result then key on the browser's own
+cookies, not the address; start has no per-client limit, only an active cap and
+the 1,000 pending attempts. Startup logs `authentication.sign-in-limit-warning`,
+and Helm's install notes and the profile renderer warn; none of them fail. Set
+`api.trustedProxy` unless the API sees each client's own address. Presets:
 
 - `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
   is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.
