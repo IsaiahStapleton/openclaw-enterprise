@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   Agent,
   AgentRead,
@@ -3055,23 +3056,48 @@ export class OpenClawController {
   async deletePreset(principalId: string, namespaceId: string, presetId: string): Promise<void> {
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
-      await this.authorize(principalId, "delete", {
-        kind: "preset",
-        id: presetId,
-        namespaceId: namespace.id,
-      });
-      if (!(await state.presets.lockPreset(namespace.id, presetId))) {
-        throw new ScopeViolationError("The Preset does not belong to the exact Namespace.");
-      }
-      for (const binding of await state.iamPolicy.listAccessBindings(namespace.id)) {
-        if (binding.resourceKind === "preset" && binding.resourceId === presetId) {
-          await state.iamPolicy.deleteAccessBinding(namespace.id, binding.id);
-        }
-      }
-      if (!(await state.presets.deletePreset(namespace.id, presetId))) {
-        throw new ResourceConflictError("The Preset changed during deletion.");
-      }
+      await this.deletePresetInState(state, principalId, namespace.id, presetId);
     });
+  }
+
+  private async deletePresetInState(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    namespaceId: string,
+    presetId: string,
+  ): Promise<void> {
+    await this.authorize(principalId, "delete", {
+      kind: "preset",
+      id: presetId,
+      namespaceId,
+    });
+    if (!(await state.presets.lockPreset(namespaceId, presetId))) {
+      throw new ScopeViolationError("The Preset does not belong to the exact Namespace.");
+    }
+    for (const binding of await state.iamPolicy.listAccessBindings(namespaceId)) {
+      if (binding.resourceKind === "preset" && binding.resourceId === presetId) {
+        await state.iamPolicy.deleteAccessBinding(namespaceId, binding.id);
+      }
+    }
+    if (!(await state.presets.deletePreset(namespaceId, presetId))) {
+      throw new ResourceConflictError("The Preset changed during deletion.");
+    }
+  }
+
+  /** True when a Preset is still the exact Installation default seeded into its Namespace. */
+  private isUnmodifiedDefaultPreset(preset: Readonly<Preset>): boolean {
+    const seeded = this.defaultPresets.find((candidate) => candidate.name === preset.name);
+    if (seeded === undefined) {
+      return false;
+    }
+    try {
+      return isDeepStrictEqual(
+        normalizePresetTemplate(seeded.template, preset.namespaceId),
+        preset.template,
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async admitPresetTemplate(
@@ -5003,26 +5029,50 @@ export class OpenClawController {
         }
         return namespace;
       }
+      const contents: string[] = [];
       if (await state.namespaces.hasAgents(namespace.id)) {
-        throw new NamespaceNotEmptyError();
-      }
-      if (await state.namespaces.hasPresets(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("Agents");
       }
       if (await state.namespaces.hasConfigurations(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("Configurations");
+      }
+      const presets = await state.presets.listPresets(namespace.id);
+      const seededPresets = presets.filter((preset) => this.isUnmodifiedDefaultPreset(preset));
+      if (seededPresets.length < presets.length) {
+        contents.push("Presets");
       }
       if (await state.namespaces.hasSecrets(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("Secrets");
       }
       if (await state.namespaces.hasCredentialSources(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("credential sources");
       }
       if (await state.namespaces.hasServiceAccounts(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("service accounts");
       }
       if (await state.provisioning.hasPendingNamespaceProvisioning(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("pending Agent provisioning");
+      }
+      if (contents.length > 0) {
+        throw new NamespaceNotEmptyError(contents);
+      }
+      // Installation defaults were seeded by Namespace creation, so deletion removes
+      // them only while they still match the defaults; edited copies block above.
+      for (const preset of seededPresets) {
+        await this.deletePresetInState(state, principalId, namespace.id, preset.id);
+        await state.audit.append({
+          id: `aud_${crypto.randomUUID()}`,
+          installationId: this.installation.id,
+          namespaceId: namespace.id,
+          occurredAt: this.timestamp(),
+          kind: "mutation",
+          actorId: principalId,
+          source: "occ",
+          action: "openclaw.presets.delete",
+          resource: { kind: "preset", id: preset.id, namespaceId: namespace.id },
+          outcome: "success",
+          details: { source: "namespace-deletion" },
+        });
       }
       const deleting = await state.namespaces.transitionNamespaceStatus(
         namespace.id,

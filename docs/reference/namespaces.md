@@ -114,10 +114,14 @@ Kubernetes namespaces are deleted normally.
 
 A Namespace containing any Agent, Configuration, Preset, service account, Secret,
 or [credential source](credential-sources.md) cannot be deleted and returns
-`409 NAMESPACE_NOT_EMPTY`. Delete unreferenced Agents, Configurations,
-[Presets](presets.md), service accounts, Secrets, and credential sources before
-deleting their Namespace. A credential source in `deleting` still counts; retry
-its deletion until it disappears.
+`409 NAMESPACE_NOT_EMPTY`; the error message lists the kinds that remain. Delete
+unreferenced Agents, Configurations, [Presets](presets.md), service accounts,
+Secrets, and credential sources before deleting their Namespace. A credential
+source in `deleting` still counts; retry its deletion until it disappears.
+Installation default Presets that still match their seeded template do not
+block deletion: the request deletes them (this needs `preset:delete`) and
+audits each one. A renamed or edited default counts as a Preset; delete it with
+`DELETE /namespaces/:namespaceId/presets/:presetId`.
 Agent deletion is asynchronous; wait until each deleted Agent disappears from
 reads before retrying Namespace deletion.
 
@@ -148,10 +152,11 @@ workload is ready.
   operation.
 - `404`: The Namespace does not exist, belongs outside the requested scope, or
   has already been tombstoned.
-- `409 NAMESPACE_NOT_EMPTY`: Remove the Namespace's unreferenced
-  Agents, Configurations, service accounts, Secrets, and credential sources
-  before deletion. An Agent whose teardown is still in progress, or a credential
-  source in `deleting`, continues to make the Namespace nonempty.
+- `409 NAMESPACE_NOT_EMPTY`: The message names what remains. Remove the
+  Namespace's unreferenced Agents, Configurations, edited or custom Presets,
+  service accounts, Secrets, and credential sources before deletion. An Agent
+  whose teardown is still in progress, or a credential source in `deleting`,
+  continues to make the Namespace nonempty.
 - Without an eligible [controller worker](controller.md) against the same
   PostgreSQL database, lifecycle work remains queued and the Namespace can stay
   `provisioning` or `deleting`. Infrastructure readiness is asynchronous.
