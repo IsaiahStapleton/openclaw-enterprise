@@ -2628,6 +2628,20 @@ export const scenarios = {
     description:
       "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
   },
+  runtimeLogsFilteredDownload: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs filtered and downloaded",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    actions: [
+      click("Download"),
+      { selector: ".log-chip.log-level-info", click: true },
+      { selector: "#runtime-log-filter", value: "slack" },
+    ],
+    description:
+      "Download saves the redacted text tail as a .log file through its own audited read. Hiding info and filtering for slack narrows the loaded window to the redacted reconnect warning; the status line counts the hidden rows.",
+  },
   runtimeLogsDenied: {
     group: "Pages/Agent detail",
     name: "Runtime logs without administer",

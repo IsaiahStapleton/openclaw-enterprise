@@ -409,6 +409,10 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       if (!current()) {
         return;
       }
+      if (typeof text !== "string") {
+        // Never save a JSON envelope (or "[object Object]") as the log file.
+        throw new Error("The log download did not return text.");
+      }
       showLogError(null);
       const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
       const link = element("a", {
