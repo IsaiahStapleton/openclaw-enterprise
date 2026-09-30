@@ -93,7 +93,7 @@ func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Re
 		stub.pages = stub.pages[1:]
 		next(response, query)
 	case strings.HasSuffix(request.URL.Path, "/runtime"):
-		fmt.Fprint(response, `{"data":{"revisionId":"rev_1","observedAt":"2026-09-30T12:00:00.000Z","pods":[{"role":"gateway","cluster":"control","name":"gw-0","uid":"u","phase":"Running","ready":true,"createdAt":null,"containers":[{"name":"gateway","state":"running","reason":null,"ready":true,"restartCount":2,"startedAt":null,"lastTermination":{"reason":"OOMKilled","exitCode":137,"finishedAt":null}}],"events":[]}],"sources":[{"id":"gateway","kind":"container","pods":[],"available":true,"retention":"current and previous instance"}]},"meta":{}}`)
+		fmt.Fprint(response, `{"data":{"revisionId":"rev_1","observedAt":"2026-09-30T12:00:00.000Z","pods":[{"role":"gateway","cluster":"control","name":"gw-0","uid":"u","phase":"Running","ready":true,"createdAt":null,"containers":[{"name":"gateway","state":"running","reason":null,"ready":true,"restartCount":2,"startedAt":null,"lastTermination":{"reason":"OOMKilled","exitCode":137,"finishedAt":null}}],"events":[{"type":"Warning","container":"gateway","reason":"Unhealthy","message":"Readiness probe failed","count":146,"lastObservedAt":"2026-09-30T11:59:00.000Z"},{"type":"Normal","container":"prepare-private-state","reason":"Started","message":"Container started","count":1,"lastObservedAt":"2026-09-30T11:00:00.000Z"},{"type":"Normal","container":null,"reason":"Scheduled","message":"Successfully assigned","count":1,"lastObservedAt":null}]}],"sources":[{"id":"gateway","kind":"container","pods":[],"available":true,"retention":"current and previous instance"}]},"meta":{}}`)
 	default:
 		stub.t.Errorf("unexpected request %s", request.URL)
 		response.WriteHeader(http.StatusNotFound)
@@ -321,6 +321,23 @@ func TestAgentRuntimePrintsPodsAndSources(t *testing.T) {
 	for _, want := range []string{"gw-0", "Running", "OOMKilled exit 137", "current and previous instance"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("runtime table lacks %q:\n%s", want, out)
+		}
+	}
+	// Table output names each Event's container, as JSON output does.
+	eventRows := [][]string{
+		{"POD", "CONTAINER", "TYPE", "REASON", "COUNT", "LAST SEEN", "MESSAGE"},
+		{"gw-0", "gateway", "Warning", "Unhealthy", "146", "2026-09-30T11:59:00.000Z", "Readiness", "probe", "failed"},
+		{"gw-0", "prepare-private-state", "Normal", "Started", "1", "2026-09-30T11:00:00.000Z", "Container", "started"},
+		{"gw-0", "-", "Normal", "Scheduled", "1", "-", "Successfully", "assigned"},
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < len(eventRows) {
+		t.Fatalf("runtime table has no Events:\n%s", out)
+	}
+	for index, want := range eventRows {
+		got := strings.Fields(lines[len(lines)-len(eventRows)+index])
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("Event row %d = %q, want %q:\n%s", index, got, want, out)
 		}
 	}
 }
