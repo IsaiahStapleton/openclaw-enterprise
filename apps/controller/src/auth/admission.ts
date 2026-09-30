@@ -200,6 +200,18 @@ export interface PasswordFailureAdmissionOptions {
   readonly isReserved: (email: string) => Promise<boolean>;
   /** Failures that spend budget: credential rejections, not dependency errors. */
   readonly countsAsFailure: (error: unknown) => boolean;
+  /**
+   * Called when attempts start going to the slow lane: at most once per lane entry per
+   * window. `key` is the hashed admission key (never the email or address); the untracked
+   * lane (a full budget table) has none.
+   */
+  readonly onLimited?: (limited: PasswordSignInLimited) => void;
+}
+
+/** One lane entering the slow lane, for operator visibility. */
+export interface PasswordSignInLimited {
+  readonly lane: "email" | "address" | "untracked";
+  readonly key?: string;
 }
 
 export const passwordFailureBudget = {
@@ -221,10 +233,12 @@ interface PasswordEntry {
   active: number;
   /** Slow-lane attempts this entry paced in the window; the floor doubles with each. */
   slowed: number;
+  /** When this entry was last reported as limited. */
+  reportedAt: number | undefined;
 }
 
 function passwordEntry(now: number): PasswordEntry {
-  return { windowStart: now, failures: 0, active: 0, slowed: 0 };
+  return { windowStart: now, failures: 0, active: 0, slowed: 0, reportedAt: undefined };
 }
 
 function currentWindow(entry: PasswordEntry, now: number): boolean {
@@ -382,9 +396,32 @@ export function passwordFailureAdmission(
     }
   }
 
-  async function runTracked<T>(entries: readonly PasswordEntry[], work: () => Promise<T>) {
+  // Reports a limited lane at most once per entry per window, so a flood logs one line.
+  function reportLimited(entry: PasswordEntry, limited: PasswordSignInLimited, now: number): void {
+    if (entry.reportedAt !== undefined && now - entry.reportedAt < admissionWindow) {
+      return;
+    }
+    entry.reportedAt = now;
     try {
-      return await work();
+      options.onLimited?.(limited);
+    } catch {
+      // Visibility is best-effort; it never changes the admission decision.
+    }
+  }
+
+  async function runTracked<T>(
+    entries: readonly PasswordEntry[],
+    emailEntry: PasswordEntry | undefined,
+    work: () => Promise<T>,
+  ) {
+    try {
+      const result = await work();
+      // A successful sign-in clears that email's failures (not the address's, which other
+      // accounts share), so earlier typos do not count toward the rest of the window.
+      if (emailEntry !== undefined) {
+        emailEntry.failures = 0;
+      }
+      return result;
     } catch (error) {
       if (options.countsAsFailure(error)) {
         recordFailure(entries);
@@ -480,36 +517,43 @@ export function passwordFailureAdmission(
     async admit<T>(attempt: PasswordSignInAttempt, work: () => Promise<T>): Promise<T> {
       const now = performance.now();
       const emailKey = admissionKey("email", attempt.email);
-      const lanes: Array<readonly [string, number]> = [
+      const lanes: Array<readonly [string, number, "email" | "address"]> = [
         ...(attempt.clientAddress === undefined
           ? []
-          : [[admissionKey("ip", attempt.clientAddress), options.perAddress] as const]),
-        [emailKey, options.perEmail],
+          : [[admissionKey("ip", attempt.clientAddress), options.perAddress, "address"] as const]),
+        [emailKey, options.perEmail, "email"],
       ];
       // Decide from existing entries first: a refused attempt creates and moves nothing.
-      const blocking = lanes
-        .map(([key, limit]) => {
-          const entry = table.peek(key);
-          return exhausted(entry, limit, now) ? entry : undefined;
-        })
-        .filter((entry): entry is PasswordEntry => entry !== undefined);
+      const blocking: PasswordEntry[] = [];
+      for (const [key, limit, lane] of lanes) {
+        const entry = table.peek(key);
+        if (entry !== undefined && exhausted(entry, limit, now)) {
+          blocking.push(entry);
+          reportLimited(entry, { lane, key }, now);
+        }
+      }
       if (blocking.length > 0) {
         return slowLane(attempt, emailKey, blocking, [], true, work);
       }
       const tracked: PasswordEntry[] = [];
+      let emailEntry: PasswordEntry | undefined;
       let untracked = false;
-      for (const [key] of lanes) {
+      for (const [key, , lane] of lanes) {
         const entry = table.claim(key, now);
         if (entry === undefined) {
           untracked = true;
         } else {
           tracked.push(entry);
+          if (lane === "email") {
+            emailEntry = entry;
+          }
         }
       }
       if (untracked) {
+        reportLimited(untrackedPacing, { lane: "untracked" }, now);
         return slowLane(attempt, emailKey, [untrackedPacing], tracked, false, work);
       }
-      return runTracked(tracked, work);
+      return runTracked(tracked, emailEntry, work);
     },
   };
 }

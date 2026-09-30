@@ -122,15 +122,14 @@ export async function composeProduction(config: ProductionConfig) {
         ? {}
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
+      ...(config.logger === undefined
+        ? {}
+        : { onOperationalEvent: (event) => emitOccLogEvent(config.logger!, event) }),
     });
-    if (
-      config.github === undefined &&
-      config.google === undefined &&
-      config.clientAddress === undefined &&
-      config.logger !== undefined
-    ) {
-      // No trusted proxy: failed password sign-ins are limited per email only, because every
-      // browser behind the ingress shares its address. api.trustedProxy adds the address lane.
+    if (config.clientAddress === undefined && config.logger !== undefined) {
+      // No trusted proxy. Password-only: failed sign-ins are limited per email only, because
+      // every browser behind the ingress shares its address. GitHub or Google: sign-in limits
+      // key on the socket peer, so behind a proxy every browser shares one budget.
       emitOccLogEvent(config.logger, {
         event: "authentication.sign-in-limit-warning",
         code: "TRUSTED_PROXY_NOT_CONFIGURED",
