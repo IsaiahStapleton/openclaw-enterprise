@@ -1,5 +1,7 @@
 # Production observability implementation qualification
 
+[Implementation plan](index.md)
+
 Status: Historical qualification report, 2026-09-23; see the current-scope note below.
 
 The expanded Helm-installed model and revision-cutover coverage is deferred.

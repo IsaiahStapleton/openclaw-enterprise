@@ -1,6 +1,6 @@
 # Report: Architecture and security audit: confirmed findings
 
-[Spec overview](../2026-09-01-architecture-security-audit.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ## Confirmed findings
 

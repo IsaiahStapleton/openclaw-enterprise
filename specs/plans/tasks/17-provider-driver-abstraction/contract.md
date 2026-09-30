@@ -1,6 +1,6 @@
 # Feature Spec: Provider and related Drivers: contract
 
-[Spec overview](../17-provider-driver-abstraction.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ## Contract
 

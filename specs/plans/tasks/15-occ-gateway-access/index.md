@@ -6,9 +6,9 @@
 
 **Historical note:** This record preserves the original approved remote
 native-device enrollment design. It does not describe current gateway access.
-Use [Agents](../../../docs/reference/agents.md#workspace-files), the
-[workspace-file flow](../../../docs/flows/workspace-files.md), and the later
-[private routing specification](../../.archive/20-private-agent-gateway-routing.md).
+Use [Agents](../../../../docs/reference/agents.md#workspace-files), the
+[workspace-file flow](../../../../docs/flows/workspace-files.md), and the later
+[private routing specification](../../../.archive/20-private-agent-gateway-routing.md).
 
 **Owner:** OCC admission and API; bundled Kubernetes Compute implementation
 
@@ -16,7 +16,7 @@ Use [Agents](../../../docs/reference/agents.md#workspace-files), the
 
 OCC provisions each Agent's gateway but has no authenticated native gateway client or command proxy. A shared gateway token alone does not establish a remote backend client's administrative scopes. Enroll a dedicated OCC device automatically during gateway bootstrap, then let authorized administrators issue native commands through the Agent's `/gateway/` endpoint.
 
-This records the implementation under the [platform design](../../../docs/design.md). The source baseline is Enterprise `4bf6985ebd3e746999bf270aead8921b4be7d812` and OpenClaw `b9d01e71270e15208d191e4ea4afdef31fbf51ac`; the implementation adds the Enterprise integration described below. Native enrollment is source-backed; the SDK pair is pinned to `@openclaw/gateway-client` `2026.8.1-beta.3` and `@openclaw/gateway-protocol` `2026.8.1-beta.3`, with native runtime `2026.8.1` and the real runtime verification recorded below.
+This records the implementation under the [platform design](../../../../docs/design.md). The source baseline is Enterprise `4bf6985ebd3e746999bf270aead8921b4be7d812` and OpenClaw `b9d01e71270e15208d191e4ea4afdef31fbf51ac`; the implementation adds the Enterprise integration described below. Native enrollment is source-backed; the SDK pair is pinned to `@openclaw/gateway-client` `2026.8.1-beta.3` and `@openclaw/gateway-protocol` `2026.8.1-beta.3`, with native runtime `2026.8.1` and the real runtime verification recorded below.
 
 ## Scope
 
@@ -31,19 +31,19 @@ This records the implementation under the [platform design](../../../docs/design
 
 ### Native identity and automatic enrollment
 
-See [Native identity and automatic enrollment](15-occ-gateway-access/native-identity-and-enrollment.md#native-identity-and-automatic-enrollment).
+See [Native identity and automatic enrollment](native-identity-and-enrollment.md#native-identity-and-automatic-enrollment).
 
 ### HTTP request and native result
 
-See [HTTP request and native result](15-occ-gateway-access/request-routing-and-policy.md#http-request-and-native-result).
+See [HTTP request and native result](request-routing-and-policy.md#http-request-and-native-result).
 
 ### Authorization, routing, and command policy
 
-See [Authorization, routing, and command policy](15-occ-gateway-access/request-routing-and-policy.md#authorization-routing-and-command-policy).
+See [Authorization, routing, and command policy](request-routing-and-policy.md#authorization-routing-and-command-policy).
 
 ## Implementation
 
-1. **G1 — Bootstrap native access.** Extend bundled Kubernetes preparation and exact Agent credential ownership with the bounded native CLI helper and pinned SDK adapter. Invoke the helper once in the owned gateway container; keep existing runtime startup and private-state cleanup unchanged. Keep public ComputeDriver contracts and SQL resources unchanged. Wire controller-namespace credential RBAC, tenant-scoped worker-only `pods/exec`, and API/worker `pods/proxy` GET in [Helm](../../../deploy/helm/openclaw-enterprise/templates). Document the terminal incomplete-enrollment case and quiesced operator reset/revocation procedure in the deployment guide.
+1. **G1 — Bootstrap native access.** Extend bundled Kubernetes preparation and exact Agent credential ownership with the bounded native CLI helper and pinned SDK adapter. Invoke the helper once in the owned gateway container; keep existing runtime startup and private-state cleanup unchanged. Keep public ComputeDriver contracts and SQL resources unchanged. Wire controller-namespace credential RBAC, tenant-scoped worker-only `pods/exec`, and API/worker `pods/proxy` GET in [Helm](../../../../deploy/helm/openclaw-enterprise/templates). Document the terminal incomplete-enrollment case and quiesced operator reset/revocation procedure in the deployment guide.
 2. **G2 — Admit and proxy a command.** Add strict request/result contracts and the Agent-scoped route in `packages/contracts/src/api/` and `apps/controller/src/index.ts`; expose the internal adapter through controller Installation composition. Implement exact `administer`, cookie CSRF, allowlist, owned routing, bounded first-response handling, and sanitized audit. Update the native bootstrap grant, generated OpenAPI, API reference, relevant gateway execution flow, and existing deployment guide when behavior ships; do not label this draft as current support.
 3. **G3 — Prove the complete path.** Use a disposable Kubernetes cluster, PostgreSQL with the limited controller role, and a real digest-pinned OpenClaw image. Exercise actual signed enrollment and HTTP-to-WebSocket commands, then repeat after controller/gateway restart and revision replacement. Cover the retained invariants below; use unit/contract tests for HTTP failure mapping, with real native integration as the acceptance proof. Do not substitute an HTTP fixture or skipped integration case for gateway access.
 
@@ -63,7 +63,7 @@ Implementation commit: `27fa96cf22522dfc382ddd9c4f152692783c76f2`. Verification 
 
 Both required native scenarios passed against the production application/worker composed in-process, limited-role PostgreSQL, and real digest-pinned OpenClaw `2026.8.1` / Codex `0.150.1` Pods: partial-enrollment recovery after token-persistence RBAC failure (135.6 seconds), and the complete command, model-turn, restart, revision-replacement, revocation, credential-loss, and supplemental failure proof (307.2 seconds). The partial scenario's passing result was retained while the positive scenario was rerun after audit/revocation test-helper corrections; production code and the partial scenario were unchanged. The proof does not claim a Helm-installed controller deployment or CI success.
 
-Current behavior is documented in the [Agent reference](../../../docs/reference/agents.md), [Kubernetes reference](../../../docs/reference/drivers/kubernetes-compute.md), [current workspace-file flow](../../../docs/flows/workspace-files.md), and [deployment guide](../../../docs/guides/deploy.md).
+Current behavior is documented in the [Agent reference](../../../../docs/reference/agents.md), [Kubernetes reference](../../../../docs/reference/drivers/kubernetes-compute.md), [current workspace-file flow](../../../../docs/flows/workspace-files.md), and [deployment guide](../../../../docs/guides/deploy.md).
 
 ## Manual Notes
 

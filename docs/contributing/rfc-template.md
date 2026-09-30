@@ -3,6 +3,7 @@
 Copy the scaffold below the divider into `specs/rfcs/<number>-<topic>.md` and
 replace the prompts with the actual decision. Allocate the number using the
 [specification process](specifications.md#files-and-numbering).
+If the RFC needs companion files, use `<number>-<topic>/index.md` instead.
 Adapt the headings to the change and remove sections that do not apply. See the
 [RFC process](rfcs.md) for review, length, and diagram guidance.
 

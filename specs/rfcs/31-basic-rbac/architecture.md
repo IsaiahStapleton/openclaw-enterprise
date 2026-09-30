@@ -1,10 +1,10 @@
 # RBAC architecture
 
-Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
+Read the [current-source and release-scope amendment](index.md#current-source-amendment--2026-09-24)
 before applying this original proposal. Its broader invocation scope is deferred
 past 0.x; the requirements below are not implementation acceptance.
 
-The [proposal](../31-basic-rbac.md) connects existing owners so an ordinary human
+The [proposal](index.md) connects existing owners so an ordinary human
 request can acquire exactly its admitted authority. The ordering below is required
 by the design. It is not evidence of a composed or installed implementation.
 

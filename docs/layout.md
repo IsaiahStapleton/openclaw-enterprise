@@ -145,9 +145,10 @@ Do not install dependencies as a verification side effect.
 Use stable feature names for living references. Follow
 [RFCs and implementation plans](contributing/specifications.md) for numbering,
 document ownership, and lifecycle. Prefer one Markdown file per RFC or plan;
-substantial supporting material lives beside its owner. Keep completed and
-superseded documents in place. Grandfathered filenames and subpage layouts are
-preserved, and `specs/.archive/` remains untouched in this first phase.
+documents with supporting material use `<number>-<topic>/index.md`, with
+companions in the same directory. Keep completed and superseded documents in
+place. Preserve historical names and content when grouping companions, and leave
+`specs/.archive/` untouched in this first phase.
 Update affected current references, guides, and flows with behavior changes;
 shipped specifications remain historical records. Keep Manual Notes unchanged.
 Put detailed contracts in their owning reference rather than expanding

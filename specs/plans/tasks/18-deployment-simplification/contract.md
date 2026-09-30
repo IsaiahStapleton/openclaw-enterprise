@@ -1,6 +1,6 @@
 # Feature Spec: Deployment Simplification: contract
 
-[Spec overview](../18-deployment-simplification.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ## Contract
 

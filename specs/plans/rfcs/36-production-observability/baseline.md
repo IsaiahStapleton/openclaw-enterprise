@@ -71,7 +71,7 @@ retained separately from the final passing result.
 ## Scope and disposition
 
 This establishes an unchanged, functional local deployment before
-[implementation](../36-production-observability-plan.md#task-1-enable-secure-production-defaults).
+[implementation](index.md#task-1-enable-secure-production-defaults).
 It does not prove the proposed telemetry defaults, OTLP export, demonstration
 observability stack, real model turns, or hosted CI execution.
 

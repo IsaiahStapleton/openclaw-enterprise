@@ -27,7 +27,7 @@ not establish that metrics or general horizontal-scaling support have shipped.
 
 Today, the [observability guide](../../docs/guides/observability.md) documents logs,
 audit persistence, and Collector self-metrics. The logging proposal
-[explicitly excluded application instrumentation](../plans/tasks/20-common-otel-logging.md).
+[explicitly excluded application instrumentation](../plans/tasks/20-common-otel-logging/index.md).
 This later proposal adds direct Prometheus instrumentation; the logging
 Collector remains independent, including its existing port `8888`.
 

@@ -1,6 +1,6 @@
 # Feature Design: Bootstrap administrator service account: verification
 
-[Spec overview](../16-bootstrap-admin-service-account.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ## Testing Plan
 

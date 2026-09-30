@@ -49,7 +49,7 @@ See [Gaps CI configuration alone cannot fix](source-audit/enterprise-coverage-an
 - Runtime owners: prove Envoy/CA and OpenShell runner setup at the selected implementation revision.
 - CI owner: trial the pinned cache action with Enterprise and validate case-level results; sampled upstream job success does not substitute.
 
-The [Enterprise GitHub Actions plan](../19-github-actions-test-coverage.md) is derived from this refreshed report. Coverage and source mismatches above are its inputs, not implementation completion claims.
+The [Enterprise GitHub Actions plan](index.md) is derived from this refreshed report. Coverage and source mismatches above are its inputs, not implementation completion claims.
 
 ## Manual Notes
 

@@ -1,6 +1,6 @@
 # Feature Spec: GitHub Actions integration and test coverage for Enterprise: coverage state and limits
 
-[Spec overview](../19-github-actions-test-coverage.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ### Coverage and failure contract
 

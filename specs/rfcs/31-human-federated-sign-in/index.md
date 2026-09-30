@@ -51,7 +51,7 @@ Register `OCC_AUTH_BASE_URL` + `/api/auth/providers/github/callback` on the GitH
 6. Startup records the designation, enrolls qualifying accounts, reports skipped ones in the audit event and log, and purges unbound sessions. A failure keeps the Ingress closed.
 7. Verify password and GitHub sign-in through restricted access, then reopen the Ingress.
 
-`helm rollback` past activation is unsupported; the pre-activation procedure lives in the [upgrade guide](../../docs/guides/deploy/production-upgrade.md).
+`helm rollback` past activation is unsupported; the pre-activation procedure lives in the [upgrade guide](../../../docs/guides/deploy/production-upgrade.md).
 
 <a id="http-interfaces"></a>
 
@@ -125,7 +125,7 @@ sequenceDiagram
   end
 ```
 
-GitHub lifecycle; password sign-in shares step 3. Commit must be confirmed; read requires current identity and IAM allow. [Source](31-human-federated-sign-in/request-lifecycle.mmd) and [SVG](31-human-federated-sign-in/request-lifecycle.svg).
+GitHub lifecycle; password sign-in shares step 3. Commit must be confirmed; read requires current identity and IAM allow. [Source](request-lifecycle.mmd) and [SVG](request-lifecycle.svg).
 
 <a id="sign-in-admission"></a>
 
@@ -141,11 +141,11 @@ Attempts expire in five minutes and bind to one browser cookie; State caps 1,000
 
 ### Recovery and uncertain outcomes
 
-State commits local effects and audit together, not IAM reads, GitHub calls or browser delivery. An unknown administrative commit returns `503 DEPENDENCY_UNAVAILABLE` stating the outcome is unknown, without replay or compensation; inspect before retrying. An administrator replaces the recovery designation online through `POST /recovery`. `auth:maintain` (PR #521) is implemented: with every writer stopped it activates, repairs enrollment, resets a lost recovery password, purges sessions and deactivates; see the [operator procedure](../../docs/guides/deploy/auth-maintenance.md). Before activation, verify the designated account's local password and preserve that credential. Do not edit authentication rows ad hoc or roll back past activation.
+State commits local effects and audit together, not IAM reads, GitHub calls or browser delivery. An unknown administrative commit returns `503 DEPENDENCY_UNAVAILABLE` stating the outcome is unknown, without replay or compensation; inspect before retrying. An administrator replaces the recovery designation online through `POST /recovery`. `auth:maintain` (PR #521) is implemented: with every writer stopped it activates, repairs enrollment, resets a lost recovery password, purges sessions and deactivates; see the [operator procedure](../../../docs/guides/deploy/auth-maintenance.md). Before activation, verify the designated account's local password and preserve that credential. Do not edit authentication rows ad hoc or roll back past activation.
 
 ## Google sign-in
 
-**2026-09-29 amendment (G, branch `feat/google-sign-in-20260929`).** Google OpenID Connect is a second optional provider in the guarded profile, with the same rules: administrators attach an exact identity to an existing account, sign-in never creates or matches accounts, and password fallback and recovery are unchanged. Operator procedure: [Google sign-in](../../docs/guides/deploy/google-sign-in.md).
+**2026-09-29 amendment (G, branch `feat/google-sign-in-20260929`).** Google OpenID Connect is a second optional provider in the guarded profile, with the same rules: administrators attach an exact identity to an existing account, sign-in never creates or matches accounts, and password fallback and recovery are unchanged. Operator procedure: [Google sign-in](../../../docs/guides/deploy/google-sign-in.md).
 
 - **Provider instance.** `google:<sha256(client ID)>`, mirroring `github:<sha256(client ID)>`; the method subject is the ID token's `sub`, never the email. A new client ID needs reattachment.
 - **Shared endpoint code.** Start, callback and result run through one provider-parameterized helper in `apps/controller/src/auth/github.ts`, so `Origin` checks, PKCE `S256`, state, the `__Host-` binding cookie, the keyed limiter (one budget for both providers), `attemptId`, the receipt and the one-use result apply unchanged. Routes are `/api/auth/providers/google/{start,callback,result}` and `POST /api/auth/accounts/:userId/providers/google`; discovery adds `google`.
@@ -163,7 +163,7 @@ State commits local effects and audit together, not IAM reads, GitHub calls or b
 
 **M2, hybrid session binding.** Landed in PR #522. Start returns `attemptId`; callback adds a signed two-minute receipt cookie; `POST /providers/github/result` exchanges receipt, attempt and session cookie for a session key; `x-occ-session-key` narrows, never widens, the cookie session; `sessionBinding` discovery.
 
-**M3, `auth:maintain`.** Landed in PR #521. Break-glass CLI run as the migration role with writers-stopped proof: activate, repair enrollment, reset the recovery password, purge sessions, deactivate (refuses while disabled accounts exist). Its `activate` keeps an existing designation like startup, and `enrol` shares the enrollment rule with the M4 repair route. See the [operator procedure](../../docs/guides/deploy/auth-maintenance.md).
+**M3, `auth:maintain`.** Landed in PR #521. Break-glass CLI run as the migration role with writers-stopped proof: activate, repair enrollment, reset the recovery password, purge sessions, deactivate (refuses while disabled accounts exist). Its `activate` keeps an existing designation like startup, and `enrol` shares the enrollment rule with the M4 repair route. See the [operator procedure](../../../docs/guides/deploy/auth-maintenance.md).
 
 **M4, recovery replacement.** Landed in PR #520: `/recovery` routes, optional GitHub subject at creation, an enrollment repair route, and the environment recovery ID as seed only.
 
@@ -175,6 +175,6 @@ Migration `0037_human_authentication`, renumbered from PR #305's original number
 
 ## References
 
-Current behavior: [`docs/reference/authentication.md`](../../docs/reference/authentication.md), [`docs/reference/settings/production.md`](../../docs/reference/settings/production.md), the [installation guide](../../docs/guides/deploy/production-installation.md#authenticate-to-the-production-api) and the [upgrade guide](../../docs/guides/deploy/production-upgrade.md). The GitHub sign-in reference and install sections shipped with [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) and its follow-ups, and the [`auth:maintain` procedure](../../docs/guides/deploy/auth-maintenance.md) with PR #521.
+Current behavior: [`docs/reference/authentication.md`](../../../docs/reference/authentication.md), [`docs/reference/settings/production.md`](../../../docs/reference/settings/production.md), the [installation guide](../../../docs/guides/deploy/production-installation.md#authenticate-to-the-production-api) and the [upgrade guide](../../../docs/guides/deploy/production-upgrade.md). The GitHub sign-in reference and install sections shipped with [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) and its follow-ups, and the [`auth:maintain` procedure](../../../docs/guides/deploy/auth-maintenance.md) with PR #521.
 
 ## Manual Notes

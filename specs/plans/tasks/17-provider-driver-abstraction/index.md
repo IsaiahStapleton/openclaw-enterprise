@@ -10,7 +10,7 @@ Introduce an Installation-owned `Provider` that groups an authenticated provider
 
 Baseline source at `b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d` has `integrations.chatgpt`, an API-only [ChatGPTClient](https://github.com/openclaw/openclaw-enterprise/blob/b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d/apps/controller/src/integrations/chatgpt.ts), and one globally selected [ServiceAccount Driver](https://github.com/openclaw/openclaw-enterprise/blob/b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d/apps/controller/src/drivers/service-account/chatgpt.ts). There is no common Integration interface or registry to replace. The client authenticates with an admin API key and creates accounts and access-token credentials; it does not perform model inference. Baseline [Agent and revision contracts](https://github.com/openclaw/openclaw-enterprise/blob/b079c4b755ef336a9c65bb4eb737e3aedbfdaa7d/packages/contracts/src/index.ts) carry no Provider reference.
 
-This proposal extends the [platform design](../../../docs/design/drivers.md#drivers-and-providers). It preserves OCC resource ownership, exact Namespace authorization, one Installation-selected Driver per capability, and the API-only admin-credential boundary. Existing model configuration and Harness selection remain authoritative for inference and execution.
+This proposal extends the [platform design](../../../../docs/design/drivers.md#drivers-and-providers). It preserves OCC resource ownership, exact Namespace authorization, one Installation-selected Driver per capability, and the API-only admin-credential boundary. Existing model configuration and Harness selection remain authoritative for inference and execution.
 
 ## Scope
 
@@ -21,14 +21,14 @@ This proposal extends the [platform design](../../../docs/design/drivers.md#driv
 
 ## Contract
 
-See [Contract](17-provider-driver-abstraction/contract.md#contract).
+See [Contract](contract.md#contract).
 
 ## Implementation
 
-1. Add shared Provider/Agent contracts in [contracts](../../../packages/contracts/src/index.ts); update request/response schemas, controller projections, generated OpenAPI, and both state adapters. Own `providerId` once per Agent/revision; keep private binding projection in [platform-state](../../../packages/occ/src/state/platform-state.ts) and its PostgreSQL implementation.
-2. Replace integration parsing in [installation-config](../../../apps/controller/src/composition/installation-config.ts), move the concrete client under `apps/controller/src/providers/`, and wire typed Provider injection through API/production/development composition. Validate concrete member selection at composition; retain the ordinary Driver registry contract unchanged.
+1. Add shared Provider/Agent contracts in [contracts](../../../../packages/contracts/src/index.ts); update request/response schemas, controller projections, generated OpenAPI, and both state adapters. Own `providerId` once per Agent/revision; keep private binding projection in [platform-state](../../../../packages/occ/src/state/platform-state.ts) and its PostgreSQL implementation.
+2. Replace integration parsing in [installation-config](../../../../apps/controller/src/composition/installation-config.ts), move the concrete client under `apps/controller/src/providers/`, and wire typed Provider injection through API/production/development composition. Validate concrete member selection at composition; retain the ordinary Driver registry contract unchanged.
 3. Add per-use admission/worker binding checks and immutable revision-column storage, preserving existing ServiceAccount CRUD, deployment queue, cancellation, credential delivery, and cleanup. Update schema artifacts through the repository's database workflow and require the clean state transition described above.
-4. Update Helm values/templates, startup examples, tests, and current [Driver selection](../../../docs/reference/drivers/selection.md), [ServiceAccount](../../../docs/reference/drivers/service-account.md), [Agent](../../../docs/reference/agents.md), settings/security, architecture, startup/credential-delivery flows, and deployment documentation when shipping. Update the platform design's integration terminology narrowly; retain historical specs unchanged.
+4. Update Helm values/templates, startup examples, tests, and current [Driver selection](../../../../docs/reference/drivers/selection.md), [ServiceAccount](../../../../docs/reference/drivers/service-account.md), [Agent](../../../../docs/reference/agents.md), settings/security, architecture, startup/credential-delivery flows, and deployment documentation when shipping. Update the platform design's integration terminology narrowly; retain historical specs unchanged.
 
 ## Verification
 
@@ -45,7 +45,7 @@ Implementation gates: focused tests above, workspace/type checks, generated Open
 
 ## Delivery Record
 
-The approved simplification removes global startup saved-state traversal and generic Driver ownership metadata, moves revision Provider snapshots into immutable columns, and consolidates test fixtures. Provider configuration, nullable API fields, exact per-use credential checks, and API-only client construction remain. Current behavior is owned by [Providers](../../../docs/reference/backends.md), [Agents](../../../docs/reference/agents.md), and the [Provider-managed credential delivery flow](../../../docs/flows/service-account-driver-credential-delivery.md).
+The approved simplification removes global startup saved-state traversal and generic Driver ownership metadata, moves revision Provider snapshots into immutable columns, and consolidates test fixtures. Provider configuration, nullable API fields, exact per-use credential checks, and API-only client construction remain. Current behavior is owned by [Providers](../../../../docs/reference/backends.md), [Agents](../../../../docs/reference/agents.md), and the [Provider-managed credential delivery flow](../../../../docs/flows/service-account-driver-credential-delivery.md).
 
 The simplified [implementation a635483](https://github.com/openclaw/openclaw-enterprise/commit/a635483aa62d41df7b45040b89d9edf4a3cee725) passed independent local verification: 139 conformance tests, 27 API/configuration/ServiceAccount tests, 36 PostgreSQL tests, and three production-image smoke tests. The PostgreSQL run had five explicit skips: four require a live Kubernetes ConfigurationDriver, and one requires an uninitialized singleton after an earlier case bootstrapped it. Workspace, TypeScript, formatting, OpenAPI, actual Helm rendering, flow-doc, and link checks passed. Two review passes resolved the bootstrap-fixture identity and security wording findings. Live ChatGPT account issuance, dedicated model turns, and upstream revocation remain unverified because authorized credentials/workspace and explicitly selected Kubernetes runtime fixtures are unavailable. No pre-existing Installation was reset or deployed.
 

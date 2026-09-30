@@ -1,11 +1,11 @@
 # RBAC delivery and qualification
 
-Read the [current-source and release-scope amendment](../31-basic-rbac.md#current-source-amendment--2026-09-24)
+Read the [current-source and release-scope amendment](index.md#current-source-amendment--2026-09-24)
 before applying this original proposal. This plan is deferred past 0.x; the
 requirements below are not implementation acceptance. The 0.x scope is
 [Agent access](../36-agent-access.md#delivery-checkpoints) checkpoints 1-2.
 
-**Post-0.x.** The [selected proposal](../31-basic-rbac.md) is complete only when
+**Post-0.x.** The [selected proposal](index.md) is complete only when
 ordinary people can use personal and team Agents through both channels with the
 required content, repository and withdrawal controls. These completion criteria are
 not 0.x requirements. An earlier checkpoint may be useful without completing that

@@ -1,5 +1,7 @@
 # Repository credentials: restart qualification and follow-up
 
+[Repository credentials RFC](index.md)
+
 This companion to the [qualification contract](qualification.md#recovery-and-acceptance-record) records the current ephemeral service's limits and the work needed for stronger recovery. It proposes acceptance criteria, not acceptance of the implementation or authorization to build the successors.
 
 ## Current boundary and tradeoffs

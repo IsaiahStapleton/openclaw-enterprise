@@ -1,6 +1,6 @@
 # Helm capability inventory
 
-This inventory supports the [two-profile proposal](../../../rfcs/2026-09-28-installation-profiles-design.md).
+This inventory supports the [two-profile proposal](index.md).
 Baseline: `e06ff9625e72ff5ab3483a504a2f02a69a370cbb`, inspected 2026-09-28.
 Defaults below are current chart defaults, not proposed profile choices.
 All listed features have source implementations; successful rendering proves
@@ -9,13 +9,13 @@ manifest generation only. No live cluster was inspected or changed in this task.
 > Historical baseline: this inventory records the pre-implementation discovery
 > phase at `e06ff962`. It does not describe the current installation profile
 > renderer, managed Slack proxy wiring, or post-implementation qualification.
-> For current operator guidance, see [Render installation profiles](../../../../docs/guides/deploy/installation-profiles.md)
-> and [Installation Profile Rendering Flow](../../../../docs/flows/installation-profile-rendering.md).
+> For current operator guidance, see [Render installation profiles](../../../docs/guides/deploy/installation-profiles.md)
+> and [Installation Profile Rendering Flow](../../../docs/flows/installation-profile-rendering.md).
 
 ## Main chart
 
-The chart's [values](../../../../deploy/helm/openclaw-enterprise/values.yaml) are the
-complete exposed Helm setting surface. [Chart.yaml](../../../../deploy/helm/openclaw-enterprise/Chart.yaml)
+The chart's [values](../../../deploy/helm/openclaw-enterprise/values.yaml) are the
+complete exposed Helm setting surface. [Chart.yaml](../../../deploy/helm/openclaw-enterprise/Chart.yaml)
 has no dependencies. PostgreSQL, Envoy Gateway, Gateway API CRDs, cert-manager,
 DNS, storage, and external credentials are operator prerequisites.
 
@@ -38,12 +38,12 @@ DNS, storage, and external credentials are operator prerequisites.
 | API HTTPS discovery        | `api.modelDiscoveryCidrs: []`                                                                                                                                                             | Optional `/32` HTTPS allowances. Model enumeration is optional. Hosted plugin discovery currently also needs API HTTPS access but has no separately named chart setting; see Installation inventory.                           |
 | Separate execution cluster | `executionCluster.enabled: false`; `apiKubeconfigSecretName`, `workerKubeconfigSecretName`: empty; `kubeconfigKey: kubeconfig`; `apiCidrs: []`, `apiPort: 6443`                           | Distinct role-specific Secrets mounted at `/etc/openclaw/execution/kubeconfig`; Installation must explicitly select them. Remote endpoint reachability, RBAC and execution chart remain external.                              |
 
-Sources: [validation helpers](../../../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl),
-[Deployments](../../../../deploy/helm/openclaw-enterprise/templates/deployments.yaml),
-[bootstrap Job](../../../../deploy/helm/openclaw-enterprise/templates/jobs.yaml),
-[NetworkPolicies](../../../../deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml),
-[bootstrap policies](../../../../deploy/helm/openclaw-enterprise/templates/bootstrap-networkpolicies.yaml),
-[RBAC](../../../../deploy/helm/openclaw-enterprise/templates/rbac.yaml).
+Sources: [validation helpers](../../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl),
+[Deployments](../../../deploy/helm/openclaw-enterprise/templates/deployments.yaml),
+[bootstrap Job](../../../deploy/helm/openclaw-enterprise/templates/jobs.yaml),
+[NetworkPolicies](../../../deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml),
+[bootstrap policies](../../../deploy/helm/openclaw-enterprise/templates/bootstrap-networkpolicies.yaml),
+[RBAC](../../../deploy/helm/openclaw-enterprise/templates/rbac.yaml).
 
 ## Repository broker
 
@@ -65,9 +65,9 @@ session durability or high availability is provided. Fresh bootstrap requires
 Namespace IDs before building the registry, so enabling repositories is a
 second stage. See the [Installation inventory](installation-inventory.md#repository-access).
 
-Sources: [broker validation](../../../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl),
-[sidecar](../../../../deploy/helm/openclaw-enterprise/templates/deployments.yaml),
-[Service](../../../../deploy/helm/openclaw-enterprise/templates/repository-credentials-service.yaml).
+Sources: [broker validation](../../../deploy/helm/openclaw-enterprise/templates/_helpers.tpl),
+[sidecar](../../../deploy/helm/openclaw-enterprise/templates/deployments.yaml),
+[Service](../../../deploy/helm/openclaw-enterprise/templates/repository-credentials-service.yaml).
 
 ## Routing and native administration
 
@@ -89,12 +89,12 @@ rules after dependencies exist. It does not install their controllers.
 `agentNativeAdmin.enabled: false`, `domain: ""`, `sharedCookieDomain: ""`
 controls native Agent UI admission separately from Console. Enabling requires
 routing and a valid trusted cookie parent plus operator-managed wildcard DNS/TLS.
-The [native admin pilot](../../../../docs/design.md#native-admin-pilot-exception)
+The [native admin pilot](../../../docs/design.md#native-admin-pilot-exception)
 grants full native administration; it is not generic per-operation authorization.
 
 Main routing egress admits tenant gateway TCP 8080. Private plugin status on
 TCP 18791 additionally requires the Installation's observed proxy sources.
-Source: [routing templates](../../../../deploy/helm/openclaw-enterprise/templates/gateway-routing.yaml).
+Source: [routing templates](../../../deploy/helm/openclaw-enterprise/templates/gateway-routing.yaml).
 
 ## Observability
 
@@ -107,12 +107,12 @@ Source: [routing templates](../../../../deploy/helm/openclaw-enterprise/template
 | Collector metrics         | `logging.collector.metrics.enabled: true`, scraper selectors `{}`                           | Private listener, explicit scraper access.                                                                                                                      |
 | Collector resources/state | requests 100m/128Mi, limits 500m/384Mi; `state.sizeLimit: 128Mi`, `tmp.sizeLimit: 64Mi`     | Disposable buffers; not durable log storage or guaranteed delivery.                                                                                             |
 
-Sources: [metrics](../../../../deploy/helm/openclaw-enterprise/templates/metrics.yaml),
-[collector](../../../../deploy/helm/openclaw-enterprise/templates/collector.yaml).
+Sources: [metrics](../../../deploy/helm/openclaw-enterprise/templates/metrics.yaml),
+[collector](../../../deploy/helm/openclaw-enterprise/templates/collector.yaml).
 
 ## Companion charts
 
-[Execution values](../../../../deploy/helm/openclaw-execution/values.yaml) configure
+[Execution values](../../../deploy/helm/openclaw-execution/values.yaml) configure
 private routing and API/worker RBAC in a separate execution cluster, not workloads.
 Required: `routing.hostname`, `gatewayClassName`, `tlsSecretName`,
 `controlPlaneCidrs`. Defaults: `gatewayName: oce-harnesses`,
@@ -121,9 +121,9 @@ Required: `routing.hostname`, `gatewayClassName`, `tlsSecretName`,
 Service type accepts ClusterIP or LoadBalancer. Preexisting TLS, GatewayClass,
 Envoy and correct post-NAT sources are required. Policies allow Agent ports
 18790 and 18791; this does not itself establish tenant ingress correctness.
-See [routing](../../../../deploy/helm/openclaw-execution/templates/routing.yaml).
+See [routing](../../../deploy/helm/openclaw-execution/templates/routing.yaml).
 
-[Observability demo values](../../../../deploy/helm/openclaw-observability-demo/values.yaml)
+[Observability demo values](../../../deploy/helm/openclaw-observability-demo/values.yaml)
 select pinned Prometheus/Loki/Grafana images and require `occ.namespace`,
 `occ.release`, `cluster.cidrs` and `grafana.adminSecretName`. Defaults:
 `occ.metricsPort: 9464`, `grafana.adminSecretKey: password`, `cluster.port: 443`,
@@ -171,6 +171,6 @@ Both companion charts rendered with synthetic inputs: execution used
 `example-admin`, cluster `192.0.2.1/32`. These reserved examples are validation
 inputs, not reusable profile defaults.
 
-Existing [packaging coverage](../../../../tests/integration/production-kubernetes-packaging.test.mjs)
+Existing [packaging coverage](../../../tests/integration/production-kubernetes-packaging.test.mjs)
 was inspected, not run. No new local runtime, EKS, provider, or restart proof was
 obtained. Runtime qualification belongs to the [acceptance plan](installation-inventory.md#qualification-plan).

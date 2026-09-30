@@ -280,8 +280,10 @@ Follow the [specification process](docs/contributing/specifications.md) for
 document choice, numbering, status, and preservation. Write architectural RFCs
 under `specs/rfcs/`. Put RFC-linked implementation plans under `specs/plans/rfcs/`
 with the RFC's number and topic, and independently numbered task plans under
-`specs/plans/tasks/`. Use one Markdown file by default; add supporting pages only
-when needed. A larger feature with an RFC needs a separate implementation plan;
+`specs/plans/tasks/`. Use one Markdown file by default. When companions are
+needed, use `<number>-<topic>/index.md` for the main document and keep supporting
+files in that folder, without a separate top-level Markdown file.
+A larger feature with an RFC needs a separate implementation plan;
 an independent plan can build on the existing architecture without a new RFC.
 Keep verification in the owning document or its supporting pages, not a separate
 reports area. Keep completed and superseded records in place.
@@ -293,7 +295,7 @@ retroactively update the earlier spec to match the later implementation;
 preserve its original design decisions and implementation details.
 
 Use stable feature names in `docs/reference/` and preserve grandfathered
-specification filenames and related subpage layouts in their assigned homes.
+specification names and IDs when grouping companions under `index.md`.
 This first organization phase leaves `specs/.archive/` unchanged; do not add new
 records to it. A behavior-changing implementation PR
 updates its affected reference, guides, and flows together. Record completion

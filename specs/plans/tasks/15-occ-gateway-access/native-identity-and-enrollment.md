@@ -1,6 +1,6 @@
 # Feature Spec: OCC Gateway Administration and Command Proxy: native identity and enrollment
 
-[Spec overview](../15-occ-gateway-access.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ### Native identity and automatic enrollment
 

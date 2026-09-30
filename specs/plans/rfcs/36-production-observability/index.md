@@ -15,12 +15,12 @@ PostgreSQL, Prometheus, Collector, and Loki.
 **Tech stack:** Helm, Kubernetes/k3d, Node.js 24+, pinned pnpm, PostgreSQL,
 OpenTelemetry Collector, Prometheus, Grafana, and Loki.
 
-**Spec:** [Default production observability](../../rfcs/36-production-observability.md).
+**Spec:** [Default production observability](../../../rfcs/36-production-observability.md).
 Status: Earlier local acceptance passed on its recorded source. The expanded
 Helm-installed model and revision-cutover coverage is deferred; the existing
 protected model lane is retained. Model-turn qualification on the current cut
 and hosted checks remain outstanding. See the
-[qualification report](36-production-observability/qualification.md)
+[qualification report](qualification.md)
 for historical evidence and delivery adjustments.
 
 ## Global constraints
@@ -218,7 +218,7 @@ receives filtered Collector OTLP logs. No operator CRDs or cloud service require
 
 The completed wrapper tasks below record the original implementation. The
 wrapper and its package commands were later removed; use the current
-[CI lane procedures](../../../docs/testing/metrics.md#kubernetes-observability-acceptance).
+[CI lane procedures](../../../../docs/testing/metrics.md#kubernetes-observability-acceptance).
 
 **Files:** Create `scripts/test-observability.mjs`; modify `package.json`,
 `scripts/ci/test-suites.json`, `.github/workflows/ci.yml`,
@@ -271,7 +271,7 @@ wrapper and its package commands were later removed; use the current
       `pnpm docs:check`, `pnpm docs:check-length`, and `git diff --check` as applicable
       with matching installed dependencies. Do not install dependencies as verification.
 - [ ] Run the credential-free lanes locally using the current
-      [CI lane procedures](../../../docs/testing/metrics.md#kubernetes-observability-acceptance),
+      [CI lane procedures](../../../../docs/testing/metrics.md#kubernetes-observability-acceptance),
       then obtain passing required CI for the final revision. Qualify model
       turns separately using the retained model lane and protected CI;
       report missing runtime evidence without presenting default checks as runtime proof.

@@ -30,7 +30,7 @@ P1 means resolve before relying on the platform for a shared multi-user pilot; i
 
 ## Confirmed findings
 
-See [Confirmed findings](2026-09-01-architecture-security-audit/confirmed-findings.md#confirmed-findings).
+See [Confirmed findings](confirmed-findings.md#confirmed-findings).
 
 ## Open Questions
 

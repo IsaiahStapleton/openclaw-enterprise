@@ -68,9 +68,25 @@ standalone task later gains an RFC, retain its task ID and path and add the
 relationship; do not create a duplicate plan merely to change its category.
 
 When substantial evidence, diagrams, or independently useful milestones need
-companions, put them in a sibling directory with the document's stem. Keep the
-main `<number>-<topic>.md` as the entry point. Link companions from it and back
-to it. Do not create empty directories or a separate reports area. PR screenshots
+companions, use a directory named `<number>-<topic>/` with the main document at
+`index.md` inside it. Move an existing `<number>-<topic>.md` into that directory
+when adding companions; do not keep a second top-level document. Keep the same
+ID, update incoming and relative links, and link companions from `index.md` and
+back to it. This applies to RFCs, RFC-linked plans, and standalone task plans:
+
+```text
+specs/rfcs/0042-runtime-trust/
+  index.md
+  architecture.svg
+specs/plans/rfcs/0042-runtime-trust/
+  index.md
+  qualification.md
+specs/plans/tasks/0042-credential-cleanup/
+  index.md
+  inventory.md
+```
+
+Do not create empty directories or a separate reports area. PR screenshots
 and recordings remain outside the repository, as required by
 [Console Storybook](console-storybook.md).
 
@@ -116,9 +132,10 @@ in the platform design.
 
 Preserve historical decisions, dates, evidence, recorded statuses, and Manual
 Notes. Keep mixed historical design and implementation records intact, choosing
-their home by primary purpose. Existing filenames, including duplicate numeric
-prefixes and date-based names, are grandfathered; refer to those by full filename
-or path when a number is ambiguous. Do not infer completion from placement or
+their home by primary purpose. Existing names, including duplicate numeric
+prefixes and date-based names, are grandfathered; documents with companions use
+those names for their directories and `index.md` for the main document. Refer to
+the full path when a number is ambiguous. Do not infer completion from placement or
 rewrite historical content to match the new template.
 
 This first phase moves non-archived specifications and supporting evidence.

@@ -14,10 +14,10 @@ EKS/general Kubernetes after explicit environment inputs are supplied. This is
 an installation proposal, not a replacement platform architecture.
 
 The inventory is pinned to `e06ff9625e72ff5ab3483a504a2f02a69a370cbb` in the isolated
-`oce-helm-presets` checkout. Read the [Helm inventory](../plans/tasks/installation-profiles/helm-inventory.md)
-and [Installation inventory](../plans/tasks/installation-profiles/installation-inventory.md)
+`oce-helm-presets` checkout. Read the [Helm inventory](helm-inventory.md)
+and [Installation inventory](installation-inventory.md)
 for current defaults, owning settings, prerequisites, and evidence limits.
-The [platform design](../../docs/design.md) retains resource ownership and isolation.
+The [platform design](../../../docs/design.md) retains resource ownership and isolation.
 
 Implementation and qualification are authorized in a new worktree and newly
 created test EKS clusters. Existing EKS clusters and unrelated installations
@@ -211,7 +211,7 @@ owning plugin/repository guides, and existing Helm/bootstrap integration coverag
 Shipped outcome: deterministic artifacts, required-input diagnostics, preserved
 preset edits. Verify each profile with complete and deliberately incomplete inputs.
 
-**Milestone 3: isolated qualification.** Run the [acceptance matrix](../plans/tasks/installation-profiles/installation-inventory.md#qualification-plan)
+**Milestone 3: isolated qualification.** Run the [acceptance matrix](installation-inventory.md#qualification-plan)
 on disposable local Kubernetes and separately authorized EKS/general Kubernetes.
 Shipped outcome: evidence for each supported combination, including denials and
 restart limits. Real Slack proof requires separately authorized test credentials

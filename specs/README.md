@@ -11,7 +11,8 @@ and the [platform design](../docs/design.md) owns current architecture.
 
 RFCs live in `rfcs/`. Their implementation plans live in `plans/rfcs/` and reuse
 the RFC number; independent plans live in `plans/tasks/` with their own sequence.
-New documents use single files by default. Store status and verification limits
+New documents use single files by default. Documents with companions use
+`<number>-<topic>/index.md` inside their folder. Store status and verification limits
 in their owning document, rather than repeating them in this index.
 
 Start a new proposal from the [RFC template](../docs/contributing/rfc-template.md)
@@ -33,45 +34,45 @@ recorded status is not proof of current implementation or release availability.
 | Agent access                                                | [Decision](rfcs/36-agent-access.md)                         | —                                                                               |
 | Agent creation, channels, and revision inspection           | —                                                           | [Plan / record](plans/tasks/19-console-agent-management.md)                     |
 | Agent deletion and revision teardown                        | —                                                           | [Plan / record](plans/tasks/28-agent-deletion.md)                               |
-| Agent egress for 0.x                                        | [Decision](rfcs/40-agent-egress-0x.md)                      | —                                                                               |
+| Agent egress for 0.x                                        | [Decision](rfcs/40-agent-egress-0x/index.md)                      | —                                                                               |
 | Agent native admin UI pilot                                 | —                                                           | [Plan / record](plans/tasks/31-agent-native-admin-ui.md)                        |
 | Agent plugin drivers                                        | —                                                           | [Plan / record](plans/tasks/16-plugin-driver.md)                                |
 | Agent presets                                               | —                                                           | [Plan / record](plans/tasks/33-agent-presets.md)                                |
 | Agent stop without revision mutation                        | —                                                           | [Plan / record](plans/tasks/29-agent-stop.md)                                   |
 | Agent workload tags                                         | [Decision](rfcs/21-agent-workload-tags.md)                  | —                                                                               |
-| Architecture and security audit                             | —                                                           | [Plan / record](plans/tasks/2026-09-01-architecture-security-audit.md)          |
+| Architecture and security audit                             | —                                                           | [Plan / record](plans/tasks/2026-09-01-architecture-security-audit/index.md)          |
 | Asynchronous Agent provisioning                             | —                                                           | [Plan / record](plans/tasks/35-agent-provisioning.md)                           |
-| Basic RBAC for personal and team Agents                     | [Decision](rfcs/31-basic-rbac.md)                           | —                                                                               |
-| Bootstrap administrator service account                     | —                                                           | [Plan / record](plans/tasks/16-bootstrap-admin-service-account.md)              |
-| Common OpenTelemetry logging                                | —                                                           | [Plan / record](plans/tasks/20-common-otel-logging.md)                          |
+| Basic RBAC for personal and team Agents                     | [Decision](rfcs/31-basic-rbac/index.md)                           | —                                                                               |
+| Bootstrap administrator service account                     | —                                                           | [Plan / record](plans/tasks/16-bootstrap-admin-service-account/index.md)              |
+| Common OpenTelemetry logging                                | —                                                           | [Plan / record](plans/tasks/20-common-otel-logging/index.md)                          |
 | ComputeDriver matrix refresh                                | —                                                           | [Plan / record](plans/tasks/2026-09-16-compute-driver-matrix.md)                |
 | Console Agent plugin selection                              | —                                                           | [Plan / record](plans/tasks/27-console-agent-plugins.md)                        |
 | Control-plane Gateway placement execution plan              | —                                                           | [Plan / record](plans/tasks/36-control-plane-gateways-plan.md)                  |
 | Credential Gateway Driver for Sandbox-injected credentials  | [Decision](rfcs/39-sandbox-credential-injection.md)         | —                                                                               |
 | Dedicated Harness RWO workspace execution plan              | —                                                           | [Plan / record](plans/tasks/38-harness-rwo-workspace-plan.md)                   |
-| Default production observability                            | [Decision](rfcs/36-production-observability.md)             | [Plan](plans/rfcs/36-production-observability-plan.md)                          |
-| Deployment Simplification                                   | —                                                           | [Plan / record](plans/tasks/18-deployment-simplification.md)                    |
+| Default production observability                            | [Decision](rfcs/36-production-observability.md)             | [Plan](plans/rfcs/36-production-observability/index.md)                          |
+| Deployment Simplification                                   | —                                                           | [Plan / record](plans/tasks/18-deployment-simplification/index.md)                    |
 | Development end-to-end guide                                | —                                                           | [Plan / record](plans/tasks/15-development-end-to-end-guide.md)                 |
 | First Enterprise container release                          | —                                                           | [Plan / record](plans/tasks/32-first-container-release.md)                      |
 | Gateway–Harness storage split                               | [Decision](rfcs/28-gateway-harness-storage-split.md)        | —                                                                               |
-| GitHub Actions integration and test coverage for Enterprise | —                                                           | [Plan / record](plans/tasks/19-github-actions-test-coverage.md)                 |
-| GitHub sign-in for existing accounts                        | [Decision](rfcs/31-human-federated-sign-in.md)              | —                                                                               |
+| GitHub Actions integration and test coverage for Enterprise | —                                                           | [Plan / record](plans/tasks/19-github-actions-test-coverage/index.md)                 |
+| GitHub sign-in for existing accounts                        | [Decision](rfcs/31-human-federated-sign-in/index.md)              | —                                                                               |
 | Harness authentication bindings                             | [Decision](rfcs/30-harness-auth-binding.md)                 | —                                                                               |
 | Independent image and chart publication                     | —                                                           | [Plan / record](plans/tasks/41-independent-image-chart-publication.md)          |
 | Independent production image upgrades                       | [Decision](rfcs/36-coordinated-image-upgrade.md)            | —                                                                               |
 | Initial Agent workspace files                               | —                                                           | [Plan / record](plans/tasks/34-agent-workspace-files-setup.md)                  |
 | Initial OCC Prometheus metrics                              | [Decision](rfcs/28-occ-prometheus-metrics.md)               | [Plan](plans/rfcs/28-occ-prometheus-metrics-plan.md)                            |
-| Installation profiles: openclaw and codex                   | [Decision](rfcs/2026-09-28-installation-profiles-design.md) | —                                                                               |
+| Installation profiles: openclaw and codex                   | [Decision](rfcs/2026-09-28-installation-profiles-design/index.md) | —                                                                               |
 | Native OpenClaw plugin tool policies                        | [Decision](rfcs/35-native-plugin-tool-policy.md)            | —                                                                               |
-| OCC Gateway Administration and Command Proxy                | —                                                           | [Plan / record](plans/tasks/15-occ-gateway-access.md)                           |
-| Platform audit                                              | [Decision](rfcs/37-platform-audit.md)                       | —                                                                               |
+| OCC Gateway Administration and Command Proxy                | —                                                           | [Plan / record](plans/tasks/15-occ-gateway-access/index.md)                           |
+| Platform audit                                              | [Decision](rfcs/37-platform-audit/index.md)                       | —                                                                               |
 | Plugin policy enforcement                                   | [Decision](rfcs/37-plugin-policy-enforcement.md)            | —                                                                               |
 | Production interactive TUI                                  | —                                                           | [Plan / record](plans/tasks/16-production-tui-end-to-end.md)                    |
-| Provider and related Drivers                                | —                                                           | [Plan / record](plans/tasks/17-provider-driver-abstraction.md)                  |
+| Provider and related Drivers                                | —                                                           | [Plan / record](plans/tasks/17-provider-driver-abstraction/index.md)                  |
 | Recover repository credential cleanup after broker loss     | [Decision](rfcs/39-repository-credential-recovery.md)       | —                                                                               |
-| Repository credentials for ordinary Agents                  | [Decision](rfcs/31-repository-credentials.md)               | —                                                                               |
+| Repository credentials for ordinary Agents                  | [Decision](rfcs/31-repository-credentials/index.md)               | —                                                                               |
 | Repository selection and inherited access                   | —                                                           | [Plan / record](plans/tasks/37-repository-picker-and-access.md)                 |
-| SSH Compute Driver for raw hosts                            | —                                                           | [Plan / record](plans/tasks/21-ssh-compute-driver.md)                           |
+| SSH Compute Driver for raw hosts                            | —                                                           | [Plan / record](plans/tasks/21-ssh-compute-driver/index.md)                           |
 | Storage split: shared interface and integration             | —                                                           | [Plan / record](plans/tasks/30-storage-split-integration.md)                    |
 | Two-cluster dedicated Gateway execution plan                | —                                                           | [Plan / record](plans/tasks/37-two-cluster-gateway-execution-plan.md)           |
 | Workspace enrollment without a Harness restart              | —                                                           | [Plan / record](plans/tasks/40-workspace-enrollment-without-harness-restart.md) |

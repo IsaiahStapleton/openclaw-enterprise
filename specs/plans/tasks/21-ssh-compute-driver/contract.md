@@ -1,6 +1,6 @@
 # Feature Spec: SSH Compute Driver for raw hosts: contract
 
-[Spec overview](../21-ssh-compute-driver.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ## Contract
 

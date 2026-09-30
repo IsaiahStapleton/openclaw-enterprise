@@ -21,8 +21,8 @@ Agent. The driver does not install OpenClaw, Node.js, or systemd; the operator
 provisions the host, the runtime, and per-Agent credential files, mirroring how
 the Kubernetes Driver expects operator-owned images and Secrets.
 
-This is the same [ComputeDriver contract](../../../docs/reference/drivers/compute.md)
-under the [platform design](../../../docs/design.md): OCC owns resources, revisions,
+This is the same [ComputeDriver contract](../../../../docs/reference/drivers/compute.md)
+under the [platform design](../../../../docs/design.md): OCC owns resources, revisions,
 authorization, and activation; the Driver realizes admitted intent on the host
 and reports readiness without acquiring platform ownership.
 
@@ -51,7 +51,7 @@ Out of scope, recorded as explicit limitations rather than silent behavior:
 
 ## Contract
 
-See [Contract](21-ssh-compute-driver/contract.md#contract).
+See [Contract](contract.md#contract).
 
 ## Implementation
 

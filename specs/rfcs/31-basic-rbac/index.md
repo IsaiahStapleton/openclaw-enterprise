@@ -4,7 +4,7 @@
 
 **Status:** Direction; deferred past 0.x — not an MVP requirement.
 
-The 0.x scope is [Agent access](36-agent-access.md#delivery-checkpoints) checkpoints 1-2 (share with existing people; enroll without grants); everything in this package is later direction.
+The 0.x scope is [Agent access](../36-agent-access.md#delivery-checkpoints) checkpoints 1-2 (share with existing people; enroll without grants); everything in this package is later direction.
 
 **Owner:** OCC authorization and Agent invocation.
 
@@ -54,7 +54,7 @@ Enrollment alone grants no access.
 
 ## Access model
 
-The [twenty fixed roles](31-basic-rbac/interfaces.md#permissions-and-targets)
+The [twenty fixed roles](interfaces.md#permissions-and-targets)
 separate everyday responsibilities. An Agent viewer reads metadata and status;
 a collaborator invokes the Agent and reads content; an editor changes configuration
 and workspace content; an operator deploys and controls its lifecycle. Repository
@@ -67,7 +67,7 @@ audit. The last two targets permit only audit-reader grants.
 
 An authorized human Installation administrator manages Groups, memberships, grants,
 Restrictions and approved creation profiles through the selected IAM Driver.
-[Policy administration](31-basic-rbac/interfaces.md#policy-administration) commits
+[Policy administration](interfaces.md#policy-administration) commits
 each change with its revision, audit and withdrawal intent in one State transaction,
 while preserving a usable local-password administrator and recoverable outcomes.
 
@@ -111,8 +111,8 @@ flowchart TB
 ```
 
 Dashed connections are proposed handoffs. The
-[request lifecycle](31-basic-rbac/architecture.md#request-lifecycle) and
-[invocation design](31-basic-rbac/invocation-and-content.md) explain execution,
+[request lifecycle](architecture.md#request-lifecycle) and
+[invocation design](invocation-and-content.md) explain execution,
 protected credentials and separate dispatch/reply safeguards.
 
 ## Delivery and limits
@@ -125,11 +125,11 @@ profiles and measured withdrawal.
 
 Enforced admission fails closed without downgrade. Compatibility mode promises
 neither verified execution nor bounded withdrawal. The
-[security requirements](31-basic-rbac/security.md#withdrawal-and-failure) set
+[security requirements](security.md#withdrawal-and-failure) set
 30-second limits for new-work refusal and the last protected bytes, with stricter
 scoped limits and separate physical-stop and provider-cleanup outcomes.
 
-[Delivery](31-basic-rbac/delivery.md) defines the increments, unresolved mechanisms
+[Delivery](delivery.md) defines the increments, unresolved mechanisms
 and acceptance evidence. [Human sign-in](https://github.com/openclaw/openclaw-enterprise/pull/246),
 [identity](https://github.com/openclaw/openclaw-enterprise/pull/247),
 [gVisor](https://github.com/openclaw/openclaw-enterprise/pull/248),

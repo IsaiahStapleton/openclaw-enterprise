@@ -12,7 +12,7 @@ egress proxy. Verify these protections before release.
 OpenShell gives the Agent a placeholder; its network proxy substitutes the real
 credential for an allowed HTTP request to a bound destination. The trusted proxy
 may hold the credential. OCE's Credential Gateway Driver for OpenShell shipped in #461
-([reference](../../docs/reference/drivers/credential-gateway.md); design proposed
+([reference](../../../docs/reference/drivers/credential-gateway.md); design proposed
 in #452); it is optional,
 not selected by production installations, and OpenShell v0.1.0 is not a
 supported production runtime. Compute refuses repository credentials when a
@@ -69,7 +69,7 @@ flowchart TB
 ```
 
 Dashed arrows show intended integration, not installed behavior.
-[Editable Mermaid source](40-agent-egress-0x/current-boundaries.mmd).
+[Editable Mermaid source](current-boundaries.mmd).
 
 <a id="scope"></a><a id="contract"></a><a id="three-execution-boundaries"></a>
 
@@ -135,8 +135,8 @@ Documentation is not installed-runtime or release evidence.
 
 The custom proxy was **accepted for implementation** against
 [`046e12b`](https://github.com/openclaw/openclaw-enterprise/commit/046e12b007bb1b4928bd3f7497a2353714be11a8),
-then deferred for 0.x. Its [architecture](../.archive/31-basic-egress-proxy/architecture.md),
-[interfaces](../.archive/31-basic-egress-proxy/interfaces.md),
-[protocol](../.archive/31-basic-egress-proxy/protocol-and-routing.md),
-[security](../.archive/31-basic-egress-proxy/security.md), and
-[delivery](../.archive/31-basic-egress-proxy/delivery.md) retain C0–C3 contracts for reference, not release approval.
+then deferred for 0.x. Its [architecture](../../.archive/31-basic-egress-proxy/architecture.md),
+[interfaces](../../.archive/31-basic-egress-proxy/interfaces.md),
+[protocol](../../.archive/31-basic-egress-proxy/protocol-and-routing.md),
+[security](../../.archive/31-basic-egress-proxy/security.md), and
+[delivery](../../.archive/31-basic-egress-proxy/delivery.md) retain C0–C3 contracts for reference, not release approval.

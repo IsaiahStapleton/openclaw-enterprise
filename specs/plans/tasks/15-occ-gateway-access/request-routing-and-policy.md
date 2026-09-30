@@ -1,6 +1,6 @@
 # Feature Spec: OCC Gateway Administration and Command Proxy: request routing and policy
 
-[Spec overview](../15-occ-gateway-access.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ### HTTP request and native result
 

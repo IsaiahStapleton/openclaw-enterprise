@@ -55,7 +55,7 @@ flowchart LR
   class P gate
 ```
 
-Proposed handoffs. [Lifecycle](37-platform-audit/request-lifecycle.svg) · [editable source](37-platform-audit/request-lifecycle.mmd).
+Proposed handoffs. [Lifecycle](request-lifecycle.svg) · [editable source](request-lifecycle.mmd).
 
 Bind read intent before locks in one original-State write transaction. Acquire Installation authority, sorted account/method/session guards, then selected policy barrier/head. Recheck genuine account, method version/usability, session and IAM after waits through settlement, including expiry. OIDC owns actual request recognition and account mapping, persisted incarnation/session disposition and every enabled logout/credential/account writer interlock.
 

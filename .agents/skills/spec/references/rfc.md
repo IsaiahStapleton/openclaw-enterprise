@@ -28,7 +28,10 @@ For a new document, allocate an RFC ID by the specification process, then use
 the scaffold below the divider in `docs/contributing/rfc-template.md` at
 `specs/rfcs/<number>-<topic>.md`. This contributor template is the shared source
 for both manual authoring and this skill; do not maintain a second copy in the
-skill assets.
+skill assets. If companions are needed, write the main document at
+`specs/rfcs/<number>-<topic>/index.md` and put companions in the same directory.
+When converting an existing single file, preserve its ID and content and update
+all incoming and relative links; do not leave a top-level duplicate.
 Start with decision status **Proposed**. Recheck that the path and number are not
 already assigned before writing. Existing ambiguous historical numbers require
 a full filename or path, not a guessed match.

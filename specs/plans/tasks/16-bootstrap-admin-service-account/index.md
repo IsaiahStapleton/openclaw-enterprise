@@ -4,10 +4,10 @@
 **Status:** Bootstrap recovery guarantees superseded; removal locally verified; PR review pending\
 **Owner:** OCC bootstrap, authentication, and native IAM  
 **Source baseline:** `openclaw/openclaw-enterprise` `main` at `b43cc49c45fa6275e79985be0eabb517743c6a23`  
-**Affected references:** [Authentication](../../../docs/reference/authentication.md), [Authorization](../../../docs/reference/authorization.md), [Settings](../../../docs/reference/settings.md)
+**Affected references:** [Authentication](../../../../docs/reference/authentication.md), [Authorization](../../../../docs/reference/authorization.md), [Settings](../../../../docs/reference/settings.md)
 
 > The bootstrap recovery guarantees below are historical and are superseded by
-> [the current authentication reference](../../../docs/reference/authentication.md#installation-and-account-ownership).
+> [the current authentication reference](../../../../docs/reference/authentication.md#installation-and-account-ownership).
 > The user-approved removal replaces automatic recovery with one attempt that
 > preserves created artifacts after any error. The earlier design and recorded
 > test results remain unchanged below.
@@ -30,9 +30,9 @@
 
 Fresh bootstrap creates the human administrator and one Installation-scoped service administrator. Extend the existing native IAM seed and issue a 30-day service API key through existing authentication code. Deliver it in a **private JSON file** on the production password PVC or a bootstrap-only development volume.
 
-The service identity is a non-Agent IAM `ServicePrincipal`, with no human login, email, password, session, Namespace, or Agent owner. Namespace [ServiceAccount resources](../../../docs/reference/service-accounts.md) instead supply upstream workload credentials. The operator owns the delivered credential; native IAM owns identity and permissions; Better Auth owns key generation, hashing, expiry, and revocation.
+The service identity is a non-Agent IAM `ServicePrincipal`, with no human login, email, password, session, Namespace, or Agent owner. Namespace [ServiceAccount resources](../../../../docs/reference/service-accounts.md) instead supply upstream workload credentials. The operator owns the delivered credential; native IAM owns identity and permissions; Better Auth owns key generation, hashing, expiry, and revocation.
 
-This active, unshipped specification records the approved implementation under [the platform design](../../../docs/design.md). The user-approved simplification replaces the earlier retained-entrypoint decision with one initializer for Compose and Helm: migrate → initialize administrators and credentials → start API/worker. Native IAM provisioning and the public human-only bootstrap endpoint remain. A shared transaction coordinator, auth/OCC atomicity, receipt table or migration, recovery endpoint, external-IAM bootstrap, extra startup-YAML mounting, automatic rotation, and existing-installation backfill remain out of scope. Local verification of the shared-initializer revision and its predecessor is recorded below. No production rollout is included.
+This active, unshipped specification records the approved implementation under [the platform design](../../../../docs/design.md). The user-approved simplification replaces the earlier retained-entrypoint decision with one initializer for Compose and Helm: migrate → initialize administrators and credentials → start API/worker. Native IAM provisioning and the public human-only bootstrap endpoint remain. A shared transaction coordinator, auth/OCC atomicity, receipt table or migration, recovery endpoint, external-IAM bootstrap, extra startup-YAML mounting, automatic rotation, and existing-installation backfill remain out of scope. Local verification of the shared-initializer revision and its predecessor is recorded below. No production rollout is included.
 
 ## Current state and evidence
 
@@ -44,11 +44,11 @@ initializer removes that duplication and the internal HTTP error boundary.
 
 | Area | Selected owner and source |
 | --- | --- |
-| Initialization | [`scripts/bootstrap-installation.mjs`](../../../scripts/bootstrap-installation.mjs) handles both environment modes, private output, commit, and failure cleanup. |
-| API startup | [Development composition](../../../apps/controller/src/composition/development-postgres.ts) and [production composition](../../../apps/controller/src/composition/production.ts) require initialized state. |
-| Identity and keys | [Native IAM](../../../packages/iam/src/index.ts) owns the shared administrator Role and bindings; the [auth wrapper](../../../apps/controller/src/auth/index.ts) owns Better Auth key issuance and verification. |
-| Persistence and delivery | [PostgreSQL transactions](../../../packages/occ/src/state/postgres-state.ts) distinguish unknown COMMIT outcomes; [private output](../../../apps/controller/src/composition/bootstrap-output.ts) protects attempt-owned files. |
-| Packaging and operator access | [Compose](../../../compose.yaml) and the [Helm Job](../../../deploy/helm/openclaw-enterprise/templates/jobs.yaml) run initialization before serving; [`scripts/occ-api`](../../../docs/guides/cli.md) sends protected operator requests. |
+| Initialization | [`scripts/bootstrap-installation.mjs`](../../../../scripts/bootstrap-installation.mjs) handles both environment modes, private output, commit, and failure cleanup. |
+| API startup | [Development composition](../../../../apps/controller/src/composition/development-postgres.ts) and [production composition](../../../../apps/controller/src/composition/production.ts) require initialized state. |
+| Identity and keys | [Native IAM](../../../../packages/iam/src/index.ts) owns the shared administrator Role and bindings; the [auth wrapper](../../../../apps/controller/src/auth/index.ts) owns Better Auth key issuance and verification. |
+| Persistence and delivery | [PostgreSQL transactions](../../../../packages/occ/src/state/postgres-state.ts) distinguish unknown COMMIT outcomes; [private output](../../../../apps/controller/src/composition/bootstrap-output.ts) protects attempt-owned files. |
+| Packaging and operator access | [Compose](../../../../compose.yaml) and the [Helm Job](../../../../deploy/helm/openclaw-enterprise/templates/jobs.yaml) run initialization before serving; [`scripts/occ-api`](../../../../docs/guides/cli.md) sends protected operator requests. |
 
 ## Requirements -> Design Mapping
 
@@ -63,7 +63,7 @@ initializer removes that duplication and the internal HTTP error boundary.
 
 ## Selected design
 
-See [Selected design](16-bootstrap-admin-service-account/selected-design.md#selected-design).
+See [Selected design](selected-design.md#selected-design).
 
 ## Delivery alternatives, tradeoffs, and open questions
 
@@ -104,11 +104,11 @@ Validate first on disposable PostgreSQL/Compose, then a selected disposable Helm
 
 ## Testing Plan
 
-See [Testing Plan](16-bootstrap-admin-service-account/verification.md#testing-plan).
+See [Testing Plan](verification.md#testing-plan).
 
 ## Implementation verification
 
-See [Implementation verification](16-bootstrap-admin-service-account/verification.md#implementation-verification).
+See [Implementation verification](verification.md#implementation-verification).
 
 ## Manual Notes
 

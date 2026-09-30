@@ -1,6 +1,6 @@
 # Repository credentials: qualification
 
-This companion to the [RFC](../31-repository-credentials.md) defines acceptance and evidence interpretation. The [testing guide][testing] owns setup, selectors and prerequisites; the [operator guide][guide] owns deployment and recovery commands. Requirements below are retained obligations, not an assertion that every final artifact is qualified.
+This companion to the [RFC](index.md) defines acceptance and evidence interpretation. The [testing guide][testing] owns setup, selectors and prerequisites; the [operator guide][guide] owns deployment and recovery commands. Requirements below are retained obligations, not an assertion that every final artifact is qualified.
 
 ## Scope and exact artifacts
 

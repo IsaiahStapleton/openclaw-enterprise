@@ -1,6 +1,6 @@
 # Installation capability inventory and qualification
 
-Companion to the [profile proposal](../../../rfcs/2026-09-28-installation-profiles-design.md)
+Companion to the [profile proposal](index.md)
 and [Helm inventory](helm-inventory.md). Baseline:
 `e06ff9625e72ff5ab3483a504a2f02a69a370cbb`, inspected 2026-09-28.
 “Implemented” below means source exists. This inventory separates historical
@@ -10,12 +10,12 @@ tests.
 > Historical baseline: this inventory records the pre-implementation discovery
 > phase at `e06ff962`. It does not describe the current installation profile
 > renderer, managed Slack proxy wiring, or post-implementation qualification.
-> For current operator guidance, see [Render installation profiles](../../../../docs/guides/deploy/installation-profiles.md)
-> and [Installation Profile Rendering Flow](../../../../docs/flows/installation-profile-rendering.md).
+> For current operator guidance, see [Render installation profiles](../../../docs/guides/deploy/installation-profiles.md)
+> and [Installation Profile Rendering Flow](../../../docs/flows/installation-profile-rendering.md).
 
 ## Startup configuration
 
-The closed [startup contract](../../../../apps/controller/src/composition/installation-config.ts)
+The closed [startup contract](../../../apps/controller/src/composition/installation-config.ts)
 accepts `occ`, `logging`, `presets`, `backend`, and `drivers`. Operators supply
 settings through the Helm-mounted startup Secret. Production does not install
 from an empty configuration; required selections and their configuration must be
@@ -38,9 +38,9 @@ explicit.
 | Backends                | `backend: []`                                                                   | Supported ChatGPT, GitHub, OpenShell entries have ID/type/configuration/driver membership; matching selections enforced. GitHub and ChatGPT can coexist. |
 | Installed extensions    | Optional `package` for Configuration, IAM, Compute, Sandbox                     | Direct production dependency built into controller image; no hot install/reload. No arbitrary package selector for plugin, repo, Secret, or Backend.     |
 
-Sources: [Driver selection](../../../../docs/reference/drivers/selection.md),
-[Backend contract](../../../../packages/contracts/src/index.ts),
-[production composition](../../../../apps/controller/src/composition/production.ts).
+Sources: [Driver selection](../../../docs/reference/drivers/selection.md),
+[Backend contract](../../../packages/contracts/src/index.ts),
+[production composition](../../../apps/controller/src/composition/production.ts).
 There is no Installation channel-driver selector: production creates the Slack
 directory driver from the separate API proxy setting.
 
@@ -48,7 +48,7 @@ directory driver from the separate API proxy setting.
 
 `drivers.compute.configuration` owns the following complete option groups.
 Most are **required explicit configuration**, not implicit defaults; the
-[production example](../../../../deploy/examples/production/installation.yaml) is not
+[production example](../../../deploy/examples/production/installation.yaml) is not
 a second source of default values.
 
 | Option group                                                                      | Defaults or required input                                      | Local and EKS/Kubernetes requirement                                                                                                                               |
@@ -67,13 +67,13 @@ a second source of default values.
 | `gatewayRouting`                                                                  | Absent                                                          | Must match chart Gateway name/namespace/Envoy; dedicated workspace setup depends on routing/enrollment.                                                            |
 | `executionCluster`                                                                | Absent                                                          | Separate authentication, harnessRouting, DNS and harness/gateway/plugin-status source CIDRs; optional CA bundle. Companion chart and remote routing prerequisites. |
 
-[Compute source](../../../../apps/controller/src/drivers/compute/kubernetes/index.ts)
+[Compute source](../../../apps/controller/src/drivers/compute/kubernetes/index.ts)
 owns constants: 10Gi private gateway state, 40Gi dedicated Harness workspace,
 1Gi disposable runtime state. These are not configurable Helm capacity values.
 Gateway storage requires SQLite-compatible filesystem locking; the dedicated
 workspace PVC omits a StorageClass and depends on the cluster default RWO class.
 Provision both storage paths, including on EKS where a default class cannot be assumed. See
-[storage contract](../../../../docs/reference/drivers/kubernetes-compute/storage-and-credentials.md).
+[storage contract](../../../docs/reference/drivers/kubernetes-compute/storage-and-credentials.md).
 
 Compute production preflight requires Kubernetes **1.35.0 or newer** for both
 control and execution clusters; older versions fail with
@@ -97,8 +97,8 @@ Namespaces and existing ready/provisioning Namespaces. It skips matching names;
 restarting or reseeding does not overwrite user edits. Disabling seeding does
 not delete saved presets. Startup requires an authorized Installation admin.
 
-[Standard OpenClaw](../../../../deploy/presets/standard-openclaw.json) uses embedded
-execution; [Standard Codex](../../../../deploy/presets/standard-codex.json) uses dedicated
+[Standard OpenClaw](../../../deploy/presets/standard-openclaw.json) uses embedded
+execution; [Standard Codex](../../../deploy/presets/standard-codex.json) uses dedicated
 execution. Both require user model/name/API-key inputs, have no selected Backend
 or platform plugins, and disable browser/elevated/web-fetch tools. Codex also
 sets cached web search and restricted native network proxy behavior. The stock
@@ -107,8 +107,8 @@ For that acceptance case, explicitly configure the Agent's ServiceAccount bindin
 and plugin selection without rewriting existing saved presets. Custom templates
 remain optional `presets.files` entries.
 
-Source: [seeding](../../../../packages/occ/src/index.ts),
-[existing preservation coverage](../../../../tests/integration/presets-controller.test.mjs).
+Source: [seeding](../../../packages/occ/src/index.ts),
+[existing preservation coverage](../../../tests/integration/presets-controller.test.mjs).
 
 ## Repository access
 
@@ -119,14 +119,14 @@ network access and runtime bridge support. Agent repository bindings remain
 explicit. Repository permissions `git-read`, `git-write`, `git-full` are separate
 from installation profiles and Agent presets.
 
-The [Installation fragment](../../../../deploy/examples/repository-credentials/installation.fragment.yaml)
+The [Installation fragment](../../../deploy/examples/repository-credentials/installation.fragment.yaml)
 sets `backend[].type: github`, `configuration.registryPath`, `drivers.repo.id`
 and `configuration.controlSocket`, `sessionDurationSeconds: 86400`, `publicCaPath`;
 these example values are not unconditional parser defaults. Broker selector/port
 must match chart resources. Supported runtime paths are embedded OpenClaw/API key
 and dedicated Codex/API key or ChatGPT ServiceAccount, without Sandbox.
 
-The [installation guide](../../../../docs/guides/repository-credentials/installation.md)
+The [installation guide](../../../docs/guides/repository-credentials/installation.md)
 requires fresh bootstrap with repositories disabled until server-assigned Namespace
 IDs exist. Both proposed profiles leave repositories disabled unless selected.
 The opted-in repository integration must prove discovery and allowed/denied Git
@@ -134,8 +134,8 @@ access, not just broker Pod health. Repository binding configures access; it doe
 not promise automatic checkout at startup.
 
 Live sessions/bearers reside in Maps in the
-[credential service](../../../../apps/controller/src/drivers/repo/credentials/service.ts).
-The [worker](../../../../apps/controller/src/worker/repository-credentials.ts) marks a
+[credential service](../../../apps/controller/src/drivers/repo/credentials/service.ts).
+The [worker](../../../apps/controller/src/worker/repository-credentials.ts) marks a
 missing previously open session invalidated and can reject recovery with
 `REPOSITORY_SESSION_RECOVERY_UNSAFE`. A durable OCC ledger does not restore broker
 authority. Preserve origin/CA, drain safely, and qualify supported recovery/new
@@ -150,13 +150,13 @@ does not enable that plugin on any Agent. Embedded OpenClaw startup installs wit
 installation. It needs compatible CLI capabilities, writable managed state and
 package-network access.
 
-[Driver source](../../../../apps/controller/src/drivers/plugin/index.ts) implements
+[Driver source](../../../apps/controller/src/drivers/plugin/index.ts) implements
 `listCatalog` only. HTTP discovery requires `discoverCatalog`, and the Console
 picker requires a Codex harness. **OpenClaw manual/API selection has a runtime
 path, but normal Console discovery is a gap.** Profile acceptance must either
 explicitly accept the manual path or include this UI/API work after approval.
 
-[Plugin proof notes](../../../../docs/testing/plugins.md) report historical native
+[Plugin proof notes](../../../docs/testing/plugins.md) report historical native
 Kubernetes Diffs installation and execution during ordinary turns. They do not
 prove this checkout's image or production Helm composition. Their warning about
 missing `--no-enable` may predate the current Dockerfile pin; verify the selected
@@ -181,8 +181,8 @@ does not configure or authenticate discovery.
 
 Optional paired `codexExecutable`/`codexHome` configures a separate controller-side
 native catalog reader; timeout defaults 10000ms, valid 1–60000ms. It is unnecessary
-for baseline HTTP/curated discovery. See [driver configuration](../../../../apps/controller/src/drivers/plugin/index.ts)
-and [hosted implementation](../../../../apps/controller/src/drivers/plugin/hosted-catalog.ts).
+for baseline HTTP/curated discovery. See [driver configuration](../../../apps/controller/src/drivers/plugin/index.ts)
+and [hosted implementation](../../../apps/controller/src/drivers/plugin/hosted-catalog.ts).
 
 Managed runtime loading requires:
 
@@ -199,8 +199,8 @@ Managed runtime loading requires:
 4. Compatible Codex/plugin-policy runtime, selected concrete hosted-app plugin,
    model access, package/provider network access and dedicated sandbox prerequisites.
 
-[Admission](../../../../packages/occ/src/index.ts) and
-[runtime startup](../../../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
+[Admission](../../../packages/occ/src/index.ts) and
+[runtime startup](../../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts)
 implement this path. Startup installs selected bundles, checks `appsNeedingAuth`,
 resolves concrete tools and verifies effective settings. Some install/auth failures
 produce warnings and disable affected selections; metadata/policy failures remain
@@ -213,7 +213,7 @@ Hooks, native MCP servers, scheduled tasks, skill-only/template-only bundles are
 unsupported. Embedded plus Codex-plugin has partial compute support but lacks
 consistent discovery/UI/proof, so it is excluded from initial guarantees. Emitted
 policy and permissive native sessions do not establish enforced human approval;
-[documented proof limits](../../../../docs/testing/plugins.md) remain material.
+[documented proof limits](../../../docs/testing/plugins.md) remain material.
 
 ## Qualification plan
 
@@ -232,11 +232,11 @@ fresh disposable local Kubernetes and separately authorized EKS/general Kubernet
 | Operations         | Worker/Agent restart, storage retention, image upgrade/rollback boundaries, metrics scrape and collector delivery if enabled                                             |
 
 Relevant existing suites were inspected, not executed:
-[driver startup](../../../../tests/integration/plugin-driver-startup.test.mjs),
-[discovery API](../../../../tests/integration/plugin-discovery-api.test.mjs),
-[real status transport](../../../../tests/integration/kubernetes-plugin-status-real.test.mjs),
-[native plugins](../../../../tests/integration/plugin-driver-real.test.mjs),
-[PostgreSQL presets](../../../../tests/integration/postgres-presets.test.mjs).
+[driver startup](../../../tests/integration/plugin-driver-startup.test.mjs),
+[discovery API](../../../tests/integration/plugin-discovery-api.test.mjs),
+[real status transport](../../../tests/integration/kubernetes-plugin-status-real.test.mjs),
+[native plugins](../../../tests/integration/plugin-driver-real.test.mjs),
+[PostgreSQL presets](../../../tests/integration/postgres-presets.test.mjs).
 Controlled upstreams prove API/IAM behavior; controlled status producers prove
 transport; native scenarios prove selected runtime behavior. None alone proves
 the proposed profiles are Helm-installed and operational on EKS.

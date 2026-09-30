@@ -1,6 +1,6 @@
 # Feature Spec: Common OpenTelemetry logging: contract
 
-[Spec overview](../20-common-otel-logging.md). Original record; decisions and status are preserved.
+[Spec overview](index.md). Original record; decisions and status are preserved.
 
 ## Contract
 

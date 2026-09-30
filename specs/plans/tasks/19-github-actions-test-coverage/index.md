@@ -8,9 +8,9 @@
 
 Start with PR-safe local and PostgreSQL checks, then add disposable image/Kubernetes checks and a protected real-model lane. Extend those same two workflows to complete the broader test inventory once specialized resources are ready. Preserve the Node test runner, existing Drivers and test contracts. A selected missing prerequisite or skipped expected case must fail its lane.
 
-The [refreshed report](19-github-actions-test-coverage/source-audit.md) was completed first and owns upstream evidence, source mismatches and the full inventory. This plan targets reviewed main [`1233e13`](https://github.com/openclaw/openclaw-enterprise/commit/1233e13aa6e1a2e4f502fa5febf06f5531c19f2c): 19 conformance, 37 integration and two browser files. Canonical authoring HEAD `f0b17b7` additionally contains three logging files and new gated log assertions. Inventory the eventual implementation SHA; do not change branches or restore historical `setup-*` suites to meet an old count.
+The [refreshed report](source-audit.md) was completed first and owns upstream evidence, source mismatches and the full inventory. This plan targets reviewed main [`1233e13`](https://github.com/openclaw/openclaw-enterprise/commit/1233e13aa6e1a2e4f502fa5febf06f5531c19f2c): 19 conformance, 37 integration and two browser files. Canonical authoring HEAD `f0b17b7` additionally contains three logging files and new gated log assertions. Inventory the eventual implementation SHA; do not change branches or restore historical `setup-*` suites to meet an old count.
 
-The user removed the workflow prohibition from [AGENTS.md](../../../AGENTS.md) and authorized implementation on September 4. GitHub accepted the workflow push in [PR #23](https://github.com/openclaw/openclaw-enterprise/pull/23). This proposal follows [the platform design](../../../docs/design.md) and changes test orchestration, not application architecture.
+The user removed the workflow prohibition from [AGENTS.md](../../../../AGENTS.md) and authorized implementation on September 4. GitHub accepted the workflow push in [PR #23](https://github.com/openclaw/openclaw-enterprise/pull/23). This proposal follows [the platform design](../../../../docs/design.md) and changes test orchestration, not application architecture.
 
 ## Scope
 
@@ -22,32 +22,32 @@ The user removed the workflow prohibition from [AGENTS.md](../../../AGENTS.md) a
 
 ### Workflow and trust boundary
 
-See [Workflow and trust boundary](19-github-actions-test-coverage/workflow-and-lanes.md#workflow-and-trust-boundary).
+See [Workflow and trust boundary](workflow-and-lanes.md#workflow-and-trust-boundary).
 
 ### Lane responsibilities and prerequisites
 
-See [Lane responsibilities and prerequisites](19-github-actions-test-coverage/workflow-and-lanes.md#lane-responsibilities-and-prerequisites).
+See [Lane responsibilities and prerequisites](workflow-and-lanes.md#lane-responsibilities-and-prerequisites).
 
 ### Coverage and failure contract
 
-See [Coverage and failure contract](19-github-actions-test-coverage/coverage-state-and-limits.md#coverage-and-failure-contract).
+See [Coverage and failure contract](coverage-state-and-limits.md#coverage-and-failure-contract).
 
 ### Disposable state, images and secrets
 
-See [Disposable state, images and secrets](19-github-actions-test-coverage/coverage-state-and-limits.md#disposable-state-images-and-secrets).
+See [Disposable state, images and secrets](coverage-state-and-limits.md#disposable-state-images-and-secrets).
 
 ### Cost and runner limits
 
-See [Cost and runner limits](19-github-actions-test-coverage/coverage-state-and-limits.md#cost-and-runner-limits).
+See [Cost and runner limits](coverage-state-and-limits.md#cost-and-runner-limits).
 
 ## Implementation
 
 1. **Authorize and inventory.** The user has authorized workflow implementation and removed the instruction prohibition. CI maintainers select the reviewed main SHA, freeze the file/scenario map, and verify public package/image availability. Generate the suite map from the actual checked-out implementation SHA and map every file present there, including unmerged branch additions. The report's 58 files describe only `1233e13`. No organization mutation is part of this document edit.
 2. **Deliver minimum PR coverage.** Add the suite map/runner and `ci.yml` with baseline/browser, PostgreSQL and `ci-required`. Reuse existing test/Compose entrypoints; add only the per-file DB setup and result checks they lack. The four live-Configuration cases remain explicitly assigned to the next lane until repaired. Prove missing prerequisites, mixed-worker coverage, fresh-state retries, failure DB admission and aggregate failure behavior.
-3. **Add PR infrastructure.** Add image/packaging and the three k3d fixture cases. Repair the four stale live-Configuration tests against current Configuration/Agent APIs and real Driver startup, then require them in the same infrastructure lane. Do not weaken validation or invent mock success. Require the lane before expanding `ci-required`'s documented scope. [Confirmed mismatch](19-github-actions-test-coverage/source-audit/enterprise-coverage-and-gaps.md#gaps-ci-configuration-alone-cannot-fix).
+3. **Add PR infrastructure.** Add image/packaging and the three k3d fixture cases. Repair the four stale live-Configuration tests against current Configuration/Agent APIs and real Driver startup, then require them in the same infrastructure lane. Do not weaken validation or invent mock success. Require the lane before expanding `ci-required`'s documented scope. [Confirmed mismatch](source-audit/enterprise-coverage-and-gaps.md#gaps-ci-configuration-alone-cannot-fix).
 4. **Deliver minimum protected coverage.** Add `full-integration.yml`, approved model environment and `docker-model` plus `runtime-integration`; prove actual embedded/dedicated responses and cleanup. Then add the three ordinary k3d model cases using the same immutable image selection. Keep policy and secrets in job/environment scope, with exact main SHA approval.
 5. **Complete specialized coverage.** Add routing/controllers/test CA, production TUI and the noncredentialed timeout case; add provider-account, Slack and OpenShell only after their resource/runner approvals. Incorporate landed logging assertions. Rerun all PR-safe lanes at the same protected SHA, then add `full-test-suite` once every mapped scenario executes. Enable a schedule only after full acceptance; until then publish an explicit partial-coverage result.
-6. **Trial reuse and document operation.** Trial the [SHA-pinned upstream pnpm action](19-github-actions-test-coverage/source-audit.md#what-enterprise-can-reuse) with cold/warm Enterprise installs and PR merge-ref read/write isolation during initial CI development. If it adds coupling, use standard pnpm/cache actions. Update `docs/testing.md`, settings and relevant helper docs with reproducible lane commands, selected-case/skip interpretation and cleanup; keep this spec historical after implementation. Factor a local composite only when setup is actually duplicated.
+6. **Trial reuse and document operation.** Trial the [SHA-pinned upstream pnpm action](source-audit.md#what-enterprise-can-reuse) with cold/warm Enterprise installs and PR merge-ref read/write isolation during initial CI development. If it adds coupling, use standard pnpm/cache actions. Update `docs/testing.md`, settings and relevant helper docs with reproducible lane commands, selected-case/skip interpretation and cleanup; keep this spec historical after implementation. Factor a local composite only when setup is actually duplicated.
 
 ## Verification
 
@@ -63,7 +63,7 @@ See [Cost and runner limits](19-github-actions-test-coverage/coverage-state-and-
 
 ## Delivery status
 
-See [Delivery status](19-github-actions-test-coverage/delivery-status.md#delivery-status).
+See [Delivery status](delivery-status.md#delivery-status).
 
 ## Open Decisions
 

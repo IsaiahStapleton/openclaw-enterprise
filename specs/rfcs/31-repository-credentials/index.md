@@ -5,12 +5,12 @@
 
 **Historical scope (2026-09-28):** The consumer boundary, `git-full` PR
 requirement and profile table below, and T5 in the
-[qualification companion](31-repository-credentials/qualification.md#t5--profiles),
+[qualification companion](qualification.md#t5--profiles),
 record the September 19 implementation. Later changes expanded consumer support
 and profile access. For current runtime scope, see the [reference][reference];
 for current permissions and REST and GraphQL boundaries, see
-[GitHub access levels](../../docs/reference/repository-credentials/access-levels.md).
-Use the [testing guide](../../docs/testing/repository-credentials.md) to qualify
+[GitHub access levels](../../../docs/reference/repository-credentials/access-levels.md).
+Use the [testing guide](../../../docs/testing/repository-credentials.md) to qualify
 current source.
 
 ## Decision
@@ -112,13 +112,13 @@ Ownership places the public contract in `packages/contracts/src/repo.ts`, the ad
 
 ## Acceptance and delivery
 
-The [qualification companion](31-repository-credentials/qualification.md) retains R1–R12/T1–T9, alternate-backend conformance, actual Git/pinned-gh, controlled hour-13 composition, delivered custody, ordinary-Agent contribution and cleanup. [Testing instructions][testing] own runnable selectors.
+The [qualification companion](qualification.md) retains R1–R12/T1–T9, alternate-backend conformance, actual Git/pinned-gh, controlled hour-13 composition, delivered custody, ordinary-Agent contribution and cleanup. [Testing instructions][testing] own runnable selectors.
 
 The historical source at `eb52cc4` and successor [`46a8fbd`][successor] establish the existing consumer and genuine supplier join. Their controlled evidence includes 17 container cases and one fixture-Harness platform case; it does not qualify the accompanying interface or layout changes. Historical installed Helm/actual-model/live-GitHub acceptance belongs to [`02f8fe0b`][historical]. Final-source assertions require justified equivalence or bounded affected requalification. Combined test containers and rendered mounts do not prove separate runtime custody. CodeQL performed no analysis; code-owner acceptance and release remain separate.
 
 ## Alternatives and follow-ups
 
-The ephemeral external process and narrow Driver preserve custody without a new Issuer, broker or parallel lifecycle store. Durable provider recovery, recipes/plugin enrollment, another production provider, PAT import, multiple replicas and arbitrary CLI parity require separate selection. A synthetic adapter establishes conformance only. These scope limits supersede older broad gateway prerequisites for this service; retained authority, recovery and publication obligations remain with the [companion's named successors](31-repository-credentials/qualification.md#recovery-and-acceptance-record).
+The ephemeral external process and narrow Driver preserve custody without a new Issuer, broker or parallel lifecycle store. Durable provider recovery, recipes/plugin enrollment, another production provider, PAT import, multiple replicas and arbitrary CLI parity require separate selection. A synthetic adapter establishes conformance only. These scope limits supersede older broad gateway prerequisites for this service; retained authority, recovery and publication obligations remain with the [companion's named successors](qualification.md#recovery-and-acceptance-record).
 
 | Successor owner             | Required connection and closure evidence                                                                                                                                                                                        |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -143,13 +143,13 @@ Before enabling personal mode:
 
 Keep OCE sign-in separate: identity-only login neither establishes repository delegation nor supplies repository credentials. Qualification must demonstrate both modes, consent and withdrawal, cross-user isolation, and refusal without fallback before claiming support.
 
-[contract]: ../../packages/contracts/src/repo.ts
-[design]: ../../docs/design/drivers.md#drivers-and-providers
-[reference]: ../../docs/reference/repository-credentials.md
-[agent-flow]: ../../docs/flows/agent-repository-credentials.md
-[service-flow]: ../../docs/flows/repository-credentials.md
-[guide]: ../../docs/guides/repository-credentials.md
-[testing]: ../../docs/testing/repository-credentials.md
+[contract]: ../../../packages/contracts/src/repo.ts
+[design]: ../../../docs/design/drivers.md#drivers-and-providers
+[reference]: ../../../docs/reference/repository-credentials.md
+[agent-flow]: ../../../docs/flows/agent-repository-credentials.md
+[service-flow]: ../../../docs/flows/repository-credentials.md
+[guide]: ../../../docs/guides/repository-credentials.md
+[testing]: ../../../docs/testing/repository-credentials.md
 [successor]: https://github.com/openclaw/openclaw-enterprise/commit/46a8fbd645a5c937d6190794576dd2dda31c0d25
 [historical]: https://github.com/openclaw/openclaw-enterprise/commit/02f8fe0b1266462a5726c6684344394324a8bdf7
 [github-user-auth]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user

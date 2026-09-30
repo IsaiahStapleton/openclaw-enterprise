@@ -129,7 +129,7 @@ Local failures can retain cleanup state while the host and state path exist. On
 Docker Desktop or similar VM-backed hosts, run one Kubernetes lane at a time when
 measured disk or network pressure has caused instability; the GitHub matrix remains
 parallel. Model/service tests require the approved credentials and spend policy in
-the [implementation specification](../../specs/plans/tasks/19-github-actions-test-coverage.md).
+the [implementation specification](../../specs/plans/tasks/19-github-actions-test-coverage/index.md).
 
 See the [execution flow](../flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failures. Use the [suite-specific guides](README.md#integration-tests) to reproduce runs locally.
 

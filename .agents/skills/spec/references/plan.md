@@ -19,8 +19,12 @@ Follow the specification process for numbering and historical exceptions:
 - An existing task plan that later gains an RFC keeps its ID and path. Link the
   relationship and preserve the work instead of duplicating or relocating it.
 
-Use one Markdown file by default. Recheck number and path collisions before
-writing. Do not change the archive during normal plan authoring.
+Use one Markdown file by default. When companions are needed, use
+`<number>-<topic>/index.md` under the selected plan directory and put companions
+beside it. When converting an existing single file, preserve its ID and content,
+update incoming and relative links, and remove the former top-level file.
+Recheck number and path collisions before writing. Do not change the archive
+during normal plan authoring.
 
 ## Gather evidence
 
@@ -70,8 +74,8 @@ never equate RFC acceptance or a green fixture suite with full delivery.
 
 Preserve existing Manual Notes byte-for-byte. Keep historical contracts and
 results intact; use a new linked plan for materially different follow-up work.
-Completed and stopped plans stay in place. Put substantial evidence in a sibling
-supporting page only when needed, and keep PR media outside the repository.
+Completed and stopped plans stay in place. Put substantial evidence beside the
+plan's `index.md` only when needed, and keep PR media outside the repository.
 
 Add or update one workstream row in `specs/README.md` and link the RFC back to its
 plan when present. Record status only in its owner. Use the template's change
