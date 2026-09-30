@@ -140,6 +140,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
       reviewer: { type: "string", default: "U456" },
       enabled: { type: "boolean", default: true },
       mode: { type: "string", default: "unfinished" },
+      access: { type: "string", default: "git-read" },
     },
     agent: {
       name: "{{ vars.name }}",
@@ -147,6 +148,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
       plugins: { github: { enabled: "unfinished", toolDefaults: { approval: "all_actions" } } },
       pluginApprovers: [{ channel: "slack", id: "team:T123:user:{{ vars.reviewer }}" }],
       harnessAuth: null,
+      repositoryAccess: { defaultProfile: "{{ vars.access }}", repositories: [] },
       initialWorkspaceFiles: {
         "AGENTS.md": "# {{ vars.name }}\n",
         "IDENTITY.md": "",
@@ -227,6 +229,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.data.name, 'My "Agent"');
   assert.equal(created.data.configurationId, configuration.data.id);
+  assert.deepEqual(created.data.repositoryAccess, { defaultProfile: "git-read", repositories: [] });
   assert.deepEqual(created.data.pluginApprovers, rendered.agent.pluginApprovers);
   assert.equal(Object.hasOwn(created.data, "presetId"), false);
   const workspaceSetup = await fixture.state.read((state) =>
@@ -262,7 +265,12 @@ test("Preset admission rejects malformed templates and credential leaks while pr
   const secret = await fixture.createSecret(alpha.id, "Model key", "synthetic-preset-secret-value");
   const wrongSecret = await fixture.createSecret(beta.id, "Other key", "synthetic-other-secret");
   const sentinel = "synthetic-preset-credential-must-not-persist";
+  // A null list used to persist successfully, then crash the Console's Use Preset flow.
+  const nullRepositoryTemplate = {
+    agent: { repositoryAccess: { defaultProfile: "git-read", repositories: null } },
+  };
   const unsafeTemplates = [
+    nullRepositoryTemplate,
     { configuration: { secretBindings: { OPENAI_API_KEY: { source: secret.ref } } } },
     { agent: { namespaceId: beta.id } },
     { agent: { harnessAuth: { method: "api_key", source: wrongSecret.ref } } },
@@ -297,6 +305,13 @@ test("Preset admission rejects malformed templates and credential leaks while pr
       },
     },
   });
+  const rejectedUpdate = await fixture.request("PATCH", `${collection(alpha.id)}/${preset.id}`, {
+    body: { template: nullRepositoryTemplate },
+  });
+  assert.equal(rejectedUpdate.status, 400, JSON.stringify(rejectedUpdate.body));
+  const unchanged = await fixture.request("GET", `${collection(alpha.id)}/${preset.id}`);
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(unchanged.data.template, preset.template);
   const rendered = renderPresetTemplate(preset.template, { secretId: secret.ref.id });
   const reader = await fixture.createAccountWithPolicy(
     "preset-user-without-secret",
@@ -1025,4 +1040,62 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
       .sort(),
     defaultNames,
   );
+});
+
+test("Namespace deletion removes unmodified default Presets and names what still blocks it", async (t) => {
+  const { loadInstallationConfiguration } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { createInstallationDriverConfiguration } =
+    await import("../helpers/installation-driver-configuration.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-delete-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "installation.yaml");
+  const configuration = createInstallationDriverConfiguration();
+  configuration.presets = { includeDefaults: true };
+  await writeFile(path, JSON.stringify(configuration));
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.ok(runtime.defaultPresets.length > 0);
+  const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
+
+  // A Namespace holding only its seeded, unmodified defaults is empty to its operator.
+  const pristine = await fixture.createNamespace("Pristine defaults", { ready: true });
+  const seeded = (await fixture.request("GET", collection(pristine.id))).data;
+  assert.equal(seeded.length, runtime.defaultPresets.length);
+  const deleted = await fixture.request("DELETE", `/namespaces/${pristine.id}`);
+  assert.equal(deleted.status, 202, JSON.stringify(deleted.body));
+  assert.equal(deleted.data.status, "deleting");
+  const remaining = await fixture.controller.transact((state) =>
+    state.presets.listPresets(pristine.id),
+  );
+  assert.deepEqual(remaining, []);
+  const cascaded = fixture.audit.events.filter(
+    (event) =>
+      event.action === "openclaw.presets.delete" &&
+      event.details?.source === "namespace-deletion" &&
+      event.namespaceId === pristine.id,
+  );
+  assert.deepEqual(
+    cascaded.map((event) => event.resource.id).sort(),
+    seeded.map((preset) => preset.id).sort(),
+  );
+
+  // An operator-edited default is real content: keep it and say what blocks deletion.
+  const edited = await fixture.createNamespace("Edited defaults", { ready: true });
+  const [first, ...rest] = (await fixture.request("GET", collection(edited.id))).data;
+  const patched = await fixture.request("PATCH", `${collection(edited.id)}/${first.id}`, {
+    body: { template: { agent: { name: "Operator customization" } } },
+  });
+  assert.equal(patched.status, 200);
+  await fixture.createSecret(edited.id, "blocking-secret", "value");
+  const blocked = await fixture.request("DELETE", `/namespaces/${edited.id}`);
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.error.code, "NAMESPACE_NOT_EMPTY");
+  assert.equal(
+    blocked.body.error.message,
+    "The requested Namespace is not empty. It still contains: Presets, Secrets.",
+  );
+  assert.equal((await fixture.request("GET", collection(edited.id))).data.length, rest.length + 1);
 });

@@ -96,8 +96,10 @@ identity headers, or membership in another Namespace do not grant access.
 ## Permissions and Roles
 
 A Permission allows one action on one resource kind. Supported permission
-actions are `create`, `read`, `update`, `delete`, `deploy`, `operate`, and
-`administer`; not every action has a corresponding public endpoint yet. Any of
+actions are `create`, `read`, `update`, `delete`, `deploy`, `operate`,
+`administer`, and `read_logs`; not every action has a corresponding public
+endpoint yet. `read_logs` on an Agent delegates reading its runtime log text
+without `administer`; fresh bootstrap does not grant it. Any of
 these actions can be granted to either a human Principal or an Agent-owned
 ServicePrincipal through an appropriately scoped Role and AccessBinding.
 
@@ -203,17 +205,28 @@ Bind it to the immutable `servicePrincipalId` returned in the Agent response:
 }
 ```
 
-The identity, Role, and target must exist in the path Namespace. Exact targets
-and Role permission kinds are `agent`, `agent_revision`, `configuration`,
-`credential_source`, `preset`, `secret`, or `service_account`. A ServiceAccount resource is not an IAM
-identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
+The subject must be an existing human Principal or a ServicePrincipal in the
+path Namespace. A human does not need a separate Namespace ServicePrincipal.
+The Role and target must exist in the path Namespace. Exact targets and Role
+permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
+`credential_source`, `preset`, `secret`, or `service_account`. `namespace`
+permissions support only `read`, and for a `namespace` target, `resourceId` must
+equal the Namespace ID in the path. A ServiceAccount
+resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
 and extra fields are rejected. Native IAM commits validated policy and its
 attributable audit event together; later requests on other replicas see it
 without a restart.
 
+For human discovery, grant `read` on that exact Namespace and separately grant
+the required actions on each exact Agent. A Namespace target grants only
+Namespace actions; it does not grant access to its Agents or permission to
+create child resources. Human enrollment and grant creation are separate steps.
+
 Roles and bindings cannot be updated. Create replacements and explicitly
 remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
-one binding preserves equivalent and unrelated bindings. After an unknown
+one binding preserves equivalent and unrelated bindings. Deleting an Agent,
+Configuration, Preset, Secret, credential source, or ServiceAccount removes the
+bindings that target it in the same transaction. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings
 may coexist. Names are labels: inspect permissions before reusing a Role.
 
@@ -260,6 +273,13 @@ does not expose every Agent in the Namespace. First deployment additionally
 checks Agent `read` and `operate` if Compute must generate missing transport
 credentials.
 
+[Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two
+tiers on the exact Agent and revision: Pod status and Events need Agent
+`operate` and `read` plus revision `read`; container log text needs Agent
+`read_logs` or `administer`, Agent `read`, and revision `read`. A matching
+`read_logs` Restriction denies log text even to a holder of `administer`. Each
+follow poll is authorized again, so revoking a grant stops the next poll.
+
 The selected IAM Driver loads current authoritative policy for each identity
 lookup and authorization decision. Account and permission changes become
 visible across controller instances without restarting or replacing the Driver.
@@ -297,7 +317,7 @@ For a working authenticated request, see the
 - [Service accounts](service-accounts.md)
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [Controller configuration](settings.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)
 
 ## Manual Notes
 

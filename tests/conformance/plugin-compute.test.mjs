@@ -410,7 +410,7 @@ async function runCodexRuntimeHelper(runtime, handler, options = {}) {
   const sandbox = {
     JSON,
     Buffer,
-    Date,
+    Date: options.Date ?? Date,
     WebSocket: FakeWebSocket,
     setTimeout,
     clearTimeout,
@@ -492,7 +492,7 @@ test("compute renders plugin-free Codex revisions with native default-deny plugi
   assert.match(data[PLUGIN_RUNTIME_CODEX_CONFIG], /^\[apps\._default\]\nenabled = false/m);
 });
 
-test("plugin-free revisions apply explicit Slack approvers and keep unrelated approvals", () => {
+test("plugin-free revisions apply explicit Slack approvers for configured Slack and keep unrelated approvals", () => {
   const rawSlackApprovers = [
     { channel: "slack", id: "U456" },
     { channel: "slack", id: "W789" },
@@ -517,14 +517,15 @@ test("plugin-free revisions apply explicit Slack approvers and keep unrelated ap
     });
     const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
       baseConfig: {
+        channels: { slack: { enabled: true } },
         approvals: {
-          exec: { security: "full" },
+          exec: { enabled: true, mode: "session" },
         },
       },
     });
     const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
     assert.deepEqual(config.approvals, {
-      exec: { security: "full" },
+      exec: { enabled: true, mode: "session" },
       plugin: { slack: { approvers: expectedApprovers } },
     });
   }
@@ -537,11 +538,14 @@ test("plugin-free Codex Gateway applies explicit Agent approvers at launch", asy
       APP_SERVER_URL: "ws://harness.example.test:18790",
       OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
     },
-    baseConfig: { approvals: { exec: { security: "full" } } },
+    baseConfig: {
+      channels: { slack: { enabled: true } },
+      approvals: { exec: { enabled: true, mode: "session" } },
+    },
   });
   const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(config.approvals, {
-    exec: { security: "full" },
+    exec: { enabled: true, mode: "session" },
     plugin: { slack: { approvers: [] } },
   });
 });
@@ -561,7 +565,9 @@ test("plugin-free Codex runtime carries broker policy and Slack approvers togeth
     pluginApprovers: [],
     repositoryBrokerNetworkPolicy,
   });
-  const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, []);
+  const { files } = runOpenClawRuntimeHelper({ manifest: runtime }, [], {
+    baseConfig: { channels: { slack: { enabled: true } } },
+  });
   const config = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.deepEqual(config.approvals.plugin.slack.approvers, []);
   assert.equal(
@@ -586,6 +592,20 @@ test("compute consumes Codex no-plugin selections from the revision", () => {
   const docker = JSON.parse(pluginRuntimeEnvironment(runtime)[PLUGIN_RUNTIME_ENVIRONMENT]);
   assert.deepEqual(docker.manifest, JSON.parse(data[PLUGIN_RUNTIME_MANIFEST]));
   assert.equal(docker.codexConfigurationToml, data[PLUGIN_RUNTIME_CODEX_CONFIG]);
+});
+
+test("Codex runtime skips the plugin API when no plugins are selected", async () => {
+  // A no-plugin Agent must reach readiness without the Codex plugin API, which a Sandbox
+  // workload may not be able to reach. Salvaged from #146 by @sallyom.
+  const runtime = {
+    manifest: pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() })),
+  };
+  const { requests, sockets } = await runCodexRuntimeHelper(runtime, (method) => {
+    throw new Error(`unexpected request ${method}`);
+  });
+
+  assert.deepEqual(requests, []);
+  assert.deepEqual(sockets, []);
 });
 
 test("compute serializes selected Codex plugins for startup-time resolution", () => {
@@ -720,6 +740,8 @@ test("Codex runtime helper installs a plugin with skills and applies write actio
       "initialize",
       "plugin/install",
       "initialize",
+      "config/read",
+      "initialize",
       "config/batchWrite",
       "initialize",
       "plugin/read",
@@ -735,6 +757,63 @@ test("Codex runtime helper installs a plugin with skills and applies write actio
     ),
     true,
   );
+});
+
+test("Codex startup explicitly denies inherited apps and replaces inherited approval exceptions", async () => {
+  const state = codexLinearPluginState({ toolDefaults: { approval: "all_actions" } });
+  const runtime = { manifest: pluginRuntimeSpecForRevision(revision({ plugins: state })) };
+  let written = false;
+  const result = await runCodexRuntimeHelper(runtime, (method, params) => {
+    if (method === "initialize") {
+      return { serverInfo: { name: "codex", version: "0.158.0" } };
+    }
+    if (method === "plugin/list") {
+      return codexListResponse();
+    }
+    if (method === "plugin/read") {
+      return codexReadResponse();
+    }
+    if (method === "plugin/install") {
+      return { authPolicy: "ON_USE", appsNeedingAuth: [] };
+    }
+    if (method === "config/read") {
+      // A lower-priority config can contribute an app through tool preferences.
+      // Native AppConfig defaults its enabled field to true despite _default=false.
+      const response = codexConfigReadResponse({
+        default_tools_approval_mode: "prompt",
+        tools: { "read issue": { enabled: null, approval_mode: written ? "prompt" : "approve" } },
+        links: { account: { default_tools_approval_mode: written ? "prompt" : "approve" } },
+      });
+      response.config.apps.unselected = {
+        enabled: !written,
+        tools: { read: { approval_mode: "approve" } },
+      };
+      return response;
+    }
+    if (method === "config/batchWrite") {
+      const edits = new Map(params.edits.map((edit) => [edit.keyPath, edit.value]));
+      assert.equal(edits.get("apps.unselected.enabled"), false);
+      assert.equal(
+        edits.get(`apps.${CODEX_LINEAR_APP_ID}.tools."read issue".approval_mode`),
+        "prompt",
+      );
+      assert.equal(
+        edits.get(`apps.${CODEX_LINEAR_APP_ID}.links.account.default_tools_approval_mode`),
+        "prompt",
+      );
+      assert.equal(
+        edits.has(`apps.${CODEX_LINEAR_APP_ID}.tools."read issue".enabled`),
+        false,
+        "approval repair must not bypass annotation-based tool enablement",
+      );
+      written = true;
+      return { status: "ok", version: "selection-policy" };
+    }
+    throw new Error(`unexpected request ${method}`);
+  });
+  assert.equal(written, true);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.value.failures)), []);
 });
 
 test("Codex runtime helper verifies explicit reviewers before readiness without constraining omission", async (t) => {
@@ -1167,6 +1246,12 @@ test("Codex runtime helper keeps malformed matching install responses generic", 
   ];
   for (const [name, response] of malformedResponses) {
     await t.test(name, async () => {
+      let now = 0;
+      class FixtureDate extends Date {
+        static now() {
+          return now;
+        }
+      }
       const result = await runCodexRuntimeHelper(
         runtime,
         (method, _params, requestId) => {
@@ -1183,12 +1268,14 @@ test("Codex runtime helper keeps malformed matching install responses generic", 
             return { status: "ok", version: "test-config-1" };
           }
           if (method === "plugin/install") {
+            now = 1;
             return { __rawMessage: response(requestId) };
           }
           throw new Error(`unexpected request ${method}`);
         },
         {
           captureError: true,
+          Date: FixtureDate,
           env: {
             OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS: "1",
           },
@@ -1196,8 +1283,30 @@ test("Codex runtime helper keeps malformed matching install responses generic", 
       );
 
       assert.equal(result.error.diagnostic, undefined);
+      assert.ok(result.requests.some((request) => request.method === "plugin/install"));
     });
   }
+});
+
+test("Codex runtime cannot report installation success when its deadline expires before the first attempt", async () => {
+  let now = 0;
+  class FixtureDate extends Date {
+    static now() {
+      return now++;
+    }
+  }
+  const result = await runCodexRuntimeHelper(
+    { manifest: pluginRuntimeSpecForRevision(revision({ plugins: codexLinearPluginState() })) },
+    () => assert.fail("An expired installation must not contact the app-server"),
+    {
+      captureError: true,
+      Date: FixtureDate,
+      env: { OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS: "1" },
+    },
+  );
+  assert.match(result.error?.message ?? "", /did not reach readiness/);
+  assert.equal(result.value, undefined);
+  assert.deepEqual(result.requests, []);
 });
 
 test("Codex runtime helper keeps pre-install native uncertainty generic", async () => {
@@ -1511,6 +1620,9 @@ test("Codex runtime helper fails before readiness when native app mapping drifts
             ],
           });
         }
+        if (method === "config/read") {
+          return codexConfigReadResponse();
+        }
         if (method === "config/batchWrite") {
           return { status: "ok", version: "test-config-1" };
         }
@@ -1545,6 +1657,9 @@ test("Codex runtime helper fails before readiness when native version drifts", a
         if (method === "plugin/read") {
           readCount += 1;
           return codexReadResponse({ version: readCount === 1 ? "5.0.1" : "5.0.2" });
+        }
+        if (method === "config/read") {
+          return codexConfigReadResponse();
         }
         if (method === "config/batchWrite") {
           return { status: "ok", version: "test-config-1" };
@@ -1841,7 +1956,7 @@ test("compute rejects plugin selections that target the wrong native runtime", a
   await assert.rejects(async () => {
     const state = openClawPluginState();
     pluginRuntimeSpecForRevision(revision({ plugins: state }));
-  }, /embedded OpenClaw Harness/);
+  }, /require an OpenClaw Harness/);
 });
 
 test("compute fails closed when Codex plugin selections are malformed", () => {
@@ -1904,9 +2019,13 @@ function enrolledNodeSecret(driver, candidate, namespace) {
       "Secret",
       driver.workspaceNodeName(candidate),
       driver.pluginRuntimeOwnership(candidate),
-      namespace,
+      { name: namespace, plane: "execution" },
     ),
-    data: { deviceId: Buffer.from("fixture-node").toString("base64") },
+    data: {
+      deviceId: Buffer.from("fixture-node").toString("base64"),
+      // A current setup code, as preparation keeps renewing it.
+      expiresAtMs: Buffer.from(String(Date.now() + 600_000)).toString("base64"),
+    },
   };
 }
 
@@ -1926,7 +2045,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const tenantOwnership = { namespaceId: tenant.id };
   const defaultPolicies = new Map(
     driver
-      .networkPolicies(tenantOwnership, namespace)
+      .networkPolicies(tenantOwnership, { name: namespace, plane: "execution" })
       .map((policy) => [policy.metadata.name, policy]),
   );
   const configMaps = new Map();
@@ -1969,10 +2088,13 @@ test("embedded plugin preparation applies runtime egress before gateway readines
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
-  driver.resolveNamespace = async () => ({ name: namespace, external: false });
+  driver.resolveNamespace = async () => ({
+    name: { name: namespace, plane: "execution" },
+    external: false,
+  });
   driver.get = async (kind, name, target) =>
     kind === "Secret"
-      ? credentialObjects.get(`${target}:${name}`)
+      ? credentialObjects.get(`${target.name}:${name}`)
       : kind === "Namespace"
         ? {
             ...(name === cp
@@ -1983,7 +2105,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
         : undefined;
   driver.getOwned = async (kind, name, target) => {
     if (kind === "Secret" && name !== driver.workspaceNodeName(embedded)) {
-      return credentialObjects.get(`${target}:${name}`);
+      return credentialObjects.get(`${target.name}:${name}`);
     }
     if (kind === "NetworkPolicy") {
       return defaultPolicies.get(name);
@@ -2028,6 +2150,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": embedded.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": embedded.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(reconciled[runtimePolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 443 },
@@ -2045,7 +2168,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
   const dedicatedTenantOwnership = { namespaceId: dedicated.namespaceId };
   const dedicatedDefaultPolicies = new Map(
     dedicatedDriver
-      .networkPolicies(dedicatedTenantOwnership, dedicatedNamespace)
+      .networkPolicies(dedicatedTenantOwnership, { name: dedicatedNamespace, plane: "execution" })
       .map((policy) => [policy.metadata.name, policy]),
   );
   const dedicatedReconciled = [];
@@ -2057,7 +2180,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
       "Secret",
       transportName,
       { namespaceId: tenant.id, agentId: dedicated.agentId },
-      cp,
+      { name: cp, plane: "execution" },
     ),
     type: "Opaque",
     data: { "app-server-token": Buffer.from("fixture-transport").toString("base64") },
@@ -2084,10 +2207,13 @@ test("embedded plugin preparation applies runtime egress before gateway readines
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
-  dedicatedDriver.resolveNamespace = async () => ({ name: dedicatedNamespace, external: false });
+  dedicatedDriver.resolveNamespace = async () => ({
+    name: { name: dedicatedNamespace, plane: "execution" },
+    external: false,
+  });
   dedicatedDriver.get = async (kind, name, target) =>
     kind === "Secret"
-      ? credentialObjects.get(`${target}:${name}`)
+      ? credentialObjects.get(`${target.name}:${name}`)
       : kind === "Namespace"
         ? {
             ...(name === cp
@@ -2098,7 +2224,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
         : undefined;
   dedicatedDriver.getOwned = async (kind, name, target) => {
     if (kind === "Secret" && name !== dedicatedDriver.workspaceNodeName(dedicated)) {
-      return credentialObjects.get(`${target}:${name}`);
+      return credentialObjects.get(`${target.name}:${name}`);
     }
     if (kind === "Secret") {
       return enrolledNodeSecret(dedicatedDriver, dedicated, dedicatedNamespace);
@@ -2181,6 +2307,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/namespace": dedicated.namespaceId,
     "openclaw.dev/workload-role": "gateway",
     "openclaw.dev/agent": dedicated.agentId,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeGatewayPolicyIndex].spec.egress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -2195,6 +2322,7 @@ test("embedded plugin preparation applies runtime egress before gateway readines
     "openclaw.dev/workload-role": "agent",
     "openclaw.dev/agent": dedicated.agentId,
     "openclaw.dev/revision": dedicated.id,
+    "openclaw.dev/network-profile": "broad-egress-v1",
   });
   assert.deepEqual(dedicatedReconciled[runtimeAgentPolicyIndex].spec.ingress[0].ports, [
     { protocol: "TCP", port: 18790 },
@@ -2256,11 +2384,22 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
       });
       if (expected === "rejects") {
         await assert.rejects(
-          () => driver.pluginRuntimeStatus(candidate, namespace, "gateway", []),
+          () =>
+            driver.pluginRuntimeStatus(
+              candidate,
+              { name: namespace, plane: "execution" },
+              "gateway",
+              [],
+            ),
           DependencyUnavailableError,
         );
       } else {
-        const status = await driver.pluginRuntimeStatus(candidate, namespace, "gateway", []);
+        const status = await driver.pluginRuntimeStatus(
+          candidate,
+          { name: namespace, plane: "execution" },
+          "gateway",
+          [],
+        );
         assert.deepEqual(status, expected === "not-ready" ? undefined : expected);
       }
     });
@@ -2313,7 +2452,10 @@ test("Kubernetes startup failure evidence requires the exact runtime Pod report"
     },
   });
 
-  const observed = await driver.safeRuntimeFailureObservation(candidate, namespace);
+  const observed = await driver.safeRuntimeFailureObservation(candidate, {
+    name: namespace,
+    plane: "execution",
+  });
 
   assert.deepEqual(observed, failure);
   assert.deepEqual(requests, [
@@ -2625,8 +2767,95 @@ test("Codex runtime gates startup and readiness on a successful native authentic
     type: "item.completed",
     item: { type: "error", message: "Model catalog metadata unavailable" },
   };
+  const recoveredStreamError = {
+    type: "error",
+    message: "Reconnecting... 1/3 stream disconnected before completion",
+  };
+  const recoveredRetryingSamplingError = {
+    type: "error",
+    message: "Reconnecting... 2/3 stream disconnected - retrying sampling request",
+  };
   const scenarios = [
+    {
+      name: "delayed retry uses only the remaining budget",
+      probeTimeouts: 2,
+      retryDelayMs: 30500,
+      expectedTimeouts: [30000, 500],
+      failureCode: "MODEL_PROBE_TIMEOUT",
+    },
+    {
+      name: "expired retry budget starts no process",
+      probeTimeouts: 1,
+      retryDelayMs: 32000,
+      expiredBudget: true,
+      failureCode: "MODEL_PROBE_TIMEOUT",
+    },
+    {
+      name: "tool output followed by timeout is not retried",
+      probeError: "ETIMEDOUT",
+      events: [started, { type: "item.completed", item: { type: "command_execution" } }],
+    },
+    {
+      name: "rejection followed by timeout is not retried",
+      probeError: "ETIMEDOUT",
+      events: [{ type: "error", message: "authentication rejected" }],
+    },
+    {
+      name: "malformed output followed by timeout is not retried",
+      probeError: "ETIMEDOUT",
+      probeOutput: "not-json",
+    },
+    {
+      name: "model timeout recovers on the second attempt",
+      probeTimeouts: 1,
+      events: [started, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "model timeout exhausts two attempts",
+      probeTimeouts: 2,
+      failureCode: "MODEL_PROBE_TIMEOUT",
+    },
+    { name: "external SIGKILL is not a timeout or retried", probeSignal: "SIGKILL" },
+    { name: "malformed model output is not retried", probeOutput: "not-json" },
     { name: "failed login", loginStatus: 1 },
+    {
+      name: "API-key login timeout is not retried",
+      loginTimeouts: 1,
+      loginAttempts: 1,
+      loginFailed: true,
+    },
+    {
+      name: "access-token spawn failure is not retried",
+      pat: true,
+      loginError: "ENOENT",
+      loginFailed: true,
+    },
+    { name: "access-token login refusal is not retried", pat: true, loginStatus: 1 },
+    {
+      // Native text observed from codex-cli 0.154 with a revoked access token.
+      name: "access-token login credential rejection is a deterministic authentication failure",
+      pat: true,
+      loginStatus: 1,
+      loginStderr:
+        "Error logging in with access token: personal access token metadata request failed with status 403 Forbidden\n",
+      failureCode: "AUTHENTICATION_FAILED",
+    },
+    {
+      name: "access-token login transport error remains a login failure",
+      pat: true,
+      loginStatus: 1,
+      loginStderr:
+        "Error logging in with access token: failed to request personal access token metadata: error sending request for url (https://auth.openai.com/)\n",
+    },
+    {
+      name: "access-token login recovers one timeout before probing",
+      pat: true,
+      loginTimeouts: 1,
+      events: [started, assistant, completed],
+      ready: true,
+    },
+    { name: "access-token login stops after three timeouts", pat: true, loginTimeouts: 3 },
     {
       name: "service account token uses native access-token login before probe and clears credentials",
       pat: true,
@@ -2639,8 +2868,80 @@ test("Codex runtime gates startup and readiness on a successful native authentic
       ready: true,
     },
     {
+      name: "recovered native stream error during active turn",
+      events: [started, recoveredStreamError, assistant, completed],
+      ready: true,
+    },
+    {
+      name: "recovered native sampling retry error during active turn",
+      events: [started, recoveredRetryingSamplingError, assistant, completed],
+      ready: true,
+    },
+    {
       name: "fatal top-level error despite assistant output",
       events: [started, assistant, { type: "error", message: "authentication failed" }, completed],
+    },
+    {
+      name: "reconnecting error with auth marker remains fatal",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "Reconnecting... 1/3 stream disconnected before completion after 401 auth",
+        },
+        assistant,
+        completed,
+      ],
+    },
+    {
+      name: "recovered native stream error with provider detail during active turn",
+      events: [
+        started,
+        {
+          type: "error",
+          message:
+            "Reconnecting... 1/5 (stream disconnected before completion: connection reset by peer)",
+        },
+        assistant,
+        completed,
+      ],
+      ready: true,
+    },
+    {
+      name: "reconnecting error after completed turn remains fatal",
+      events: [started, assistant, completed, recoveredStreamError],
+    },
+    {
+      name: "reconnecting error before the turn starts remains fatal",
+      events: [recoveredStreamError, started, assistant, completed],
+    },
+    ...[
+      [
+        "with auth detail",
+        "Reconnecting... 1/3 stream disconnected before completion: 401 Unauthorized",
+      ],
+      [
+        "with credential detail",
+        "Reconnecting... 1/3 stream disconnected before completion: invalid credential",
+      ],
+      ["with an unknown reason", "Reconnecting... 1/3 request failed with status 500"],
+      ["with trailing reason text", "Reconnecting... 1/3 stream disconnected before completionist"],
+      ["not at the start", "Error: Reconnecting... 1/3 stream disconnected before completion"],
+      ["past its retry limit", "Reconnecting... 4/3 stream disconnected before completion"],
+      ["above the retry budget", "Reconnecting... 1/50 stream disconnected before completion"],
+      ["with a zero attempt", "Reconnecting... 0/3 stream disconnected before completion"],
+    ].map(([description, message]) => ({
+      name: `reconnecting error ${description} remains fatal`,
+      events: [started, { type: "error", message }, assistant, completed],
+    })),
+    {
+      name: "unbounded reconnecting errors remain fatal",
+      events: [
+        started,
+        ...Array.from({ length: 11 }, () => recoveredStreamError),
+        assistant,
+        completed,
+      ],
     },
     {
       name: "failed turn",
@@ -2649,6 +2950,31 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         assistant,
         { type: "turn.failed", error: { message: "authentication failed" } },
       ],
+    },
+    {
+      // Native terminal event observed from codex-cli 0.154 with an invalid API key.
+      name: "provider credential rejection is a deterministic authentication failure",
+      events: [
+        started,
+        {
+          type: "error",
+          message: "unexpected status 401 Unauthorized: Incorrect API key provided",
+        },
+        {
+          type: "turn.failed",
+          error: { message: "unexpected status 401 Unauthorized: Incorrect API key provided" },
+        },
+      ],
+      probeStatus: 1,
+      failureCode: "AUTHENTICATION_FAILED",
+    },
+    {
+      name: "provider server error is not an authentication failure",
+      events: [
+        started,
+        { type: "turn.failed", error: { message: "unexpected status 503 Service Unavailable" } },
+      ],
+      probeStatus: 1,
     },
     { name: "completed turn without visible assistant", events: [started, advisory, completed] },
     {
@@ -2681,8 +3007,15 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         let statusHandler;
         let appServerStarts = 0;
         let nativeCalls = 0;
+        let loginCalls = 0;
+        let probeCalls = 0;
+        let clock = 0;
+        const retryTimers = [];
         const sandbox = {
           URL,
+          setTimeout(callback, delay) {
+            retryTimers.push({ callback, delay });
+          },
           console: {
             error(message) {
               diagnostics.push(message);
@@ -2713,6 +3046,9 @@ test("Codex runtime gates startup and readiness on a successful native authentic
             },
           },
           require(specifier) {
+            if (specifier === "node:perf_hooks") {
+              return { performance: { now: () => clock } };
+            }
             if (specifier === "node:fs") {
               return {
                 mkdirSync() {},
@@ -2736,7 +3072,11 @@ test("Codex runtime gates startup and readiness on a successful native authentic
               return {
                 spawnSync(command, args, options) {
                   nativeCalls++;
-                  if (nativeCalls === 1 && scenario.pat) {
+                  const isLogin = args.includes("login");
+                  if (isLogin) {
+                    loginCalls++;
+                  }
+                  if (isLogin && scenario.pat) {
                     assert.equal(command, "codex");
                     assert.deepEqual(Array.from(args), [
                       "-c",
@@ -2746,19 +3086,44 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                     ]);
                     assert.equal(options.input, "at-fixture-token");
                   }
-                  if (nativeCalls === 2) {
+                  if (!isLogin) {
                     assert.equal(sandbox.process.env.CODEX_ACCESS_TOKEN, undefined);
                     assert.equal(sandbox.process.env.OPENAI_API_KEY, undefined);
                     assert.equal(sandbox.process.env.CODEX_CHATGPT_WORKSPACE_ID, undefined);
                   }
                   // Substitute only native process output; execute the production
                   // login/probe parser and readiness control flow unmodified.
-                  return nativeCalls === 1
-                    ? { status: scenario.loginStatus ?? 0 }
-                    : {
-                        status: scenario.probeStatus ?? 0,
-                        stdout: scenario.events.map((event) => JSON.stringify(event)).join("\n"),
-                      };
+                  if (isLogin) {
+                    if (scenario.loginError) {
+                      return { status: null, error: { code: scenario.loginError } };
+                    }
+                    if (loginCalls <= (scenario.loginTimeouts ?? 0)) {
+                      return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" } };
+                    }
+                    return {
+                      status: scenario.loginStatus ?? 0,
+                      ...(scenario.loginStderr ? { stderr: scenario.loginStderr } : {}),
+                    };
+                  }
+                  probeCalls++;
+                  assert.ok(options.timeout > 0 && options.timeout <= 30000);
+                  if (scenario.expectedTimeouts) {
+                    assert.equal(options.timeout, scenario.expectedTimeouts[probeCalls - 1]);
+                  }
+                  if (probeCalls <= (scenario.probeTimeouts ?? 0)) {
+                    clock += options.timeout;
+                    return { status: null, signal: "SIGKILL", error: { code: "ETIMEDOUT" } };
+                  }
+                  if (scenario.probeSignal) {
+                    return { status: null, signal: scenario.probeSignal };
+                  }
+                  return {
+                    status: scenario.probeStatus ?? 0,
+                    ...(scenario.probeError ? { error: { code: scenario.probeError } } : {}),
+                    stdout:
+                      scenario.probeOutput ??
+                      scenario.events.map((event) => JSON.stringify(event)).join("\n"),
+                  };
                 },
                 spawn(_command, args) {
                   assert.ok(args.includes("app-server"));
@@ -2771,7 +3136,71 @@ test("Codex runtime gates startup and readiness on a successful native authentic
           },
         };
         vm.runInNewContext(AGENT_RUNTIME_ENTRYPOINT, sandbox);
-        assert.equal(nativeCalls, scenario.loginStatus === 1 ? 1 : 2);
+        if (scenario.probeTimeouts) {
+          assert.equal(appServerStarts, 0);
+          assert.equal(existsSync(marker), false);
+          assert.equal(readRuntimeStatusFromHandler(statusHandler).runtimeFailure, undefined);
+          assert.equal(retryTimers.length, 1);
+          assert.equal(retryTimers[0].delay, 1000);
+          clock += scenario.retryDelayMs ?? 1000;
+          retryTimers[0].callback();
+          assert.equal(retryTimers.length, 1, "exhaustion must not schedule another retry");
+        } else {
+          assert.equal(retryTimers.length, 0);
+        }
+        const loginFailed =
+          scenario.loginFailed || scenario.loginStatus === 1 || scenario.loginTimeouts === 3;
+        assert.equal(
+          loginCalls,
+          scenario.loginAttempts ?? Math.min((scenario.loginTimeouts ?? 0) + 1, 3),
+        );
+        assert.equal(
+          nativeCalls,
+          loginCalls +
+            (loginFailed ? 0 : scenario.probeTimeouts && !scenario.expiredBudget ? 2 : 1),
+        );
+        const jsonDiagnostics = diagnostics
+          .filter((message) => message.startsWith("{"))
+          .map(JSON.parse);
+        const probeDiagnostics = jsonDiagnostics.filter(
+          ({ event }) => event !== "runtime.startup_phase",
+        );
+        const startupPhases = jsonDiagnostics.filter(
+          ({ event }) => event === "runtime.startup_phase",
+        );
+        assert.equal(probeDiagnostics.length, probeCalls);
+        for (const [index, diagnostic] of probeDiagnostics.entries()) {
+          assert.equal(diagnostic.event, "codex.model_probe");
+          assert.equal(diagnostic.attempt, index + 1);
+          assert.ok(diagnostic.elapsedMs >= 0);
+        }
+        if (scenario.probeTimeouts) {
+          assert.equal(probeDiagnostics[0].code, "MODEL_PROBE_TIMEOUT");
+        }
+        // Startup timing reports fixed phase names and outcomes only: no model,
+        // provider, credential or path value can appear in these lines.
+        assert.deepEqual(
+          startupPhases.map(({ phase, outcome }) => [phase, outcome]),
+          [
+            ["codex-login", loginFailed ? "failed" : "ok"],
+            ...(loginFailed ? [] : [["model-probe", scenario.ready ? "ok" : "failed"]]),
+            ...(scenario.ready ? [["native-spawn", "ok"]] : []),
+          ],
+        );
+        for (const phase of startupPhases) {
+          assert.deepEqual(Object.keys(phase), [
+            "event",
+            "container",
+            "phase",
+            "outcome",
+            "ms",
+            "sinceStartMs",
+          ]);
+          assert.equal(phase.container, "agent");
+          assert.ok(Number.isInteger(phase.ms) && phase.ms >= 0);
+          assert.ok(phase.sinceStartMs >= phase.ms);
+        }
+        const failureMessages = diagnostics.filter((message) => !message.startsWith("{"));
         assert.ok(statusHandler);
         const runtimeStatus = readRuntimeStatusFromHandler(statusHandler);
         assert.equal(runtimeStatus.revisionId, revisionId);
@@ -2779,25 +3208,23 @@ test("Codex runtime gates startup and readiness on a successful native authentic
         assert.equal(runtimeStatus.podUid, "pod-runtime-auth-gate");
         if (scenario.ready) {
           assert.equal(appServerStarts, 1);
-          assert.deepEqual(diagnostics, []);
+          assert.deepEqual(failureMessages, []);
+          assert.equal(probeDiagnostics.at(-1).code, "READY");
           assert.equal(idleTimers.length, 0);
           assert.equal(readFileSync(marker, "utf8"), "ready\n");
           assert.equal(runtimeStatus.runtimeFailure, undefined);
         } else {
           assert.equal(appServerStarts, 0);
-          assert.deepEqual(diagnostics, ["Harness model authentication probe failed."]);
+          assert.deepEqual(failureMessages, ["Harness model authentication probe failed."]);
           assert.equal(idleTimers.length, 1);
           assert.equal(typeof idleTimers[0].callback, "function");
           assert.ok(idleTimers[0].delay > 0);
           assert.equal(existsSync(marker), false);
           assert.equal(runtimeStatus.runtimeFailure.component, "agent");
-          assert.equal(
-            runtimeStatus.runtimeFailure.check,
-            scenario.loginStatus === 1 ? "login" : "model-probe",
-          );
+          assert.equal(runtimeStatus.runtimeFailure.check, loginFailed ? "login" : "model-probe");
           assert.equal(
             runtimeStatus.runtimeFailure.code,
-            scenario.loginStatus === 1 ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED",
+            scenario.failureCode ?? (loginFailed ? "LOGIN_FAILED" : "MODEL_PROBE_FAILED"),
           );
           assert.match(runtimeStatus.runtimeFailure.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
         }
@@ -2928,30 +3355,12 @@ test("Codex agent app-server uses a per-startup plugin status token", () => {
   }
 });
 
-test("Codex gateway supervisor exits when the peer Agent plugin failure set changes", async () => {
-  const peerHttp = await import("node:http");
+// On a first dedicated deploy the Gateway starts alongside its Harness, and the
+// agent Service lists the Harness only once it is ready. The Gateway waits for
+// the Harness plugin status without a deadline: it neither exits nor reports
+// ready until the Harness really reports.
+test("Codex gateway supervisor waits for its Harness plugin status without a deadline", async () => {
   const revisionId = "revision-plugin-compute-1";
-  const initialFailure = {
-    pluginId: "codex-plugin:linear@openai-curated-remote",
-    code: "PLUGIN_AUTH_REQUIRED",
-  };
-  let peerStatus = {
-    revisionId,
-    container: "agent",
-    startupId: "agent-startup-1",
-    podUid: "agent-pod-1",
-    phase: "ready",
-    successfulPluginIds: [],
-    failures: [initialFailure],
-  };
-  const peerServer = peerHttp.createServer((request, response) => {
-    assert.equal(request.url, "/openclaw/plugin-runtime/status");
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(peerStatus));
-  });
-  await new Promise((resolve) => peerServer.listen(0, "127.0.0.1", resolve));
-  const peerPort = peerServer.address().port;
-
   const runtime = pluginRuntimeSpecForRevision(
     revision({
       plugins: codexLinearPluginState({
@@ -2969,10 +3378,555 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
       }),
     ],
   ]);
-  const intervals = [];
+  const peerStatus = {
+    revisionId,
+    container: "agent",
+    startupId: "agent-startup-1",
+    podUid: "agent-pod-1",
+    phase: "ready",
+    successfulPluginIds: ["codex-plugin:linear@openai-curated-remote"],
+    failures: [],
+  };
+  // Harness not ready yet: no Service endpoint, then an unready status port,
+  // then a Harness still installing its plugins.
+  const unavailable = [
+    () => Promise.reject(new TypeError("fetch failed")),
+    () => Promise.resolve({ status: 503, json: async () => ({}) }),
+    () =>
+      Promise.resolve({ status: 200, json: async () => ({ ...peerStatus, phase: "starting" }) }),
+  ];
+  let peerReady = false;
+  let fetches = 0;
+  const waits = [];
+  const errors = [];
+  const exits = [];
+  let now = 0;
   let statusHandler;
   let child;
-  try {
+  class FixtureDate extends Date {
+    static now() {
+      return now;
+    }
+  }
+  const sandbox = {
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    Date: FixtureDate,
+    console: { error: (message) => errors.push(message) },
+    fetch(url) {
+      assert.equal(
+        String(url),
+        "http://agent-fixture.harness.svc:18791/openclaw/plugin-runtime/status",
+      );
+      fetches++;
+      if (peerReady) {
+        return Promise.resolve({ status: 200, json: async () => peerStatus });
+      }
+      return unavailable[(fetches - 1) % unavailable.length]();
+    },
+    process: {
+      env: {
+        APP_SERVER_TOKEN: "base-app-server-token",
+        APP_SERVER_URL: "ws://agent-fixture.harness.svc:4500",
+        HOME: "/home/node",
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "8080",
+        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
+        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+        OPENCLAW_POD_UID: "gateway-pod-1",
+      },
+      on() {},
+      exit(code) {
+        exits.push(code);
+      },
+    },
+    setInterval() {
+      return { unref() {} };
+    },
+    setTimeout(callback, delay) {
+      if (delay === 250) {
+        waits.push(callback);
+      }
+      return { unref() {} };
+    },
+    clearTimeout() {},
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          existsSync(path) {
+            return files.has(path);
+          },
+          mkdirSync() {},
+          readFileSync(path) {
+            if (!files.has(path)) {
+              throw new Error(`Missing mocked file: ${path}`);
+            }
+            return files.get(path);
+          },
+          writeFileSync(path, data) {
+            files.set(path, String(data));
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn() {
+            child = { kill() {}, on() {} };
+            return child;
+          },
+          spawnSync() {
+            throw new Error("gateway bridge must not run native plugin installers for Codex peers");
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+
+  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  // Twelve failed reads, each ten minutes apart: far beyond the former 60 s deadline
+  // and the controller's own 900 s convergence deadline.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await waitForCondition("the next peer status retry", () => waits.length > 0);
+    assert.equal(child, undefined, "the Gateway must not start before its Harness reports");
+    assert.equal(readStatusFromHandler(statusHandler).phase, "starting");
+    now += 10 * 60_000;
+    waits.shift()();
+  }
+  await waitForCondition("the next peer status retry", () => waits.length > 0);
+  assert.equal(fetches, 13);
+  assert.deepEqual(exits, [], "a slow Harness must not exit the Gateway supervisor");
+  assert.equal(child, undefined);
+  assert.equal(readStatusFromHandler(statusHandler).phase, "starting");
+  // The wait reports why it is still waiting, never a token or the peer address.
+  assert.ok(errors.length > 0);
+  for (const message of errors) {
+    assert.match(message, /^Waiting for Harness plugin runtime status: /);
+    assert.doesNotMatch(message, /base-app-server-token|agent-fixture/);
+  }
+
+  peerReady = true;
+  waits.shift()();
+  await waitForCondition("gateway supervisor start", () => child);
+  assert.equal(fetches, 14);
+  assert.deepEqual(exits, []);
+  const status = readStatusFromHandler(statusHandler);
+  assert.equal(status.phase, "ready");
+  assert.deepEqual(status.successfulPluginIds, peerStatus.successfulPluginIds);
+  assert.equal(
+    sandbox.process.env.APP_SERVER_TOKEN,
+    pluginAppServerToken("base-app-server-token", revisionId, peerStatus.startupId),
+  );
+});
+
+// Runs the Kubernetes Codex Gateway wrapper against a real HTTP Harness peer
+// status endpoint and a real readiness endpoint standing in for OpenClaw. Only
+// process spawning and the filesystem are substituted.
+async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
+  const peerHttp = await import("node:http");
+  const revisionId = "revision-plugin-compute-1";
+  const initialFailure = {
+    pluginId: "codex-plugin:linear@openai-curated-remote",
+    code: "PLUGIN_AUTH_REQUIRED",
+  };
+  const fixture = {
+    revisionId,
+    initialFailure,
+    peerStatus: {
+      revisionId,
+      container: "agent",
+      startupId: "agent-startup-1",
+      podUid: "agent-pod-1",
+      phase: "ready",
+      successfulPluginIds: [],
+      failures: [initialFailure],
+    },
+    peerAvailable: true,
+    serving: true,
+    children: [],
+    exits: [],
+    intervals: [],
+    signalHandlers: {},
+    statusHandler: undefined,
+    files: new Map([
+      [
+        "/etc/openclaw/openclaw.json",
+        JSON.stringify({
+          gateway: { port: 8080 },
+          plugins: { installs: { keep: { source: "npm" } }, load: { paths: ["existing"] } },
+          tools: { alsoAllow: ["existing-tool"] },
+        }),
+      ],
+    ]),
+  };
+  if (bindingDeviceId !== undefined) {
+    fixture.files.set(
+      "/home/node/workspace-node-binding/workspace-node.json",
+      JSON.stringify({ revisionId, deviceId: bindingDeviceId }),
+    );
+  }
+  const listen = async (handler) => {
+    const server = peerHttp.createServer(handler);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    return server.address().port;
+  };
+  const peerPort = await listen((request, response) => {
+    assert.equal(request.url, "/openclaw/plugin-runtime/status");
+    if (!fixture.peerAvailable) {
+      response.writeHead(503).end();
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(fixture.peerStatus));
+  });
+  // The native Gateway's own readiness endpoint, answered only while serving.
+  const gatewayPort = await listen((request, response) => {
+    assert.equal(request.url, "/readyz");
+    const live = fixture.children.at(-1);
+    response.writeHead(fixture.serving && live?.exited === undefined ? 200 : 503).end();
+  });
+  fixture.gatewayPort = gatewayPort;
+  const sandbox = {
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    console: { error() {} },
+    fetch,
+    process: {
+      env: {
+        APP_SERVER_TOKEN: "base-app-server-token",
+        APP_SERVER_URL: `ws://127.0.0.1:${peerPort}`,
+        HOME: "/home/node",
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({
+          manifest: pluginRuntimeSpecForRevision(
+            revision({
+              plugins: codexLinearPluginState({
+                toolDefaults: { approval: "provider_default", reviewer: "auto" },
+              }),
+            }),
+          ),
+        }),
+        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+        OPENCLAW_PLUGIN_STATUS_PORT: String(peerPort),
+        OPENCLAW_POD_UID: "gateway-pod-1",
+        ...(bindingDeviceId === undefined
+          ? {}
+          : {
+              OPENCLAW_WORKSPACE_NODE_PATH: "/home/node/workspace-node-binding/workspace-node.json",
+              OPENCLAW_RUNTIME_STATUS_PORT: "18792",
+              OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+            }),
+      },
+      on(signal, handler) {
+        fixture.signalHandlers[signal] = handler;
+      },
+      exit(code) {
+        fixture.exits.push(code);
+      },
+    },
+    setInterval(callback) {
+      fixture.intervals.push(callback);
+      return { unref() {} };
+    },
+    clearInterval() {},
+    setTimeout,
+    clearTimeout,
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            fixture.statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          existsSync: (path) => fixture.files.has(path),
+          mkdirSync() {},
+          readFileSync(path) {
+            if (!fixture.files.has(path)) {
+              throw new Error(`Missing mocked file: ${path}`);
+            }
+            return fixture.files.get(path);
+          },
+          writeFileSync(path, data) {
+            fixture.files.set(path, String(data));
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn(command, args) {
+            assert.equal(command, "node");
+            assert.deepEqual(plain(args), [
+              "/app/openclaw.mjs",
+              "gateway",
+              "--port",
+              String(gatewayPort),
+            ]);
+            const child = {
+              token: sandbox.process.env.APP_SERVER_TOKEN,
+              config: JSON.parse(fixture.files.get("/home/node/.openclaw/openclaw.json")),
+              killed: [],
+              exited: undefined,
+              listeners: [],
+              kill(signal) {
+                this.killed.push(signal);
+              },
+              on(event, listener) {
+                if (event === "exit") {
+                  this.listeners.push(listener);
+                }
+              },
+              exit(code, signal) {
+                this.exited = { code, signal };
+                for (const listener of this.listeners) {
+                  listener(code, signal);
+                }
+              },
+            };
+            fixture.children.push(child);
+            return child;
+          },
+          spawnSync() {
+            throw new Error("gateway bridge must not run native plugin installers for Codex peers");
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+  fixture.sandbox = sandbox;
+  fixture.status = () => readStatusFromHandler(fixture.statusHandler);
+  fixture.runtimeStatus = () => readRuntimeStatusFromHandler(fixture.statusHandler);
+  fixture.token = (startupId) =>
+    pluginAppServerToken("base-app-server-token", revisionId, startupId);
+  // The peer poll is the last interval the wrapper registers.
+  fixture.pollPeer = () => fixture.intervals.at(-1)();
+  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  await waitForCondition("gateway supervisor start", () => fixture.children.length === 1);
+  return fixture;
+}
+
+test("Codex gateway supervisor respawns OpenClaw in place for a changed Harness peer", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  assert.equal(first.token, gateway.token("agent-startup-1"));
+  assert.equal(
+    first.config.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled,
+    false,
+  );
+  assert.equal(gateway.status().phase, "ready");
+
+  // The Harness restarted with a new startup and its plugin now authorized.
+  gateway.peerStatus = {
+    ...gateway.peerStatus,
+    startupId: "agent-startup-2",
+    podUid: "agent-pod-2",
+    failures: [],
+  };
+  gateway.serving = false;
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+  assert.deepEqual(first.killed, ["SIGTERM"]);
+  // Readiness drops before anything else, and nothing new starts while the
+  // stale process (holding the old credential) is still running.
+  assert.equal(gateway.status().phase, "starting");
+  assert.deepEqual(gateway.status().failures, [gateway.initialFailure]);
+  assert.equal(gateway.children.length, 1);
+
+  first.exit(null, "SIGTERM");
+  await waitForCondition("the respawned Gateway", () => gateway.children.length === 2);
+  const second = gateway.children[1];
+  assert.equal(second.token, gateway.token("agent-startup-2"));
+  assert.equal(
+    second.config.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled,
+    true,
+  );
+  // Spawned but not yet serving: still unready.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.equal(gateway.status().phase, "starting");
+
+  gateway.serving = true;
+  await respawn;
+  const ready = gateway.status();
+  assert.equal(ready.phase, "ready");
+  assert.deepEqual(ready.failures, []);
+  assert.deepEqual(gateway.exits, [], "the wrapper, and so the container, keeps running");
+  assert.deepEqual(second.killed, []);
+
+  // An unchanged peer changes nothing.
+  await gateway.pollPeer();
+  assert.equal(gateway.children.length, 2);
+  assert.deepEqual(second.killed, []);
+
+  // An exit of the respawned process that no respawn asked for is still the container's.
+  second.exit(1, null);
+  assert.deepEqual(gateway.exits, [1]);
+});
+
+test("Codex gateway supervisor keeps OpenClaw when the same Harness returns after a status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+  gateway.peerAvailable = true;
+  await poll;
+  assert.equal(gateway.status().phase, "ready");
+  assert.deepEqual(first.killed, [], "the Gateway's credential is still valid");
+  assert.equal(gateway.children.length, 1);
+  assert.deepEqual(gateway.exits, []);
+});
+
+test("Codex gateway supervisor exits when OpenClaw crashes during a peer status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+
+  // A status outage must not hide the running Gateway's own failure.
+  first.exit(1, null);
+  const exitsAfterCrash = [...gateway.exits];
+  // process.exit is captured by this fixture, so release the pending peer wait.
+  gateway.peerAvailable = true;
+  await poll;
+  assert.deepEqual(exitsAfterCrash, [1]);
+});
+
+test("Codex gateway supervisor forwards container termination during a peer status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+
+  gateway.signalHandlers.SIGTERM();
+  assert.deepEqual(first.killed, ["SIGTERM"]);
+  first.exit(null, "SIGTERM");
+  assert.deepEqual(gateway.exits, [0]);
+  gateway.peerAvailable = true;
+  await poll;
+  assert.equal(gateway.children.length, 1);
+});
+
+test("Codex gateway supervisor re-applies the workspace node binding on respawn", async (t) => {
+  const deviceId = "a".repeat(64);
+  const gateway = await startCodexGatewaySupervisor(t, { bindingDeviceId: deviceId });
+  const [first] = gateway.children;
+  assert.deepEqual(first.config.plugins.entries["file-transfer"].config.workspaces.main, {
+    nodeId: deviceId,
+    remoteRoot: "/home/node/workspace",
+  });
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+  first.exit(null, "SIGTERM");
+  await respawn;
+  const second = gateway.children[1];
+  assert.deepEqual(second.config.plugins.entries["file-transfer"].config.workspaces.main, {
+    nodeId: deviceId,
+    remoteRoot: "/home/node/workspace",
+  });
+  assert.ok(second.config.gateway.nodes.commands.allow.includes("file.fetch"));
+  // The new process must acknowledge the node itself before the controller sees it.
+  assert.equal(gateway.runtimeStatus().workspaceNodeId, undefined);
+  assert.equal(gateway.status().phase, "ready");
+  assert.deepEqual(gateway.exits, []);
+});
+
+test("Codex gateway supervisor bounds respawn retries and falls back to a container restart", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+  gateway.serving = false;
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => gateway.children[0].killed.length === 1);
+  gateway.children[0].exit(null, "SIGTERM");
+  // Every respawned process dies before it serves.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    // Retries back off by 1 s, then 2 s.
+    const deadline = Date.now() + 5_000;
+    while (gateway.children.length !== attempt + 1) {
+      assert.ok(Date.now() < deadline, `respawn attempt ${attempt} did not start`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    gateway.children[attempt].exit(1, null);
+    assert.equal(gateway.status().phase, "starting");
+    assert.deepEqual(gateway.exits, [], "a respawn retry does not end the wrapper");
+  }
+  await respawn;
+  assert.equal(gateway.children.length, 4);
+  assert.deepEqual(gateway.exits, [1]);
+  assert.equal(gateway.status().phase, "starting");
+});
+
+test("Codex gateway supervisor stops respawning a Gateway whose Harness keeps changing", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  for (let change = 2; change <= 6; change++) {
+    const current = gateway.children.at(-1);
+    gateway.peerStatus = { ...gateway.peerStatus, startupId: `agent-startup-${change}` };
+    const respawn = gateway.pollPeer();
+    await waitForCondition("the stale Gateway stop", () => current.killed.length === 1);
+    current.exit(null, "SIGTERM");
+    await respawn;
+    assert.equal(gateway.status().phase, "ready");
+  }
+  assert.equal(gateway.children.length, 6);
+  assert.deepEqual(gateway.exits, []);
+  // A sixth change within the window: the kubelet's backoff takes over.
+  const last = gateway.children.at(-1);
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-7" };
+  await gateway.pollPeer();
+  assert.deepEqual(last.killed, ["SIGTERM"]);
+  assert.equal(gateway.status().phase, "starting");
+  last.exit(null, "SIGTERM");
+  assert.deepEqual(gateway.exits, [1]);
+  assert.equal(gateway.children.length, 6);
+});
+
+for (const withBroker of [false, true]) {
+  test(`Codex gateway supervisor applies plugin-free bridge runtime (broker=${withBroker})`, async () => {
+    const revisionId = "revision-plugin-compute-1";
+    const runtime = pluginRuntimeSpecForRevision(
+      revision({ plugins: codexNoPluginState() }),
+      withBroker
+        ? {
+            host: "git.oce.svc",
+            domains: { "github.com": "allow", "*.oce.svc": "deny" },
+          }
+        : undefined,
+    );
+    const files = new Map([
+      [
+        "/etc/openclaw/openclaw.json",
+        JSON.stringify({
+          gateway: { port: 8080 },
+          plugins: { entries: { codex: { enabled: true, config: { keep: true } } } },
+        }),
+      ],
+    ]);
+    const intervals = [];
+    let statusHandler;
+    let child;
     const sandbox = {
       AbortSignal,
       Buffer,
@@ -2983,14 +3937,13 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
       process: {
         env: {
           APP_SERVER_TOKEN: "base-app-server-token",
-          APP_SERVER_URL: `ws://127.0.0.1:${peerPort}`,
           HOME: "/home/node",
           OPENCLAW_AGENT_REVISION_ID: revisionId,
           OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
           OPENCLAW_GATEWAY_PORT: "8080",
           OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
           OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
-          OPENCLAW_PLUGIN_STATUS_PORT: String(peerPort),
+          OPENCLAW_PLUGIN_STATUS_PORT: "18791",
           OPENCLAW_POD_UID: "gateway-pod-1",
         },
         on() {},
@@ -3035,19 +3988,11 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
             spawn(command, args) {
               assert.equal(command, "node");
               assert.deepEqual(plain(args), ["/app/openclaw.mjs", "gateway", "--port", "8080"]);
-              child = {
-                killed: [],
-                kill(signal) {
-                  this.killed.push(signal);
-                },
-                on() {},
-              };
+              child = { kill() {}, on() {} };
               return child;
             },
             spawnSync() {
-              throw new Error(
-                "gateway bridge must not run native plugin installers for Codex peers",
-              );
+              throw new Error("plugin-free bridge must not run native plugin installers");
             },
           };
         }
@@ -3057,151 +4002,41 @@ test("Codex gateway supervisor exits when the peer Agent plugin failure set chan
 
     vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
     await waitForCondition("gateway supervisor start", () => child);
-    assert.equal(intervals.length, 1);
+    assert.equal(intervals.length, 0);
 
     const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
-    assert.equal(effective.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled, false);
-    assert.deepEqual(readStatusFromHandler(statusHandler).failures, [initialFailure]);
-
-    peerStatus = {
-      ...peerStatus,
-      startupId: "agent-startup-2",
-      podUid: "agent-pod-2",
+    assert.equal(effective.plugins.entries.codex.config.keep, true);
+    assert.equal(effective.plugins.entries.codex.config.codexPlugins, undefined);
+    assert.deepEqual(
+      effective.plugins.entries.codex.config.appServer.networkProxy,
+      withBroker
+        ? {
+            enabled: true,
+            mode: "full",
+            allowLocalBinding: true,
+            readOnlyPaths: [
+              "/app/node_modules/openclaw",
+              "/home/node/.openclaw/plugin-skills",
+              "/home/node/openclaw-runtime-assets/plugin-skills",
+              "/opt/oce/repository-credentials",
+              "/run/oce/repository-credentials",
+            ],
+            domains: { "github.com": "allow", "*.oce.svc": "deny", "git.oce.svc": "allow" },
+          }
+        : { readOnlyPaths: ["/app/node_modules/openclaw"] },
+    );
+    const status = readStatusFromHandler(statusHandler);
+    assert.deepEqual(status, {
+      revisionId,
+      container: "gateway",
+      startupId: status.startupId,
+      podUid: "gateway-pod-1",
+      phase: "ready",
+      successfulPluginIds: [],
       failures: [],
-    };
-    await intervals[0]();
-
-    assert.deepEqual(child.killed, ["SIGTERM"]);
-    const restarting = readStatusFromHandler(statusHandler);
-    assert.equal(restarting.phase, "starting");
-    assert.deepEqual(restarting.failures, [initialFailure]);
-  } finally {
-    await new Promise((resolve) => peerServer.close(resolve));
-  }
-});
-
-test("Codex gateway supervisor applies broker-only bridge runtime without selected plugins", async () => {
-  const revisionId = "revision-plugin-compute-1";
-  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }), {
-    host: "git.oce.svc",
-    domains: { "github.com": "allow", "*.oce.svc": "deny" },
+    });
   });
-  const files = new Map([
-    [
-      "/etc/openclaw/openclaw.json",
-      JSON.stringify({
-        gateway: { port: 8080 },
-        plugins: { entries: { codex: { enabled: true, config: { keep: true } } } },
-      }),
-    ],
-  ]);
-  const intervals = [];
-  let statusHandler;
-  let child;
-  const sandbox = {
-    AbortSignal,
-    Buffer,
-    JSON,
-    URL,
-    console: { error() {} },
-    fetch,
-    process: {
-      env: {
-        APP_SERVER_TOKEN: "base-app-server-token",
-        HOME: "/home/node",
-        OPENCLAW_AGENT_REVISION_ID: revisionId,
-        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
-        OPENCLAW_GATEWAY_PORT: "8080",
-        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
-        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
-        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
-        OPENCLAW_POD_UID: "gateway-pod-1",
-      },
-      on() {},
-      exit() {},
-    },
-    setInterval(callback) {
-      intervals.push(callback);
-      return { unref() {} };
-    },
-    setTimeout() {
-      return { unref() {} };
-    },
-    clearTimeout() {},
-    require(specifier) {
-      if (specifier === "node:http") {
-        return {
-          createServer(handler) {
-            statusHandler = handler;
-            return { listen() {} };
-          },
-        };
-      }
-      if (specifier === "node:fs") {
-        return {
-          existsSync(path) {
-            return files.has(path);
-          },
-          mkdirSync() {},
-          readFileSync(path) {
-            if (!files.has(path)) {
-              throw new Error(`Missing mocked file: ${path}`);
-            }
-            return files.get(path);
-          },
-          writeFileSync(path, data) {
-            files.set(path, String(data));
-          },
-        };
-      }
-      if (specifier === "node:child_process") {
-        return {
-          spawn(command, args) {
-            assert.equal(command, "node");
-            assert.deepEqual(plain(args), ["/app/openclaw.mjs", "gateway", "--port", "8080"]);
-            child = { kill() {}, on() {} };
-            return child;
-          },
-          spawnSync() {
-            throw new Error("broker-only bridge must not run native plugin installers");
-          },
-        };
-      }
-      return nodeRequire(specifier);
-    },
-  };
-
-  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
-  await waitForCondition("gateway supervisor start", () => child);
-  assert.equal(intervals.length, 0);
-
-  const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
-  assert.equal(effective.plugins.entries.codex.config.keep, true);
-  assert.equal(effective.plugins.entries.codex.config.codexPlugins, undefined);
-  assert.deepEqual(effective.plugins.entries.codex.config.appServer.networkProxy, {
-    enabled: true,
-    mode: "full",
-    allowLocalBinding: true,
-    readOnlyPaths: [
-      "/app/node_modules/openclaw",
-      "/home/node/.openclaw/plugin-skills",
-      "/home/node/openclaw-runtime-assets/plugin-skills",
-      "/opt/oce/repository-credentials",
-      "/run/oce/repository-credentials",
-    ],
-    domains: { "github.com": "allow", "*.oce.svc": "deny", "git.oce.svc": "allow" },
-  });
-  const status = readStatusFromHandler(statusHandler);
-  assert.deepEqual(status, {
-    revisionId,
-    container: "gateway",
-    startupId: status.startupId,
-    podUid: "gateway-pod-1",
-    phase: "ready",
-    successfulPluginIds: [],
-    failures: [],
-  });
-});
+}
 
 test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin status auth", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
@@ -3214,7 +4049,7 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    kubernetesNamespaceName(tenant.id),
+    { name: kubernetesNamespaceName(tenant.id), plane: "execution" },
     "openclaw-enterprise/agent-fixture:local",
     "agent-plugin-compute",
     "agent",
@@ -3223,11 +4058,10 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
     undefined,
     false,
     undefined,
-    driver.harnessAuthForRevision(
-      candidate,
-      harnessAuthContext(candidate),
-      kubernetesGatewayNamespaceName(tenant.id),
-    ),
+    driver.harnessAuthForRevision(candidate, harnessAuthContext(candidate), {
+      name: kubernetesGatewayNamespaceName(tenant.id),
+      plane: "control",
+    }),
     [],
     [],
     { name: "plugin-runtime-agent-plugin-compute", runtime },
@@ -3278,59 +4112,69 @@ test("Kubernetes dedicated Codex agent mounts plugin-free runtime without plugin
   );
 });
 
-test("Kubernetes dedicated Codex gateway mounts broker-only runtime without plugin selections", async () => {
-  const driver = createKubernetesComputeDriver(kubernetesOptions());
-  const runtime = pluginRuntimeSpecForRevision(revision({ plugins: codexNoPluginState() }), {
-    host: "git.oce.svc",
-    domains: {},
-  });
-  const deployment = driver.deployment(
-    "gateway-plugin-compute-rev",
-    {
-      namespaceId: tenant.id,
-      agentId: agent.id,
-      revisionId: "revision-plugin-compute-1",
-    },
-    "oce-plugin-compute",
-    "openclaw-enterprise/gateway-fixture:local",
-    "gateway-plugin-compute",
-    "gateway",
-    {},
-    "info",
-    driver.gatewayConfiguration(revision(), undefined, "oce-plugin-compute"),
-    false,
-    undefined,
-    undefined,
-    [],
-    [],
-    { name: "plugin-runtime-gateway-plugin-compute", runtime },
-  );
+for (const withBroker of [false, true]) {
+  test(`Kubernetes dedicated Codex gateway mounts plugin-free runtime (broker=${withBroker})`, async () => {
+    const driver = createKubernetesComputeDriver(kubernetesOptions());
+    const runtime = pluginRuntimeSpecForRevision(
+      revision({ plugins: codexNoPluginState() }),
+      withBroker
+        ? {
+            host: "git.oce.svc",
+            domains: {},
+          }
+        : undefined,
+    );
+    const deployment = driver.deployment(
+      "gateway-plugin-compute-rev",
+      {
+        namespaceId: tenant.id,
+        agentId: agent.id,
+        revisionId: "revision-plugin-compute-1",
+      },
+      { name: "oce-plugin-compute", plane: "execution" },
+      "openclaw-enterprise/gateway-fixture:local",
+      "gateway-plugin-compute",
+      "gateway",
+      {},
+      "info",
+      driver.gatewayConfiguration(revision(), undefined, {
+        name: "oce-plugin-compute",
+        plane: "execution",
+      }),
+      false,
+      undefined,
+      undefined,
+      [],
+      [],
+      { name: "plugin-runtime-gateway-plugin-compute", runtime },
+    );
 
-  const pod = deployment.spec.template.spec;
-  assert.equal(
-    pod.volumes.some(
-      (volume) => volume.configMap?.name === "plugin-runtime-gateway-plugin-compute",
-    ),
-    true,
-  );
-  const container = pod.containers[0];
-  assert.equal(
-    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT),
-    true,
-  );
-  assert.equal(
-    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT),
-    false,
-  );
-  assert.equal(
-    container.env.some((variable) => variable.name === PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT),
-    false,
-  );
-  assert.equal(
-    container.env.some((variable) => variable.name === "OPENCLAW_PLUGIN_STATUS_CONTAINER"),
-    false,
-  );
-});
+    const pod = deployment.spec.template.spec;
+    assert.equal(
+      pod.volumes.some(
+        (volume) => volume.configMap?.name === "plugin-runtime-gateway-plugin-compute",
+      ),
+      true,
+    );
+    const container = pod.containers[0];
+    assert.equal(
+      container.env.some((variable) => variable.name === PLUGIN_RUNTIME_MANIFEST_ENVIRONMENT),
+      true,
+    );
+    assert.equal(
+      container.env.some((variable) => variable.name === PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT),
+      false,
+    );
+    assert.equal(
+      container.env.some((variable) => variable.name === PLUGIN_RUNTIME_READY_MARKER_ENVIRONMENT),
+      false,
+    );
+    assert.equal(
+      container.env.some((variable) => variable.name === "OPENCLAW_PLUGIN_STATUS_CONTAINER"),
+      false,
+    );
+  });
+}
 
 test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runtime", async () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
@@ -3349,13 +4193,16 @@ test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runti
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    { name: "oce-plugin-compute", plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     "gateway-plugin-compute",
     "gateway",
     {},
     "info",
-    driver.gatewayConfiguration(candidate, undefined, "oce-plugin-compute"),
+    driver.gatewayConfiguration(candidate, undefined, {
+      name: "oce-plugin-compute",
+      plane: "execution",
+    }),
     true,
     candidate.servicePrincipalId,
     driver.harnessAuthForRevision(
@@ -3371,7 +4218,7 @@ test("Kubernetes embedded OpenClaw gateway mounts broker-only Codex bridge runti
           },
         },
       },
-      "oce-plugin-compute",
+      { name: "oce-plugin-compute", plane: "execution" },
     ),
     [],
     [],
@@ -3422,7 +4269,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
   const predecessorRevisionName = `${agentName}-rev-${shortHash(predecessor.id)}`;
   const defaultPolicies = new Map(
     driver
-      .networkPolicies(tenantOwnership, namespace)
+      .networkPolicies(tenantOwnership, { name: namespace, plane: "execution" })
       .map((policy) => [policy.metadata.name, policy]),
   );
   const reconciled = [];
@@ -3443,7 +4290,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
       "Secret",
       transportName,
       { namespaceId: tenant.id, agentId: candidate.agentId },
-      cp,
+      { name: cp, plane: "execution" },
     ),
     type: "Opaque",
     data: { "app-server-token": Buffer.from("fixture-transport").toString("base64") },
@@ -3466,10 +4313,13 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
       listNamespacedPod: async () => ({ apiVersion: "v1", kind: "PodList", items: [] }),
     },
   });
-  driver.resolveNamespace = async () => ({ name: namespace, external: false });
+  driver.resolveNamespace = async () => ({
+    name: { name: namespace, plane: "execution" },
+    external: false,
+  });
   driver.get = async (kind, name, target) =>
     kind === "Secret"
-      ? credentialObjects.get(`${target}:${name}`)
+      ? credentialObjects.get(`${target.name}:${name}`)
       : kind === "Namespace"
         ? {
             ...(name === cp
@@ -3480,7 +4330,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
         : undefined;
   driver.getOwned = async (kind, name, target) => {
     if (kind === "Secret" && name !== driver.workspaceNodeName(candidate)) {
-      return credentialObjects.get(`${target}:${name}`);
+      return credentialObjects.get(`${target.name}:${name}`);
     }
     if (kind === "Secret") {
       return enrolledNodeSecret(driver, candidate, namespace);
@@ -3495,7 +4345,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
           "Deployment",
           name,
           { ...tenantOwnership, agentId: candidate.agentId },
-          namespace,
+          { name: namespace, plane: "execution" },
         ),
         metadata: {
           name,
@@ -3538,7 +4388,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
                 servicePrincipalId: candidate.servicePrincipalId,
                 revisionId: candidate.id,
               },
-              namespace,
+              { name: namespace, plane: "execution" },
             )
           : structuredClone(reconciledCandidate)),
         metadata: { ...(reconciledCandidate?.metadata ?? { name }), generation: 1 },
@@ -3554,7 +4404,7 @@ test("Kubernetes dedicated successor readiness preserves the stable Agent Servic
           agentId: candidate.agentId,
           servicePrincipalId: candidate.servicePrincipalId,
         },
-        namespace,
+        { name: namespace, plane: "execution" },
         { "app.kubernetes.io/name": predecessorRevisionName },
       );
     }
@@ -3600,13 +4450,16 @@ test("Kubernetes dedicated Codex gateway mounts bridge runtime and prior plugin 
       agentId: agent.id,
       revisionId: "revision-plugin-compute-1",
     },
-    "oce-plugin-compute",
+    { name: "oce-plugin-compute", plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     "gateway-plugin-compute",
     "gateway",
     {},
     "info",
-    driver.gatewayConfiguration(revision(), undefined, "oce-plugin-compute"),
+    driver.gatewayConfiguration(revision(), undefined, {
+      name: "oce-plugin-compute",
+      plane: "execution",
+    }),
     false,
     undefined,
     undefined,
@@ -3673,22 +4526,22 @@ test("Kubernetes dedicated Codex gateway mounts bridge runtime and prior plugin 
 
 test("Kubernetes plugin-free Codex gateway receives explicit Agent approvers", () => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
-  for (const [pluginApprovers, expectedMount] of [
-    [undefined, false],
-    [[], true],
-  ]) {
+  for (const pluginApprovers of [undefined, []]) {
     const candidate = revision({ pluginApprovers });
     const runtime = pluginRuntimeSpecForRevision(candidate);
     const deployment = driver.deployment(
       "gateway-plugin-free",
       { namespaceId: tenant.id, agentId: agent.id, revisionId: candidate.id },
-      "oce-plugin-compute",
+      { name: "oce-plugin-compute", plane: "execution" },
       "openclaw-enterprise/gateway-fixture:local",
       "gateway-plugin-compute",
       "gateway",
       {},
       "info",
-      driver.gatewayConfiguration(candidate, undefined, "oce-plugin-compute"),
+      driver.gatewayConfiguration(candidate, undefined, {
+        name: "oce-plugin-compute",
+        plane: "execution",
+      }),
       false,
       undefined,
       undefined,
@@ -3699,7 +4552,7 @@ test("Kubernetes plugin-free Codex gateway receives explicit Agent approvers", (
     const pod = deployment.spec.template.spec;
     assert.equal(
       pod.volumes.some((volume) => volume.configMap?.name === "plugin-runtime-gateway-plugin-free"),
-      expectedMount,
+      true,
     );
   }
 });

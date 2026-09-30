@@ -1,9 +1,10 @@
 # Harness execution
 
-A Harness calls the model and runs tools for an Agent. OpenClaw Enterprise supports
-OpenClaw either inside the Agent's gateway or as a dedicated native worker,
-and Codex as a dedicated runtime. You choose an execution mode on the Agent and
-a compatible model and Harness in its Configuration.
+A Harness calls the model and runs tools for an Agent. The bundled deployment
+paths run OpenClaw inside the Agent's gateway or Codex as a dedicated runtime.
+Dedicated native OpenClaw requires the experimental Sandbox integration below.
+Choose an execution mode on the Agent and a compatible model and Harness in its
+Configuration.
 
 This page explains supported combinations, model authentication, and what a
 replacement can interrupt. For the infrastructure choices, see
@@ -12,11 +13,11 @@ response, follow [Deploy your first Agent](../guides/first-agent.md).
 
 ## Supported topology
 
-| Harness  | Agent execution mode | Workloads                                                        |
-| -------- | -------------------- | ---------------------------------------------------------------- |
-| OpenClaw | `embedded`           | One Agent-owned gateway executes the built-in Harness.           |
-| OpenClaw | `dedicated`          | An Agent-owned gateway connects to a paired dedicated Harness.   |
-| Codex    | `dedicated`          | An Agent-owned gateway connects to a separate dedicated Harness. |
+| Harness  | Agent execution mode | Workloads and support                                                                                                                                                                      |
+| -------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenClaw | `embedded`           | One gateway executes the built-in Harness; available on Kubernetes and SSH.                                                                                                                |
+| Codex    | `dedicated`          | A gateway connects to a separate Codex Harness; available on Kubernetes.                                                                                                                   |
+| OpenClaw | `dedicated`          | Experimental native worker; requires full-facet Sandbox provisioning. Stock OpenShell has [upstream blockers](#optional-sandbox-provisioning), so this is not a supported production path. |
 
 Agent creation defaults to `embedded`; an update preserves the existing mode
 when omitted. Unsupported Harness/mode pairs are rejected before work is admitted.
@@ -138,26 +139,64 @@ remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
 
-Kubernetes OpenClaw performs one bounded native model probe in the process that
-owns model access, for both initial and replacement deployments. Embedded activation uses
+Kubernetes OpenClaw performs one native model probe (20 seconds plus 45
+CPU-seconds at its CPU limit) in the process that owns model access, for initial
+and replacement deployments. Embedded activation uses
 the shared gateway's `Recreate` strategy: cutover can stop the working gateway
 before the replacement validates its credentials. Invalid credentials or a
 provider failure leave the replacement unready and the Agent unavailable until
 repair and restart or a new deployment. There is no automatic rollback.
-Readiness polling does not repeat model calls. The probe stores its temporary
-state beneath the runtime's selected `TMPDIR`.
+The probe stores its temporary state beneath the runtime's selected `TMPDIR`.
 
 Both startup checks call the configured primary model. OpenClaw disables tools
 and model fallback. Codex ignores user configuration and rules, disables execution
 and external tools, and uses read-only filesystem policy without approval grants;
 a tool event cannot satisfy its success check. The Codex probe runs with a minimal
 environment that keeps only the runtime's TLS trust variables (`SSL_CERT_FILE`,
-`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Each probe has a process timeout
-and captures native output, emitting only a fixed failure message if unsuccessful.
-A failed Codex probe also holds the process unready until restart.
+`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Each probe captures
+native output without logging its contents. Dedicated Codex retries a confirmed
+subprocess timeout once after one second. Each attempt has a 30-second cap within
+one 61-second budget, including the delay. Authentication rejection, malformed
+output, tool events, and external signals without timeout evidence do not retry.
+Wrappers run under `tini`, so termination during a probe, its delay, or a held
+failure exits at once without another probe. Exhausted or nonretryable failure
+holds the process unready until restart or Pod stop; readiness polling never
+starts another model call.
+
+Codex emits a structured `codex.model_probe` log for each attempt with its number,
+elapsed milliseconds, exit code, recognized termination signal, and final code
+(`READY`, `MODEL_PROBE_TIMEOUT`, `MODEL_PROBE_FAILED`, `AUTHENTICATION_FAILED`, or
+`UNAVAILABLE`). Logs omit credentials and raw provider output. The existing runtime
+failure status is published only after retries end.
+
+The runtime failure code is `AUTHENTICATION_FAILED` only when the provider
+rejected the credential: an OpenClaw probe result with status `auth` (provider
+401/403 or invalid key), or a Codex probe `turn.failed` event or access-token
+login error reporting HTTP 401 or 403. The worker then fails the deployment with
+`RUNTIME_AUTHENTICATION_FAILED` instead of waiting for the convergence deadline.
+A CPU-starved OpenClaw probe reports `MODEL_PROBE_CPU_STARVED`, failing with
+`RUNTIME_CPU_STARVED`.
+Other timeouts, provider server errors, and transport failures keep `MODEL_PROBE_TIMEOUT`,
+`MODEL_PROBE_FAILED`, or `LOGIN_FAILED` and remain pending.
+
+Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
+per startup phase, such as login, model probe, peer plugin status, plugin
+install, workspace setup, and native process spawn, with its container, phase name, `ok` or `failed` outcome,
+duration, and time since the wrapper started. A Gateway also logs
+`peer-status-changed` when its Harness is replaced, then `gateway-respawn` once
+the OpenClaw process it restarts in place serves again. These
+logs carry no provider, model, credential, or path values.
+
+On a first dedicated Codex deploy the controller creates the Gateway alongside
+its Harness, and the Agent Service selects that revision's Harness from the
+start. The Service lists the Harness only once it is ready, so the Gateway
+waits for the Harness plugin status without a deadline. It stays unready while
+it waits and logs `Waiting for Harness plugin runtime status` at most every 30
+seconds. The deployment's convergence deadline governs a Harness that never
+reports. A redeploy keeps the Service on the serving revision until activation.
 
 These startup checks make provider requests and may incur model usage charges.
-They do not verify access to every other configured model or guarantee continued validity
+They do not verify access to other configured models or guarantee continued validity
 after upstream revocation. Embedded probe transport configuration must use
 literal metadata rather than additional environment or Secret references. The
 canonical `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` alias for the selected provider remains supported, and unrelated
@@ -215,16 +254,15 @@ and permitted transport depend on the selected Driver and admitted topology.
 The [Kubernetes security reference](security.md) defines its concrete credential
 exceptions and enforcement limitations; Docker has its own narrower boundaries.
 
-A replacement can be prepared while its predecessor serves. Embedded preparation
-does not validate replacement credentials; its activation can interrupt service
-as described above. Guarded activation publishes the replacement before the
-prior revision is retired, and retries cannot allow an older operation to
-overwrite a newer active revision. OCC records one active revision and routes
-new requests to it during normal reconciliation.
-Kubernetes Deployments do not guarantee a physical process singleton during node
-partitions or manual replacement; see the
-[gateway rollout limitation](drivers/kubernetes-compute.md#execution-modes).
-The worker records one
+Embedded preparation runs while its predecessor serves but does not validate
+replacement credentials; activation can interrupt service as described above.
+Dedicated replacement stops every earlier revision, even a healthy Gateway,
+before preparation, leaving the Agent unavailable until the replacement is
+ready. Guarded activation publishes the replacement before retiring the prior
+revision; an older retry never overwrites a newer active revision, and OCC
+routes to one active revision. Kubernetes cannot guarantee a process singleton
+during node partitions or manual replacement; see [execution
+modes](drivers/kubernetes-compute.md#execution-modes). The worker records one
 activation audit when durable completion succeeds; recovery repeats safe effects
 under the current claim. Exact ordering and failure handling are explained in
 the [worker flow](../flows/controller-worker.md).
@@ -258,6 +296,15 @@ fail explicitly; test bridges do not establish turnkey production support.
 There is no current command-level `exec` facet or per-tool sandbox admission.
 See [SandboxDriver](drivers/sandbox.md) and [OpenShell](drivers/openshell-sandbox.md)
 for the complete capability and upstream compatibility boundaries.
+
+### Native worker support
+
+The pinned OpenClaw [runtime image](../../deploy/runtime/README.md) lacks required
+worker placement (`cloudWorkers.requiredProfile`) and native worker inference.
+Deploy and provisioning therefore refuse dedicated native OpenClaw with
+`400 INVALID_REQUEST`, and the console withholds that choice. An operator whose
+runtime image is built from an OpenClaw source with both features can declare
+[`runtime.nativeWorkerSupport`](configuration.md#installation-startup-configuration).
 
 ## Related
 

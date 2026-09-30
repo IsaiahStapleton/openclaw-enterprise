@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { KubernetesApiUnavailableError } from "../../apps/controller/src/drivers/kubernetes/client.ts";
+import { createOccLogger, emitOccLogEvent } from "../../apps/controller/src/logging.ts";
+import { startupDependencyFailure } from "../../apps/controller/src/startup-failure.ts";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 
 function driverForVersion(gitVersion) {
@@ -54,3 +61,143 @@ test("Kubernetes preflight rejects an invalid API server version response", asyn
   await assert.rejects(fixture.driver.preflight(), /version preflight returned invalid data/);
   assert.equal(fixture.namespaceReads(), 0);
 });
+
+test("Kubernetes preflight names the unreachable API server endpoint", async () => {
+  const port = await closedLoopbackPort();
+  const directory = await mkdtemp(join(tmpdir(), "occ-kubernetes-preflight-"));
+  try {
+    const kubeconfigPath = join(directory, "kubeconfig");
+    await writeFile(
+      kubeconfigPath,
+      [
+        "apiVersion: v1",
+        "kind: Config",
+        `clusters: [{name: target, cluster: {server: "https://127.0.0.1:${port}"}}]`,
+        "users: [{name: operator, user: {token: preflight-token}}]",
+        "contexts: [{name: target, context: {cluster: target, user: operator}}]",
+        "current-context: target",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+    const driver = createTestKubernetesComputeDriver("compute-kubernetes-unreachable", {
+      authentication: { mode: "kubeconfig", kubeconfigPath, context: "target" },
+    });
+
+    const error = await driver.preflight().then(
+      () => assert.fail("preflight must fail when the Kubernetes API is unreachable"),
+      (failure) => failure,
+    );
+
+    assert.ok(error instanceof KubernetesApiUnavailableError, String(error));
+    assert.equal(error.host, "127.0.0.1");
+    assert.equal(error.port, port);
+    assert.deepEqual(startupDependencyFailure(error), {
+      code: "KUBERNETES_API_UNAVAILABLE",
+      host: "127.0.0.1",
+      port,
+    });
+    assert.equal(startupDependencyFailure(new Error("fetch failed")), undefined);
+
+    const lines = [];
+    const logger = createOccLogger({
+      component: "occ-worker",
+      destination: {
+        write(chunk) {
+          lines.push(JSON.parse(String(chunk)));
+          return true;
+        },
+      },
+    });
+    emitOccLogEvent(logger, { event: "worker.startup-error", ...startupDependencyFailure(error) });
+    assert.deepEqual(
+      lines.map(({ severity, event, code, host, port: loggedPort }) => ({
+        severity,
+        event,
+        code,
+        host,
+        port: loggedPort,
+      })),
+      [
+        {
+          severity: "ERROR",
+          event: "worker.startup-error",
+          code: "KUBERNETES_API_UNAVAILABLE",
+          host: "127.0.0.1",
+          port,
+        },
+      ],
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Kubernetes preflight keeps TLS and HTTP failures distinct from an unreachable server", async () => {
+  const trust = Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("self-signed certificate in certificate chain"), {
+      code: "SELF_SIGNED_CERT_IN_CHAIN",
+    }),
+  });
+  const forbidden = Object.assign(new Error("Forbidden"), { code: 403 });
+  for (const failure of [trust, forbidden]) {
+    const driver = createTestKubernetesComputeDriver("compute-kubernetes-reachable");
+    driver.apiClients = Promise.resolve({
+      server: "https://10.43.0.1:443",
+      version: {
+        async getCode() {
+          throw failure;
+        },
+      },
+    });
+    await assert.rejects(driver.preflight(), (error) => error === failure);
+  }
+});
+
+test("Kubernetes preflight reports a refused connection with the in-cluster endpoint", async () => {
+  const refused = Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("connect ECONNREFUSED 10.43.0.1:443"), {
+      code: "ECONNREFUSED",
+    }),
+  });
+  const driver = createTestKubernetesComputeDriver("compute-kubernetes-refused");
+  driver.apiClients = Promise.resolve({
+    server: "https://10.43.0.1",
+    version: {
+      async getCode() {
+        throw refused;
+      },
+    },
+  });
+  await assert.rejects(driver.preflight(), (error) => {
+    assert.ok(error instanceof KubernetesApiUnavailableError);
+    assert.deepEqual(startupDependencyFailure(error), {
+      code: "KUBERNETES_API_UNAVAILABLE",
+      host: "10.43.0.1",
+      port: 443,
+    });
+    assert.equal(error.cause, refused);
+    return true;
+  });
+});
+
+test("Kubernetes preflight without a recorded endpoint keeps the original failure", async () => {
+  const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  const driver = createTestKubernetesComputeDriver("compute-kubernetes-no-endpoint");
+  driver.apiClients = Promise.resolve({
+    version: {
+      async getCode() {
+        throw refused;
+      },
+    },
+  });
+  await assert.rejects(driver.preflight(), (error) => error === refused);
+});
+
+async function closedLoopbackPort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}

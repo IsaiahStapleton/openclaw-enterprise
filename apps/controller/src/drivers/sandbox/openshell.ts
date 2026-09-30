@@ -1,5 +1,10 @@
 import { asRecord, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/utils";
 import { KubernetesObjectApi, type KubernetesObject, PatchStrategy } from "@kubernetes/client-node";
+import {
+  RuntimeLogsForbiddenByClusterError,
+  RuntimeLogsSandboxNotFoundError,
+  SandboxRevisionUnsupportedError,
+} from "@openclaw-enterprise/occ";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   AgentRevision,
@@ -11,6 +16,9 @@ import type {
   OpenClawConfigurationValue,
   SandboxDriver,
   SandboxHarnessContext,
+  SandboxLogChunk,
+  SandboxLogContext,
+  SandboxLogRequest,
   SandboxNamespaceContext,
   SandboxResourceRef,
 } from "@openclaw-enterprise/contracts";
@@ -20,6 +28,7 @@ import {
   type OpenShellGateway,
 } from "../../backends/openshell.ts";
 import {
+  openShellSandboxLogReader,
   type OpenShellGatewayClient,
   type OpenShellWorkspaceResponse,
   OpenShellSandboxAlreadyExistsError,
@@ -104,6 +113,10 @@ export interface OpenShellSandboxDriverSelection {
 }
 
 class OpenShellSandboxConfigurationFailure extends Error {}
+
+const GRPC_NOT_FOUND = 5;
+const GRPC_PERMISSION_DENIED = 7;
+const GRPC_UNAUTHENTICATED = 16;
 
 const NETWORK_TLS_MODES = Object.freeze({
   skip: "NETWORK_TLS_MODE_SKIP",
@@ -281,7 +294,8 @@ function environment(requirements: HarnessWorkloadRequirements): Record<string, 
   const result: Record<string, string> = {};
   for (const entry of requirements.environment) {
     if ("valueFrom" in entry) {
-      throw new OpenShellSandboxConfigurationFailure(
+      throw new SandboxRevisionUnsupportedError(
+        "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
         `OpenShell v0.1.0 cannot receive secretKeyRef environment ${entry.name}; upstream Secret projection support is required.`,
       );
     }
@@ -1116,7 +1130,8 @@ export class OpenShellSandboxDriver implements SandboxDriver {
       context.revision.harness.mode !== "dedicated" ||
       (context.revision.harness.id !== "codex" && context.revision.harness.id !== "openclaw")
     ) {
-      throw new OpenShellSandboxConfigurationFailure(
+      throw new SandboxRevisionUnsupportedError(
+        "SANDBOX_HARNESS_UNSUPPORTED",
         "OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.",
       );
     }
@@ -1221,6 +1236,59 @@ export class OpenShellSandboxDriver implements SandboxDriver {
         }
       }
     }
+  }
+
+  /**
+   * The revision's Sandbox log through a reader narrowed to `GetSandboxLogs`, so this
+   * path cannot create, delete or exec into a Sandbox. The Sandbox name is derived from
+   * the revision exactly as at provisioning.
+   */
+  async readSandboxLogs(
+    context: SandboxLogContext,
+    request: SandboxLogRequest,
+  ): Promise<SandboxLogChunk> {
+    this.requireOperatorWorkspaceMode("read Sandbox logs");
+    if (
+      context.revision.namespaceId !== context.namespace.id ||
+      context.revision.sandboxDriverId !== this.id
+    ) {
+      throw new OpenShellSandboxConfigurationFailure(
+        "Refusing to read a Sandbox outside its selected AgentRevision and Namespace.",
+      );
+    }
+    const sandbox = this.sandboxRef(context);
+    const reader = openShellSandboxLogReader(this.gatewayClientForNamespace(sandbox.namespaceName));
+    let response;
+    try {
+      response = await reader.getSandboxLogs(
+        {
+          workspace: workspaceName(context.namespace),
+          sandbox: sandbox.resourceName,
+          lines: request.lines,
+          ...(request.sinceTime === undefined ? {} : { sinceTime: request.sinceTime }),
+        },
+        context.signal,
+      );
+    } catch (error) {
+      const code = asRecord(error)?.code;
+      // NOT_FOUND: the Sandbox is not provisioned (yet) or was removed, or OCC's identity
+      // is not a member of its Workspace (OpenShell conceals the Sandbox then). Neither
+      // means "no lines", and the two cannot be told apart.
+      if (code === GRPC_NOT_FOUND) {
+        throw new RuntimeLogsSandboxNotFoundError();
+      }
+      // The OCC identity lacks `sandbox:read` or the Workspace role `user`.
+      if (code === GRPC_PERMISSION_DENIED || code === GRPC_UNAUTHENTICATED) {
+        throw new RuntimeLogsForbiddenByClusterError();
+      }
+      throw error;
+    }
+    return Object.freeze({
+      sandbox: sandbox.resourceName,
+      observedAt: new Date().toISOString(),
+      lines: response.lines,
+      bufferTotal: response.bufferTotal,
+    });
   }
 
   close(): void {

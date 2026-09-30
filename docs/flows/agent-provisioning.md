@@ -1,6 +1,6 @@
 ---
 created: "2026-09-23"
-updated: "2026-09-28"
+updated: "2026-09-30"
 last_updated_session: "Codex/01a0e8ec-d02f-7b93-a59b-5b7fccf2ebaa"
 ---
 
@@ -50,7 +50,9 @@ graph TD
 
 Console keeps the configured Harness separate from execution mode: dedicated
 OpenClaw retains its native provider/model and uses the same provisioning,
-retry, and activation navigation as dedicated Codex. Preset restoration and
+retry, and deployment navigation as dedicated Codex. Selecting OpenClaw starts
+in Embedded mode; Dedicated is an explicit choice when the Installation reports
+native worker support. Preset restoration and
 Credentials read native model runtime policy through
 `apps/controller/src/console/agents/harness-auth.mjs:configuredHarnessId`.
 Service Accounts and Codex plugin browsing remain specific to Codex.
@@ -65,7 +67,7 @@ On ordinary draft creation paths, Console creates the Configuration and Agent, t
 
 `packages/occ/src/index.ts:OpenClawController.provisionAgent`
 
-OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
+OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. Before a new API request enters the write transaction, the selected ChannelDriver checks configured credentials through authorized Secret callbacks. The Slack Driver checks token roles and bot authentication; this does not pin Secret versions or add worker revalidation. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
 
 The `202` response contains `data.provisioning`, with the work ID and status URL. Public progress exposes result IDs and safe errors without input values or backend credentials.
 
@@ -81,10 +83,14 @@ The Compute Driver prepares runtime credentials through the existing credential 
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-The job admits one first revision and records its ID. Provisioning reports success at this handoff. Console then follows deployment status until activation and opens Workspace files for the returned Agent and revision. Ordinary revision reconciliation owns startup, activation and runtime failure. Later deployments use the regular Deploy API.
+The job admits one first revision and records its ID. Provisioning reports success at this handoff. `apps/controller/src/console/agents/create.mjs:waitForProvisioning` returns those IDs immediately; the submit handler opens Agent details for that revision without waiting for activation. The detail page's Deployment activity panel reads the recorded startup result and exposes Refresh deployment. Ordinary revision reconciliation owns startup, activation and runtime failure. Later deployments use the regular Deploy API.
 
-Dedicated OpenClaw is an admitted topology when its selected Sandbox Driver
-provides the required containment facets. Admission does not prove that the
+Dedicated OpenClaw admission requires native worker support and a Sandbox Driver
+with all required containment facets. The pinned runtime lacks that support;
+an operator must declare a compatible custom image in
+[Installation startup configuration](../reference/configuration.md#installation-startup-configuration).
+`packages/occ/src/index.ts:requireDedicatedNativeSupport` enforces both requirements.
+Admission does not prove that the
 Driver can deliver every workload requirement. The current Sandbox handoff
 rejects workspace initialization, and stock OpenShell rejects Secret-backed
 environment projection. These requirements remain enforced; the
@@ -97,7 +103,7 @@ describes the upstream delivery limits and verification-only path.
 
 Safe failed steps can retry under a fresh claim and authorization check. Completed resources are retained and reused. An unresolved external write keeps its exact target and ownership evidence; lease expiry or a not-found response alone does not justify dispatching it again. No provisioning rollback or Secret deletion runs.
 
-While initialization owns an Agent, conflicting edits and manual deployment are guarded. Stop/Delete invalidate provisioning, and stale workers cannot hand off a deployment afterward. Ordinary deletion retains its lifecycle and in-flight credential safety. Namespace Secrets and completed Configurations remain available through their existing resource APIs.
+While initialization owns an Agent, conflicting edits and manual deployment are guarded. Stop/Delete invalidate provisioning, and stale workers cannot hand off a deployment afterward. Ordinary deletion retains its lifecycle and in-flight credential safety. Because a cancelled provisioning never runs again, Agent deletion resolves an effect it left unsettled: it waits one worker lease after the cancellation, removes runtime credentials, and records the effect receipt in the same transaction as the finalizer. The wait is deferred and does not use deletion attempts. Namespace Secrets and completed Configurations remain available through their existing resource APIs.
 
 ## Debugging and Verification
 
@@ -120,6 +126,14 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 17:31: Reconcile Console Harness selection with Embedded defaults, native-worker admission, and current provisioning navigation. (Codex/01a0e8ec-d02f-7b93-a59b-5b7fccf2ebaa - a0970577)
+
+- 2026-09-29 17:30: Agent deletion settles an effect left by cancelled provisioning instead of waiting for it forever. (fix-1/agent-deletion-unsettled-effect)
+
+- 2026-09-29 05:00: Document request-time channel credential validation. (authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c - 756b02ce)
+
+- 2026-09-29 02:33: Open Agent details after provisioning hands off the first deployment, and show pending or failed deployment status there. (Codex/01a0eaf9-6dcf-76b1-a376-d2a2fbfd6c60 - a14435c8)
 
 - 2026-09-28 17:30: Separate Console Harness selection from Dedicated placement and document retained Sandbox delivery requirements. (Codex/01a0e8ec-d02f-7b93-a59b-5b7fccf2ebaa - e2b739f5)
 

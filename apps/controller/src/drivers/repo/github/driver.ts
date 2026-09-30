@@ -7,7 +7,7 @@ import type {
   RepoDriver,
   RepositoryCredentialResolution,
   RepositoryCredentialSessionStatus,
-  RepositoryOption,
+  RepositoryOptions,
 } from "@openclaw-enterprise/contracts";
 import { DependencyUnavailableError, ScopeViolationError } from "@openclaw-enterprise/occ";
 import { isAbsolute, resolve } from "node:path";
@@ -97,6 +97,7 @@ export class GitHubRepoDriver implements RepoDriver {
   readonly capability = "repo" as const;
   readonly implementation = "github";
   readonly maintenanceIntervalMs = 30_000;
+  readonly durableBrokerReceipts = true as const;
   readonly id: string;
   readonly #backendId: string;
   readonly #registry: GitHubRepositoryRegistry;
@@ -139,23 +140,73 @@ export class GitHubRepoDriver implements RepoDriver {
     this.#publicCa = options.publicCa === undefined ? undefined : Uint8Array.from(options.publicCa);
   }
 
-  listOptions(input: { readonly namespaceId: string }): readonly RepositoryOption[] {
-    return Object.freeze(
-      this.#registry.repositories.flatMap((repository) => {
-        const policy = repository.namespaces.find(
-          (candidate) => candidate.namespaceId === input.namespaceId,
-        );
-        return policy === undefined
-          ? []
-          : [
-              Object.freeze({
-                repositoryRef: repository.repositoryRef,
-                displayName: repository.repository,
-                allowedProfiles: Object.freeze([...policy.profiles]),
-              }),
-            ];
-      }),
+  async listOptions(input: {
+    readonly namespaceId: string;
+    readonly descriptionRefs?: readonly string[];
+  }): Promise<RepositoryOptions> {
+    const options = this.#registry.repositories.flatMap((repository) => {
+      const policy = repository.namespaces.find(
+        (candidate) => candidate.namespaceId === input.namespaceId,
+      );
+      return policy === undefined
+        ? []
+        : [
+            Object.freeze({
+              repositoryRef: repository.repositoryRef,
+              displayName: repository.repository,
+              allowedProfiles: Object.freeze([...policy.profiles]),
+            }),
+          ];
+    });
+    const approvedRefs = new Set(options.map((option) => option.repositoryRef));
+    const approved = new Map(
+      this.#registry.repositories
+        .filter((repository) => approvedRefs.has(repository.repositoryRef))
+        .map((repository) => [repository.repositoryRef, repository.repositoryId]),
     );
+    const descriptionRefs = (input.descriptionRefs ?? []).filter((ref) => approved.has(ref));
+    if (descriptionRefs.length === 0) {
+      return Object.freeze({ options: Object.freeze(options), descriptionsPending: false });
+    }
+    try {
+      // Descriptions are optional: the approved registry remains usable if metadata is unavailable.
+      const metadata = await this.#client.descriptions(
+        input.namespaceId,
+        descriptionRefs,
+        AbortSignal.timeout(2_000),
+      );
+      if (
+        metadata.providerInstanceId !== this.#registry.providerInstanceId ||
+        metadata.appId !== this.#registry.appId ||
+        metadata.githubInstallationId !== this.#registry.githubInstallationId
+      ) {
+        throw new Error("unexpected-repository-provider");
+      }
+      const requested = new Set(descriptionRefs);
+      const descriptions = new Map(
+        metadata.descriptions
+          .filter(
+            (entry) =>
+              requested.has(entry.repositoryRef) &&
+              approved.get(entry.repositoryRef) === entry.repositoryId,
+          )
+          .map((entry) => [entry.repositoryRef, entry.description]),
+      );
+      return Object.freeze({
+        options: Object.freeze(
+          options.map((option) => {
+            const description = descriptions.get(option.repositoryRef);
+            return Object.freeze({
+              ...option,
+              ...(description === undefined ? {} : { description }),
+            });
+          }),
+        ),
+        descriptionsPending: metadata.pending,
+      });
+    } catch {
+      return Object.freeze({ options: Object.freeze(options), descriptionsPending: false });
+    }
   }
 
   resolve(input: {
@@ -188,6 +239,10 @@ export class GitHubRepoDriver implements RepoDriver {
     }
   }
 
+  async checkAdmissionReady(signal: AbortSignal): Promise<void> {
+    await this.control(() => this.#client.checkAdmissionReady(signal));
+  }
+
   async open(
     input: OpenRepositorySessionInput,
     signal: AbortSignal,
@@ -207,6 +262,7 @@ export class GitHubRepoDriver implements RepoDriver {
           profile: input.binding.profile,
           durationSeconds: input.durationSeconds,
           deadlineWallMs: input.deadlineWallMs,
+          durableAdmission: true,
           ...(input.recoverOnly === true ? { recoverOnly: true } : {}),
         },
         input.admissionId,

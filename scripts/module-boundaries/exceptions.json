@@ -2,42 +2,6 @@
   "version": 1,
   "exceptions": [
     {
-      "rule": "cross-package-source",
-      "from": "apps/controller/src/auth/index.ts",
-      "to": "packages/occ/package.json",
-      "specifier": "file:packages/occ/package.json",
-      "kind": "dependency-anchor",
-      "typeOnly": false,
-      "bindings": ["*"],
-      "owner": "Authentication persistence",
-      "reason": "Current authentication setup loads the shared authored auth schema and its database dependency through the OCC package location.",
-      "removeWhen": "Replace the private schema and dependency anchor with the supported auth-persistence factory export."
-    },
-    {
-      "rule": "cross-package-source",
-      "from": "apps/controller/src/auth/index.ts",
-      "to": "packages/occ/src/state/postgres-schema.ts",
-      "specifier": "file:packages/occ/src/state/postgres-schema.ts",
-      "kind": "dynamic-import",
-      "typeOnly": false,
-      "bindings": ["*"],
-      "owner": "Authentication persistence",
-      "reason": "Current authentication setup loads the shared authored auth schema and its database dependency through the OCC package location.",
-      "removeWhen": "Replace the private schema and dependency anchor with the supported auth-persistence factory export."
-    },
-    {
-      "rule": "cross-package-source",
-      "from": "apps/controller/src/auth/index.ts",
-      "to": "packages/occ/src/state/postgres-schema.ts",
-      "specifier": "file:packages/occ/src/state/postgres-schema.ts",
-      "kind": "path",
-      "typeOnly": false,
-      "bindings": ["*"],
-      "owner": "Authentication persistence",
-      "reason": "Current authentication setup loads the shared authored auth schema and its database dependency through the OCC package location.",
-      "removeWhen": "Replace the private schema and dependency anchor with the supported auth-persistence factory export."
-    },
-    {
       "rule": "unresolved-dynamic-import",
       "from": "apps/controller/src/composition/installation-config.ts",
       "to": "",
@@ -48,7 +12,7 @@
       "owner": "Driver package composition",
       "reason": "The installed Driver loader validates configured package identity, trusted root and entrypoint at runtime; its target is deliberately not a statically enumerable workspace import.",
       "removeWhen": "Remove this exception if the supported installed Driver loader is removed or replaced by static registration.",
-      "loaderIdentity": "loader:sha256:9054a27490942e1c2d8e8b8e3afdb434e4afd946a6a57ce62efbd7c189e147e8"
+      "loaderIdentity": "loader:sha256:46812da55209d0af971888c46c179d31c517026f126c5330d525d7e662344725"
     },
     {
       "rule": "cross-provider-implementation",
@@ -244,6 +208,7 @@
         "type:DeploymentStatusResult",
         "value:controllerWorkDeploymentStatus",
         "value:deploymentErrorForWork",
+        "value:deploymentProgressForWork",
         "value:deploymentWarningsForWork"
       ],
       "owner": "Work status projection",
@@ -293,9 +258,14 @@
       "specifier": "./state/repository-credential-state.ts",
       "kind": "import",
       "typeOnly": false,
-      "bindings": ["value:validAdmittedRepositoryBindings", "value:validRepositoryRevisionState"],
+      "bindings": [
+        "value:normalizedRepositoryAccess",
+        "value:validAdmittedRepositoryBindings",
+        "value:validRepositoryAccess",
+        "value:validRepositoryRevisionState"
+      ],
       "owner": "Repository revision admission",
-      "reason": "OCC admission reuses the canonical material-free repository snapshot validators currently located in the State module.",
+      "reason": "OCC admission reuses the canonical material-free repository snapshot and access-intent validators currently located in the State module.",
       "removeWhen": "Move shared repository snapshot validation into neutral contracts and update admission and State consumers."
     },
     {

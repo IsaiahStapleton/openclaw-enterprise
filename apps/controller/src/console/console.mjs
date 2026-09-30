@@ -12,11 +12,115 @@ const lifetime = createViewLifetime();
 let session = null;
 let namespaces = [];
 let namespaceId = null;
+let observabilityUrl = null;
+// Session owner whose Installation-admin observability read has settled.
+let observabilityOwner = null;
+// Whether that owner administers the Installation: true, false, or null when unknown.
+let installationAdmin = null;
+const installationAccessStorageKey = "occ.console.installationAccess";
 let loggingOut = false;
 let navigateAgentTab = null;
 let discardCreationOnExit = null;
 const drafts = createDraftStore();
 let draftUserId = null;
+// The session this tab signed in to or first observed; see api-client.mjs.
+let pinnedSessionKey = null;
+let externalSessionBinding = false;
+const externalAttemptStorageKeys = {
+  github: "occ.console.githubAttempt",
+  google: "occ.console.googleAttempt",
+};
+const externalProviders = {
+  github: {
+    label: "GitHub",
+    origin: "https://github.com",
+    pathname: "/login/oauth/authorize",
+  },
+  google: {
+    label: "Google",
+    origin: "https://accounts.google.com",
+    pathname: "/o/oauth2/v2/auth",
+  },
+};
+const bindingValue = /^[A-Za-z0-9_-]{43}$/;
+
+// A failed provider sign-in. Where password sign-in is recovery-only, ordinary users
+// have no password to fall back on, so the advice depends on provider discovery.
+function providerFailure(label) {
+  return (password) =>
+    password
+      ? `Could not sign in with ${label}. Try again or use your password.`
+      : `Could not sign in with ${label}. Try again, or ask an administrator to attach your ${label} identity to your account.`;
+}
+
+function pinSessionKey(value) {
+  pinnedSessionKey = typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// The attemptId is per tab: another tab's provider callback cannot complete this tab's sign-in.
+function rememberExternalAttempt(provider, attemptId) {
+  try {
+    for (const key of Object.values(externalAttemptStorageKeys)) {
+      sessionStorage.removeItem(key);
+    }
+    sessionStorage.setItem(externalAttemptStorageKeys[provider], attemptId);
+  } catch {
+    // Without tab storage the callback still signs in; this tab adopts the session it sees.
+  }
+}
+
+// The observability read is the console's Installation-administration probe. The API audits
+// a 403 as an authorization denial, so this tab keeps the settled answer across reloads for
+// the same session owner instead of probing again on every page load. The owner key is a
+// noncredential session binding, so another sign-in always probes afresh.
+function rememberInstallationAccess(owner, admin, url) {
+  try {
+    sessionStorage.setItem(installationAccessStorageKey, JSON.stringify({ owner, admin, url }));
+  } catch {
+    // Without tab storage the next page load probes again.
+  }
+}
+
+function recalledInstallationAccess(owner) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(installationAccessStorageKey) ?? "null");
+    if (
+      stored?.owner === owner &&
+      typeof stored.admin === "boolean" &&
+      (stored.url === null || (stored.admin && typeof stored.url === "string"))
+    ) {
+      return { admin: stored.admin, url: stored.url };
+    }
+  } catch {
+    // Unreadable tab storage falls back to a fresh probe.
+  }
+  return null;
+}
+
+function forgetInstallationAccess() {
+  try {
+    sessionStorage.removeItem(installationAccessStorageKey);
+  } catch {
+    // Nothing to clear without tab storage.
+  }
+}
+
+// Returns and clears this tab's pending attempt as { provider, attemptId }, or null.
+function takeExternalAttempt() {
+  let pendingAttempt = null;
+  for (const [provider, key] of Object.entries(externalAttemptStorageKeys)) {
+    try {
+      const attemptId = sessionStorage.getItem(key);
+      sessionStorage.removeItem(key);
+      if (pendingAttempt === null && attemptId !== null && bindingValue.test(attemptId)) {
+        pendingAttempt = { provider, attemptId };
+      }
+    } catch {
+      // Unavailable tab storage leaves no attempt to adopt.
+    }
+  }
+  return pendingAttempt;
+}
 const navigation = createNavigation({
   getNamespaceId: () => namespaceId,
   isLoggingOut: () => loggingOut,
@@ -29,6 +133,7 @@ const request = createApiClient({
   lifetime,
   hasSession: () => session !== null,
   onExpired: () => showLogin("Your session has expired.", location.pathname + location.search),
+  sessionKey: () => pinnedSessionKey,
 });
 const retainedViews = new Map();
 let mountedRouteKey = null;
@@ -141,7 +246,7 @@ function restoreRetainedView(current) {
     return null;
   }
   retainedViews.delete(key);
-  const shell = renderShell(current.feature);
+  const shell = renderShell(current.feature, true);
   if (retained.title) {
     app.querySelector(".content h1").textContent = retained.title;
   }
@@ -197,14 +302,23 @@ function resetReads({ retainView = false } = {}) {
   return lifetime.reset();
 }
 
-function renderShell(feature) {
-  return shellUI.renderShell(feature, { session, namespaces, namespaceId });
+function renderShell(feature, namespaceAdmissionPending = false) {
+  return shellUI.renderShell(feature, {
+    session,
+    namespaces,
+    namespaceId,
+    observabilityUrl,
+    namespaceAdmissionPending,
+  });
 }
 
 function clearPrivate() {
   session = null;
   namespaces = [];
   namespaceId = null;
+  observabilityUrl = null;
+  observabilityOwner = null;
+  installationAdmin = null;
   clearRetainedViews();
 }
 
@@ -215,9 +329,15 @@ function clearDrafts() {
 }
 
 function showLogin(message = "", returnPath = null) {
+  // A message may depend on whether ordinary accounts can use a password.
+  const describe = typeof message === "function" ? message : () => message;
   clearDrafts();
-  resetReads();
+  const loginView = resetReads();
   clearPrivate();
+  pinSessionKey(null);
+  // A pending exchange runs before any login view; an abandoned attempt must not
+  // turn a later password sign-in into a provider failure.
+  takeExternalAttempt();
   const url = new URL("/console/login", location.origin);
   const destination = safeReturn(returnPath);
   if (destination) {
@@ -239,19 +359,87 @@ function showLogin(message = "", returnPath = null) {
     autocomplete: "current-password",
     required: "",
   });
-  const feedback = element("p", { className: "error", role: "alert" }, message);
+  const feedback = element("p", { className: "error", role: "alert" }, describe(true));
+  const usernameHint = element(
+    "span",
+    { id: "username-hint", className: "hint" },
+    "Use your account email",
+  );
+  // Recovery-only password sign-in hides the form until the recovery path is chosen.
+  let recoveryOnly = false;
   const submit = element("button", { type: "submit", className: "primary" }, "Login");
   const form = element(
     "form",
     {},
     element("label", { for: "username" }, "Username"),
     username,
-    element("span", { id: "username-hint", className: "hint" }, "Use your account email"),
+    usernameHint,
     element("label", { for: "password" }, "Password"),
     password,
     feedback,
     submit,
   );
+  const providerButton = (provider) => {
+    const { label, origin, pathname } = externalProviders[provider];
+    const control = button(`Continue with ${label}`, async () => {
+      if (pending) {
+        return;
+      }
+      pending = true;
+      setDisabled(true);
+      feedback.textContent = "";
+      try {
+        const result = await request(`/api/auth/providers/${provider}/start`, { method: "POST" });
+        if (!lifetime.isCurrent(loginView)) {
+          return;
+        }
+        const authorization = new URL(result.url);
+        if (
+          authorization.origin !== origin ||
+          authorization.pathname !== pathname ||
+          (externalSessionBinding && !bindingValue.test(result.attemptId ?? ""))
+        ) {
+          throw new Error("Invalid authorization URL");
+        }
+        if (externalSessionBinding) {
+          rememberExternalAttempt(provider, result.attemptId);
+        }
+        location.assign(authorization.href);
+      } catch (error) {
+        if (!lifetime.isCurrent(loginView)) {
+          return;
+        }
+        feedback.textContent =
+          error.status === 429
+            ? "Too many attempts. Please try again later."
+            : recoveryOnly
+              ? `${label} sign-in is unavailable. Please try again later.`
+              : `${label} sign-in is unavailable. Try again or use your password.`;
+        pending = false;
+        setDisabled(false);
+      }
+    });
+    return control;
+  };
+  const github = providerButton("github");
+  const google = providerButton("google");
+  const recovery = button(
+    "Recovery sign-in",
+    () => {
+      recovery.hidden = true;
+      feedback.textContent = "";
+      form.insertBefore(feedback, submit);
+      form.hidden = false;
+      username.focus();
+    },
+    { className: "auth-recovery", hidden: true },
+  );
+  function setDisabled(disabled) {
+    submit.disabled = disabled;
+    github.disabled = disabled;
+    google.disabled = disabled;
+  }
+  const providers = element("div", { className: "auth-providers" });
   let pending = false;
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -259,17 +447,19 @@ function showLogin(message = "", returnPath = null) {
       return;
     }
     pending = true;
-    submit.disabled = true;
+    setDisabled(true);
     feedback.textContent = "";
+    takeExternalAttempt();
     const active = lifetime.capture();
     try {
-      await request("/api/auth/sign-in/email", {
+      const signedIn = await request("/api/auth/sign-in/email", {
         method: "POST",
         body: { email: username.value, password: password.value },
       });
       if (!lifetime.isCurrent(active)) {
         return;
       }
+      pinSessionKey(signedIn?.sessionKey);
       password.value = "";
       history.replaceState(null, "", destination ?? "/console/agents");
       await loadPage();
@@ -281,12 +471,14 @@ function showLogin(message = "", returnPath = null) {
         error.status === 429
           ? "Too many attempts. Please try again later."
           : error.status === 400 || error.status === 401 || error.status === 403
-            ? "Could not sign in. Check your username and password."
+            ? recoveryOnly
+              ? "Could not sign in. Only the recovery account can use a password; other accounts continue with their external sign-in."
+              : "Could not sign in. Check your username and password."
             : "Sign-in is unavailable. Please retry.";
     } finally {
       if (lifetime.isCurrent(active)) {
         pending = false;
-        submit.disabled = false;
+        setDisabled(false);
       }
     }
   });
@@ -303,8 +495,39 @@ function showLogin(message = "", returnPath = null) {
       element("h1", {}, "Welcome back"),
       element("p", { className: "muted" }, "Sign in to your Installation."),
       form,
+      providers,
+      recovery,
     ),
   );
+  void request("/api/auth/providers")
+    .then((available) => {
+      if (lifetime.isCurrent(loginView)) {
+        externalSessionBinding = available?.sessionBinding === true;
+        if (available?.github === true) {
+          providers.append(github);
+        }
+        if (available?.google === true) {
+          providers.append(google);
+        }
+        // Only an explicit false hides the form: failed or older discovery keeps it.
+        if (available?.password === false && (available.github || available.google)) {
+          recoveryOnly = true;
+          if (feedback.textContent === describe(true)) {
+            feedback.textContent = describe(false);
+          }
+          usernameHint.textContent = "Use the recovery account's email";
+          // Never pull the form away from someone already using it.
+          if (!pending && username.value === "" && password.value === "") {
+            form.hidden = true;
+            providers.after(feedback);
+            recovery.hidden = false;
+          }
+        }
+      }
+    })
+    .catch(() => {
+      // Password sign-in remains available when provider discovery fails.
+    });
 }
 
 async function loadPage({ fromNavigation = false, reuseView = fromNavigation } = {}) {
@@ -348,29 +571,66 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     return;
   }
   if (current.feature !== "login" && !retained) {
-    shell = renderShell(current.feature);
+    shell = renderShell(current.feature, true);
     panel(shell.view, "Loading…", "Checking your session and Namespace access.");
   }
   let sessionResolved = false;
   let accessResolved = false;
+  const authError = current.url.searchParams.get("authError");
+  const providerError = Object.hasOwn(externalProviders, authError ?? "")
+    ? externalProviders[authError]
+    : null;
+  const externalAttempt = takeExternalAttempt();
+  if (externalAttempt !== null && providerError === null) {
+    // Adopt only the session this tab's own provider attempt created.
+    try {
+      const confirmed = await request(`/api/auth/providers/${externalAttempt.provider}/result`, {
+        method: "POST",
+        body: { attemptId: externalAttempt.attemptId },
+      });
+      if (!lifetime.isCurrent(active)) {
+        return;
+      }
+      pinSessionKey(confirmed?.sessionKey);
+    } catch {
+      if (lifetime.isCurrent(active)) {
+        showLogin(
+          providerFailure(externalProviders[externalAttempt.provider].label),
+          "/console/agents",
+        );
+      }
+      return;
+    }
+  }
   try {
     const previousOwner = sessionOwnerKey(session);
     const resolvedSession = await request("/api/auth/session");
     if (!lifetime.isCurrent(active)) {
       return;
     }
+    if (resolvedSession !== null && pinnedSessionKey === null) {
+      pinSessionKey(resolvedSession.sessionKey);
+    } else if (resolvedSession !== null && resolvedSession.sessionKey !== pinnedSessionKey) {
+      // The controller rejects a mismatched key; never act on another session regardless.
+      showLogin("Your session has expired.", pageUrl(current.target, current.namespace));
+      return;
+    }
     session = resolvedSession;
     if (session === null) {
       const destination =
-        current.feature === "login"
-          ? current.url.searchParams.get("return")
-          : pageUrl(current.target, current.namespace);
+        providerError !== null
+          ? "/console/agents"
+          : current.feature === "login"
+            ? current.url.searchParams.get("return")
+            : pageUrl(current.target, current.namespace);
       showLogin(
-        current.feature !== "login" &&
-          current.url.pathname !== "/console/" &&
-          current.url.pathname !== "/console"
-          ? "Your session has expired."
-          : "",
+        providerError !== null
+          ? providerFailure(providerError.label)
+          : current.feature !== "login" &&
+              current.url.pathname !== "/console/" &&
+              current.url.pathname !== "/console"
+            ? "Your session has expired."
+            : "",
         destination,
       );
       return;
@@ -380,6 +640,9 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     if (!owner || previousOwner !== owner || draftUserId !== owner) {
       clearDrafts();
       clearRetainedViews();
+      observabilityUrl = null;
+      observabilityOwner = null;
+      installationAdmin = null;
       draftUserId = owner;
       if (retained) {
         retained = false;
@@ -396,7 +659,32 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       void loadPage();
       return;
     }
-    const readable = await request("/namespaces");
+    // Read the admin-only destination once per session owner. Non-administrators
+    // get 403, which the API audits as a denial, so do not repeat it per navigation
+    // or, within this tab, per page load.
+    const recalled =
+      owner && observabilityOwner !== owner ? recalledInstallationAccess(owner) : null;
+    const [readable, observability] = await Promise.all([
+      request("/namespaces"),
+      owner && observabilityOwner === owner
+        ? null
+        : recalled
+          ? { ...recalled, settled: true }
+          : request("/observability").then(
+              (data) => ({
+                url: typeof data?.url === "string" ? data.url : null,
+                admin: true,
+                settled: true,
+              }),
+              (error) => {
+                if (error.status === 401) {
+                  throw error;
+                }
+                const denied = error.status === 403;
+                return { url: null, admin: denied ? false : null, settled: denied };
+              },
+            ),
+    ]);
     if (!lifetime.isCurrent(active)) {
       return;
     }
@@ -406,6 +694,14 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     clearRetainedViewsOutsideNamespaces(readable);
     namespaces = sorted(readable);
     accessResolved = true;
+    if (observability) {
+      observabilityUrl = observability.url;
+      installationAdmin = observability.admin;
+      observabilityOwner = observability.settled ? owner : null;
+      if (owner && observability.settled && !recalled) {
+        rememberInstallationAccess(owner, observability.admin, observability.url);
+      }
+    }
     namespaceId =
       current.namespace ??
       (namespaces.find((item) => item.status === "ready") ?? namespaces[0])?.id ??
@@ -494,7 +790,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
         return;
       }
     }
-    shell = renderShell(current.feature);
+    shell = renderShell(current.feature, false);
     const viewState = {
       active,
       pending: 0,
@@ -567,6 +863,8 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       return;
     }
     const agentContext = {
+      operatorId: session.user.id,
+      installationAdmin,
       drafts: drafts.scope(namespaceId, current.agentId ?? "create"),
       suspendDrafts: () => drafts.suspend(),
       view: shell.view,
@@ -878,17 +1176,20 @@ async function revalidateMountedAgent(current) {
 }
 
 function resumePage() {
-  if (document.hidden || !session || loggingOut || app.querySelector("form, dialog[open]")) {
+  if (document.hidden || !session || loggingOut || app.querySelector("dialog[open]")) {
     return;
   }
   if (resumePending) {
     return;
   }
   const current = route();
-  const pending =
-    current.agentId && mountedRouteKey === routeKey(current)
-      ? revalidateMountedAgent(current)
-      : loadPage({ reuseView: true });
+  // Agent detail rechecks in place and keeps its forms, so their input must not skip the
+  // check. Other pages reload the view, which would discard an unfinished form.
+  const inPlace = current.agentId && mountedRouteKey === routeKey(current);
+  if (!inPlace && app.querySelector("form")) {
+    return;
+  }
+  const pending = inPlace ? revalidateMountedAgent(current) : loadPage({ reuseView: true });
   resumePending = pending;
   void pending.finally(() => {
     if (resumePending === pending) {
@@ -902,6 +1203,7 @@ async function logout() {
   clearDrafts();
   const active = resetReads();
   clearPrivate();
+  forgetInstallationAccess();
   publicPanel("Signing out…", "Confirming that your session has ended.");
   let confirmed = false;
   try {

@@ -12,7 +12,9 @@ import {
   DependencyUnavailableError,
   InMemoryPlatformState,
   NamespaceNotEmptyError,
+  NativeWorkerSupportError,
   OpenClawController,
+  PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS,
   ScopeViolationError,
   resolveConfiguredHarnessId,
 } from "../../packages/occ/src/index.ts";
@@ -26,7 +28,7 @@ const installation = Object.freeze({
   name: "Configuration OCC conformance",
   createdAt: "2026-08-19T00:00:00.000Z",
 });
-async function fixture() {
+async function fixture(options = {}) {
   const permissions = [
     { action: "create", resourceKind: "secret" },
     { action: "operate", resourceKind: "secret" },
@@ -42,6 +44,7 @@ async function fixture() {
     { action: "update", resourceKind: "agent" },
     { action: "deploy", resourceKind: "agent" },
     { action: "read", resourceKind: "agent_revision" },
+    { action: "read", resourceKind: "installation" },
   ];
   const iamState = {
     identities: [administrator, deployOnly].map((id) => ({
@@ -105,7 +108,7 @@ async function fixture() {
   };
   const configurationDriver = createTestConfigurationDriver();
   const state = new InMemoryPlatformState();
-  const controller = new OpenClawController(installation, { state });
+  const controller = new OpenClawController(installation, { state, ...options });
   const secretDriver = createTestSecretDriver();
   for (const driver of [iam, compute, configurationDriver, secretDriver]) {
     controller.registerDriver(driver);
@@ -896,18 +899,23 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
     configurationId: openclawConfiguration.id,
     executionMode: "dedicated",
   });
-  const dedicatedNative = await controller.deployAgent(
-    administrator,
-    { namespaceId: namespace.id, agentId: agent.id },
-    resolveApprovedProductionHarness,
+  // The pinned runtime cannot run dedicated OpenClaw, so admission refuses it before
+  // any revision exists unless the Installation declares a native-worker runtime image.
+  assert.equal(PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS, false);
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedProductionHarness,
+    ),
+    (error) =>
+      error instanceof NativeWorkerSupportError &&
+      /cloudWorkers\.requiredProfile/.test(error.message) &&
+      /docs\/reference\/harness-execution\.md#native-worker-support/.test(error.message),
   );
-  assert.deepEqual(dedicatedNative.harness, {
-    ...DEVELOPMENT_HARNESS_DESCRIPTOR,
-    mode: "dedicated",
-  });
+  assert.equal((await controller.getInstallation(administrator)).capabilities, undefined);
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), [
     embedded,
-    dedicatedNative,
   ]);
 
   assert.throws(
@@ -933,6 +941,43 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
           },
         },
       }),
+    ScopeViolationError,
+  );
+});
+
+test("Installation native worker support admits dedicated OpenClaw to Sandbox checks", async () => {
+  const { agent, controller, namespace } = await fixture({ nativeWorkerSupport: "custom-image" });
+  assert.deepEqual((await controller.getInstallation(administrator)).capabilities, {
+    nativeWorkers: { support: "custom-image" },
+  });
+  const openclawConfiguration = await controller.createConfiguration(administrator, {
+    namespaceId: namespace.id,
+    kind: "agent",
+    values: {},
+  });
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: openclawConfiguration.id,
+    executionMode: "dedicated",
+  });
+  // The declaration lifts only the runtime refusal: dedicated OpenClaw still fails closed
+  // without a provisioning SandboxDriver that declares networking, filesystem, and process containment.
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedProductionHarness,
+    ),
+    (error) =>
+      error instanceof DependencyUnavailableError &&
+      /requires a provisioning SandboxDriver with networking, filesystem, and process containment/.test(
+        error.message,
+      ),
+  );
+  assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), []);
+  assert.throws(
+    () => new OpenClawController(installation, { nativeWorkerSupport: "pinned-runtime" }),
     ScopeViolationError,
   );
 });

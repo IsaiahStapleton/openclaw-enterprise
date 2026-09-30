@@ -124,7 +124,13 @@ function provisioningRequestBody({ modelSecretRef, slackBotSecretRef, authMethod
             models: { [model]: { agentRuntime: { id: "codex" } } },
           },
         },
-        channels: { slack: { enabled: true, botTokenEnv: "SLACK_BOT_TOKEN" } },
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+          },
+        },
       },
       secretBindings: {
         SLACK_BOT_TOKEN: {
@@ -181,6 +187,15 @@ async function privateBootstrapDirectory(context) {
 }
 
 async function createProvisioningApiFixture(context, computeDriver, authentication) {
+  // Exercise real admission with Kubernetes Secrets; fixture credentials never reach Slack.
+  const originalFetch = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    if (String(url) === "https://slack.com/api/auth.test") {
+      assert.match(init.headers.authorization, /^Bearer xoxb-/);
+      return Response.json({ ok: true, bot_id: "B0123456789", team_id: "T0123456789" });
+    }
+    return originalFetch(url, init);
+  });
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
   let workerPool;
   const state = new PostgresPlatformState(pool);
@@ -677,6 +692,104 @@ async function assertDeniedTraffic(description, namespaceName, podName, operatio
       throw error;
     }
     assert.equal(error.code, 1, `${description} must be denied by enforced NetworkPolicies`);
+  }
+}
+
+async function assertExplicitNetworkProfile(context, namespaceName, sourcePod) {
+  const profileLabel = "openclaw.dev/network-profile";
+  assert.equal(sourcePod.metadata.labels[profileLabel], "broad-egress-v1");
+  const name = `network-profile-${randomUUID()}`;
+  const directory = await mkdtemp(join(tmpdir(), "oce-network-profile-"));
+  const manifestPath = join(directory, "pod.json");
+  // Preserve the rendered role/Agent labels and security settings. A unique app
+  // name keeps this probe outside the workload's ReplicaSet and Service selectors.
+  const spec = structuredClone(sourcePod.spec);
+  delete spec.nodeName;
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name,
+        namespace: namespaceName,
+        labels: { ...sourcePod.metadata.labels, "app.kubernetes.io/name": name },
+      },
+      spec,
+    }),
+  );
+  context.after(async () => {
+    await kubectl("delete", "pod", name, "--namespace", namespaceName, "--ignore-not-found=true");
+    await rm(directory, { recursive: true, force: true });
+  });
+  try {
+    await kubectl("create", "-f", manifestPath);
+    await kubectl(
+      "wait",
+      "--namespace",
+      namespaceName,
+      "--for=condition=Ready",
+      `pod/${name}`,
+      "--timeout=120s",
+    );
+    const dnsOutcome = async () =>
+      JSON.parse(
+        await kubectl(
+          "exec",
+          name,
+          "--namespace",
+          namespaceName,
+          "--",
+          "node",
+          "-e",
+          `
+        const dns = require("node:dns");
+        const timer = setTimeout(() => { console.log(JSON.stringify({ resolved: false, reason: "timeout" })); process.exit(0); }, 2000);
+        dns.resolve4("kubernetes.default.svc.cluster.local", (error, addresses) => {
+          clearTimeout(timer);
+          if (error) { console.log(JSON.stringify({ resolved: false, reason: error.code })); }
+          else { console.log(JSON.stringify({ resolved: true, addresses })); }
+        });
+      `,
+        ),
+      );
+    const assertAllowed = () =>
+      waitFor("explicit broad profile DNS access", async () => (await dnsOutcome()).resolved);
+    await assertAllowed();
+    for (const profile of [undefined, "", "unrecognized-v1"]) {
+      await kubectl(
+        "label",
+        "pod",
+        name,
+        "--namespace",
+        namespaceName,
+        profile === undefined ? `${profileLabel}-` : `${profileLabel}=${profile}`,
+        "--overwrite",
+      );
+      // Policy reconciliation is asynchronous. Require a real DNS denial between
+      // successful controls on the same Pod so unavailable DNS cannot satisfy it.
+      const denied = await waitFor(`DNS denial for profile ${String(profile)}`, async () => {
+        const outcome = await dnsOutcome();
+        return outcome.resolved ? undefined : outcome;
+      });
+      assert.ok(
+        ["timeout", "ETIMEOUT", "ECONNREFUSED", "EAI_AGAIN"].includes(denied.reason),
+        JSON.stringify(denied),
+      );
+      await kubectl(
+        "label",
+        "pod",
+        name,
+        "--namespace",
+        namespaceName,
+        `${profileLabel}=broad-egress-v1`,
+        "--overwrite",
+      );
+      await assertAllowed();
+    }
+  } finally {
+    await kubectl("delete", "pod", name, "--namespace", namespaceName, "--ignore-not-found=true");
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -1231,6 +1344,7 @@ test(
     );
     const platformProbe = await resource("pod", "platform-probe", platformNamespace);
     assert.ok(firstPod && siblingPod && foreignPod && gatewayPod);
+    await assertExplicitNetworkProfile(context, owned[0], firstPod);
 
     const gatewayUrl = `http://${gatewayName(primaryAgent)}.${gatewayTargets[0]}.svc.cluster.local:8080/readyz`;
     let lastApprovedGatewayError;
@@ -2622,7 +2736,7 @@ test(
       };
       const configuration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
         kind: "agent",
-        values: boundSecret === undefined ? baseValues : missingChannelBindingValues,
+        values: baseValues,
       });
       assert.equal(configuration.status, 201, JSON.stringify(configuration.error));
       const created = await request("POST", `/namespaces/${namespaceId}/agents`, {
@@ -2659,15 +2773,23 @@ test(
       await assertDeployDenied(namespaceId, created.data.id, `${label} before model Secret grant`);
       await grantSecretOperate(namespaceId, created.data.servicePrincipalId, secret.data.id, label);
       if (boundSecret !== undefined) {
+        // Isolate missing channel credentials from the model permission denial above.
+        const missingConfiguration = await request(
+          "PATCH",
+          `/namespaces/${namespaceId}/configurations/${configuration.data.id}`,
+          { values: missingChannelBindingValues },
+        );
+        assert.equal(missingConfiguration.status, 200, JSON.stringify(missingConfiguration.error));
         const missingBindings = await request(
           "POST",
           `/namespaces/${namespaceId}/agents/${created.data.id}/deploy`,
         );
         assert.equal(
           missingBindings.status,
-          409,
+          400,
           `${label} before channel Secret bindings: ${JSON.stringify(missingBindings.error)}`,
         );
+        assert.equal(missingBindings.error.code, "CHANNEL_CREDENTIAL_BINDING_REQUIRED");
         // This k3d fixture has no runtime.channels proxy and uses the fixture image,
         // so successful deployment proves generic API/IAM/admission/gateway Secret
         // projection. Real Slack channel runtime proof belongs to the real-runtime suite.
@@ -2988,6 +3110,86 @@ test(
     const persistedAfter = await request("GET", deploymentPath);
     assert.equal(persistedAfter.status, 200, JSON.stringify(persistedAfter.error));
     assert.deepEqual(persistedAfter.data, persistedBefore);
+
+    // Runtime status and container logs for the same exact revision, read through the
+    // regular API with the Installation's Kubernetes credentials. Only Pods carrying
+    // this Agent's and revision's labels are listed and read.
+    const runtimePath = `${deploymentPath}/runtime`;
+    const runningGateway = (observed) => {
+      const source = observed.data?.sources.find(({ id }) => id === "gateway");
+      return source?.pods.find(({ uid }) =>
+        observed.data.pods.some(
+          (pod) =>
+            pod.uid === uid &&
+            pod.containers.some(({ name, state }) => name === "gateway" && state === "running"),
+        ),
+      );
+    };
+    const gatewayPod = await waitFor("a running Gateway container in runtime status", async () => {
+      const observed = await request("GET", runtimePath);
+      return observed.status === 200 ? runningGateway(observed) : undefined;
+    });
+    const runtimeStatus = await request("GET", runtimePath);
+    assert.equal(runtimeStatus.data.revisionId, admitted[0].id);
+    assert.ok(runtimeStatus.data.pods.every(({ name }) => name.length > 0));
+    const logsPath = `${runtimePath}/logs?source=gateway&tailLines=100`;
+    const firstPage = await request("GET", logsPath);
+    assert.equal(firstPage.status, 200, JSON.stringify(firstPage.error));
+    assert.equal(firstPage.data.stream.pod, gatewayPod.name);
+    assert.equal(typeof firstPage.data.cursor, "string");
+    assert.ok(
+      firstPage.data.records.every(
+        (record) => record.type !== "line" || record.contentClass === "operational",
+      ),
+    );
+    const followPage = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&cursor=${encodeURIComponent(firstPage.data.cursor)}`,
+    );
+    assert.equal(followPage.status, 200, JSON.stringify(followPage.error));
+    // One audited view for the first page; the cursor poll is not re-audited.
+    const views = await observerPool.query(
+      `SELECT count(*)::integer AS count FROM occ.audit_events
+       WHERE action = 'openclaw.agents.runtime_logs.view' AND resource_id = $1`,
+      [first.id],
+    );
+    assert.equal(views.rows[0].count, 1);
+    // Replacing the Pod ends the cursor's instance; the next poll labels it.
+    const gatewayNamespace = JSON.parse(
+      await kubectl(
+        "get",
+        "pods",
+        "--all-namespaces",
+        "-l",
+        `openclaw.dev/revision=${admitted[0].id},openclaw.dev/workload-role=gateway`,
+        "-o",
+        "json",
+      ),
+    ).items.find(({ metadata }) => metadata.uid === gatewayPod.uid).metadata.namespace;
+    await kubectl("delete", "pod", gatewayPod.name, "-n", gatewayNamespace, "--wait=false");
+    const replacementGateway = await waitFor(
+      "a replacement Gateway Pod in runtime status",
+      async () => {
+        const observed = await request("GET", runtimePath);
+        const pod = observed.status === 200 ? runningGateway(observed) : undefined;
+        return pod !== undefined && pod.uid !== gatewayPod.uid ? pod : undefined;
+      },
+      180_000,
+    );
+    const replaced = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&cursor=${encodeURIComponent(followPage.data.cursor)}`,
+    );
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.error));
+    assert.equal(replaced.data.records[0].type, "gap");
+    assert.equal(replaced.data.records[0].reason, "stream_replaced");
+    assert.equal(replaced.data.stream.pod, replacementGateway.name);
+    const previousInstance = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&pod=${replacementGateway.name}&previous=true`,
+    );
+    assert.equal(previousInstance.status, 200, JSON.stringify(previousInstance.error));
+    assert.equal((await request("GET", runtimePath, undefined, { session: false })).status, 401);
 
     if (runtimeImage !== undefined) {
       const gatewayTarget = kubernetesGatewayNamespaceName(namespaceIds[0]);

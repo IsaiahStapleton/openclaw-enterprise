@@ -70,6 +70,12 @@ export async function composeRepoDriver(input: {
 }): Promise<
   Readonly<{
     repoDriver: RepoDriver;
+    repositoryReceipt: Readonly<{
+      controlSocket: string;
+      driverId: string;
+      implementation: string;
+      backendId: string;
+    }>;
   }>
 > {
   const { backend: definition, selection } = input;
@@ -100,6 +106,12 @@ export async function composeRepoDriver(input: {
     }),
   });
   return Object.freeze({
+    repositoryReceipt: Object.freeze({
+      controlSocket: configuration.controlSocket,
+      driverId: selection.id,
+      implementation: selection.implementation,
+      backendId: definition.id,
+    }),
     repoDriver: new GitHubRepoDriver(backend, registry, {
       sessionDurationSeconds: configuration.sessionDurationSeconds,
       publicCa,

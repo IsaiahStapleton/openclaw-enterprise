@@ -103,7 +103,55 @@ export interface OpenShellSandboxProviderStatus {
   readonly reason?: string;
 }
 
-export interface OpenShellGatewayClient {
+export interface OpenShellSandboxLogsRequest {
+  readonly workspace: string;
+  readonly sandbox: string;
+  /** 1 to 2000; the gateway ring holds at most 2000 lines per sandbox. */
+  readonly lines: number;
+  /** RFC 3339; only lines at or after this time. */
+  readonly sinceTime?: string;
+}
+
+export interface OpenShellSandboxLogLine {
+  readonly sandboxId: string;
+  readonly time: string | null;
+  readonly level: string;
+  readonly target: string;
+  readonly message: string;
+  readonly source: string;
+  readonly fields: Readonly<Record<string, string>>;
+}
+
+export interface OpenShellSandboxLogsResponse {
+  readonly lines: readonly OpenShellSandboxLogLine[];
+  /** Lines the gateway examined before the time filter (at most `lines`). */
+  readonly bufferTotal: number;
+}
+
+/**
+ * The only OpenShell surface the runtime log path holds: one read-only RPC
+ * (`GetSandboxLogs`, upstream scope `sandbox:read`). It cannot create, delete or
+ * exec into a Sandbox; see `openShellSandboxLogReader`.
+ */
+export interface OpenShellSandboxLogReader {
+  getSandboxLogs(
+    request: OpenShellSandboxLogsRequest,
+    signal: AbortSignal,
+  ): Promise<OpenShellSandboxLogsResponse>;
+}
+
+/** Narrows a gateway client to its log read; the result exposes nothing else. */
+export function openShellSandboxLogReader(
+  client: OpenShellSandboxLogReader,
+): OpenShellSandboxLogReader {
+  const read = client.getSandboxLogs.bind(client);
+  return Object.freeze({
+    getSandboxLogs: (request: OpenShellSandboxLogsRequest, signal: AbortSignal) =>
+      read(request, signal),
+  });
+}
+
+export interface OpenShellGatewayClient extends OpenShellSandboxLogReader {
   health(signal: AbortSignal): Promise<void>;
   getWorkspace(name: string, signal: AbortSignal): Promise<OpenShellWorkspaceResponse | undefined>;
   createWorkspace(
@@ -164,6 +212,7 @@ type OpenShellMethod =
   | "DeleteWorkspace"
   | "CreateSandbox"
   | "DeleteSandbox"
+  | "GetSandboxLogs"
   | "GetSandboxProviderStatus"
   | "CreateProvider"
   | "GetProvider"
@@ -313,6 +362,58 @@ function profileDiagnosticsFailure(response: RecordValue, operation: string): vo
       .join("; ");
     throw new OpenShellGatewayFailure(`OpenShell ${operation} rejected the profile: ${detail}`);
   }
+}
+
+const MAX_SANDBOX_LOG_LINES = 2000;
+
+/** RFC 3339 with up to nanosecond precision to a protobuf Timestamp. */
+function timestampMessage(value: string): { seconds: string; nanos: number } {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  const seconds = match === null ? Number.NaN : Date.parse(`${match[1]}Z`);
+  if (match === null || Number.isNaN(seconds)) {
+    throw new OpenShellGatewayFailure("OpenShell log since time must be an RFC 3339 UTC time.");
+  }
+  return {
+    seconds: String(Math.floor(seconds / 1000)),
+    nanos: Number((match[2] ?? "").padEnd(9, "0")),
+  };
+}
+
+/** A protobuf Timestamp to RFC 3339 with nanosecond precision, or null when absent. */
+function timestampText(value: unknown): string | null {
+  const timestamp = asRecord(value);
+  if (timestamp === undefined) {
+    return null;
+  }
+  const seconds = Number(timestamp.seconds ?? 0);
+  const nanos = Number(timestamp.nanos ?? 0);
+  if (
+    !Number.isSafeInteger(seconds) ||
+    !Number.isSafeInteger(nanos) ||
+    nanos < 0 ||
+    nanos > 999_999_999
+  ) {
+    return null;
+  }
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime()) || date.getUTCFullYear() > 9999 || seconds < 0) {
+    return null;
+  }
+  return `${date.toISOString().slice(0, 19)}.${String(nanos).padStart(9, "0")}Z`;
+}
+
+function sandboxLogLine(value: unknown): OpenShellSandboxLogLine {
+  const line = asRecord(value) ?? {};
+  const text = (entry: unknown) => (typeof entry === "string" ? entry : "");
+  return Object.freeze({
+    sandboxId: text(line.sandbox_id),
+    time: timestampText(line.event_time),
+    level: text(line.level),
+    target: text(line.target),
+    message: text(line.message),
+    source: text(line.source),
+    fields: stringMap(line.fields, "sandbox log fields"),
+  });
 }
 
 function deletionConfirmed(response: RecordValue): boolean {
@@ -643,6 +744,40 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
     }
   }
 
+  async getSandboxLogs(
+    request: OpenShellSandboxLogsRequest,
+    signal: AbortSignal,
+  ): Promise<OpenShellSandboxLogsResponse> {
+    if (
+      !Number.isSafeInteger(request.lines) ||
+      request.lines < 1 ||
+      request.lines > MAX_SANDBOX_LOG_LINES
+    ) {
+      throw new OpenShellGatewayFailure("OpenShell log line count must be 1 to 2000.");
+    }
+    const response = await this.unary(
+      "GetSandboxLogs",
+      {
+        sandbox: nonempty(request.sandbox, "OpenShell Sandbox name"),
+        workspace_scope: { workspace: nonempty(request.workspace, "OpenShell Workspace name") },
+        lines: request.lines,
+        ...(request.sinceTime === undefined
+          ? {}
+          : { since_time: timestampMessage(request.sinceTime) }),
+      },
+      signal,
+    );
+    const logs = Array.isArray(response.logs) ? response.logs : [];
+    if (logs.length > request.lines) {
+      throw new OpenShellGatewayFailure("OpenShell GetSandboxLogs returned too many lines.");
+    }
+    const bufferTotal = Number(response.buffer_total ?? 0);
+    return Object.freeze({
+      lines: Object.freeze(logs.map(sandboxLogLine)),
+      bufferTotal: Number.isSafeInteger(bufferTotal) && bufferTotal >= 0 ? bufferTotal : 0,
+    });
+  }
+
   async getProviderProfile(
     workspace: string,
     id: string,
@@ -863,31 +998,43 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
   ): Promise<RecordValue> {
     signal.throwIfAborted();
     const { grpc, client } = await this.ensureClient();
+    signal.throwIfAborted();
     const headers = await metadata(grpc, this.options.auth);
+    signal.throwIfAborted();
     return new Promise<RecordValue>((resolve, reject) => {
       let call: ClientUnaryCall | undefined;
       const abort = () => {
+        signal.removeEventListener("abort", abort);
         call?.cancel();
         reject(signal.reason ?? new Error("OpenShell gateway request aborted."));
       };
       signal.addEventListener("abort", abort, { once: true });
-      call = client[method](
-        request,
-        headers,
-        { deadline: deadline(this.requestTimeoutMs) },
-        (error, response) => {
-          signal.removeEventListener("abort", abort);
-          if (signal.aborted) {
-            reject(signal.reason ?? new Error("OpenShell gateway request aborted."));
-            return;
-          }
-          if (error !== null) {
-            reject(error);
-            return;
-          }
-          resolve(asRecord(response) ?? {});
-        },
-      );
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+      try {
+        call = client[method](
+          request,
+          headers,
+          { deadline: deadline(this.requestTimeoutMs) },
+          (error, response) => {
+            signal.removeEventListener("abort", abort);
+            if (signal.aborted) {
+              reject(signal.reason ?? new Error("OpenShell gateway request aborted."));
+              return;
+            }
+            if (error !== null) {
+              reject(error);
+              return;
+            }
+            resolve(asRecord(response) ?? {});
+          },
+        );
+      } catch (error) {
+        signal.removeEventListener("abort", abort);
+        throw error;
+      }
     });
   }
 

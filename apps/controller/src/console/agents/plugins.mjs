@@ -1,7 +1,7 @@
 import { button, element } from "../dom.mjs";
 import { createPluginDiscovery } from "./plugin-discovery.mjs";
 import { createSlackApproverField } from "./slack-approvers.mjs";
-import { message } from "./list.mjs";
+import { assertReadableConfiguration, message } from "./list.mjs";
 import { configuredHarnessId } from "./harness-auth.mjs";
 
 export function renderAgentPlugins(
@@ -233,6 +233,7 @@ export function renderAgentPlugins(
       if (!context.isCurrent()) {
         return;
       }
+      assertReadableConfiguration(freshAgent);
       if (
         freshAgent.configurationId !== baseline.configurationId ||
         JSON.stringify(freshAgent.plugins ?? {}) !== JSON.stringify(baseline.plugins) ||

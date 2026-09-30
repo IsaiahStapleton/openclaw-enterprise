@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chromium } from "playwright";
 
+import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
+import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
 export function apiRequests(page, origin) {
@@ -52,9 +55,11 @@ export async function newPage(t, fixture, options = {}) {
   const artifacts = await artifactDirectory(t);
   const browser = await launchBrowser(options);
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -70,6 +75,8 @@ export async function newPage(t, fixture, options = {}) {
     }
   });
   context = await browser.newContext();
+  diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   return { page, artifacts };
@@ -99,6 +106,17 @@ export async function routeRuntimeCredentials(page, fixture, namespaceId, agentI
       });
     },
   );
+}
+
+// Browser storage the console wrote, except the tab-scoped Installation-access probe answer
+// (session owner key, admin flag and observability URL), which never holds drafts or
+// credentials.
+export async function consoleStorage(page) {
+  return page.evaluate(() => {
+    const session = { ...sessionStorage };
+    delete session["occ.console.installationAccess"];
+    return { local: { ...localStorage }, session };
+  });
 }
 
 export function nonAuthWriteRequests(requests) {
@@ -203,4 +221,22 @@ export async function slackSelectionValue(input) {
     .locator("..")
     .locator(".slack-directory-chip")
     .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("title")).join(", "));
+}
+
+export function repositoryCheckbox(page, name) {
+  return page
+    .locator("#repository-results .repository-result-row")
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .getByRole("checkbox");
+}
+
+export async function unusedPort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
 }

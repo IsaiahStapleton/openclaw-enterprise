@@ -1,6 +1,7 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import {
+  PERMISSION_ACTIONS,
   RESOURCE_KINDS,
   type AccessBinding,
   type AuthorizationDecision,
@@ -15,12 +16,14 @@ import {
   type IAMPolicyReadContext,
   type IAMPolicyReadRepository,
   type Identity,
+  type IdentityAccessCoverageRequest,
   type IdentityLookup,
   type JSONSchema,
   type ManagedIAMResourceKind,
   type Permission,
   type PermissionAction,
   type Principal,
+  type ResourceKind,
   type ResourceRef,
   type Restriction,
   type Role,
@@ -62,13 +65,23 @@ export class AuthAccountRoleNotFoundError extends Error {
   }
 }
 
+/** The requested Role exists but cannot be bound to a new auth account. */
+export class AuthAccountRoleInvalidError extends Error {
+  constructor(roleId: string) {
+    super(`The requested auth account Role ${roleId} is not an Installation-scoped Role.`);
+    this.name = "AuthAccountRoleInvalidError";
+  }
+}
+
 /** Fresh bootstrap creates both administrator identities against one shared Role. */
 export function createBootstrapAdministratorSeed(
   installationId: string,
   issuer: string,
   account: { readonly id: string },
 ): BootstrapAdministratorSeed {
-  const human = createAuthPrincipalSeed(installationId, issuer, account);
+  const human = createAuthPrincipalSeed(installationId, issuer, account, {
+    grant: "administrator",
+  });
   const administratorRole = human.roles[0];
   if (administratorRole === undefined) {
     throw new Error("Bootstrap administrator seed requires an administrator Role.");
@@ -92,12 +105,20 @@ export function createBootstrapAdministratorSeed(
   };
 }
 
-/** IAM owns the Principal, administrator permissions, and exact account Role binding. */
+/**
+ * Every auth Principal seed names its grant explicitly: bind an existing Role,
+ * create a fresh administrator Role, or grant nothing.
+ */
+export type AuthPrincipalSeedOptions =
+  | { readonly roleId: string; readonly grant?: undefined }
+  | { readonly grant: "administrator" | "none"; readonly roleId?: undefined };
+
+/** IAM owns the Principal plus explicit administrator creation, exact Role binding, or no grant. */
 export function createAuthPrincipalSeed(
   installationId: string,
   issuer: string,
   account: { readonly id: string },
-  options: { readonly roleId?: string } = {},
+  options: AuthPrincipalSeedOptions,
 ): AuthPrincipalSeed {
   const principal: Principal = {
     kind: "principal",
@@ -105,9 +126,29 @@ export function createAuthPrincipalSeed(
     issuer,
     subject: account.id,
   };
-  const existingRoleId = options.roleId;
-  if (existingRoleId !== undefined && !isNonEmptyString(existingRoleId)) {
+  // Fail closed: untyped JavaScript callers can omit or misspell the options, and
+  // a missing or unknown grant must never fall through to a new administrator.
+  const requested = options as
+    { readonly roleId?: unknown; readonly grant?: unknown } | null | undefined;
+  const requestedRoleId = requested?.roleId;
+  const grant = requested?.grant;
+  if (requestedRoleId !== undefined && grant !== undefined) {
+    throw new Error("Auth account Role binding and an explicit grant are mutually exclusive.");
+  }
+  if (requestedRoleId !== undefined && !isNonEmptyString(requestedRoleId)) {
     throw new Error("Additional auth accounts require a Role id.");
+  }
+  if (requestedRoleId === undefined && grant !== "administrator" && grant !== "none") {
+    throw new Error("Auth Principal seeds require a Role id or an explicit grant.");
+  }
+  const existingRoleId = typeof requestedRoleId === "string" ? requestedRoleId : undefined;
+
+  if (grant === "none") {
+    return {
+      principal,
+      roles: [],
+      bindings: [],
+    };
   }
 
   const roleId = existingRoleId ?? `role_admin_${randomUUID()}`;
@@ -173,16 +214,17 @@ export function validateAuthAccountPrincipalSeed(
   if (seed.principal.kind !== "principal" || seed.principal.namespaceId !== undefined) {
     throw new Error("Auth account creation requires one Installation-scoped Principal.");
   }
-  if (seed.bindings.length === 0) {
-    throw new Error("Auth account creation requires an existing IAM Role binding.");
-  }
   for (const binding of seed.bindings) {
     const role = state.roles.find((candidate) => candidate.id === binding.roleId);
     if (role === undefined) {
       throw new AuthAccountRoleNotFoundError(binding.roleId);
     }
+    // A caller-supplied Namespace Role is a request error; the binding shape
+    // below is built by createAuthPrincipalSeed, so a mismatch is an internal fault.
+    if (role.namespaceId !== undefined) {
+      throw new AuthAccountRoleInvalidError(binding.roleId);
+    }
     if (
-      role.namespaceId !== undefined ||
       binding.namespaceId !== undefined ||
       binding.subjectKind !== "identity" ||
       binding.subjectId !== seed.principal.id ||
@@ -194,17 +236,10 @@ export function validateAuthAccountPrincipalSeed(
   }
 }
 
-const ACTIONS: readonly PermissionAction[] = [
-  "create",
-  "read",
-  "update",
-  "delete",
-  "deploy",
-  "operate",
-  "administer",
-];
+const ACTIONS: readonly PermissionAction[] = PERMISSION_ACTIONS;
 
 const MANAGED_RESOURCE_KINDS: readonly ManagedIAMResourceKind[] = [
+  "namespace",
   "preset",
   "agent",
   "agent_revision",
@@ -283,6 +318,10 @@ function validatedManagedPermissions(permissions: readonly Permission[]): readon
     assertCondition(
       MANAGED_RESOURCE_KINDS.includes(permission.resourceKind as ManagedIAMResourceKind),
       "managed Role permission resource kind is invalid",
+    );
+    assertCondition(
+      permission.resourceKind !== "namespace" || permission.action === "read",
+      "managed Namespace Role permissions support only read",
     );
     const key = `${permission.action}\u0000${permission.resourceKind}`;
     assertCondition(!keys.has(key), "managed Role permissions must be duplicate-free");
@@ -811,6 +850,107 @@ function evaluateValidatedAuthorization(
   );
 }
 
+interface EffectiveGrant {
+  readonly namespaceId: string | undefined;
+  readonly resourceKind: ResourceKind | undefined;
+  readonly resourceId: string | undefined;
+  readonly permissions: readonly Permission[];
+}
+
+/** Every binding that can grant `identity` anything, with its combined scope. */
+function effectiveGrants(
+  identity: Identity,
+  state: Readonly<NativeIAMState>,
+  roles: ReadonlyMap<string, Role>,
+): EffectiveGrant[] {
+  const subjects: { groupId?: string; namespaceId?: string | undefined }[] = [{}];
+  if (identity.kind === "principal") {
+    for (const membership of state.memberships) {
+      if (membership.principalId === identity.id) {
+        subjects.push({ groupId: membership.groupId, namespaceId: membership.namespaceId });
+      }
+    }
+  }
+  const grants: EffectiveGrant[] = [];
+  for (const subject of subjects) {
+    for (const binding of state.bindings) {
+      const matches =
+        subject.groupId === undefined
+          ? binding.subjectKind === "identity" && binding.subjectId === identity.id
+          : binding.subjectKind === "group" && binding.subjectId === subject.groupId;
+      const role = roles.get(binding.roleId);
+      if (!matches || role === undefined) {
+        continue;
+      }
+      const namespaces = new Set(
+        [identity.namespaceId, subject.namespaceId, binding.namespaceId, role.namespaceId].filter(
+          (namespaceId) => namespaceId !== undefined,
+        ),
+      );
+      if (namespaces.size > 1) {
+        continue; // Conflicting Namespace scopes can never match a request.
+      }
+      grants.push({
+        namespaceId: [...namespaces][0],
+        resourceKind: binding.resourceKind,
+        resourceId: binding.resourceId,
+        permissions: role.permissions.filter(
+          (permission) =>
+            binding.resourceKind === undefined || permission.resourceKind === binding.resourceKind,
+        ),
+      });
+    }
+  }
+  return grants;
+}
+
+function grantCovers(holder: EffectiveGrant, target: EffectiveGrant, permission: Permission) {
+  return (
+    (holder.namespaceId === undefined || holder.namespaceId === target.namespaceId) &&
+    (holder.resourceKind === undefined ||
+      (holder.resourceKind === target.resourceKind && holder.resourceId === target.resourceId)) &&
+    holder.permissions.some(
+      (candidate) =>
+        candidate.action === permission.action &&
+        candidate.resourceKind === permission.resourceKind,
+    )
+  );
+}
+
+/**
+ * Restrictions apply to every identity alike, so the holder covers the target
+ * when each target grant is matched by a holder grant at the same or a broader scope.
+ */
+function identityAccessCovered(
+  request: IdentityAccessCoverageRequest,
+  state: Readonly<NativeIAMState>,
+  roles: ReadonlyMap<string, Role>,
+): boolean {
+  if (
+    typeof request !== "object" ||
+    request === null ||
+    !isNonEmptyString(request.principalId) ||
+    !isNonEmptyString(request.targetIdentityId)
+  ) {
+    return false;
+  }
+  const exact = (id: string) => {
+    const matches = state.identities.filter((identity) => identity.id === id);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const holder = exact(request.principalId);
+  const target = exact(request.targetIdentityId);
+  if (holder === undefined || target === undefined) {
+    return false;
+  }
+  const holderGrants = effectiveGrants(holder, state, roles);
+  return effectiveGrants(target, state, roles).every((grant) =>
+    grant.permissions.every((permission) =>
+      holderGrants.some((held) => grantCovers(held, grant, permission)),
+    ),
+  );
+}
+
 export function evaluateAuthorization(
   request: AuthorizationRequest,
   state: NativeIAMState,
@@ -919,6 +1059,17 @@ export class NativeIAMDriver implements IAMDriver {
       return decision(this.id, false, "The native IAM policy is invalid.");
     }
     return evaluateValidatedAuthorization(request, state, roles, this.id);
+  }
+
+  async coversIdentityAccess(request: IdentityAccessCoverageRequest): Promise<boolean> {
+    const state = await this.state.loadNativeIAMState();
+    let roles: ReadonlyMap<string, Role>;
+    try {
+      roles = validateAndIndexNativeIAMState(state);
+    } catch {
+      return false;
+    }
+    return identityAccessCovered(request, state, roles);
   }
 
   async listNamespaceRoles(

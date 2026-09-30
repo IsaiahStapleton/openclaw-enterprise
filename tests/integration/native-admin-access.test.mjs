@@ -519,6 +519,12 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
     "native-admin-proxy-exact-administer",
   );
   const nativeCookie = administerOnlySession.cookie;
+  const nativeSessionKey = (
+    await injectJson(context.fixture, "GET", "/api/auth/session", {
+      headers: { cookie: nativeCookie },
+    })
+  ).json().data.sessionKey;
+  assert.match(nativeSessionKey, /^[A-Za-z0-9_-]{43}$/);
 
   trustLocalUpstreamCertificate(t, context.upstream.cert);
 
@@ -531,6 +537,7 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
       "x-occ-identity": "must-not-forward",
       "x-openclaw-scopes": "must-not-forward",
       "x-safe-client-header": "preserved",
+      "x-occ-session-key": nativeSessionKey,
     },
   });
   assert.equal(proxied.statusCode, 200, proxied.body);
@@ -553,6 +560,7 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
     "cookie",
     "x-forwarded-for",
     "x-occ-identity",
+    "x-occ-session-key",
     "x-openclaw-scopes",
   ]) {
     assert.equal(observed.headers[header], undefined, `${header} must not reach native upstream`);
@@ -580,6 +588,9 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
       url: "/api/auth/get-session",
       headers: { cookie: `${nativeCookie}; ${nativeCookieName}=legacy` },
     },
+    // A session key narrows the shared cookie; a foreign or malformed key is refused.
+    { url: "/", headers: { "x-occ-session-key": "A".repeat(43) } },
+    { url: "/", headers: { "x-occ-session-key": "malformed" } },
     { url: "/__occ/native-admin/unknown" },
     { url: "/assets/%2e%2e%2fother-agent" },
     { url: "/assets/%252e%252e%252fother-agent" },
@@ -702,7 +713,18 @@ test("session mutations reject sibling origins before changing Agent or audit st
       headers: { cookie, ...headers },
     });
     assert.equal(response.statusCode, 403, `${JSON.stringify(headers)}: ${response.body}`);
+    // The refusal says what is missing instead of a generic admission boundary.
+    assert.match(response.json().error.message, /^A trusted browser origin is required: /);
   }
+  // Reads need no Origin to be admitted; the account route then names the same requirement.
+  const accountRead = await injectJson(context.fixture, "GET", "/api/auth/accounts/any-account", {
+    headers: { cookie },
+  });
+  assert.equal(accountRead.statusCode, 403, accountRead.body);
+  assert.equal(
+    accountRead.json().error.message,
+    "A current human session and trusted browser origin are required.",
+  );
   for (const path of [
     `${agentPath}/deploy`,
     "/api/auth/accounts",

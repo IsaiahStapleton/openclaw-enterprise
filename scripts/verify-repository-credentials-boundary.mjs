@@ -35,6 +35,10 @@ const reviewedImports = {
   "drivers/repo/github/credentials/provider-transport/request.ts": {
     "node:https": ["request"],
   },
+  // The registry-backed metadata owner sends one authorized, metadata-only GET.
+  "drivers/repo/github/credentials/descriptions.ts": {
+    "node:https": ["request"],
+  },
   "drivers/repo/github/credentials/client/commands.ts": { "node:child_process": ["spawnSync"] },
   "drivers/repo/github/credentials/client/config.ts": {
     "node:fs/promises": ["lstat", "mkdir", "mkdtemp", "open", "rename", "rm"],
@@ -99,6 +103,18 @@ const reviewedImports = {
   "drivers/repo/github/driver.ts": {
     "@openclaw-enterprise/occ": ["DependencyUnavailableError", "ScopeViolationError"],
   },
+  // The isolated image probe reports only a synthetic binding and failure kind.
+  "drivers/repo/github/credentials/admission-probe.mjs": {
+    "@openclaw-enterprise/occ": ["DependencyUnavailableError"],
+  },
+  // The broker journal client writes only nonsecret receipts over a local Unix socket.
+  "drivers/repo/credentials/control.ts": { "node:crypto": ["randomUUID"] },
+  "drivers/repo/credentials/receipt-client.ts": { "node:http": ["request"] },
+  // The worker owns the private journal socket; parent and socket identity are checked.
+  "backends/repository-credentials/receipt-server.ts": {
+    "node:http": ["createServer"],
+    "node:fs/promises": ["chmod", "lstat", "mkdir", "realpath", "unlink"],
+  },
   "drivers/repo/credentials/lifecycle.ts": { "node:crypto": ["randomUUID"] },
   "drivers/repo/credentials/server.ts": {
     "node:fs/promises": ["chmod", "lstat", "realpath", "unlink"],
@@ -124,15 +140,24 @@ const ordinaryBuiltins = new Set([
   "node:zlib",
 ]);
 const senderConsumers = {
+  "drivers/repo/github/credentials/descriptions.ts": {
+    "composition/repository-credentials/config.ts": ["createGitHubRepositoryDescriptions"],
+  },
   "drivers/repo/github/credentials/provider-transport/request.ts": {
     "drivers/repo/github/credentials/provider-transport.ts": ["sendProviderRequest"],
   },
   "drivers/repo/credentials/transport/upstream.ts": {
     "drivers/repo/credentials/transport/agent.ts": ["createUpstreamSender"],
   },
+  "drivers/repo/credentials/receipt-client.ts": {
+    "drivers/repo/credentials/control.ts": ["RepositoryReceiptClient"],
+  },
   "backends/repository-credentials/control-client.ts": {
     "composition/repository-credentials/platform.ts": ["UnixRepositoryCredentialControlClient"],
     "drivers/repo/github/driver.ts": ["RepositoryCredentialControlError"],
+    "drivers/repo/github/credentials/admission-probe.mjs": [
+      "UnixRepositoryCredentialControlClient",
+    ],
   },
 };
 const rawGlobals = new Set([
@@ -184,6 +209,7 @@ const reviewedProcessMembers = {
   ],
   "drivers/repo/github/credentials/client/router.ts": ["argv", "env", "exitCode", "stderr"],
   "drivers/repo/github/credentials/client/operator.ts": ["argv", "exitCode", "stderr", "stdout"],
+  "drivers/repo/github/credentials/admission-probe.mjs": ["argv", "exitCode", "stderr", "stdout"],
   "drivers/repo/github/credentials/client/private-files.ts": ["getuid"],
   "composition/repository-credentials/protected-file.ts": ["getuid"],
   "composition/repository-credentials/service.ts": ["exit", "once", "stderr", "stdout"],
@@ -198,6 +224,7 @@ const reviewedProcessMembers = {
   "repository-credentials.ts": ["argv", "exitCode", "stderr", "stdout"],
   "repository-credentials.mjs": ["exitCode", "stderr"],
   "drivers/repo/credentials/server.ts": ["getuid"],
+  "backends/repository-credentials/receipt-server.ts": ["getuid"],
 };
 const runtimeTypeScript = new Set([
   "TSAsExpression",

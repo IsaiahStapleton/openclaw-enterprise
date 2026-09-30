@@ -5,10 +5,13 @@ Drivers, deployment packaging, or documentation. For a first code change, start
 with [Local development](local-development.md) and the [first-change walkthrough](first-change.md).
 To use or administer an installation, start with [Getting Started](../README.md).
 
+To schedule work, follow [Add issues to a sprint](sprints.md) to create tasks or
+assign existing issues to a two-week iteration in the project.
+
 ## Find the code and its design
 
-- [Design](design.md) separates the current architecture, approved target, and
-  source-backed implementation guides.
+- [Design](design.md) links the platform architecture, remaining design work,
+  and source-backed implementation guides.
 - The [RFC guide](rfcs.md) explains how to propose architectural changes and
   request feedback.
 - [Design philosophy](design-philosophy.md) guides interface, ownership, and
@@ -29,6 +32,8 @@ To use or administer an installation, start with [Getting Started](../README.md)
   and Agent deployment in the source.
 - [Documentation](documentation.md) explains where pages belong, how to name them,
   and how to build and check the site.
+- [Documentation hosting](documentation-hosting.md) covers private publication,
+  the custom domain, and the approval required to enable public access.
 
 Read the [contribution policy](../../CONTRIBUTING.md) before opening a pull
 request. It covers repository access, verification, review, and private security

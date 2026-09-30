@@ -12,6 +12,13 @@ const candidateRevisionId = "rev_00000000-0000-4000-8000-000000000007";
 const secretRef = (id) => ({ kind: "secret", namespaceId, id });
 const auth = { method: "api_key", source: secretRef("sec_demo_model") };
 
+function initialDeploymentProgress(status) {
+  if (status !== "queued" && status !== "running") {
+    return null;
+  }
+  return { lastAttempt: null, nextAttemptAt: status === "queued" ? createdAt : null };
+}
+
 function slackChannels(scenario) {
   if (scenario.slackChannels !== undefined) {
     return structuredClone(scenario.slackChannels);
@@ -30,6 +37,11 @@ function configurationValues(scenario) {
     agents: { defaults: { model: "codex/gpt-4.1" } },
     channels: {},
   };
+  if (scenario.gatewayPassword) {
+    values.gateway.auth = {
+      password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+    };
+  }
   if (scenario.slack) {
     values.channels.slack = {
       enabled: true,
@@ -55,6 +67,15 @@ function configurationValues(scenario) {
 export function installFixture(scenario, evidence) {
   const rules = structuredClone(scenario.rules ?? []);
   let signedIn = !scenario.signedOut;
+  let repositoryDescriptionRequests = 0;
+  if (scenario.pendingGithubAttempt) {
+    // Simulates returning from a GitHub callback started in this tab.
+    sessionStorage.setItem("occ.console.githubAttempt", "a".repeat(43));
+  }
+  if (scenario.pendingGoogleAttempt) {
+    // Simulates returning from a Google callback started in this tab.
+    sessionStorage.setItem("occ.console.googleAttempt", "a".repeat(43));
+  }
   let serial = 100;
   const nextId = (prefix) =>
     `${prefix}_00000000-0000-4000-8000-${String(serial++).padStart(12, "0")}`;
@@ -175,6 +196,9 @@ export function installFixture(scenario, evidence) {
     servicePrincipalId: "identity_demo_agent",
     createdAt,
     activeRevisionId: selectedRevisionId,
+    ...(scenario.repositoryAccess
+      ? { repositoryAccess: structuredClone(scenario.repositoryAccess) }
+      : {}),
     ...(scenario.repositoryBindings
       ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
       : {}),
@@ -250,6 +274,7 @@ export function installFixture(scenario, evidence) {
       namespaceId,
       agentId: agent.id,
       status: "succeeded",
+      progress: null,
       error: null,
       warnings: [],
     });
@@ -262,6 +287,13 @@ export function installFixture(scenario, evidence) {
         namespaceId,
         agentId: agent.id,
         status: scenario.candidateDeploymentStatus,
+        progress: ["queued", "running"].includes(scenario.candidateDeploymentStatus)
+          ? {
+              lastAttempt: scenario.deploymentLastAttempt ?? null,
+              nextAttemptAt:
+                scenario.candidateDeploymentStatus === "queued" ? "2026-09-26T22:53:01.000Z" : null,
+            }
+          : null,
         error:
           scenario.candidateDeploymentStatus === "failed"
             ? scenario.candidateSelected
@@ -295,6 +327,30 @@ export function installFixture(scenario, evidence) {
       id: "agt_00000000-0000-4000-8000-000000000002",
       name: "Documentation assistant",
       activeRevisionId: null,
+    });
+  }
+  if (scenario.unreadableAgentConfiguration) {
+    for (const field of ["harnessAuth", "plugins", "pluginApprovers", "repositoryBindings"]) {
+      delete agent[field];
+    }
+    agent.configurationReadError = {
+      code: "SAVED_CONFIGURATION_UNREADABLE",
+      field: scenario.unreadableAgentConfiguration,
+    };
+  }
+  if (scenario.unreadableRevisionConfiguration) {
+    const saved = revisions.get(selectedRevisionId);
+    revisions.set(saved.id, {
+      id: saved.id,
+      namespaceId: saved.namespaceId,
+      agentId: saved.agentId,
+      revision: saved.revision,
+      backendId: saved.backendId,
+      createdAt: saved.createdAt,
+      configurationReadError: {
+        code: "SAVED_CONFIGURATION_UNREADABLE",
+        field: scenario.unreadableRevisionConfiguration,
+      },
     });
   }
   const preset = {
@@ -351,13 +407,13 @@ export function installFixture(scenario, evidence) {
       });
     }
   }
-  const response = (data, status = 200, errorCode) =>
+  const response = (data, status = 200, errorCode, meta = {}) =>
     new Response(
       JSON.stringify({
         ...(errorCode
           ? { error: { code: errorCode, message: "The selected preview simulates this failure." } }
           : { data }),
-        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001", ...meta },
       }),
       { status, headers: { "content-type": "application/json" } },
     );
@@ -417,12 +473,35 @@ export function installFixture(scenario, evidence) {
         return error(rule.status, rule.code);
       }
     }
+    if (path === "/api/auth/providers" && method === "GET") {
+      return response({
+        github: scenario.githubEnabled === true,
+        google: scenario.googleEnabled === true,
+        password: scenario.passwordRecoveryOnly !== true,
+        sessionBinding: scenario.githubEnabled === true || scenario.googleEnabled === true,
+      });
+    }
+    if (
+      (path === "/api/auth/providers/github/start" ||
+        path === "/api/auth/providers/google/start") &&
+      method === "POST"
+    ) {
+      // Keep the preview local; provider navigation needs real backend verification.
+      return error(503);
+    }
+    if (
+      (path === "/api/auth/providers/github/result" ||
+        path === "/api/auth/providers/google/result") &&
+      method === "POST"
+    ) {
+      return response({ sessionKey: session.sessionKey });
+    }
     if (path === "/api/auth/session") {
       return response(signedIn ? session : null);
     }
     if (path === "/api/auth/sign-in/email" && method === "POST") {
       signedIn = true;
-      return response(session);
+      return response({ authenticated: true, sessionKey: session.sessionKey });
     }
     if (path === "/api/auth/sign-out" && method === "POST") {
       signedIn = false;
@@ -437,6 +516,9 @@ export function installFixture(scenario, evidence) {
           ...(scenario.unsupportedProvisioning === true
             ? {}
             : { agentProvisioning: { executionModes: ["dedicated"] } }),
+          ...(scenario.nativeWorkerSupport
+            ? { nativeWorkers: { support: scenario.nativeWorkerSupport } }
+            : {}),
           ...(scenario.pluginCapabilities ? { pluginPolicies: scenario.pluginCapabilities } : {}),
           ...(scenario.pluginDiscoveryCredential
             ? { pluginDiscovery: { credential: scenario.pluginDiscoveryCredential } }
@@ -450,6 +532,11 @@ export function installFixture(scenario, evidence) {
     if (path === "/backends" && method === "GET") {
       return response(backends);
     }
+    if (path === "/observability" && method === "GET") {
+      return scenario.observabilityDenied
+        ? error(403)
+        : response({ url: scenario.observabilityUrl ?? null });
+    }
     const match = path.match(/^\/namespaces\/([^/]+)\/(.*)$/);
     if (match) {
       const [, ns, resource] = match;
@@ -459,20 +546,41 @@ export function installFixture(scenario, evidence) {
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);
       }
-      if (resource === "agents/repository-options" && method === "GET") {
+      if (
+        (resource === "agents/repository-options" ||
+          /^agents\/[^/]+\/repository-options$/.test(resource)) &&
+        method === "GET"
+      ) {
+        const options = scenario.repositoryOptions ?? [
+          {
+            repositoryRef: "application",
+            displayName: "example/application",
+            description: "The application and services used by the team.",
+            allowedProfiles: ["git-read", "git-write", "git-full"],
+          },
+          {
+            repositoryRef: "handbook",
+            displayName: "example/handbook",
+            description: "Guides and operating practices for the team.",
+            allowedProfiles: ["git-read"],
+          },
+        ];
+        const requestedDescriptions = new Set(
+          url.searchParams.get("descriptionRefs")?.split(",") ?? [],
+        );
+        const descriptionsPending =
+          requestedDescriptions.size > 0 &&
+          scenario.repositoryDescriptionsPending &&
+          repositoryDescriptionRequests++ === 0;
         return response(
-          scenario.repositoryOptions ?? [
-            {
-              repositoryRef: "application",
-              displayName: "example/application",
-              allowedProfiles: ["git-read", "git-write", "git-full"],
-            },
-            {
-              repositoryRef: "handbook",
-              displayName: "example/handbook",
-              allowedProfiles: ["git-read"],
-            },
-          ],
+          options.map(({ description, ...option }) =>
+            requestedDescriptions.has(option.repositoryRef) && !descriptionsPending && description
+              ? { ...option, description }
+              : option,
+          ),
+          200,
+          undefined,
+          descriptionsPending ? { descriptionsPending: true } : {},
         );
       }
       if (resource === "presets" && method === "GET") {
@@ -650,9 +758,13 @@ export function installFixture(scenario, evidence) {
           deploymentId: revision.id,
           namespaceId,
           agentId: saved.id,
-          status: "queued",
-          reads: 0,
-          error: null,
+          status: scenario.provisionedDeploymentStatus ?? "queued",
+          progress: initialDeploymentProgress(scenario.provisionedDeploymentStatus ?? "queued"),
+          reads: scenario.provisionedDeploymentStatus === undefined ? 0 : undefined,
+          error:
+            scenario.provisionedDeploymentStatus === "failed"
+              ? { code: "DEPENDENCY_UNAVAILABLE", message: "Deployment reconciliation failed." }
+              : null,
           warnings: [],
         });
         provisioning.set(saved.id, {
@@ -819,6 +931,7 @@ export function installFixture(scenario, evidence) {
             namespaceId,
             agentId: id,
             status: "queued",
+            progress: initialDeploymentProgress("queued"),
             reads: 0,
             error: null,
             warnings: [],
@@ -832,6 +945,133 @@ export function installFixture(scenario, evidence) {
           return revisions.has(suffix.split("/")[2])
             ? response(revisions.get(suffix.split("/")[2]))
             : error(404);
+        }
+        if (suffix.startsWith("/deployments/") && suffix.endsWith("/runtime") && method === "GET") {
+          const revisionId = suffix.split("/")[2];
+          if (!revisions.has(revisionId)) {
+            return error(404);
+          }
+          const pod = {
+            role: "gateway",
+            cluster: "control",
+            name: "gateway-7d9f8c-x2k4q",
+            uid: "0f3b6c1e-7d52-4f4b-9a2e-5c6d7e8f9a01",
+            phase: "Running",
+            ready: true,
+            createdAt: "2026-09-27T10:00:00.000Z",
+            containers: [
+              {
+                name: "gateway",
+                state: "running",
+                reason: null,
+                ready: true,
+                restartCount: 1,
+                startedAt: "2026-09-27T11:40:00.000Z",
+                lastTermination: {
+                  reason: "OOMKilled",
+                  exitCode: 137,
+                  finishedAt: "2026-09-27T11:39:58.000Z",
+                },
+              },
+            ],
+            events: [
+              {
+                type: "Warning",
+                reason: "BackOff",
+                message: "Back-off restarting failed container gateway",
+                count: 2,
+                lastObservedAt: "2026-09-27T11:39:59.000Z",
+              },
+            ],
+          };
+          return response({
+            revisionId,
+            observedAt: "2026-09-27T12:00:00.000Z",
+            pods: [pod],
+            sources: [
+              {
+                id: "gateway",
+                kind: "container",
+                pods: [{ name: pod.name, uid: pod.uid, container: "gateway", restartCount: 1 }],
+                available: true,
+                retention:
+                  "Kubernetes keeps only the current and the previous instance of each container; older output and output from deleted Pods is gone.",
+              },
+            ],
+          });
+        }
+        if (
+          suffix.startsWith("/deployments/") &&
+          suffix.endsWith("/runtime/logs") &&
+          method === "GET"
+        ) {
+          const revisionId = suffix.split("/")[2];
+          if (url.searchParams.get("download") === "true") {
+            // Downloads are a text/plain attachment, not a JSON envelope.
+            return new Response(
+              [
+                "2026-09-27T11:40:01.120Z info wrapper runtime.startup_phase container=gateway phase=config outcome=ok ms=12",
+                "2026-09-27T11:40:03.400Z info openclaw [gateway] gateway listening",
+                "2026-09-27T11:41:10.000Z warn openclaw [channels/slack] slack socket reconnect with token=[redacted:key-value]",
+                "",
+              ].join("\n"),
+              {
+                status: 200,
+                headers: {
+                  "content-type": "text/plain; charset=utf-8",
+                  "content-disposition": `attachment; filename="${revisionId}-gateway.log"`,
+                },
+              },
+            );
+          }
+          const stream = {
+            source: "gateway",
+            pod: "gateway-7d9f8c-x2k4q",
+            podUid: "0f3b6c1e-7d52-4f4b-9a2e-5c6d7e8f9a01",
+            container: "gateway",
+            restartCount: 1,
+          };
+          const line = (time, kind, level, message, extra = {}) => ({
+            type: "line",
+            time,
+            stream,
+            contentClass: "operational",
+            kind,
+            level,
+            message,
+            ...extra,
+          });
+          return response({
+            revisionId,
+            source: "gateway",
+            stream,
+            observedAt: "2026-09-27T12:00:00.000Z",
+            records: [
+              line("2026-09-27T11:40:01.120Z", "wrapper", "info", "runtime.startup_phase", {
+                fields: { container: "gateway", phase: "config", outcome: "ok", ms: 12 },
+              }),
+              line("2026-09-27T11:40:03.400Z", "openclaw", "info", "gateway listening", {
+                subsystem: "gateway",
+              }),
+              {
+                type: "withheld",
+                time: "2026-09-27T11:40:04.000Z",
+                stream,
+                count: 3,
+                reason: "unrecognised_structured",
+              },
+              line(
+                "2026-09-27T11:41:10.000Z",
+                "openclaw",
+                "warn",
+                "slack socket reconnect with token=[redacted:key-value]",
+                { subsystem: "channels/slack" },
+              ),
+            ],
+            withheld: 3,
+            truncated: false,
+            cursor: `v1.${"a".repeat(40)}.${"b".repeat(43)}`,
+          });
         }
         if (
           suffix.startsWith("/deployments/") &&
@@ -898,10 +1138,12 @@ export function installFixture(scenario, evidence) {
           }
           if (deployment.reads !== undefined && ++deployment.reads > 1) {
             deployment.status = "succeeded";
+            deployment.progress = null;
             saved.desiredRuntimeState = "running";
             saved.activeRevisionId = deployment.deploymentId;
           }
-          return response(deployment);
+          const { reads: _reads, ...status } = deployment;
+          return response(status);
         }
         if (suffix.startsWith("/workspace/files/")) {
           const filename = decodeURIComponent(suffix.split("/").at(-1));
@@ -924,7 +1166,7 @@ export function installFixture(scenario, evidence) {
           return response(roles);
         }
         if (method === "POST") {
-          const role = { ...body, id: `role_${serial++}` };
+          const role = { ...body, id: `role_${serial++}`, namespaceId };
           roles.push(role);
           return response(role, 201);
         }
@@ -934,10 +1176,19 @@ export function installFixture(scenario, evidence) {
           return response(bindings);
         }
         if (method === "POST") {
-          const binding = { ...body, id: `binding_${serial++}` };
+          const binding = { ...body, id: `binding_${serial++}`, namespaceId };
           bindings.push(binding);
           return response(binding, 201);
         }
+      }
+      const bindingMatch = resource.match(/^iam\/access-bindings\/([^/]+)$/);
+      if (bindingMatch && method === "DELETE") {
+        const index = bindings.findIndex((binding) => binding.id === bindingMatch[1]);
+        if (index < 0) {
+          return error(404);
+        }
+        bindings.splice(index, 1);
+        return new Response(null, { status: 204 });
       }
       if (resource === "secrets") {
         if (method === "POST" && scenario.denySecretCreate) {

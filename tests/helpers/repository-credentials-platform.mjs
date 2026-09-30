@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, isIPv4 } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { signInWithEmailPassword, authenticatedHeaders } from "./auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 import { createHarnessConfiguration } from "./harness-configuration.mjs";
@@ -597,7 +597,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   });
   diagnostic.stage = "control-relay-startup";
   const control = await startControlResponseRelay(scope, {
-    directory,
+    directory: dirname(credentialsFixture.config.gateway.controlSocket),
     target: credentialsFixture.config.gateway.controlSocket,
   });
   scope.after(stopProcesses);
@@ -704,6 +704,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   await startProcesses();
 
   const agents = [];
+  const crashLostAdmissions = new Set();
   scope.after(async () => {
     if (app === undefined) {
       return;
@@ -711,12 +712,19 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     for (const agent of agents) {
       await request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/stop`, undefined, 202);
     }
-    await kube.waitFor("all credential attempts to settle before fixture teardown", async () => {
+    await kube.waitFor("credential attempts to settle before fixture teardown", async () => {
       const result = await pool.query(
-        "SELECT count(*)::integer AS count FROM occ.repository_session_attempts WHERE namespace_id=$1 AND phase IN ('opening','open','closing')",
+        "SELECT admission_id, phase FROM occ.repository_session_attempts WHERE namespace_id=$1 AND phase IN ('opening','open','closing')",
         [namespace.id],
       );
-      return result.rows[0].count === 0;
+      // A killed broker cannot confirm disposal for these exact sessions. Stop
+      // must leave them closing; every other attempt must still settle.
+      return (
+        result.rows.length === crashLostAdmissions.size &&
+        result.rows.every(
+          ({ admission_id, phase }) => phase === "closing" && crashLostAdmissions.has(admission_id),
+        )
+      );
     });
   });
   async function createAgent(bindings) {
@@ -937,7 +945,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   const attempts = async (revision) =>
     (
       await pool.query(
-        "SELECT namespace_id, agent_id, revision_id, repository_ref, admission_id, session_id, phase, deadline_wall_ms, live_revision_id, cleanup_context FROM occ.repository_session_attempts WHERE revision_id=$1 ORDER BY created_at, admission_id",
+        "SELECT namespace_id, agent_id, revision_id, repository_ref, admission_id, session_id, phase, duration_seconds, deadline_wall_ms, live_revision_id, cleanup_context FROM occ.repository_session_attempts WHERE revision_id=$1 ORDER BY created_at, admission_id",
         [revision.id],
       )
     ).rows;
@@ -958,6 +966,13 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     runningPodContainers,
     workspaceVolume,
     attempts,
+    expectCrashLostAttempts: (attempts) => {
+      for (const attempt of attempts) {
+        assert.equal(attempt.namespace_id, namespace.id);
+        assert.equal(attempt.phase, "open");
+        crashLostAdmissions.add(attempt.admission_id);
+      }
+    },
     credentials: credentialsFixture,
     control,
     events,
@@ -968,6 +983,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
       return endpoint;
     },
     startWorker,
+    armMaterialExpiry: (agentId) => worker.armMaterialExpiry(agentId),
     killWorker: async () => {
       const receipt = await worker.kill();
       worker = undefined;

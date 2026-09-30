@@ -1,0 +1,21 @@
+routing:
+  hostname: ""
+  gatewayClassName: ""
+  gatewayName: oce-harnesses
+  envoyNamespace: envoy-gateway-system
+  tlsSecretName: ""
+  serviceType: ClusterIP
+  # Source addresses observed by the DP ingress after any load-balancer NAT.
+  controlPlaneCidrs: []
+  envoyHttpsTargetPort: 10443
+  envoyGatewayPodLabels:
+    control-plane: envoy-gateway
+    app.kubernetes.io/name: gateway-helm
+dns:
+  namespace: kube-system
+  podLabels:
+    k8s-app: kube-dns
+# Runtime status and container log reads from Harness Pods by the control-plane API.
+# Keep equal to the openclaw-enterprise chart's agentRuntimeLogs.enabled.
+agentRuntimeLogs:
+  enabled: true

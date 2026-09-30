@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import test from "node:test";
 import {
   createRepositoryPlatformFixture,
@@ -10,6 +10,29 @@ function gatewayContainerId(pod) {
   const container = pod.status.containerStatuses.find(({ name }) => name === "gateway");
   assert.match(container.containerID, /^containerd:\/\/[a-f0-9]+$/);
   return container.containerID.slice("containerd://".length);
+}
+
+async function materialDigests(fixture, pod, key) {
+  const result = await fixture.podNode(
+    pod,
+    `
+      const fs = require("node:fs");
+      const { createHmac } = require("node:crypto");
+      const key = Buffer.from(fs.readFileSync(0, "utf8"), "hex");
+      const manifest = JSON.parse(fs.readFileSync("/run/oce/repository-credentials/manifest.json", "utf8"));
+      const names = ["bearer", "client.json", "gitconfig", "gh/hosts.yml", "gh/config.yml", "ca.pem"];
+      const bindings = manifest.bindings.map(({ repositoryRef, directory }) => ({
+        repositoryRef,
+        files: names.map((name) => ({
+          name,
+          digest: createHmac("sha256", key).update(fs.readFileSync(directory + "/" + name)).digest("hex"),
+        })),
+      }));
+      process.stdout.write(JSON.stringify(bindings));
+    `,
+    key,
+  );
+  return JSON.parse(result.stdout);
 }
 
 test(
@@ -519,81 +542,6 @@ test(
         )
       ).rows;
     }
-    async function assertRefused(currentRevision, previousPod, before) {
-      const failed = await kube.waitFor("lost session to refuse its exact revision", async () =>
-        (await revisionWork(currentRevision)).find(
-          (work) =>
-            work.state === "failed_permanent" &&
-            work.reason_code === "REPOSITORY_SESSION_RECOVERY_UNSAFE",
-        ),
-      );
-      const retirementKey = `agent_revision:${currentRevision.id}:repository_cleanup:retire:${createHash(
-        "sha256",
-      )
-        .update(failed.idempotency_key)
-        .digest("hex")}`;
-      const retirement = await kube.waitFor("exact unresolved retirement Work owner", async () =>
-        (await revisionWork(currentRevision)).find(
-          (work) =>
-            work.idempotency_key === retirementKey &&
-            work.state === "queued" &&
-            work.reason_code === null,
-        ),
-      );
-      assert.equal(retirement.namespace_id, namespace.id);
-      assert.equal(retirement.agent_id, agent.id);
-      assert.equal(retirement.revision_id, currentRevision.id);
-      assert.equal(retirement.actor_id, failed.actor_id);
-      // Queued Work has no terminal reason; the worker reports pending cleanup separately.
-      await kube.waitFor("exact retirement Work pending cleanup event", () =>
-        fixture.events.some(
-          (event) =>
-            event.event === "worker.completed" &&
-            event.workId === retirementKey &&
-            event.namespaceId === namespace.id &&
-            event.agentId === agent.id &&
-            event.revisionId === currentRevision.id &&
-            event.outcome === "pending" &&
-            event.code === "REPOSITORY_CLEANUP_PENDING",
-        ),
-      );
-      await kube.waitFor(
-        "refused revision's actual Pod, process and Secret retirement",
-        async () => {
-          const pods = await kube.resources(
-            "pods",
-            placement,
-            "-l",
-            `openclaw.dev/agent=${agent.id}`,
-          );
-          const secrets = await kube.resources(
-            "secrets",
-            placement,
-            "-l",
-            `openclaw.dev/agent=${agent.id},openclaw.dev/repository-material=session`,
-          );
-          return (
-            pods.length === 0 &&
-            secrets.length === 0 &&
-            (await fixture.runningPodContainers(previousPod)).length === 0
-          );
-        },
-      );
-      const after = await fixture.attempts(currentRevision);
-      assert.deepEqual(
-        after.map(({ admission_id }) => admission_id),
-        before.map(({ admission_id }) => admission_id),
-        "no automatic same-revision admission",
-      );
-      for (const attempt of before.filter(({ phase }) => phase === "open")) {
-        const retained = after.find(({ admission_id }) => admission_id === attempt.admission_id);
-        assert.deepEqual(retained, { ...attempt, phase: "invalidated" });
-        assert.equal(retained.live_revision_id, currentRevision.id);
-        assert.ok(retained.cleanup_context.driver);
-        assert.equal(retained.cleanup_context.binding.repositoryRef, attempt.repository_ref);
-      }
-      return { attempts: after, retirementKey };
-    }
     async function deployAfterLoss(previousRevision, previousPod, previousMaterial) {
       // This real authorized HTTP request creates a new immutable revision. It does
       // not settle old provider effects or replay the earlier Git/PR operations.
@@ -623,15 +571,42 @@ test(
       return { revision: next, pod: nextPod, material };
     }
 
-    // Graceful shutdown settles the service's tracked tokens, but destroying its
-    // inventory leaves the worker without surviving disposition evidence.
+    // Graceful shutdown commits the original broker's terminal observations.
+    // A new process recovers those receipts, so maintenance may replace the
+    // exact sessions without creating another revision or losing workspace data.
     const gracefulAttempts = await fixture.attempts(revision);
     const gracefulService = credentials.process;
     await credentials.restart();
     assert.notEqual(credentials.process.pid, gracefulService.pid);
     assert.equal(credentials.process.generation, gracefulService.generation + 1);
-    const gracefulRefusal = await assertRefused(revision, pod, gracefulAttempts);
-    const restarted = await deployAfterLoss(revision, pod, repaired);
+    for (const binding of repaired.bindings) {
+      assert.equal((await credentials.status(binding.sessionId)).state, "DISPOSED");
+    }
+    const gracefulPod = await fixture.readyPod(agent, revision, pod.metadata.uid);
+    await assertWorkspaceReplacement(pod, gracefulPod);
+    const gracefulMaterial = await fixture.material(gracefulPod);
+    assert.notEqual(gracefulMaterial.generation, repaired.generation);
+    for (const binding of gracefulMaterial.bindings) {
+      const previous = repaired.bindings.find(
+        (entry) => entry.repositoryRef === binding.repositoryRef,
+      );
+      assert.notEqual(binding.sessionId, previous.sessionId);
+      assert.equal((await credentials.status(binding.sessionId)).state, "OPEN");
+    }
+    const gracefulSettled = (await fixture.attempts(revision)).filter((attempt) =>
+      gracefulAttempts.some(({ admission_id }) => admission_id === attempt.admission_id),
+    );
+    assert.equal(gracefulSettled.length, gracefulAttempts.length);
+    for (const attempt of gracefulAttempts) {
+      const settled = gracefulSettled.find(
+        ({ admission_id }) => admission_id === attempt.admission_id,
+      );
+      assert.deepEqual(
+        settled,
+        attempt.phase === "open" ? { ...attempt, phase: "disposed" } : attempt,
+      );
+    }
+    const restarted = { revision, pod: gracefulPod, material: gracefulMaterial };
     await fixture.tool(restarted.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     await fixture.tool(restarted.pod, "git", ["-C", secondCheckout, "fetch", "origin"]);
 
@@ -640,6 +615,11 @@ test(
     const crashService = credentials.process;
     const crashWorkerPid = fixture.workerPid;
     const crashAttempts = await fixture.attempts(restarted.revision);
+    const priorFailedWork = new Set(
+      (await revisionWork(restarted.revision))
+        .filter(({ state }) => state === "failed_permanent")
+        .map(({ idempotency_key }) => idempotency_key),
+    );
     const oldBearerProbe = await fixture.retainBearerProbe(restarted.pod, "repo-a");
     const outstanding = credentials.repositories.map(({ github }) => {
       const lastUse = github.authenticationAttempts.at(-1);
@@ -655,6 +635,7 @@ test(
     let replacementFailure;
     try {
       const serviceDeath = await credentials.kill();
+      fixture.expectCrashLostAttempts(crashAttempts.filter(({ phase }) => phase === "open"));
       assert.deepEqual(serviceDeath, { pid: crashService.pid, code: null, signal: "SIGKILL" });
       assert.equal((await fixture.request("GET", path)).activeRevisionId, restarted.revision.id);
       assert.equal(fixture.endpoint, endpoint);
@@ -701,10 +682,31 @@ test(
     }
     assert.notEqual(credentials.process.pid, crashService.pid);
     assert.equal(credentials.process.generation, crashService.generation + 1);
+    // An active durable receipt does not prove disposal or absence. The new
+    // broker reports it as unavailable and maintenance keeps the same sessions.
     for (const binding of restarted.material.bindings) {
-      assert.equal(await credentials.status(binding.sessionId), undefined);
+      await assert.rejects(credentials.status(binding.sessionId), {
+        name: "RepositoryCredentialControlError",
+        retryable: true,
+      });
+      const receipt = await fixture.pool.query(
+        "SELECT state, session_id FROM occ.repository_broker_receipts WHERE session_id=$1",
+        [binding.sessionId],
+      );
+      assert.deepEqual(receipt.rows, [{ state: "active", session_id: binding.sessionId }]);
     }
-    const crashRefusal = await assertRefused(restarted.revision, restarted.pod, crashAttempts);
+    await kube.waitFor("unavailable receipt to leave maintenance pending", async () =>
+      (await revisionWork(restarted.revision)).find(
+        (work) =>
+          !priorFailedWork.has(work.idempotency_key) &&
+          work.state === "failed_permanent" &&
+          work.reason_code === "REVISION_FINALIZATION_INCOMPLETE",
+      ),
+    );
+    assert.deepEqual(await fixture.attempts(restarted.revision), crashAttempts);
+    const pendingPod = await fixture.readyPod(agent, restarted.revision);
+    assert.equal(pendingPod.metadata.uid, restarted.pod.metadata.uid);
+    assert.deepEqual(await fixture.material(pendingPod), restarted.material);
     assert.equal(fixture.workerPid, crashWorkerPid);
     assert.doesNotThrow(() => process.kill(crashWorkerPid, 0));
     assert.deepEqual(
@@ -716,11 +718,80 @@ test(
       assert.deepEqual(token, outstanding[index]);
       assert.ok(token.expires > credentials.clock.wallNow());
     }
+    const cleanupEventCursor = fixture.events.length;
     const recoveredAfterCrash = await deployAfterLoss(
       restarted.revision,
       restarted.pod,
       restarted.material,
     );
+    // The explicitly admitted successor retires the old runtime while its
+    // unresolved active receipts remain owned by durable cleanup work.
+    const cleanupPrefix = `agent_revision:${restarted.revision.id}:repository_cleanup:`;
+    const retirement = await kube.waitFor(
+      "crash-lost sessions to retain cleanup ownership",
+      async () => {
+        const attempts = await fixture.attempts(restarted.revision);
+        const cleanup = (await revisionWork(restarted.revision)).find(
+          ({ idempotency_key, state }) =>
+            idempotency_key.startsWith(cleanupPrefix) &&
+            /^[0-9a-f]{64}$/.test(idempotency_key.slice(cleanupPrefix.length)) &&
+            ["queued", "claimed"].includes(state) &&
+            fixture.events
+              .slice(cleanupEventCursor)
+              .some(
+                (event) =>
+                  event.event === "worker.completed" &&
+                  event.workId === idempotency_key &&
+                  event.namespaceId === namespace.id &&
+                  event.agentId === agent.id &&
+                  event.revisionId === restarted.revision.id &&
+                  event.outcome === "pending" &&
+                  event.code === "REPOSITORY_CLEANUP_PENDING",
+              ),
+        );
+        const closing = crashAttempts
+          .filter(({ phase }) => phase === "open")
+          .every((prior) =>
+            attempts.some(
+              ({ admission_id, phase }) =>
+                admission_id === prior.admission_id && phase === "closing",
+            ),
+          );
+        return closing ? cleanup : undefined;
+      },
+    );
+    const retirementKey = retirement.idempotency_key;
+    const successorWork = (await revisionWork(recoveredAfterCrash.revision)).find(
+      ({ idempotency_key }) =>
+        idempotency_key === `agent_revision:${recoveredAfterCrash.revision.id}:reconcile`,
+    );
+    assert.equal(retirement.namespace_id, namespace.id);
+    assert.equal(retirement.agent_id, agent.id);
+    assert.equal(retirement.revision_id, restarted.revision.id);
+    assert.equal(retirement.actor_id, successorWork.actor_id);
+    const oldProjection = restarted.pod.spec.volumes.find(
+      ({ name }) => name === "repository-material-projection",
+    );
+    const oldSecrets = oldProjection.projected.sources.map(({ secret }) => secret.name);
+    await kube.waitFor("predecessor repository Secrets to retire", async () => {
+      const secrets = await kube.resources(
+        "secrets",
+        placement,
+        "-l",
+        `openclaw.dev/agent=${agent.id},openclaw.dev/repository-material=session`,
+      );
+      return oldSecrets.every((name) => !secrets.some(({ metadata }) => metadata.name === name));
+    });
+    const crashRetired = await fixture.attempts(restarted.revision);
+    for (const attempt of crashAttempts) {
+      const retained = crashRetired.find(
+        ({ admission_id }) => admission_id === attempt.admission_id,
+      );
+      assert.deepEqual(
+        retained,
+        attempt.phase === "open" ? { ...attempt, phase: "closing" } : attempt,
+      );
+    }
     const beforeProbe = credentials.repositories.map(
       ({ github }) => github.authenticationAttempts.length,
     );
@@ -740,19 +811,164 @@ test(
     await fixture.tool(recoveredAfterCrash.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     assert.equal([...first.github.pulls.values()].filter(({ native }) => native).length, 1);
     assert.equal(await first.git.ref("refs/heads/native-feature"), commit);
+    const longSessionBinding = recoveredAfterCrash.material.bindings.find(
+      ({ repositoryRef }) => repositoryRef === "repo-a",
+    );
+    assert.ok(longSessionBinding);
+    const longSessionAttempt = (await fixture.attempts(recoveredAfterCrash.revision)).find(
+      ({ session_id }) => session_id === longSessionBinding.sessionId,
+    );
+    assert.ok(longSessionAttempt);
+    const admittedDeadline = recoveredAfterCrash.revision.repositoryCredentials.deadlineWallMs;
+    assert.equal(
+      admittedDeadline,
+      Date.parse(recoveredAfterCrash.revision.createdAt) + 24 * 60 * 60 * 1000,
+    );
+    assert.equal(Number(longSessionAttempt.deadline_wall_ms), admittedDeadline);
+    assert.ok(Number(longSessionAttempt.duration_seconds) > 13 * 60 * 60 + 1);
+    assert.ok(Number(longSessionAttempt.duration_seconds) <= 24 * 60 * 60);
+    assert.ok(longSessionBinding.deadlineWallMs <= admittedDeadline);
+    assert.ok(
+      longSessionBinding.deadlineWallMs > credentials.clock.wallNow() + 13 * 60 * 60 * 1000 + 1000,
+    );
+    const beforeLongSessionStatus = await credentials.status(longSessionBinding.sessionId);
+    assert.equal(beforeLongSessionStatus.state, "OPEN");
+    assert.equal(beforeLongSessionStatus.deadlineWallMs, longSessionBinding.deadlineWallMs);
+    const beforeLongSessionPod = await fixture.readyPod(agent, recoveredAfterCrash.revision);
+    assert.equal(beforeLongSessionPod.metadata.uid, recoveredAfterCrash.pod.metadata.uid);
+    assert.equal(
+      gatewayContainerId(beforeLongSessionPod),
+      gatewayContainerId(recoveredAfterCrash.pod),
+    );
+    const beforeLongSessionMaterial = await fixture.material(beforeLongSessionPod);
+    const digestKey = randomBytes(32).toString("hex");
+    const beforeMaterialDigests = await materialDigests(fixture, beforeLongSessionPod, digestKey);
+    const priorTokenIndex = first.github.authenticationAttempts.at(-1).tokenIndex;
+    const priorToken = first.github.tokenState().find(({ index }) => index === priorTokenIndex);
+    const priorIssuance = first.github.issuesOfTokens.find(
+      ({ index }) => index === priorTokenIndex,
+    );
+    assert.ok(priorToken);
+    assert.ok(priorIssuance);
     const beforeRenewal = first.github.issuesOfTokens.length;
     // Controlled provider/service time proves hour-thirteen renewal without a
     // wall-clock wait. Perform it after repairs so new admission timestamps use
     // the same real clock as the worker throughout the lifecycle assertions.
-    await credentials.clock.advance(13 * 60 * 60 * 1000);
-    await fixture.tool(recoveredAfterCrash.pod, "git", ["-C", firstCheckout, "fetch", "origin"]);
+    await credentials.clock.advance(13 * 60 * 60 * 1000 + 1000);
+    assert.ok(credentials.clock.wallNow() >= priorToken.expires);
+    assert.ok(credentials.clock.wallNow() < longSessionBinding.deadlineWallMs);
+    const longSessionPod = await fixture.readyPod(agent, recoveredAfterCrash.revision);
+    assert.equal(longSessionPod.metadata.uid, beforeLongSessionPod.metadata.uid);
+    assert.equal(gatewayContainerId(longSessionPod), gatewayContainerId(beforeLongSessionPod));
+    await fixture.tool(longSessionPod, "git", ["-C", firstCheckout, "fetch", "origin"]);
     assert.ok(first.github.issuesOfTokens.length > beforeRenewal);
+    const renewedTokenIndex = first.github.authenticationAttempts.at(-1).tokenIndex;
+    assert.notEqual(renewedTokenIndex, priorTokenIndex);
+    const renewedIssuance = first.github.issuesOfTokens.find(
+      ({ index }) => index === renewedTokenIndex,
+    );
+    assert.ok(renewedIssuance);
+    assert.deepEqual(renewedIssuance.repositoryIds, priorIssuance.repositoryIds);
+    assert.deepEqual(renewedIssuance.permissions, priorIssuance.permissions);
     assert.equal(
-      (await fixture.material(recoveredAfterCrash.pod)).generation,
-      recoveredAfterCrash.material.generation,
+      first.github.tokenState().find(({ index }) => index === priorTokenIndex).attempts,
+      priorToken.attempts,
+    );
+
+    // The remote and GitHub services are fixtures, but Git and gh run in the
+    // original Pod and use its existing repository session after token expiry.
+    await fixture.podNode(
+      longSessionPod,
+      `require('node:fs').writeFileSync(${JSON.stringify(`${firstCheckout}/hour13-proof.txt`)}, ${JSON.stringify("hour thirteen repository proof\n")});`,
+    );
+    await fixture.tool(longSessionPod, "git", ["-C", firstCheckout, "add", "hour13-proof.txt"]);
+    await fixture.tool(longSessionPod, "git", [
+      "-C",
+      firstCheckout,
+      "-c",
+      "user.name=Platform Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-m",
+      "Hour thirteen repository proof",
+    ]);
+    const hour13Commit = (
+      await fixture.tool(longSessionPod, "git", ["-C", firstCheckout, "rev-parse", "HEAD"])
+    ).trim();
+    assert.notEqual(hour13Commit, localCommit);
+    await fixture.tool(longSessionPod, "git", [
+      "-C",
+      firstCheckout,
+      "push",
+      "origin",
+      "HEAD:refs/heads/agent/hour13",
+    ]);
+    assert.equal(await first.git.ref("refs/heads/agent/hour13"), hour13Commit);
+    const prTrace = first.github.trace.length;
+    await fixture.tool(
+      longSessionPod,
+      "gh",
+      [
+        "pr",
+        "create",
+        "--repo",
+        `github.com/${first.repository}`,
+        "--head",
+        "agent/hour13",
+        "--base",
+        "main",
+        "--title",
+        "Hour thirteen PR",
+        "--body",
+        "Repository session remains usable after token refresh",
+      ],
+      { cwd: firstCheckout },
+    );
+    const created = [...first.github.pulls.values()].find(
+      ({ title, native }) => title === "Hour thirteen PR" && native,
+    );
+    assert.ok(created);
+    assert.ok(
+      first.github.trace
+        .slice(prTrace)
+        .some(
+          ({ operation, tokenIndex }) =>
+            operation === "createPullRequest" && tokenIndex === renewedTokenIndex,
+        ),
+    );
+    const readBack = JSON.parse(
+      await fixture.tool(
+        longSessionPod,
+        "gh",
+        ["api", `repos/${first.repository}/pulls/${created.number}`],
+        { cwd: firstCheckout },
+      ),
+    );
+    assert.equal(readBack.head.ref, "agent/hour13");
+    assert.equal(readBack.base.ref, "main");
+    assert.equal(await first.git.ref("refs/heads/agent/hour13"), hour13Commit);
+    const afterLongSessionPod = await fixture.readyPod(agent, recoveredAfterCrash.revision);
+    assert.equal(afterLongSessionPod.metadata.uid, beforeLongSessionPod.metadata.uid);
+    assert.equal(gatewayContainerId(afterLongSessionPod), gatewayContainerId(beforeLongSessionPod));
+    assert.deepEqual(await fixture.material(afterLongSessionPod), beforeLongSessionMaterial);
+    assert.deepEqual(
+      await materialDigests(fixture, afterLongSessionPod, digestKey),
+      beforeMaterialDigests,
+    );
+    assert.equal(
+      (await fixture.request("GET", path)).activeRevisionId,
+      recoveredAfterCrash.revision.id,
+    );
+    const afterLongSessionStatus = await credentials.status(longSessionBinding.sessionId);
+    assert.equal(afterLongSessionStatus.state, "OPEN");
+    assert.equal(afterLongSessionStatus.deadlineWallMs, beforeLongSessionStatus.deadlineWallMs);
+    assert.equal(
+      first.github.tokenState().find(({ index }) => index === priorTokenIndex).attempts,
+      priorToken.attempts,
     );
     context.diagnostic(
-      "Worker survival, material repair, graceful restart and SIGKILL refusal, explicit new revisions, and controlled hour-thirteen renewal traversed the real platform path.",
+      "Worker survival, material repair, graceful restart with durable receipts, SIGKILL uncertainty, an explicit new revision, and controlled hour-thirteen Git push and PR creation traversed the real platform path.",
     );
 
     await fixture.request("POST", `${path}/stop`, undefined, 202);
@@ -777,18 +993,21 @@ test(
     for (const binding of recoveredAfterCrash.material.bindings) {
       assert.notEqual((await credentials.status(binding.sessionId))?.state, "OPEN");
     }
-    // Neither a new revision nor later token expiry rewrites lost custody as disposal.
-    for (const [lostRevision, retained] of [
-      [revision, gracefulRefusal],
-      [restarted.revision, crashRefusal],
-    ]) {
-      assert.deepEqual(await fixture.attempts(lostRevision), retained.attempts);
-      const cleanup = (await revisionWork(lostRevision)).find(
-        ({ idempotency_key }) => idempotency_key === retained.retirementKey,
+    // Neither a new revision nor later token expiry rewrites crash-lost custody
+    // as disposal. The earlier confirmed graceful disposals also stay durable.
+    const afterCrash = await fixture.attempts(restarted.revision);
+    assert.deepEqual(afterCrash, crashRetired);
+    for (const attempt of gracefulSettled) {
+      assert.deepEqual(
+        afterCrash.find(({ admission_id }) => admission_id === attempt.admission_id),
+        attempt,
       );
-      assert.ok(["queued", "claimed"].includes(cleanup.state));
-      assert.notEqual(cleanup.state, "succeeded");
     }
+    const cleanup = (await revisionWork(restarted.revision)).find(
+      ({ idempotency_key }) => idempotency_key === retirementKey,
+    );
+    assert.ok(["queued", "claimed"].includes(cleanup.state));
+    assert.notEqual(cleanup.state, "succeeded");
     const remaining = await kube.resources(
       "secrets",
       placement,

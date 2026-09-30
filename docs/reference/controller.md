@@ -121,7 +121,13 @@ The worker emits fixed operational event classes through the same logger:
 - `worker.health`: reports readiness and pending work count at debug level.
 - `worker.completed`: includes `namespaceId`, work identity, attempt, outcome,
   and a stable result code; AgentRevision operations also include `agentId` and
-  `revisionId`.
+  `revisionId`. Each deployment pass adds worker wall-clock milliseconds:
+  `durationMs` for the pass, `deployPasses` and summed Compute `prepareMs` so
+  far, `readinessWaitMs` from the first unready observation to the first ready
+  one (or to now while pending), `activationMs` from the ready observation to
+  completion, and `elapsedMs` since admission. Totals cover the passes this
+  worker process ran; a restart starts them again. Maintenance, cleanup, and
+  stop work carry no deployment timing.
 - `worker.error`: reports `CLAIM_LOST` or `WORKER_UNAVAILABLE` without exposing
   credentials.
 - `worker.stopped`: confirms graceful shutdown.
@@ -166,6 +172,10 @@ worker does not expose an HTTP health endpoint.
   the same absolute, readable file for API and worker. Remove unknown Driver
   fields and plaintext credentials; verify all selected Driver
   implementations and exact Kubernetes access.
+- **`KUBERNETES_API_UNAVAILABLE` at startup:** The Compute preflight got no
+  answer from the Kubernetes API server in the event's `host` and `port`.
+  Confirm the API and worker egress policy still allows that address (Helm
+  `cluster.cidrs`) and that the server is running.
 - **Configuration operations fail:** Verify exact Namespace or Configuration
   authorization, tenant-local ConfigMap CRUD, and a native JSON configuration
   document;
@@ -193,4 +203,4 @@ worker does not expose an HTTP health endpoint.
 - [Namespace Configuration and Kubernetes ConfigMaps](configuration.md)
 - [Kubernetes Compute Driver and local-cluster verification](drivers/kubernetes-compute.md)
 - [Identity and access management](authorization.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)

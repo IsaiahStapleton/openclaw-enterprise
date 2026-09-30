@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: "2026-09-27"
-last_updated_session: "01a0df20-f340-7810-bb59-b1df6c0bbbd3"
+updated: "2026-09-29"
+last_updated_session: "PR-187"
 ---
 
 # Production Startup Flow
@@ -71,7 +71,11 @@ graph TD
 The migration, shared bootstrap, API, and worker entrypoints use
 [`createPostgresPool`](../../packages/occ/src/state/postgres-pool.ts).
 See [connection authentication settings](../reference/settings/operations.md#postgresql-connection-authentication)
-for password and Azure workload-identity configuration.
+for password and Azure workload-identity configuration. When PostgreSQL ends
+an idle pooled connection (failover, maintenance restart, `idle_session_timeout`
+or a proxy reset), the pool discards that client and writes one
+`database.idle-client-error` warning with only the error code to stderr; the
+process keeps running and the next query opens a new connection.
 
 ### 1. Prepare native production inputs
 
@@ -171,9 +175,13 @@ API and worker also mount the CA Secret read-only at `database.caMountPath`.
 Tenant gateway and Agent placement remain in the selected Compute Driver
 configuration.
 
-NetworkPolicies allow database egress to every `database.cidrs` host and
-Kubernetes API egress to every `cluster.cidrs` host. Each entry must be an
-explicit IPv4 `/32`; operators must refresh the values when a managed database
+The [shared egress policy](../../deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml)
+selects only `api`, `worker`, and `initialization` Pods with the release identity.
+It allows DNS, database egress to every `database.cidrs` host, and
+Kubernetes API egress to every `cluster.cidrs` host. Collectors use their separate
+DNS, API, and exporter policy; unknown or missing component labels retain
+default-deny. Pre-install initialization has only its hook DNS/database grants.
+Each configured database or API destination must be an explicit IPv4 `/32`; operators must refresh the values when a managed database
 or API endpoint resolves to a different address set.
 
 `deploy/helm/openclaw-enterprise/templates/networkpolicies.yaml` also renders
@@ -262,6 +270,10 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   identifies a server below the supported Kubernetes 1.35 baseline; startup
   continues, but operators should upgrade before treating the deployment as
   supported.
+- `startup-error` or `worker.startup-error` with code
+  `KUBERNETES_API_UNAVAILABLE` means the Compute preflight got no answer from
+  the Kubernetes API server named by `host` and `port`. Check that
+  `cluster.cidrs` still lists that address; a restarted cluster can move it.
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
   first check for unsafe output storage, existing output files, database-role
   failures, auth origin errors, and administrator/IAM mismatch.
@@ -291,6 +303,10 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29: Merge current main into release-scoped shared egress documentation. (PR-187)
+
+- 2026-09-24 08:54: Describe release-scoped shared egress and dedicated collector/bootstrap policies. (PR-187 - 5ebd7305b0876db33276a249934bc82073b63424)
 
 - 2026-09-27 08:51: Document API-only Slack directory proxy egress and disabled default. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - 1a2764952c421bfee00ed6892714366292c2741a)
 

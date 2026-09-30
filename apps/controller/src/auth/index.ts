@@ -1,17 +1,133 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
-import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { splitSetCookieHeader } from "better-auth/cookies";
+import { hashPassword } from "better-auth/crypto";
 import { memoryAdapter, type MemoryDB } from "better-auth/adapters/memory";
 import { apiKey } from "@better-auth/api-key";
 import type { ApiKey } from "@better-auth/api-key/types";
 import { parse as parseDomain } from "tldts";
 import type { ServicePrincipal } from "@openclaw-enterprise/contracts";
-import { createAuthPrincipalSeed, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-import type { PostgresPool } from "@openclaw-enterprise/occ";
+import {
+  NativeIAMDriver,
+  createAuthPrincipalSeed,
+  type AuthPrincipalSeed,
+  type AuthPrincipalSeedOptions,
+} from "@openclaw-enterprise/iam";
+import {
+  PostgresHumanAuthentication,
+  ScopeViolationError,
+  type HumanAuthenticationActivation,
+  type HumanAuthenticationActivationHooks,
+  type HumanAuthenticationActor,
+  type HumanAuthenticationRecovery,
+  type HumanAuthenticationAccount,
+  createPostgresAuthBinding,
+  type SchemaAuthPoolV1,
+  type SchemaAuthAdapterOptionsV1,
+  type PostgresPlatformState,
+  type PreparedPasswordAccount,
+} from "@openclaw-enterprise/occ";
+import type { IAMDriver } from "@openclaw-enterprise/contracts";
+import {
+  createHumanLogin,
+  githubLoginConfiguration,
+  type GitHubLoginConfiguration,
+} from "./github.ts";
+import { googleLoginConfiguration, type GoogleSignInConfiguration } from "./google.ts";
+import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
+import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
+import {
+  SignInRateLimited,
+  passwordFailureAdmission,
+  passwordFailureBudget,
+  type PasswordSignInAdmission,
+} from "./admission.ts";
+import {
+  issueKnownDevice,
+  knownDeviceFromCookieHeader,
+  knownDeviceSetCookie,
+  verifyKnownDevice,
+  type KnownDeviceAccountState,
+} from "./known-device.ts";
+
+export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
+export {
+  googleLoginConfiguration,
+  type GoogleLoginConfiguration,
+  type GoogleSignInConfiguration,
+} from "./google.ts";
+
+/**
+ * Who may sign in with a password in the guarded profile: every enrolled account
+ * (`all`, the default) or only the recovery account (`recovery-only`).
+ */
+export type PasswordSignInPolicy = "all" | "recovery-only";
+
+export interface HumanLoginConfiguration {
+  readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
+  /** Set only for `recovery-only`; absent means every enrolled account keeps its password. */
+  readonly passwordSignIn?: "recovery-only";
+}
+
+/** Parses OCC_AUTH_PASSWORD_SIGN_IN; empty or unset keeps the default, `all`. */
+export function passwordSignInPolicy(
+  environment: Readonly<Record<string, string | undefined>>,
+): PasswordSignInPolicy {
+  const value = environment.OCC_AUTH_PASSWORD_SIGN_IN?.trim() ?? "";
+  if (value === "" || value === "all") {
+    return "all";
+  }
+  if (value === "recovery-only") {
+    return value;
+  }
+  throw new Error("OCC_AUTH_PASSWORD_SIGN_IN must be all or recovery-only.");
+}
+
+/**
+ * Parses every external sign-in provider. The recovery user ID (still named
+ * OCC_AUTH_GITHUB_RECOVERY_USER_ID) seeds the guarded profile, so it is required exactly
+ * when at least one provider is configured. Recovery-only password sign-in needs a
+ * provider: without one it would leave only the recovery account able to sign in.
+ */
+export function humanLoginConfiguration(
+  environment: Readonly<Record<string, string | undefined>>,
+): HumanLoginConfiguration {
+  const github = githubLoginConfiguration(environment);
+  const google = googleLoginConfiguration(environment);
+  const recoveryUserId = environment.OCC_AUTH_GITHUB_RECOVERY_USER_ID;
+  const passwordSignIn = passwordSignInPolicy(environment);
+  if (github === undefined && google === undefined) {
+    if (recoveryUserId !== undefined) {
+      throw new Error(
+        "External sign-in requires client ID, client secret and recovery user ID for GitHub or Google.",
+      );
+    }
+    if (passwordSignIn !== "all") {
+      throw new Error("OCC_AUTH_PASSWORD_SIGN_IN=recovery-only requires GitHub or Google sign-in.");
+    }
+    return {};
+  }
+  if (
+    google !== undefined &&
+    (recoveryUserId === undefined || recoveryUserId.trim().length === 0)
+  ) {
+    throw new Error("Google sign-in requires client ID, client secret and recovery user ID.");
+  }
+  return {
+    ...(github === undefined ? {} : { github }),
+    ...(google === undefined ? {} : { google: { ...google, recoveryUserId: recoveryUserId! } }),
+    ...(passwordSignIn === "all" ? {} : { passwordSignIn }),
+  };
+}
+export {
+  clientAddressConfiguration,
+  resolveClientAddress,
+  type ClientAddressConfiguration,
+} from "./client-address.ts";
 import type {
   AdmissionHeaders,
   AdmissionRequest,
@@ -23,12 +139,17 @@ import { AdmissionFailure } from "../admission/admission-verifier.ts";
 
 export const OCC_BETTER_AUTH_ISSUER_PREFIX = "occ:installation:";
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
+const LOCAL_PASSWORD_MIN_LENGTH = 12;
+const LOCAL_PASSWORD_MAX_LENGTH = 128;
 export const OCC_SHARED_AUTH_COOKIE_PREFIX = "openclaw_occ_shared";
 export const OCC_SERVICE_KEY_HEADER = "x-api-key";
 const SERVICE_KEY_CONFIG = "occ-service";
 const SAFE_COOKIE_DOMAIN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-type ControllerBetterAuth = Auth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>;
+type ControllerPlugins = (
+  ReturnType<typeof apiKey> | ReturnType<typeof createHumanLogin>["plugin"]
+)[];
+type ControllerBetterAuth = Auth<BetterAuthOptions & { plugins: ControllerPlugins }>;
 
 export interface ServiceKey {
   readonly id: string;
@@ -47,13 +168,57 @@ export interface ControllerAuthOptions {
   readonly memoryDatabase?: MemoryDB;
   readonly secureCookies?: boolean;
   readonly sharedCookieDomain?: string;
+  readonly humanLogin?: ReturnType<typeof createHumanLogin>;
+  /** Trusted proxies whose client-address header keys sign-in admission. */
+  readonly clientAddress?: ClientAddressConfiguration;
+  /**
+   * Whether a user administers the Installation. Once the shared budget is spent, only
+   * administrators' passwords (and, with an external provider, the recovery account's) are
+   * still checked (slowly). Without it no administrator is.
+   */
+  readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
+  /** Replaces the in-memory failure-counting password admission (both profiles). */
+  readonly passwordAdmission?: PasswordSignInAdmission;
+  /**
+   * The password-only profile's known-device account state (see known-device.ts). Without
+   * it, and without an external provider, entries are bound to the user and a hash of its
+   * stored password hash, read through Better Auth.
+   */
+  readonly knownDeviceState?: KnownDeviceAccountState;
+  /**
+   * Password-only profile: audits each password sign-in Better Auth accepted (with the
+   * account) or refused (without it). The guarded profile audits in State itself.
+   */
+  readonly passwordSignInAudit?: {
+    accepted(userId: string): Promise<void>;
+    refused(): Promise<void>;
+  };
+  /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
+  readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
+}
+
+/**
+ * The logged form of a limited sign-in lane's key: keyed by the auth secret, so a log
+ * reader cannot test candidate emails or addresses against it, and truncated. Stable for
+ * one secret, so repeated reports about one target correlate.
+ */
+export function signInLimitKeyHash(secret: string, key: string): string {
+  return createHmac("sha256", secret).update(`sign-in-limited\0${key}`).digest("hex").slice(0, 16);
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
   ControllerAuthOptions,
   "database" | "memoryDatabase"
 > {
-  readonly pool: PostgresPool;
+  readonly pool: SchemaAuthPoolV1;
+  readonly state?: PostgresPlatformState;
+  readonly iamDriver?: IAMDriver;
+  readonly github?: GitHubLoginConfiguration;
+  readonly google?: GoogleSignInConfiguration;
+  /** Guarded profile only: `recovery-only` admits only the recovery account's password. */
+  readonly passwordSignIn?: "recovery-only";
+  /** Receives nonfatal startup conditions as structured log events. */
+  readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
 
 export interface AuthenticatedAccount {
@@ -64,17 +229,21 @@ export interface AuthenticatedAccount {
 
 export type AuthenticatedSession = AdmittedSession;
 
+/** A validated, hashed account that has not been written yet. */
+export type PreparedAuthAccount = PreparedPasswordAccount;
+
 export interface ProvisionAuthAccountInput {
   readonly email: string;
   readonly password: string;
   readonly name?: string;
 }
 
-export { AuthAccountRoleNotFoundError, type AuthPrincipalSeed } from "@openclaw-enterprise/iam";
-
-export interface AuthPrincipalSeedOptions {
-  readonly roleId?: string;
-}
+export {
+  AuthAccountRoleInvalidError,
+  AuthAccountRoleNotFoundError,
+  type AuthPrincipalSeed,
+  type AuthPrincipalSeedOptions,
+} from "@openclaw-enterprise/iam";
 
 export interface ControllerAuth {
   readonly auth: ControllerBetterAuth;
@@ -82,11 +251,76 @@ export interface ControllerAuth {
   readonly sessionCookieName: string;
   readonly sharedCookieDomain?: string;
   readonly admissionVerifier: ControllerAdmissionVerifier;
+  readonly githubEnabled: boolean;
+  /** Provider-instance key for GitHub identities; set only while GitHub sign-in is configured. */
+  readonly githubProviderId?: string;
+  /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
+  readonly activationSkipped?: readonly string[];
+  /** Who may sign in with a password: `recovery-only` only in the guarded profile. */
+  readonly passwordSignIn: PasswordSignInPolicy;
+  /**
+   * Recovery-only password sign-in: enabled accounts, other than the recovery account, with
+   * no identity for a configured provider. They cannot sign in until one is attached.
+   */
+  readonly withoutExternalIdentity?: readonly string[];
+  githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  readonly googleEnabled: boolean;
+  /** Provider-instance key for Google identities; set only while Google sign-in is configured. */
+  readonly googleProviderId?: string;
+  googleStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  googleCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  googleResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  readAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<HumanAuthenticationAccount>;
+  attachGitHub?(
+    userId: string,
+    subject: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<unknown>;
+  attachGoogle?(
+    userId: string,
+    subject: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<unknown>;
+  changeAccount?(
+    userId: string,
+    operation: "disable" | "enable" | "revoke",
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<void>;
+  readRecovery?(actor: HumanAuthenticationActor): Promise<HumanAuthenticationRecovery>;
+  replaceRecovery?(
+    userId: string,
+    principalId: string,
+    expectedCurrentUserId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<HumanAuthenticationRecovery & { changed: boolean }>;
+  enrolAccount?(
+    userId: string,
+    actor: HumanAuthenticationActor,
+  ): Promise<{ principalId: string; version: number; created: boolean }>;
+  detachMethod?(
+    userId: string,
+    methodId: string,
+    actor: HumanAuthenticationActor,
+    expectedVersion: number,
+  ): Promise<{ methodId: string; providerId: string }>;
+  /** "guarded" once State-owned human sign-in admission is active. */
+  readonly humanProfile: "password" | "guarded";
+  prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount>;
+  writePreparedAccount(prepared: PreparedAuthAccount): Promise<AuthenticatedAccount>;
   createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount>;
   deleteAccount(account: Pick<AuthenticatedAccount, "id">): Promise<void>;
   principalSeed(
     account: Pick<AuthenticatedAccount, "id">,
-    options?: AuthPrincipalSeedOptions,
+    options: AuthPrincipalSeedOptions,
   ): AuthPrincipalSeed;
   signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   signOut(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -108,6 +342,8 @@ function validHttpBaseURL(value: string): boolean {
       (parsed.protocol === "http:" || parsed.protocol === "https:") &&
       parsed.username.length === 0 &&
       parsed.password.length === 0 &&
+      parsed.pathname === "/" &&
+      parsed.search.length === 0 &&
       parsed.hash.length === 0
     );
   } catch {
@@ -181,6 +417,18 @@ function sessionCookieNames(prefix: string): readonly string[] {
   return [`${prefix}.session_token`, `__Secure-${prefix}.session_token`];
 }
 
+function activeSessionCookieName(
+  prefix: string,
+  secureOrigin: boolean,
+  humanLogin: boolean,
+): string {
+  const name = `${prefix}.session_token`;
+  if (!secureOrigin) {
+    return name;
+  }
+  return `${humanLogin ? "__Host-" : "__Secure-"}${name}`;
+}
+
 function hostOnlySessionCookieClearance(enabled: boolean, activePrefix: string): readonly string[] {
   if (!enabled) {
     return [];
@@ -236,7 +484,13 @@ function authFailure(error: unknown): { readonly status: number; readonly code: 
       return {
         status,
         code:
-          status === 401 ? "UNAUTHENTICATED" : status === 409 ? "RESOURCE_CONFLICT" : "FORBIDDEN",
+          status === 401
+            ? "UNAUTHENTICATED"
+            : status === 409
+              ? "RESOURCE_CONFLICT"
+              : status === 429
+                ? "RATE_LIMITED"
+                : "FORBIDDEN",
       };
     }
     if (error instanceof APIError) {
@@ -244,6 +498,27 @@ function authFailure(error: unknown): { readonly status: number; readonly code: 
     }
   }
   return { status: 503, code: "DEPENDENCY_UNAVAILABLE" };
+}
+
+/**
+ * A rejected password whose denial audit could not be written. The response is 503 (audit
+ * outages fail closed), yet admission still counts it as a credential failure.
+ */
+class DenialAuditUnavailable extends Error {
+  constructor(cause: unknown) {
+    super("The sign-in denial could not be audited.", { cause });
+    this.name = "DenialAuditUnavailable";
+  }
+}
+
+// Credential rejections spend the password budget; dependency failures do not, except a
+// rejection whose denial audit failed.
+function countsAsSignInFailure(error: unknown): boolean {
+  if (error instanceof DenialAuditUnavailable) {
+    return true;
+  }
+  const { status } = authFailure(error);
+  return status >= 400 && status < 500;
 }
 
 function authBody(request: FastifyRequest): Record<string, unknown> {
@@ -260,21 +535,57 @@ function ensureEmailPassword(input: Record<string, unknown>): { email: string; p
   return { email, password };
 }
 
+function untrustedOrigin(): AdmissionFailure {
+  return new AdmissionFailure(
+    403,
+    "FORBIDDEN",
+    "The browser origin is not trusted.",
+    "untrusted_origin",
+  );
+}
+
 function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: string): void {
   const origin = request.headers.origin;
   if (Array.isArray(origin)) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
   if (origin !== undefined) {
     if (origin !== expectedOrigin) {
-      throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+      throw untrustedOrigin();
     }
     return;
   }
 
   if (request.headers["sec-fetch-site"] === "cross-site") {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
+}
+
+/**
+ * Applies the optional x-occ-session-key header to a resolved cookie session.
+ * Absent keeps the cookie-only contract; a malformed, duplicated or foreign key
+ * rejects instead of acting on whichever session the shared cookie now carries.
+ */
+function requireSessionKey(headers: Headers, secret: string, sessionId: string | undefined): void {
+  const key = sessionKeyHeader(headers);
+  if (key === undefined) {
+    return;
+  }
+  if (key === null || (sessionId !== undefined && !sessionKeyMatches(secret, sessionId, key))) {
+    throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session key does not match.");
+  }
+}
+
+function responseSessionId(response: unknown): string | undefined {
+  const session =
+    typeof response === "object" && response !== null
+      ? (response as { readonly session?: unknown }).session
+      : undefined;
+  const id =
+    typeof session === "object" && session !== null
+      ? (session as Record<string, unknown>).id
+      : undefined;
+  return isNonEmptyString(id) ? id : undefined;
 }
 
 function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string): void {
@@ -283,15 +594,26 @@ function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string):
     headers.get("origin") !== expectedOrigin ||
     (fetchSite !== null && fetchSite !== "same-origin")
   ) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
+}
+
+function preparedId(
+  context: { generateId(options: { model: "user" | "account" }): string | false },
+  model: "user" | "account",
+): string {
+  const generated = context.generateId({ model });
+  return typeof generated === "string" && generated.length > 0 ? generated : randomUUID();
 }
 
 function accountName(input: ProvisionAuthAccountInput): string {
   return input.name?.trim() || input.email.trim();
 }
 
-function safeSessionResponse(response: unknown): {
+function safeSessionResponse(
+  response: unknown,
+  secret: string,
+): {
   readonly authenticated: true;
   readonly sessionKey: string;
   readonly user: { readonly id: string; readonly email: string; readonly name: string };
@@ -320,7 +642,7 @@ function safeSessionResponse(response: unknown): {
   }
   return {
     authenticated: true,
-    sessionKey,
+    sessionKey: sessionBindingKey(secret, sessionKey),
     user: { id, email, name },
   };
 }
@@ -376,6 +698,9 @@ async function sendAuthEndpoint(
     });
   } catch (error) {
     const failure = authFailure(error);
+    if (error instanceof SignInRateLimited) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+    }
     reply.status(failure.status).send({
       error: { code: failure.code, message: failureMessage },
       meta: { requestId: request.id },
@@ -383,36 +708,17 @@ async function sendAuthEndpoint(
   }
 }
 
-const requireOccDependency = createRequire(
-  new URL("../../../../packages/occ/package.json", import.meta.url),
-);
-
 async function createOccAuthDatabase(
-  pool: PostgresPool,
+  pool: SchemaAuthPoolV1,
 ): Promise<NonNullable<BetterAuthOptions["database"]>> {
-  const { drizzle } = (await import(requireOccDependency.resolve("drizzle-orm/node-postgres"))) as {
-    drizzle: (pool: unknown, config: { readonly schema: unknown }) => unknown;
-  };
-  const { drizzleAdapter } = (await import("better-auth/adapters/drizzle")) as unknown as {
-    drizzleAdapter: (
-      database: unknown,
-      options: {
-        readonly provider: "pg";
-        readonly schema: unknown;
-        readonly camelCase: true;
-        readonly transaction: true;
-      },
-    ) => NonNullable<BetterAuthOptions["database"]>;
-  };
-  const occPostgresSchema = await import(
-    new URL("../../../../packages/occ/src/state/postgres-schema.ts", import.meta.url).href
-  );
-  return drizzleAdapter(drizzle(pool, { schema: occPostgresSchema }), {
+  const { database, schema } = await createPostgresAuthBinding(pool);
+  const { drizzleAdapter } = await import("better-auth/adapters/drizzle");
+  return drizzleAdapter(database, {
     provider: "pg",
-    schema: occPostgresSchema,
+    schema,
     camelCase: true,
     transaction: true,
-  });
+  } satisfies SchemaAuthAdapterOptionsV1);
 }
 
 export class ControllerAdmissionVerifier implements AdmissionVerifier {
@@ -420,15 +726,18 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
   readonly #installationId: string;
   readonly #issuer: string;
   readonly #sessionCookieName: string;
+  readonly #secret: string;
   readonly #browserOrigin: string;
 
   constructor(
     auth: ControllerBetterAuth,
     installationId: string,
     cookieName: string,
+    secret: string,
     browserOrigin: string,
   ) {
     this.#auth = auth;
+    this.#secret = secret;
     this.#sessionCookieName = cookieName;
     this.#browserOrigin = browserOrigin;
     this.#installationId = installationId;
@@ -498,6 +807,7 @@ export class ControllerAdmissionVerifier implements AdmissionVerifier {
     if (authenticatedSession === undefined) {
       throw new AdmissionFailure(401, "UNAUTHENTICATED", "A valid controller session is required.");
     }
+    requireSessionKey(headers, this.#secret, authenticatedSession.id);
 
     return {
       externalIdentity: { issuer: this.#issuer, subject: authenticatedSession.userId },
@@ -546,7 +856,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     throw new Error("OCC_AUTH_SECRET must contain at least 256 bits of secret material.");
   }
   if (!validHttpBaseURL(options.baseURL)) {
-    throw new Error("OCC_AUTH_BASE_URL must be an HTTP URL.");
+    throw new Error("OCC_AUTH_BASE_URL must be an absolute HTTP origin URL.");
   }
 
   const expectedBrowserOrigin = new URL(options.baseURL).origin;
@@ -563,25 +873,33 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   ) {
     throw new Error("OCC_AUTH_COOKIE_DOMAIN requires secure HTTPS session cookies.");
   }
+  const humanLogin = options.humanLogin;
+  const secureOrigin = new URL(options.baseURL).protocol === "https:";
+  const hostBoundSession = humanLogin !== undefined && secureOrigin;
   const cookiePrefix =
     sharedCookieDomain === undefined ? OCC_AUTH_COOKIE_PREFIX : OCC_SHARED_AUTH_COOKIE_PREFIX;
-  const sessionCookieBaseName = `${cookiePrefix}.session_token`;
-  const sessionCookieName =
-    new URL(options.baseURL).protocol === "https:"
-      ? `__Secure-${sessionCookieBaseName}`
-      : sessionCookieBaseName;
+  const sessionCookieName = activeSessionCookieName(
+    cookiePrefix,
+    secureOrigin,
+    humanLogin !== undefined,
+  );
   const hostOnlySessionCookieCleanup = hostOnlySessionCookieClearance(
     sharedCookieDomain !== undefined,
     cookiePrefix,
   );
   const issuer = betterAuthIssuer(options.installationId);
-  const auth = betterAuth<BetterAuthOptions & { plugins: ReturnType<typeof apiKey>[] }>({
-    appName: "OpenClaw Enterprise Controller",
+  if (humanLogin !== undefined && typeof options.database !== "function") {
+    throw new Error("The human authentication profile requires its guarded State adapter.");
+  }
+  const auth = betterAuth<BetterAuthOptions & { plugins: ControllerPlugins }>({
+    appName: "OpenClaw Control Plane",
     baseURL: options.baseURL,
     basePath: "/auth",
     secret: options.secret,
     database:
-      options.database ??
+      (humanLogin && typeof options.database === "function"
+        ? humanLogin.database(options.database)
+        : options.database) ??
       memoryAdapter(
         options.memoryDatabase ?? {
           user: [],
@@ -591,7 +909,32 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           apikey: [],
         },
       ),
+    ...(humanLogin === undefined
+      ? {
+          // Credential refusals are Better Auth warnings with no request or account; the
+          // sign-in audit records them instead. Errors still reach the console.
+          logger: { level: "error" },
+        }
+      : {
+          session: {
+            expiresIn: 8 * 60 * 60,
+            disableSessionRefresh: true,
+            cookieCache: { enabled: false },
+          },
+          logger: { disabled: true },
+          onAPIError: {
+            onError(error) {
+              // Better Call logs unclassified exceptions even when the auth logger is disabled.
+              throw error instanceof APIError
+                ? error
+                : APIError.fromStatus("SERVICE_UNAVAILABLE", {
+                    message: "Authentication dependency unavailable.",
+                  });
+            },
+          },
+        }),
     plugins: [
+      ...(humanLogin === undefined ? [] : [humanLogin.plugin]),
       apiKey({
         configId: SERVICE_KEY_CONFIG,
         defaultPrefix: "occ_",
@@ -606,13 +949,21 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       enabled: true,
       disableSignUp: true,
       requireEmailVerification: false,
-      minPasswordLength: 12,
-      maxPasswordLength: 128,
+      minPasswordLength: LOCAL_PASSWORD_MIN_LENGTH,
+      maxPasswordLength: LOCAL_PASSWORD_MAX_LENGTH,
     },
     trustedOrigins: [options.baseURL],
-    rateLimit: { enabled: true },
+    rateLimit: { enabled: humanLogin === undefined },
     advanced: {
+      ...(humanLogin === undefined ? {} : { ipAddress: { ipAddressHeaders: ["x-occ-client-ip"] } }),
       cookiePrefix,
+      ...(hostBoundSession
+        ? {
+            // Better Auth otherwise prepends __Secure- even to an explicit __Host- name.
+            useSecureCookies: false,
+            cookies: { session_token: { name: sessionCookieName } },
+          }
+        : {}),
       ...(sharedCookieDomain === undefined
         ? {}
         : { crossSubDomainCookies: { enabled: true, domain: sharedCookieDomain } }),
@@ -621,14 +972,80 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         path: "/",
         sameSite: "lax",
         secure:
+          hostBoundSession ||
           sharedCookieDomain !== undefined ||
           (options.secureCookies ?? options.mode === "production"),
       },
     },
   });
   const api = auth.api;
+  // The known-device cookie is host-only (__Host-) whenever the origin is HTTPS. With an
+  // external provider its name follows the curated endpoints that issue it.
+  const knownDeviceSecure =
+    humanLogin?.knownDeviceSecure ?? (secureOrigin && options.secureCookies !== false);
+  // What a known-device entry is bound to: with an external provider, the guarded account
+  // state (versions and enabled state); otherwise the composition's password state.
+  const knownDeviceState: KnownDeviceAccountState =
+    humanLogin?.knownDeviceState ??
+    options.knownDeviceState ??
+    (async (email) => {
+      const found = await (
+        await auth.$context
+      ).internalAdapter.findUserByEmail(email, { includeAccounts: true });
+      const credentials = (found?.accounts ?? []).filter(
+        (account) =>
+          account.providerId === "credential" &&
+          typeof account.password === "string" &&
+          account.password.length > 0,
+      );
+      if (found === null || credentials.length !== 1) {
+        return undefined;
+      }
+      const passwordHash = createHash("sha256").update(credentials[0]!.password!).digest("hex");
+      return `adapter\0${found.user.id}\0${credentials[0]!.id}\0${passwordHash}`;
+    });
+  // Failure-counting admission for password sign-in in both profiles, keyed on email (or a
+  // known device) and, behind a trusted proxy, client address. Reserved accounts are slowed,
+  // never refused (see admission.ts).
+  const passwordAdmission =
+    options.passwordAdmission ??
+    passwordFailureAdmission({
+      ...passwordFailureBudget,
+      countsAsFailure: countsAsSignInFailure,
+      ...(options.onOperationalEvent === undefined
+        ? {}
+        : {
+            onLimited: ({ lane, key }) =>
+              options.onOperationalEvent!({
+                event: "authentication.sign-in-limited",
+                lane,
+                ...(key === undefined ? {} : { keyHash: signInLimitKeyHash(options.secret, key) }),
+              }),
+          }),
+      // Timing differences here are hidden by the slow lane's floor. Lookup failures
+      // propagate, so an outage is 503 rather than a refusal.
+      async isReserved(email) {
+        if (humanLogin !== undefined) {
+          // The recovery account is the documented way in when a provider is down, so
+          // strangers spending its email can slow it but never refuse it.
+          if (humanLogin.isRecoveryEmail(email)) {
+            return true;
+          }
+          // Recovery-only: every other password is refused unread, reserved or not.
+          if (humanLogin.passwordSignIn === "recovery-only") {
+            return false;
+          }
+        }
+        if (options.passwordAdministrator === undefined) {
+          return false;
+        }
+        const found = await (await auth.$context).internalAdapter.findUserByEmail(email);
+        return found !== null && (await options.passwordAdministrator(found.user.id));
+      },
+    });
 
-  async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
+  /** Validates and hashes a new password account without writing it. */
+  async function prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount> {
     const email = input.email.trim().toLowerCase();
     const password = input.password;
     if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
@@ -661,13 +1078,61 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         message: "The requested account already exists.",
       });
     }
-    const hash = await context.password.hash(password);
-    const created = await context.internalAdapter.createUser(
-      {
-        email,
-        name: accountName({ ...input, email }),
+    return Object.freeze({
+      id: preparedId(context, "user"),
+      email,
+      name: accountName({ ...input, email }),
+      passwordHash: await context.password.hash(password),
+      credentialId: preparedId(context, "account"),
+    });
+  }
+
+  /** Writes a prepared account through Better Auth, for compositions without original State. */
+  async function writePreparedAccount(
+    prepared: PreparedAuthAccount,
+  ): Promise<AuthenticatedAccount> {
+    const context = await auth.$context;
+    const created = await context.adapter.create<
+      Record<string, unknown>,
+      { id: string; email: string; name: string }
+    >({
+      model: "user",
+      data: {
+        id: prepared.id,
+        email: prepared.email,
+        name: prepared.name,
         emailVerified: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
+      forceAllowId: true,
+    });
+    try {
+      await context.adapter.create({
+        model: "account",
+        data: {
+          id: prepared.credentialId,
+          userId: prepared.id,
+          providerId: "credential",
+          accountId: prepared.id,
+          password: prepared.passwordHash,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        forceAllowId: true,
+      });
+    } catch (error) {
+      await context.internalAdapter.deleteUser(prepared.id).catch(() => {});
+      throw error;
+    }
+    return Object.freeze({ id: created.id, email: created.email, name: created.name });
+  }
+
+  async function createAccount(input: ProvisionAuthAccountInput): Promise<AuthenticatedAccount> {
+    const prepared = await prepareAccount(input);
+    const context = await auth.$context;
+    const created = await context.internalAdapter.createUser(
+      { email: prepared.email, name: prepared.name, emailVerified: true },
       { method: "admin" },
     );
     try {
@@ -675,7 +1140,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         userId: created.id,
         providerId: "credential",
         accountId: created.id,
-        password: hash,
+        password: prepared.passwordHash,
       });
     } catch (error) {
       await context.internalAdapter.deleteUser(created.id).catch(() => {});
@@ -693,23 +1158,217 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await context.internalAdapter.deleteUser(account.id);
   }
 
+  function clientAddressOf(request: FastifyRequest): string {
+    return resolveClientAddress(
+      options.clientAddress,
+      request.ip,
+      options.clientAddress === undefined
+        ? undefined
+        : request.headers[options.clientAddress.header],
+    );
+  }
+
+  async function runPrivateEndpoint(
+    request: FastifyRequest,
+    path: string,
+    body?: Record<string, unknown>,
+  ) {
+    const url = new URL(`/auth${path}`, options.baseURL);
+    if (request.method === "GET") {
+      url.search = new URL(request.url, options.baseURL).search;
+    }
+    const headers = authHeaders(request.headers);
+    headers.set("host", new URL(options.baseURL).host);
+    // Sign-in admission keys on this value; Better Auth reads only this address header.
+    headers.set("x-occ-client-ip", clientAddressOf(request));
+    // Password sign-in keeps the established browser/CLI origin contract; sign-out already
+    // required the exact browser Origin before reaching this point.
+    if (!headers.has("origin") && path === "/oce/password") {
+      headers.set("origin", expectedBrowserOrigin);
+    }
+    if (body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
+    const response = await auth.handler(
+      new Request(url, {
+        method: request.method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+    if (!response.ok) {
+      if (response.status === 429) {
+        throw APIError.fromStatus("TOO_MANY_REQUESTS", {
+          message: "Authentication rate limit exceeded.",
+        });
+      }
+      if (response.status >= 500) {
+        throw new Error("Authentication dependency unavailable.");
+      }
+      throw new AdmissionFailure(401, "UNAUTHENTICATED", "Authentication was not accepted.");
+    }
+    return { response: await response.json(), headers: response.headers, status: response.status };
+  }
+
+  // Browser endpoints for one external provider; its absence is a 403 (start/result) or
+  // the console error redirect (callback), as before.
+  function externalProviderRoutes(name: "github" | "google", label: string) {
+    const configured =
+      name === "github"
+        ? humanLogin?.githubProviderId !== undefined
+        : humanLogin?.googleProviderId !== undefined;
+    return {
+      async start(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+        await sendAuthEndpoint(
+          request,
+          reply,
+          () => {
+            if (!configured) {
+              throw new AdmissionFailure(403, "FORBIDDEN", `${label} sign-in is unavailable.`);
+            }
+            // Sets the browser-binding cookie, so it takes the same exact-Origin and
+            // Sec-Fetch-Site guard as sign-out and the result exchange.
+            requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
+            return runPrivateEndpoint(request, `/oce/providers/${name}/start`);
+          },
+          (value) => value,
+          `${label} sign-in could not be started.`,
+        );
+      },
+      async callback(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+        reply.header("cache-control", "no-store");
+        reply.header("referrer-policy", "no-referrer");
+        try {
+          if (!configured) {
+            throw new Error(`${label} sign-in unavailable.`);
+          }
+          const result = await runPrivateEndpoint(request, `/oce/providers/${name}/callback`);
+          setAuthHeaders(reply, result.headers);
+          reply.redirect("/console/");
+        } catch {
+          reply.redirect(`/console/?authError=${name}`);
+        }
+      },
+      async result(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+        reply.header("cache-control", "no-store");
+        await sendAuthEndpoint(
+          request,
+          reply,
+          () => {
+            if (!configured) {
+              throw new AdmissionFailure(403, "FORBIDDEN", `${label} sign-in is unavailable.`);
+            }
+            // Reads the session cookie, so it takes the same exact-Origin guard as sign-out.
+            requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
+            return runPrivateEndpoint(request, `/oce/providers/${name}/result`, authBody(request));
+          },
+          (value) => {
+            const sessionKey = (value as { readonly sessionKey?: unknown } | null)?.sessionKey;
+            return { sessionKey: isNonEmptyString(sessionKey) ? sessionKey : null };
+          },
+          `${label} sign-in could not be confirmed.`,
+        );
+      },
+    };
+  }
+  const githubRoutes = externalProviderRoutes("github", "GitHub");
+  const googleRoutes = externalProviderRoutes("google", "Google");
+
   async function signInEmail(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     await sendAuthEndpoint(
       request,
       reply,
-      () => {
+      async () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
-        const body = ensureEmailPassword(authBody(request));
-        return api.signInEmail({
-          body: { ...body, rememberMe: true },
-          headers: authHeaders(request.headers),
-          asResponse: false,
-          returnHeaders: true,
-          returnStatus: true,
+        const input = authBody(request);
+        const body = ensureEmailPassword(input);
+        // Read from the validated input, not the credential pair, so the admission key
+        // is plainly derived from the email alone.
+        const email = String(input.email).trim().toLowerCase();
+        const deviceCookie = knownDeviceFromCookieHeader(request.headers.cookie, knownDeviceSecure);
+        // The account's state is read only for an entry issued for this email, so a
+        // forged or foreign cookie reads nothing; a stale entry just means no exemption.
+        const device = await verifyKnownDevice(
+          options.secret,
+          email,
+          deviceCookie,
+          Date.now(),
+          knownDeviceState,
+        );
+        // The address lane needs a trusted proxy: without one, browsers behind the ingress
+        // share its address, so only the email (or known-device) lane applies.
+        const attempt = {
+          ...(options.clientAddress === undefined
+            ? {}
+            : { clientAddress: clientAddressOf(request) }),
+          email,
+          ...(device === undefined ? {} : { knownDevice: device.deviceKey }),
+        };
+        if (humanLogin) {
+          // The curated endpoint checks the password, issues the session and marks the
+          // browser as a known device; only credential rejections spend budget.
+          return passwordAdmission.admit(attempt, () =>
+            runPrivateEndpoint(request, "/oce/password", body),
+          );
+        }
+        return passwordAdmission.admit(attempt, async () => {
+          const audit = options.passwordSignInAudit;
+          // The entry is bound to the account's state read before the password check: a
+          // password reset or account recreation that commits during the sign-in then bumps
+          // the state past it and revokes the entry, instead of the old password's sign-in
+          // being bound to the new state. A failed read only skips the marking.
+          const accountState = await knownDeviceState(email).catch(() => undefined);
+          let result;
+          try {
+            result = await api.signInEmail({
+              body: { ...body, rememberMe: true },
+              headers: authHeaders(request.headers),
+              asResponse: false,
+              returnHeaders: true,
+              returnStatus: true,
+            });
+          } catch (error) {
+            if (audit !== undefined && countsAsSignInFailure(error)) {
+              try {
+                await audit.refused();
+              } catch (auditError) {
+                // Denial audits fail closed (503), but the wrong password still spends budget.
+                throw new DenialAuditUnavailable(auditError);
+              }
+            }
+            throw error;
+          }
+          if (audit !== undefined) {
+            try {
+              await audit.accepted(result.response.user.id);
+            } catch (error) {
+              // No unaudited session is handed out.
+              const context = await auth.$context;
+              await context.internalAdapter.deleteSession(result.response.token).catch(() => {});
+              throw error;
+            }
+          }
+          // Only a successful sign-in marks the browser as a known device for this email.
+          // Rejections throw; a success leaves the status unset (200).
+          if ((result.status ?? 200) === 200 && accountState !== undefined) {
+            result.headers.append(
+              "set-cookie",
+              knownDeviceSetCookie(
+                knownDeviceSecure,
+                issueKnownDevice(options.secret, email, accountState, Date.now(), deviceCookie),
+              ),
+            );
+          }
+          return result;
         });
       },
-      () => ({ authenticated: true }),
+      (response) => {
+        const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;
+        return isNonEmptyString(sessionKey)
+          ? { authenticated: true, sessionKey }
+          : { authenticated: true };
+      },
       "The caller did not provide valid authentication credentials.",
       hostOnlySessionCookieCleanup,
     );
@@ -719,11 +1378,32 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () => {
+      async () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireSessionMutationOrigin(authHeaders(request.headers), expectedBrowserOrigin);
+        const headers = sessionHeaders(request.headers, sessionCookieName);
+        if (sessionKeyHeader(headers) !== undefined) {
+          // A pinned tab ends only its own session; a cookie replaced by another
+          // sign-in is neither revoked nor cleared.
+          const current = responseSessionId(
+            await api.getSession({
+              headers,
+              query: { disableCookieCache: true, disableRefresh: true },
+              asResponse: false,
+              returnHeaders: false,
+              returnStatus: false,
+            }),
+          );
+          if (current === undefined) {
+            throw new AdmissionFailure(401, "UNAUTHENTICATED", "The session key does not match.");
+          }
+          requireSessionKey(headers, options.secret, current);
+        }
+        if (humanLogin) {
+          return runPrivateEndpoint(request, "/oce/sign-out");
+        }
         return api.signOut({
-          headers: sessionHeaders(request.headers, sessionCookieName),
+          headers,
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
@@ -739,15 +1419,20 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () =>
-        api.getSession({
-          headers: sessionHeaders(request.headers, sessionCookieName),
+      async () => {
+        const headers = sessionHeaders(request.headers, sessionCookieName);
+        requireSessionKey(headers, options.secret, undefined);
+        const result = await api.getSession({
+          headers,
           query: { disableCookieCache: true, disableRefresh: true },
           asResponse: false,
           returnHeaders: true,
           returnStatus: true,
-        }),
-      safeSessionResponse,
+        });
+        requireSessionKey(headers, options.secret, responseSessionId(result?.response));
+        return result;
+      },
+      (response) => safeSessionResponse(response, options.secret),
       "The controller session could not be resolved.",
     );
   }
@@ -755,14 +1440,21 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   async function resolveSession(
     request: FastifyRequest,
   ): Promise<AuthenticatedSession | undefined> {
-    const result = await api.getSession({
-      headers: sessionHeaders(request.headers, sessionCookieName),
-      query: { disableCookieCache: true, disableRefresh: true },
-      asResponse: false,
-      returnHeaders: false,
-      returnStatus: false,
-    });
-    return safeAuthenticatedSession(result);
+    const headers = sessionHeaders(request.headers, sessionCookieName);
+    requireSessionKey(headers, options.secret, undefined);
+    const session = safeAuthenticatedSession(
+      await api.getSession({
+        headers,
+        query: { disableCookieCache: true, disableRefresh: true },
+        asResponse: false,
+        returnHeaders: false,
+        returnStatus: false,
+      }),
+    );
+    if (session !== undefined) {
+      requireSessionKey(headers, options.secret, session.id);
+    }
+    return session;
   }
 
   return {
@@ -774,13 +1466,16 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       auth,
       options.installationId,
       sessionCookieName,
+      options.secret,
       expectedBrowserOrigin,
     ),
+    prepareAccount,
+    writePreparedAccount,
     createAccount,
     deleteAccount,
     principalSeed: (
       account: Pick<AuthenticatedAccount, "id">,
-      seedOptions?: AuthPrincipalSeedOptions,
+      seedOptions: AuthPrincipalSeedOptions,
     ) =>
       createAuthPrincipalSeed(
         options.installationId,
@@ -788,6 +1483,16 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         account,
         seedOptions,
       ),
+    githubEnabled: humanLogin?.githubProviderId !== undefined,
+    humanProfile: humanLogin === undefined ? "password" : "guarded",
+    passwordSignIn: humanLogin?.passwordSignIn ?? "all",
+    githubStart: githubRoutes.start,
+    githubCallback: githubRoutes.callback,
+    githubResult: githubRoutes.result,
+    googleEnabled: humanLogin?.googleProviderId !== undefined,
+    googleStart: googleRoutes.start,
+    googleCallback: googleRoutes.callback,
+    googleResult: googleRoutes.result,
     signInEmail,
     signOut,
     session,
@@ -834,12 +1539,312 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   };
 }
 
+/**
+ * Startup and stopped maintenance share this one-way activation path. External sign-in
+ * requires the native IAM Driver, so both authorize through it. The configured recovery
+ * user id only seeds the first activation: once a designation exists (possibly moved by an
+ * online replacement) it is kept, and `seedIgnored` reports a differing seed. Every call
+ * re-checks the actual holder. Refused preconditions throw ScopeViolationError.
+ */
+export async function activateRecoveryAccount(
+  persistence: PostgresHumanAuthentication,
+  iamDriver: NativeIAMDriver,
+  installationId: string,
+  seedRecoveryUserId: string,
+  hooks?: HumanAuthenticationActivationHooks,
+): Promise<HumanAuthenticationActivation & { recoveryUserId: string; seedIgnored: boolean }> {
+  const existing = await persistence.recoveryDesignation();
+  const seedIgnored = existing !== undefined && existing.userId !== seedRecoveryUserId;
+  const recoveryUserId = seedIgnored ? existing.userId : seedRecoveryUserId;
+  // Its Principal must still administer the Installation; activateRecovery re-checks
+  // enrolment, enabled state and the password.
+  const principal = await iamDriver.lookupIdentity({
+    issuer: betterAuthIssuer(installationId),
+    subject: recoveryUserId,
+  });
+  if (!principal || principal.kind !== "principal") {
+    throw new ScopeViolationError("Recovery Principal is unavailable.");
+  }
+  const decision = await iamDriver.authorize({
+    principalId: principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  if (!decision.allowed || decision.driverId !== iamDriver.id) {
+    throw new ScopeViolationError("Recovery account must administer the Installation.");
+  }
+  const activation = await persistence.activateRecovery(recoveryUserId, principal.id, hooks);
+  return { ...activation, recoveryUserId, seedIgnored };
+}
+
+/** Whether a Better Auth user's Principal holds Installation `administer`. */
+async function administersInstallation(
+  iamDriver: IAMDriver,
+  installationId: string,
+  userId: string,
+): Promise<boolean> {
+  const principal = await iamDriver.lookupIdentity({
+    issuer: betterAuthIssuer(installationId),
+    subject: userId,
+  });
+  if (!principal || principal.kind !== "principal") {
+    return false;
+  }
+  const decision = await iamDriver.authorize({
+    principalId: principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  return decision.allowed;
+}
+
+/**
+ * The password-only profile's known-device account state: the user, its one password method
+ * and that method's authentication version. Undefined without exactly one password.
+ */
+async function passwordKnownDeviceState(
+  pool: SchemaAuthPoolV1,
+  email: string,
+): Promise<string | undefined> {
+  const { rows } = await pool.query<{
+    user_id: string;
+    method_id: string;
+    authentication_version: number;
+  }>(
+    `SELECT u.id AS user_id, m.id AS method_id, m.authentication_version
+     FROM occ."user" u
+     JOIN occ.account m ON m.user_id = u.id AND m.provider_id = 'credential'
+       AND m.password IS NOT NULL AND m.password <> ''
+     WHERE u.email = $1`,
+    [email],
+  );
+  const [row] = rows;
+  if (rows.length !== 1 || row === undefined) {
+    return undefined;
+  }
+  return `password\0${row.user_id}\0${row.method_id}\0${row.authentication_version}`;
+}
+
+/** Hash a local password exactly as the controller's password sign-in verifies it. */
+export async function hashLocalPassword(password: string): Promise<string> {
+  if (password.length < LOCAL_PASSWORD_MIN_LENGTH || password.length > LOCAL_PASSWORD_MAX_LENGTH) {
+    throw new Error(
+      `Passwords must contain ${LOCAL_PASSWORD_MIN_LENGTH} to ${LOCAL_PASSWORD_MAX_LENGTH} characters.`,
+    );
+  }
+  return hashPassword(password);
+}
+
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, ...controllerOptions } = options;
-  return createControllerAuth({
+  const {
+    pool,
+    state,
+    iamDriver,
+    github,
+    google,
+    passwordSignIn,
+    onWarning,
+    ...controllerOptions
+  } = options;
+  const persistence =
+    state === undefined
+      ? undefined
+      : new PostgresHumanAuthentication(
+          state,
+          options.installationId,
+          betterAuthIssuer(options.installationId),
+        );
+  // Either external provider activates the guarded profile; both share its recovery user.
+  const recoveryUserId = github?.recoveryUserId ?? google?.recoveryUserId;
+  const guarded = recoveryUserId !== undefined;
+  const providerLabel = github === undefined ? "Google" : "GitHub";
+  if (!guarded && passwordSignIn !== undefined) {
+    throw new Error("Recovery-only password sign-in requires GitHub or Google sign-in.");
+  }
+  if (!guarded && persistence && (await persistence.recoveryDesignation())) {
+    throw new Error(
+      "An activated human authentication profile requires a configured external sign-in provider.",
+    );
+  }
+  if (guarded) {
+    if (
+      github !== undefined &&
+      google !== undefined &&
+      github.recoveryUserId !== google.recoveryUserId
+    ) {
+      throw new Error("GitHub and Google sign-in require the same recovery user ID.");
+    }
+    if (!persistence || !(iamDriver instanceof NativeIAMDriver)) {
+      throw new Error(
+        `${providerLabel} sign-in requires original PostgreSQL State and the native IAM Driver.`,
+      );
+    }
+    if (options.sharedCookieDomain !== undefined) {
+      throw new Error(
+        `${providerLabel} sign-in supports host-only cookies without shared native administration.`,
+      );
+    }
+    if (options.mode === "production" && new URL(options.baseURL).protocol !== "https:") {
+      throw new Error(`Production ${providerLabel} sign-in requires HTTPS.`);
+    }
+  }
+  const humanLogin = !guarded
+    ? undefined
+    : createHumanLogin(
+        persistence!,
+        {
+          recoveryUserId,
+          ...(github === undefined ? {} : { github }),
+          ...(google === undefined ? {} : { google }),
+          ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
+        },
+        options.baseURL,
+        { trustedClientAddress: controllerOptions.clientAddress !== undefined },
+      );
+  const auth = createControllerAuth({
     ...controllerOptions,
+    ...(humanLogin === undefined ? {} : { humanLogin }),
+    // Password-only: bind known-device entries to the password method's authentication
+    // version, which the database bumps on every password change. The guarded profile's
+    // state (bound to the enabled state, not the account version) comes from humanLogin.
+    knownDeviceState: (email: string) => passwordKnownDeviceState(pool, email),
+    ...(iamDriver === undefined
+      ? {}
+      : {
+          passwordAdministrator: (userId: string) =>
+            administersInstallation(iamDriver, options.installationId, userId),
+        }),
+    ...(humanLogin !== undefined || persistence === undefined
+      ? {}
+      : {
+          passwordSignInAudit: {
+            accepted: (userId: string) => persistence.recordPasswordLogin(userId),
+            refused: () => persistence.recordDenied("INVALID_CREDENTIALS"),
+          },
+        }),
     database: await createOccAuthDatabase(pool),
   });
+  // Finish static auth initialization before the one-way activation transaction.
+  await auth.auth.$context;
+  let activationSkipped: readonly string[] = [];
+  let withoutExternalIdentity: readonly string[] = [];
+  if (guarded) {
+    const activation = await activateRecoveryAccount(
+      persistence!,
+      // Checked above: external sign-in requires the native IAM Driver.
+      iamDriver as NativeIAMDriver,
+      options.installationId,
+      recoveryUserId,
+    );
+    if (activation.seedIgnored) {
+      onWarning?.({
+        event: "authentication.recovery-seed-warning",
+        message:
+          "OCC_AUTH_GITHUB_RECOVERY_USER_ID differs from the recorded recovery designation, which is kept.",
+      });
+    }
+    activationSkipped = activation.skipped;
+    const designation = await persistence!.recoveryDesignation();
+    if (!designation) {
+      throw new Error("Recovery designation is unavailable.");
+    }
+    // The recovery account's password lane stays admitted under sign-in floods. It follows the
+    // stored designation, never the environment seed, which may name a replaced holder.
+    humanLogin!.designateRecovery(designation.email);
+    if (passwordSignIn === "recovery-only") {
+      withoutExternalIdentity = await persistence!.accountsWithoutExternalIdentity(
+        [humanLogin!.githubProviderId, humanLogin!.googleProviderId].filter(
+          (providerId): providerId is string => providerId !== undefined,
+        ),
+      );
+    }
+  }
+  return {
+    ...auth,
+    ...(activationSkipped.length === 0 ? {} : { activationSkipped }),
+    ...(withoutExternalIdentity.length === 0 ? {} : { withoutExternalIdentity }),
+    ...(humanLogin === undefined
+      ? {}
+      : {
+          ...(humanLogin.githubProviderId === undefined
+            ? {}
+            : { githubProviderId: humanLogin.githubProviderId }),
+          ...(humanLogin.googleProviderId === undefined
+            ? {}
+            : { googleProviderId: humanLogin.googleProviderId }),
+          readAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.readAccount(userId, actor),
+          ...(humanLogin.githubProviderId === undefined
+            ? {}
+            : {
+                attachGitHub: (
+                  userId: string,
+                  subject: string,
+                  actor: HumanAuthenticationActor,
+                  expectedVersion: number,
+                ) =>
+                  persistence!.attachExternal(
+                    userId,
+                    humanLogin.githubProviderId!,
+                    subject,
+                    actor,
+                    expectedVersion,
+                  ),
+              }),
+          ...(humanLogin.googleProviderId === undefined
+            ? {}
+            : {
+                attachGoogle: (
+                  userId: string,
+                  subject: string,
+                  actor: HumanAuthenticationActor,
+                  expectedVersion: number,
+                ) =>
+                  persistence!.attachExternal(
+                    userId,
+                    humanLogin.googleProviderId!,
+                    subject,
+                    actor,
+                    expectedVersion,
+                  ),
+              }),
+          changeAccount: (
+            userId: string,
+            operation: "disable" | "enable" | "revoke",
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => persistence!.changeAccount(userId, operation, actor, expectedVersion),
+          readRecovery: (actor: HumanAuthenticationActor) => persistence!.readRecovery(actor),
+          replaceRecovery: async (
+            userId: string,
+            principalId: string,
+            expectedCurrentUserId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => {
+            const { email, ...replaced } = await persistence!.replaceRecovery(
+              userId,
+              principalId,
+              expectedCurrentUserId,
+              actor,
+              expectedVersion,
+            );
+            // Move the reserved password lane to the committed holder's email. The email comes
+            // from the replacing transaction, so no later read can fail and leave the old holder
+            // on the lane.
+            humanLogin.designateRecovery(email);
+            return replaced;
+          },
+          enrolAccount: (userId: string, actor: HumanAuthenticationActor) =>
+            persistence!.enrolAccount(userId, actor),
+          detachMethod: (
+            userId: string,
+            methodId: string,
+            actor: HumanAuthenticationActor,
+            expectedVersion: number,
+          ) => persistence!.detachExternal(userId, methodId, actor, expectedVersion),
+        }),
+  };
 }

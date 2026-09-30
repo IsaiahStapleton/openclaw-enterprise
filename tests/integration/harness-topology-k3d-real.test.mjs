@@ -88,6 +88,7 @@ test(
     const agentService = await resource("service", topology.agentServiceName, topology.placement);
     assert.deepEqual(agentService.spec.selector, {
       "app.kubernetes.io/name": `${topology.agentServiceName}-rev-${hash(topology.revision.id)}`,
+      "openclaw.dev/namespace": topology.agent.namespaceId,
       "openclaw.dev/agent": topology.agent.id,
       "openclaw.dev/revision": topology.revision.id,
       "openclaw.dev/workload-role": "agent",
@@ -103,14 +104,14 @@ test(
         "--version",
       )
     ).trim();
-    const expectedCodexVersion = process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ?? "0.156.0";
+    const expectedCodexVersion = process.env.OCC_TEST_KUBERNETES_CODEX_VERSION ?? "0.158.0";
     assert.ok(codexVersion.includes(expectedCodexVersion));
     context.diagnostic(`dedicated: ${codexVersion}`);
     await assertUnauthorizedCodexSocket(topology);
     await resource("networkpolicy", "default-deny", topology.placement);
     const target = await resource("pod", topology.approvedClient, topology.platformNamespace);
     await assertDeniedConnection(
-      topology.placement,
+      topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       target.status.podIP,
     );

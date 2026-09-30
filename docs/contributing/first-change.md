@@ -7,7 +7,7 @@ platform, see [Local development](local-development.md).
 
 ## 1. Prepare a checkout
 
-You need access to the private repository, Git, Node.js 24 or newer, the pnpm
+You need Git, Node.js 24 or newer, the pnpm
 version pinned in [`package.json`](../../package.json), and Go 1.27 as selected by
 [`go.mod`](../../go.mod). If you do not have a checkout yet:
 
@@ -25,7 +25,8 @@ git switch -c chore/first-platform-change
 pnpm install --frozen-lockfile
 ```
 
-Use your own branch name if that one already exists. Installation also sets up
+Use a branch name allowed by your repository access, and choose a new name if
+that branch already exists. Installation also sets up
 the repository's pre-push hook; if a custom hook already exists or other work is
 using the same dependencies, follow the [contribution policy](../../CONTRIBUTING.md#set-up-a-development-checkout).
 The first Go command may download the Go toolchain or module dependencies.

@@ -33,6 +33,8 @@ export interface RepositoryCredentialBoundSessionInput extends RepositoryCredent
   readonly deadlineWallMs: number;
   /** Look up an admission without creating a session; not part of replay identity. */
   readonly recoverOnly?: true;
+  /** Requires the durable admission protocol; older brokers must reject it. */
+  readonly durableAdmission?: true;
 }
 
 export interface RepositoryCredentialSessionResult {
@@ -102,5 +104,24 @@ export interface SessionControl {
   close(sessionId: string): SessionStatus;
 }
 export interface CredentialService extends SessionControl {
+  shutdown(graceMs: number): Promise<ShutdownSummary>;
+}
+
+/** Optional, non-authoritative display data from a repository Backend. */
+export interface RepositoryDescriptions {
+  list(
+    namespaceId: string,
+    repositoryRefs: readonly string[],
+  ): Readonly<{
+    providerInstanceId: string;
+    appId: string;
+    githubInstallationId: string;
+    descriptions: readonly Readonly<{
+      repositoryRef: string;
+      repositoryId: string;
+      description: string;
+    }>[];
+    pending: boolean;
+  }>;
   shutdown(graceMs: number): Promise<ShutdownSummary>;
 }

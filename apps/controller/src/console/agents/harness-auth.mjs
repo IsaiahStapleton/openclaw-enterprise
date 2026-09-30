@@ -9,7 +9,7 @@ export function configuredHarnessId(values) {
   const selection = defaults?.model ?? entries.find((entry) => entry?.model)?.model;
   const model = typeof selection === "string" ? selection : selection?.primary;
   if (typeof model !== "string") {
-    return "openclaw";
+    return undefined;
   }
   const providerId = model.split("/", 1)[0];
   const provider = values?.models?.providers?.[providerId];
@@ -109,6 +109,7 @@ export function createHarnessAuthFields(context, binding = null, harnessId, opti
     onSecretSelected(secret) {
       selectedSecretSource = secret.ref;
       changedSecret = secret;
+      options.onChange?.();
     },
     createSecretName: () => {
       const agentName =

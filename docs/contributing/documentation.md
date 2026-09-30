@@ -4,6 +4,9 @@ Use this guide to add or update OpenClaw Enterprise documentation. Start with th
 reader's task and verify commands, permissions, defaults, and limits against the
 current source before describing them as supported.
 
+For private deployment, the custom domain, and the separate public-launch step,
+see [Documentation hosting](documentation-hosting.md).
+
 ## Choose one home
 
 The menu bar selects a sidebar. Put each page in one section and link to it from
@@ -45,10 +48,8 @@ If a page contains only an internal record, set `published: false` in its YAML
 frontmatter and leave it out of `docs.json`. It will have no site URL or search
 result, so use a GitHub source link if the archive needs to be cited.
 
-The [documentation map](../README.md) links the six sections. A previous
-[documentation inventory](../documentation-inventory.md) records gaps and
-placement decisions from the navigation audit; use the live map and `docs.json`
-for current navigation.
+The [documentation map](../README.md) links the six sections. Use it and
+`docs.json` for current navigation.
 
 ## Preview and check
 

@@ -206,7 +206,9 @@ function operationReference(path, method, operation, document, { headingLevel = 
                 ? " (when selecting an existing namespace)"
                 : condition === "bound_secret"
                   ? " (when bound)"
-                  : "";
+                  : condition === "read_logs_alternative"
+                    ? " (instead of `read_logs`)"
+                    : "";
           return `| \`${action}\` | \`${resourceKind}\` | \`${scope}\`${qualifier} |`;
         }),
       ].join("\n"),
@@ -293,7 +295,7 @@ function errorSchema(document, entries) {
       .flatMap((operation) => Object.entries(operation.responses))
       .find(([status, response]) => {
         const schema = resolveSchema(response.content?.["application/json"]?.schema, document);
-        return !status.startsWith("2") && schema.properties?.error?.properties?.details;
+        return !status.startsWith("2") && schema?.properties?.error?.properties?.details;
       })
       ?.at(1).content["application/json"].schema ??
     operations

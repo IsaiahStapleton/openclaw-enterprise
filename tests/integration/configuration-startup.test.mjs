@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import pg from "pg";
-import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
+import {
+  loadInstallationConfiguration,
+  loadStartupConfigurationSnapshot,
+} from "../../apps/controller/src/composition/installation-config.ts";
 import { DEVELOPMENT_HARNESS_DESCRIPTOR } from "../../apps/controller/src/composition/production-harness.ts";
 import {
   kubernetesNamespaceName,
@@ -40,6 +43,82 @@ async function fixture(t, configuration = installation()) {
   await writeFile(path, JSON.stringify(configuration), "utf8");
   return path;
 }
+
+test("Installation startup validates the optional external observability URL", async (t) => {
+  const configuration = installation();
+  configuration.observability = { url: "https://metrics.example.test/d/operations" };
+  const path = await fixture(t, configuration);
+  const loaded = await loadInstallationConfiguration({
+    mode: "development",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.equal(loaded.installation.observability.url, configuration.observability.url);
+
+  const url = configuration.observability.url;
+  for (const [observability, message] of [
+    ...[
+      "javascript:alert(1)",
+      "https://user:pass@example.test",
+      "relative",
+      "https://x.example/#f",
+    ].map((invalid) => [{ url: invalid }, /observability\.url/]),
+    [{ url, extra: 1 }, /observability contains unsupported option extra/],
+  ]) {
+    configuration.observability = observability;
+    await writeFile(path, JSON.stringify(configuration), "utf8");
+    await assert.rejects(
+      loadInstallationConfiguration({
+        mode: "development",
+        environment: { OCC_CONFIG_PATH: path },
+      }),
+      message,
+    );
+  }
+});
+
+test("Installation startup declares native worker support only as a custom runtime image", async (t) => {
+  const configuration = installation();
+  const path = await fixture(t, configuration);
+  const load = () =>
+    loadInstallationConfiguration({ mode: "development", environment: { OCC_CONFIG_PATH: path } });
+  // Off by default: the pinned runtime cannot run dedicated native OpenClaw.
+  assert.equal((await load()).installation.runtime, undefined);
+  configuration.runtime = { nativeWorkerSupport: "custom-image" };
+  await writeFile(path, JSON.stringify(configuration), "utf8");
+  assert.deepEqual((await load()).installation.runtime, { nativeWorkerSupport: "custom-image" });
+  for (const [runtime, message] of [
+    [{ nativeWorkerSupport: true }, /runtime\.nativeWorkerSupport must be "custom-image"/],
+    [
+      { nativeWorkerSupport: "pinned-runtime" },
+      /runtime\.nativeWorkerSupport must be "custom-image"/,
+    ],
+    [{}, /runtime\.nativeWorkerSupport must be "custom-image"/],
+    [
+      { nativeWorkerSupport: "custom-image", image: "x" },
+      /runtime contains unsupported option image/,
+    ],
+  ]) {
+    configuration.runtime = runtime;
+    await writeFile(path, JSON.stringify(configuration), "utf8");
+    await assert.rejects(load(), message);
+  }
+});
+
+test("development accepts a Metrics URL with its default Compose Drivers", async (t) => {
+  const url = "https://metrics.example.test/d/operations";
+  const path = await fixture(t, { observability: { url } });
+  const environment = { OCC_CONFIG_PATH: path };
+  const snapshot = await loadStartupConfigurationSnapshot({ mode: "development", environment });
+  assert.equal(snapshot.observability.url, url);
+  assert.equal(
+    await loadInstallationConfiguration({
+      mode: "development",
+      environment,
+      startupConfiguration: snapshot,
+    }),
+    undefined,
+  );
+});
 
 function chatgptInstallation() {
   const configuration = installation();
@@ -470,7 +549,7 @@ test("production embedded replacements preserve their active Service across fail
   const service = computeDriver.service(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     structuredClone(activeSelector),
   );
   assert.equal(service.spec.ports[0].name, "http");
@@ -563,7 +642,7 @@ test("production embedded replacements preserve their active Service across fail
   const newerGateway = computeDriver.deployment(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     "openclaw-enterprise/gateway-fixture:local",
     `agent-${shortHash(agentId, 12)}`,
     "gateway",
@@ -572,11 +651,10 @@ test("production embedded replacements preserve their active Service across fail
     computeDriver.gatewayConfiguration(candidate),
     true,
     servicePrincipalId,
-    computeDriver.harnessAuthForRevision(
-      candidate,
-      authContext,
-      kubernetesGatewayNamespaceName(namespaceId),
-    ),
+    computeDriver.harnessAuthForRevision(candidate, authContext, {
+      name: kubernetesGatewayNamespaceName(namespaceId),
+      plane: "control",
+    }),
   );
   const originalGet = computeDriver.get;
   computeDriver.get = async (kind, requestedName) => {
@@ -599,7 +677,7 @@ test("production embedded replacements preserve their active Service across fail
   service.spec.selector = computeDriver.service(
     name,
     ownership,
-    kubernetesNamespaceName(namespaceId),
+    { name: kubernetesNamespaceName(namespaceId), plane: "execution" },
     inactiveSelector,
   ).spec.selector;
   const initial = await worker.observeRevision(claim, candidate, undefined, undefined);

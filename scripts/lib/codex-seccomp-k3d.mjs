@@ -527,7 +527,7 @@ async function prepareCodexSeccompProfile({
   execFile,
   kubectl: kubectlBin,
   docker,
-  codexVersion = "0.156.0",
+  codexVersion = "0.158.0",
   commandTimeoutMs = timeoutMs + 15_000,
   env = process.env,
 } = {}) {
@@ -667,7 +667,11 @@ async function selectedDevelopmentCluster(directory) {
   if (
     state.version !== 3 ||
     state.computeDriver !== "kubernetes" ||
-    state.deploymentMode !== "k3d" ||
+    (state.deploymentMode !== "k3d" &&
+      !(
+        state.deploymentMode === undefined &&
+        /^[a-z0-9][a-z0-9_-]*$/.test(state.composeProject ?? "")
+      )) ||
     state.sandboxDriver !== "none" ||
     !/^occ-dev-[a-z0-9][a-z0-9-]*$/.test(state.cluster ?? "") ||
     state.cluster.length > 63 ||
@@ -693,6 +697,17 @@ async function selectedDevelopmentCluster(directory) {
     context: `k3d-${state.cluster}`,
     engine: state.containerEngine,
   };
+}
+
+// Names the localhost profile installed for the dedicated Codex sandbox. The
+// lifecycle in internal/occdev/openshell_k3d.go parses this name, so the format
+// is a contract between the two; it matches the shape rather than repeating the
+// reviewed version, which this module owns.
+function developmentCodexProfileName(profile, codexVersion) {
+  assertReviewedCodexVersion(codexVersion);
+  const name = `openclaw/codex-${codexVersion}-${sha256Hex(stableJson(profile))}.json`;
+  assertLocalhostProfileName(name);
+  return name;
 }
 
 async function installDevelopmentProfile(nodeName, profileName, profile, directory, options) {
@@ -765,7 +780,7 @@ async function prepareDevelopmentCodexSeccompProfile({ directory, image, execFil
   const cluster = await selectedDevelopmentCluster(directory);
   assertImmutableImageReference(image);
   const execute = requireExecFile(execFile);
-  const codexVersion = "0.156.0";
+  const codexVersion = "0.158.0";
   assertReviewedCodexVersion(codexVersion);
   const selection = { kubeconfig: cluster.kubeconfig, context: cluster.context };
   const namespace = `openclaw-dev-seccomp-${randomSuffix(4)}`;
@@ -809,8 +824,8 @@ async function prepareDevelopmentCodexSeccompProfile({ directory, image, execFil
       }
       const profile = deriveCodexBwrapProfile(baseline, { codexVersion });
       const digest = sha256Hex(stableJson(profile));
-      const profileName = `openclaw/codex-${codexVersion}-${digest}.json`;
-      assertLocalhostProfileName(profileName);
+      const profileName = developmentCodexProfileName(profile, codexVersion);
+
       await installDevelopmentProfile(nodes[0], profileName, profile, temporaryDirectory, options);
       await verifyInstalledProfile(
         selection,
@@ -863,6 +878,7 @@ export {
   codexBwrapSourceProvenance,
   defaultProfileName,
   deriveCodexBwrapProfile,
+  developmentCodexProfileName,
   prepareCodexSeccompProfile,
   prepareDevelopmentCodexSeccompProfile,
   validateRuntimeDefaultSeccompProfile,

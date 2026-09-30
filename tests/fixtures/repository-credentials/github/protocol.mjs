@@ -15,10 +15,12 @@ export function createGitHubProtocol({
   clock,
   repository = fixtureRepository,
   repositoryId = fixtureRepositoryId,
+  description = null,
   keyPair = generateKeyPairSync("rsa", { modulusLength: 2048 }),
   tokenLifetimeMs = 3600000,
   tokenResponse = (packet) => packet,
   beforeIssueResponse,
+  beforeMetadataResponse,
   issueResponse = (response) => response,
   issueResponseGate,
   revokeStatus = 204,
@@ -30,7 +32,7 @@ export function createGitHubProtocol({
     lifetimeMs: tokenLifetimeMs,
     repositoryId,
   });
-  const resources = createRepositoryResources({ repository, repositoryId });
+  const resources = createRepositoryResources({ repository, repositoryId, description });
   const trace = [];
   const errors = [];
   let disconnectMutation;
@@ -111,6 +113,9 @@ export function createGitHubProtocol({
         json(401, { message: "Unauthorized" });
         return;
       }
+      if (request.method === "GET" && url.pathname === `/repos/${repository}`) {
+        await beforeMetadataResponse?.();
+      }
       if (url.pathname === "/graphql") {
         entry.query = body.query;
         entry.variables = body.variables;
@@ -161,6 +166,9 @@ export function createGitHubProtocol({
     errors,
     authorize: authority.authorize,
     tokenState: authority.tokenState,
+    setRevokeStatus(status) {
+      revokeStatus = status;
+    },
     disconnectAfterMutation(method, target) {
       disconnectMutation = `${method} ${target}`;
     },

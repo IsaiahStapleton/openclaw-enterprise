@@ -6,9 +6,19 @@ OpenTelemetry Collector also exposes metrics about its own delivery pipeline;
 it does not collect application metrics, traces, or audit records. Run commands
 from the repository root.
 
+To give Installation administrators a shortcut to an observability UI, set
+`observability.url` in the [trusted startup YAML](../reference/configuration.md#installation-startup-configuration)
+and restart the API. The console opens that URL in a separate tab after an
+Installation `administer` check. Configure authentication at the destination.
+The link does not change Collector export.
+For the demonstration Grafana stack, point the link to `/d/occ-observability`;
+that landing page lists its metrics and operational logs views. The demo does
+not provide traces.
+
 | Signal              | Available path                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Operational logs    | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend.                                                                      |
+| One Agent's output  | The console **Logs** tab and `runtime/logs` API read a bounded, redacted page from Kubernetes on demand; nothing is exported. See [Agent logs](topics/agent-logs.md).    |
 | Collector metrics   | Prometheus endpoint on port `8888` for the collection pipeline itself.                                                                                                   |
 | Audit records       | Stored separately in PostgreSQL; the Collector does not export them. See [Audit Log](topics/audit-log.md).                                                               |
 | Application metrics | Private OCC Prometheus endpoints enabled by default in Helm; see [production scraping](observability/metrics.md) and the [development dashboard](../testing/metrics.md). |
@@ -185,6 +195,10 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 3. For runtime coverage, deploy an Agent and exercise its gateway or Codex
    app-server. Check the corresponding `openclaw-gateway` or `codex-app-server`
    records and `openclaw.agent.id` / `openclaw.revision.id` resource attributes.
+
+Retained record bodies hold only the event name. Search for a request, Agent,
+or revision by its attribute, not by body text; in Loki these are structured
+metadata, for example `{service_name="occ-worker"} | occ_revision_id="<id>"`.
 
 A healthy Collector and local container output do not prove that the backend
 received the records. Only approved runtime events appear. Receiving API logs

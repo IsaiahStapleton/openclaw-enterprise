@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-09-28
-last_updated_session: 01a0e441-02f9-70b2-ad45-0a1a5049954a
+updated: 2026-09-29
+last_updated_session: 89a4ccd7-3974-43c6-b08a-be02269a8d01
 ---
 
 # Compose development startup
@@ -49,20 +49,20 @@ graph TD
 
 ### 1. scripts/dev-up: host preflight and runtime image selection
 
-`scripts/dev-up:require_command`, `internal/occdev/compose.go:AnalyzeCompose`,
+`scripts/dev-up:require_command`, `internal/occdev/up.go:Up`,
+`internal/occdev/compose.go:AnalyzeCompose`,
 `deploy/runtime/Dockerfile`
 
-The helper requires the checkout-local `bin/occ` from `pnpm cli:build`, accepts
-`--key-output`, and forwards arguments after `--` to Compose. This section traces
-the default `OCC_DEVELOPMENT_COMPUTE_DRIVER=docker`. OpenShell requires
-Kubernetes Compute. Kubernetes Compute also defaults to the Compose control
+The helper requires `bin/occ` (`pnpm cli:build`), accepts `--key-output`, and
+forwards arguments after `--` to Compose. This section traces Docker Compute.
+OpenShell requires Kubernetes Compute, which defaults to the Compose control
 plane; explicitly select `OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` for
 [local Kubernetes-only development](../../guides/deploy/local-kubernetes-development.md).
+Without a Sandbox Driver, Compose Kubernetes startup requires Node before creating resources.
 
-The Docker Compute path first probes a running Docker Engine and the JSON
-configuration capability required from Docker Compose. If that probe fails, it
-selects `podman` directly; a `docker` compatibility alias is neither required
-nor treated as Docker merely because of its name. Podman requires the standalone
+Docker Compute probes Docker Engine and Compose JSON configuration support.
+On failure it selects `podman`; a `docker` compatibility alias is neither
+required nor sufficient. Podman requires the standalone
 `podman-compose` provider and `yq` v4; the helper pins that provider so status
 and stopped one-shot container behavior stay consistent.
 
@@ -75,11 +75,10 @@ image selection. The helper appends
 at `/var/run/docker.sock`. The base Docker Compute worker disables SELinux
 process labeling because relabeling a host engine socket is unsafe; other
 services retain SELinux confinement.
-The override also gives migration, bootstrap, API, and worker one shared
-development image. Because podman-compose otherwise rebuilds that identical
-target once per service, `dev-up` builds it once through the migration service
-and starts the stack with `--no-build`. Docker keeps its native `up --build`
-path. Expanded configuration and credentials are never printed.
+The override shares one development image across migration, bootstrap, API,
+and worker. To avoid repeated Podman builds, `dev-up` builds through migration
+once, then starts with `--no-build`. Docker uses `up --build`. Expanded
+configuration and credentials are never printed.
 
 On macOS, run `podman` as your normal host user, without `sudo`. The k3d
 workflow requires a rootful Podman machine; rootful describes the VM, not
@@ -199,11 +198,9 @@ does not mount the configuration volume.
 `internal/occdev/gateway_k3d.go:installDevelopmentRoutingControllers`,
 `internal/occdev/repository_k3d.go:enableDevelopmentRepository`.
 
-The Kubernetes-only profile creates its owned k3d cluster in K3s legacy
-iptables mode, imports matching OCE images, and runs PostgreSQL, migration,
-bootstrap, API, and
-worker inside Kubernetes. An explicitly selected IPv4 resolver replaces k3d's
-node DNS rewriting; the host resolver is unchanged.
+Both profiles use legacy iptables and honor the explicit IPv4 node DNS resolver
+without changing host DNS. Kubernetes-only startup imports matching OCE images
+and runs PostgreSQL, migration, bootstrap, API and worker in Kubernetes.
 
 Without OpenShell, it verifies the pinned cert-manager and Envoy Gateway
 manifests. It waits for the k3s-owned Gateway API CRDs to be created and
@@ -244,14 +241,13 @@ discovery. This does not prove a model turn, native sandbox, or Git operation.
 
 `internal/occdev/command.go:selectEngine`,
 `internal/occdev/command.go:pinEndpoint`,
+`internal/occdev/command.go:podmanEndpoint`,
 `internal/occdev/up.go:Up`.
 
-The ordinary Kubernetes lifecycle, with no Sandbox Driver selected, chooses
-Docker or Podman, resolves the selected local
-Unix socket, and records it with the Compose project and generated `occ-dev-*`
-cluster name in a private state directory. Cleanup validates that state and
-reuses the recorded endpoint. Changing the active Docker context after startup
-does not redirect cleanup to another engine.
+Without a Sandbox Driver, Kubernetes startup selects Docker or Podman and
+resolves its host socket from Docker's active context or `podman machine inspect`.
+Private state records the socket, Compose project, and `occ-dev-*` cluster.
+Cleanup validates and reuses those records, regardless of later context changes.
 
 Startup refuses existing cluster or project resources, validates the resolved
 Compose publications through `internal/occdev/compose.go:AnalyzeCompose`, and
@@ -310,7 +306,9 @@ The host kubeconfig remains owner-readable. The container kubeconfig uses the
 cluster's internal load-balancer hostname with TLS verification. The lifecycle
 imports the selected local runtime image, resolves its in-cluster digest, and
 writes Installation configuration selecting Kubernetes Compute, Configuration,
-and Secret Drivers with native IAM. Its runtime section configures the transport
+and Secret Drivers with native IAM. Without OpenShell, it includes both bundled
+Presets and the Codex Plugin Driver after the shared Codex sandbox check.
+Its runtime section configures the transport
 Secret prefix and gateway storage class accepted by the current Compute Driver
 schema. Generated Gateway and Harness resource limits allow 2 GiB of memory per
 workload; the current runtime can exceed the former 1 GiB limit during startup.
@@ -338,6 +336,10 @@ response before the final key file is written exclusively. With OpenShell,
 startup also waits for the bootstrap Kubernetes Namespace and then for OCC to
 report that Namespace ready, which establishes that the Sandbox Driver created
 or adopted its operator-mode Workspace.
+
+Both Kubernetes profiles pass `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` to
+`k3d cluster create --timeout`. A node that never becomes ready therefore returns
+failure instead of leaving the launcher waiting indefinitely.
 
 On failure, startup attempts resource cleanup. Explicit Kubernetes shutdown
 validates the marker, state, and Compose snapshot before using the recorded
@@ -371,6 +373,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:40: Bound k3d startup timeouts and preflight Node for Compose sandbox preparation. (89a4ccd7-3974-43c6-b08a-be02269a8d01 - cc96e34f33868555d4a89cb44bc022859d76c815)
 
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 

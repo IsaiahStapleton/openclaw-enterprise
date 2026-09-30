@@ -35,9 +35,14 @@ async function ensureInstallation(state, createDevelopmentIAMState, createAuthPr
   };
   state.setBootstrapNativeIAM(
     createDevelopmentIAMState(
-      createAuthPrincipalSeed(installation.id, "worker-stale-claim-integration", {
-        id: `account-worker-${randomUUID()}`,
-      }),
+      createAuthPrincipalSeed(
+        installation.id,
+        "worker-stale-claim-integration",
+        {
+          id: `account-worker-${randomUUID()}`,
+        },
+        { grant: "administrator" },
+      ),
     ),
   );
   await state.transact((unit) => unit.installations.createInstallation(installation));

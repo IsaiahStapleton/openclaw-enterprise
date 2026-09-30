@@ -4,6 +4,9 @@ The Kubernetes Compute Driver runs OpenClaw Agents on Kubernetes. It provisions
 or adopts a data-plane namespace for each tenant and creates an OpenClaw gateway
 for each deployed Agent. Dedicated Gateways run in a separate managed control-plane
 runtime namespace; embedded OpenClaw remains in the data plane.
+The experimental `executionCluster` configuration selects a second Kubernetes
+API for dedicated Harness resources. See the [two-cluster validation profile](../../testing/two-cluster-local.md)
+before using it; cloud deployment and complete runtime acceptance remain pending.
 Kubernetes supports a managed model API key for both modes and a managed
 ChatGPT service-account credential for dedicated Codex only.
 
@@ -35,8 +38,7 @@ For detailed operator contracts, see:
 - Kubernetes 1.35 or later. On an older API server, API and worker startup each
   emit `compute.preflight-warning`; its message includes the observed and
   minimum versions. Startup continues, but versions below 1.35 are outside the
-  supported and CI-verified boundary even though this advisory does not block
-  startup.
+  supported and CI-verified boundary.
 - A Kubernetes cluster dedicated to one OpenClaw Enterprise Installation.
 - Enforced Kubernetes NetworkPolicies, verified Kubernetes API TLS, and
   restricted Pod security.
@@ -48,6 +50,8 @@ For detailed operator contracts, see:
 - Approved, digest-pinned gateway and Agent images.
 - Explicit container resource limits, namespace quotas, DNS settings, approved
   proxy clients, and `network.gatewayTrustedProxyCidrs` for gateway trust.
+  Native workspace initialization uses `resources.gateway`, including in dedicated
+  Harness Pods, because it loads the OpenClaw CLI.
 - For real gateways in either topology, an explicitly selected
   `runtime.gatewayStorageClassName` for a private disk supporting `10Gi`
   `ReadWriteOnce` filesystem claims. Use `local-path` in the disposable k3d
@@ -127,15 +131,15 @@ drivers:
       resources:
         gateway:
           requests: { cpu: 100m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          limits: { cpu: "4", memory: 256Mi }
         agent:
           requests: { cpu: 100m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          limits: { cpu: "4", memory: 256Mi }
         namespace:
           quota: { pods: "10" }
           containerDefaults:
             requests: { cpu: 100m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 256Mi }
+            limits: { cpu: "4", memory: 256Mi }
       network:
         dns:
           namespace: kube-system
@@ -152,13 +156,12 @@ drivers:
         expirationSeconds: 900
       runtime:
         gatewayStorageClassName: sqlite-block
-        # Maximum retained native OpenClaw session workers per AgentRevision.
         nativeOpenClawSessionCapacity: 8
         nodeSelector: { oce-role: agents }
         gatewayNodeSelector: { oce-role: control-plane }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
-        codexSeccompProfile: profiles/codex-0.156.0.json
+        codexSeccompProfile: profiles/codex-0.158.0.json
 ```
 
 This example shows only the Compute Driver portion of the Installation
@@ -166,12 +169,10 @@ configuration. See the [complete production Installation example](../../guides/d
 for the other required Drivers and settings.
 
 `runtime.nativeOpenClawSessionCapacity` accepts an integer from `1` through
-`1024` and defaults to `8`. It bounds retained dedicated native OpenClaw session
-workers inside one AgentRevision Sandbox. Stopping a hosted session releases
-its slot; saved session history does not consume capacity. OpenClaw does not
-currently retire an idle paired-node worker automatically, so size the limit
-with the Agent workload's CPU and memory limits instead of treating it as an
-unbounded session-history setting.
+`1024` and defaults to `8`. It bounds retained native OpenClaw session workers
+in one AgentRevision Sandbox. Stopping a hosted session releases its slot; saved
+history does not consume capacity. OpenClaw does not yet retire idle paired-node
+workers, so size the limit against the Agent workload's CPU and memory limits.
 
 ### Authentication
 
@@ -192,7 +193,8 @@ selects Harness and embedded Pods; dedicated real Gateways require
 `runtime.gatewayNodeSelector`, including their private-state initializer. Use
 disjoint trusted and tenant node pools in production. Quotas and defaults apply
 separately to each physical namespace. Production requires
-`images.requireImmutableDigest: true` and SHA-256 image digests.
+`images.requireImmutableDigest: true` and SHA-256 image digests. Quote
+whole-core quantities, such as `cpu: "4"`.
 
 See [network configuration](kubernetes-compute/networking-and-isolation.md#networking)
 for DNS, gateway clients, proxy trust, and egress requirements.
@@ -271,10 +273,11 @@ configuration before serving and refreshes that configuration after a changed
 restart result. Failed-only Codex app bindings are disabled; successful selections
 retain their admitted policy, including shared app bindings they require.
 
-The Codex app-server credential is derived from the Agent's transport Secret,
+The Codex app-server credential derives from the Agent's transport Secret,
 revision, and startup identity. A gateway configured for the previous startup
 cannot authenticate to a restarted Agent. Its supervisor obtains the new status,
-applies the matching exclusions, and starts the gateway with the new credential.
+applies the matching exclusions, and respawns the gateway process with the new
+credential.
 This closes the interval before the supervisor's next status poll.
 
 The worker records warnings with successful deployment completion under its live
@@ -314,9 +317,17 @@ for additional execution details.
   ownership, exclusive tenant use, and no foreign NetworkPolicies.
 - **Gateway or Harness remains pending:** Check image digests, image pull
   permissions, CPU and memory limits, namespace quotas, required Secrets, and
-  workload readiness. Dedicated Codex Harness containers clear the plugin
-  readiness marker at process start so a marker left in the Pod's temporary
-  volume by a previous container attempt cannot make a restarted runtime ready.
+  workload readiness, including the
+  [network profile](kubernetes-compute/networking-and-isolation.md#explicit-network-profiles)
+  label. Dedicated Codex Harness
+  containers clear the plugin readiness marker at process start so a marker left
+  by a previous container attempt cannot make a restarted runtime ready.
+  Access-token login retries only native process timeouts, up to three 30-second
+  attempts. The dedicated Codex model probe separately retries a confirmed timeout
+  once within a 61-second budget; refusals are not retried. Exhausted startup
+  remains unready until an explicit restart. See the
+  [authentication probe contract](../harness-execution.md#harness-authentication)
+  for retry limits and sanitized attempt logs.
   Native plugin startup, authentication, transport, and installation failures
   remain generic workload startup failures unless the Compute-owned runtime
   reports a verified current-startup warning for an admitted selected plugin.

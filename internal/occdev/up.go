@@ -53,8 +53,11 @@ func Up(ctx context.Context, opts Options) (result error) {
 	}
 	state := &developmentState{Repository: opts.Repository, Version: 3, ComputeDriver: "kubernetes", SandboxDriver: sandboxDriver, ComposeProject: r.setting("OCC_DEVELOPMENT_COMPOSE_PROJECT", "openclaw-enterprise-development-kubernetes"), Cluster: r.setting("OCC_DEVELOPMENT_KUBERNETES_CLUSTER", "occ-dev-"+strings.ToLower(rand.Text()[:10])), directory: directory, KeyPath: opts.KeyOutput, KeyOwned: opts.KeyOutput == ""}
 
-	if !clusterName.MatchString(state.Cluster) || !projectName.MatchString(state.ComposeProject) {
-		return fmt.Errorf("invalid Kubernetes cluster or Compose project name")
+	if err := validateClusterName(state.Cluster); err != nil {
+		return err
+	}
+	if !projectName.MatchString(state.ComposeProject) {
+		return fmt.Errorf("invalid OCC_DEVELOPMENT_COMPOSE_PROJECT %q: the name must match %s", state.ComposeProject, projectName)
 	}
 	if state.KeyOwned {
 		state.KeyPath = filepath.Join(directory, "initial-admin-service-key.json")
@@ -64,7 +67,11 @@ func Up(ctx context.Context, opts Options) (result error) {
 	if err := validateComposeArgs(opts.ComposeArgs, opts.Repository); err != nil {
 		return err
 	}
-	for _, name := range []string{"k3d", "kubectl"} {
+	required := []string{"k3d", "kubectl"}
+	if sandboxDriver == "none" {
+		required = append(required, "node")
+	}
+	for _, name := range required {
 		if _, err := exec.LookPath(name); err != nil {
 			return fmt.Errorf("%s is required on PATH", name)
 		}
@@ -178,7 +185,12 @@ func Up(ctx context.Context, opts Options) (result error) {
 	fmt.Fprintf(r.opts.Out, "Creating k3d cluster %s...\n", state.Cluster)
 	clusterAttempted = true
 	clusterImage := r.setting("OCC_DEVELOPMENT_K3S_IMAGE", "+v1.35")
-	clusterArgs := []string{"cluster", "create", state.Cluster}
+	clusterArgs := []string{"cluster", "create", state.Cluster, "--timeout", (time.Duration(timeout) * time.Second).String(), "--env", "IPTABLES_MODE=legacy@server:0"}
+	resolverArgs, err := r.prepareDevelopmentResolver(state)
+	if err != nil {
+		return err
+	}
+	clusterArgs = append(clusterArgs, resolverArgs...)
 	if sandboxDriver == "openshell" {
 		clusterImage = openShellK3sImage
 		admissionPath, err := prepareOpenShellAdmission(directory)
@@ -213,7 +225,14 @@ func Up(ctx context.Context, opts Options) (result error) {
 			return err
 		}
 	}
-	if err := writeInstallation(state, reference, openShellAssets, ""); err != nil {
+	var codexSeccompProfile string
+	if sandboxDriver == "none" {
+		codexSeccompProfile, err = r.prepareDevelopmentCodexSandbox(ctx, state, reference, timeout)
+		if err != nil {
+			return err
+		}
+	}
+	if err := writeInstallation(state, reference, openShellAssets, codexSeccompProfile); err != nil {
 		return err
 	}
 	fmt.Fprintln(r.opts.Out, "Starting the Compose controller and Kubernetes worker...")

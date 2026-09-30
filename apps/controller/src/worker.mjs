@@ -1,5 +1,6 @@
 import { unlink, writeFile } from "node:fs/promises";
-import { createPostgresPool } from "@openclaw-enterprise/occ";
+import { createPostgresPool, PostgresPlatformState } from "@openclaw-enterprise/occ";
+import { startRepositoryReceiptServer } from "./backends/repository-credentials/receipt-server.ts";
 import {
   loadInstallationConfiguration,
   loadOperationalLoggingConfiguration,
@@ -9,6 +10,7 @@ import { createOccLogger, createWorkerLogEmitter, emitOccLogEvent } from "./logg
 import { createControllerWorker } from "./worker.ts";
 import { PostgresMetricsSnapshot } from "@openclaw-enterprise/occ";
 import { createOccMetrics } from "./metrics/index.ts";
+import { startupDependencyFailure } from "./startup-failure.ts";
 import { metricsConfiguration, startMetricsListener } from "./metrics/listener.ts";
 
 function positiveEnvironment(name, fallback) {
@@ -70,6 +72,7 @@ let startupConfiguration;
 let metricsPool;
 let metricsListener;
 let metricsClosing;
+let receiptServer;
 async function closeMetrics() {
   metricsClosing ??= (async () => {
     try {
@@ -110,6 +113,12 @@ try {
     }
   }
   pool = await createPostgresPool(databaseUrl);
+  if (drivers?.repositoryReceipt !== undefined) {
+    receiptServer = await startRepositoryReceiptServer({
+      ...drivers.repositoryReceipt,
+      state: new PostgresPlatformState(pool),
+    });
+  }
   let metrics;
   if (metricsSettings !== undefined) {
     metricsPool = await createPostgresPool(databaseUrl, {
@@ -153,7 +162,11 @@ try {
         await unlink(readinessPath).catch(() => {});
       }
       try {
-        await closeMetrics();
+        try {
+          await receiptServer?.close();
+        } finally {
+          await closeMetrics();
+        }
       } finally {
         await worker.stop();
       }
@@ -166,6 +179,7 @@ try {
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 } catch (error) {
+  await receiptServer?.close().catch(() => {});
   await closeMetrics().catch(() => {});
   if (readinessPath !== undefined) {
     await unlink(readinessPath).catch(() => {});
@@ -191,7 +205,7 @@ try {
   }
   emitOccLogEvent(logger, {
     event: "worker.startup-error",
-    code: workerStartupFailureCode(error),
+    ...(startupDependencyFailure(error) ?? { code: workerStartupFailureCode(error) }),
   });
   process.exitCode = 1;
 }

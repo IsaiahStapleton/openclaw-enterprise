@@ -20,6 +20,10 @@
   },
   "files": [
     {
+      "path": "tests/integration/observability-demo-chart.test.mjs",
+      "expectedTests": ["demo Grafana keeps its disposable SQLite database off node disk"]
+    },
+    {
       "path": "tests/integration/observability-demo-k3d.test.mjs",
       "expectedTests": ["demo Helm stack ingests fixture metrics and OTLP logs through Grafana"]
     }

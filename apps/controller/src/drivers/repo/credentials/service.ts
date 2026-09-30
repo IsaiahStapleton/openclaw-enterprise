@@ -20,6 +20,7 @@ import type { LifecycleOwner } from "./lifecycle.ts";
 import { executeExchange } from "./lifecycle/exchange.ts";
 import type { ExecutingExchange } from "./lifecycle/exchange.ts";
 import { createProviderQueue, waitWithin } from "./provider-queue.ts";
+import type { ProviderQueue } from "./provider-queue.ts";
 import {
   admitSession,
   bearerDigest,
@@ -49,7 +50,12 @@ const deny = (status: number, code: string): Denied =>
   Object.freeze({ kind: "denied", status, code });
 
 export function createCredentialService(
-  options: Readonly<{ config: ServiceConfig; factory: RepositoryBackendFactory; clock: Clock }>,
+  options: Readonly<{
+    config: ServiceConfig;
+    factory: RepositoryBackendFactory;
+    clock: Clock;
+    providerQueue?: ProviderQueue;
+  }>,
 ): CredentialServiceOwner {
   const { factory, clock } = options;
   // Caller mutation cannot change limits or broaden an already admitted policy.
@@ -58,12 +64,13 @@ export function createCredentialService(
     ...options.config.sessionPolicy,
     allowedProfiles: Object.freeze([...options.config.sessionPolicy.allowedProfiles]),
   });
-  const queue = createProviderQueue(limits.providerQueue);
+  const queue = options.providerQueue ?? createProviderQueue(limits.providerQueue);
   const sessions = new Map<string, Session>();
   const failedConstructions = new Set<CustodyOwner>();
   const bearers = new Map<string, Session>();
   const exchanges = new WeakMap<ExchangeRef, Exchange>();
   const shutdownWaiters = new Set<() => void>();
+  const disposalObservers = new Set<(status: SessionStatus) => void>();
   let exchangeCount = 0;
   let shuttingDown = false;
 
@@ -95,6 +102,13 @@ export function createCredentialService(
       session.custody.renewalCallbacks === 0
     ) {
       session.state = "DISPOSED";
+      for (const observer of disposalObservers) {
+        try {
+          observer(snapshot(session));
+        } catch {
+          // An observer cannot alter the original custody outcome.
+        }
+      }
     }
     notifyShutdown();
   }
@@ -296,6 +310,10 @@ export function createCredentialService(
         bearer,
         client: Object.freeze({ ...resolved.client }),
       });
+    },
+    observeDisposal(observer: (status: SessionStatus) => void) {
+      disposalObservers.add(observer);
+      return () => disposalObservers.delete(observer);
     },
     status(sessionId: string) {
       const session = sessions.get(sessionId);
