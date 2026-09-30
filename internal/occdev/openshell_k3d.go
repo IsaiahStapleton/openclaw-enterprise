@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -506,18 +507,25 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 	if err := r.waitPodSucceeded(ctx, namespace, "bootstrap-password-prepare", timeout); err != nil {
 		return err
 	}
+	// A StatefulSet, not a bare Pod: k3d cluster stop/start and host reboots
+	// delete bare Pods, and the controller recreates PostgreSQL on its claim.
+	postgresLabels := map[string]string{"app": "postgres", "app.kubernetes.io/managed-by": "openclaw-development"}
 	postgres := map[string]any{
-		"apiVersion": "v1", "kind": "Pod", "metadata": kubernetesMetadata("postgres", namespace, map[string]string{"app": "postgres", "app.kubernetes.io/managed-by": "openclaw-development"}),
+		"apiVersion": "apps/v1", "kind": "StatefulSet", "metadata": kubernetesMetadata("postgres", namespace, labels),
 		"spec": map[string]any{
-			"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 999, "runAsGroup": 999, "fsGroup": 999, "seccompProfile": map[string]string{"type": "RuntimeDefault"}},
-			"containers": []any{map[string]any{
-				"name": "postgres", "image": postgresImage, "imagePullPolicy": "Never", "resources": resources,
-				"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}},
-				"env":             []any{map[string]string{"name": "POSTGRES_DB", "value": "openclaw_enterprise"}, map[string]any{"name": "POSTGRES_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]string{"name": "postgres-bootstrap", "key": "password"}}}},
-				"volumeMounts":    []any{map[string]any{"name": "data", "mountPath": "/var/lib/postgresql"}, map[string]any{"name": "init", "mountPath": "/docker-entrypoint-initdb.d", "readOnly": true}},
-				"readinessProbe":  map[string]any{"exec": map[string]any{"command": []string{"pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"}}, "initialDelaySeconds": 2, "periodSeconds": 2},
+			"replicas": 1, "serviceName": "postgres",
+			"selector": map[string]any{"matchLabels": map[string]string{"app": "postgres"}},
+			"template": map[string]any{"metadata": map[string]any{"labels": postgresLabels}, "spec": map[string]any{
+				"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 999, "runAsGroup": 999, "fsGroup": 999, "seccompProfile": map[string]string{"type": "RuntimeDefault"}},
+				"containers": []any{map[string]any{
+					"name": "postgres", "image": postgresImage, "imagePullPolicy": "Never", "resources": resources,
+					"securityContext": map[string]any{"allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}},
+					"env":             []any{map[string]string{"name": "POSTGRES_DB", "value": "openclaw_enterprise"}, map[string]any{"name": "POSTGRES_PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]string{"name": "postgres-bootstrap", "key": "password"}}}},
+					"volumeMounts":    []any{map[string]any{"name": "data", "mountPath": "/var/lib/postgresql"}, map[string]any{"name": "init", "mountPath": "/docker-entrypoint-initdb.d", "readOnly": true}},
+					"readinessProbe":  map[string]any{"exec": map[string]any{"command": []string{"pg_isready", "-U", "postgres", "-d", "openclaw_enterprise"}}, "initialDelaySeconds": 2, "periodSeconds": 2},
+				}},
+				"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "postgres-data"}}, map[string]any{"name": "init", "secret": map[string]any{"secretName": "postgres-bootstrap", "items": []any{map[string]string{"key": "init.sql", "path": "init.sql"}}}}},
 			}},
-			"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]string{"claimName": "postgres-data"}}, map[string]any{"name": "init", "secret": map[string]any{"secretName": "postgres-bootstrap", "items": []any{map[string]string{"key": "init.sql", "path": "init.sql"}}}}},
 		},
 	}
 	if err := r.writeAndApply(ctx, state, "postgres", postgres); err != nil {
@@ -530,10 +538,10 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 	if err := r.writeAndApply(ctx, state, "postgres-service", postgresService); err != nil {
 		return err
 	}
-	if err := r.run(ctx, "kubectl", "-n", namespace, "wait", "--for=condition=Ready", "pod/postgres", "--timeout", timeout.String()); err != nil {
+	if err := r.run(ctx, "kubectl", "-n", namespace, "rollout", "status", "statefulset/postgres", "--timeout", timeout.String()); err != nil {
 		return err
 	}
-	postgresIP, err := r.output(ctx, "kubectl", "-n", namespace, "get", "pod", "postgres", "-o", "jsonpath={.status.podIP}")
+	postgresIP, err := r.output(ctx, "kubectl", "-n", namespace, "get", "pod", "postgres-0", "-o", "jsonpath={.status.podIP}")
 	if err != nil || len(postgresIP) == 0 {
 		return fmt.Errorf("resolve PostgreSQL Pod IP: %w", err)
 	}
@@ -548,6 +556,9 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 	clusterPort, err := strconv.Atoi(string(clusterPortData))
 	if err != nil || clusterPort < 1 || clusterPort > 65535 {
 		return fmt.Errorf("Kubernetes API endpoint reported an invalid port")
+	}
+	if err := r.applyDevelopmentRestartEgress(ctx, state, string(clusterIP), clusterPort); err != nil {
+		return err
 	}
 	installationData, err := os.ReadFile(filepath.Join(state.directory, "installation.yaml"))
 	if err != nil {
@@ -614,6 +625,97 @@ func (r *runner) installKubernetesControlPlane(ctx context.Context, state *devel
 		return err
 	}
 	return r.installDevelopmentAPIProxy(ctx, state, controllerImage, timeout)
+}
+
+// applyDevelopmentRestartEgress keeps the control plane connected after
+// `k3d cluster stop` and `start` or a host reboot. The chart admits PostgreSQL
+// and the Kubernetes API only as explicit /32 hosts, and both addresses can
+// change on restart. This launcher-owned policy adds the same egress by
+// PostgreSQL Pod label and by the owned k3d network subnet.
+func (r *runner) applyDevelopmentRestartEgress(ctx context.Context, state *developmentState, clusterIP string, clusterPort int) error {
+	subnet, err := r.developmentNodeSubnet(ctx, state, clusterIP)
+	if err != nil {
+		return fmt.Errorf("resolve k3d network subnet: %w", err)
+	}
+	namespace := state.PlatformNamespace
+	labels := map[string]string{"app.kubernetes.io/managed-by": "openclaw-development"}
+	components := func(values ...string) map[string]any {
+		return map[string]any{
+			"matchLabels":      map[string]string{"app.kubernetes.io/name": "openclaw-enterprise", "app.kubernetes.io/instance": "openclaw-enterprise"},
+			"matchExpressions": []any{map[string]any{"key": "app.kubernetes.io/component", "operator": "In", "values": values}},
+		}
+	}
+	policies := map[string]any{
+		"apiVersion": "v1", "kind": "List", "items": []any{
+			map[string]any{
+				"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": kubernetesMetadata("openclaw-development-postgres-egress", namespace, labels),
+				"spec": map[string]any{
+					"podSelector": components("api", "worker", "initialization"), "policyTypes": []string{"Egress"},
+					"egress": []any{map[string]any{
+						"to":    []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]string{"app": "postgres"}}}},
+						"ports": []any{map[string]any{"protocol": "TCP", "port": 5432}},
+					}},
+				},
+			},
+			map[string]any{
+				"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": kubernetesMetadata("openclaw-development-kubernetes-egress", namespace, labels),
+				"spec": map[string]any{
+					"podSelector": components("api", "worker", "initialization", "collector"), "policyTypes": []string{"Egress"},
+					"egress": []any{map[string]any{
+						"to":    []any{map[string]any{"ipBlock": map[string]string{"cidr": subnet}}},
+						"ports": []any{map[string]any{"protocol": "TCP", "port": clusterPort}},
+					}},
+				},
+			},
+		},
+	}
+	return r.writeAndApply(ctx, state, "restart-egress", policies)
+}
+
+// developmentNodeSubnet returns the IPv4 subnet of the owned k3d network that
+// contains the Kubernetes API endpoint. The engine may give the node a new
+// address in that subnet when the cluster or host restarts.
+func (r *runner) developmentNodeSubnet(ctx context.Context, state *developmentState, endpoint string) (string, error) {
+	address, err := netip.ParseAddr(endpoint)
+	if err != nil || !address.Is4() {
+		return "", fmt.Errorf("Kubernetes API endpoint must be an IPv4 address")
+	}
+	data, err := r.output(ctx, r.engine, "network", "inspect", "k3d-"+state.Cluster)
+	if err != nil {
+		return "", err
+	}
+	// Docker reports IPAM.Config[].Subnet; Podman reports subnets[].subnet.
+	var networks []struct {
+		IPAM struct {
+			Config []struct {
+				Subnet string `json:"Subnet"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+		Subnets []struct {
+			Subnet string `json:"subnet"`
+		} `json:"subnets"`
+	}
+	if err := json.Unmarshal(data, &networks); err != nil || len(networks) != 1 {
+		return "", fmt.Errorf("invalid k3d network information")
+	}
+	var subnets []string
+	for _, entry := range networks[0].IPAM.Config {
+		subnets = append(subnets, entry.Subnet)
+	}
+	for _, entry := range networks[0].Subnets {
+		subnets = append(subnets, entry.Subnet)
+	}
+	for _, subnet := range subnets {
+		prefix, err := netip.ParsePrefix(subnet)
+		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() || !prefix.Contains(address) {
+			continue
+		}
+		if prefix.Bits() < 16 {
+			return "", fmt.Errorf("k3d network subnet %s is broader than /16", prefix)
+		}
+		return prefix.String(), nil
+	}
+	return "", fmt.Errorf("k3d network k3d-%s has no IPv4 subnet containing the Kubernetes API endpoint", state.Cluster)
 }
 
 func (r *runner) waitPodSucceeded(ctx context.Context, namespace, name string, timeout time.Duration) error {
