@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,6 +114,21 @@ func TestEngineImageReferenceMatchesDefaultTagAndRegistry(t *testing.T) {
 		tags   string
 		want   string
 	}{
+		{"qualified official to familiar", "docker", "docker.io/library/postgres:17", `["postgres:17"]`, "postgres:17"},
+		{"qualified official default tag", "docker", "docker.io/library/postgres", `["postgres:latest"]`, "postgres:latest"},
+		{"docker hub shorthand to familiar", "docker", "docker.io/postgres:17", `["postgres:17"]`, "postgres:17"},
+		{"legacy docker hub to familiar", "docker", "index.docker.io/library/postgres:17", `["postgres:17"]`, "postgres:17"},
+		{"qualified namespace to familiar", "docker", "docker.io/team/postgres:17", `["team/postgres:17"]`, "team/postgres:17"},
+		{"qualified official prefers exact tag", "docker", "docker.io/library/postgres:17", `["postgres:17","docker.io/library/postgres:17"]`, "docker.io/library/postgres:17"},
+		{"qualified official rejects registry port", "docker", "docker.io/library/postgres:17", `["docker.io:5000/library/postgres:17"]`, ""},
+		{"qualified official rejects nested library", "docker", "docker.io/library/postgres:17", `["library/nested/postgres:17"]`, ""},
+		{"qualified official rejects other registry", "docker", "docker.io/library/postgres:17", `["other.example/library/postgres:17"]`, ""},
+		{"qualified official rejects other namespace", "docker", "docker.io/library/postgres:17", `["team/postgres:17"]`, ""},
+		{"qualified namespace rejects official", "docker", "docker.io/team/postgres:17", `["postgres:17"]`, ""},
+		{"qualified official rejects different tag", "docker", "docker.io/library/postgres:17", `["postgres:18"]`, ""},
+		{"qualified official rejects digest", "docker", "docker.io/library/postgres@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", `["postgres:latest"]`, ""},
+		{"docker hub port remains distinct", "docker", "docker.io:5000/library/postgres:17", `["postgres:17"]`, ""},
+		{"qualified aliases ambiguous", "docker", "docker.io/library/postgres:17", `["postgres:17","library/postgres:17"]`, ""},
 		{"docker default tag", "docker", "runtime", `["runtime:other","runtime:latest"]`, "runtime:latest"},
 		{"podman local default tag", "podman", "team/runtime", `["localhost/team/runtime:other","localhost/team/runtime:latest"]`, "localhost/team/runtime:latest"},
 		{"podman pulled default tag", "podman", "runtime", `["docker.io/library/runtime:latest"]`, "docker.io/library/runtime:latest"},
@@ -134,6 +150,9 @@ func TestEngineImageReferenceMatchesDefaultTagAndRegistry(t *testing.T) {
 			if tc.want == "" {
 				if err == nil {
 					t.Fatalf("accepted unrelated or ambiguous tag %q", got)
+				}
+				if strings.Contains(tc.name, "ambiguous") && !strings.Contains(err.Error(), "ambiguous tags") {
+					t.Fatalf("expected an ambiguity error, got %v", err)
 				}
 				return
 			}

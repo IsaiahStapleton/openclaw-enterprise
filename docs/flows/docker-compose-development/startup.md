@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
 updated: 2026-09-30
-last_updated_session: authoring-run/bbaa0733-5942-49d5-8bff-1b5354c10117
+last_updated_session: authoring-run/b1f9b6de-7c4e-4931-af56-d7be91056814
 ---
 
 # Compose development startup
@@ -309,11 +309,11 @@ current context unchanged.
 The host kubeconfig remains owner-readable; the container kubeconfig verifies
 TLS against the cluster's internal load-balancer hostname. Startup imports the
 runtime and OpenShell images under their engine-recorded names, including
-Podman's `localhost/` local tags. For an omitted tag,
-`internal/occdev/kubernetes.go:engineImageReference` matches `:latest`;
-it rejects missing or ambiguous matches. Startup resolves each in-cluster digest
-and writes Installation configuration selecting Kubernetes Compute, Configuration,
-and Secret Drivers with native IAM. Its runtime section configures the transport
+Podman's `localhost/` local tags and Docker Hub's familiar names. For an
+omitted tag, `internal/occdev/kubernetes.go:engineImageReference` matches
+`:latest`; it rejects missing or ambiguous matches. Startup resolves each
+in-cluster digest and writes Installation configuration selecting Kubernetes
+Compute, Configuration, and Secret Drivers with native IAM. Its runtime section configures the transport
 Secret prefix and gateway storage class accepted by the Compute Driver schema.
 Gateway and Harness limits allow 2 GiB per workload; runtime startup can exceed
 the former 1 GiB limit. The configuration and kubeconfig, behind the private host
@@ -372,6 +372,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 00:10: Matched qualified Docker Hub references to recorded familiar names. (authoring-run/b1f9b6de-7c4e-4931-af56-d7be91056814 - 9ec7ad6944f6cad953e4b1e8284bc3e3faf28378)
 
 - 2026-09-30 00:00: Matched implicit image tags and rejected ambiguous names. (authoring-run/bbaa0733-5942-49d5-8bff-1b5354c10117 - 421e85b24aa3a29c5748dde951224082b2c39d71)
 

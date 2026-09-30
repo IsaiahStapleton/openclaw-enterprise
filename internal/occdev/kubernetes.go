@@ -129,10 +129,9 @@ var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // engineImageReference reports the name the container engine recorded for a
 // local image.
 //
-// Docker keeps an unqualified name as written. Podman qualifies it with the
-// `localhost` registry, so a build tagged `name:tag` is stored as
-// `localhost/name:tag`. Both `k3d image import` and containerd match the
-// recorded name exactly, so every step after the build must use it.
+// Docker can record a familiar Docker Hub name. Podman qualifies a local
+// build tagged `name:tag` as `localhost/name:tag`. Both `k3d image import`
+// and containerd match the recorded name, so later steps must use it.
 func (r *runner) engineImageReference(ctx context.Context, image string) (string, error) {
 	data, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{json .RepoTags}}", image)
 	if err != nil {
@@ -164,11 +163,17 @@ func (r *runner) engineImageReference(ctx context.Context, image string) (string
 	qualified := hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost")
 	match := ""
 	for _, tag := range tags {
-		registry, unqualified, found := strings.Cut(tag, "/")
-		if qualified || !found || (registry != "localhost" && !strings.ContainsAny(registry, ".:")) {
-			continue
+		matched := false
+		if qualified && (first == "docker.io" || first == "index.docker.io") {
+			requestedHub, ok := dockerHubReference(requested)
+			recordedHub, recordedOK := dockerHubReference(tag)
+			matched = ok && recordedOK && requestedHub == recordedHub
+		} else if !qualified {
+			registry, unqualified, found := strings.Cut(tag, "/")
+			matched = found && (registry == "localhost" || strings.ContainsAny(registry, ".:")) &&
+				(unqualified == image || unqualified == requested || (registry == "docker.io" && !hasSlash && unqualified == "library/"+requested))
 		}
-		if unqualified != image && unqualified != requested && !(registry == "docker.io" && !hasSlash && unqualified == "library/"+requested) {
+		if !matched {
 			continue
 		}
 		if match != "" && match != tag {
@@ -180,6 +185,30 @@ func (r *runner) engineImageReference(ctx context.Context, image string) (string
 		return match, nil
 	}
 	return "", fmt.Errorf("container engine records no tag matching image %s", image)
+}
+
+// dockerHubReference expands Docker Hub's familiar names without changing
+// other registries, tags, or digests. The caller supplies any implicit tag.
+func dockerHubReference(reference string) (string, bool) {
+	if strings.Contains(reference, "@") {
+		return "", false
+	}
+	first, rest, hasSlash := strings.Cut(reference, "/")
+	if !hasSlash {
+		return "docker.io/library/" + reference, true
+	}
+	switch first {
+	case "docker.io", "index.docker.io":
+		if !strings.Contains(rest, "/") {
+			rest = "library/" + rest
+		}
+		return "docker.io/" + rest, true
+	default:
+		if first == "localhost" || strings.ContainsAny(first, ".:") || strings.ToLower(first) != first {
+			return "", false
+		}
+		return "docker.io/" + reference, true
+	}
 }
 
 func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string, error) {
