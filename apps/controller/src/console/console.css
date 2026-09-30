@@ -2189,3 +2189,12 @@ summary:focus-visible {
 .log-fields dd {
   margin: 0;
 }
+.log-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.log-chip[aria-pressed="false"] {
+  opacity: 0.55;
+  text-decoration: line-through;
+}

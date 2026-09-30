@@ -11295,6 +11295,18 @@
             }
           },
           {
+            "description": "`true` returns the last 1000 lines as a text/plain attachment and is audited per download; it cannot be combined with `cursor`.",
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                { "const": "true", "type": "string" },
+                { "const": "false", "type": "string" }
+              ]
+            }
+          },
+          {
             "in": "path",
             "name": "namespaceId",
             "required": true,
@@ -11637,9 +11649,15 @@
                   "required": ["data", "meta"],
                   "type": "object"
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "description": "The same sanitized records as the JSON page, one per line, for `download=true`.",
+                  "type": "string"
+                }
               }
             },
-            "description": "Default Response"
+            "description": "One page of records, or a text/plain attachment when `download=true`"
           },
           "400": {
             "content": {
