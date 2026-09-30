@@ -73,11 +73,15 @@ support. Viewing neither deploys nor activates it.
 
 **Run diagnostics for this version** requests fresh, on-demand observations of
 the viewed version. Checks include a time and `succeeded`, `failed`, or
-`unknown` state; unavailable requests show retryable errors. If every check is
-`unknown` with `UNAVAILABLE`, the runtime did not answer; the page points to the
-version's recorded failure, if any, and its Logs. Diagnostics do
-not change deployment history, activate a version, repeat the startup model
-probe, or prove message delivery. You need Agent `read` and `operate` plus
+`unknown` state; unavailable requests show retryable errors. On Kubernetes
+Compute the gateway checks cover only the Slack channel. A version without
+Slack reports configuration `failed` with `NOT_CONFIGURED` and leaves
+authentication and connectivity `unknown`; the page says this is expected. If
+every check is `unknown` with `UNAVAILABLE`, the runtime did not answer. Either
+way, a recorded deployment failure such as `RUNTIME_AUTHENTICATION_FAILED`
+stays in view: diagnostics do not test model credentials, so they cannot
+confirm or clear it. Diagnostics do not change deployment history, activate a
+version, repeat the startup model probe, or prove message delivery. You need Agent `read` and `operate` plus
 read access to that version.
 
 **Logs** on a deployed version shows its Pods, restarts, recent warning Events
