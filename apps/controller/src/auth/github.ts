@@ -32,6 +32,13 @@ import {
   type ProviderExchange,
 } from "./provider-transport.ts";
 import { admissionKey, keyedAdmission } from "./admission.ts";
+import {
+  issueKnownDevice,
+  knownDeviceCookieAttributes,
+  knownDeviceCookieName,
+  knownDeviceFromCookieHeader,
+  verifyKnownDevice,
+} from "./known-device.ts";
 
 export interface GitHubLoginConfiguration {
   readonly clientId: string;
@@ -223,6 +230,22 @@ export function createHumanLogin(
   const receiptAttributes = { httpOnly: true, secure, sameSite: "strict" as const, path: "/" };
   const receipts = receiptLedger();
   const cookieAttributes = { httpOnly: true, secure, sameSite: "lax" as const, path: "/" };
+  const knownDeviceCookie = knownDeviceCookieName(secure);
+
+  // A successful sign-in marks this browser as a known device for the account's email,
+  // keeping the browser's entries for up to two other accounts.
+  function knownDeviceValue(
+    headers: Headers | undefined,
+    authSecret: string,
+    email: string,
+  ): string {
+    return issueKnownDevice(
+      authSecret,
+      email.trim().toLowerCase(),
+      Date.now(),
+      knownDeviceFromCookieHeader(headers?.get("cookie"), secure),
+    );
+  }
 
   // Callback denials say whether the attempt, the provider, or the identity failed.
   async function rejectExternal(
@@ -458,6 +481,12 @@ export function createHumanLogin(
               await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
                 maxAge,
               });
+              // An external sign-in also marks the browser, for password fallback.
+              ctx.setCookie(
+                knownDeviceCookie,
+                knownDeviceValue(ctx.headers, ctx.context.secret, snapshot.user.email),
+                knownDeviceCookieAttributes(secure),
+              );
               // The redirect carries no secret. The starting tab exchanges this
               // receipt for the key of exactly the session this attempt created.
               ctx.setCookie(
@@ -550,17 +579,33 @@ export function createHumanLogin(
           await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
             maxAge,
           });
+          ctx.setCookie(
+            knownDeviceCookie,
+            knownDeviceValue(ctx.headers, ctx.context.secret, email),
+            knownDeviceCookieAttributes(secure),
+          );
           return ctx.json({
             authenticated: true,
             sessionKey: sessionBindingKey(ctx.context.secret, session.id),
           });
         };
+        // A verified known device of this email spends its own lane instead of the email's
+        // (or the shared recovery lane), so strangers spending the email cannot keep that
+        // browser out. The cookie never authenticates; the address and global caps still apply.
+        const device = verifyKnownDevice(
+          ctx.context.secret,
+          email,
+          knownDeviceFromCookieHeader(ctx.headers?.get("cookie"), secure),
+          Date.now(),
+        );
+        const deviceKey =
+          device === undefined ? undefined : admissionKey("device", device.deviceKey);
         return recoveryEmail !== undefined && email === recoveryEmail
-          ? admitPassword.admitRecovery(work)
+          ? admitPassword.admitRecovery(work, deviceKey)
           : admitPassword.admit(
               [
                 admissionKey("ip", ctx.headers?.get("x-occ-client-ip")),
-                admissionKey("email", email),
+                deviceKey ?? admissionKey("email", email),
               ],
               work,
             );

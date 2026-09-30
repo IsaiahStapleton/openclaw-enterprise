@@ -316,6 +316,116 @@ test(
       }
     });
 
+    // Known-device cookie: a browser that signed in to an account before keeps its own
+    // budget for that email, so strangers who know the email cannot keep it out (T1) or
+    // crowd an administrator's attempt out of the slow lane (T2).
+    const knownDeviceName = "__Host-occ_known_device";
+    const knownDeviceOf = (response) =>
+      [response.headers["set-cookie"] ?? []]
+        .flat()
+        .find((value) => value.startsWith(`${knownDeviceName}=`));
+    const plainSignInWith = (cookie, account) =>
+      plainApp.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress: ingress,
+        headers: { origin, cookie },
+        payload: account,
+      });
+    const knownMember = await createAccount("limit-known@example.test", roles.reader.id);
+    const knownOther = await createAccount("limit-known-other@example.test", roles.reader.id);
+    const knownAdmin = await createAccount("limit-known-admin@example.test", roles.admin.id);
+    let memberDevice;
+
+    await t.test("the known-device cookie is set only after a successful sign-in", async () => {
+      const failed = await plainSignIn({ ...knownMember, password: wrongPassword });
+      assert.equal(failed.statusCode, 401);
+      assert.equal(knownDeviceOf(failed), undefined);
+      const signedIn = await plainSignIn(knownMember);
+      assert.equal(signedIn.statusCode, 200, signedIn.body);
+      const setCookie = knownDeviceOf(signedIn);
+      assert.ok(setCookie, "a successful sign-in marks the browser");
+      assert.match(
+        setCookie,
+        /^__Host-occ_known_device=v1\.[^;]+; Max-Age=7776000; Path=\/; HttpOnly; Secure; SameSite=Strict$/,
+      );
+      assert.equal(setCookie.includes("limit-known"), false, "the cookie does not carry the email");
+      memberDevice = setCookie.split(";", 1)[0];
+    });
+
+    await t.test(
+      "a browser that signed in before is not locked out by strangers' failures",
+      async () => {
+        // Strangers spend the member's email lane from anywhere.
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...knownMember, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        assert.equal((await plainSignIn(knownMember)).statusCode, 429, "a new browser is refused");
+        // The member's own browser still signs in, at once and repeatedly.
+        for (let index = 0; index < 3; index += 1) {
+          const started = performance.now();
+          const response = await plainSignInWith(memberDevice, knownMember);
+          assert.equal(response.statusCode, 200, `sign-in ${index}: ${response.body}`);
+          assert.ok(performance.now() - started < 1000, "not paced");
+          memberDevice = knownDeviceOf(response).split(";", 1)[0];
+        }
+        // The cookie is bound to its account: it does not open another account's spent lane.
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...knownOther, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        assert.equal((await plainSignInWith(memberDevice, knownOther)).statusCode, 429);
+      },
+    );
+
+    await t.test(
+      "a valid cookie with a wrong password is 401 and spends its own lane",
+      async () => {
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignInWith(memberDevice, {
+            ...knownMember,
+            password: wrongPassword,
+          });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+          assert.equal(knownDeviceOf(response), undefined);
+        }
+        // That device's lane is now spent too: a stolen cookie buys only its own budget.
+        assert.equal((await plainSignInWith(memberDevice, knownMember)).statusCode, 429);
+        // A cookie signed under another secret, or forged, is ignored: the shared lane applies.
+        const forged = `${knownDeviceName}=v1.AAAAAAAA.${Math.floor(Date.now() / 1000)}.${"A".repeat(16)}.${"A".repeat(43)}`;
+        assert.equal((await plainSignInWith(forged, knownMember)).statusCode, 429);
+      },
+    );
+
+    await t.test(
+      "an administrator's known browser does not queue behind strangers' slowed attempts",
+      async () => {
+        const signedIn = await plainSignIn(knownAdmin);
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const adminDevice = knownDeviceOf(signedIn).split(";", 1)[0];
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...knownAdmin, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        // Strangers hold both of the email's slow-lane slots and queue behind them; each
+        // holds its slot for a floor of 1 s up to 8 s.
+        const flood = Array.from({ length: 4 }, () =>
+          plainSignIn({ ...knownAdmin, password: wrongPassword }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const started = performance.now();
+        const response = await plainSignInWith(adminDevice, knownAdmin);
+        const elapsed = performance.now() - started;
+        assert.equal(response.statusCode, 200, response.body);
+        assert.ok(elapsed < 1000, `the known browser waited ${elapsed} ms`);
+        assert.deepEqual(
+          (await Promise.all(flood)).map((refused) => refused.statusCode),
+          Array(4).fill(429),
+        );
+      },
+    );
+
     await t.test("existing and unknown emails look the same in status and timing", async () => {
       const client = "203.0.113.50";
       const existing = [];
