@@ -132,6 +132,41 @@ test(
       assert.equal(await sessionOf(cookie), null);
     });
 
+    await t.test(
+      "account controls refuse with a specific conflict, not a dependency failure",
+      async () => {
+        const admin = await signIn(adminEmail, adminPassword);
+        const headers = { cookie: cookieHeaderFromSetCookie(admin.headers["set-cookie"]), origin };
+        const memberSession = cookieHeaderFromSetCookie(
+          (await signIn(memberEmail, memberPassword)).headers["set-cookie"],
+        );
+        const requests = [
+          { method: "GET", url: `/api/auth/accounts/${member.id}` },
+          ...["disable", "enable", "revoke"].map((operation) => ({
+            method: "POST",
+            url: `/api/auth/accounts/${member.id}/${operation}`,
+            payload: { expectedVersion: 1 },
+          })),
+          { method: "POST", url: `/api/auth/accounts/${member.id}/enrol` },
+          { method: "GET", url: "/api/auth/recovery" },
+          {
+            method: "POST",
+            url: "/api/auth/recovery",
+            payload: { userId: member.id, expectedCurrentUserId: member.id, expectedVersion: 1 },
+          },
+        ];
+        for (const request of requests) {
+          const response = await app.inject({ ...request, headers });
+          assert.equal(response.statusCode, 409, `${request.url}: ${response.body}`);
+          assert.equal(response.json().error.code, "RESOURCE_CONFLICT");
+          assert.match(response.json().error.message, /password-only/);
+          const untrusted = await app.inject({ ...request, headers: { cookie: headers.cookie } });
+          assert.equal(untrusted.statusCode, 403, "the Origin check still precedes the profile");
+        }
+        assert.equal((await sessionOf(memberSession)).user.id, member.id, "nothing was revoked");
+      },
+    );
+
     await t.test("GitHub and Google routes refuse without contacting a provider", async () => {
       let providerCalls = 0;
       const originalFetch = globalThis.fetch;

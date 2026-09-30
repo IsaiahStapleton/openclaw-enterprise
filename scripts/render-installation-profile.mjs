@@ -672,6 +672,15 @@ function buildRendered(profile, parsed, diagnostics) {
   const signIn = externalSignIn
     ? renderExternalSignIn(controlPlane, github, google, authBaseUrl, diagnostics)
     : {};
+  // Without a trusted proxy the API sees the ingress as every browser's address. Existing
+  // source-preserving setups (such as an NLB) stay valid, so this warns rather than fails.
+  if (controlPlane.trustedProxy === undefined) {
+    diagnostics.warnings.push(
+      externalSignIn
+        ? "controlPlane.trustedProxy is not set: behind a proxy that does not preserve client addresses, every browser shares one address budget: 10 password sign-in attempts and 30 GitHub or Google sign-in requests (about 10 sign-ins) per minute for the whole Installation. Set it unless the API sees each client's own address."
+        : "controlPlane.trustedProxy is not set: failed password sign-ins are limited per email only, with no per-client-address limit. Set it when a proxy fronts the API.",
+    );
+  }
   if (!externalSignIn && controlPlane.recoveryUserId !== undefined) {
     diagnostics.errors.push(
       "controlPlane.recoveryUserId requires controlPlane.github or controlPlane.google.",
@@ -924,19 +933,21 @@ function buildRendered(profile, parsed, diagnostics) {
             requireImmutableDigest: true,
           },
           resources: {
+            // Tenant runtimes may burst to four cores; 100m requests keep the
+            // scheduling reservation unchanged.
             gateway: {
               requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "500m", memory: "2Gi" },
+              limits: { cpu: "4", memory: "2Gi" },
             },
             agent: {
               requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "500m", memory: "2Gi" },
+              limits: { cpu: "4", memory: "2Gi" },
             },
             namespace: {
               quota: { pods: "10" },
               containerDefaults: {
                 requests: { cpu: "100m", memory: "128Mi" },
-                limits: { cpu: "500m", memory: "2Gi" },
+                limits: { cpu: "4", memory: "2Gi" },
               },
             },
           },

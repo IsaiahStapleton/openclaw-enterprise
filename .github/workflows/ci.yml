@@ -20,6 +20,57 @@ env:
   NODE_VERSION: "24.16.0"
 
 jobs:
+  impact:
+    name: CI Impact
+    runs-on: ubuntu-22.04
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - id: select
+        env:
+          IMPACT_ACTION: select
+        run: |
+          # The workflow itself is PR-controlled; independent required-workflow
+          # enforcement is needed to protect this bootstrap from workflow edits.
+          policy=$(mktemp "$RUNNER_TEMP/ci-impact-policy.XXXXXX.mjs")
+          trap 'rm -f "$policy"' EXIT
+          trusted_policy() {
+            [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || return 1
+            base=$(jq -er '.pull_request.base.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
+            head=$(jq -er '.pull_request.head.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
+            oid='^([0-9a-f]{40}|[0-9a-f]{64})$'
+            [[ $base =~ $oid && $head =~ $oid && ${GITHUB_SHA:-} =~ $oid ]] || return 1
+            actual=$(git rev-parse --verify 'HEAD^{commit}') || return 1
+            [ "$actual" = "$GITHUB_SHA" ] || return 1
+            parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
+            [ "$parents" = "$base $head" ] || return 1
+            git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
+            entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
+            git cat-file blob "${BASH_REMATCH[1]}" > "$policy" || return 1
+            [ -s "$policy" ]
+          }
+          if trusted_policy; then
+            if [ "$IMPACT_ACTION" = select ]; then
+              node "$policy" --github-output "$GITHUB_OUTPUT"
+            else
+              node "$policy" --verify-mode "$EXPECTED_MODE"
+            fi
+          elif [ "$IMPACT_ACTION" = select ]; then
+            printf 'CI impact: full (trusted base policy unavailable)\n'
+            printf 'mode=full\n' >> "$GITHUB_OUTPUT"
+          else
+            [ "$EXPECTED_MODE" = full ] || exit 1
+            printf 'CI impact: full (trusted base policy unavailable)\n'
+          fi
+
   native-images:
     name: Native Container Verification
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -48,8 +99,53 @@ jobs:
       - name: Audit suite manifest and workflows
         run: node scripts/ci/run-tests.mjs audit
 
+  docs-checks:
+    name: Documentation Checks
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'docs' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify checkout source
+        run: test "$(git rev-parse --verify 'HEAD^{commit}')" = "$GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: read-write
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Check and build documentation
+        run: pnpm docs:install && pnpm docs:check && pnpm docs:build
+
+  checks-baseline:
+    name: Checks and Conformance
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'full' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/run-ci-lane
+        with:
+          lane: checks-baseline
+          profile: baseline
+          node-version: ${{ env.NODE_VERSION }}
+          artifact-prefix: ci-results
+
   pr-safe:
     name: ${{ matrix.title }}
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'full' }}
     # NetworkPolicy proofs need a runner kernel with bridge netfilter support.
     runs-on: ${{ (startsWith(matrix.lane, 'k3d-fixture-') || matrix.lane == 'k3d-observability') && 'ubuntu-22.04' || matrix.lane == 'repository-credentials-platform' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -57,8 +153,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: checks-baseline
-            title: Checks, Conformance, Browser
+          - lane: checks-browser
+            title: Console Browser
             profile: baseline
             timeout: 25
           - lane: postgres
@@ -69,10 +165,18 @@ jobs:
             title: PostgreSQL Application
             profile: postgres
             timeout: 25
+          - lane: postgres-auth
+            title: PostgreSQL Authentication
+            profile: postgres
+            timeout: 25
           - lane: images-packaging
             title: Images and Packaging
             profile: full
             timeout: 45
+          - lane: images-model-probes
+            title: Image Model Probes
+            profile: images
+            timeout: 25
           - lane: k3d-fixture-configuration
             title: k3d Fixture and Configuration
             profile: k3d
@@ -122,6 +226,8 @@ jobs:
 
   runtime-image-fixture:
     name: Runtime Image Fixture
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'full' }}
     # GitHub-hosted jobs receive a fresh VM and the job's existing Docker engine.
     # Only this lane writes fixture tags; its process awaits each Docker command.
     runs-on: ubuntu-22.04
@@ -141,35 +247,74 @@ jobs:
     name: CI Required
     runs-on: ubuntu-22.04
     needs:
+      - impact
       - audit
+      - docs-checks
+      - checks-baseline
       - pr-safe
       - runtime-image-fixture
     if: always()
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Verify selected mode
+        env:
+          IMPACT_ACTION: verify
+          EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
+        run: |
+          # The workflow itself is PR-controlled; independent required-workflow
+          # enforcement is needed to protect this bootstrap from workflow edits.
+          policy=$(mktemp "$RUNNER_TEMP/ci-impact-policy.XXXXXX.mjs")
+          trap 'rm -f "$policy"' EXIT
+          trusted_policy() {
+            [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || return 1
+            base=$(jq -er '.pull_request.base.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
+            head=$(jq -er '.pull_request.head.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
+            oid='^([0-9a-f]{40}|[0-9a-f]{64})$'
+            [[ $base =~ $oid && $head =~ $oid && ${GITHUB_SHA:-} =~ $oid ]] || return 1
+            actual=$(git rev-parse --verify 'HEAD^{commit}') || return 1
+            [ "$actual" = "$GITHUB_SHA" ] || return 1
+            parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
+            [ "$parents" = "$base $head" ] || return 1
+            git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
+            entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
+            git cat-file blob "${BASH_REMATCH[1]}" > "$policy" || return 1
+            [ -s "$policy" ]
+          }
+          if trusted_policy; then
+            if [ "$IMPACT_ACTION" = select ]; then
+              node "$policy" --github-output "$GITHUB_OUTPUT"
+            else
+              node "$policy" --verify-mode "$EXPECTED_MODE"
+            fi
+          elif [ "$IMPACT_ACTION" = select ]; then
+            printf 'CI impact: full (trusted base policy unavailable)\n'
+            printf 'mode=full\n' >> "$GITHUB_OUTPUT"
+          else
+            [ "$EXPECTED_MODE" = full ] || exit 1
+            printf 'CI impact: full (trusted base policy unavailable)\n'
+          fi
+      - name: Validate selected job state
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+          EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
+        run: |
+          printf '%s' "$NEEDS_JSON" > "$RUNNER_TEMP/raw-needs.json"
+          node scripts/ci/impact-gate.mjs --needs "$RUNNER_TEMP/raw-needs.json" --mode "$EXPECTED_MODE" --output "$RUNNER_TEMP/needs.json"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: ${{ always() && needs.impact.outputs.mode == 'full' }}
         with:
           pattern: ci-results-*
           path: ${{ runner.temp }}/results
           merge-multiple: true
-      - name: Write selected job state
-        env:
-          NEEDS_JSON: ${{ toJson(needs) }}
-        run: |
-          node <<'NODE'
-          const fs = require("fs");
-          const needs = JSON.parse(process.env.NEEDS_JSON);
-          const lanes = ["checks-baseline", "postgres", "postgres-application", "images-packaging", "k3d-fixture-configuration", "k3d-fixture-state", "k3d-fixture-plugins", "k3d-observability", "logging-collector", "repository-credentials-container", "repository-credentials-platform"];
-          const expanded = { audit: needs.audit, "runtime-image-fixture": needs["runtime-image-fixture"] };
-          for (const lane of lanes) {
-            expanded[lane] = { result: needs["pr-safe"]?.result ?? "missing" };
-          }
-          fs.writeFileSync(`${process.env.RUNNER_TEMP}/needs.json`, JSON.stringify(expanded));
-          NODE
       - name: Aggregate CI results
-        run: node scripts/ci/run-tests.mjs aggregate ci --results-dir "$RUNNER_TEMP/results" --needs "$RUNNER_TEMP/needs.json"
+        if: ${{ always() && needs.impact.outputs.mode == 'full' }}
+        run: |
+          node scripts/ci/run-tests.mjs aggregate ci --results-dir "$RUNNER_TEMP/results" --needs "$RUNNER_TEMP/needs.json"

@@ -55,6 +55,9 @@
       "path": "tests/conformance/occ-api-security.test.mjs"
     },
     {
+      "path": "tests/conformance/runtime-logs-content.test.mjs"
+    },
+    {
       "path": "tests/conformance/occ-read.test.mjs"
     },
     {
@@ -199,6 +202,12 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
+      "path": "tests/integration/ci-impact.test.mjs"
+    },
+    {
+      "path": "tests/integration/ci-impact-gate.test.mjs"
+    },
+    {
       "path": "tests/integration/metrics-monitoring-readiness.test.mjs",
       "expectedTests": [
         "datasource readiness retries a transient HTTP 400",
@@ -230,39 +239,6 @@
     },
     {
       "path": "tests/integration/ci-openshell.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agents.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agent-repositories.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agent-draft-guards.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agent-detail.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agent-presets.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agent-plugin-approvers.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-agent-channels.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-repository-dedicated.test.mjs"
-    },
-    {
-      "path": "tests/browser/console-runtime-credentials.test.mjs"
-    },
-    {
-      "path": "tests/browser/console.test.mjs"
-    },
-    {
-      "path": "tests/browser/docs-compute-matrix.test.mjs"
     },
     {
       "path": "tests/integration/ci-logging.test.mjs"
@@ -420,6 +396,19 @@
       "path": "tests/conformance/repository-client-environment.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-material-expiry-probe.test.mjs"
+    },
+    {
+      "path": "tests/conformance/repository-material-store.test.mjs",
+      "expectedTests": [
+        "expiry during Secret read refuses to create material",
+        "earliest expiry during first creation prevents the next creation and leaves cleanup possible",
+        "unexpired material is created and the retained session is reused",
+        "expiry during retained Secret read is not reported as missing material",
+        "expiry during retained Secret validation is not reported as missing material"
+      ]
+    },
+    {
       "path": "tests/conformance/repository-runtime-material.test.mjs"
     },
     {
@@ -476,6 +465,9 @@
     },
     {
       "path": "tests/integration/password-sign-in-admission.test.mjs"
+    },
+    {
+      "path": "tests/integration/known-device-cookie.test.mjs"
     },
     {
       "path": "tests/conformance/postgres-auth-binding.test.mjs"

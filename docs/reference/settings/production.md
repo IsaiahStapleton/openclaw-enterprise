@@ -41,6 +41,10 @@ setting is used, the chart renders no proxy egress rule, and Slack lookup and
 credential validation require another approved network route. See the
 [Slack Channel Driver](../drivers/slack-channel.md#enable-lookup-in-production).
 
+`OCC_AGENT_RUNTIME_LOGS_ENABLED` (`true` or `false`, default `true`) switches the
+[Agent logs](../../guides/topics/agent-logs.md) routes; `false` makes them answer
+`501`. The chart sets it from `agentRuntimeLogs.enabled`.
+
 When the native admin pilot is enabled, the API also requires:
 
 | Variable                         | Required value or format                                                                                                                                     | Behavior                                                                                                    |
@@ -107,7 +111,8 @@ scope, and revocation, and the [deployment guide](../../guides/deploy/service-ke
 for the procedure. Normal issuance and verification require no additional
 settings; initial-key delivery uses the bootstrap settings below.
 Auth-secret rotation takes effect after
-replacing the mounted Secret and restarting the process.
+replacing the mounted Secret and restarting the process; it also invalidates
+[known-device cookies](../authentication.md#known-devices) until each browser's next sign-in.
 
 ### GitHub sign-in and trusted proxies
 
@@ -135,8 +140,14 @@ for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
 `api.trustedProxy` is off by default: the API rejects `Forwarded`,
 `X-Forwarded-*`, and `X-Real-IP` with `403`. Sign-in limits then key on the
 socket peer with GitHub or Google, and on email alone in the password-only
-profile, which logs `authentication.sign-in-limit-warning` at startup; set
-`api.trustedProxy` to add its per-client-address limit. Presets:
+profile. Either way startup logs `authentication.sign-in-limit-warning`, and
+Helm's install notes and the profile renderer warn; none of them fail.
+
+With GitHub or Google behind a proxy that does not preserve client addresses,
+every browser shares the proxy's address, so the whole Installation gets one
+budget: 10 password sign-in attempts and 30 external sign-in requests (about 10
+sign-ins) per minute. Set `api.trustedProxy` unless the API sees each client's
+own address. Presets:
 
 - `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
   is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.

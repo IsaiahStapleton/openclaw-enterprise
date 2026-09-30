@@ -45,7 +45,10 @@ function rollWindow(entry: AdmissionEntry, now: number): void {
 }
 
 // Caller keys are hashed; the address header value is capped before hashing.
-export function admissionKey(kind: "ip" | "email", value: string | null | undefined): string {
+export function admissionKey(
+  kind: "ip" | "email" | "device",
+  value: string | null | undefined,
+): string {
   const trimmed = (value ?? "").trim();
   const raw = kind === "ip" ? trimmed.slice(0, 64) : trimmed;
   return `${kind}:${createHash("sha256")
@@ -135,19 +138,30 @@ export function keyedAdmission(
       }
       return run(entries, work);
     },
-    async admitRecovery<T>(work: () => Promise<T>): Promise<T> {
+    /**
+     * The reserved recovery lane. With `deviceKey` (a verified known device of the recovery
+     * account) the attempt spends that device's own recovery budget instead of the shared
+     * one, so strangers spending the recovery email's lane cannot keep that browser out.
+     */
+    async admitRecovery<T>(work: () => Promise<T>, deviceKey?: string): Promise<T> {
       if (recovery === undefined) {
         throw tooManyRequests();
       }
-      rollWindow(recoveryEntry, performance.now());
+      const now = performance.now();
+      let entry = recoveryEntry;
+      if (deviceKey === undefined) {
+        rollWindow(recoveryEntry, now);
+      } else {
+        entry = touch(deviceKey, now, []);
+      }
       if (
         active >= global.concurrent + global.reserved ||
-        recoveryEntry.admitted >= recovery.perMinute ||
-        recoveryEntry.active >= recovery.concurrent
+        entry.admitted >= recovery.perMinute ||
+        entry.active >= recovery.concurrent
       ) {
         throw tooManyRequests();
       }
-      return run([recoveryEntry], work);
+      return run([entry], work);
     },
   };
 }
@@ -162,6 +176,12 @@ export interface PasswordSignInAttempt {
   readonly clientAddress?: string;
   /** Normalized (trimmed, lower-case) email. */
   readonly email: string;
+  /**
+   * The verified known-device key for this email (see known-device.ts), never raw client
+   * input. When present, the attempt spends the device's own budget instead of the email's,
+   * and a slowed attempt waits on the device's slots instead of the email's.
+   */
+  readonly knownDevice?: string;
 }
 
 /**
@@ -200,6 +220,18 @@ export interface PasswordFailureAdmissionOptions {
   readonly isReserved: (email: string) => Promise<boolean>;
   /** Failures that spend budget: credential rejections, not dependency errors. */
   readonly countsAsFailure: (error: unknown) => boolean;
+  /**
+   * Called when attempts start going to the slow lane: at most once per lane entry per
+   * window. `key` is the hashed admission key (never the email or address); the untracked
+   * lane (a full budget table) has none.
+   */
+  readonly onLimited?: (limited: PasswordSignInLimited) => void;
+}
+
+/** One lane entering the slow lane, for operator visibility. */
+export interface PasswordSignInLimited {
+  readonly lane: "email" | "device" | "address" | "untracked";
+  readonly key?: string;
 }
 
 export const passwordFailureBudget = {
@@ -221,10 +253,12 @@ interface PasswordEntry {
   active: number;
   /** Slow-lane attempts this entry paced in the window; the floor doubles with each. */
   slowed: number;
+  /** When this entry was last reported as limited. */
+  reportedAt: number | undefined;
 }
 
 function passwordEntry(now: number): PasswordEntry {
-  return { windowStart: now, failures: 0, active: 0, slowed: 0 };
+  return { windowStart: now, failures: 0, active: 0, slowed: 0, reportedAt: undefined };
 }
 
 function currentWindow(entry: PasswordEntry, now: number): boolean {
@@ -340,6 +374,12 @@ class Gate {
  * administers. Guessing an administrator is bounded by the email's slots and floor, and the
  * administrator's correct password is admitted however many failures were spent.
  *
+ * Known devices: an attempt carrying a verified known-device key spends that device's lane
+ * instead of the email's and waits on the device's slow-lane slots, so a browser that signed
+ * in to the account before is neither refused by nor crowded out by strangers spending the
+ * email. The device lane has the email lane's size; the address lane and the global slow-lane
+ * bounds still apply.
+ *
  * A refused attempt creates no entry and moves none. When the table is full of entries
  * that are in flight or spent, a new key cannot be tracked: that attempt goes through the
  * slow lane and its password is checked for every account, paced by a shared floor.
@@ -382,9 +422,33 @@ export function passwordFailureAdmission(
     }
   }
 
-  async function runTracked<T>(entries: readonly PasswordEntry[], work: () => Promise<T>) {
+  // Reports a limited lane at most once per entry per window, so a flood logs one line.
+  function reportLimited(entry: PasswordEntry, limited: PasswordSignInLimited, now: number): void {
+    if (entry.reportedAt !== undefined && now - entry.reportedAt < admissionWindow) {
+      return;
+    }
+    entry.reportedAt = now;
     try {
-      return await work();
+      options.onLimited?.(limited);
+    } catch {
+      // Visibility is best-effort; it never changes the admission decision.
+    }
+  }
+
+  async function runTracked<T>(
+    entries: readonly PasswordEntry[],
+    identityEntry: PasswordEntry | undefined,
+    work: () => Promise<T>,
+  ) {
+    try {
+      const result = await work();
+      // A successful sign-in clears its email's (or known device's) failures, not the
+      // address's, which other accounts share, so earlier typos do not count toward the
+      // rest of the window.
+      if (identityEntry !== undefined) {
+        identityEntry.failures = 0;
+      }
+      return result;
     } catch (error) {
       if (options.countsAsFailure(error)) {
         recordFailure(entries);
@@ -399,7 +463,7 @@ export function passwordFailureAdmission(
 
   async function slowLane<T>(
     attempt: PasswordSignInAttempt,
-    emailKey: string,
+    gateKey: string,
     pacing: readonly PasswordEntry[],
     tracked: readonly PasswordEntry[],
     administratorsOnly: boolean,
@@ -422,10 +486,10 @@ export function passwordFailureAdmission(
       }
       occupancy += 1;
       try {
-        let gate = emailGates.get(emailKey);
+        let gate = emailGates.get(gateKey);
         if (gate === undefined) {
           gate = new Gate(slow.concurrentPerEmail, slow.waitingPerEmail);
-          emailGates.set(emailKey, gate);
+          emailGates.set(gateKey, gate);
         }
         if (!(await gate.acquire())) {
           await floor();
@@ -463,7 +527,7 @@ export function passwordFailureAdmission(
         } finally {
           gate.release();
           if (gate.idle) {
-            emailGates.delete(emailKey);
+            emailGates.delete(gateKey);
           }
         }
       } finally {
@@ -479,37 +543,50 @@ export function passwordFailureAdmission(
   return {
     async admit<T>(attempt: PasswordSignInAttempt, work: () => Promise<T>): Promise<T> {
       const now = performance.now();
-      const emailKey = admissionKey("email", attempt.email);
-      const lanes: Array<readonly [string, number]> = [
+      // A known device replaces the email lane with its own lane of the same size, and
+      // waits on its own slow-lane slots, so failures spent against the email by anyone
+      // else neither refuse it nor crowd it out. The address lane still applies.
+      const [identityKey, identityLane] =
+        attempt.knownDevice === undefined
+          ? [admissionKey("email", attempt.email), "email" as const]
+          : [admissionKey("device", attempt.knownDevice), "device" as const];
+      const lanes: Array<readonly [string, number, "email" | "device" | "address"]> = [
         ...(attempt.clientAddress === undefined
           ? []
-          : [[admissionKey("ip", attempt.clientAddress), options.perAddress] as const]),
-        [emailKey, options.perEmail],
+          : [[admissionKey("ip", attempt.clientAddress), options.perAddress, "address"] as const]),
+        [identityKey, options.perEmail, identityLane],
       ];
       // Decide from existing entries first: a refused attempt creates and moves nothing.
-      const blocking = lanes
-        .map(([key, limit]) => {
-          const entry = table.peek(key);
-          return exhausted(entry, limit, now) ? entry : undefined;
-        })
-        .filter((entry): entry is PasswordEntry => entry !== undefined);
+      const blocking: PasswordEntry[] = [];
+      for (const [key, limit, lane] of lanes) {
+        const entry = table.peek(key);
+        if (entry !== undefined && exhausted(entry, limit, now)) {
+          blocking.push(entry);
+          reportLimited(entry, { lane, key }, now);
+        }
+      }
       if (blocking.length > 0) {
-        return slowLane(attempt, emailKey, blocking, [], true, work);
+        return slowLane(attempt, identityKey, blocking, [], true, work);
       }
       const tracked: PasswordEntry[] = [];
+      let identityEntry: PasswordEntry | undefined;
       let untracked = false;
-      for (const [key] of lanes) {
+      for (const [key, , lane] of lanes) {
         const entry = table.claim(key, now);
         if (entry === undefined) {
           untracked = true;
         } else {
           tracked.push(entry);
+          if (lane !== "address") {
+            identityEntry = entry;
+          }
         }
       }
       if (untracked) {
-        return slowLane(attempt, emailKey, [untrackedPacing], tracked, false, work);
+        reportLimited(untrackedPacing, { lane: "untracked" }, now);
+        return slowLane(attempt, identityKey, [untrackedPacing], tracked, false, work);
       }
-      return runTracked(tracked, work);
+      return runTracked(tracked, identityEntry, work);
     },
   };
 }

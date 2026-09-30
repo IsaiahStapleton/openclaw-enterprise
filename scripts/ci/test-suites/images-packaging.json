@@ -52,14 +52,6 @@
       ]
     },
     {
-      "path": "tests/integration/runtime-image-model-probe.test.mjs",
-      "expectedTests": [
-        "runtime image embedded Gateway passes its model probe at the production CPU limit",
-        "runtime image embedded Gateway reports a hung provider as a model probe timeout",
-        "runtime image embedded Gateway reports a CPU-starved model probe at its cap"
-      ]
-    },
-    {
       "path": "tests/integration/repository-runtime-volume.test.mjs",
       "expectedTests": [
         "repository init uses a private subPath of a root-owned fsGroup memory volume"
@@ -106,7 +98,8 @@
         "the API accepts exactly the Google sign-in settings the chart renders, alone and with GitHub",
         "values the chart refuses are settings the API also refuses",
         "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API",
-        "the chart refuses Google Secret and egress settings the API cannot observe"
+        "the chart refuses Google Secret and egress settings the API cannot observe",
+        "install notes warn when sign-in is exposed without a trusted proxy, and never fail"
       ]
     },
     {
@@ -136,19 +129,6 @@
       "path": "tests/integration/container-registry-real.test.mjs",
       "expectedTests": [
         "publication updates aliases using real Skopeo and a multi-platform registry"
-      ]
-    },
-    {
-      "path": "tests/integration/codex-model-probe.test.mjs",
-      "expectedTests": [
-        "generated Codex launcher bounds model-probe recovery",
-        "timeout then success",
-        "two timeouts",
-        "credential rejection",
-        "external SIGKILL",
-        "malformed output",
-        "tool event",
-        "termination during backoff exits without another probe"
       ]
     }
   ]

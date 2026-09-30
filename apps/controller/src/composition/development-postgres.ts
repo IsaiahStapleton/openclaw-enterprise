@@ -68,6 +68,8 @@ export interface PostgresDevelopmentConfig {
   readonly workspaceFilesAccess?: ControllerWorkspaceFilesAccess;
   readonly gatewayApiKeyPath?: string;
   readonly nativeAdmin?: NativeAdminAccessConfig;
+  /** Default: enabled. `false` makes both runtime routes answer 501. */
+  readonly agentRuntimeLogsEnabled?: boolean;
 }
 
 export type PostgresDevelopmentRuntimeOptions =
@@ -260,6 +262,10 @@ export async function composePostgresDevelopment(
       computeDriver,
       publicOrigin: config.authBaseURL,
       ...(config.nativeAdmin === undefined ? {} : { nativeAdmin: config.nativeAdmin }),
+      agentRuntimeLogs: {
+        enabled: config.agentRuntimeLogsEnabled !== false,
+        cursorSecret: config.authSecret,
+      },
       ...(config.nativeAdmin?.enabled === true && config.gatewayApiKeyPath !== undefined
         ? { nativeAdminGatewayApiKey: () => readWorkspaceFilesApiKey(config.gatewayApiKeyPath!) }
         : {}),

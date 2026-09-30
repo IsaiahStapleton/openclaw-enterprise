@@ -2586,9 +2586,10 @@ process.stdout.write("shared-codex-0.158.0-ready\n");
 // substituted: a sidecar in the runtime image owns the network namespace,
 // answers the Responses API as api.openai.com (mapped to loopback, trusted
 // through a private CA), and observes the wrapper from outside.
-// The Codex wrapper runs under the production example's 500m CPU limit. The
-// embedded Gateway gets one CPU to keep these cases quick;
-// runtime-image-model-probe.test.mjs covers it at 500m.
+// The production example lets both roles burst to four cores; these cases run
+// tighter, the Codex wrapper at 500m and the embedded Gateway at one core (its
+// probe cap counts at most one core); runtime-image-model-probe.test.mjs covers
+// the Gateway at 500m.
 const startupProbeCpuLimit = "0.5";
 const gatewayStartupProbeCpuLimit = "1";
 const startupProbeMemoryLimit = "2g";

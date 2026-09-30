@@ -80,6 +80,18 @@ export interface ResolvedRepositoryMaterialSpec {
   readonly bindings: readonly ResolvedRepositoryMaterialBinding[];
 }
 
+export function repositoryMaterialCurrent(spec: {
+  readonly bindings: readonly Pick<RepositoryMaterialBinding, "deadlineWallMs">[];
+}): boolean {
+  const now = Date.now();
+  return (
+    spec.bindings.length > 0 &&
+    spec.bindings.every(
+      ({ deadlineWallMs }) => Number.isSafeInteger(deadlineWallMs) && deadlineWallMs > now,
+    )
+  );
+}
+
 function invalid(): never {
   throw new Error("Repository credential material is invalid.");
 }

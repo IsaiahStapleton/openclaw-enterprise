@@ -8,15 +8,15 @@ override grants, and one action never implies another. See
 
 ## Actions
 
-| Action       | What it permits                                                                                                                    |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `create`     | Create a resource in its parent Installation or Namespace.                                                                         |
-| `read`       | Read a resource or include it in a list; Secret reads return metadata, not values.                                                 |
-| `update`     | Change a resource or its credential.                                                                                               |
-| `delete`     | Request deletion of the exact resource.                                                                                            |
-| `deploy`     | Admit a new Agent revision.                                                                                                        |
-| `operate`    | Stop an Agent, provision its runtime credentials, write its workspace files, or use a bound Secret or credential source.           |
-| `administer` | Run Installation administration or access the exact Agent’s native admin UI. It does not imply `read`, `deploy`, or other actions. |
+| Action       | What it permits                                                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create`     | Create a resource in its parent Installation or Namespace.                                                                                                     |
+| `read`       | Read a resource or include it in a list; Secret reads return metadata, not values.                                                                             |
+| `update`     | Change a resource or its credential.                                                                                                                           |
+| `delete`     | Request deletion of the exact resource.                                                                                                                        |
+| `deploy`     | Admit a new Agent revision.                                                                                                                                    |
+| `operate`    | Stop an Agent, provision its runtime credentials, write its workspace files, read its runtime status, or use a bound Secret or credential source.              |
+| `administer` | Run Installation administration, access the exact Agent’s native admin UI, or read its runtime log text. It does not imply `read`, `deploy`, or other actions. |
 
 ## Resources and scopes
 
@@ -74,6 +74,11 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
   requires `installation:administer`.
 - [Provisioning Agent runtime credentials](../api.md#post-namespacesnamespaceidagentsagentidruntimecredentials)
   requires both `agent:operate` and `agent:read`.
+- [Agent runtime status](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntime)
+  requires `agent:operate`, `agent:read` and `agent_revision:read`;
+  [runtime log text](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntimelogs)
+  requires `agent:administer`, `agent:read` and `agent_revision:read`. See
+  [Agent logs](../../guides/topics/agent-logs.md#who-can-see-what).
 - A first [Agent deployment](../agents/deployment.md#revisions-and-deployment)
   also requires exact-Agent `read` and `operate` when the selected Compute Driver
   must create missing generated transport credentials.

@@ -1,5 +1,5 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
@@ -45,6 +45,12 @@ import {
   passwordFailureBudget,
   type PasswordSignInAdmission,
 } from "./admission.ts";
+import {
+  issueKnownDevice,
+  knownDeviceFromCookieHeader,
+  knownDeviceSetCookie,
+  verifyKnownDevice,
+} from "./known-device.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
 export {
@@ -144,6 +150,17 @@ export interface ControllerAuthOptions {
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Password-only profile: replaces the in-memory failure-counting admission. */
   readonly passwordAdmission?: PasswordSignInAdmission;
+  /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
+  readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
+}
+
+/**
+ * The logged form of a limited sign-in lane's key: keyed by the auth secret, so a log
+ * reader cannot test candidate emails or addresses against it, and truncated. Stable for
+ * one secret, so repeated reports about one target correlate.
+ */
+export function signInLimitKeyHash(secret: string, key: string): string {
+  return createHmac("sha256", secret).update(`sign-in-limited\0${key}`).digest("hex").slice(0, 16);
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -882,6 +899,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     },
   });
   const api = auth.api;
+  // The known-device cookie is host-only (__Host-) whenever the origin is HTTPS.
+  const knownDeviceSecure = secureOrigin && options.secureCookies !== false;
   // Password-only profile: failure-counting admission keyed on email and, behind a trusted
   // proxy, client address; administrators are slowed, never refused (see admission.ts).
   const passwordAdmission =
@@ -891,6 +910,18 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         passwordFailureAdmission({
           ...passwordFailureBudget,
           countsAsFailure: countsAsSignInFailure,
+          ...(options.onOperationalEvent === undefined
+            ? {}
+            : {
+                onLimited: ({ lane, key }) =>
+                  options.onOperationalEvent!({
+                    event: "authentication.sign-in-limited",
+                    lane,
+                    ...(key === undefined
+                      ? {}
+                      : { keyHash: signInLimitKeyHash(options.secret, key) }),
+                  }),
+              }),
           // Timing differences here are hidden by the slow lane's floor. Lookup failures
           // propagate, so an outage is 503 rather than a refusal.
           async isReserved(email) {
@@ -1144,25 +1175,41 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/password", body);
         }
+        // Read from the validated input, not the credential pair, so the admission key
+        // is plainly derived from the email alone.
+        const email = String(input.email).trim().toLowerCase();
+        const deviceCookie = knownDeviceFromCookieHeader(request.headers.cookie, knownDeviceSecure);
+        const device = verifyKnownDevice(options.secret, email, deviceCookie, Date.now());
         // The address lane needs a trusted proxy: without one, browsers behind the ingress
-        // share its address, so only the email lane applies.
+        // share its address, so only the email (or known-device) lane applies.
         const attempt = {
           ...(options.clientAddress === undefined
             ? {}
             : { clientAddress: clientAddressOf(request) }),
-          // Read from the validated input, not the credential pair, so the admission key
-          // is plainly derived from the email alone.
-          email: String(input.email).trim().toLowerCase(),
+          email,
+          ...(device === undefined ? {} : { knownDevice: device.deviceKey }),
         };
-        return passwordAdmission!.admit(attempt, () =>
-          api.signInEmail({
+        return passwordAdmission!.admit(attempt, async () => {
+          const result = await api.signInEmail({
             body: { ...body, rememberMe: true },
             headers: authHeaders(request.headers),
             asResponse: false,
             returnHeaders: true,
             returnStatus: true,
-          }),
-        );
+          });
+          // Only a successful sign-in marks the browser as a known device for this email.
+          // Rejections throw; a success leaves the status unset (200).
+          if ((result.status ?? 200) === 200) {
+            result.headers.append(
+              "set-cookie",
+              knownDeviceSetCookie(
+                knownDeviceSecure,
+                issueKnownDevice(options.secret, email, Date.now(), deviceCookie),
+              ),
+            );
+          }
+          return result;
+        });
       },
       (response) => {
         const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;

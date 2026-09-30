@@ -17,8 +17,9 @@ import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 
 // The embedded Gateway's startup model probe on the real runtime image, under
-// the CPU and memory limits the production example gives a Gateway Pod
-// (deploy/examples/production/installation.yaml). Only the model provider is
+// the production example's Gateway memory limit and a 500m CPU limit, an eighth
+// of the example's four cores (deploy/examples/production/installation.yaml),
+// which operators may still choose. Only the model provider is
 // substituted: a sidecar in the runtime image owns the network namespace,
 // answers the Responses API as api.openai.com (mapped to loopback, trusted
 // through a private CA), and observes the wrapper from outside. Like the
@@ -33,7 +34,7 @@ const imageTestOptions =
     ? { skip: "Set OCC_TEST_RUNTIME_IMAGE to a locally built OpenClaw runtime image tag." }
     : {};
 
-const productionGatewayCpuLimit = "0.5";
+const constrainedGatewayCpuLimit = "0.5";
 const productionGatewayMemoryLimit = "2g";
 const probeApiKey = "sk-openclaw-runtime-probe-synthetic";
 
@@ -381,17 +382,17 @@ const runtimeFailure = (events) =>
   )?.value;
 const phaseAt = (phases, phase) => phases.find((entry) => entry.phase === phase);
 
-// The Gateway at the production example's limits, with a model turn a real
-// provider can take, passes its probe and becomes ready.
+// The Gateway at a 500m CPU limit, with a model turn a real provider can take,
+// passes its probe and becomes ready.
 test(
-  "runtime image embedded Gateway passes its model probe at the production CPU limit",
+  "runtime image embedded Gateway passes its model probe at a 500m CPU limit",
   { ...imageTestOptions, timeout: 900_000 },
   async (t) => {
     const delayMs = 5_000;
     const run = await runEmbeddedGatewayProbe(t, {
       mode: "answer",
       delayMs,
-      cpus: productionGatewayCpuLimit,
+      cpus: constrainedGatewayCpuLimit,
       memory: productionGatewayMemoryLimit,
       limitMs: 300_000,
       until: ({ events }) =>
@@ -408,7 +409,7 @@ test(
     );
     const probe = jsonLines(output).find(({ event }) => event === "openclaw.model_probe");
     t.diagnostic(
-      `embedded Gateway at --cpus ${productionGatewayCpuLimit}, ${delayMs} ms model turn: ` +
+      `embedded Gateway at --cpus ${constrainedGatewayCpuLimit}, ${delayMs} ms model turn: ` +
         JSON.stringify({
           probeMs: phaseAt(phases, "model-probe")?.ms,
           probeCapMs: probe?.capMs,
@@ -432,7 +433,7 @@ test(
   async (t) => {
     const run = await runEmbeddedGatewayProbe(t, {
       mode: "hang",
-      cpus: productionGatewayCpuLimit,
+      cpus: constrainedGatewayCpuLimit,
       memory: productionGatewayMemoryLimit,
       limitMs: 300_000,
       until: failed,
@@ -446,7 +447,7 @@ test(
     assert.equal(probe?.code, "MODEL_PROBE_TIMEOUT", detail);
     assert.ok(probe.elapsedMs < probe.capMs, detail);
     assert.doesNotMatch(output, new RegExp(probeApiKey));
-    t.diagnostic(`hung provider at --cpus ${productionGatewayCpuLimit}: ${JSON.stringify(probe)}`);
+    t.diagnostic(`hung provider at --cpus ${constrainedGatewayCpuLimit}: ${JSON.stringify(probe)}`);
   },
 );
 
@@ -462,7 +463,7 @@ test(
     const run = await runEmbeddedGatewayProbe(t, {
       mode: "answer",
       delayMs: 2_000,
-      cpus: productionGatewayCpuLimit,
+      cpus: constrainedGatewayCpuLimit,
       memory: productionGatewayMemoryLimit,
       limitMs: 400_000,
       until: (snapshot, containerName) => {
@@ -489,7 +490,7 @@ test(
     assert.equal(phaseAt(phases, "model-probe")?.outcome, "failed", detail);
     assert.equal(phaseAt(phases, "native-spawn"), undefined, detail);
     t.diagnostic(
-      `CPU-starved probe at --cpus ${productionGatewayCpuLimit}: ${JSON.stringify(probe)}`,
+      `CPU-starved probe at --cpus ${constrainedGatewayCpuLimit}: ${JSON.stringify(probe)}`,
     );
     await runDocker(["rm", "-f", run.containerName]).catch(() => {});
     await hogs;

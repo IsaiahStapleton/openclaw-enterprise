@@ -30,6 +30,15 @@ import type {
 import type {
   AgentDeploymentDiagnostics,
   AgentRevision,
+  AgentRuntimeContainerStatus,
+  AgentRuntimeDescribeOptions,
+  AgentRuntimeDescription,
+  AgentRuntimeEvent,
+  AgentRuntimeLogChunk,
+  AgentRuntimeLogRequest,
+  AgentRuntimeLogSource,
+  AgentRuntimePodStatus,
+  RuntimeLogSourceId,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
   ComputeAgentProvisioningInput,
@@ -69,8 +78,15 @@ import type {
   OpenClawConfigurationValue,
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
-import { DependencyUnavailableError, ResourceConflictError } from "@openclaw-enterprise/occ";
-import { createKubernetesClientConfiguration } from "../../kubernetes/client.ts";
+import {
+  DependencyUnavailableError,
+  ResourceConflictError,
+  RuntimeLogsForbiddenByClusterError,
+} from "@openclaw-enterprise/occ";
+import {
+  createKubernetesClientConfiguration,
+  KubernetesApiUnavailableError,
+} from "../../kubernetes/client.ts";
 import {
   WORKSPACE_SETUP_RUNTIME,
   workspaceSetupMainAgent,
@@ -109,6 +125,7 @@ import {
 
 import {
   REPOSITORY_MATERIAL_GENERATION,
+  repositoryMaterialCurrent,
   repositoryMaterialSpec,
   repositoryMaterialDeployment,
   type RepositoryMaterialSpec,
@@ -189,6 +206,8 @@ interface KubernetesApiClients {
   readonly discovery: DiscoveryV1Api;
   readonly networking: NetworkingV1Api;
   readonly objects: KubernetesObjectApi;
+  /** The selected API server URL, named when the server is unreachable. */
+  readonly server?: string;
 }
 
 export const MINIMUM_KUBERNETES_VERSION = "1.35.0";
@@ -394,6 +413,44 @@ interface PrivateStatusReadback {
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
 
+class KubernetesRequestTimeout extends Error {}
+
+// Socket-level failures: the request never reached a Kubernetes API server.
+// TLS trust and HTTP status failures keep their original error.
+const UNREACHABLE_SOCKET_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function unreachableSocketFailure(error: unknown, depth = 0): boolean {
+  if (error instanceof KubernetesRequestTimeout) {
+    return true;
+  }
+  const record = asRecord(error);
+  if (record === undefined || depth > 4) {
+    return false;
+  }
+  if (typeof record.code === "string" && UNREACHABLE_SOCKET_CODES.has(record.code)) {
+    return true;
+  }
+  const nested = Array.isArray(record.errors) ? record.errors : [];
+  return [record.cause, ...nested].some((entry) => unreachableSocketFailure(entry, depth + 1));
+}
+
+function unreachableKubernetesApi(server: string | undefined, error: unknown): unknown {
+  if (server === undefined || !unreachableSocketFailure(error)) {
+    return error;
+  }
+  return new KubernetesApiUnavailableError(server, { cause: error });
+}
+
 const REPOSITORY_BROKER_CA_ENVIRONMENT = [
   "SSL_CERT_FILE",
   "GIT_SSL_CAINFO",
@@ -548,6 +605,12 @@ const GATEWAY_SECURITY_POLICY_API_VERSION = "gateway.envoyproxy.io/v1alpha1";
 const GATEWAY_LISTENER_SECTION = "https";
 const GATEWAY_MEMBERSHIP_LABEL = "openclaw-enterprise.io/gateway";
 const REQUEST_TIMEOUT_MS = 10_000;
+/** Each Kubernetes call on the runtime log path; the service bounds the whole request. */
+const RUNTIME_LOG_CALL_TIMEOUT_MS = 5_000;
+const RUNTIME_LOG_MAX_PODS = 8;
+const RUNTIME_LOG_MAX_EVENTS = 100;
+const RUNTIME_LOG_RETENTION =
+  "Kubernetes keeps only the current and the previous instance of each container; older output and output from deleted Pods is gone.";
 const WORKLOAD_TERMINATION_TIMEOUT_MS = 120_000;
 const WORKLOAD_TERMINATION_POLL_MS = 100;
 const AGENT_TRANSPORT_PORT = 18_790;
@@ -725,17 +788,28 @@ function mergeDomainDecision(
   domains[host] = "allow";
 }
 
-function validateResources(value: V1ResourceRequirements, description: string): void {
+function validateResources(value: V1ResourceRequirements, description: string, path: string): void {
   const resources = asRecord(value);
   const requests = asRecord(resources?.requests);
   const limits = asRecord(resources?.limits);
   if (requests === undefined || limits === undefined) {
     throw new ConfigurationFailure(`${description} requests and limits must be configured.`);
   }
-  required(requests.cpu, `${description} CPU request`);
-  required(requests.memory, `${description} memory request`);
-  required(limits.cpu, `${description} CPU limit`);
-  required(limits.memory, `${description} memory limit`);
+  resourceQuantity(requests.cpu, `${description} CPU request`, `${path}.requests.cpu`);
+  resourceQuantity(requests.memory, `${description} memory request`, `${path}.requests.memory`);
+  resourceQuantity(limits.cpu, `${description} CPU limit`, `${path}.limits.cpu`);
+  resourceQuantity(limits.memory, `${description} memory limit`, `${path}.limits.memory`);
+}
+
+// Quantities stay strings, as Kubernetes returns them: an unquoted YAML `4` is a
+// number, so name the fix instead of reporting the value as missing.
+function resourceQuantity(value: unknown, description: string, path: string): string {
+  if (typeof value === "number") {
+    throw new ConfigurationFailure(
+      `${description} (${path}) must be a quoted Kubernetes quantity string: write "${value}", not ${value}.`,
+    );
+  }
+  return required(value, description);
 }
 
 function validatePeer(value: KubernetesWorkloadPeer, description: string): void {
@@ -1603,16 +1677,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("Workload and namespace resource policies are required.");
     }
-    validateResources(options.resources.gateway, "Gateway");
-    validateResources(options.resources.agent, "Agent");
-    validateResources(options.resources.namespace.containerDefaults, "Namespace default");
+    validateResources(options.resources.gateway, "Gateway", "resources.gateway");
+    validateResources(options.resources.agent, "Agent", "resources.agent");
+    validateResources(
+      options.resources.namespace.containerDefaults,
+      "Namespace default",
+      "resources.namespace.containerDefaults",
+    );
     const quota = asRecord(options.resources.namespace.quota);
     if (quota === undefined || Object.keys(quota).length === 0) {
       throw new ConfigurationFailure("Namespace resource quota must be configured.");
     }
     for (const [key, quantity] of Object.entries(quota)) {
       required(key, "Quota resource");
-      required(quantity, `Quota ${key}`);
+      resourceQuantity(quantity, `Quota ${key}`, `resources.namespace.quota.${key}`);
     }
     if (asRecord(options.network) === undefined) {
       throw new ConfigurationFailure("Network policy is required.");
@@ -1865,10 +1943,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
         : (["control", "execution"] as const);
     for (const plane of planes) {
       const clients = await this.clients(plane);
+      const reachable = <T>(operation: () => Promise<T>) =>
+        this.request(operation).catch((error: unknown) => {
+          throw unreachableKubernetesApi(clients.server, error);
+        });
       const observedVersion = kubernetesVersion(
-        (await this.request(() => clients.version.getCode())).gitVersion,
+        (await reachable(() => clients.version.getCode())).gitVersion,
       );
-      const namespaces = await this.request(() =>
+      const namespaces = await reachable(() =>
         clients.core.listNamespace({
           limit: 1,
           timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
@@ -2222,6 +2304,304 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       throw error;
     }
+  }
+
+  async describeAgentRuntime(
+    binding: ComputeAgentRevisionBinding,
+    signal: AbortSignal,
+    options: AgentRuntimeDescribeOptions = {},
+  ): Promise<AgentRuntimeDescription> {
+    const revision = this.runtimeLogRevision(binding);
+    const namespace = await this.runtimeLogNamespace(revision, signal);
+    const pods: AgentRuntimePodStatus[] = [];
+    const sources: AgentRuntimeLogSource[] = [];
+    // A log read (every follow poll) asks for one source and no Events, which keeps
+    // it to the Namespace read and one Pod list.
+    const roles = this.runtimeStatusContainers(revision).filter(
+      (role) => options.source === undefined || role === options.source,
+    );
+    for (const role of roles) {
+      const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+      // Terminating Pods are being replaced; their output is not offered as a source.
+      const observed = (
+        await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))
+      )
+        .filter((pod) => asRecord(pod.metadata)?.deletionTimestamp === undefined)
+        .slice(0, RUNTIME_LOG_MAX_PODS);
+      const described = await Promise.all(
+        observed.map(async (pod) => {
+          const status = this.runtimePodStatus(pod, role, target);
+          const events =
+            options.events === false
+              ? []
+              : await this.runtimeLogStep(signal, () => this.runtimePodEvents(target, status.uid));
+          return { ...status, events };
+        }),
+      );
+      pods.push(...described);
+      sources.push({
+        id: role,
+        kind: "container",
+        pods: described.map((pod) => ({
+          name: pod.name,
+          uid: pod.uid,
+          container: role,
+          restartCount: pod.containers.find(({ name }) => name === role)?.restartCount ?? 0,
+        })),
+        available: described.length > 0,
+        ...(described.length > 0 ? {} : { unavailableCode: "NO_POD" as const }),
+        retention: RUNTIME_LOG_RETENTION,
+      });
+    }
+    return {
+      revisionId: revision.id,
+      observedAt: new Date().toISOString(),
+      pods,
+      sources,
+    };
+  }
+
+  async readAgentRuntimeLogs(
+    binding: ComputeAgentRevisionBinding,
+    request: AgentRuntimeLogRequest,
+  ): Promise<AgentRuntimeLogChunk> {
+    const revision = this.runtimeLogRevision(binding);
+    const role = request.source;
+    if (!this.runtimeStatusContainers(revision).includes(role) || request.container !== role) {
+      throw new ResourceConflictError("The runtime log request does not match the revision.");
+    }
+    const signal = request.signal;
+    const namespace = await this.runtimeLogNamespace(revision, signal);
+    const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+    // Ownership re-check: the named Pod must still carry this revision's labels and UID.
+    const owned = (
+      await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))
+    ).find(
+      (pod) =>
+        asRecord(pod.metadata)?.name === request.pod &&
+        asRecord(pod.metadata)?.uid === request.podUid,
+    );
+    if (owned === undefined) {
+      throw new DependencyUnavailableError("The runtime log Pod is no longer available.");
+    }
+    const clients = await this.clients(target.plane);
+    let raw: string;
+    try {
+      raw = await this.runtimeLogStep(signal, () =>
+        this.request(() =>
+          clients.core.readNamespacedPodLog({
+            name: request.pod,
+            namespace: target.name,
+            container: request.container,
+            follow: false,
+            limitBytes: request.limitBytes,
+            previous: request.previous,
+            ...(request.sinceSeconds === undefined ? {} : { sinceSeconds: request.sinceSeconds }),
+            tailLines: request.tailLines,
+            timestamps: true,
+          }),
+        ),
+      );
+    } catch (error) {
+      // A container that never restarted has no previous instance.
+      if (request.previous && numericErrorStatus(error) === 400) {
+        raw = "";
+      } else {
+        throw error;
+      }
+    }
+    if (typeof raw !== "string") {
+      throw new DependencyUnavailableError("The Kubernetes client returned invalid log output.");
+    }
+    // Re-read after the log read so the caller can detect a replaced instance.
+    const latest = (
+      await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))
+    ).find((pod) => asRecord(pod.metadata)?.name === request.pod);
+    const latestStatus =
+      latest === undefined ? undefined : this.runtimePodStatus(latest, role, target);
+    const truncated = Buffer.byteLength(raw, "utf8") >= request.limitBytes;
+    const lines = raw.split("\n");
+    if (lines.at(-1) === "") {
+      lines.pop();
+    }
+    return {
+      stream: {
+        source: role,
+        pod: request.pod,
+        podUid: latestStatus?.uid ?? request.podUid,
+        container: request.container,
+        restartCount:
+          latestStatus?.containers.find(({ name }) => name === role)?.restartCount ??
+          this.runtimePodStatus(owned, role, target).containers.find(({ name }) => name === role)
+            ?.restartCount ??
+          0,
+      },
+      observedAt: new Date().toISOString(),
+      lines: lines.map((line) => {
+        const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z) (.*)$/s.exec(line);
+        return match === null ? { time: null, raw: line } : { time: match[1]!, raw: match[2]! };
+      }),
+      truncated,
+    };
+  }
+
+  private runtimeLogRevision(binding: ComputeAgentRevisionBinding): AgentRevision {
+    const revision = binding.revision;
+    if (
+      revision.namespaceId !== binding.namespace.id ||
+      revision.agentId !== binding.agent.id ||
+      revision.compute.id !== this.id ||
+      revision.compute.implementation !== this.implementation
+    ) {
+      throw new ResourceConflictError("The Agent runtime log binding is invalid.");
+    }
+    return revision;
+  }
+
+  private async runtimeLogNamespace(
+    revision: AgentRevision,
+    signal: AbortSignal,
+  ): Promise<KubernetesNamespaceAddress> {
+    const { name: namespace, external } = await this.runtimeLogStep(signal, () =>
+      this.resolveNamespace(revision.namespaceId),
+    );
+    const observed = await this.runtimeLogStep(signal, () => this.getNamespace(namespace));
+    if (observed === undefined || observed.status?.phase !== "Active") {
+      throw new DependencyUnavailableError("The Agent Kubernetes namespace is unavailable.");
+    }
+    this.verifyNamespaceOwnership(observed, { namespaceId: revision.namespaceId }, external);
+    return namespace;
+  }
+
+  /** One bounded Kubernetes step; a cluster 403 becomes a typed operator-facing error. */
+  private async runtimeLogStep<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const step = AbortSignal.any([signal, AbortSignal.timeout(RUNTIME_LOG_CALL_TIMEOUT_MS)]);
+    try {
+      return await withComputeAbortSignal(step, operation);
+    } catch (error) {
+      if (numericErrorStatus(error) === 403) {
+        throw new RuntimeLogsForbiddenByClusterError();
+      }
+      throw error;
+    }
+  }
+
+  private runtimePodStatus(
+    pod: KubernetesRecord,
+    role: RuntimeLogSourceId,
+    namespace: KubernetesNamespaceAddress,
+  ): Omit<AgentRuntimePodStatus, "events"> {
+    const metadata = asRecord(pod.metadata) ?? {};
+    const status = asRecord(pod.status) ?? {};
+    const conditions = Array.isArray(status.conditions) ? status.conditions : [];
+    const ready = conditions.some((condition) => {
+      const value = asRecord(condition);
+      return value?.type === "Ready" && value.status === "True";
+    });
+    const statuses = [
+      ...(Array.isArray(status.initContainerStatuses) ? status.initContainerStatuses : []),
+      ...(Array.isArray(status.containerStatuses) ? status.containerStatuses : []),
+    ]
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => isNonEmptyString(entry?.name))
+      .slice(0, 16);
+    return {
+      role,
+      cluster:
+        namespace.plane === "execution" && this.options.executionCluster !== undefined
+          ? "execution"
+          : "control",
+      name: String(metadata.name),
+      uid: String(metadata.uid),
+      phase: isNonEmptyString(status.phase) ? status.phase : "Unknown",
+      ready,
+      createdAt: isNonEmptyString(metadata.creationTimestamp)
+        ? String(metadata.creationTimestamp)
+        : metadata.creationTimestamp instanceof Date
+          ? metadata.creationTimestamp.toISOString()
+          : null,
+      containers: statuses.map((entry) => this.runtimeContainerStatus(entry)),
+    };
+  }
+
+  private runtimeContainerStatus(entry: Record<string, unknown>): AgentRuntimeContainerStatus {
+    const state = asRecord(entry.state) ?? {};
+    const [kind, detail] = (["waiting", "running", "terminated"] as const)
+      .map((name) => [name, asRecord(state[name])] as const)
+      .find(([, value]) => value !== undefined) ?? ["unknown" as const, undefined];
+    const last = asRecord(asRecord(entry.lastState)?.terminated);
+    return {
+      name: String(entry.name),
+      state: kind,
+      reason: isNonEmptyString(detail?.reason) ? detail.reason : null,
+      ready: entry.ready === true,
+      restartCount: Number.isSafeInteger(entry.restartCount) ? (entry.restartCount as number) : 0,
+      startedAt: kubernetesTime(detail?.startedAt),
+      lastTermination:
+        last === undefined
+          ? null
+          : {
+              reason: isNonEmptyString(last.reason) ? last.reason : null,
+              exitCode: Number.isSafeInteger(last.exitCode) ? (last.exitCode as number) : null,
+              finishedAt: kubernetesTime(last.finishedAt),
+            },
+    };
+  }
+
+  private async runtimePodEvents(
+    namespace: KubernetesNamespaceAddress,
+    podUid: string,
+  ): Promise<readonly AgentRuntimeEvent[]> {
+    const clients = await this.clients(namespace.plane);
+    const list = asRecord(
+      await this.request(() =>
+        clients.core.listNamespacedEvent({
+          namespace: namespace.name,
+          fieldSelector: `involvedObject.uid=${podUid}`,
+          limit: RUNTIME_LOG_MAX_EVENTS,
+          timeoutSeconds: Math.ceil(RUNTIME_LOG_CALL_TIMEOUT_MS / 1000),
+        }),
+      ),
+    );
+    if (!Array.isArray(list?.items)) {
+      throw new DependencyUnavailableError("The Kubernetes client returned an invalid Event list.");
+    }
+    return list.items
+      .map((item) => asRecord(item))
+      .filter((event): event is Record<string, unknown> => {
+        // The field selector is advisory to this code: keep only this Pod's Events.
+        const involved = asRecord(event?.involvedObject);
+        return (
+          involved?.uid === podUid &&
+          involved.kind === "Pod" &&
+          (involved.namespace === undefined || involved.namespace === namespace.name) &&
+          (event?.type === "Normal" || event?.type === "Warning")
+        );
+      })
+      .map((event) => {
+        const series = asRecord(event.series);
+        return {
+          type: event.type as "Normal" | "Warning",
+          reason: isNonEmptyString(event.reason) ? event.reason : "Unknown",
+          message: typeof event.message === "string" ? event.message : "",
+          count: Math.max(
+            1,
+            Number.isSafeInteger(series?.count)
+              ? (series!.count as number)
+              : Number.isSafeInteger(event.count)
+                ? (event.count as number)
+                : 1,
+          ),
+          lastObservedAt:
+            kubernetesTime(series?.lastObservedTime) ??
+            kubernetesTime(event.lastTimestamp) ??
+            kubernetesTime(event.eventTime) ??
+            kubernetesTime(event.firstTimestamp),
+        };
+      })
+      .sort((left, right) => (right.lastObservedAt ?? "").localeCompare(left.lastObservedAt ?? ""))
+      .slice(0, RUNTIME_LOG_MAX_EVENTS);
   }
 
   async deleteAgentRuntimeCredentials(binding: ComputeAgentBinding): Promise<void> {
@@ -2911,6 +3291,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ): Promise<ComputeReadiness> => {
       if (statusContainer === undefined) {
         await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
+        if (material?.kind === "ready" && !repositoryMaterialCurrent(material.spec)) {
+          return incomplete();
+        }
         return {
           ...result,
           ready: true,
@@ -2934,6 +3317,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       if (status !== undefined) {
         await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
+        if (material?.kind === "ready" && !repositoryMaterialCurrent(material.spec)) {
+          return incomplete();
+        }
       }
       return status === undefined
         ? result
@@ -3144,6 +3530,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       // The shared Recreate gateway validates auth in the replacement's startup.
       // An unready predecessor must not prevent repair through a new deployment.
+      if (repositoryMaterial !== undefined && !repositoryMaterialCurrent(repositoryMaterial)) {
+        return incomplete();
+      }
       return { ...result, ready: true };
     }
     if (!embedded) {
@@ -3281,13 +3670,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayNamespace,
           gatewayOwnership,
         );
-        if (
-          gateway === undefined ||
-          !this.deploymentReady(
-            gateway,
-            gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id,
-          )
-        ) {
+        const current =
+          gateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id;
+        if (gateway !== undefined && !current && !this.deploymentReady(gateway, false)) {
+          // The predecessor never served (for example, it failed model auth) and is
+          // unready: repair it with this revision's template, as the dedicated path does.
+          await reconcileGatewayDeployment(gatewayEnvironment);
+          return incomplete();
+        }
+        if (gateway === undefined || !this.deploymentReady(gateway, current)) {
           return incomplete();
         }
       } else if (
@@ -3496,7 +3887,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         return agentReadiness;
       }
       if (this.options.runtime === undefined) {
-        return (await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))
+        return (await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace)) &&
+          (repositoryMaterial === undefined || repositoryMaterialCurrent(repositoryMaterial))
           ? agentReadiness
           : incomplete();
       }
@@ -3749,6 +4141,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
         await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
+        if (!repositoryMaterialCurrent(repositoryMaterial)) {
+          throw new DependencyUnavailableError(
+            "The exact repository credential runtime generation is not ready.",
+          );
+        }
       }
       return;
     }
@@ -3953,6 +4350,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (!(await this.workspaceNodeReady(revision, namespace))) {
       throw new Error("The exact AgentRevision Harness node is not ready.");
     }
+    if (repositoryMaterial !== undefined && !repositoryMaterialCurrent(repositoryMaterial)) {
+      throw new DependencyUnavailableError(
+        "The exact repository credential runtime generation is not ready.",
+      );
+    }
   }
 
   async deactivateRevision(revision: AgentRevision): Promise<void> {
@@ -4084,6 +4486,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // its exact Harness is being shut down.
     await this.removeStoppedGateway(revision, namespace);
     await this.shutdownRevisionRuntime(revision, namespace);
+    // Its Pods are gone, so drop the revision's credential copies and snapshots.
+    // Preparing the revision again re-projects them from the canonical sources.
+    await this.deleteRetiredRevisionArtifacts(revision, namespace);
     if (revision.repositoryCredentials !== undefined) {
       await this.removeRepositoryMaterial(revision, namespace);
     }
@@ -4819,7 +5224,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ready += 1;
       }
     }
-    return ready >= Number(deployment.spec?.replicas);
+    return repositoryMaterialCurrent(material) && ready >= Number(deployment.spec?.replicas);
   }
 
   private async cleanupRepositoryMaterial(
@@ -5404,7 +5809,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private async createClients(
     authentication: KubernetesComputeDriverOptions["authentication"],
   ): Promise<KubernetesApiClients> {
-    const { sdk, clientConfiguration } = await createKubernetesClientConfiguration(
+    const { sdk, clientConfiguration, server } = await createKubernetesClientConfiguration(
       authentication,
       (message) => new ConfigurationFailure(message),
     );
@@ -5417,6 +5822,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       discovery: new sdk.DiscoveryV1Api(clientConfiguration),
       networking: new sdk.NetworkingV1Api(clientConfiguration),
       objects: new sdk.KubernetesObjectApi(clientConfiguration),
+      server,
     };
   }
 
@@ -5437,7 +5843,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
           throw ownerSignal.reason;
         }
         if (deadline.aborted) {
-          throw new Error("Kubernetes API request timed out.");
+          throw new KubernetesRequestTimeout("Kubernetes API request timed out.", {
+            cause: error,
+          });
         }
         const status = numericErrorStatus(error);
         const retryable =
@@ -8495,6 +8903,11 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       );
       directories.push(embedded ? "/gateway-state/workspace" : "/gateway-state/sessions");
     }
+    // Init mounts the volume root; the gateway later mounts its home subdirectory.
+    const writableConfigurationInitPath = WRITABLE_CONFIGURATION_PATH.replace(
+      /^\/home\/node/u,
+      "/runtime-state/home",
+    );
     const script = [
       writableConfiguration
         ? 'const { chmodSync, copyFileSync, mkdirSync } = require("node:fs");'
@@ -8510,8 +8923,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         ? [
             `copyFileSync(${JSON.stringify(
               `${MANAGED_CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
-            )}, ${JSON.stringify(WRITABLE_CONFIGURATION_PATH)});`,
-            `chmodSync(${JSON.stringify(WRITABLE_CONFIGURATION_PATH)}, 0o600);`,
+            )}, ${JSON.stringify(writableConfigurationInitPath)});`,
+            `chmodSync(${JSON.stringify(writableConfigurationInitPath)}, 0o600);`,
           ]
         : []),
     ].join("\n");
@@ -9849,7 +10262,7 @@ for (const path of ${JSON.stringify(
       }
       variables.push(...harnessAuth.environment);
     }
-    if (role === "agent" && repositoryMaterial !== undefined) {
+    if ((role === "agent" || embedded) && repositoryMaterial !== undefined) {
       const brokerCa = repositoryBrokerPublicCaPath(repositoryMaterial);
       if (brokerCa !== undefined) {
         const existingCaPolicy = variables.find((variable) =>
@@ -10396,4 +10809,15 @@ export function createKubernetesComputeDriver(
   options: KubernetesComputeDriverOptions,
 ): KubernetesComputeDriver {
   return new KubernetesComputeDriver(options);
+}
+
+/** Kubernetes clients return `Date` objects or RFC 3339 strings for timestamps. */
+function kubernetesTime(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === "string" && !Number.isNaN(Date.parse(value))) {
+    return new Date(value).toISOString();
+  }
+  return null;
 }

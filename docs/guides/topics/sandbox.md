@@ -20,6 +20,15 @@ keeps the model API key out of the Harness. Local verification uses development-
 supported production deployment path. If the selected Sandbox cannot enforce
 required containment or preserve workload identity, deployment stops.
 
+Upstream OpenClaw has a separate
+[OpenShell sandbox backend](https://docs.openclaw.ai/gateway/openshell), the
+`@openclaw/openshell-sandbox` plugin. There, the OpenClaw Gateway and its
+plugins stay on the host, and only tool execution runs in OpenShell. OCE does
+not install or configure that plugin. The OCE SandboxDriver runs the whole
+dedicated Harness inside the Sandbox, and Kubernetes Compute manages its
+lifecycle. Do not combine the two: each sandbox needs a single lifecycle
+owner.
+
 ## What a Sandbox does not provide
 
 Selecting a Sandbox does not add per-tool authorization or guarantee that every
