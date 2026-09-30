@@ -178,6 +178,29 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
   assert.equal(logs.data.records.at(-1).reason, "truncated");
 });
 
+test("the wrapper's fixed plain-text failure line is a wrapper error, not unknown text", () => {
+  const stream = { source: "agent", pod: "gateway-0", container: "agent" };
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: "Harness model authentication probe failed." },
+      { time: lineTime(2), raw: "Harness model authentication probe failed. extra" },
+    ],
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message }) => ({ kind, level, message })),
+    [
+      { kind: "wrapper", level: "error", message: "Harness model authentication probe failed." },
+      {
+        kind: "text",
+        level: "unknown",
+        message: "Harness model authentication probe failed. extra",
+      },
+    ],
+  );
+});
+
 test("the sanitizer drops a partial final line and bounds oversized input", () => {
   const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
   const fragment = randomBytes(10).toString("hex");
@@ -213,6 +236,84 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   assert.equal(long.records[0].truncated, true);
   assert.ok(Buffer.byteLength(long.records[0].message) <= 8 * 1024);
   assert.match(long.records[0].message, /…\[truncated\]$/);
+});
+
+test("a PEM block printed over several lines is masked on every line", () => {
+  const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
+  const body = randomBytes(48).toString("base64");
+  const tail = `PEMTAIL${randomString(12)}`;
+  const header = `DEK-Info: AES-128-CBC,${randomBytes(8).toString("hex").toUpperCase()}`;
+  const lines = [
+    "before the key",
+    "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    header,
+    "",
+    body,
+    tail,
+    "-----END ENCRYPTED PRIVATE KEY----- after the key",
+    "ordinary line",
+  ];
+  const chunk = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: lines.map((raw, index) => ({ time: lineTime(index), raw })),
+  });
+  const messages = chunk.records.map((record) => record.message);
+  assert.deepEqual(messages, [
+    "before the key",
+    "[redacted:pem]",
+    "[redacted:pem]",
+    "[redacted:pem]",
+    "[redacted:pem]",
+    "[redacted:pem]",
+    "[redacted:pem] after the key",
+    "ordinary line",
+  ]);
+
+  // A page that starts inside a block has no BEGIN line; the END line and the body
+  // lines directly above it are masked.
+  const midBlock = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: ["page start", body, tail, "-----END PRIVATE KEY-----", "next"].map((raw, index) => ({
+      time: lineTime(index),
+      raw,
+    })),
+  });
+  assert.deepEqual(
+    midBlock.records.map((record) => record.message),
+    ["page start", "[redacted:pem]", "[redacted:pem]", "[redacted:pem]", "next"],
+  );
+
+  // A BEGIN marker quoted in prose ends at the first line that is not PEM-shaped.
+  const prose = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: ["expected a -----BEGIN CERTIFICATE----- header", "retrying in 5s", "done"].map(
+      (raw, index) => ({ time: lineTime(index), raw }),
+    ),
+  });
+  assert.deepEqual(
+    prose.records.map((record) => record.message),
+    ["expected a [redacted:pem]", "retrying in 5s", "done"],
+  );
+
+  // Continuation lines are workload-controlled plain text up to 32 KiB each.
+  for (const unit of [" ", "a", "A:", "A: ", "-----BEGIN A-----", "-----END A-----"]) {
+    const hostile = unit.repeat(Math.ceil((32 * 1024) / unit.length)).slice(0, 32 * 1024 - 1);
+    for (const suffix of ["!", " x"]) {
+      const started = performance.now();
+      sanitizeRuntimeLogChunk({
+        stream,
+        truncated: false,
+        lines: ["-----BEGIN X-----", hostile + suffix, hostile + suffix, "-----END X-----"].map(
+          (raw, index) => ({ time: lineTime(index), raw }),
+        ),
+      });
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 400, `${JSON.stringify(unit)} took ${elapsed.toFixed(0)} ms`);
+    }
+  }
 });
 
 test("the sanitizer keeps bracket-tagged text lines but withholds malformed JSON arrays", () => {

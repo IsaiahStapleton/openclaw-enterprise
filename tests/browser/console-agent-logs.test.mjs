@@ -44,6 +44,7 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   computeDriver.state.events = [
     {
       type: "Warning",
+      container: "gateway",
       reason: "BackOff",
       message: "Back-off restarting failed container",
       count: 3,
@@ -57,6 +58,10 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
     ),
     line(2, `pushing with ${secret}`),
     line(3, '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"hi"}}'),
+    line(
+      4,
+      '{"event":"codex.model_probe","attempt":1,"elapsedMs":900,"exitCode":1,"signal":null,"code":"AUTHENTICATION_FAILED"}',
+    ),
   ];
   computeDriver.state.previousLines = [line(0, "output before the restart")];
 
@@ -68,11 +73,19 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   const card = page.locator(".runtime-pod");
   await card.getByRole("heading", { name: "Gateway" }).waitFor();
   await card.getByText("OOMKilled · exit 137", { exact: false }).waitFor();
-  await card.getByText("BackOff ×3: Back-off restarting failed container").waitFor();
+  // Events name the container they concern.
+  await card.getByText("gateway · BackOff ×3: Back-off restarting failed container").waitFor();
   const pane = page.getByRole("log", { name: "Runtime log output" });
   await pane.getByText("runtime.startup_phase").waitFor();
   await pane.getByText("pushing with [redacted:token]").waitFor();
   await pane.getByText("1 structured output withheld").waitFor();
+  // A failure code shows on the collapsed row, not only after expanding it.
+  const probe = pane.locator(".log-row", { hasText: "codex.model_probe" });
+  assert.equal(
+    await probe.locator("summary .log-code").textContent(),
+    "code=AUTHENTICATION_FAILED",
+  );
+  assert.equal(await probe.locator("summary .log-code").isVisible(), true);
   assert.equal(await page.getByText(secret).count(), 0);
   await page.getByText("Kubernetes keeps the current and the previous instance.").waitFor();
 
@@ -115,6 +128,7 @@ test("level chips and the text filter narrow only the loaded window; download sa
     ),
     line(4, `plain output with ${secret}`),
     line(5, '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"hi"}}'),
+    line(6, "Harness model authentication probe failed."),
   ];
 
   const { page } = await newPage(t, fixture);
@@ -138,11 +152,13 @@ test("level chips and the text filter narrow only the loaded window; download sa
   );
   await pane.getByText("Gateway ready").waitFor({ state: "hidden" });
   await pane.getByText(/plain output with/).waitFor({ state: "hidden" });
+  // The wrapper's plain failure line is an error, so hiding `unknown` keeps it.
+  await pane.getByText("Harness model authentication probe failed.").waitFor();
   assert.equal(await pane.getByText("model call failed").isVisible(), true);
   assert.equal(await pane.getByText("1 structured output withheld").isVisible(), true);
   await page
     .getByText(
-      "Showing 2 of 4 loaded lines. Filters search only the lines loaded in this view, not the whole container log.",
+      "Showing 3 of 5 loaded lines. Filters search only the lines loaded in this view, not the whole container log.",
     )
     .waitFor();
 
@@ -152,7 +168,7 @@ test("level chips and the text filter narrow only the loaded window; download sa
   await page.getByLabel("Filter", { exact: true }).fill("SLACK");
   await pane.getByText("model call failed").waitFor({ state: "hidden" });
   assert.equal(await pane.getByText("slow channel").isVisible(), true);
-  await page.getByText(/^Showing 1 of 4 loaded lines\./).waitFor();
+  await page.getByText(/^Showing 1 of 5 loaded lines\./).waitFor();
   // Filtering never asks the server again.
   assert.equal(logRequests(requests, revisionId).length, reads);
   await page.getByLabel("Filter", { exact: true }).fill("");

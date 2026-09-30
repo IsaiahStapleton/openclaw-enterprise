@@ -8,7 +8,12 @@ import type {
   RuntimeLogStream,
   RuntimeLogWithheldReason,
 } from "@openclaw-enterprise/contracts";
-import { redactArgvCredentials, redactRuntimeLogText, stripRuntimeLogControls } from "./redact.ts";
+import {
+  maskPemBlockLines,
+  redactArgvCredentials,
+  redactRuntimeLogText,
+  stripRuntimeLogControls,
+} from "./redact.ts";
 
 declare const sanitizedRuntimeLogRecord: unique symbol;
 
@@ -33,6 +38,12 @@ const WRAPPER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freez
   "codex.model_probe": ["attempt", "elapsedMs", "exitCode", "signal", "code"],
   "runtime.workspace_node": ["container", "outcome", "code"],
 });
+
+// Fixed plain-text failure lines the runtime wrapper prints next to its structured
+// events (`runtime-entrypoints.ts`). They are wrapper errors, not `unknown` text.
+const WRAPPER_ERROR_LINES: ReadonlySet<string> = new Set([
+  "Harness model authentication probe failed.",
+]);
 
 // Operational keys only. Anything else, and every free-text or payload key
 // (`args`, `payload`, `body`, `prompt`, `messages`, `content`, `text`, `transcript`,
@@ -256,6 +267,9 @@ function classify(line: string): Classified {
   if (byteLength(text) > RUNTIME_LOG_MAX_TEXT_BYTES) {
     return { type: "withheld", reason: "oversized" };
   }
+  if (WRAPPER_ERROR_LINES.has(trimmed)) {
+    return { type: "line", kind: "wrapper", level: "error", message: trimmed };
+  }
   return { type: "line", kind: "text", level: "unknown", message: text };
 }
 
@@ -281,8 +295,15 @@ export function sanitizeRuntimeLogChunk(
   const records: SanitizedRuntimeLogRecord[] = [];
   let withheld = 0;
   let run: Mutable<Extract<RuntimeLogRecord, { type: "withheld" }>> | undefined;
-  for (const line of lines) {
-    const classified = classify(line.raw);
+  const classifiedLines = lines.map((line) => classify(line.raw));
+  // A key printed over several lines is split across records; mask the whole block.
+  const pem = maskPemBlockLines(
+    classifiedLines.map((classified) =>
+      classified.type === "line" && classified.kind === "text" ? classified.message : undefined,
+    ),
+  );
+  for (const [index, line] of lines.entries()) {
+    const classified = classifiedLines[index]!;
     const time = validTime(line.time);
     if (classified.type === "withheld") {
       withheld += 1;
@@ -300,7 +321,7 @@ export function sanitizeRuntimeLogChunk(
       records.push(brand(run));
       run = undefined;
     }
-    const message = sanitizeRuntimeLogText(classified.message);
+    const message = sanitizeRuntimeLogText(pem.get(index) ?? classified.message);
     const subsystem =
       classified.subsystem === undefined
         ? undefined

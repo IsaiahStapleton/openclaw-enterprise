@@ -44,7 +44,7 @@
       "source": "events",
       "provenance": "captured",
       "origin": "kubectl get events -o json for a recreated gateway Pod and its ReplicaSet, K3s v1.36.4, local k3d, 2026-09-30",
-      "scrubbed": "tenant Namespace, Pod and ReplicaSet names, node name, image digest and object UIDs replaced"
+      "scrubbed": "tenant Namespace, Pod and ReplicaSet names, node name, image digest and object UIDs replaced; container `involvedObject.fieldPath` values added afterwards in the kubelet shape"
     }
   ]
 }

@@ -1,6 +1,7 @@
 package occcli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,12 +74,18 @@ type runtimeLogStub struct {
 	queries  []url.Values
 	pages    []func(http.ResponseWriter, url.Values)
 	activeID string
+	// revisions is the JSON revision list; empty means the Agent has none.
+	revisions string
+	paths     []string
 }
 
 func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Request) {
+	stub.paths = append(stub.paths, request.URL.Path)
 	switch {
 	case request.URL.Path == "/namespaces/ns_1/agents/agt_1":
 		fmt.Fprintf(response, `{"data":{"id":"agt_1","activeRevisionId":%q},"meta":{}}`, stub.activeID)
+	case request.URL.Path == "/namespaces/ns_1/agents/agt_1/revisions":
+		fmt.Fprintf(response, `{"data":%s,"meta":{}}`, cmp.Or(stub.revisions, "[]"))
 	case strings.HasSuffix(request.URL.Path, "/runtime/logs"):
 		if request.Header.Get("x-api-key") != "test-key" {
 			stub.t.Errorf("missing service key")
@@ -93,7 +101,7 @@ func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Re
 		stub.pages = stub.pages[1:]
 		next(response, query)
 	case strings.HasSuffix(request.URL.Path, "/runtime"):
-		fmt.Fprint(response, `{"data":{"revisionId":"rev_1","observedAt":"2026-09-30T12:00:00.000Z","pods":[{"role":"gateway","cluster":"control","name":"gw-0","uid":"u","phase":"Running","ready":true,"createdAt":null,"containers":[{"name":"gateway","state":"running","reason":null,"ready":true,"restartCount":2,"startedAt":null,"lastTermination":{"reason":"OOMKilled","exitCode":137,"finishedAt":null}}],"events":[]}],"sources":[{"id":"gateway","kind":"container","pods":[],"available":true,"retention":"current and previous instance"}]},"meta":{}}`)
+		fmt.Fprint(response, `{"data":{"revisionId":"rev_1","observedAt":"2026-09-30T12:00:00.000Z","pods":[{"role":"gateway","cluster":"control","name":"gw-0","uid":"u","phase":"Running","ready":true,"createdAt":null,"containers":[{"name":"gateway","state":"running","reason":null,"ready":true,"restartCount":2,"startedAt":null,"lastTermination":{"reason":"OOMKilled","exitCode":137,"finishedAt":null}}],"events":[{"type":"Warning","container":"gateway","reason":"Unhealthy","message":"Readiness probe failed","count":146,"lastObservedAt":"2026-09-30T11:59:00.000Z"},{"type":"Normal","container":"prepare-private-state","reason":"Started","message":"Container started","count":1,"lastObservedAt":"2026-09-30T11:00:00.000Z"},{"type":"Normal","container":null,"reason":"Scheduled","message":"Successfully assigned","count":1,"lastObservedAt":null}]}],"sources":[{"id":"gateway","kind":"container","pods":[],"available":true,"retention":"current and previous instance"}]},"meta":{}}`)
 	default:
 		stub.t.Errorf("unexpected request %s", request.URL)
 		response.WriteHeader(http.StatusNotFound)
@@ -218,8 +226,40 @@ func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 	}
 	stub := &runtimeLogStub{t: t}
 	_, _, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "gateway")
-	if err == nil || !strings.Contains(err.Error(), "no active revision") {
-		t.Fatalf("expected a missing active revision error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "has no readable revisions") {
+		t.Fatalf("expected a missing revision error, got %v", err)
+	}
+	if len(stub.queries) != 0 {
+		t.Fatalf("sent %d log requests for an Agent without revisions", len(stub.queries))
+	}
+}
+
+// A first deploy that fails leaves no active revision; the failed version is
+// the one an operator needs to inspect, so runtime and logs default to it.
+func TestAgentRuntimeAndLogsDefaultToLatestRevisionWithoutActiveRevision(t *testing.T) {
+	revisions := `[{"id":"rev_1","revision":1},{"id":"rev_2","revision":2}]`
+	stub := &runtimeLogStub{t: t, revisions: revisions, pages: []func(http.ResponseWriter, url.Values){
+		logPage("", logLine(1, "error", "startup failed")),
+	}}
+	out, errOut, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "gateway")
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+	if !strings.Contains(out, "startup failed") {
+		t.Fatalf("logs output = %q", out)
+	}
+	if !strings.Contains(errOut, "has no active revision; using latest revision rev_2") {
+		t.Fatalf("logs notice = %q", errOut)
+	}
+	_, runtimeErr, err := runLogsCommand(t, context.Background(), stub, "agent", "runtime", "agt_1")
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	if want := "/namespaces/ns_1/agents/agt_1/deployments/rev_2/runtime"; !slices.Contains(stub.paths, want) {
+		t.Fatalf("runtime requests = %v, want %s", stub.paths, want)
+	}
+	if !strings.Contains(runtimeErr, "using latest revision rev_2") {
+		t.Fatalf("runtime notice = %q", runtimeErr)
 	}
 }
 
@@ -321,6 +361,23 @@ func TestAgentRuntimePrintsPodsAndSources(t *testing.T) {
 	for _, want := range []string{"gw-0", "Running", "OOMKilled exit 137", "current and previous instance"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("runtime table lacks %q:\n%s", want, out)
+		}
+	}
+	// Table output names each Event's container, as JSON output does.
+	eventRows := [][]string{
+		{"POD", "CONTAINER", "TYPE", "REASON", "COUNT", "LAST SEEN", "MESSAGE"},
+		{"gw-0", "gateway", "Warning", "Unhealthy", "146", "2026-09-30T11:59:00.000Z", "Readiness", "probe", "failed"},
+		{"gw-0", "prepare-private-state", "Normal", "Started", "1", "2026-09-30T11:00:00.000Z", "Container", "started"},
+		{"gw-0", "-", "Normal", "Scheduled", "1", "-", "Successfully", "assigned"},
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < len(eventRows) {
+		t.Fatalf("runtime table has no Events:\n%s", out)
+	}
+	for index, want := range eventRows {
+		got := strings.Fields(lines[len(lines)-len(eventRows)+index])
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("Event row %d = %q, want %q:\n%s", index, got, want, out)
 		}
 	}
 }

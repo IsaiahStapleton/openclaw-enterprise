@@ -1022,8 +1022,12 @@ func (app *application) agentCommand() *cobra.Command {
 }
 
 // agentRevision returns the requested revision, or the Agent's active revision.
+// Without an active revision (for example, after a failed first deploy) it uses
+// the latest revision and says so on notices, because that is the version whose
+// Pods and output explain the failure.
 func (app *application) agentRevision(
 	client *occclient.Client,
+	notices io.Writer,
 	namespace, agentID, revision string,
 ) (string, error) {
 	if revision != "" {
@@ -1034,11 +1038,19 @@ func (app *application) agentRevision(
 		return "", err
 	}
 	resource, _ := agent.(map[string]any)
-	active, _ := resource["activeRevisionId"].(string)
-	if active == "" {
-		return "", fmt.Errorf("agent %s has no active revision; pass --revision", agentID)
+	if active, _ := resource["activeRevisionId"].(string); active != "" {
+		return active, nil
 	}
-	return active, nil
+	revisions, err := client.ListAgentRevisions(namespace, agentID)
+	if err != nil {
+		return "", err
+	}
+	latest, err := latestRevisionID(agentID, revisions)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(notices, "agent %s has no active revision; using latest revision %s\n", agentID, latest)
+	return latest, nil
 }
 
 func (app *application) agentRuntimeCommand() *cobra.Command {
@@ -1047,7 +1059,7 @@ func (app *application) agentRuntimeCommand() *cobra.Command {
 		Use:   "runtime AGENT_ID",
 		Short: "Show Pod status, restarts, last termination and log sources for an Agent revision",
 		Args:  idArgs(agentIDArg),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(command *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
 				return err
@@ -1056,7 +1068,7 @@ func (app *application) agentRuntimeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			revisionID, err := app.agentRevision(client, namespace, args[0], revision)
+			revisionID, err := app.agentRevision(client, command.ErrOrStderr(), namespace, args[0], revision)
 			if err != nil {
 				return err
 			}
@@ -1070,7 +1082,7 @@ func (app *application) agentRuntimeCommand() *cobra.Command {
 			return app.printRuntime(description)
 		},
 	}
-	command.Flags().StringVar(&revision, "revision", "", "Revision ID (default: the active revision)")
+	command.Flags().StringVar(&revision, "revision", "", "Revision ID (default: the active revision, else the latest revision)")
 	return command
 }
 
@@ -1101,7 +1113,7 @@ func (app *application) agentLogsCommand() *cobra.Command {
 	}
 	flags := command.Flags()
 	flags.StringVar(&options.source, "source", "", "Log source: gateway, agent or sandbox")
-	flags.StringVar(&options.revision, "revision", "", "Revision ID (default: the active revision)")
+	flags.StringVar(&options.revision, "revision", "", "Revision ID (default: the active revision, else the latest revision)")
 	flags.StringVar(&options.pod, "pod", "", "Pod name (default: the source's first Pod)")
 	flags.BoolVar(&options.previous, "previous", false, "Read the previous container instance")
 	flags.IntVar(&options.tail, "tail", 200, "Lines from the end of the stream, 1 to 1000")
@@ -1161,7 +1173,7 @@ func (app *application) runAgentLogs(command *cobra.Command, agentID string, opt
 	}
 	ctx := cmp.Or(app.ctx, context.Background())
 	notices := command.ErrOrStderr()
-	revisionID, err := app.agentRevision(client, namespace, agentID, options.revision)
+	revisionID, err := app.agentRevision(client, notices, namespace, agentID, options.revision)
 	if err != nil {
 		return err
 	}
@@ -1300,10 +1312,27 @@ func (app *application) printRuntime(description any) error {
 	}
 	pods, _ := resource["pods"].([]any)
 	rows := make([]any, 0, len(pods))
+	events := []any{}
 	for _, item := range pods {
 		pod, ok := item.(map[string]any)
 		if !ok {
 			return fmt.Errorf("OCC returned an invalid runtime description")
+		}
+		podEvents, _ := pod["events"].([]any)
+		for _, entry := range podEvents {
+			event, ok := entry.(map[string]any)
+			if !ok {
+				return fmt.Errorf("OCC returned an invalid runtime description")
+			}
+			events = append(events, map[string]any{
+				"pod":            pod["name"],
+				"container":      event["container"],
+				"type":           event["type"],
+				"reason":         event["reason"],
+				"count":          event["count"],
+				"lastObservedAt": event["lastObservedAt"],
+				"message":        event["message"],
+			})
 		}
 		row := map[string]any{
 			"role":    pod["role"],
@@ -1347,16 +1376,33 @@ func (app *application) printRuntime(description any) error {
 		return err
 	}
 	sources, _ := resource["sources"].([]any)
-	if len(sources) == 0 {
+	if len(sources) > 0 {
+		if _, err := fmt.Fprintln(app.out); err != nil {
+			return err
+		}
+		if err := printTable(app.out, sources, []column{
+			{title: "SOURCE", key: "id"},
+			{title: "AVAILABLE", key: "available"},
+			{title: "RETENTION", key: "retention"},
+		}); err != nil {
+			return err
+		}
+	}
+	if len(events) == 0 {
 		return nil
 	}
 	if _, err := fmt.Fprintln(app.out); err != nil {
 		return err
 	}
-	return printTable(app.out, sources, []column{
-		{title: "SOURCE", key: "id"},
-		{title: "AVAILABLE", key: "available"},
-		{title: "RETENTION", key: "retention"},
+	// Pod Events arrive newest first per Pod; CONTAINER is "-" for Pod-level Events.
+	return printTable(app.out, events, []column{
+		{title: "POD", key: "pod"},
+		{title: "CONTAINER", key: "container"},
+		{title: "TYPE", key: "type"},
+		{title: "REASON", key: "reason"},
+		{title: "COUNT", key: "count"},
+		{title: "LAST SEEN", key: "lastObservedAt"},
+		{title: "MESSAGE", key: "message"},
 	})
 }
 

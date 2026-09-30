@@ -77,7 +77,7 @@ const DEPLOYMENT_FAILURE_GUIDANCE = {
     "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
 };
 
-function deploymentFailure(error, credentialsHref = null) {
+function deploymentFailure(error, credentialsHref = null, logs = null) {
   if (!error) {
     return element("p", { className: "muted" }, "No persisted startup failure.");
   }
@@ -96,6 +96,14 @@ function deploymentFailure(error, credentialsHref = null) {
           guidance,
           credentialsHref ? " " : null,
           credentialsHref ? element("a", { href: credentialsHref }, "Open Credentials") : null,
+        )
+      : null,
+    // A failed version may never become current, so link its output directly.
+    logs
+      ? element(
+          "p",
+          { className: "hint" },
+          element("a", { href: logs.href }, `Open v${logs.revision} Logs`),
         )
       : null,
     runtimeFailure && typeof runtimeFailure === "object"
@@ -161,6 +169,9 @@ function deploymentProgress(status, progress) {
   );
 }
 
+export const DEPLOYMENT_POLL_MS = 5000;
+const PENDING_DEPLOYMENT_STATUSES = new Set(["queued", "running"]);
+
 function createDeploymentStatusPanel(
   context,
   path,
@@ -168,14 +179,35 @@ function createDeploymentStatusPanel(
   onAgentChange,
   onStatusChange,
   credentialsHref = null,
+  logsHref = null,
 ) {
   const section = element("section", { className: "agent-card deployment-status" });
   const state = { loading: false, status: null, error: null, overviewError: false };
+  let pollTimer = null;
 
-  async function loadStatus(refreshAgent = false) {
+  // Queued and running records are reread until they record a result or a read fails.
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    if (state.error || !PENDING_DEPLOYMENT_STATUSES.has(state.status?.status)) {
+      return;
+    }
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      // A newer deployment replaces this panel; a detached panel stops following.
+      if (context.isCurrent() && section.isConnected) {
+        void loadStatus(false, true);
+      }
+    }, DEPLOYMENT_POLL_MS);
+  }
+
+  async function loadStatus(refreshAgent = false, poll = false) {
     if (state.loading || !context.isCurrent()) {
       return;
     }
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    const previousStatus = state.status?.status ?? null;
     state.loading = true;
     state.error = null;
     state.overviewError = false;
@@ -230,6 +262,17 @@ function createDeploymentStatusPanel(
           state.status?.error?.code ?? null,
           state.status,
         );
+        if (
+          poll &&
+          PENDING_DEPLOYMENT_STATUSES.has(previousStatus) &&
+          !state.error &&
+          !PENDING_DEPLOYMENT_STATUSES.has(state.status?.status)
+        ) {
+          // A recorded result can change the current version; reread it once.
+          void loadStatus(true);
+        } else {
+          schedulePoll();
+        }
       }
     }
   }
@@ -271,7 +314,11 @@ function createDeploymentStatusPanel(
           )
         : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
-      deploymentFailure(state.status.error, credentialsHref),
+      deploymentFailure(
+        state.status.error,
+        credentialsHref,
+        logsHref ? { href: logsHref, revision: revision.revision } : null,
+      ),
       state.status.warnings?.length
         ? element(
             "div",
@@ -1048,6 +1095,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             agent.harnessAuth?.method === "runtime"
               ? null
               : context.pageUrl(`agents/${agent.id}?revision=draft&tab=credentials`, namespaceId),
+            context.pageUrl(
+              `agents/${agent.id}?revision=${encodeURIComponent(mostRecent.id)}&tab=logs`,
+              namespaceId,
+            ),
           )
         : element(
             "section",

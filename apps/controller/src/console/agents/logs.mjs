@@ -123,7 +123,7 @@ function podCard(pod) {
             element(
               "li",
               {},
-              `${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
+              `${event.container ? `${event.container} · ` : ""}${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
             ),
           ),
         )
@@ -184,6 +184,10 @@ function recordRow(record) {
     element("span", { className: "log-kind" }, record.kind),
     record.subsystem ? element("span", { className: "log-subsystem" }, record.subsystem) : null,
     element("span", { className: "log-message" }, record.message),
+    // A failure code is the point of the line; keep it visible without expanding.
+    record.fields?.code === undefined
+      ? null
+      : element("span", { className: "log-code" }, `code=${record.fields.code}`),
   );
   const provenance = record.kind === "sandbox" ? policyProvenance(record.fields) : null;
   if (provenance !== null) {

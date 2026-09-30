@@ -3233,6 +3233,7 @@ Read Pod status, restarts, Events and log sources for one exact Agent revision
 | `data.pods[].containers[].state` | `"waiting" or "running" or "terminated" or "unknown"` | Yes | — |
 | `data.pods[].createdAt` | `string (date-time) or null` | Yes | — |
 | `data.pods[].events` | `array<object>` | Yes | max items: 100 |
+| `data.pods[].events[].container` | `string or null` | Yes | — |
 | `data.pods[].events[].count` | `integer` | Yes | minimum: 1 |
 | `data.pods[].events[].lastObservedAt` | `string (date-time) or null` | Yes | — |
 | `data.pods[].events[].message` | `string` | Yes | max length: 2048 |

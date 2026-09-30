@@ -14,7 +14,10 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 1. Open the Agent and select a deployed version. The editable draft is not a
    version and has no runtime; a version without a running Pod shows no Pod.
-2. Select **Logs**. The runtime strip refreshes every 10 seconds.
+   When the latest deployment failed, **Deployment activity** links straight to
+   that version's Logs tab.
+2. Select **Logs**. The runtime strip refreshes every 10 seconds. Each Pod card
+   lists its recent warning Events, prefixed with the container they concern.
 3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
    **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
    for dedicated execution), or **Sandbox (policy decisions)** (see
@@ -62,7 +65,8 @@ always reads 1000 lines, and cannot be combined with `cursor` (`400`). See the
 
 ## Command line
 
-`occ agent runtime AGENT_ID` prints the Pods and sources; `occ agent logs
+`occ agent runtime AGENT_ID` prints the Pods, sources and Events (with the
+container each concerns); `occ agent logs
 AGENT_ID --source gateway` prints one page, and `--follow` keeps polling every
 2 seconds until Ctrl-C:
 
@@ -72,7 +76,9 @@ occ agent logs agt_... --source agent --previous -o json
 occ agent logs agt_... --source sandbox --follow
 ```
 
-Both use the active revision unless you pass `--revision`. Gaps and withheld
+Both use the active revision unless you pass `--revision`. An Agent with no
+active revision, such as one whose first deployment failed, uses the latest
+revision and says so on stderr. Gaps and withheld
 counts are printed to stderr as notices; `-o json` prints NDJSON records. The
 command waits out `429` responses and exits nonzero on `501` and `503`. See the
 [CLI reference](../../reference/cli.md#runtime-status-and-logs).
@@ -105,6 +111,9 @@ OCC classifies every line against an allowlist of operational output before
 returning it:
 
 - **wrapper**: runtime startup and model-probe events, with fixed fields only.
+  The wrapper's fixed plain line
+  `Harness model authentication probe failed.` is also a wrapper `error`. A
+  line's `code` field shows on the collapsed row.
 - **openclaw**: Gateway JSON console records (level, subsystem, message and a
   short list of operational fields such as `status`, `method` and `durationMs`).
   Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are
@@ -121,7 +130,9 @@ Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
 `github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
 query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
-long base64 or hex runs with `[redacted:<pattern>]`. Redaction is best-effort
+long base64 or hex runs with `[redacted:<pattern>]`. A PEM block printed over
+several lines is masked on every line from BEGIN through END; the block ends early
+at the first line that is not base64, a PEM header or blank. Redaction is best-effort
 pattern masking: an opaque token under 40 characters with no known prefix and no
 key name or `Bearer` next to it stays visible. Do not rely on redaction to make
 a runtime that prints secrets safe.

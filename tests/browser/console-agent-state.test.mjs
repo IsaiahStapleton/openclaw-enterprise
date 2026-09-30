@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { detailUrl, login, nativeValues, newPage } from "./console-agents-browser-helpers.mjs";
 
@@ -63,6 +64,54 @@ test("Refresh deployment also refreshes the viewed version's deployment record",
     .getByText("RUNTIME_AUTHENTICATION_FAILED: Deployment runtime credentials were rejected.")
     .waitFor();
   assert.equal(await record.getByText("No persisted startup failure.").count(), 0);
+});
+
+test("Deployment activity follows pending work until it records a result", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Activity follow", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Follow Agent", nativeValues("v1"));
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  let status = "running";
+  let statusReads = 0;
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`,
+    (route) => {
+      statusReads += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: deploymentBody(
+          namespace.id,
+          agent.id,
+          revision.id,
+          status,
+          status === "failed" ? authenticationFailure : null,
+        ),
+      });
+    },
+  );
+  await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const activity = page.locator(".deployment-status");
+  const record = page.locator(".version-deployment-record");
+  await activity.getByText("Recorded status: running").waitFor();
+  await record.getByText("Recorded outcome: running").waitFor();
+
+  // Pending work is reread on its own; the reader does not have to press Refresh deployment.
+  status = "failed";
+  await page.clock.runFor(DEPLOYMENT_POLL_MS);
+  await activity.getByText("Recorded status: failed").waitFor();
+  await record.getByText("Recorded outcome: failed").waitFor();
+  await page.getByText("v1 · Failed", { exact: true }).waitFor();
+
+  // A recorded result ends the follow-up reads.
+  const readsAtResult = statusReads;
+  await page.clock.runFor(DEPLOYMENT_POLL_MS * 3);
+  assert.equal(statusReads, readsAtResult);
 });
 
 test("Diagnostics explain UNAVAILABLE checks and point at the recorded failure", async (t) => {
