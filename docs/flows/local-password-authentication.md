@@ -154,7 +154,8 @@ the success audit fails, the new session is deleted and sign-in returns `503`.
 If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), but
 admission still counts the wrong password against the email and address budgets.
 With an external sign-in provider, `/oce/password` writes the denial itself; if
-that write fails, sign-in returns `503` and the guess is not counted.
+that write fails, it answers `503` with `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`, which
+the controller counts the same way.
 Better Auth logs only errors, so a wrong password writes no unstructured console
 warning.
 
