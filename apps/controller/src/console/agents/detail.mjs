@@ -1445,6 +1445,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       return;
     }
     if (tab === "logs") {
+      // The version heading still comes from the snapshot read.
+      details ??= loadDetails();
       // Polling views are rebuilt on every visit instead of being retained.
       state.reusable = false;
       content.append(renderAgentLogs(tabContext, { agent, revisionId: selected }));
@@ -2230,7 +2232,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     void renderTab();
     return true;
   });
-  if (selectedTab === "workspace" || selectedTab === "logs") {
+  if (selectedTab === "workspace") {
     void loadOverview();
   } else {
     details ??= loadDetails();

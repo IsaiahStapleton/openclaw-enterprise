@@ -404,6 +404,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
         void readLogs({ restart: true });
         return;
       }
+      if (restart) {
+        logStatus.textContent = "";
+      }
       showLogError(withRequestId(runtimeErrorText(error, "logs"), error));
       if (error.status === 403) {
         // Never re-poll after a denial; the view needs new grants.
