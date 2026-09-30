@@ -1012,3 +1012,35 @@ test("runtime log cursor preserves known-open context across a lost overlap wind
   );
   assertTailMasked(page);
 });
+
+test("runtime log cursor preserves an observed BEGIN on uncertain initial and legacy pages", async (t) => {
+  for (const legacy of [false, true]) {
+    for (const beginTime of [3, null]) {
+      await t.test(
+        `${legacy ? "legacy" : "initial"} ${beginTime === null ? "null" : "reordered"}`,
+        async () => {
+          const reader = pollReader();
+          if (legacy) {
+            await reader.poll([timedLog("retrying in 5s", 0)]);
+            assert.equal(
+              reader.codec.decode(reader.cursor, reader.binding).position.pemOpen,
+              undefined,
+            );
+          }
+          // BEGIN is observed in this very page. Missing earlier cursor context does
+          // not make this older END valid evidence of a close.
+          await reader.poll([timedLog(pemBegin, beginTime), timedLog(pemEnd, 1)]);
+          const context = reader.codec.decode(reader.cursor, reader.binding).position;
+          const next = await reader.poll([
+            timedLog(syntheticPemTail, 4),
+            timedLog("retrying in 5s", 5),
+          ]);
+          assertTailMasked(next);
+          assert.ok(messages(next).includes("retrying in 5s"));
+          assert.equal(context.pemOpen, true);
+          assert.equal(context.pemAfterTime, null);
+        },
+      );
+    }
+  }
+});

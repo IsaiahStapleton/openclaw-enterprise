@@ -303,12 +303,15 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
       validRuntimeLogFrontierTime(line.time) &&
       (index === 0 || compareRuntimeLogTime(line.time, prefix[index - 1]!.time!) >= 0),
   );
-  const canClose =
-    pemPrior === undefined
+  // Uncertain chronology also applies when BEGIN is first observed in this page.
+  // Without this guard, an older/null-time END could close it before any signed
+  // context exists, leaving a false closed state that later polls cannot repair.
+  const canClose = !ordered
+    ? delivered.map(() => false)
+    : pemPrior === undefined
       ? undefined
       : delivered.map(
           (line) =>
-            ordered &&
             pemPrior.pemAfterTime != null &&
             line.time !== null &&
             compareRuntimeLogTime(line.time, pemPrior.pemAfterTime) > 0,
