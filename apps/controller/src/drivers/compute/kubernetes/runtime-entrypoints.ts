@@ -2673,6 +2673,8 @@ publishRuntimeReady();
 // Everything before this line delays the Codex app-server.
 logStartupPhase("native-spawn", startupPhaseOrigin);
 const digest = createHash("sha256").update(process.env.APP_SERVER_TOKEN).digest("hex");
+const appServerEnvironment = { ...process.env };
+delete appServerEnvironment.APP_SERVER_TOKEN;
 const child = spawn(
   "codex",
   [
@@ -2696,7 +2698,7 @@ const child = spawn(
     "--ws-token-sha256",
     digest,
   ],
-  { stdio: "inherit", cwd: "/home/node/workspace" },
+  { stdio: "inherit", cwd: "/home/node/workspace", env: appServerEnvironment },
 );
 forwardTermination(child);
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));

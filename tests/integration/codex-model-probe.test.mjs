@@ -49,6 +49,11 @@ if (args.includes("login")) {
     process.stdout.write(events.map(JSON.stringify).join("\n") + "\n");
   }
 } else if (args.includes("app-server")) {
+  assert.equal(Object.hasOwn(process.env, "APP_SERVER_TOKEN"), false);
+  assert.equal(
+    args[args.indexOf("--ws-token-sha256") + 1],
+    require("node:crypto").createHash("sha256").update("transport-canary").digest("hex"),
+  );
   console.log("APP_SERVER_STARTED");
   setInterval(() => {}, 1000);
 } else {
