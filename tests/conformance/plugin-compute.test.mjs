@@ -3558,6 +3558,7 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
     children: [],
     exits: [],
     intervals: [],
+    signalHandlers: {},
     statusHandler: undefined,
     files: new Map([
       [
@@ -3633,7 +3634,9 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
               OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
             }),
       },
-      on() {},
+      on(signal, handler) {
+        fixture.signalHandlers[signal] = handler;
+      },
       exit(code) {
         fixture.exits.push(code);
       },
@@ -3792,6 +3795,38 @@ test("Codex gateway supervisor keeps OpenClaw when the same Harness returns afte
   assert.deepEqual(first.killed, [], "the Gateway's credential is still valid");
   assert.equal(gateway.children.length, 1);
   assert.deepEqual(gateway.exits, []);
+});
+
+test("Codex gateway supervisor exits when OpenClaw crashes during a peer status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+
+  // A status outage must not hide the running Gateway's own failure.
+  first.exit(1, null);
+  const exitsAfterCrash = [...gateway.exits];
+  // process.exit is captured by this fixture, so release the pending peer wait.
+  gateway.peerAvailable = true;
+  await poll;
+  assert.deepEqual(exitsAfterCrash, [1]);
+});
+
+test("Codex gateway supervisor forwards container termination during a peer status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+
+  gateway.signalHandlers.SIGTERM();
+  assert.deepEqual(first.killed, ["SIGTERM"]);
+  first.exit(null, "SIGTERM");
+  assert.deepEqual(gateway.exits, [0]);
+  gateway.peerAvailable = true;
+  await poll;
+  assert.equal(gateway.children.length, 1);
 });
 
 test("Codex gateway supervisor re-applies the workspace node binding on respawn", async (t) => {

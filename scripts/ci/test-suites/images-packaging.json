@@ -39,6 +39,7 @@
         "runtime image publishes dedicated assets with the Kubernetes gateway entrypoint",
         "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
         "runtime image Gateway hot-loads its workspace node binding without restarting OpenClaw",
+        "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
         "runtime image validates the configuration dedicated native OpenClaw renders"
       ]
     },
