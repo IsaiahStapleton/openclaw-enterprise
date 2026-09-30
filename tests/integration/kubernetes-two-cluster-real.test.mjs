@@ -252,12 +252,10 @@ test(
       "-n",
       namespaces.execution,
     );
-    const denied = await fetch(new URL(`${runtimePath}/logs?source=agent`, origin), {
-      headers: { "x-api-key": key },
-      signal: AbortSignal.timeout(20_000),
-    });
-    assert.equal(denied.status, 503);
-    assert.equal((await denied.json()).error.code, "RUNTIME_LOGS_CLUSTER_RBAC");
+    await assert.rejects(
+      api("GET", `${runtimePath}/logs?source=agent`),
+      /: 503 RUNTIME_LOGS_CLUSTER_RBAC$/,
+    );
     await dp.applyManifest(
       JSON.stringify({
         apiVersion: "rbac.authorization.k8s.io/v1",
@@ -278,11 +276,11 @@ test(
       }),
     );
     await cp.waitFor("restored execution log grant", async () => {
-      const restored = await fetch(new URL(`${runtimePath}/logs?source=agent`, origin), {
-        headers: { "x-api-key": key },
-        signal: AbortSignal.timeout(20_000),
-      });
-      return restored.status === 200;
+      try {
+        return (await api("GET", `${runtimePath}/logs?source=agent`)).cursor !== null;
+      } catch {
+        return false;
+      }
     });
 
     // Inspect only delivery shape; assertion failures never expose credential bytes.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -14,7 +14,7 @@ const alphanumeric = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 
 // Canaries are generated per run so no credential-shaped value is committed.
 function randomString(length, alphabet = alphanumeric) {
-  return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
+  return Array.from({ length }, () => alphabet[randomInt(alphabet.length)]).join("");
 }
 
 function canaries() {
