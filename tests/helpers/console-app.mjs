@@ -204,6 +204,7 @@ export async function createConsoleAppFixture(t, options = {}) {
       }),
     configurationDriver:
       options.configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),
+    ...(options.sandboxDriver === undefined ? {} : { sandboxDriver: options.sandboxDriver }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
     ...(publicOrigin === undefined ? {} : { publicOrigin }),
     ...(options.observabilityUrl === undefined

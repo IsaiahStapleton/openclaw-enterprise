@@ -460,3 +460,93 @@ test("OpenShell client closes cancellation races around provider dispatch", asyn
     fake.client.close();
   });
 });
+
+test("OpenShell client reads v0.1.0 sandbox logs with nanosecond times", async () => {
+  const proto = await loader.load(
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
+  );
+  const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
+  const requests = [];
+  const metadata = [];
+  const server = new grpc.Server();
+  server.addService(OpenShell.service, {
+    GetSandboxLogs(call, callback) {
+      requests.push(call.request);
+      metadata.push(call.metadata.get("authorization"));
+      callback(null, {
+        logs: [
+          {
+            sandbox_id: "sandbox-object-id",
+            event_time: { seconds: "1790000000", nanos: 123_456_789 },
+            level: "OCSF",
+            target: "ocsf",
+            message: "NET:OPEN [INFO] ALLOWED curl(7) -> api.example.com:443",
+            source: "sandbox",
+            fields: { dst_host: "api.example.com" },
+          },
+          { sandbox_id: "sandbox-object-id", level: "INFO", message: "no time" },
+        ],
+        buffer_total: 7,
+      });
+    },
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+  const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
+  try {
+    const response = await client.getSandboxLogs(
+      {
+        workspace: "tenant-workspace",
+        sandbox: "sb-0123",
+        lines: 200,
+        sinceTime: "2026-09-21T14:13:20.5Z",
+      },
+      AbortSignal.timeout(2_000),
+    );
+    assert.deepEqual(requests[0], {
+      sandbox: "sb-0123",
+      lines: 200,
+      since_time: {
+        seconds: String(Date.parse("2026-09-21T14:13:20Z") / 1000),
+        nanos: 500_000_000,
+      },
+      workspace_scope: { workspace: "tenant-workspace", selection: "workspace" },
+    });
+    assert.deepEqual(metadata[0], []);
+    assert.equal(response.bufferTotal, 7);
+    assert.deepEqual(response.lines[0], {
+      sandboxId: "sandbox-object-id",
+      time: "2026-09-21T14:13:20.123456789Z",
+      level: "OCSF",
+      target: "ocsf",
+      message: "NET:OPEN [INFO] ALLOWED curl(7) -> api.example.com:443",
+      source: "sandbox",
+      fields: { dst_host: "api.example.com" },
+    });
+    assert.equal(response.lines[1].time, null);
+    assert.equal(response.lines[1].source, "");
+
+    await assert.rejects(
+      client.getSandboxLogs(
+        { workspace: "tenant-workspace", sandbox: "sb-0123", lines: 0 },
+        AbortSignal.timeout(2_000),
+      ),
+      /line count must be 1 to 2000/,
+    );
+    await assert.rejects(
+      client.getSandboxLogs(
+        { workspace: "tenant-workspace", sandbox: "sb-0123", lines: 5, sinceTime: "yesterday" },
+        AbortSignal.timeout(2_000),
+      ),
+      /RFC 3339/,
+    );
+    assert.equal(requests.length, 1);
+  } finally {
+    client.close();
+    await new Promise((resolve) => server.tryShutdown(resolve));
+  }
+});

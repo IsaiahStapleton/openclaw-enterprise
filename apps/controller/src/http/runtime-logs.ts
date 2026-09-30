@@ -159,14 +159,20 @@ export function runtimeLogDownloadBody(page: RuntimeLogPage, agentId: string): s
     stream?.pod === undefined ? "" : ` pod=${stream.pod}`,
     stream?.container === undefined ? "" : ` container=${stream.container}`,
     stream?.restartCount === undefined ? "" : ` restartCount=${stream.restartCount}`,
+    stream?.sandbox === undefined ? "" : ` sandbox=${stream.sandbox}`,
     ` observedAt=${page.observedAt} withheld=${page.withheld}`,
   ].join("");
   const lines = serializedRecords(page.records).map(recordText);
   return `${[header, ...lines].join("\n")}\n`;
 }
 
-/** `<agent>-<revision>-<source>-<pod>.log`; every part is an OCC or Kubernetes name. */
+/** `<agent>-<revision>-<source>-<pod or sandbox>.log`; every part is an OCC or Kubernetes name. */
 export function runtimeLogDownloadFileName(page: RuntimeLogPage, agentId: string): string {
-  const name = [agentId, page.revisionId, page.source, page.stream?.pod ?? "no-pod"].join("-");
+  const name = [
+    agentId,
+    page.revisionId,
+    page.source,
+    page.stream?.pod ?? page.stream?.sandbox ?? "no-pod",
+  ].join("-");
   return `${name.replace(/[^A-Za-z0-9_.-]/g, "_")}.log`;
 }

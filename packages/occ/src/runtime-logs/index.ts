@@ -16,8 +16,10 @@ export {
   type RuntimeLogViewAdmission,
 } from "./read.ts";
 export { maskRuntimeEventText, redactRuntimeLogText } from "./redact.ts";
+export { readSandboxLogPage, SANDBOX_LOG_RETENTION } from "./sandbox.ts";
 export {
   sanitizeRuntimeLogChunk,
+  sanitizeSandboxLogLines,
   type SanitizedRuntimeLogChunk,
   type SanitizedRuntimeLogRecord,
 } from "./sanitize.ts";

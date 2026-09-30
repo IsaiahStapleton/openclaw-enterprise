@@ -178,11 +178,27 @@ func TestAgentLogsBuildsTheQueryAndDefaultsToTheActiveRevision(t *testing.T) {
 	}
 }
 
+func TestAgentLogsReadsTheSandboxSourceWithoutAPod(t *testing.T) {
+	stub := &runtimeLogStub{t: t, activeID: "rev_1", pages: []func(http.ResponseWriter, url.Values){
+		logPage("v1.a.b", logLine(1, "warn", "slow start")),
+	}}
+	if _, _, err := runLogsCommand(t, context.Background(), stub,
+		"agent", "logs", "agt_1", "--source", "sandbox", "--tail", "20"); err != nil {
+		t.Fatal(err)
+	}
+	want := url.Values{"source": {"sandbox"}, "tailLines": {"20"}}
+	if !reflect.DeepEqual(stub.queries[0], want) {
+		t.Fatalf("query = %v, want %v", stub.queries[0], want)
+	}
+}
+
 func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 	for _, args := range [][]string{
 		{"agent", "logs", "agt_1"},
 		{"agent", "logs", "agt_1", "--source", "kubelet"},
-		{"agent", "logs", "agt_1", "--source", "sandbox"},
+		{"agent", "logs", "agt_1", "--source", "kubelet-sandbox"},
+		{"agent", "logs", "agt_1", "--source", "sandbox", "--pod", "gw-0"},
+		{"agent", "logs", "agt_1", "--source", "sandbox", "--previous"},
 		{"agent", "logs", "my-agent", "--source", "gateway"},
 		{"agent", "runtime", "my-agent"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "--tail", "0"},

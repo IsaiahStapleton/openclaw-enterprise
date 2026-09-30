@@ -262,6 +262,180 @@ export function redactRuntimeLogText(value: string): string {
   return text;
 }
 
+// Command-line flags whose next argument (or attached / `=` value) is a credential.
+// `--password X`, `--token=X` and friends are also caught by the key-value rules above;
+// these are the short and single-dash forms those rules cannot see.
+const ARGV_SECRET_FLAGS: ReadonlySet<string> = new Set([
+  "-p",
+  "--password",
+  "--passwd",
+  "--pass",
+  "-pass",
+  "-passin",
+  "-passout",
+  "-password",
+  "--token",
+  "-token",
+  "--secret",
+  "--api-key",
+  "--apikey",
+  "--with-token",
+  "--username",
+]);
+// `-u user:password`, `--user user:password`, `--proxy-user user:password` and
+// `-U user:password` (curl's proxy form): masked only when the value carries a `:`, so
+// `pip install --user pkg` and `sort -u file` stay readable.
+const ARGV_USERINFO_FLAGS: ReadonlySet<string> = new Set(["-u", "--user", "--proxy-user", "-U"]);
+// Clients whose own flags carry a credential that is not a generic flag name elsewhere.
+// Each entry lists the secret flags and the extra user/password separators it accepts.
+const ARGV_CLIENT_CREDENTIALS: ReadonlyMap<
+  string,
+  { readonly secret: readonly string[]; readonly userinfo: Readonly<Record<string, string>> }
+> = new Map([
+  // `redis-cli -a PASSWORD`.
+  ["redis-cli", { secret: ["-a"], userinfo: {} }],
+  // `sqlcmd -P PASSWORD`, `bcp ... -P PASSWORD`.
+  ["sqlcmd", { secret: ["-P"], userinfo: {} }],
+  ["bcp", { secret: ["-P"], userinfo: {} }],
+  // `smbclient -U user%password` (Samba tools).
+  ["smbclient", { secret: [], userinfo: { "-U": "%", "--user": "%" } }],
+  ["rpcclient", { secret: [], userinfo: { "-U": "%", "--user": "%" } }],
+  ["smbcacls", { secret: [], userinfo: { "-U": "%", "--user": "%" } }],
+  ["smbget", { secret: [], userinfo: { "-U": "%", "--user": "%" } }],
+  // `lftp -u user,password`.
+  ["lftp", { secret: [], userinfo: { "-u": "," } }],
+]);
+const MYSQL_CLIENTS: ReadonlySet<string> = new Set([
+  "mysql",
+  "mysqldump",
+  "mysqladmin",
+  "mysqlimport",
+  "mysqlshow",
+  "mysqlcheck",
+  "mariadb",
+  "mariadb-dump",
+  "mariadb-admin",
+]);
+// Path-shaped values after `-p` (`mkdir -p /work/dir`) are not credentials.
+const PATH_VALUE = /^(?:\/|~\/|\.\.?\/)/;
+
+function basename(token: string): string {
+  const slash = token.lastIndexOf("/");
+  return slash === -1 ? token : token.slice(slash + 1);
+}
+
+/**
+ * Masks credentials passed as command-line arguments: `-u user:pass`, `-p pass`,
+ * `-pPASS` (MySQL clients, or any attached value that is not a lowercase word such as
+ * `-print`), `--user=a:b`, `--proxy-user a:b`, `-pass pass:X`, the positional token of
+ * `vault login`, and client-specific forms: `redis-cli -a`, `sqlcmd -P`,
+ * `smbclient -U user%pass` and `lftp -u user,pass`.
+ * Input is one command line or log message. The scan visits each whitespace-separated
+ * token once; a value that opens a quote extends to the token that closes it.
+ */
+export function redactArgvCredentials(value: string): string {
+  const parts = value.split(/(\s+)/);
+  const tokens: number[] = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    if (parts[index]!.length > 0) {
+      tokens.push(index);
+    }
+  }
+  const mysql = tokens.some((index) => MYSQL_CLIENTS.has(basename(parts[index]!)));
+  const clientSecrets = new Set<string>();
+  const clientSeparators = new Map<string, string>();
+  for (const index of tokens) {
+    const client = ARGV_CLIENT_CREDENTIALS.get(basename(parts[index]!));
+    if (client !== undefined) {
+      client.secret.forEach((flag) => clientSecrets.add(flag));
+      for (const [flag, separator] of Object.entries(client.userinfo)) {
+        clientSeparators.set(flag, (clientSeparators.get(flag) ?? "") + separator);
+      }
+    }
+  }
+  // A user flag's value is a credential when it joins a user and a password.
+  const carriesPassword = (flag: string, value: string): boolean =>
+    value.includes(":") ||
+    [...(clientSeparators.get(flag) ?? "")].some((separator) => value.includes(separator));
+  let vaultLogin = false;
+  const masked = mark("argv");
+  // Replaces the value starting at token position `at`, extending through a quoted span.
+  const maskFrom = (at: number): number => {
+    const first = parts[tokens[at]!]!;
+    const quote = first[0] === '"' || first[0] === "'" ? first[0] : undefined;
+    let end = at;
+    if (quote !== undefined && !(first.length > 1 && first.endsWith(quote))) {
+      while (end + 1 < tokens.length) {
+        end += 1;
+        if (parts[tokens[end]!]!.endsWith(quote)) {
+          break;
+        }
+      }
+    }
+    parts[tokens[at]!] = masked;
+    for (let index = tokens[at]! + 1; index <= tokens[end]!; index += 1) {
+      parts[index] = "";
+    }
+    return end;
+  };
+  for (let at = 0; at < tokens.length; at += 1) {
+    const token = parts[tokens[at]!]!;
+    if (token.startsWith(MARK)) {
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (vaultLogin && !token.includes("=")) {
+        at = maskFrom(at);
+      } else if (token === "login" && at > 0 && basename(parts[tokens[at - 1]!]!) === "vault") {
+        vaultLogin = true;
+      }
+      continue;
+    }
+    const equals = token.indexOf("=");
+    const flag = equals === -1 ? token : token.slice(0, equals);
+    const attached = equals === -1 ? undefined : token.slice(equals + 1);
+    const secret = ARGV_SECRET_FLAGS.has(flag) || clientSecrets.has(flag);
+    const userinfo = ARGV_USERINFO_FLAGS.has(flag) || clientSeparators.has(flag);
+    if (secret || userinfo) {
+      if (attached !== undefined) {
+        if (
+          attached.length > 0 &&
+          !attached.startsWith(MARK) &&
+          (secret || carriesPassword(flag, attached))
+        ) {
+          parts[tokens[at]!] = `${flag}=${masked}`;
+        }
+        continue;
+      }
+      const next = at + 1 < tokens.length ? parts[tokens[at + 1]!]! : undefined;
+      if (
+        next === undefined ||
+        next.startsWith("-") ||
+        next.startsWith(MARK) ||
+        (userinfo && !secret && !carriesPassword(flag, next)) ||
+        (flag === "-p" && PATH_VALUE.test(next))
+      ) {
+        continue;
+      }
+      at = maskFrom(at + 1);
+      continue;
+    }
+    // Attached short forms: `-pPASSWORD`, `-ualice:pw`, `-Ualice%pw`, `-aPASSWORD`.
+    if (token.length > 2 && token[1] !== "-") {
+      const short = token.slice(0, 2);
+      const rest = token.slice(2);
+      if (
+        (short === "-p" && (mysql || !/^[a-z]+$/.test(rest))) ||
+        ((short === "-u" || short === "-U") && carriesPassword(short, rest)) ||
+        clientSecrets.has(short)
+      ) {
+        parts[tokens[at]!] = `${short}${masked}`;
+      }
+    }
+  }
+  return parts.join("");
+}
+
 // Standard scheduler and kubelet Event shapes that name cluster objects: the node a Pod
 // was assigned to, image references, and Secret and ConfigMap names. Each pattern starts
 // at a fixed keyword and scans one bounded token, so matching stays linear.

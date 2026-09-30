@@ -127,6 +127,19 @@ the auth secret; `untracked` events have no key and no hash. The email and
 address are never logged. The bundled Collector
 exports the event and lane, not the hash.
 
+Every password sign-in whose password is checked is audited as
+`authentication.login`: success names the account's Principal and `userId`; a
+wrong password or unknown email is `denied` with `INVALID_CREDENTIALS` and no
+account. Audit writes fail closed: a success whose audit cannot be written
+returns `503` and keeps no session. In the password-only profile, a wrong
+password whose denial cannot be written returns `503` (`429` in the slow lane)
+but still spends the sign-in budget; with an external sign-in provider it
+returns `503` and does not spend it. A `429` is unaudited
+only when admission refuses it before the password is checked;
+`authentication.sign-in-limited` reports those. An administrator's attempt in the
+slow lane is still checked, so a wrong password there returns `429` and is also
+audited as `denied`.
+
 ### Known devices
 
 Every successful sign-in, password or external, sets `__Host-occ_known_device`

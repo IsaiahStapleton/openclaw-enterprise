@@ -137,7 +137,7 @@ export const DeploymentParams = Type.Object(
 /** Query strings are not coerced; numeric and boolean values are exact decimal text. */
 export const AgentRuntimeLogsQuery = Type.Object(
   {
-    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent")]),
+    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent"), Type.Literal("sandbox")]),
     pod: Type.Optional(
       Type.String({ minLength: 1, maxLength: 253, pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" }),
     ),
@@ -731,6 +731,7 @@ export const ERROR_CODES = Object.freeze([
   "RUNTIME_LOGS_SOURCE_UNAVAILABLE",
   "RUNTIME_LOGS_RATE_LIMITED",
   "RUNTIME_LOGS_CLUSTER_RBAC",
+  "RUNTIME_LOGS_SANDBOX_NOT_FOUND",
   "RUNTIME_LOGS_UNAVAILABLE",
   "RUNTIME_LOGS_AUDIT_UNAVAILABLE",
   "RUNTIME_LOGS_TIMEOUT",
@@ -802,6 +803,7 @@ export const ErrorResponse = Type.Object(
           Type.Literal("RUNTIME_LOGS_SOURCE_UNAVAILABLE"),
           Type.Literal("RUNTIME_LOGS_RATE_LIMITED"),
           Type.Literal("RUNTIME_LOGS_CLUSTER_RBAC"),
+          Type.Literal("RUNTIME_LOGS_SANDBOX_NOT_FOUND"),
           Type.Literal("RUNTIME_LOGS_UNAVAILABLE"),
           Type.Literal("RUNTIME_LOGS_AUDIT_UNAVAILABLE"),
           Type.Literal("RUNTIME_LOGS_TIMEOUT"),

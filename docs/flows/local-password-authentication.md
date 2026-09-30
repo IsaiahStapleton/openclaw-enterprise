@@ -147,6 +147,16 @@ password state (user, password method, and its `authentication_version`; with an
 external provider, only while the account is enabled), reading the account only
 for an entry issued for that email, and on success reissues it; a verified entry
 replaces the email lane with a device lane.
+In the password-only profile with PostgreSQL State, `passwordSignInAudit` appends `authentication.login` for
+each accepted password (actor: the account's Principal; details: `userId`) and a
+denied event with `INVALID_CREDENTIALS` and no account for each refused one. If
+the success audit fails, the new session is deleted and sign-in returns `503`.
+If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), but
+admission still counts the wrong password against the email and address budgets.
+With an external sign-in provider, `/oce/password` writes the denial itself; if
+that write fails, sign-in returns `503` and the guess is not counted.
+Better Auth logs only errors, so a wrong password writes no unstructured console
+warning.
 
 `requireSessionKey` applies the optional `x-occ-session-key` header after the
 cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API

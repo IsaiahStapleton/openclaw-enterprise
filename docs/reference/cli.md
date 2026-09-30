@@ -111,16 +111,16 @@ and needs Agent `operate` and `read` plus `read` on the revision. `logs` needs
 Agent `administer` and `read` plus `read` on the revision, and each view is
 audited.
 
-| `occ agent logs` flag  | Meaning                                                         |
-| ---------------------- | --------------------------------------------------------------- |
-| `--source SOURCE`      | Required: `gateway` or `agent` (dedicated Harness container).   |
-| `--revision ID`        | Revision to read; defaults to the active revision.              |
-| `--pod NAME`           | Pod to read when the source has more than one.                  |
-| `--previous`           | Read the container instance before the last restart.            |
-| `--tail N`             | Lines from the end of the stream, 1 to 1000 (default 200).      |
-| `--since DURATION`     | Only lines newer than a Go duration such as `10m`, up to `24h`. |
-| `--follow`             | Poll every 2 seconds with the view's cursor until Ctrl-C.       |
-| `-o text` or `-o json` | Text lines (default) or NDJSON, one API record per line.        |
+| `occ agent logs` flag  | Meaning                                                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--source SOURCE`      | Required: `gateway`, `agent` (dedicated Harness container) or `sandbox` (OpenShell policy decisions; no `--pod` or `--previous`). |
+| `--revision ID`        | Revision to read; defaults to the active revision.                                                                                |
+| `--pod NAME`           | Pod to read when the source has more than one.                                                                                    |
+| `--previous`           | Read the container instance before the last restart.                                                                              |
+| `--tail N`             | Lines from the end of the stream, 1 to 1000 (default 200).                                                                        |
+| `--since DURATION`     | Only lines newer than a Go duration such as `10m`, up to `24h`.                                                                   |
+| `--follow`             | Poll every 2 seconds with the view's cursor until Ctrl-C.                                                                         |
+| `-o text` or `-o json` | Text lines (default) or NDJSON, one API record per line.                                                                          |
 
 Text output prints `TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value` per line.
 Gap and withheld records are printed to stderr as `notice:` lines; in JSON mode
