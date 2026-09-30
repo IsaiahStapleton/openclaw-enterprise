@@ -2461,8 +2461,8 @@ async function prepareProductionInstallation(
 
 /**
  * Updates the source through the API, then withdraws it from the running Agent. After the
- * worker records `revoked`, the same running Codex app server can no longer resolve its
- * placeholder, which is the design's live-revocation gate.
+ * worker records `revoked`, a completed turn from the same running Codex app server must
+ * fail this test. A rejected turn alone does not establish the cause of rejection.
  */
 async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
   const { request, namespaceId } = topology;
@@ -2524,21 +2524,26 @@ async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
   const unchanged = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
   assert.equal(unchanged.data.activeRevisionId, revision.id, "withdrawal must not redeploy");
 
-  // The running app server keeps its placeholder, but the proxy no longer resolves it.
+  // A successful turn after withdrawal violates the live-revocation boundary.
   const after = `OCC-OPENSHELL-AFTER-${randomUUID()}`;
   let observation;
+  let result;
+  let rejected = false;
   try {
-    const result = await turn(`Reply with exactly ${after}.`);
-    observation = result.assistant ?? "";
-    assert.doesNotMatch(observation, new RegExp(after));
+    result = await turn(`Reply with exactly ${after}.`);
   } catch (error) {
+    rejected = true;
     observation = error instanceof Error ? error.message : String(error);
+  }
+  if (!rejected) {
+    observation = JSON.stringify(result);
   }
   assert.equal(
     String(observation).includes(process.env.OPENAI_API_KEY),
     false,
     "a revoked turn must not expose the model key",
   );
+  assert.equal(rejected, true, "a turn must not complete after credential withdrawal");
 
   // The active revision still references the source, so it cannot be deleted yet.
   const deletion = await request(
@@ -3109,7 +3114,7 @@ test(
       );
       await assertCredentialSourceUpdateAndLiveWithdrawal(topology);
       process.stderr.write(
-        "OpenShell integration: withdrawal revoked the running Harness; testing embedded fail-closed.\n",
+        "OpenShell integration: withdrawal recorded and post-withdrawal turn did not complete; testing embedded fail-closed.\n",
       );
       await assertEmbeddedOpenShellFailsClosed(topology);
       return;
