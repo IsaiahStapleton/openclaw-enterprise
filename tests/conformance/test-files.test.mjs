@@ -161,8 +161,10 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
       const file = f.put(
         "live.test.mjs",
         `import test, { after } from 'node:test';
-      test('assertion passes', () => {}); setInterval(() => {}, 1000);
-      after(() => setImmediate(() => console.log('test-child-pid:', process.pid)));`,
+      test('assertion passes', () => {});
+      after(() => {
+        setInterval(() => console.log('test-child-pid:', process.pid), 10);
+      });`,
       );
       const child = spawn(process.execPath, [runner, "--", file], {
         cwd: root,
@@ -184,9 +186,9 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
           } catch {}
         }
       });
-      // Wait for the passing result and a later event-loop turn with the leaked
-      // handle still alive. A PID file can exist before its contents are written;
-      // reading that empty file made Number("") probe process group 0 instead.
+      // Wait for the passing result and output from the leaked interval itself.
+      // Hook output alone can race natural shutdown without a live handle.
+      // Complete PID lines also avoid reading an empty, newly created PID file.
       let passed = false;
       for await (const line of output) {
         const match = /^# test-child-pid: ([1-9]\d*)$/.exec(line);
@@ -201,7 +203,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
         }
       }
       child.stdout.resume();
-      assert.ok(testPid, "real test child remains live after its after hook");
+      assert.ok(testPid, "real test child remains live through its leaked interval");
       assert.ok(passed, "the passing assertion was reported before cancellation");
       assert.equal(child.exitCode, null);
       assert.equal(child.signalCode, null);
