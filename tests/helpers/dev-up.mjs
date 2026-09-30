@@ -428,6 +428,12 @@ process.exit(86);
 // selection, state ownership, rollback, and authenticated HTTP use the real code.
 async function prepareLifecycleCommands(fixture, scenario = "success") {
   const bin = join(fixture.directory, "bin");
+  // Isolate the launcher contract; real sandbox enforcement is covered by the
+  // real-cluster lifecycle suite, not this external-command fixture.
+  await writeFile(
+    join(fixture.fixtureRepository, "scripts", "prepare-development-codex-seccomp.mjs"),
+    'process.stdout.write(JSON.stringify({ mode: "RuntimeDefault", profileName: "" }));\n',
+  );
   await rename(join(bin, "docker"), join(bin, "docker-config"));
   fixture.env.SAFETY_LOG = join(fixture.directory, "lifecycle.log");
   fixture.env.DEV_UP_RESOURCE_STATE = join(fixture.directory, "resources.json");

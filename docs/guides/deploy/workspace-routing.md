@@ -6,10 +6,8 @@ retaining its protected Helm values, Installation YAML, and Kubernetes context.
 On EKS, complete the [strict-mode prerequisites](eks.md#enable-console-workspace-files).
 
 This procedure assumes OCC API and worker Pods run in the same Kubernetes
-cluster as the private Envoy Service. The local Compose + k3d helper does not
-configure this topology. Use [Kubernetes setup](../kubernetes-setup.md) for
-workspace access; enabling a Helm value alone does not connect a Compose API
-to the private Service.
+cluster as the private Envoy Service. For OCC in Compose, use the separate [local hybrid routing procedure](local-compose-kubernetes.md).
+Enabling a Helm value alone does not connect a Compose API to the private Service.
 
 Production examples enable routing; the chart defaults to
 `gatewayRouting.enabled: false`. Install routing controllers, create the

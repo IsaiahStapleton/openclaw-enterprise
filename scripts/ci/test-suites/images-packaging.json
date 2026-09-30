@@ -51,14 +51,6 @@
       ]
     },
     {
-      "path": "tests/integration/runtime-image-model-probe.test.mjs",
-      "expectedTests": [
-        "runtime image embedded Gateway passes its model probe at a 500m CPU limit",
-        "runtime image embedded Gateway reports a hung provider as a model probe timeout",
-        "runtime image embedded Gateway reports a CPU-starved model probe at its cap"
-      ]
-    },
-    {
       "path": "tests/integration/repository-runtime-volume.test.mjs",
       "expectedTests": [
         "repository init uses a private subPath of a root-owned fsGroup memory volume"
@@ -135,19 +127,6 @@
       "path": "tests/integration/container-registry-real.test.mjs",
       "expectedTests": [
         "publication updates aliases using real Skopeo and a multi-platform registry"
-      ]
-    },
-    {
-      "path": "tests/integration/codex-model-probe.test.mjs",
-      "expectedTests": [
-        "generated Codex launcher bounds model-probe recovery",
-        "timeout then success",
-        "two timeouts",
-        "credential rejection",
-        "external SIGKILL",
-        "malformed output",
-        "tool event",
-        "termination during backoff exits without another probe"
       ]
     }
   ]

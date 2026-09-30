@@ -7,6 +7,7 @@ import { numericErrorStatus } from "@openclaw-enterprise/utils";
 import {
   REPOSITORY_MATERIAL_KEYS,
   REPOSITORY_MATERIAL_LABEL,
+  repositoryMaterialCurrent,
   repositoryMaterialFromSecret,
   repositoryMaterialSecretName,
   type NewRepositoryMaterialBinding,
@@ -39,6 +40,12 @@ const fields = {
 
 function invalid(): never {
   throw new Error("Repository credential Kubernetes material ownership is invalid.");
+}
+
+function requireCurrentMaterial(spec: RepositoryMaterialSpec): void {
+  if (!repositoryMaterialCurrent(spec)) {
+    throw new Error("Repository credential material has expired.");
+  }
 }
 
 function labels(owner: RepositoryMaterialOwner): Record<string, string> {
@@ -179,9 +186,11 @@ export class RepositoryMaterialStore {
     const resolved: ResolvedRepositoryMaterialBinding[] = [];
     const pending: NewRepositoryMaterialBinding[] = [];
     const missing: RepositoryCredentialMaterialRef[] = [];
+    requireCurrentMaterial(spec);
     // Read and validate the complete set before creating any Secret or workload.
     for (const binding of spec.bindings) {
       const existing = await this.read(binding.secretName);
+      requireCurrentMaterial(spec);
       if (existing === undefined) {
         if (binding.kind === "new") {
           pending.push(binding);
@@ -195,13 +204,16 @@ export class RepositoryMaterialStore {
         this.verify(existing, owner, binding);
         resolved.push(repositoryMaterialFromSecret(binding, existing));
       } catch {
+        requireCurrentMaterial(spec);
         missing.push({ repositoryRef: binding.repositoryRef, sessionId: binding.sessionId });
       }
     }
     if (missing.length !== 0) {
+      requireCurrentMaterial(spec);
       return { kind: "missing", missing };
     }
     for (const binding of pending) {
+      requireCurrentMaterial(spec);
       const data = Object.fromEntries(
         Object.entries(binding.files).map(([file, content]) => [
           REPOSITORY_MATERIAL_KEYS[file as keyof typeof REPOSITORY_MATERIAL_KEYS],
@@ -227,6 +239,7 @@ export class RepositoryMaterialStore {
         data,
       };
       let observed: V1Secret | undefined;
+      requireCurrentMaterial(spec);
       try {
         observed = await this.request(
           () => this.core.createNamespacedSecret({ namespace: this.namespace, body }),
@@ -239,6 +252,7 @@ export class RepositoryMaterialStore {
         }
         observed = await this.read(binding.secretName);
       }
+      requireCurrentMaterial(spec);
       if (observed === undefined) {
         throw new Error("Repository credential material creation could not be confirmed.");
       }
@@ -246,12 +260,14 @@ export class RepositoryMaterialStore {
         this.verify(observed, owner, binding);
         repositoryMaterialFromSecret(binding, observed);
       } catch {
+        requireCurrentMaterial(spec);
         return {
           kind: "missing",
           missing: [{ repositoryRef: binding.repositoryRef, sessionId: binding.sessionId }],
         };
       }
     }
+    requireCurrentMaterial(spec);
     return { kind: "ready", spec: { ...spec, bindings: resolved } };
   }
 

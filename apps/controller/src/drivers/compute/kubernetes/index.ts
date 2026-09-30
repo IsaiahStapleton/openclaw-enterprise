@@ -109,6 +109,7 @@ import {
 
 import {
   REPOSITORY_MATERIAL_GENERATION,
+  repositoryMaterialCurrent,
   repositoryMaterialSpec,
   repositoryMaterialDeployment,
   type RepositoryMaterialSpec,
@@ -2911,6 +2912,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ): Promise<ComputeReadiness> => {
       if (statusContainer === undefined) {
         await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
+        if (material?.kind === "ready" && !repositoryMaterialCurrent(material.spec)) {
+          return incomplete();
+        }
         return {
           ...result,
           ready: true,
@@ -2934,6 +2938,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       if (status !== undefined) {
         await this.deliverWorkspaceSetup(revision, workspaceSetup, namespace, true);
+        if (material?.kind === "ready" && !repositoryMaterialCurrent(material.spec)) {
+          return incomplete();
+        }
       }
       return status === undefined
         ? result
@@ -3144,6 +3151,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       // The shared Recreate gateway validates auth in the replacement's startup.
       // An unready predecessor must not prevent repair through a new deployment.
+      if (repositoryMaterial !== undefined && !repositoryMaterialCurrent(repositoryMaterial)) {
+        return incomplete();
+      }
       return { ...result, ready: true };
     }
     if (!embedded) {
@@ -3496,7 +3506,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         return agentReadiness;
       }
       if (this.options.runtime === undefined) {
-        return (await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace))
+        return (await this.gatewayReady(gatewayOwnership, gatewayName, gatewayNamespace)) &&
+          (repositoryMaterial === undefined || repositoryMaterialCurrent(repositoryMaterial))
           ? agentReadiness
           : incomplete();
       }
@@ -3749,6 +3760,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
         await this.cleanupRepositoryMaterial(revision, namespace, repositoryMaterial);
+        if (!repositoryMaterialCurrent(repositoryMaterial)) {
+          throw new DependencyUnavailableError(
+            "The exact repository credential runtime generation is not ready.",
+          );
+        }
       }
       return;
     }
@@ -3952,6 +3968,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (!(await this.workspaceNodeReady(revision, namespace))) {
       throw new Error("The exact AgentRevision Harness node is not ready.");
+    }
+    if (repositoryMaterial !== undefined && !repositoryMaterialCurrent(repositoryMaterial)) {
+      throw new DependencyUnavailableError(
+        "The exact repository credential runtime generation is not ready.",
+      );
     }
   }
 
@@ -4819,7 +4840,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ready += 1;
       }
     }
-    return ready >= Number(deployment.spec?.replicas);
+    return repositoryMaterialCurrent(material) && ready >= Number(deployment.spec?.replicas);
   }
 
   private async cleanupRepositoryMaterial(
@@ -8495,6 +8516,11 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       );
       directories.push(embedded ? "/gateway-state/workspace" : "/gateway-state/sessions");
     }
+    // Init mounts the volume root; the gateway later mounts its home subdirectory.
+    const writableConfigurationInitPath = WRITABLE_CONFIGURATION_PATH.replace(
+      /^\/home\/node/u,
+      "/runtime-state/home",
+    );
     const script = [
       writableConfiguration
         ? 'const { chmodSync, copyFileSync, mkdirSync } = require("node:fs");'
@@ -8510,8 +8536,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         ? [
             `copyFileSync(${JSON.stringify(
               `${MANAGED_CONFIGURATION_DIRECTORY}/${CONFIGURATION_DOCUMENT}`,
-            )}, ${JSON.stringify(WRITABLE_CONFIGURATION_PATH)});`,
-            `chmodSync(${JSON.stringify(WRITABLE_CONFIGURATION_PATH)}, 0o600);`,
+            )}, ${JSON.stringify(writableConfigurationInitPath)});`,
+            `chmodSync(${JSON.stringify(writableConfigurationInitPath)}, 0o600);`,
           ]
         : []),
     ].join("\n");
@@ -9849,7 +9875,7 @@ for (const path of ${JSON.stringify(
       }
       variables.push(...harnessAuth.environment);
     }
-    if (role === "agent" && repositoryMaterial !== undefined) {
+    if ((role === "agent" || embedded) && repositoryMaterial !== undefined) {
       const brokerCa = repositoryBrokerPublicCaPath(repositoryMaterial);
       if (brokerCa !== undefined) {
         const existingCaPolicy = variables.find((variable) =>

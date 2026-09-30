@@ -1,7 +1,7 @@
 ---
 created: "2026-09-18"
-updated: 2026-09-28
-last_updated_session: "authoring-run/75044c27-6c5b-4cff-a6cf-9e31fd688ac2"
+updated: 2026-09-30
+last_updated_session: "authoring-run/00e5c01e-b8c9-46df-a8ac-45aa0e6932da"
 ---
 
 # Agent repository credential flow
@@ -9,8 +9,8 @@ last_updated_session: "authoring-run/75044c27-6c5b-4cff-a6cf-9e31fd688ac2"
 ## Overview
 
 The Console lists approved repositories; admission saves selections and deployment
-freezes grants. The worker delivers sessions to Kubernetes embedded OpenClaw
-or dedicated Codex with compatible Harness authentication and no Sandbox Driver.
+freezes grants. Sessions reach embedded OpenClaw or dedicated Codex with compatible
+Harness authentication and no Sandbox Driver.
 See [service forwarding and retirement](repository-credentials.md) and
 [runtime qualification](../testing/repository-credentials.md).
 
@@ -183,50 +183,53 @@ before terminal commit remains unknown; transport failure cannot establish absen
 validates `new | retained` bindings against the revision and hashes sorted
 reference/session pairs.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-store.ts:RepositoryMaterialStore.prepare`
-validates ownership and contents before creating immutable
-Agent/revision/session-owned Secrets. It reports missing retained bindings. The worker's `RepositoryCredentialLifecycle.repair` closes that subset
-and requires disposal before replacement, then retries Compute once. Missing
-inventory fails the revision. Pending closure blocks replacement until bounded
-retry or active-revision continuation confirms disposal.
+validates ownership, contents and deadlines before creating immutable Agent/revision-owned
+Secrets. It rechecks deadlines after requests and before creation or return;
+expiry leaves Secrets for owned cleanup. For missing retained
+bindings, `RepositoryCredentialLifecycle.repair` closes that subset, requires
+disposal, then retries Compute once. Missing inventory fails;
+pending closure blocks replacement until bounded retry or continuation confirms
+disposal.
 
 `apps/controller/src/drivers/compute/kubernetes/repository-material.ts:repositoryMaterialDeployment`
-mounts Secrets only in the first init container. Sorted projection items prevent
-key-order changes from triggering rollouts; session replacement still does.
+mounts Secrets only in the first initializer. Sorted projections prevent key-order rollouts; session replacement still rolls.
 `apps/controller/src/drivers/compute/kubernetes/repository-material-init.ts:REPOSITORY_MATERIAL_INIT_ENTRYPOINT`
-validates a complete projection, then writes mode-0700 directories and mode-0600
-files into memory-backed storage. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts
-that private subPath at `/run/oce/repository-credentials`, avoiding the
-fsGroup-writable volume root. It calls
+validates the complete projection, then writes mode-0700 directories and
+mode-0600 files in memory. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts the
+private subPath at `/run/oce/repository-credentials`, avoiding the fsGroup-writable
+root. It calls
 `apps/controller/src/drivers/repo/github/credentials/client/native-git.ts:prepareNativeGitConfiguration`
 with private-file checks. Retry removes only a validated private `gitconfig`.
-Both init steps gate startup; the consumer mounts material read-only. Public
-metadata and gateway bearers remain separate.
+Both gate startup; the consumer mount is read-only. Metadata and gateway
+bearers remain separate.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.activateRevision`
-replaces the consumer when material changes, including within one revision.
-Readiness requires role, revision and generation. Dedicated replacement preserves enrollment and revision-private storage. `KubernetesComputeDriver.prepareRevision` rechecks material after plugin,
-gateway and node observations, including for successors; changed generation or
-lost readiness returns incomplete.
-The gateway receives neither repository material nor repository-gateway egress.
+replaces consumers on material changes, even within one revision.
+Readiness requires role, revision, generation and current deadlines.
+Dedicated replacement preserves enrollment and revision-private storage.
+`KubernetesComputeDriver.prepareRevision` rechecks material after plugin,
+gateway and node observations; changed generation, lost readiness or expiry
+returns incomplete. Activation rechecks deadlines after final observations.
+Dedicated gateways lack repository material and repository-gateway egress.
+Both consumers trust CAs through `SSL_CERT_FILE`, `GIT_SSL_CAINFO` and
+`NODE_EXTRA_CA_CERTS`; overrides fail.
 Compute grants consumer egress; Helm admits consumers through
 [credential-sidecar ingress selectors](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking). Native preparation
 writes aggregate `gitconfig` without reading bearers. System Git includes
 `/run/oce/repository-credentials/gitconfig`, preserving HOME/global configuration.
 Embedded `repositoryNativeConfiguration` keeps the `gh` router first in
 `tools.exec.pathPrepend`. `AGENT_RUNTIME_ENTRYPOINT` sets Codex's
-`allow_login_shell=false` and `shell_environment_policy.set.PATH`. The Harness
-model environment remains intact. App keys, JWTs, installation tokens and the
-control socket never enter this material set. Selected Codex plugins can read `/app/node_modules/openclaw`,
+`allow_login_shell=false` and `shell_environment_policy.set.PATH`. Model authentication remains intact. App keys, JWTs, installation tokens and the
+control socket never enter consumer material. Selected Codex plugins can read `/app/node_modules/openclaw`,
 `/home/node/.openclaw/plugin-skills` and `/home/node/openclaw-runtime-assets/plugin-skills`
 for the stock app-server and published skills inside sandboxed Codex tools. Repository-bound Codex consumers additionally receive stock Codex
 `allow_local_binding = true`, `mode = "full"`, and the exact broker hostname
 allowance; explicit denies prevail. That repository profile also grants
 read-only access to `/opt/oce/repository-credentials` and
 `/run/oce/repository-credentials` so the native binary, Git helper, and generated
-session material remain reachable inside sandboxed Codex tools. The
+session material remain reachable. The
 [networking contract](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
-defines dedicated/embedded eligibility. Unbound policy and broker authorization remain unchanged.
-Compute supplies CA trust; TLS verification stays enabled.
+defines dedicated/embedded eligibility. Unbound policy, broker authorization and TLS verification remain unchanged.
 
 ### 5. Authenticate native Git and route GitHub CLI commands
 
@@ -318,19 +321,18 @@ Compare `occ agent get AGENT_ID --output json` with the admitted `activeRevision
 Inspect worker events for
 `REPOSITORY_BINDING_CHANGED`, `REPOSITORY_CREDENTIAL_DEADLINE_EXCEEDED`,
 `REPOSITORY_SESSION_RECOVERY_UNSAFE`, `REPOSITORY_CLEANUP_PENDING` or
-`REPOSITORY_CLEANUP_COMPLETE`. Check registry
-identity and deadline before retrying.
+`REPOSITORY_CLEANUP_COMPLETE`. Check registry identity and deadline before retry.
 
 `repository-not-admitted` means an unselected target; `name-one-repository-target`
-or `name-one-repository-ref` requires explicit selection. Inspect material metadata
-and Pod generation without printing bearers or Secrets.
+or `name-one-repository-ref` requires explicit selection. Inspect metadata
+and Pod generation without printing credentials.
 
 The [test guide](../testing/repository-credentials.md) distinguishes lifecycle,
 installed-runtime and live-provider proof. The
 [image volume case](../testing/images.md#repository-runtime-volume-test-environment)
 checks Docker mounts; Helm checks rendered ingress. Neither proves CNI enforcement.
 Console recordings cover fixture/API behavior, not model, Slack or GitHub execution.
-Ready Pods and local commands do not prove live writes.
+Ready Pods and commands do not prove live writes.
 
 ## Related docs
 
@@ -345,6 +347,10 @@ Ready Pods and local commands do not prove live writes.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 05:21: Deliver broker CA settings to both repository consumers. (01a0ed9e-6c22-7671-9ee1-a58e1df39acd - ab0a1838)
+
+- 2026-09-30 03:57: Recheck material deadlines. (authoring-run/00e5c01e-b8c9-46df-a8ac-45aa0e6932da - 5334a55faf3ced4bf9e0971daad6fd34ad2fe982)
 
 - 2026-09-29 20:00: Trace repository descriptions, inheritance and overrides. (public-pr/374)
 

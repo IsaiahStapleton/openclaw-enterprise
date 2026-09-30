@@ -667,7 +667,11 @@ async function selectedDevelopmentCluster(directory) {
   if (
     state.version !== 3 ||
     state.computeDriver !== "kubernetes" ||
-    state.deploymentMode !== "k3d" ||
+    (state.deploymentMode !== "k3d" &&
+      !(
+        state.deploymentMode === undefined &&
+        /^[a-z0-9][a-z0-9_-]*$/.test(state.composeProject ?? "")
+      )) ||
     state.sandboxDriver !== "none" ||
     !/^occ-dev-[a-z0-9][a-z0-9-]*$/.test(state.cluster ?? "") ||
     state.cluster.length > 63 ||
