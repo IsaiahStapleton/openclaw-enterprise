@@ -53,8 +53,10 @@ Each Agent explicitly records how its selected Harness runs:
 The Agent's native Configuration selects a Harness through model/provider
 `agentRuntime.id` policy. The [Harness execution reference](../harness-execution.md)
 owns supported runtime selections, model catalogs, transport, and credential
-boundaries. OCC rejects conflicting, unknown, or mode-incompatible selections
-before admitting a revision. A selected SandboxDriver currently requires
+boundaries. OCC rejects conflicting, unknown, missing, or mode-incompatible
+selections before admitting a revision: deploy returns `400 INVALID_REQUEST`
+with the specific reason, such as "The configured Agent model requires an
+explicit supported Harness runtime." A selected SandboxDriver currently requires
 `dedicated` Codex execution; it does not support embedded OpenClaw.
 
 An Agent update may include `executionMode`, `harnessAuth`, and `backendId`

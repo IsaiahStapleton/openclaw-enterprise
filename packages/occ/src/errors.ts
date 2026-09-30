@@ -92,6 +92,18 @@ export class ScopeViolationError extends Error {
   }
 }
 
+/**
+ * Admitted Configuration content cannot select a supported Harness runtime. The
+ * caller can already see the Configuration, so HTTP reports the static message as
+ * an invalid request instead of hiding it as a scope miss.
+ */
+export class ConfigurationHarnessError extends ScopeViolationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigurationHarnessError";
+  }
+}
+
 export class ResourceConflictError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
