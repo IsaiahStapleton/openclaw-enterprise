@@ -22,7 +22,7 @@ export function validateContext(env, repo, workflow = publishWorkflow) {
   assert.equal(repo.full_name, repository);
   assert.equal(typeof repo.private, "boolean", "Repository privacy must be a boolean.");
   if (workflow !== publishWorkflow || env.PUBLISH !== "false") {
-    assert.equal(repo.private, true, "Publication requires the private Enterprise repository.");
+    assert.equal(repo.private, false, "Publication requires the public Enterprise repository.");
   }
   assert.equal(repo.default_branch, "main");
   assert.equal(env.GITHUB_EVENT_NAME, "workflow_dispatch", "Only manual dispatch is supported.");
@@ -79,10 +79,16 @@ export function ghcrPackageName(image) {
   return image.slice("ghcr.io/openclaw/".length);
 }
 
-export function validatePackage(pkg, image, { allowMissingRepository = false } = {}) {
+export function validatePackage(
+  pkg,
+  image,
+  { allowMissingRepository = false, allowPrivateBootstrap = false } = {},
+) {
   assert.equal(pkg.name, ghcrPackageName(image));
   assert.equal(pkg.package_type, "container");
-  assert.equal(pkg.visibility, "private", "GHCR package must already exist and be private.");
+  // GHCR creates marker packages privately; only bootstrap may accept that state.
+  const visibility = allowPrivateBootstrap ? ["public", "private"] : ["public"];
+  assert.ok(visibility.includes(pkg.visibility), "GHCR package must already exist and be public.");
   // GitHub's package schema makes repository nullable and optional. Absence
   // cannot establish linkage; callers may accept the setup-time package grant.
   // Explicit conflicting metadata always fails.
@@ -90,7 +96,7 @@ export function validatePackage(pkg, image, { allowMissingRepository = false } =
     return false;
   }
   assert.equal(pkg.repository?.full_name, repository, "Link the package to Enterprise first.");
-  assert.equal(pkg.repository?.private, true);
+  assert.equal(pkg.repository?.private, false);
   return true;
 }
 
