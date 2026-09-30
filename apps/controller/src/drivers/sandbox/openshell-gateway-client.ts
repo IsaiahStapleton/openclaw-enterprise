@@ -624,7 +624,7 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no stable name.");
     }
     const serviceUrls = asRecord(response.service_urls);
-    if (serviceUrls === undefined) {
+    if (serviceUrls === undefined && request.serviceExposures.length !== 0) {
       throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no service URL map.");
     }
     return Object.freeze({
@@ -638,7 +638,7 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       }),
       serviceUrls: Object.freeze(
         Object.fromEntries(
-          Object.entries(serviceUrls).map(([service, value]) => [
+          Object.entries(serviceUrls ?? {}).map(([service, value]) => [
             service,
             normalizeServiceUrl(value, this.options.endpoint),
           ]),

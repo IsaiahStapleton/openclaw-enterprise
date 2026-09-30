@@ -87,8 +87,11 @@ and predecessor retirement for deployments. Retry and convergence delays count;
 maintenance, superseded operations, and permanent failures do not. Repeated stops
 that find the Agent already stopped still count as completed stop requests.
 Both bounded operation label sets start at zero so the first completion can
-contribute to rates. Buckets in seconds are `0.1, 0.5, 1, 5, 15, 30, 60, 120, 300, 900, 1800` plus
-`+Inf`, count, and sum. The timer uses wall-clock admission time and clamps
+contribute to rates. Buckets in seconds are `0.1, 0.5, 1, 2, 5, 10, 15, 20, 30,
+45, 60, 90, 120, 180, 240, 300, 450, 600, 900, 1800` plus `+Inf`, count, and
+sum, resolving deployments from one second to the 900-second convergence
+deadline. Per-phase deployment timing is in the worker's
+[`worker.completed` log](controller.md#observability). The timer uses wall-clock admission time and clamps
 negative elapsed time to zero. Process death between commit and observation can
 lose a sample; observations are operational metrics, not durable audit evidence.
 

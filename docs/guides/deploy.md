@@ -45,9 +45,13 @@ hosting does not select the Agent model provider.
 
 - Kubernetes 1.35 or later, an explicit context, enforcing NetworkPolicies,
   Helm, a version-compatible `kubectl`, Python 3, `yq` v4, and the installed
-  [OCC CLI](cli.md). Older servers produce a startup warning and remain outside
-  the supported boundary.
-- Controller and runtime image digests (build them in the first step).
+  [OCC CLI](cli.md). Use Bash for image selection and model verification, and
+  Node.js 24 or newer for profile generation or the API transport-credential
+  example. Manual YAML plus console transport provisioning avoids those Node
+  commands. Older Kubernetes servers produce a startup warning and remain
+  outside the supported boundary.
+- Controller and runtime image digests and a chart matched to their source; see
+  [private image delivery](deploy/private-registry-images.md).
 - External PostgreSQL with separate migrator and application roles.
 - A Kubernetes node pool labeled for OCC control-plane Pods. The production example
   selects nodes with `oce-role: control`; the chart default is `{}`. Set
@@ -66,9 +70,10 @@ hosting does not select the Agent model provider.
 Follow these pages in order in the same operator shell:
 
 1. [Build images and install the control plane](deploy/production-installation.md).
-   Configure protected Installation YAML and Helm values, create system
-   Secrets, prepare the fresh bootstrap PVC, install the chart, and authenticate
-   to the production API.
+   Generate configuration from an
+   [installation profile](deploy/installation-profiles.md) (recommended) or copy
+   the manual YAML examples, then create system Secrets, prepare the fresh
+   bootstrap PVC, install the chart, and authenticate to the production API.
 2. [Prepare Namespaces and deploy Agents](deploy/production-agents.md).
    Grant tenant RoleBindings, choose embedded OpenClaw or dedicated Codex,
    provision exact-Agent credentials, and deploy an immutable revision.
@@ -87,6 +92,8 @@ window. For a persistent Helm installation on k3d, use
 
 For ongoing business operation, use [production handoff](deploy/production-handoff.md)
 to record owners, credential renewal, alert response, and recovery decisions.
+When GitHub sign-in needs recovery or must be turned back off, use
+[sign-in maintenance](deploy/auth-maintenance.md) with the API stopped.
 
 For private workspace-file administration, configure
 [Agent workspace routing](deploy/workspace-routing.md). For operational logs,
@@ -140,6 +147,7 @@ runtime paths. See
 - [Troubleshoot the platform](operate/troubleshooting.md)
 - [Service API keys, rotation, and bootstrap recovery](../reference/authentication/service-api-keys.md)
 - [Credential renewal and revocation](deploy/credential-lifecycle.md)
+- [Render installation profiles](deploy/installation-profiles.md)
 - [Local Kubernetes, development TUI, and cleanup](deploy/local-operations.md)
 - [Local Kubernetes development inner loop](deploy/local-kubernetes-development.md)
 - [Configuration and settings](../reference/settings.md)

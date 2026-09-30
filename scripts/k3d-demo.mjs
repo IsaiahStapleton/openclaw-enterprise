@@ -8,6 +8,7 @@ import {
 const controlUiPort = 18888;
 const consolePort = 18889;
 const demoStatePath = process.env.OCC_K3D_DEMO_STATE;
+const harnessId = process.env.OCC_K3D_HARNESS ?? "codex";
 
 async function main() {
   assert.ok(demoStatePath, "OCC_K3D_DEMO_STATE is required");
@@ -24,8 +25,11 @@ async function main() {
   process.once("SIGTERM", stopDemo);
   let failure;
   try {
-    process.stderr.write("[k3d:demo] Creating a dedicated Codex Agent and OCC console.\n");
+    assert.ok(harnessId === "codex" || harnessId === "openclaw", "invalid k3d Harness");
+    const harnessName = harnessId === "codex" ? "Codex" : "native OpenClaw";
+    process.stderr.write(`[k3d:demo] Creating a dedicated ${harnessName} Agent and OCC console.\n`);
     const topology = await arrangeProductionTopology(context, "dedicated", undefined, {
+      harnessId,
       bindingNegativeControl: false,
       controllerPort: consolePort,
       gatewayPassword: true,

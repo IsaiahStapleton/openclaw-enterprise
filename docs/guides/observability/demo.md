@@ -1,8 +1,7 @@
 # Try the observability demonstration stack
 
-Install disposable Prometheus, Grafana and Loki alongside OCE. **Not for
-production:** storage is bounded, high availability and durable backups are
-absent, and Pod replacement can lose telemetry. See
+Install disposable Prometheus, Grafana, and Loki. **Not for production:**
+there is no high availability or durable backup, and Pod replacement can lose telemetry. See
 [metrics discovery](metrics.md) and [log collection](../observability.md).
 
 **Required:** A qualified operator must dedicate the cluster to the selected OCC
@@ -321,8 +320,8 @@ if (s.get("name") != "oce" or s.get("namespace") != "openclaw-system"
 ```
 
 Keep forwarding running. Sign in at `http://127.0.0.1:3001` as `admin` with
-the generated password. Open **OCC → OCC development** for metrics or
-**OCC → OCC operational logs (demonstration)** for logs.
+the generated password. Open **OCC → OCC observability** for metrics and logs.
+Point `observability.url` to its `/d/occ-observability` URL.
 
 ## Verify actual data
 

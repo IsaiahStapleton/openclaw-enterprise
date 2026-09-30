@@ -38,7 +38,7 @@ test("service API keys authenticate scoped automation without replacing sessions
   const auth = createControllerAuth(authOptions);
   const credentials = { email: "admin@example.invalid", password: `test-password-${randomUUID()}` };
   const account = await auth.createAccount(credentials);
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   const policy = {
     identities: [seed.principal],
     roles: [...seed.roles],
@@ -49,13 +49,29 @@ test("service API keys authenticate scoped automation without replacing sessions
   };
   const iamDriver = new NativeIAMDriver({ loadNativeIAMState: async () => policy });
   const auditSink = new InMemoryAuditSink();
+  const runtimeCredentialStatus = new Map();
+  const computeDriver = {
+    ...createDevelopmentComputeDriver(),
+    async getAgentRuntimeCredentialStatus({ namespace, agent }) {
+      return (
+        runtimeCredentialStatus.get(`${namespace.id}:${agent.id}`) ?? {
+          transportConfigured: false,
+        }
+      );
+    },
+    async provisionAgentRuntimeCredentials({ namespace, agent }) {
+      const status = { transportConfigured: true };
+      runtimeCredentialStatus.set(`${namespace.id}:${agent.id}`, status);
+      return status;
+    },
+  };
   let controller;
   const app = createFastifyApp({
     auth,
     iamDriver,
     auditSink,
     development: { enabled: true, installationId },
-    computeDriver: createDevelopmentComputeDriver(),
+    computeDriver,
     secretDriver: createTestSecretDriver(),
     configurationDriver: createTestConfigurationDriver(),
     resolveHarness: resolveApprovedDevelopmentHarness,
@@ -107,6 +123,10 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "read", resourceKind: "namespace" },
       { action: "create", resourceKind: "configuration" },
       { action: "delete", resourceKind: "configuration" },
+      { action: "create", resourceKind: "secret" },
+      { action: "read", resourceKind: "secret" },
+      { action: "update", resourceKind: "secret" },
+      { action: "delete", resourceKind: "secret" },
       { action: "read", resourceKind: "agent" },
       { action: "operate", resourceKind: "agent" },
       { action: "delete", resourceKind: "agent" },
@@ -144,12 +164,30 @@ test("service API keys authenticate scoped automation without replacing sessions
     const directory = await mkdtemp(join(tmpdir(), "openclaw-occ-cli-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const keyFile = join(directory, "service-key.json");
+    const adminKeyFile = join(directory, "admin-service-key.json");
     const bodyFile = join(directory, "configuration.json");
     const ambiguousBodyFile = join(directory, "ambiguous-configuration.json");
+    const secretFile = join(directory, "secret.json");
+    const secretUpdateFile = join(directory, "secret-update.json");
+    const roleFile = join(directory, "role.json");
     await writeFile(keyFile, JSON.stringify(issued), { mode: 0o600 });
     await writeFile(bodyFile, JSON.stringify({ kind: "agent", values: { model: "gpt-test" } }), {
       mode: 0o600,
     });
+    await writeFile(secretFile, JSON.stringify({ name: "cli-secret", value: "initial-secret" }), {
+      mode: 0o600,
+    });
+    await writeFile(secretUpdateFile, JSON.stringify({ value: "rotated-secret" }), {
+      mode: 0o600,
+    });
+    await writeFile(
+      roleFile,
+      JSON.stringify({
+        name: "CLI secret operator",
+        permissions: [{ action: "operate", resourceKind: "secret" }],
+      }),
+      { mode: 0o600 },
+    );
     await writeFile(
       ambiguousBodyFile,
       '{"kind":"agent","kind":"agent","values":{"model":"gpt-test"}}',
@@ -161,6 +199,44 @@ test("service API keys authenticate scoped automation without replacing sessions
       OCC_SERVICE_KEY_FILE: keyFile,
       OCC_NAMESPACE: namespaceId,
     };
+    // IAM policy management requires Installation administer. Grant only that,
+    // not the bootstrap administrator Role, so the key cannot reach other data.
+    const installationPrincipal = { kind: "service_principal", id: `sp_${randomUUID()}` };
+    policy.identities.push(installationPrincipal);
+    policy.roles.push(
+      {
+        id: "cli-installation-iam-administrator",
+        permissions: [{ action: "administer", resourceKind: "installation" }],
+      },
+      {
+        id: "cli-installation-namespace-reader",
+        namespaceId,
+        permissions: [{ action: "read", resourceKind: "namespace" }],
+      },
+    );
+    policy.bindings.push({
+      id: "cli-installation-iam-administrator",
+      subjectKind: "identity",
+      subjectId: installationPrincipal.id,
+      roleId: "cli-installation-iam-administrator",
+      resourceKind: "installation",
+      resourceId: installationId,
+    });
+    policy.bindings.push({
+      id: "cli-installation-namespace-reader",
+      namespaceId,
+      subjectKind: "identity",
+      subjectId: installationPrincipal.id,
+      roleId: "cli-installation-namespace-reader",
+      resourceKind: "namespace",
+      resourceId: namespaceId,
+    });
+    const adminKey = await request("POST", "/api/auth/service-keys", {
+      body: { servicePrincipalId: installationPrincipal.id, name: "cli-installation-admin" },
+    });
+    assert.equal(adminKey.status, 201);
+    await writeFile(adminKeyFile, JSON.stringify(adminKey), { mode: 0o600 });
+    const adminEnv = { ...env, OCC_SERVICE_KEY_FILE: adminKeyFile };
 
     // Reject ambiguous object members before a credentialed mutation can reach OCC.
     await assert.rejects(
@@ -196,14 +272,34 @@ test("service API keys authenticate scoped automation without replacing sessions
     });
     assert.equal((await request("GET", configurationPath)).status, 404);
 
-    // Seed the server-owned resource through the administrator session so the
-    // scoped CLI credential exercises only its granted Agent operations.
+    // Secret material and Agent runtime operations require a ready Namespace.
     const readyNamespace = await controller.handleNamespaceLifecycle(
       seed.principal.id,
       namespaceId,
       "ready",
     );
     assert.equal(readyNamespace.status, "ready");
+    const secretCreated = await run(
+      occCli,
+      ["secret", "create", "--file", secretFile, "--output", "json"],
+      { env },
+    );
+    const cliSecret = JSON.parse(secretCreated.stdout);
+    assert.equal(cliSecret.name, "cli-secret");
+    assert.equal(Object.hasOwn(cliSecret, "value"), false);
+    const secretRead = await run(occCli, ["secret", "get", cliSecret.id, "--output", "json"], {
+      env,
+    });
+    assert.equal(JSON.parse(secretRead.stdout).id, cliSecret.id);
+    const secretUpdated = await run(
+      occCli,
+      ["secret", "update", cliSecret.id, "--file", secretUpdateFile, "--output", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(secretUpdated.stdout), cliSecret);
+
+    // Seed the server-owned resource through the administrator session so the
+    // scoped CLI credential exercises only its granted Agent operations.
     const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
       body: { kind: "agent", values: {} },
     });
@@ -242,6 +338,82 @@ test("service API keys authenticate scoped automation without replacing sessions
       resourceKind: "secret",
       resourceId: source.id,
     });
+    const roleCreated = await run(
+      occCli,
+      ["iam", "role", "create", "--file", roleFile, "-o", "json"],
+      {
+        env: adminEnv,
+      },
+    );
+    const role = JSON.parse(roleCreated.stdout);
+    assert.equal(role.name, "CLI secret operator");
+    assert.deepEqual(role.permissions, [{ action: "operate", resourceKind: "secret" }]);
+    const roleList = await run(occCli, ["iam", "role", "list", "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.ok(JSON.parse(roleList.stdout).some((candidate) => candidate.id === role.id));
+    const roleRead = await run(occCli, ["iam", "role", "get", role.id, "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.deepEqual(JSON.parse(roleRead.stdout), role);
+    policy.roles.push({
+      id: "cli-installation-secret-reader",
+      namespaceId,
+      permissions: [{ action: "read", resourceKind: "secret" }],
+    });
+    policy.bindings.push({
+      id: "cli-installation-secret-reader",
+      namespaceId,
+      subjectKind: "identity",
+      subjectId: installationPrincipal.id,
+      roleId: "cli-installation-secret-reader",
+      resourceKind: "secret",
+      resourceId: cliSecret.id,
+    });
+    const bindingFile = join(directory, "binding.json");
+    await writeFile(
+      bindingFile,
+      JSON.stringify({
+        subjectKind: "identity",
+        subjectId: boundAgent.servicePrincipalId,
+        roleId: role.id,
+        resourceKind: "secret",
+        resourceId: cliSecret.id,
+      }),
+      { mode: 0o600 },
+    );
+    const bindingCreated = await run(
+      occCli,
+      ["iam", "access-binding", "create", "--file", bindingFile, "-o", "json"],
+      { env: adminEnv },
+    );
+    const binding = JSON.parse(bindingCreated.stdout);
+    assert.equal(binding.subjectId, boundAgent.servicePrincipalId);
+    assert.equal(binding.roleId, role.id);
+    assert.equal(binding.resourceId, cliSecret.id);
+    const bindingList = await run(occCli, ["iam", "access-binding", "list", "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.ok(JSON.parse(bindingList.stdout).some((candidate) => candidate.id === binding.id));
+    const bindingRead = await run(
+      occCli,
+      ["iam", "access-binding", "get", binding.id, "-o", "json"],
+      { env: adminEnv },
+    );
+    assert.deepEqual(JSON.parse(bindingRead.stdout), binding);
+    const runtimeInitial = await run(
+      occCli,
+      ["agent", "runtime-credentials", "get", agent.data.id, "-o", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(runtimeInitial.stdout), { transportConfigured: false });
+    const runtimeProvisioned = await run(
+      occCli,
+      ["agent", "runtime-credentials", "provision", agent.data.id, "-o", "json"],
+      { env },
+    );
+    const runtimeMetadata = JSON.parse(runtimeProvisioned.stdout);
+    assert.equal(runtimeMetadata.transportConfigured, true);
     const deployed = await request(
       "POST",
       `/namespaces/${namespaceId}/agents/${agent.data.id}/deploy`,
@@ -266,6 +438,36 @@ test("service API keys authenticate scoped automation without replacing sessions
         desiredRuntimeState: currentAgent.desiredRuntimeState,
       },
       { id: agent.data.id, desiredRuntimeState: "stopped" },
+    );
+    const bindingDeleted = await run(
+      occCli,
+      ["iam", "access-binding", "delete", binding.id, "-o", "json"],
+      { env: adminEnv },
+    );
+    assert.deepEqual(JSON.parse(bindingDeleted.stdout), {
+      deleted: true,
+      id: binding.id,
+      kind: "iam access-binding",
+    });
+    const roleDeleted = await run(occCli, ["iam", "role", "delete", role.id, "-o", "json"], {
+      env: adminEnv,
+    });
+    assert.deepEqual(JSON.parse(roleDeleted.stdout), {
+      deleted: true,
+      id: role.id,
+      kind: "iam role",
+    });
+    const secretDeleted = await run(occCli, ["secret", "delete", cliSecret.id, "-o", "json"], {
+      env,
+    });
+    assert.deepEqual(JSON.parse(secretDeleted.stdout), {
+      deleted: true,
+      id: cliSecret.id,
+      kind: "secret",
+    });
+    assert.equal(
+      (await request("GET", `/namespaces/${namespaceId}/secrets/${cliSecret.id}`)).status,
+      404,
     );
 
     const deleting = await run(occCli, ["agent", "delete", agent.data.id], { env });
@@ -399,13 +601,27 @@ test("service API keys authenticate scoped automation without replacing sessions
         ).status,
         403,
       );
-      const adminBinding = {
-        id: "installation-service-admin",
+      // Installation administer alone cannot issue a key that reaches the
+      // Namespace grants the issuer itself lacks.
+      const exactAdminBinding = {
+        id: "installation-service-exact-admin",
         subjectKind: "identity",
         subjectId: installationPrincipal.id,
         roleId: seed.bindings[0].roleId,
         resourceKind: "installation",
         resourceId: installationId,
+      };
+      policy.bindings.push(exactAdminBinding);
+      assert.equal(
+        (await request("POST", "/api/auth/service-keys", { headers: keyHeaders, body })).status,
+        403,
+      );
+      policy.bindings.splice(policy.bindings.indexOf(exactAdminBinding), 1);
+      const adminBinding = {
+        id: "installation-service-admin",
+        subjectKind: "identity",
+        subjectId: installationPrincipal.id,
+        roleId: seed.bindings[0].roleId,
       };
       policy.bindings.push(adminBinding);
       const child = await request("POST", "/api/auth/service-keys", { headers: keyHeaders, body });
@@ -632,5 +848,157 @@ test("service API keys authenticate scoped automation without replacing sessions
         ),
       );
     },
+  );
+});
+
+// Issuing a key hands the caller every grant of the target ServicePrincipal, so
+// Installation administer alone must not reach a principal with broader access.
+test("service key issuance cannot exceed the caller's own IAM grants", async (t) => {
+  const installationId = `ins_${randomUUID()}`;
+  const memoryDatabase = { user: [], account: [], session: [], verification: [], apikey: [] };
+  const baseURL = "http://127.0.0.1";
+  const auth = createControllerAuth({
+    installationId,
+    mode: "development",
+    baseURL,
+    secret: `test-secret-${randomUUID()}`,
+    memoryDatabase,
+    secureCookies: false,
+  });
+  const adminCredentials = {
+    email: "admin@example.invalid",
+    password: `test-password-${randomUUID()}`,
+  };
+  const operatorCredentials = {
+    email: "operator@example.invalid",
+    password: `test-password-${randomUUID()}`,
+  };
+  const admin = auth.principalSeed(await auth.createAccount(adminCredentials), {
+    grant: "administrator",
+  });
+  const administratorRole = admin.roles[0];
+  // POST /api/auth/accounts with the administrator roleId binds it to the exact Installation.
+  const operator = auth.principalSeed(await auth.createAccount(operatorCredentials), {
+    roleId: administratorRole.id,
+  });
+  // Same shape as the bootstrap ServicePrincipal: the administrator Role, unscoped.
+  const bootstrapService = { kind: "service_principal", id: `spn_${randomUUID()}` };
+  const installationService = { kind: "service_principal", id: `spn_${randomUUID()}` };
+  const policy = {
+    identities: [admin.principal, operator.principal, bootstrapService, installationService],
+    roles: [
+      ...admin.roles,
+      {
+        id: "installation-iam",
+        permissions: [{ action: "administer", resourceKind: "installation" }],
+      },
+    ],
+    bindings: [
+      ...admin.bindings,
+      ...operator.bindings,
+      {
+        id: "bootstrap-service-admin",
+        subjectKind: "identity",
+        subjectId: bootstrapService.id,
+        roleId: administratorRole.id,
+      },
+      {
+        id: "installation-service-iam",
+        subjectKind: "identity",
+        subjectId: installationService.id,
+        roleId: "installation-iam",
+        resourceKind: "installation",
+        resourceId: installationId,
+      },
+    ],
+    groups: [],
+    memberships: [],
+    restrictions: [],
+  };
+  const auditSink = new InMemoryAuditSink();
+  const app = createFastifyApp({
+    auth,
+    iamDriver: new NativeIAMDriver({ loadNativeIAMState: async () => policy }),
+    auditSink,
+    development: { enabled: true, installationId },
+    computeDriver: createDevelopmentComputeDriver(),
+    secretDriver: createTestSecretDriver(),
+    configurationDriver: createTestConfigurationDriver(),
+    resolveHarness: resolveApprovedDevelopmentHarness,
+    createController(installation) {
+      return new OpenClawController(installation, {
+        state: new InMemoryPlatformState({ auditSink }),
+        recordOperations: false,
+      });
+    },
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => app.close());
+  const origin = `http://127.0.0.1:${app.server.address().port}`;
+  const adminSession = await signInWithEmailPassword({ origin, ...adminCredentials });
+  const operatorSession = await signInWithEmailPassword({ origin, ...operatorCredentials });
+  async function request(method, path, { headers, body } = {}) {
+    const response = await fetch(`${origin}${path}`, {
+      method,
+      headers: {
+        origin: baseURL,
+        ...headers,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: response.status, ...(await response.json()) };
+  }
+  const asAdmin = { cookie: adminSession.cookie };
+  const asOperator = { cookie: operatorSession.cookie };
+  assert.equal(
+    (await request("POST", "/installation/bootstrap", { headers: asAdmin, body: { name: "t" } }))
+      .status,
+    201,
+  );
+  const namespace = await request("POST", "/namespaces", {
+    headers: asAdmin,
+    body: { name: "tenant" },
+  });
+  assert.equal(namespace.status, 201);
+  const namespacePath = `/namespaces/${namespace.data.id}`;
+
+  // The operator's grant stops at the exact Installation.
+  assert.equal((await request("GET", "/installation", { headers: asOperator })).status, 200);
+  assert.equal((await request("GET", namespacePath, { headers: asOperator })).status, 403);
+
+  const escalation = await request("POST", "/api/auth/service-keys", {
+    headers: asOperator,
+    body: { servicePrincipalId: bootstrapService.id, name: "escalation" },
+  });
+  assert.equal(escalation.status, 403, JSON.stringify(escalation));
+  assert.equal(JSON.stringify(escalation).includes("occ_"), false);
+  assert.equal(memoryDatabase.apikey.length, 0);
+  assert.ok(
+    auditSink.events.some(
+      (event) =>
+        event.action === "openclaw.auth.service-keys.create" &&
+        event.kind === "authorization_denial" &&
+        event.actorId === operator.principal.id,
+    ),
+  );
+
+  // A principal whose grants the operator already holds is still issuable.
+  const covered = await request("POST", "/api/auth/service-keys", {
+    headers: asOperator,
+    body: { servicePrincipalId: installationService.id, name: "covered" },
+  });
+  assert.equal(covered.status, 201, JSON.stringify(covered));
+
+  // The unscoped administrator holds every grant of the bootstrap principal.
+  const bootstrapKey = await request("POST", "/api/auth/service-keys", {
+    headers: asAdmin,
+    body: { servicePrincipalId: bootstrapService.id, name: "bootstrap" },
+  });
+  assert.equal(bootstrapKey.status, 201, JSON.stringify(bootstrapKey));
+  assert.equal(
+    (await request("GET", namespacePath, { headers: { "x-api-key": bootstrapKey.data.key } }))
+      .status,
+    200,
   );
 });

@@ -66,9 +66,30 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   let session = null;
   let namespaces = [];
   let namespaceId = null;
+  let observabilityUrl = null;
   let menuControls = null;
   let drawerControls = null;
   let namespaceSelect = null;
+  let namespaceAdmissionPending = true;
+
+  function externalLinkIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "external-link-icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute(
+      "d",
+      "M15 3h6v6m0-6L10 14m11-1v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6",
+    );
+    svg.append(path);
+    return svg;
+  }
 
   function publicPanel(title, description, actionLabel, action) {
     app.replaceChildren(
@@ -149,32 +170,43 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     return account;
   }
 
-  function namespaceSelector() {
-    namespaceSelect = element("select", {
-      id: "namespace-selector",
-      disabled: !session || namespaces.length === 0,
-    });
-    if (!namespaces.some((item) => item.id === namespaceId)) {
+  function updateNamespaceSelector() {
+    const readable = namespaceAdmissionPending ? [] : namespaces;
+    namespaceSelect.disabled = namespaceAdmissionPending || !session || readable.length === 0;
+    namespaceSelect.replaceChildren();
+    if (!readable.some((item) => item.id === namespaceId)) {
       let placeholder = "Checking access…";
-      if (session) {
+      if (session && !namespaceAdmissionPending) {
         placeholder = namespaceId === null ? "No readable Namespaces" : "Namespace unavailable";
       }
       namespaceSelect.append(
         element("option", { value: "", disabled: true, selected: true }, placeholder),
       );
     }
-    for (const item of namespaces) {
+    for (const item of readable) {
       namespaceSelect.append(
         element("option", { value: item.id, selected: item.id === namespaceId }, item.name),
       );
     }
+  }
+
+  function namespaceSelector(label = "Namespace") {
+    namespaceSelect = element("select", { id: "namespace-selector" });
+    updateNamespaceSelector();
     namespaceSelect.addEventListener("change", (event) => {
+      if (
+        namespaceAdmissionPending ||
+        event.currentTarget !== namespaceSelect ||
+        !namespaces.some((item) => item.id === event.target.value)
+      ) {
+        return;
+      }
       navigate(route().feature, event.target.value);
     });
     return element(
       "div",
       { className: "namespace-selector" },
-      element("label", { for: "namespace-selector" }, "Namespace"),
+      element("label", { for: "namespace-selector" }, label),
       namespaceSelect,
     );
   }
@@ -184,6 +216,7 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       return;
     }
     if (
+      !namespaceAdmissionPending &&
       readable.length === namespaces.length &&
       readable.every(
         (item, index) => item.id === namespaces[index].id && item.name === namespaces[index].name,
@@ -192,10 +225,8 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       return;
     }
     namespaces = readable;
-    namespaceSelect.replaceChildren(
-      ...readable.map((item) => element("option", { value: item.id }, item.name)),
-    );
-    namespaceSelect.value = namespaceId;
+    namespaceAdmissionPending = false;
+    updateNamespaceSelector();
     const scope = app.querySelector(".content .scope");
     if (scope && route().feature === "agents") {
       scope.textContent = `Namespace · ${readable.find((item) => item.id === namespaceId)?.name ?? "No available selection"}`;
@@ -203,7 +234,13 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
   }
 
   function renderShell(feature, state) {
-    ({ session, namespaces, namespaceId } = state);
+    ({
+      session,
+      namespaces,
+      namespaceId,
+      observabilityUrl,
+      namespaceAdmissionPending = true,
+    } = state);
     namespaceSelect = null;
     const nav = element("nav", { className: "nav", "aria-label": "Main navigation" });
     const icons = { agents: "◇", namespaces: "▤" };
@@ -228,6 +265,21 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
         navigate(name);
       });
       nav.append(link);
+    }
+    if (session && observabilityUrl) {
+      nav.append(
+        element(
+          "a",
+          {
+            href: observabilityUrl,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          },
+          element("span", { className: "nav-icon", "aria-hidden": "true" }, "◉"),
+          "Observability",
+          externalLinkIcon(),
+        ),
+      );
     }
     const revision = document.querySelector('meta[name="occ-build-revision"]')?.content;
     const knownRevision = /^[a-f0-9]{40}$/.test(revision ?? "");
@@ -299,14 +351,25 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
     const view = element("div", { "aria-live": "polite", "aria-busy": "true" });
     main.append(header);
     if (session && feature !== "agents" && namespaceId !== null && !selected) {
-      main.append(
-        element(
-          "p",
-          { className: "scope" },
-          "Namespace unavailable. ",
-          button("Switch Namespace", switchNamespace),
-        ),
-      );
+      if (feature === "namespaces" && namespaces.length) {
+        main.append(
+          element(
+            "section",
+            { className: "state-panel namespace-recovery", role: "status" },
+            element("h2", {}, "Namespace unavailable"),
+            namespaceSelector("Choose a valid namespace"),
+          ),
+        );
+      } else if (feature !== "namespaces") {
+        main.append(
+          element(
+            "p",
+            { className: "scope" },
+            "Namespace unavailable. ",
+            button("Switch Namespace", switchNamespace),
+          ),
+        );
+      }
     }
     main.append(view);
     const mobileToggle = button("Open navigation", () => openDrawer(), {
@@ -427,6 +490,8 @@ export function createShell({ app, pages, route, pageUrl, navigate, loadPage, lo
       session = null;
       namespaces = [];
       namespaceId = null;
+      observabilityUrl = null;
+      namespaceAdmissionPending = true;
     },
   };
 }

@@ -1,3 +1,43 @@
+// A trace may record an interim tool error before that same call completes.
+// Only its latest result, or an exact process-session poll, can prove success.
+export function completedToolResult(trace, call) {
+  const succeeded = (result) =>
+    !result.isError && result.status === "completed" && result.exitCode === 0;
+  const result = trace.results.findLast(
+    (result) => result.toolCallId === call.id && result.seq > call.seq,
+  );
+  if (!result || result.isError) {
+    return undefined;
+  }
+  if (succeeded(result)) {
+    return result;
+  }
+  if (result.status !== "running" || typeof result.processSessionId !== "string") {
+    return undefined;
+  }
+  for (const poll of trace.calls) {
+    if (
+      poll.name !== "process" ||
+      poll.processAction !== "poll" ||
+      poll.processSessionId !== result.processSessionId ||
+      poll.seq <= result.seq
+    ) {
+      continue;
+    }
+    const completed = trace.results.findLast(
+      (done) => done.toolCallId === poll.id && done.seq > poll.seq,
+    );
+    if (
+      completed &&
+      completed.processSessionId === result.processSessionId &&
+      succeeded(completed)
+    ) {
+      return completed;
+    }
+  }
+  return undefined;
+}
+
 const repositoryCommandEvidence = String.raw`
   // This is the deliberately small grammar requested by this installed task,
   // not a general shell parser: one command, literal arguments and explicit cwd.
@@ -41,6 +81,7 @@ const repositoryCommandEvidence = String.raw`
 
 export const sessionEvidenceScript = String.raw`
   const { DatabaseSync } = require("node:sqlite");
+  const { zstdDecompressSync } = require("node:zlib");
   const sessionKey = process.argv[1];
   const marker = process.argv[2];
   const toolName = process.argv[3];
@@ -96,7 +137,7 @@ export const sessionEvidenceScript = String.raw`
             .filter((name) => typeof name === "string")
         : undefined;
     const rows = db
-      .prepare("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+      .prepare("SELECT seq, event_json, event_zstd, event_utf8_bytes FROM transcript_events WHERE session_id = ? ORDER BY seq")
       .all(session.current_session_id);
     const messages = [];
     const calls = [];
@@ -135,7 +176,11 @@ export const sessionEvidenceScript = String.raw`
       return index === -1 ? undefined : withoutSuffix.slice(0, index);
     }
     for (const row of rows) {
-      const event = JSON.parse(row.event_json);
+      const eventText = row.event_json ?? zstdDecompressSync(row.event_zstd).toString("utf8");
+      if (Buffer.byteLength(eventText) !== (row.event_utf8_bytes ?? Buffer.byteLength(eventText))) {
+        throw new Error("transcript event length mismatch");
+      }
+      const event = JSON.parse(eventText);
       eventTypeCounts[event.type ?? "unknown"] = (eventTypeCounts[event.type ?? "unknown"] ?? 0) + 1;
       if (event.type !== "message") continue;
       const message = event.message;
@@ -287,6 +332,8 @@ export const codexRepositoryEvidenceScript = String.raw`
               operations: expected.filter(command => item.cwd === command.workdir && args?.length === command.argv.length && args.every((arg, index) => arg === command.argv[index])).map(command => command.operation),
               status: item.status,
               exitCode: item.exitCode,
+              http400: /returned error: 400\b/i.test(item.aggregatedOutput ?? ""),
+              sandboxDenied: /SANDBOX_DENIED:(?:EACCES|EPERM|EROFS)\b/.test(item.aggregatedOutput ?? ""),
               commitShas: lines.filter(line => /^[a-f0-9]{40}$/.test(line)),
               pullUrls: lines.filter(line => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/.test(line)),
             };

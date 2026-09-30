@@ -102,6 +102,12 @@ func (app *application) printAgent(value any, collection bool) error {
 	})
 }
 
+func (app *application) printRuntimeCredentials(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "CONFIGURED", key: "transportConfigured"},
+	})
+}
+
 func (app *application) printDeletion(kind, id string) error {
 	value := map[string]any{"deleted": true, "kind": kind, "id": id}
 	if app.output == "table" {

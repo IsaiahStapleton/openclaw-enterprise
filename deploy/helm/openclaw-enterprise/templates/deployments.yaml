@@ -8,7 +8,11 @@ metadata:
     {{- include "openclaw.labels" (dict "root" $ "component" $component) | nindent 4 }}
 spec:
   replicas: 1
-  {{- if eq $component "worker" }}
+  {{- if eq $component "api" }}
+  # One serving controller: sign-in limits and session admission are process-local.
+  strategy:
+    type: Recreate
+  {{- else }}
   strategy:
     {{- if $.Values.repositoryCredentials.enabled }}
     type: Recreate
@@ -221,7 +225,38 @@ spec:
             {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_SECRET" "secretName" $.Values.auth.secretName "key" $.Values.auth.secretKey) | nindent 12 }}
             - name: OCC_AUTH_BASE_URL
               value: {{ $.Values.auth.baseUrl | quote }}
-            {{- if $.Values.api.channelDirectoryProxyUrl }}
+            {{- if $.Values.auth.github.enabled }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_GITHUB_CLIENT_ID" "secretName" $.Values.auth.github.secretName "key" $.Values.auth.github.clientIdKey) | nindent 12 }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_GITHUB_CLIENT_SECRET" "secretName" $.Values.auth.github.secretName "key" $.Values.auth.github.clientSecretKey) | nindent 12 }}
+            {{- end }}
+            {{- if and $.Values.auth.google $.Values.auth.google.enabled }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_GOOGLE_CLIENT_ID" "secretName" $.Values.auth.google.secretName "key" $.Values.auth.google.clientIdKey) | nindent 12 }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_GOOGLE_CLIENT_SECRET" "secretName" $.Values.auth.google.secretName "key" $.Values.auth.google.clientSecretKey) | nindent 12 }}
+            {{- if $.Values.auth.google.allowedDomains }}
+            - name: OCC_AUTH_GOOGLE_ALLOWED_DOMAINS
+              value: {{ join "," $.Values.auth.google.allowedDomains | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $.Values.auth.recoveryUserId }}
+            - name: OCC_AUTH_GITHUB_RECOVERY_USER_ID
+              value: {{ $.Values.auth.recoveryUserId | quote }}
+            {{- end }}
+            {{- if $.Values.api.trustedProxy.preset }}
+            - name: OCC_AUTH_TRUSTED_PROXY_CIDRS
+              value: {{ join "," $.Values.api.trustedProxy.cidrs | quote }}
+            - name: OCC_AUTH_TRUSTED_PROXY_PRESET
+              value: {{ $.Values.api.trustedProxy.preset | quote }}
+            {{- if eq $.Values.api.trustedProxy.preset "generic" }}
+            - name: OCC_AUTH_CLIENT_IP_HEADER
+              value: {{ include "openclaw.trustedProxy.header" $ | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $.Values.slackProxy.enabled }}
+            - name: OCC_CHANNEL_DIRECTORY_PROXY_URL
+              value: {{ include "openclaw.slackProxy.url" $ | quote }}
+            - name: OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST
+              value: {{ printf "%s.%s.svc" (include "openclaw.slackProxy.serviceName" $) $.Release.Namespace | quote }}
+            {{- else if $.Values.api.channelDirectoryProxyUrl }}
             - name: OCC_CHANNEL_DIRECTORY_PROXY_URL
               value: {{ $.Values.api.channelDirectoryProxyUrl | quote }}
             {{- end }}

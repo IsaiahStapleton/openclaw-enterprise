@@ -11,7 +11,7 @@ ChatGPT service account), without a Sandbox Driver. Other combinations reject
 repository-bearing revisions. Helm's `Recreate` strategy prevents overlapping
 worker/credential-service owners.
 
-Only the repository consumer receives repository and model credentials. Dedicated
+Only the consumer receives repository and model credentials. Dedicated
 Slack tokens stay in the gateway. Repository profiles and model authentication
 are independent. [Kubernetes policies](drivers/kubernetes-compute/networking-and-isolation.md#networking)
 allow consumer access to the credential sidecar.
@@ -50,19 +50,20 @@ Public status contains only `sessionId`, `state`, `deadlineWallMs` and `binding`
 snapshot after complete private validation. Cleanup counters and configuration
 decoding remain private. Status cannot regenerate the closed-schema Git/gh files.
 
-`maintenanceIntervalMs` schedules worker reconciliation; it is not a measured
-withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
+`maintenanceIntervalMs` schedules worker reconciliation and retries of incomplete
+repository cleanup; it is not a measured withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
 persisted `admitted_spec.repository_credentials` retain their meaning.
 
 State derives immutable Driver, Backend, profile and grant context from the
 admitted revision. It retains original Namespace, Agent, revision, admission and
 session identities and deadlines after Agent deletion, without bearers or tokens.
 
-Agent deletion closes sessions and retires Compute. Physical deletion and live
-revision detachment require every attempt to be `disposed`. `CLOSED`, missing
-inventory and `invalidated` attempts retain cleanup Work and the deleting Agent.
-Deadlines do not settle provider cleanup. Evidence pruning and durable token
-recovery are unimplemented.
+Agent deletion retires Compute without waiting for repository-session cleanup.
+Pending, missing, unknown and `invalidated` sessions block neither deletion
+admission nor completion. Retained attempts and cleanup Work survive deletion;
+cleanup continues independently. New requests share Work by revision and purpose.
+Deletion, invalidation and elapsed deadlines do not prove disposal or provider
+revocation. Evidence pruning and durable token recovery are unimplemented.
 
 Worker restart can retain surviving sessions and Compute material. A broker can
 recover the original broker's committed `DISPOSED` observation; active or uncertain
@@ -74,8 +75,8 @@ authorized revision neither settles old cleanup nor replays Git/API mutations.
 
 ### Canonical platform registry
 
-The GitHub Backend selects one registry through `configuration.registryPath`;
-its `drivers.repo` names the selected Driver. API, worker and
+The GitHub Backend selects `configuration.registryPath` and names its Driver
+in `drivers.repo`. API, worker and
 service load the same immutable, versioned ConfigMap. The registry contains
 nonsecret identity and Namespace policy for one App installation and multiple
 repositories:
@@ -229,7 +230,7 @@ no admission or close endpoint.
 lowercase UUIDv4. The CLI prints this nonsecret ID before dispatch. HTTP 201
 returns the bearer once; matching ID/duration/profile returns HTTP 200 with
 status only. Conflicts fail. Follow
-[lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
+[lost-response recovery](../guides/repository-credentials/standalone-service.md#recover-an-admission)
 before explicitly requesting replacement material.
 
 Registry-backed brokers advertise `durableAdmissionVersion: 1` privately. The

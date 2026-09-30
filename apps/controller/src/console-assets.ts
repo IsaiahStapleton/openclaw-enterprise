@@ -30,6 +30,7 @@ const CONSOLE_ASSETS = new Map([
       "agents/repository-profiles.mjs",
       "agents/starter-model.mjs",
       "agents/workspace.mjs",
+      "agents/access.mjs",
       "agents/detail.mjs",
       "agents/deletion.mjs",
       "agents/stop.mjs",

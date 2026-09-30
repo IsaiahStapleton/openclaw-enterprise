@@ -1,5 +1,6 @@
 import { element, button } from "../dom.mjs";
 import { createHarnessAuthFields, renderHarnessAuthSummary } from "./harness-auth.mjs";
+import { renderAgentAccess } from "./access.mjs";
 import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { createAgentDeletion } from "./deletion.mjs";
 import { createAgentStop } from "./stop.mjs";
@@ -7,7 +8,14 @@ import { renderAgentPlugins } from "./plugins.mjs";
 import { repositoryProfile, repositoryWriteAccessHelp } from "./repository-profiles.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
-import { displayDate, shortId, namespacePath, link, message } from "./list.mjs";
+import {
+  displayDate,
+  shortId,
+  namespacePath,
+  link,
+  message,
+  assertReadableConfiguration,
+} from "./list.mjs";
 import {
   createChannelSecretsPanel,
   hasRequiredChannelCredentials,
@@ -23,7 +31,13 @@ function errorPanel(error, context, retry) {
   return element(
     "section",
     { className: "state-panel", role: "alert" },
-    element("h2", {}, "Configuration unavailable"),
+    element(
+      "h2",
+      {},
+      error.code === "SAVED_CONFIGURATION_UNREADABLE"
+        ? "Saved configuration unreadable"
+        : "Configuration unavailable",
+    ),
     element("p", {}, message(error)),
     error.requestId
       ? element("p", { className: "request-id" }, `Request ID: ${error.requestId}`)
@@ -81,18 +95,20 @@ function deploymentFailure(error) {
   );
 }
 
-function deploymentProgress(status) {
+function deploymentProgress(status, progress) {
+  const workDescriptions = {
+    queued: progress?.lastAttempt
+      ? "Waiting to continue deployment."
+      : "Waiting for a worker claim.",
+    running: "A worker claim is active.",
+    failed: "Deployment work failed; check the recorded error and current version.",
+    succeeded: "Work completed or the version was already active.",
+  };
   const stages = [
     ["Admitted", "An immutable version was created.", "complete"],
     [
       "Deployment work",
-      status === "queued"
-        ? "Waiting for a worker claim."
-        : status === "running"
-          ? "A worker claim is active."
-          : status === "failed"
-            ? "Deployment work failed; check the recorded error and current version."
-            : "Work completed or the version was already active.",
+      workDescriptions[status],
       status === "queued"
         ? "waiting"
         : status === "running"
@@ -196,7 +212,32 @@ function createDeploymentStatusPanel(context, path, revision, onAgentChange, onS
     return element(
       "div",
       {},
-      deploymentProgress(state.status.status),
+      deploymentProgress(state.status.status, state.status.progress),
+      state.status.progress
+        ? element(
+            "div",
+            { className: "deployment-pending-progress" },
+            state.status.progress.lastAttempt
+              ? element(
+                  "dl",
+                  { className: "credential-status-list" },
+                  element("dt", {}, "Last recorded result"),
+                  element("dd", {}, state.status.progress.lastAttempt.message),
+                  element("dt", {}, "Reason"),
+                  element("dd", {}, state.status.progress.lastAttempt.code),
+                  element("dt", {}, "Last checked"),
+                  element("dd", {}, displayDate(state.status.progress.lastAttempt.at)),
+                )
+              : element("p", { className: "muted" }, "No reconciliation result is available yet."),
+            state.status.progress.nextAttemptAt
+              ? element(
+                  "p",
+                  { className: "muted" },
+                  `Eligible for next attempt: ${displayDate(state.status.progress.nextAttemptAt)}. Start time depends on worker availability.`,
+                )
+              : null,
+          )
+        : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
       deploymentFailure(state.status.error),
       state.status.warnings?.length
@@ -616,6 +657,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     statusLine,
     deploymentStatus,
     renderNativeAdminAccess(context, path),
+    renderAgentAccess(context, agent),
     versionLayout,
   );
   let details;
@@ -681,13 +723,15 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       if (selected !== "draft") {
         heading.append(element("p", { className: "resource-id" }, snapshot.id));
       }
-      heading.append(
-        element(
-          "p",
-          { className: "muted" },
-          `${selected === "draft" ? "Configuration" : "Source Configuration"} ${selected === "draft" ? snapshot.id : snapshot.configurationId} · generation ${selected === "draft" ? snapshot.generation : snapshot.configurationGeneration}`,
-        ),
-      );
+      if (!snapshot.configurationReadError) {
+        heading.append(
+          element(
+            "p",
+            { className: "muted" },
+            `${selected === "draft" ? "Configuration" : "Source Configuration"} ${selected === "draft" ? snapshot.id : snapshot.configurationId} · generation ${selected === "draft" ? snapshot.generation : snapshot.configurationGeneration}`,
+          ),
+        );
+      }
     }
     detailHeading.replaceChildren(
       heading,
@@ -720,6 +764,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       );
       if (revision.id === currentRevisionId) {
         control.append(element("span", { className: "version-current" }, "Current version"));
+      }
+      if (revision.configurationReadError) {
+        control.append(element("small", {}, "Saved configuration unreadable"));
       }
       trackRevisionControl(control);
       list.append(control);
@@ -933,11 +980,13 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   async function loadDetails() {
     const results = await Promise.allSettled([
       revisionsPromise,
-      request(
-        selected === "draft"
-          ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
-          : `${path}/revisions/${encodeURIComponent(selected)}`,
-      ),
+      selected === "draft" && agent.configurationReadError
+        ? Promise.resolve(null)
+        : request(
+            selected === "draft"
+              ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
+              : `${path}/revisions/${encodeURIComponent(selected)}`,
+          ),
     ]);
     if (!context.isCurrent() || deleting) {
       return;
@@ -952,6 +1001,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     viewedSnapshot = snapshot;
     renderOverview(revisionResult, snapshot);
     renderDetailHeading();
+    const configurationReadError =
+      selected === "draft" ? agent.configurationReadError : snapshot?.configurationReadError;
+    if (configurationReadError) {
+      return { error: configurationReadError };
+    }
     if (!snapshot) {
       return { error: results[1].reason };
     }
@@ -1092,6 +1146,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           if (!context.isCurrent()) {
             return;
           }
+          assertReadableConfiguration(freshAgent);
           if (!freshAgent.harnessAuth) {
             deployFeedback.textContent =
               "Select a harness authentication source in Credentials before deployment.";
@@ -1300,7 +1355,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     state.loading = false;
     if (data?.error) {
       state.reusable = false;
-      content.append(errorPanel(data.error, tabContext, () => change(selected)));
+      content.append(
+        errorPanel(data.error, tabContext, () =>
+          context.navigate(target(selected, selectedTab), namespaceId, true),
+        ),
+      );
     } else if (data) {
       renderConfigurationTab(tabContext, tab, data);
     }
@@ -1364,6 +1423,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             if (!context.isCurrent()) {
               throw new Error("This view has changed. Reopen the Configuration before saving.");
             }
+            assertReadableConfiguration(freshAgent);
             if (
               freshAgent.configurationId !== snapshot.id ||
               freshConfig.generation !== snapshot.generation
@@ -1507,6 +1567,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           if (!context.isCurrent()) {
             return;
           }
+          assertReadableConfiguration(current);
           const expected = savedAuthentication ?? baseline;
           if (
             current.configurationId !== expected.configurationId ||
@@ -1658,6 +1719,31 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       editing = true;
       render();
     });
+    const password = values.gateway?.auth?.password;
+    const usesGeneratedGatewayPassword =
+      password?.source === "env" &&
+      (password.provider === undefined || password.provider === "default") &&
+      password.id === "OPENCLAW_GATEWAY_PASSWORD";
+    const enableGatewayPassword = button("Enable Gateway password access", () => {
+      // Stage the native reference through the same draft and save checks as JSON edits.
+      // The Compute Driver delivers the generated value only after deployment.
+      editor.value = JSON.stringify(
+        {
+          ...values,
+          gateway: {
+            ...values.gateway,
+            auth: {
+              ...values.gateway?.auth,
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+          },
+        },
+        null,
+        2,
+      );
+      editing = true;
+      render();
+    });
     const save = button("Save Configuration", () => void saveConfiguration(), {
       className: "primary",
     });
@@ -1715,6 +1801,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       save.disabled = pending || outcomeUnknown || reloadRequired || !dirty;
       cancel.disabled = pending || outcomeUnknown || reloadRequired;
       edit.disabled = pending || outcomeUnknown;
+      enableGatewayPassword.disabled = pending || outcomeUnknown || reloadRequired;
       editor.readOnly = pending || outcomeUnknown || reloadRequired;
       if (outcomeUnknown) {
         feedback.textContent =
@@ -1778,6 +1865,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         if (!context.isCurrent()) {
           return;
         }
+        assertReadableConfiguration(freshAgent);
         if (
           freshAgent.configurationId !== baseline.id ||
           freshConfig.generation !== baseline.generation
@@ -1823,7 +1911,19 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     function render() {
       if (!editing) {
         container.replaceChildren(
-          element("div", { className: "form-actions" }, edit),
+          element(
+            "p",
+            { className: "hint" },
+            usesGeneratedGatewayPassword
+              ? "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
+              : "Use generated credentials for direct Gateway password access. Enable access, save Configuration, then deploy a new version.",
+          ),
+          element(
+            "div",
+            { className: "form-actions" },
+            edit,
+            usesGeneratedGatewayPassword ? null : enableGatewayPassword,
+          ),
           nativeDocument(values, "View native Configuration"),
         );
         return;

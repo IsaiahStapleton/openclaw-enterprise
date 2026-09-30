@@ -79,7 +79,7 @@ export function createOpenShellServiceLoopbackLookup(serviceHostname) {
 
 // Model egress comes only from the credential source's OpenShell profile, bound to this binary.
 export const OPENSHELL_CODEX_BINARY =
-  "/app/node_modules/openclaw/node_modules/.pnpm/@openai+codex@0.156.0-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex";
+  "/app/node_modules/openclaw/node_modules/.pnpm/@openai+codex@0.158.0-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex";
 
 export function createOpenShellInstallationConfiguration({
   authentication,
@@ -98,6 +98,8 @@ export function createOpenShellInstallationConfiguration({
   });
   configuration.drivers.configuration.id = "configuration-kubernetes-production";
   configuration.drivers.compute.id = "compute-kubernetes-production";
+  // The real Gateway loads its plugins and installs the native worker bundle during the first turn.
+  configuration.drivers.compute.configuration.resources.gateway.limits.memory = "4Gi";
   configuration.drivers.compute.configuration.resources.namespace.quota = {
     pods: "14",
     "requests.cpu": "3",
@@ -132,35 +134,17 @@ export function createOpenShellInstallationConfiguration({
           serviceName: "openshell-gateway",
           podSelector: { "app.kubernetes.io/name": "openshell" },
         },
-        networkPolicyResources: [
-          {
-            apiVersion: "networking.k8s.io/v1",
-            kind: "NetworkPolicy",
-            metadata: { name: "allow-openshell-gateway" },
-            spec: {
-              podSelector: {},
-              policyTypes: ["Egress"],
-              egress: [
-                {
-                  to: [
-                    {
-                      namespaceSelector: {
-                        matchLabels: { "kubernetes.io/metadata.name": "kube-system" },
-                      },
-                    },
-                  ],
-                  ports: [
-                    { protocol: "UDP", port: 53 },
-                    { protocol: "TCP", port: 53 },
-                  ],
-                },
-              ],
-            },
-          },
-        ],
+        // Compute owns ordinary Harness DNS; OpenShell's own `openshell-sandbox-supervisors`
+        // policy covers supervisor egress, and the installer scopes gateway DNS/API access below.
+        networkPolicyResources: [],
       },
       kubernetes: {
         runtimeClassName: openShellRuntimeClass,
+        // Match the Compute-owned Harness budget. The cluster's 1 GiB default
+        // can OOM-kill a real worker while it installs the Gateway bundle.
+        agentResources: structuredClone(
+          configuration.drivers.compute.configuration.resources.agent,
+        ),
         // TODO(OpenShell per-Sandbox ServiceAccount support): replace the shared gateway setting
         // with Compute's exact Agent ServiceAccount on each Sandbox request.
         serviceAccount: { mode: "gatewayConfigured" },
@@ -270,6 +254,90 @@ function assertRenderedOpenShellImages({
     new RegExp(`supervisor_image\\s*=\\s*${regexpEscape(JSON.stringify(expectedSupervisorImage))}`),
     "OpenShell supervisor image in gateway.toml must retain the imported immutable digest after Helm rendering.",
   );
+}
+
+function openShellGatewayServiceName(namespace) {
+  return `openshell-${openshellHash(namespace, 10)}`;
+}
+
+// OpenShell v0.1.0 runs a separate supervisor Pod per Sandbox; it (not the Harness workload) calls
+// the gateway back. Mirrors internal/occdev/kubernetes.go and OpenShell sandbox_runtime.rs labels.
+export const openShellSupervisorLabels = Object.freeze({
+  "openshell.ai/managed-by": "openshell",
+  "openshell.ai/boundary-role": "supervisor",
+});
+
+export function openShellGatewayNetworkPolicies(namespace, apiPeers) {
+  const gatewayLabels = {
+    "app.kubernetes.io/name": "openshell",
+    "app.kubernetes.io/instance": openShellGatewayServiceName(namespace),
+  };
+  const supervisorLabels = { ...openShellSupervisorLabels };
+  return {
+    apiVersion: "v1",
+    kind: "List",
+    items: [
+      {
+        apiVersion: "networking.k8s.io/v1",
+        kind: "NetworkPolicy",
+        metadata: { name: "allow-openshell-gateway-control-plane", namespace },
+        spec: {
+          podSelector: { matchLabels: gatewayLabels },
+          policyTypes: ["Egress"],
+          egress: [
+            {
+              to: [
+                {
+                  namespaceSelector: {
+                    matchLabels: { "kubernetes.io/metadata.name": "kube-system" },
+                  },
+                },
+              ],
+              ports: [
+                { protocol: "UDP", port: 53 },
+                { protocol: "TCP", port: 53 },
+              ],
+            },
+            { to: apiPeers, ports: [{ protocol: "TCP", port: 443 }] },
+            { to: apiPeers, ports: [{ protocol: "TCP", port: 6443 }] },
+          ],
+        },
+      },
+      {
+        apiVersion: "networking.k8s.io/v1",
+        kind: "NetworkPolicy",
+        metadata: { name: "allow-openshell-gateway-callback", namespace },
+        spec: {
+          podSelector: { matchLabels: gatewayLabels },
+          policyTypes: ["Ingress"],
+          ingress: [
+            {
+              from: [{ podSelector: { matchLabels: supervisorLabels } }],
+              ports: [
+                { protocol: "TCP", port: gatewayPort },
+                { protocol: "TCP", port: 8081 },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        apiVersion: "networking.k8s.io/v1",
+        kind: "NetworkPolicy",
+        metadata: { name: "allow-openshell-sandbox-callback", namespace },
+        spec: {
+          podSelector: { matchLabels: { ...supervisorLabels } },
+          policyTypes: ["Egress"],
+          egress: [
+            {
+              to: [{ podSelector: { matchLabels: { ...gatewayLabels } } }],
+              ports: [{ protocol: "TCP", port: gatewayPort }],
+            },
+          ],
+        },
+      },
+    ],
+  };
 }
 
 export function createOpenShellKubernetesFixture({
@@ -392,10 +460,6 @@ export function createOpenShellKubernetesFixture({
     }
   }
 
-  function openShellGatewayServiceName(namespace) {
-    return `openshell-${openshellHash(namespace, 10)}`;
-  }
-
   function chartImageValues(prefix, image) {
     return openShellChartImageValues(prefix, image);
   }
@@ -472,76 +536,7 @@ export function createOpenShellKubernetesFixture({
   }
 
   async function applyOpenShellGatewayNetworkPolicies(namespace) {
-    const gatewayLabels = {
-      "app.kubernetes.io/name": "openshell",
-      "app.kubernetes.io/instance": openShellGatewayServiceName(namespace),
-    };
-    const apiPeers = await kubernetesApiPeers();
-    const policies = {
-      apiVersion: "v1",
-      kind: "List",
-      items: [
-        {
-          apiVersion: "networking.k8s.io/v1",
-          kind: "NetworkPolicy",
-          metadata: { name: "allow-openshell-gateway-control-plane", namespace },
-          spec: {
-            podSelector: { matchLabels: gatewayLabels },
-            policyTypes: ["Egress"],
-            egress: [
-              {
-                to: [
-                  {
-                    namespaceSelector: {
-                      matchLabels: { "kubernetes.io/metadata.name": "kube-system" },
-                    },
-                  },
-                ],
-                ports: [
-                  { protocol: "UDP", port: 53 },
-                  { protocol: "TCP", port: 53 },
-                ],
-              },
-              { to: apiPeers, ports: [{ protocol: "TCP", port: 443 }] },
-              { to: apiPeers, ports: [{ protocol: "TCP", port: 6443 }] },
-            ],
-          },
-        },
-        {
-          apiVersion: "networking.k8s.io/v1",
-          kind: "NetworkPolicy",
-          metadata: { name: "allow-openshell-gateway-callback", namespace },
-          spec: {
-            podSelector: { matchLabels: gatewayLabels },
-            policyTypes: ["Ingress"],
-            ingress: [
-              {
-                from: [{ podSelector: {} }],
-                ports: [
-                  { protocol: "TCP", port: gatewayPort },
-                  { protocol: "TCP", port: 8081 },
-                ],
-              },
-            ],
-          },
-        },
-        {
-          apiVersion: "networking.k8s.io/v1",
-          kind: "NetworkPolicy",
-          metadata: { name: "allow-openshell-sandbox-callback", namespace },
-          spec: {
-            podSelector: {},
-            policyTypes: ["Egress"],
-            egress: [
-              {
-                to: [{ podSelector: { matchLabels: gatewayLabels } }],
-                ports: [{ protocol: "TCP", port: gatewayPort }],
-              },
-            ],
-          },
-        },
-      ],
-    };
+    const policies = openShellGatewayNetworkPolicies(namespace, await kubernetesApiPeers());
     const directory = await mkdtemp(join(tmpdir(), "openshell-networkpolicy-"));
     const path = join(directory, "networkpolicies.json");
     try {
@@ -699,7 +694,7 @@ export function createOpenShellKubernetesFixture({
   }
 
   async function waitForProviderHarnessPod(namespace, revision) {
-    return await base.waitFor(
+    const pod = await base.waitFor(
       `OpenShell-owned Harness Pod for revision ${revision.id}`,
       async () => {
         const pods = await base.resources("pods", namespace);
@@ -715,6 +710,15 @@ export function createOpenShellKubernetesFixture({
       },
       360_000,
     );
+    // Compute gives the Sandbox the provider-fenced profile: the Pod keeps Gateway transport
+    // ingress but receives none of Compute's DNS, model or auth egress, so OpenShell's own
+    // egress fence is not unioned away.
+    assert.equal(
+      pod.metadata.labels?.["openclaw.dev/network-profile"],
+      "provider-fenced-v1",
+      "the OpenShell-owned Harness Pod must carry the provider-fenced network profile.",
+    );
+    return pod;
   }
 
   async function assertProviderOwnedHarness(namespace, revision, sandbox, pod) {

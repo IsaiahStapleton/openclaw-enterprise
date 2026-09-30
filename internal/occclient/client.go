@@ -2,6 +2,7 @@ package occclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json/jsontext"
@@ -21,10 +22,13 @@ type Config struct {
 	ServiceKeyFile string
 	CABundle       string
 	Timeout        time.Duration
+	// Context cancels in-flight requests, for example on Ctrl-C. Nil means no cancellation.
+	Context context.Context
 }
 
 // Client exposes supported OpenClaw Control Plane resource operations.
 type Client struct {
+	ctx        context.Context
 	baseURL    *url.URL
 	serviceKey string
 	http       *http.Client
@@ -67,7 +71,13 @@ func New(config Config) (*Client, error) {
 		return nil, err
 	}
 
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	return &Client{
+		ctx:        ctx,
 		baseURL:    baseURL,
 		serviceKey: serviceKey,
 		http: &http.Client{
@@ -293,6 +303,20 @@ func (client *Client) UpdateAgent(namespaceID, agentID string, body jsontext.Val
 	return client.send(http.MethodPatch, []string{"namespaces", namespaceID, "agents", agentID}, body)
 }
 
+// GetAgentRuntimeCredentials fetches runtime credential metadata for an Agent.
+func (client *Client) GetAgentRuntimeCredentials(namespaceID, agentID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", agentID, "runtime-credentials")
+}
+
+// ProvisionAgentRuntimeCredentials provisions initial runtime credentials for an Agent.
+func (client *Client) ProvisionAgentRuntimeCredentials(namespaceID, agentID string) (any, error) {
+	return client.send(
+		http.MethodPost,
+		[]string{"namespaces", namespaceID, "agents", agentID, "runtime-credentials"},
+		map[string]any{},
+	)
+}
+
 // DeployAgent deploys an Agent and creates an immutable revision.
 func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 	return client.send(
@@ -385,7 +409,7 @@ func (client *Client) execute(method string, segments []string, body any) (int, 
 		requestBody = bytes.NewReader(encoded)
 	}
 
-	request, err := http.NewRequest(method, resourceURL.String(), requestBody)
+	request, err := http.NewRequestWithContext(client.ctx, method, resourceURL.String(), requestBody)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to create OCC request: %w", err)
 	}

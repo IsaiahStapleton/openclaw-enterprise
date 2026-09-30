@@ -1,28 +1,26 @@
 # Authentication
 
 OpenClaw Control Plane (OCC) authenticates human controller API clients with
-user sessions established through email/password sign-in. Programmatic
-non-Agent automation authenticates with service API keys. Better Auth owns
+user sessions established through email/password sign-in or an administrator-enrolled
+GitHub or Google identity. Programmatic non-Agent automation authenticates with service
+API keys. Better Auth owns
 password verification, revocable session cookies, and hashed API-key storage.
 The selected IAM Driver resolves the authenticated account or service identity
 to an explicitly provisioned Principal or ServicePrincipal and owns
 [authorization](authorization.md).
 
-This page defines the currently supported authentication behavior. For a
-working sign-in procedure, see
+For a sign-in procedure, see
 [human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
-The [platform console](console.md) provides email/password login at `/console/`
-and uses these same session endpoints. Public signup, OIDC, and bearer
-credentials are not supported controller API authentication paths.
+The [platform console](console.md) at `/console/` uses these session endpoints. Public signup, generic OIDC, and bearer
+credentials are unsupported.
 
 ## Installation and account ownership
 
 Authentication belongs to one bootstrapped Installation. The controller requires
-`OCC_AUTH_SECRET` and `OCC_AUTH_BASE_URL`; their deployment configuration is
-specified in [settings](settings.md). An account's immutable Better Auth user ID
-and Installation-specific trusted issuer identify its IAM Principal. Email
-addresses and display names do not grant access.
+`OCC_AUTH_SECRET` and `OCC_AUTH_BASE_URL` (see [settings](settings.md)). An account's immutable Better Auth user ID
+and Installation-specific trusted issuer identify its IAM Principal. Neither
+email nor display name grants access.
 
 Fresh native-IAM bootstrap creates the first human administrator and one
 Installation-scoped, non-Agent ServicePrincipal. Both have separate bindings to
@@ -33,22 +31,20 @@ its authority does not depend on the human account remaining present.
 Fresh bootstrap also creates the initial [`default` Namespace](namespaces.md#initial-namespace)
 under the bootstrap Principal's ordinary Namespace creation permission.
 Installation/IAM state, the Namespace, its queued reconciliation, and bootstrap
-audit commit together. Worker provisioning remains asynchronous.
+audit commit together. Worker provisioning is asynchronous.
 
 Bootstrap issues a 30-day service API key named `bootstrap-admin` and writes its
 one-time response to `OCC_BOOTSTRAP_SERVICE_KEY_FILE`. The JSON contains
 `data.id`, `data.servicePrincipalId`, `data.name`, `data.expiresAt`, `data.key`,
-and `meta.installationId`; it is usable with the existing service-key examples.
-Better Auth retains the hash, not plaintext. The file remains readable until the
-operator removes it; there is no server-side plaintext retrieval endpoint.
+and `meta.installationId`.
+Better Auth keeps only the hash; there is no server-side plaintext retrieval.
 
 Production also creates the configured `OCC_BOOTSTRAP_ADMIN_EMAIL` account with
 a random password written to `OCC_BOOTSTRAP_PASSWORD_FILE`. Both paths must be
 absolute, distinct siblings on protected operator-owned storage. Output is
 exclusive, owner-only (`0600`), and synced before committing Installation/IAM
 state; existing files, symlinks, or unsafe parent directories fail closed.
-Credentials never appear in bootstrap logs, audit, or the HTTP bootstrap
-response. OCC creates no Kubernetes Secret or PVC for delivery.
+Credentials never appear in logs, audit, or the bootstrap response. OCC creates no Kubernetes Secret or PVC for delivery.
 
 In Helm, `bootstrap.password.claimName` selects the existing protected PVC.
 Only the initialization Job mounts it; `bootstrap.password.fileName` and
@@ -78,16 +74,14 @@ Bootstrap makes one attempt. Any error emits `installation.bootstrap-failed`
 with available non-secret IDs and paths, then exits unsuccessfully. Created
 accounts, keys, and files remain, including partial output from a failed write.
 Bootstrap does not automatically revoke, delete, retry, repair, or reset them.
-The Helm initialization Job uses `backoffLimit: 0` and does not retry a failed
-attempt. Better Auth persistence and the Installation/IAM commit are separate;
-an error does not establish whether the transaction committed. Operators must
-resolve that outcome before manual repair, or explicitly reset an identified
-disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
+The Helm initialization Job uses `backoffLimit: 0`. Better Auth persistence and the Installation/IAM commit are separate,
+so an error leaves the commit outcome unknown; resolve it before manual repair
+or reset an identified disposable Installation. See [incomplete bootstrap recovery](authentication/service-api-keys.md#recover-an-incomplete-bootstrap).
 File existence alone is not proof of successful initialization.
 
 ## Browser request origin
 
-Controller API requests that use a session cookie for a mutation must include an
+Cookie-authenticated controller API mutations must include an
 `Origin` matching the origin of `OCC_AUTH_BASE_URL`. This includes sign-out. A missing,
 malformed, or different origin is rejected with `403`. If `Sec-Fetch-Site` is
 present, it must be `same-origin`. Safe reads do not require an Origin.
@@ -100,77 +94,82 @@ not require Origin, and an invalid key never falls back to a session cookie.
 
 ## Session lifecycle
 
-| Operation                      | Supported behavior                                                                                                                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication without returning a session token. |
-| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                    |
-| `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                           |
+| Operation                      | Supported behavior                                                                                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/sign-in/email` | Verifies an existing account's email and password and issues a session cookie. The JSON response confirms authentication, and with GitHub enabled returns `sessionKey`, never a session token. |
+| `GET /api/auth/session`        | Returns safe account identity and a noncredential `sessionKey`, or `data: null` without a valid session.                                                                                       |
+| `POST /api/auth/sign-out`      | Revokes the current session. Protected API requests using that session subsequently return `401`.                                                                                              |
 
-The `sessionKey` identifies the current session record, stays stable across reads,
-and changes on a new sign-in, including for the same account. It cannot authenticate
-requests; the session token remains in its HttpOnly cookie. Console uses this key
-to discard retained content and drafts when the session changes.
+The `sessionKey` names the current session, stays stable across reads, and changes
+on each sign-in. It cannot authenticate; the token stays in its HttpOnly cookie.
+Sending it back as `x-occ-session-key` narrows a request to that session: a
+foreign, malformed, or duplicated key returns `401`, and such a sign-out neither
+revokes nor clears the cookie. Without the header, requests are unchanged. Console
+pins each tab's key this way.
 
-For example, the sign-in body is:
+Sign-in takes `{"email": "...", "password": "..."}`. The session arrives only
+through `Set-Cookie`.
 
-```json
-{
-  "email": "admin@example.invalid",
-  "password": "<account-password>"
-}
-```
-
-The successful sign-in response contains `data: { "authenticated": true }` and
-request metadata. The session credential is delivered through `Set-Cookie`, not
-the JSON body. Protected OCC API calls use that cookie.
+Without an external provider, after 10 failed sign-ins per minute per email, or 20
+per client address with [`api.trustedProxy`](settings/production.md#github-sign-in-and-trusted-proxies),
+attempts wait 1–8 s and return `429` with `Retry-After`, whether or not the email
+exists; an Installation administrator's correct password still signs in. Without
+one, browsers share the ingress address and startup logs
+`authentication.sign-in-limit-warning`.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
 HTTP-only, use `SameSite=Lax`, and cover `/`. Production enables secure cookies;
 the configured base URL is also the trusted origin. Session inspection exposes
-only `authenticated` and the account's `id`, `email`, and `name`.
+only `authenticated`, `sessionKey`, and the account's `id`, `email`, and `name`.
 
 Protected requests resolve the current stored session with cookie caching
-disabled. A missing, expired, revoked, or forged session is rejected. Supplying
-an `Authorization` header is rejected even if a session cookie is also present.
+disabled. A missing, expired, revoked, or forged session is rejected, as is an
+`Authorization` header even alongside a session cookie.
+
+## GitHub sign-in for existing accounts
+
+An Installation can let enrolled existing accounts sign in with GitHub or Google.
+[External sign-in and account controls](authentication/external-sign-in.md)
+defines the single-controller profile, provider flow, session binding, the
+recovery user, the administrator account API, and sign-in limits.
 
 ## Native admin shared sessions
 
 Agent native admin UI access starts from an ordinary controller browser session.
-When the trusted-operator pilot is enabled, the server parses
-`nativeAdmin.sharedCookieDomain` and configures the Better Auth session cookie
-for that explicit shared OCE parent domain so the console host and derived Agent
-hosts can use the same human session. Service API keys do not create browser
-sessions and cannot open native admin UI access. When native admin is disabled,
-leftover shared-cookie-domain configuration is ignored and Better Auth keeps the
-legacy host-only `openclaw_occ` cookie prefix and scope.
+With the trusted-operator pilot enabled, the session cookie is scoped to the
+explicit `nativeAdmin.sharedCookieDomain` parent so the console and derived Agent
+hosts share one human session. Service API keys cannot open native admin UI.
+When native admin is disabled, leftover shared-cookie-domain configuration is
+ignored and the host-only `openclaw_occ` cookie remains.
 
-The shared cookie parent domain is configured explicitly and validated against
-the console origin and Agent host suffix on DNS-label boundaries. Public
-suffixes, malformed domains, and hosts outside the configured parent are
-rejected; OCC does not infer a broader parent domain from either host. A
-domain-scoped cookie cannot use a host-only `__Host-` prefix. The shared-domain
-session uses the Better Auth cookie prefix `openclaw_occ_shared`; on HTTPS its
-cookie name is `__Secure-openclaw_occ_shared.session_token`. During migration,
-successful sign-in/sign-out responses clear prior host-only `openclaw_occ` and
-`openclaw_occ_shared` session-cookie names without a `Domain` attribute so
-browsers do not choose between duplicate host-only and domain cookies.
+The explicit parent domain is validated against the console origin and Agent host
+suffix on DNS-label boundaries. Public suffixes, malformed domains, and outside
+hosts are rejected; OCC never infers a broader parent. Because a domain cookie
+cannot use `__Host-`, the shared session uses prefix `openclaw_occ_shared`
+(`__Secure-openclaw_occ_shared.session_token` on HTTPS). Successful sign-in and
+sign-out clear prior host-only `openclaw_occ` and `openclaw_occ_shared` cookie
+names so browsers never choose between duplicates.
 
 Native-host requests authenticate the shared OCE session, resolve the exact
 Agent represented by the requested host, authorize exact Agent `administer`, and
 validate the current active revision and supported native configuration before
-proxying. OCC strips browser cookies, `Authorization`, API keys, forwarded
-identity, and native scope headers before forwarding upstream, so the native
+proxying. OCC strips browser cookies, `Authorization`, API and session keys,
+forwarded identity, and native scope headers before forwarding upstream, so the native
 gateway never receives the OCE session cookie. Native chat or other Agent-host
 activity does not renew the console session.
 
 ## Account provisioning
 
-`POST /api/auth/accounts` requires a human session and `administer` on the singleton Installation.
-It creates a Better Auth account, its explicit IAM Principal, and an
-AccessBinding to an existing Role. The request must supply `roleId`; it cannot
-implicitly create a Role or infer a grant from the account's email or session.
-Creating an account does not sign it in or issue a session.
+`POST /api/auth/accounts` requires a human session and `administer` on the
+singleton Installation, and stays available with GitHub sign-in enabled. One
+transaction writes the account, Principal, grant, enrollment and an optional
+`"github":{"subject":"<numeric id>"}` identity (`409` if GitHub is off or taken).
+
+An optional `roleId` binds an existing Installation Role (`400` if unknown or
+Namespace-scoped); without one the account has no grants. It cannot create Roles
+or infer grants. Audit records `principalId` and `roleId` or `grant: "none"`.
+Creation issues no session.
 
 A representative provisioning body is:
 
@@ -183,9 +182,8 @@ A representative provisioning body is:
 ```
 
 Emails are normalized to lowercase. Passwords must contain 12–128 characters.
-The backend provisions the account without a public email-verification or
-signup flow. Duplicate accounts are rejected. General account management and
-password reset endpoints are not exposed by the controller API.
+Provisioning has no public email-verification or signup flow; duplicates are
+rejected.
 
 ## Authorization and failures
 
@@ -203,8 +201,7 @@ headers and bearer credentials are not authorization evidence.
 | Duplicate account during provisioning                          | `409 RESOURCE_CONFLICT`.                                                           |
 | Authentication or IAM dependency unavailable                   | The request fails closed; dependency failures return `503 DEPENDENCY_UNAVAILABLE`. |
 
-The optional session-inspection route is not a protected resource operation:
-anonymous inspection returns `200` with `data: null`.
+Anonymous session inspection returns `200` with `data: null`.
 
 ## Automation credentials
 
@@ -213,9 +210,8 @@ Non-Agent automation uses `x-api-key` with an existing IAM ServicePrincipal. [Se
 ## Evidence and related references
 
 The [authentication implementation](../../apps/controller/src/auth/index.ts)
-owns session verification and safe responses; the
-[HTTP routes](../../apps/controller/src/index.ts) own public endpoint exposure
-and account-provisioning authorization.
+owns sessions; the [HTTP routes](../../apps/controller/src/index.ts) own
+endpoint exposure and provisioning authorization.
 
 - [Local authentication tests](../testing/local.md#authentication-and-authorization-coverage)
 - [Service-key persistence tests](../testing/postgresql.md#service-key-persistence)

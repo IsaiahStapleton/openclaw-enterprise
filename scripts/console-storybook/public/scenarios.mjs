@@ -37,7 +37,7 @@ const presetSecretsPath = "/namespaces/ns_00000000-0000-4000-8000-000000000001/s
 const repositoryForm = [...readyForm, { selector: "#agent-name", value: "Repository assistant" }];
 const pluginCapabilities = {
   driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
-  approvers: { agent: true, plugin: true, tools: true },
+  approvers: { agent: true, plugin: false, tools: false },
   toolDefaults: {
     enabled: true,
     approval: ["provider_default", "all_actions", "write_actions", "none"],
@@ -235,6 +235,14 @@ const pluginSelections = JSON.stringify(
   null,
   2,
 );
+// Codex offers only Agent-wide approvers. These stories reuse its catalog to show the plugin and
+// tool fields that a Driver advertising them (OpenClaw) renders.
+const overrideApproverCapabilities = {
+  ...pluginCapabilities,
+  approvers: { agent: true, plugin: true, tools: true },
+};
+const overrideApproverGap =
+  "This is simulated UI and does not prove runtime approval authorization. The Codex Plugin Driver does not offer plugin or tool approvers; these fixtures enable them on its catalog to preview the fields.";
 const pluginApproverOverrides = JSON.parse(pluginSelections);
 pluginApproverOverrides["codex-plugin:calendar@openai-curated-remote"].approvers = [];
 pluginApproverOverrides["codex-plugin:calendar@openai-curated-remote"].tools[
@@ -341,11 +349,17 @@ const devdayCreateCheckpoint = [
   { selector: "#slack-secret-slack-bot-token", value: "sec_devday_slack_bot_token" },
   click("Apply channel settings"),
   click("Create Agent"),
-  { selector: '[id="workspace-AGENTS.md"]' },
+  { selector: ".deployment-status" },
 ];
 const devdayAdminCheckpoint = [
   { selector: 'a[href*="agt_00000000-0000-4000-8000-000000000001"]', click: true },
   { selector: ".native-admin-access a.primary" },
+];
+
+const shareExistingPerson = [
+  { selector: "#share-principal-id", value: "person-demo" },
+  { selector: ".agent-access-consent input", click: true },
+  click("Share Agent"),
 ];
 
 // Page failures use the HTTP boundary; isolated component previews receive their input state.
@@ -406,12 +420,108 @@ export const scenarios = {
     description:
       "The email and password form. Any nonempty demo email/password signs into this fixture.",
   },
+  githubLogin: {
+    group: "Pages/Sign in",
+    name: "GitHub enabled",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    description:
+      "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
+  },
+  githubUnavailable: {
+    group: "Pages/Sign in",
+    name: "GitHub unavailable",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    actions: [click("Continue with GitHub")],
+    description: "A failed GitHub start leaves password sign-in and a deliberate retry available.",
+  },
+  githubRateLimited: {
+    group: "Pages/Sign in",
+    name: "GitHub rate limited",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/start", method: "POST", status: 429 }],
+    actions: [click("Continue with GitHub")],
+    description: "Admission refusal asks the user to wait without automatically retrying.",
+  },
+  githubCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    description:
+      "A rejected callback shows the generic sign-in error and keeps password recovery available.",
+  },
+  githubResultRejected: {
+    group: "Pages/Sign in",
+    name: "GitHub result not confirmed",
+    path: "/console/",
+    pendingGithubAttempt: true,
+    githubEnabled: true,
+    rules: [{ path: "/api/auth/providers/github/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started GitHub sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
+  },
+  googleLogin: {
+    group: "Pages/Sign in",
+    name: "Google enabled",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    googleEnabled: true,
+    description:
+      "Provider discovery adds Continue with Google beside the password form and any other configured provider. Clicking it demonstrates an unavailable provider; this fixture never navigates to Google.",
+    gap: "An administrator must attach the Google subject identifier to an existing account through the API. Email addresses never match an account. OAuth navigation and session issuance require backend verification.",
+  },
+  googleUnavailable: {
+    group: "Pages/Sign in",
+    name: "Google unavailable",
+    path: "/console/login",
+    signedOut: true,
+    googleEnabled: true,
+    actions: [click("Continue with Google")],
+    description: "A failed Google start leaves password sign-in and a deliberate retry available.",
+  },
+  googleCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "Google callback rejected",
+    path: "/console/?authError=google",
+    signedOut: true,
+    googleEnabled: true,
+    description:
+      "A rejected Google callback shows the generic sign-in error and keeps password recovery available.",
+  },
+  googleResultRejected: {
+    group: "Pages/Sign in",
+    name: "Google result not confirmed",
+    path: "/console/",
+    pendingGoogleAttempt: true,
+    googleEnabled: true,
+    rules: [{ path: "/api/auth/providers/google/result", method: "POST", status: 401 }],
+    description:
+      "The tab that started Google sign-in could not confirm that the current session is the one its attempt created, so it shows the sign-in error instead of adopting that session.",
+  },
+  providerDiscoveryUnavailable: {
+    group: "Pages/Sign in",
+    name: "Provider discovery unavailable",
+    path: "/console/login",
+    signedOut: true,
+    rules: [{ path: "/api/auth/providers", status: 503 }],
+    description:
+      "Failed provider discovery leaves the password form usable without provider buttons.",
+  },
   loginError: {
     group: "Pages/Sign in",
     name: "Invalid credentials",
     path: "/console/login",
     signedOut: true,
-    rules: [{ path: "/api/auth/sign-in/email", status: 401 }],
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
     actions: [
       { selector: "#username", value: "operator@example.com" },
       { selector: "#password", value: "demo-only" },
@@ -443,7 +553,7 @@ export const scenarios = {
   logoutFailure: {
     group: "Pages/Sign in",
     name: "Logout unconfirmed",
-    rules: [{ path: "/api/auth/sign-out", status: 503 }],
+    rules: [{ path: "/api/auth/sign-out", method: "POST", status: 503 }],
     actions: [...account, click("Logout")],
     description:
       "Failed logout with a still-active session hides private content until revocation can be confirmed.",
@@ -541,11 +651,36 @@ export const scenarios = {
       "When the session check fails, confirm the sign-in form replaces all private content. Browser Back must not restore the collection.",
     ],
   },
+  observabilityLink: {
+    group: "Components/Navigation",
+    name: "Admin Observability link",
+    observabilityUrl: "https://observability.example.test/d/occ-observability",
+    description:
+      "Installation administrators see Observability with an external-link icon; it opens in a new tab.",
+  },
+  observabilityDenied: {
+    group: "Components/Navigation",
+    name: "Observability access denied",
+    observabilityDenied: true,
+    description: "Namespace-only access keeps Observability out of navigation.",
+  },
   agentsEmpty: {
     group: "Pages/Agents",
     name: "Empty",
     emptyAgents: true,
     description: "A ready Namespace with no Agents offers creation.",
+  },
+  agentsUnreadableConfiguration: {
+    group: "Pages/Agents",
+    name: "Unreadable saved configuration",
+    deployed: true,
+    unreadableAgentConfiguration: "plugins",
+    description:
+      "One Agent has unreadable saved plugin selections. Both Agents remain in the list, and the affected row shows a warning. This is simulated API data, not database recovery proof.",
+    steps: [
+      "Open Research assistant and select Create new version. Its saved settings show a repair banner without editing or deployment controls.",
+      "Select v1 to inspect the readable admitted snapshot. Return to Agents and open Documentation assistant to check that its draft remains editable.",
+    ],
   },
   agentsSearch: {
     group: "Pages/Agents",
@@ -612,6 +747,30 @@ export const scenarios = {
     path: "/console/namespaces",
     description:
       "Installation-wide Namespace identity and status cards, without a Namespace selector.",
+  },
+  namespacesUnavailable: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    description: "Recover from a stale Namespace URL using the selector inside the message.",
+    steps: [
+      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Use browser Back to return to the unavailable selection and recover again.",
+    ],
+  },
+  namespacesUnavailableMobile: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection mobile",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    mobile: true,
+    description: "Recover inline at 390px without opening navigation.",
+  },
+  namespacesUnavailableEmpty: {
+    group: "Pages/Namespaces",
+    name: "Unavailable selection without access",
+    path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
+    emptyNamespaces: true,
+    description: "No readable alternatives: show access guidance instead of a selection action.",
   },
   namespacesEmpty: {
     group: "Pages/Namespaces",
@@ -1245,6 +1404,33 @@ export const scenarios = {
     description:
       "Codex creation submits provisioning with inline Configuration and Secret references prepared through the channel modal.",
   },
+  createDeploymentPending: {
+    group: "Pages/Create Agent",
+    name: "Created Agent with pending deployment",
+    path: create,
+    actions: readyForm,
+    provisionedDeploymentStatus: "queued",
+    description:
+      "Creation opens Agent details after provisioning completes, while the first deployment remains queued.",
+    steps: [
+      "Click Create Agent and wait for Agent details to open.",
+      "Inspect Deployment activity: the recorded status remains queued, and no version is selected.",
+      "Click Refresh deployment. The simulated deployment stays queued; the create form does not reopen.",
+    ],
+  },
+  createDeploymentFailed: {
+    group: "Pages/Create Agent",
+    name: "Created Agent with failed deployment",
+    path: create,
+    actions: readyForm,
+    provisionedDeploymentStatus: "failed",
+    description:
+      "A first-deployment failure appears on Agent details after successful provisioning, without trapping creation on the form.",
+    steps: [
+      "Click Create Agent and wait for Agent details to open.",
+      "Inspect the failed Deployment activity and its reconciliation error.",
+    ],
+  },
   createUnsupportedProvisioning: {
     group: "Pages/Create Agent",
     name: "Unsupported provisioning",
@@ -1360,6 +1546,20 @@ export const scenarios = {
     actions: [...form, { selector: "#agent-harness", value: "openclaw" }],
     description:
       "OpenClaw remains available for OpenAI with an API key. It uses Embedded execution and disables unsupported channel editing.",
+  },
+  createDedicatedOpenclawExperimental: {
+    group: "Pages/Create Agent",
+    name: "Experimental Dedicated OpenClaw",
+    path: create,
+    actions: [
+      ...form,
+      { selector: "#agent-harness", value: "openclaw" },
+      { selector: ".launch-runtime summary", click: true },
+      { selector: "#execution-mode", value: "dedicated" },
+    ],
+    description:
+      "Dedicated OpenClaw displays its experimental status and runtime-build compatibility requirement before deployment.",
+    gap: "This simulated form does not verify that a selected OpenClaw runtime image includes native worker-inference support.",
   },
   createRepositoriesSelected: {
     group: "Pages/Create Agent",
@@ -1582,7 +1782,7 @@ export const scenarios = {
     standardCodexPreset: true,
     actions: [{ selector: "#agent-preset", value: "pre_00000000-0000-4000-8000-000000000001" }],
     description:
-      "The shipped Preset asks for name, model, and a masked modelSecret password. No Namespace or Secret ID is needed.",
+      "The shipped Preset asks for Name, Model, and a masked Model Secret. No Namespace or Secret ID is needed.",
     steps: [
       "Enter a name, model ID, and a dummy model key.",
       "Use Preset and review the masked API key and restricted configuration.",
@@ -1859,6 +2059,51 @@ export const scenarios = {
     ],
     gap: "Simulated UI proof; no deployment or real persistence.",
   },
+  agentSharing: {
+    group: "Pages/Agent detail",
+    name: "Share an Agent",
+    path: draft,
+    description:
+      "Grant an existing person access to this Agent's full native Gateway. Other Agents and OCE administration remain separate.",
+    steps: [
+      "Enter person-demo as the existing Principal ID.",
+      "Review the native-access disclosure, acknowledge it, and share.",
+      "Remove the direct binding; Namespace discovery remains available.",
+    ],
+  },
+  agentSharingGranted: {
+    group: "Pages/Agent detail",
+    name: "Agent shared",
+    path: draft,
+    actions: shareExistingPerson,
+    description:
+      "Namespace discovery and the selected Agent grant are present. Removing the direct grant does not remove other effective access.",
+  },
+  agentSharingRemoved: {
+    group: "Pages/Agent detail",
+    name: "Direct Agent grant removed",
+    path: draft,
+    actions: [...shareExistingPerson, click("Remove binding")],
+    description:
+      "The selected direct Agent binding was removed. Namespace discovery and unrelated grants are preserved.",
+  },
+  agentSharingDenied: {
+    group: "Pages/Agent detail",
+    name: "Sharing administration denied",
+    path: draft,
+    rules: [{ suffix: "/iam/roles", status: 403 }],
+    description:
+      "An Agent's other controls retain their own permissions when sharing administration is unavailable.",
+  },
+  agentSharingUnknown: {
+    group: "Pages/Agent detail",
+    name: "Sharing outcome uncertain",
+    path: draft,
+    actions: shareExistingPerson,
+    rules: [{ suffix: "/iam/access-bindings", method: "POST", status: 503, once: true }],
+    description:
+      "A failed mutation response leaves the outcome uncertain. Refresh current policy before explicitly retrying; no automatic replay occurs.",
+  },
   configurationEditor: {
     group: "Pages/Agent detail",
     name: "Edit Configuration",
@@ -1866,6 +2111,56 @@ export const scenarios = {
     actions: [click("Edit Configuration")],
     description:
       "Edit native JSON on the current draft. Save Configuration persists values; deployment remains a separate action.",
+  },
+  gatewayPasswordAccess: {
+    group: "Pages/Agent detail",
+    name: "Enable Gateway password access",
+    path: draft,
+    deployed: true,
+    description: "Configure the generated Gateway password without typing native JSON.",
+    steps: [
+      "Select Enable Gateway password access. The draft receives a password reference; no password value is displayed.",
+      "Cancel to discard the edit, or Save Configuration to persist it.",
+      "Confirm the saved-access message, then Deploy new version to apply the reference.",
+    ],
+    gap: "Simulated UI proof; does not verify credential generation, delivery, or a real Gateway login.",
+  },
+  gatewayPasswordEnabled: {
+    group: "Pages/Agent detail",
+    name: "Gateway password access configured",
+    path: draft,
+    gatewayPassword: true,
+    description:
+      "The saved Configuration uses the generated password; deployment is still required to apply edits.",
+  },
+  gatewayPasswordSaveDenied: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save denied",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        status: 403,
+      },
+    ],
+    description: "A denied save retains the draft and does not change the saved Configuration.",
+  },
+  gatewayPasswordSaving: {
+    group: "Pages/Agent detail",
+    name: "Gateway password save in progress",
+    path: draft,
+    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    rules: [
+      {
+        method: "PATCH",
+        suffix: "/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        hold: true,
+      },
+    ],
+    description:
+      "A pending save blocks further Configuration edits and deployment; a timed-out write requires draft readback.",
   },
   pluginsDraft: {
     group: "Pages/Agent detail",
@@ -1895,7 +2190,7 @@ export const scenarios = {
     auth: "codex_pat",
     agentPlugins: JSON.parse(pluginSelections),
     agentPluginApprovers: [{ channel: "slack", id: "team:TDEMO123:user:UDEMO123" }],
-    pluginCapabilities,
+    pluginCapabilities: overrideApproverCapabilities,
     pluginDiscovery,
     actions: [
       click("Plugins"),
@@ -1908,7 +2203,7 @@ export const scenarios = {
     ],
     description:
       "The Agent default has one workspace-qualified Slack user. Calendar inherits that list, and Create event inherits Calendar. Clearing a plugin or tool override restores inheritance.",
-    gap: "This is simulated UI and does not prove runtime approval authorization.",
+    gap: overrideApproverGap,
   },
   pluginApproversOverrides: {
     group: "Pages/Agent detail",
@@ -1918,7 +2213,7 @@ export const scenarios = {
     auth: "codex_pat",
     agentPlugins: pluginApproverOverrides,
     agentPluginApprovers: [{ channel: "slack", id: "team:TDEMO123:user:UDEMO123" }],
-    pluginCapabilities,
+    pluginCapabilities: overrideApproverCapabilities,
     pluginDiscovery,
     actions: [
       click("Plugins"),
@@ -1935,7 +2230,7 @@ export const scenarios = {
       "Change Calendar to Inherit Agent default approvers and inspect Plugin selections JSON.",
       "Search Create event tool approvers people to choose between duplicate Alex Chen names by exact ID.",
     ],
-    gap: "This is simulated UI and does not prove runtime approval authorization.",
+    gap: overrideApproverGap,
   },
   pluginApproversLookup: {
     group: "Pages/Agent detail",
@@ -2060,6 +2355,40 @@ export const scenarios = {
     description:
       "A worker holds the v7 deployment claim while v6 remains selected. The API does not expose finer runtime stages.",
   },
+  deploymentDeferred: {
+    group: "Pages/Agent detail",
+    name: "Deployment waiting for runtime",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "queued",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "REVISION_INCOMPLETE",
+      message: "Waiting for the runtime to become ready.",
+    },
+    description:
+      "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
+    steps: [
+      "Read the pending reason and Last checked time in Deployment activity.",
+      "Click Refresh deployment; the simulated pending result remains visible.",
+      "View v6 and confirm the latest deployment still describes v7.",
+    ],
+    gap: "Simulated API results demonstrate presentation only. PostgreSQL integration covers durable work attribution.",
+  },
+  deploymentRetrying: {
+    group: "Pages/Agent detail",
+    name: "Deployment retry after dependency failure",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "running",
+    deploymentLastAttempt: {
+      at: "2026-09-26T22:53:00.000Z",
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "A dependency was unavailable. The controller will retry.",
+    },
+    description:
+      "A worker is active again. The previous dependency failure is explicitly labeled as the last recorded result, not a current failure or a terminal outcome.",
+  },
   currentVersionDuringDeployment: {
     group: "Pages/Agent detail",
     name: "Current version during deployment",
@@ -2176,6 +2505,33 @@ export const scenarios = {
       },
     ],
     description: "The Configuration read fails independently of the Agent header.",
+  },
+  unreadableAgentConfiguration: {
+    group: "Pages/Agent detail",
+    name: "Unreadable Agent draft",
+    path: draft,
+    deployed: true,
+    unreadableAgentConfiguration: "plugins",
+    description:
+      "Saved Agent plugin selections could not be read. The Agent header and version history remain visible; draft settings and deployment are unavailable. The admitted v1 snapshot is independently readable.",
+    steps: [
+      "Open Plugins, Channels, and Credentials. Each shows the saved-configuration banner, with no empty settings or editable defaults.",
+      "Select v1 to inspect its admitted configuration, then return to Create new version to see the unreadable draft.",
+    ],
+  },
+  unreadableRevisionConfiguration: {
+    group: "Pages/Agent detail",
+    name: "Unreadable revision snapshot",
+    path: revision,
+    deployed: true,
+    unreadableRevisionConfiguration: "plugins",
+    rules: [{ suffix: "/deployments/rev_00000000-0000-4000-8000-000000000001", status: 503 }],
+    description:
+      "An admitted revision has unreadable plugin selections. Its identity and history remain visible while its saved settings show a repair banner. Deployment activity can fail separately because it still requires a valid snapshot.",
+    steps: [
+      "Open Plugins and confirm the invalid snapshot is not shown as empty JSON.",
+      "Select Create new version. The healthy current draft remains editable independently of the unreadable historical snapshot.",
+    ],
   },
   revisionError: {
     group: "Pages/Agent detail",
@@ -3042,9 +3398,9 @@ export const scenarios = {
     description:
       "Interactive walkthrough from Preset selection through first-time provisioning and deployment activation. Worker progress is simulated; it is not a live deployment.",
     steps: [
-      "Choose Research assistant, fill Variable: name, then Use Preset.",
+      "Choose Research assistant, fill Name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
-      "Wait for the simulated provisioning and deployment to finish; the Console opens Workspace files for the admitted revision.",
+      "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Refresh deployment to finish simulated activation, then open Workspace files.",
       "Use Versions to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
@@ -3172,7 +3528,7 @@ export const scenarios = {
       "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
       "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
       "Open Edit Slack. Confirm the six prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), oce-team-test (C0C4A0JH2BG), oce-community (C0C5KF0JLSC), and oce-community-test (C0C5KF0DWLQ); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
-      "Create Agent and keep the Console visible while the fixture progresses through provisioning and deployment activation until Workspace files open for the admitted revision.",
+      "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity and use Refresh deployment to finish simulated activation.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
     gap: "This Storybook flow proves only the UI sequence and fixture state. It does not store a real credential, deploy a workload, prove GitHub authorization, or prove Slack delivery.",
@@ -3221,10 +3577,10 @@ export const scenarios = {
     ],
     actions: devdayCreateCheckpoint,
     description:
-      "Auto-run checkpoint for reviewers who want the deployed end state of the DevDay create segment without replaying every presenter click.",
+      "Auto-run checkpoint for reviewers who want the created Agent detail view without replaying every presenter click.",
     steps: [
       "Use the primary DevDay segment 1 story for recording the manual presenter flow.",
-      "This checkpoint clicks through the same controls, including the Linear plugin policy choices, and waits until Workspace files open for the admitted revision.",
+      "This checkpoint clicks through the same controls, including the Linear plugin policy choices, and opens Agent details while the first deployment remains queued.",
     ],
     gap: "Checkpoint automation is a setup aid. Use the manual story for the demo video.",
   },

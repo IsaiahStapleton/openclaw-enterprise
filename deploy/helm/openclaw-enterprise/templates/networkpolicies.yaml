@@ -43,6 +43,10 @@ spec:
     matchLabels:
       app.kubernetes.io/name: openclaw-enterprise
       app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker, initialization]
   policyTypes: [Egress]
   egress:
     - to:
@@ -146,6 +150,33 @@ spec:
         - protocol: TCP
           port: {{ $proxyPort }}
 {{- end }}
+{{- if .Values.slackProxy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-api-managed-slack-proxy-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openclaw-enterprise
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: slack-proxy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.slackProxy.port }}
+{{- end }}
 {{- if .Values.backend.chatgpt.enabled }}
 {{- $providerCidr := .Values.backend.chatgpt.providerCidr }}
 {{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$" $providerCidr) }}
@@ -167,6 +198,56 @@ spec:
     - to:
         - ipBlock:
             cidr: {{ $providerCidr }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
+{{- if and .Values.auth.github .Values.auth.github.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-api-github-login-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  policyTypes: [Egress]
+  egress:
+    # Empty egressCidrs permits HTTPS to any address for github.com and api.github.com.
+    - to:
+        {{- range (default (list "0.0.0.0/0") .Values.auth.github.egressCidrs) }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
+{{- if and .Values.auth.google .Values.auth.google.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-api-google-login-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  policyTypes: [Egress]
+  egress:
+    # The API calls only oauth2.googleapis.com and www.googleapis.com. Google publishes
+    # no small stable range for them. Empty egressCidrs permits HTTPS to any address;
+    # narrow it with an egress proxy.
+    - to:
+        {{- range (default (list "0.0.0.0/0") .Values.auth.google.egressCidrs) }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: 443

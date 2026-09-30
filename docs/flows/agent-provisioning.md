@@ -1,7 +1,7 @@
 ---
 created: "2026-09-23"
-updated: "2026-09-23"
-last_updated_session: "public-pr/295"
+updated: "2026-09-29"
+last_updated_session: "authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c"
 ---
 
 # Agent provisioning flow
@@ -58,7 +58,7 @@ On ordinary draft creation paths, Console creates the Configuration and Agent, t
 
 `packages/occ/src/index.ts:OpenClawController.provisionAgent`
 
-OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
+OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. Before a new API request enters the write transaction, the selected ChannelDriver checks configured credentials through authorized Secret callbacks. The Slack Driver checks token roles and bot authentication; this does not pin Secret versions or add worker revalidation. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
 
 The `202` response contains `data.provisioning`, with the work ID and status URL. Public progress exposes result IDs and safe errors without input values or backend credentials.
 
@@ -74,7 +74,7 @@ The Compute Driver prepares runtime credentials through the existing credential 
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
-The job admits one first revision and records its ID. Provisioning reports success at this handoff. Console then follows deployment status until activation and opens Workspace files for the returned Agent and revision. Ordinary revision reconciliation owns startup, activation and runtime failure. Later deployments use the regular Deploy API.
+The job admits one first revision and records its ID. Provisioning reports success at this handoff. `apps/controller/src/console/agents/create.mjs:waitForProvisioning` returns those IDs immediately; the submit handler opens Agent details for that revision without waiting for activation. The detail page's Deployment activity panel reads the recorded startup result and exposes Refresh deployment. Ordinary revision reconciliation owns startup, activation and runtime failure. Later deployments use the regular Deploy API.
 
 ### 5. Failures preserve useful outputs
 
@@ -82,7 +82,7 @@ The job admits one first revision and records its ID. Provisioning reports succe
 
 Safe failed steps can retry under a fresh claim and authorization check. Completed resources are retained and reused. An unresolved external write keeps its exact target and ownership evidence; lease expiry or a not-found response alone does not justify dispatching it again. No provisioning rollback or Secret deletion runs.
 
-While initialization owns an Agent, conflicting edits and manual deployment are guarded. Stop/Delete invalidate provisioning, and stale workers cannot hand off a deployment afterward. Ordinary deletion retains its lifecycle and in-flight credential safety. Namespace Secrets and completed Configurations remain available through their existing resource APIs.
+While initialization owns an Agent, conflicting edits and manual deployment are guarded. Stop/Delete invalidate provisioning, and stale workers cannot hand off a deployment afterward. Ordinary deletion retains its lifecycle and in-flight credential safety. Because a cancelled provisioning never runs again, Agent deletion resolves an effect it left unsettled: it waits one worker lease after the cancellation, removes runtime credentials, and records the effect receipt in the same transaction as the finalizer. The wait is deferred and does not use deletion attempts. Namespace Secrets and completed Configurations remain available through their existing resource APIs.
 
 ## Debugging and Verification
 
@@ -105,6 +105,12 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 17:30: Agent deletion settles an effect left by cancelled provisioning instead of waiting for it forever. (fix-1/agent-deletion-unsettled-effect)
+
+- 2026-09-29 05:00: Document request-time channel credential validation. (authoring-run/bb89c55f-8771-46c9-801d-e5bc028d7e5c - 756b02ce)
+
+- 2026-09-29 02:33: Open Agent details after provisioning hands off the first deployment, and show pending or failed deployment status there. (Codex/01a0eaf9-6dcf-76b1-a376-d2a2fbfd6c60 - a14435c8)
 
 - 2026-09-23 21:00: Integrate provider model discovery and saved API-key/PAT references with canonical Dedicated provisioning and deployment activation. (Codex/01a0cf27-71c6-7042-8357-74d1811a2ef8 - fb711b49)
 

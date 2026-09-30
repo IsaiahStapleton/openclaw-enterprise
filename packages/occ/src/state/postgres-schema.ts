@@ -697,8 +697,7 @@ export const repositorySessionAttempts = occSchema.table(
       .onDelete("restrict"),
     check(
       "repository_session_attempts_live_revision_valid",
-      sql`(${table.liveRevisionId} IS NOT NULL AND ${table.liveRevisionId} = ${table.revisionId})
-        OR (${table.liveRevisionId} IS NULL AND ${table.phase} = 'disposed')`,
+      sql`${table.liveRevisionId} IS NULL OR ${table.liveRevisionId} = ${table.revisionId}`,
     ),
     check(
       "repository_session_attempts_cleanup_context_valid",
@@ -975,6 +974,11 @@ export const auditEvents = occSchema.table(
     details: jsonb("details").$type<Record<string, unknown>>(),
   },
   (table) => [
+    index("audit_events_work_attempt_idx")
+      .on(sql`(${table.details}->>'workId')`, table.occurredAt.desc(), table.id.desc())
+      .where(
+        sql`${table.kind} = 'mutation' AND ${table.action} = 'reconcile' AND ${table.resourceKind} = 'agent_revision'`,
+      ),
     check("audit_events_id_format", sql`${table.id} ~ ${identifierPatterns.audit}`),
     check("audit_events_outcome_valid", sql`${table.outcome} IN ('success', 'denied', 'failure')`),
     check(
@@ -1056,6 +1060,10 @@ export const controllerWork = occSchema.table(
         OR (${table.workKind} = 'provisioning' AND ${table.agentId} IS NULL
           AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NULL)
+        OR (${table.workKind} = 'lifecycle' AND ${table.agentId} IS NULL
+          AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
+          AND ${table.agentTarget} IS NULL
+          AND ${table.idempotencyKey} ~ '^agent_revision:rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:repository_cleanup:(retire:)?[0-9a-f]{64}$')
       )`,
     ),
     check(
@@ -1293,10 +1301,20 @@ export const account = occSchema.table(
     refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
     scope: text("scope"),
     password: text("password"),
+    authenticationVersion: integer("authentication_version").notNull().default(1),
+    identityOnly: boolean("identity_only").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
   },
   (table) => [
+    check("account_authentication_version_positive", sql`${table.authenticationVersion} > 0`),
+    check(
+      "account_identity_only",
+      sql`NOT ${table.identityOnly} OR (
+      ${table.providerId} <> 'credential' AND ${table.password} IS NULL AND ${table.accessToken} IS NULL
+      AND ${table.refreshToken} IS NULL AND ${table.idToken} IS NULL AND ${table.accessTokenExpiresAt} IS NULL
+      AND ${table.refreshTokenExpiresAt} IS NULL AND ${table.scope} IS NULL)`,
+    ),
     index("account_user_id_idx").on(table.userId),
     uniqueIndex("account_provider_account_unique").on(table.providerId, table.accountId),
     check("auth_account_id_length", sql`char_length(${table.id}) BETWEEN 1 AND 200`),
@@ -1306,6 +1324,112 @@ export const account = occSchema.table(
       sql`char_length(${table.accountId}) BETWEEN 1 AND 512`,
     ),
     check("auth_account_timestamp_order", sql`${table.updatedAt} >= ${table.createdAt}`),
+  ],
+);
+
+export const humanAuthenticationAccounts = occSchema.table(
+  "human_authentication_accounts",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onUpdate: "restrict", onDelete: "cascade" }),
+    installationId: text("installation_id")
+      .notNull()
+      .references(() => installation.id, { onUpdate: "restrict", onDelete: "restrict" }),
+    principalId: text("principal_id")
+      .notNull()
+      .references(() => iamIdentities.id, { onUpdate: "restrict", onDelete: "restrict" }),
+    version: integer("version").notNull().default(1),
+    disabled: boolean("disabled").notNull().default(false),
+    changedAt: timestamp("changed_at", { withTimezone: true })
+      .notNull()
+      .default(sql`clock_timestamp()`),
+  },
+  (table) => [
+    check("human_authentication_version_positive", sql`${table.version} > 0`),
+    unique("human_authentication_principal_unique").on(table.principalId),
+  ],
+);
+
+export const humanAuthenticationSessions = occSchema.table(
+  "human_authentication_sessions",
+  {
+    sessionId: text("session_id")
+      .primaryKey()
+      .references(() => session.id, { onUpdate: "restrict", onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => humanAuthenticationAccounts.userId, {
+        onUpdate: "restrict",
+        onDelete: "cascade",
+      }),
+    methodId: text("method_id")
+      .notNull()
+      .references(() => account.id, { onUpdate: "restrict", onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    methodVersion: integer("method_version").notNull(),
+  },
+  (table) => [
+    check("human_authentication_session_version_positive", sql`${table.version} > 0`),
+    check("human_authentication_session_method_version_positive", sql`${table.methodVersion} > 0`),
+  ],
+);
+
+export const humanAuthenticationRecovery = occSchema.table("human_authentication_recovery", {
+  installationId: text("installation_id")
+    .primaryKey()
+    .references(() => installation.id, { onUpdate: "restrict", onDelete: "restrict" }),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => humanAuthenticationAccounts.userId, {
+      onUpdate: "restrict",
+      onDelete: "restrict",
+    }),
+  principalId: text("principal_id")
+    .notNull()
+    .references(() => iamIdentities.id, { onUpdate: "restrict", onDelete: "restrict" }),
+  methodId: text("method_id")
+    .notNull()
+    .references(() => account.id, { onUpdate: "restrict", onDelete: "restrict" }),
+});
+
+export const humanAuthenticationAttempts = occSchema.table(
+  "human_authentication_attempts",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    browserHash: text("browser_hash").notNull(),
+    installationId: text("installation_id")
+      .notNull()
+      .references(() => installation.id, { onUpdate: "restrict", onDelete: "cascade" }),
+    providerId: text("provider_id").notNull(),
+    callbackURL: text("callback_url").notNull(),
+    codeVerifier: text("code_verifier").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`clock_timestamp()`),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    check("human_authentication_state_hash", sql`${table.stateHash} ~ '^[a-f0-9]{64}$'`),
+    check("human_authentication_browser_hash", sql`${table.browserHash} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "human_authentication_provider_length",
+      sql`char_length(${table.providerId}) BETWEEN 1 AND 200 AND ${table.providerId} <> 'credential'`,
+    ),
+    check(
+      "human_authentication_callback_length",
+      sql`char_length(${table.callbackURL}) BETWEEN 1 AND 2048`,
+    ),
+    check(
+      "human_authentication_verifier",
+      sql`${table.codeVerifier} ~ '^[A-Za-z0-9._~-]{43,128}$'`,
+    ),
+    check(
+      "human_authentication_attempt_lifetime",
+      sql`${table.expiresAt} > ${table.createdAt} AND ${table.expiresAt} <= ${table.createdAt} + interval '5 minutes'`,
+    ),
+    index("human_authentication_attempt_expiry").on(table.expiresAt),
   ],
 );
 

@@ -100,9 +100,14 @@ export async function ensureInstallation(state, label) {
   };
   state.setBootstrapNativeIAM(
     createDevelopmentIAMState(
-      createAuthPrincipalSeed(installation.id, label, {
-        id: `account-${label}-${randomUUID()}`,
-      }),
+      createAuthPrincipalSeed(
+        installation.id,
+        label,
+        {
+          id: `account-${label}-${randomUUID()}`,
+        },
+        { grant: "administrator" },
+      ),
     ),
   );
   await state.transact((unit) => unit.installations.createInstallation(installation));
