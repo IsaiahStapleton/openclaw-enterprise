@@ -8,5 +8,6 @@ test("same session pushes and completes API workflows after controlled hour thir
   ) {
     return;
   }
-  await qualifyLongSession(t);
+  await t.test("git-full", (scenario) => qualifyLongSession(scenario, { profile: "git-full" }));
+  await t.test("git-write", (scenario) => qualifyLongSession(scenario, { profile: "git-write" }));
 });

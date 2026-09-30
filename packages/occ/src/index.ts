@@ -105,12 +105,18 @@ import {
   ChannelCredentialError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
+  NativeWorkerSupportError,
   NotImplementedError,
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
   ScopeViolationError,
 } from "./errors.ts";
+import {
+  nativeWorkerSupportSource,
+  type NativeWorkerSupport,
+  type NativeWorkerSupportSource,
+} from "./native-worker-support.ts";
 import {
   assertConfiguredBackend,
   backendDefinitionMap,
@@ -172,12 +178,18 @@ export {
   ChannelCredentialError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
+  NativeWorkerSupportError,
   NotImplementedError,
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
   ScopeViolationError,
 } from "./errors.ts";
+export {
+  PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS,
+  type NativeWorkerSupport,
+  type NativeWorkerSupportSource,
+} from "./native-worker-support.ts";
 export {
   backendDefinitionMap,
   validateBackendDefinitions,
@@ -318,6 +330,8 @@ export interface ControllerOptions {
   readonly defaultPresets?: readonly Pick<Preset, "name" | "template">[];
   readonly loggingLevel?: LoggingLevel;
   readonly configuredServiceAccountDriverId?: string;
+  /** Installation startup `runtime.nativeWorkerSupport`; never set from the API. */
+  readonly nativeWorkerSupport?: NativeWorkerSupport;
 }
 
 export interface CreateNamespaceInput {
@@ -918,12 +932,16 @@ function validExecutionMode(value: unknown): value is HarnessExecutionMode {
   return value === "embedded" || value === "dedicated";
 }
 
-function requireDedicatedNativeSandbox(
+function requireDedicatedNativeSupport(
   harness: Readonly<RevisionHarnessDescriptor>,
   sandbox: SandboxDriver | undefined,
+  nativeWorkers: NativeWorkerSupportSource | undefined,
 ): void {
   if (harness.id !== "openclaw" || harness.mode !== "dedicated") {
     return;
+  }
+  if (nativeWorkers === undefined) {
+    throw new NativeWorkerSupportError();
   }
   const requiredFacets: readonly SandboxFacet[] = ["networking", "filesystem", "process"];
   if (
@@ -1044,6 +1062,7 @@ export class OpenClawController {
   private readonly provisioningContext = new AsyncLocalStorage<ClaimedWork>();
   private readonly mutationRollbacks = new AsyncLocalStorage<(() => Promise<void>)[]>();
   private readonly shouldRecordOperations: boolean;
+  private readonly nativeWorkers: NativeWorkerSupportSource | undefined;
   private readonly registry = new Map<string, RegisteredDriver>();
   private readonly selections = new Map<DriverCapability, RegisteredDriver>();
   private readonly backends: readonly BackendDefinition[];
@@ -1082,6 +1101,13 @@ export class OpenClawController {
       presetNames.add(preset.name);
     }
     this.loggingLevel = normalizeLoggingLevel(options.loggingLevel);
+    if (
+      options.nativeWorkerSupport !== undefined &&
+      options.nativeWorkerSupport !== "custom-image"
+    ) {
+      throw new ScopeViolationError("The native worker support declaration is invalid.");
+    }
+    this.nativeWorkers = nativeWorkerSupportSource(options.nativeWorkerSupport);
     this.backendMap = backendDefinitionMap(this.backends);
     if (
       options.configuredServiceAccountDriverId !== undefined &&
@@ -1171,14 +1197,19 @@ export class OpenClawController {
       kind: "installation",
       id: this.installation.id,
     });
+    const nativeWorkers =
+      this.nativeWorkers === undefined ? {} : { nativeWorkers: { support: this.nativeWorkers } };
     if (!this.selections.has("plugin")) {
-      return this.installation;
+      return this.nativeWorkers === undefined
+        ? this.installation
+        : immutableCopy({ ...this.installation, capabilities: nativeWorkers });
     }
     const driver = this.pluginDriver();
     return immutableCopy({
       ...this.installation,
       capabilities: {
         ...this.installation.capabilities,
+        ...nativeWorkers,
         ...(driver.discoverCatalog && driver.getCatalogPlugin
           ? { pluginDiscovery: { credential: driver.discoveryCredential ?? "required" } }
           : {}),
@@ -4518,7 +4549,7 @@ export class OpenClawController {
         ...approvedHarness,
         mode: lockedAgent.executionMode,
       });
-      requireDedicatedNativeSandbox(revisionHarness, sandbox);
+      requireDedicatedNativeSupport(revisionHarness, sandbox, this.nativeWorkers);
       const sandboxConfiguration =
         sandbox?.configureAgent !== undefined
           ? frozenValues(
@@ -5589,7 +5620,7 @@ export class OpenClawController {
       mode: plan.executionMode,
     };
     const sandbox = this.sandboxDriver();
-    requireDedicatedNativeSandbox(harness, sandbox);
+    requireDedicatedNativeSupport(harness, sandbox, this.nativeWorkers);
     const configuration =
       sandbox?.configureAgent?.(plan.configuration.values, harness) ?? plan.configuration.values;
     if (resolveConfiguredHarnessId(configuration) !== harness.id) {

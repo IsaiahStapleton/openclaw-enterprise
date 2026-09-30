@@ -49,6 +49,7 @@ import {
   provisioningEffectReceipt as provisioningEffectReceiptForRecord,
   provisioningPendingEffect,
   type ClaimedWork,
+  type NativeWorkerSupport,
   type ProvisioningEffectReceipt,
   type PlatformUnitOfWork,
   type PostgresPool,
@@ -403,6 +404,7 @@ export class ControllerWorker {
   private readonly iam: IAMDriver;
   private readonly secretDriverId: string | undefined;
   private readonly configuredServiceAccountDriverId: string | undefined;
+  private readonly nativeWorkerSupport: NativeWorkerSupport | undefined;
   private readonly secretDriver: SecretDriver | undefined;
   private provisioningController: OpenClawController | undefined;
   private readonly sandbox: SandboxDriver | undefined;
@@ -458,6 +460,7 @@ export class ControllerWorker {
     );
     const drivers = options.drivers;
     this.configuredServiceAccountDriverId = drivers?.installation.drivers.service_account?.id;
+    this.nativeWorkerSupport = drivers?.installation.runtime?.nativeWorkerSupport;
     if (this.mode === "production" && drivers === undefined) {
       throw new Error("Production controller workers require Installation startup configuration.");
     }
@@ -593,6 +596,9 @@ export class ControllerWorker {
       ...(this.configuredServiceAccountDriverId === undefined
         ? {}
         : { configuredServiceAccountDriverId: this.configuredServiceAccountDriverId }),
+      ...(this.nativeWorkerSupport === undefined
+        ? {}
+        : { nativeWorkerSupport: this.nativeWorkerSupport }),
     });
     for (const driver of [
       this.configuration,

@@ -1833,13 +1833,29 @@ ${OPENCLAW_AUTH_PROBE_HELPERS}
 ${startupPhaseHelper("gateway")}
 startPluginRuntimeStatusServer();
 
-function forwardTermination(child) {
-  let terminating = false;
+// A respawn for a changed Harness peer bounds its retries and falls back to a
+// container restart when the peer keeps changing.
+const GATEWAY_RESPAWN_ATTEMPTS = 3;
+const GATEWAY_RESPAWN_LIMIT = 5;
+const GATEWAY_RESPAWN_WINDOW_MS = 10 * 60_000;
+const GATEWAY_RESPAWN_READY_TIMEOUT_MS = 180_000;
+const GATEWAY_RESPAWN_READY_POLL_MS = 500;
+const GATEWAY_RESPAWN_KILL_GRACE_MS = 10_000;
+let gatewayTerminating = false;
+
+// Forward to the current native process; between a respawn's stop and spawn
+// there is none, and the wrapper exits itself.
+function forwardTermination(currentChild) {
   const forward = (signal) => {
-    if (terminating) return;
-    terminating = true;
-    child.kill(signal);
-    setTimeout(() => child.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+    if (gatewayTerminating) return;
+    gatewayTerminating = true;
+    const target = currentChild();
+    if (target === undefined) {
+      process.exit(0);
+      return;
+    }
+    target.kill(signal);
+    setTimeout(() => currentChild()?.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
   };
   process.on("SIGTERM", () => forward("SIGTERM"));
   process.on("SIGINT", () => forward("SIGINT"));
@@ -2040,75 +2056,144 @@ if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
 }
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
+const followsPeerStatus =
+  pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime);
+// A respawn configures from the file a container restart would start from.
+const initialConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+
+// Write the configuration the native Gateway starts with. It depends only on the
+// admitted configuration, the Harness peer status and the workspace node binding,
+// so an in-place respawn repeats it for a changed peer. For a Codex peer this
+// installs nothing: the Harness installs the plugins; the Gateway applies its result.
+function configureGateway(peerStatus) {
+  process.env.OPENCLAW_CONFIG_PATH = initialConfigPath;
+  configureNativeWorkerProfile();
+  const peerFailures = peerStatus?.failures ?? readPluginFailuresFromEnvironment();
+  if (peerStatus !== undefined) {
+    process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(peerStatus.startupId);
+  }
+  const pluginInstallStartedAt = Date.now();
+  const pluginResult =
+    pluginRuntime === undefined
+      ? { successfulPluginIds: [], failures: peerFailures }
+      : installOpenClawPlugins(pluginRuntime, peerFailures);
+  if (pluginRuntime !== undefined) {
+    logStartupPhase("plugin-install", pluginInstallStartedAt);
+  }
+  if (peerStatus !== undefined) {
+    pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
+  }
+  // A native worker profile, or a Gateway whose controller cannot read its runtime
+  // status, receives its node in the environment; the others read the binding file.
+  const environmentWorkspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
+  let workspaceNodeId;
+  if (
+    environmentWorkspaceNodeId !== undefined ||
+    workspaceNodeBindingPath !== undefined ||
+    process.env.APP_SERVER_URL !== undefined ||
+    process.env.OPENCLAW_NATIVE_WORKER_PROFILE !== undefined
+  ) {
+    const config = readOpenClawConfig();
+    // The first pairing records its command grant before a node ID is available.
+    // gateway.* changes restart OpenClaw, so this is written only before a spawn.
+    const commands = ((config.gateway ??= {}).nodes ??= {}).commands ??= {};
+    commands.allow = [...new Set([...(commands.allow ?? []), "file.fetch", "file.stat", "file.write", "file.create", "dir.list", "workspace.memory", "workspace.skills"])];
+    if (environmentWorkspaceNodeId !== undefined || workspaceNodeBindingPath !== undefined) {
+      // Refuse a revision that cannot host its node now, not when the node arrives.
+      requireWorkspaceNodePlugins(config);
+    }
+    workspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
+    if (workspaceNodeId !== undefined) {
+      configureWorkspaceNodePlugins(config, workspaceNodeId);
+    }
+    writeOpenClawConfig(config);
+  }
+  return { pluginResult, workspaceNodeId };
+}
+
+// The native Gateway process. A respawn for a changed Harness peer replaces it;
+// any other exit ends the wrapper, and so restarts the container.
+let child;
+let childRunning = false;
+let childExited;
+let respawning = false;
+let stoppingContainer = false;
+let gatewayGeneration = 0;
+
+function startGatewayProcess() {
+  const spawned = spawn(
+    "node",
+    ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
+    { stdio: "inherit" },
+  );
+  child = spawned;
+  childRunning = true;
+  gatewayGeneration++;
+  childExited = new Promise((resolve) => {
+    spawned.on("exit", (code, signal) => {
+      if (spawned === child) childRunning = false;
+      resolve();
+      if (stoppingContainer) {
+        process.exit(1);
+        return;
+      }
+      if (gatewayTerminating || (!respawning && spawned === child)) {
+        process.exit(code ?? (signal === "SIGTERM" ? 0 : 1));
+      }
+    });
+  });
+  return Date.now();
+}
+
+// Fall back to a container restart, which the kubelet backs off.
+function stopContainer() {
+  if (stoppingContainer) return;
+  stoppingContainer = true;
+  if (!childRunning) {
+    process.exit(1);
+    return;
+  }
+  child.kill("SIGTERM");
+  setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+}
+
+let pluginResult;
+let peerStatus;
+let resetWorkspaceNodeTracking = () => {};
 (async () => {
-configureNativeWorkerProfile();
-const peerStatus =
-  pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)
-    ? await timeStartupPhase("peer-plugin-status", waitForPeerPluginRuntimeStatus)
-    : undefined;
-const peerFailures = peerStatus?.failures ?? readPluginFailuresFromEnvironment();
-if (peerStatus !== undefined) {
-  process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(peerStatus.startupId);
-}
-const pluginInstallStartedAt = Date.now();
-const pluginResult =
-  pluginRuntime === undefined
-    ? { successfulPluginIds: [], failures: peerFailures }
-    : installOpenClawPlugins(pluginRuntime, peerFailures);
-if (pluginRuntime !== undefined) {
-  logStartupPhase("plugin-install", pluginInstallStartedAt);
-}
-if (peerStatus !== undefined) {
-  pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
-}
+peerStatus = followsPeerStatus
+  ? await timeStartupPhase("peer-plugin-status", waitForPeerPluginRuntimeStatus)
+  : undefined;
+const started = configureGateway(peerStatus);
+pluginResult = started.pluginResult;
 publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
-// A native worker profile, or a Gateway whose controller cannot read its runtime
-// status, receives its node in the environment; the others read the binding file.
-const environmentWorkspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
-let startWorkspaceNodeId;
-if (
-  environmentWorkspaceNodeId !== undefined ||
-  workspaceNodeBindingPath !== undefined ||
-  process.env.APP_SERVER_URL !== undefined ||
-  process.env.OPENCLAW_NATIVE_WORKER_PROFILE !== undefined
-) {
-  const config = readOpenClawConfig();
-  // The first pairing records its command grant before a node ID is available.
-  // gateway.* changes restart OpenClaw, so this is written only here, at start.
-  const commands = ((config.gateway ??= {}).nodes ??= {}).commands ??= {};
-  commands.allow = [...new Set([...(commands.allow ?? []), "file.fetch", "file.stat", "file.write", "file.create", "dir.list", "workspace.memory", "workspace.skills"])];
-  if (environmentWorkspaceNodeId !== undefined || workspaceNodeBindingPath !== undefined) {
-    // Refuse a revision that cannot host its node now, not when the node arrives.
-    requireWorkspaceNodePlugins(config);
-  }
-  startWorkspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
-  if (startWorkspaceNodeId !== undefined) {
-    configureWorkspaceNodePlugins(config, startWorkspaceNodeId);
-  }
-  writeOpenClawConfig(config);
-}
+const startWorkspaceNodeId = started.workspaceNodeId;
 publishRuntimeReady();
 // Everything before this line delays the native Gateway process.
 logStartupPhase("native-spawn", startupPhaseOrigin);
-const child = spawn(
-  "node",
-  ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
-  { stdio: "inherit" },
-);
 // Apply budgets start when OpenClaw does, not at wrapper start: login, the model
 // probe and plugin install must not count against them.
-const childSpawnedAt = Date.now();
-forwardTermination(child);
+const childSpawnedAt = startGatewayProcess();
+forwardTermination(() => (childRunning ? child : undefined));
 if (workspaceNodeBindingPath !== undefined) {
   // The wrapper writing the config is not the ack: OpenClaw must report the
   // file-transfer plugin active in a plugin registry loaded after the write.
   const WORKSPACE_NODE_APPLY_TIMEOUT_MS = 30_000;
-  let written = startWorkspaceNodeId === undefined
-    ? undefined
-    : { deviceId: startWorkspaceNodeId, at: childSpawnedAt, activeBefore: false };
+  let written;
   let firstSeenAt;
   let stoppingForChangedWorkspaceNode = false;
   let pollInFlight = false;
+  // A new Gateway process loads its configuration, node included, from scratch:
+  // its ack is required again.
+  resetWorkspaceNodeTracking = (deviceId, spawnedAt) => {
+    written = deviceId === undefined
+      ? undefined
+      : { deviceId, at: spawnedAt, activeBefore: false };
+    firstSeenAt = undefined;
+    runtimeWorkspaceNodeId = undefined;
+    runtimeWorkspaceNodeFailure = undefined;
+  };
+  resetWorkspaceNodeTracking(startWorkspaceNodeId, childSpawnedAt);
   const reportFailure = (code) => {
     if (runtimeWorkspaceNodeFailure?.code === code) return;
     runtimeWorkspaceNodeFailure = { code, checkedAt: new Date().toISOString() };
@@ -2124,13 +2209,16 @@ if (workspaceNodeBindingPath !== undefined) {
       stoppingForChangedWorkspaceNode = true;
       clearInterval(workspaceNodePoll);
       logStartupPhase("workspace-node-changed", startupPhaseOrigin);
-      child.kill("SIGTERM");
-      setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+      stopContainer();
       return;
     }
     firstSeenAt ??= Date.now();
+    const generation = gatewayGeneration;
+    // A respawn replaced the process this poll was talking to: start over.
+    const superseded = () => respawning || generation !== gatewayGeneration;
     if (written === undefined) {
       const before = await openClawFileTransferState();
+      if (superseded()) return;
       if (before === undefined) {
         if (Date.now() - firstSeenAt > WORKSPACE_NODE_APPLY_TIMEOUT_MS) reportFailure("GATEWAY_UNAVAILABLE");
         return;
@@ -2149,6 +2237,7 @@ if (workspaceNodeBindingPath !== undefined) {
       return;
     }
     const after = await openClawFileTransferState();
+    if (superseded()) return;
     if (
       after?.state === "active" &&
       (!written.activeBefore || after.generation !== written.generationBefore)
@@ -2165,7 +2254,7 @@ if (workspaceNodeBindingPath !== undefined) {
     }
   };
   const workspaceNodePoll = setInterval(async () => {
-    if (pollInFlight) return;
+    if (pollInFlight || respawning) return;
     pollInFlight = true;
     try {
       await pollWorkspaceNode();
@@ -2178,40 +2267,118 @@ if (workspaceNodeBindingPath !== undefined) {
   }, 1_000);
   workspaceNodePoll.unref?.();
 }
-if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)) {
+if (followsPeerStatus) {
   let pollInFlight = false;
-  let stoppingForChangedPeerStatus = false;
-  const stopForChangedPeerStatus = () => {
-    if (stoppingForChangedPeerStatus) return;
-    stoppingForChangedPeerStatus = true;
-    // The container exits and restarts: a Gateway start the controller cannot see.
-    logStartupPhase("peer-status-changed", startupPhaseOrigin);
-    publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
+  const recentRespawns = [];
+  const peerChanged = (current) =>
+    current.startupId !== peerStatus.startupId ||
+    current.podUid !== peerStatus.podUid ||
+    !samePluginFailures(current.failures, pluginResult.failures);
+  // Stop the native Gateway within its drain budget; one that outlives SIGKILL
+  // leaves only the container restart.
+  const stopGatewayProcess = async () => {
+    if (!childRunning) return;
     child.kill("SIGTERM");
-    setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+    const exited = childExited;
+    const escalate = setTimeout(() => child.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS});
+    escalate.unref?.();
+    let giveUp;
+    const stuck = new Promise((resolve) => {
+      giveUp = setTimeout(() => resolve(true), ${GATEWAY_STOP_TIMEOUT_MS} + GATEWAY_RESPAWN_KILL_GRACE_MS);
+      giveUp.unref?.();
+    });
+    const timedOut = await Promise.race([exited.then(() => false), stuck]);
+    clearTimeout(escalate);
+    clearTimeout(giveUp);
+    if (timedOut) throw new Error("The native Gateway did not stop.");
+  };
+  // Serving means the new process answers its own readiness endpoint; the
+  // plugin status stays "starting", so the Pod stays unready, until then.
+  const waitForGatewayServing = async () => {
+    const deadline = Date.now() + GATEWAY_RESPAWN_READY_TIMEOUT_MS;
+    while (childRunning && Date.now() < deadline) {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
+          { signal: AbortSignal.timeout(2_000), redirect: "error" },
+        );
+        if (response.status === 200 && childRunning) return true;
+      } catch {}
+      await pluginRuntimeDelay(GATEWAY_RESPAWN_READY_POLL_MS);
+    }
+    return false;
+  };
+  // A changed Harness peer invalidates the app-server credential and possibly
+  // the plugin result the Gateway was configured with. Respawn only the native
+  // process: the container, its volumes and runtime assets stay, and there is
+  // no kubelet crash-loop backoff.
+  const respawnForPeerStatus = async (current) => {
+    respawning = true;
+    // Readiness drops first; nothing routes to this Gateway until it is replaced.
+    publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
+    const respawnStartedAt = Date.now();
+    logStartupPhase("peer-status-changed", startupPhaseOrigin);
+    try {
+      if (current === undefined) {
+        // Unreadable status need not mean a new Harness: the same Harness
+        // process coming back leaves this Gateway's credential valid.
+        const returned = await waitForPeerPluginRuntimeStatus();
+        if (!peerChanged(returned) && childRunning) {
+          publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
+          logStartupPhase("peer-status-restored", respawnStartedAt);
+          return;
+        }
+      }
+      while (recentRespawns.length > 0 && respawnStartedAt - recentRespawns[0] > GATEWAY_RESPAWN_WINDOW_MS) {
+        recentRespawns.shift();
+      }
+      if (recentRespawns.length >= GATEWAY_RESPAWN_LIMIT) {
+        throw new Error("The Harness peer changed too often to respawn the Gateway in place.");
+      }
+      recentRespawns.push(respawnStartedAt);
+      await stopGatewayProcess();
+      for (let attempt = 1; ; attempt++) {
+        // Configure from the latest ready status, which may be newer than the change.
+        peerStatus = await waitForPeerPluginRuntimeStatus();
+        const configured = configureGateway(peerStatus);
+        pluginResult = configured.pluginResult;
+        if (gatewayTerminating) return;
+        const spawnedAt = startGatewayProcess();
+        resetWorkspaceNodeTracking(configured.workspaceNodeId, spawnedAt);
+        if (await waitForGatewayServing()) break;
+        if (attempt >= GATEWAY_RESPAWN_ATTEMPTS) {
+          throw new Error("The respawned native Gateway did not become ready.");
+        }
+        await stopGatewayProcess();
+        await pluginRuntimeDelay(1_000 * 2 ** (attempt - 1));
+      }
+      publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
+      logStartupPhase("gateway-respawn", respawnStartedAt);
+    } catch {
+      logStartupPhase("gateway-respawn", respawnStartedAt, "failed");
+      stopContainer();
+    } finally {
+      respawning = false;
+    }
   };
   setInterval(async () => {
-    if (pollInFlight) return;
+    if (pollInFlight || respawning || stoppingContainer) return;
     pollInFlight = true;
     try {
-      const current = await readPeerPluginRuntimeStatus();
-      if (current === undefined || peerStatus === undefined) {
-        stopForChangedPeerStatus();
-      } else if (
-        current.startupId !== peerStatus.startupId ||
-        current.podUid !== peerStatus.podUid ||
-        !samePluginFailures(current.failures, pluginResult.failures)
-      ) {
-        stopForChangedPeerStatus();
+      let current;
+      try {
+        current = await readPeerPluginRuntimeStatus();
+      } catch {
+        current = undefined;
       }
-    } catch {
-      stopForChangedPeerStatus();
+      if (current === undefined || peerChanged(current)) {
+        await respawnForPeerStatus(current);
+      }
     } finally {
       pollInFlight = false;
     }
   }, 2_000).unref();
 }
-child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 })().catch((error) => {
   if (!holdPluginApproverConfigurationFailure(error)) throw error;
 });

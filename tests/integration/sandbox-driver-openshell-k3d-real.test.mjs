@@ -1986,6 +1986,8 @@ async function prepareProductionInstallation(
     cluster: "k3d-openshell-sandboxdriver",
   });
   if (harnessId === "openclaw") {
+    // scripts/k3d builds this runtime from an OpenClaw source with native worker support.
+    configuration.runtime = { nativeWorkerSupport: "custom-image" };
     configuration.drivers.compute.configuration.runtime.nativeOpenClawSessionCapacity = 2;
     configuration.drivers.credential_gateway.configuration.binaries = ["/usr/local/bin/node"];
   }

@@ -3531,156 +3531,341 @@ test("Codex gateway supervisor waits for its Harness plugin status without a dea
   );
 });
 
-test("Codex gateway supervisor exits when the peer Agent plugin failure set changes", async () => {
+// Runs the Kubernetes Codex Gateway wrapper against a real HTTP Harness peer
+// status endpoint and a real readiness endpoint standing in for OpenClaw. Only
+// process spawning and the filesystem are substituted.
+async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
   const peerHttp = await import("node:http");
   const revisionId = "revision-plugin-compute-1";
   const initialFailure = {
     pluginId: "codex-plugin:linear@openai-curated-remote",
     code: "PLUGIN_AUTH_REQUIRED",
   };
-  let peerStatus = {
+  const fixture = {
     revisionId,
-    container: "agent",
-    startupId: "agent-startup-1",
-    podUid: "agent-pod-1",
-    phase: "ready",
-    successfulPluginIds: [],
-    failures: [initialFailure],
+    initialFailure,
+    peerStatus: {
+      revisionId,
+      container: "agent",
+      startupId: "agent-startup-1",
+      podUid: "agent-pod-1",
+      phase: "ready",
+      successfulPluginIds: [],
+      failures: [initialFailure],
+    },
+    peerAvailable: true,
+    serving: true,
+    children: [],
+    exits: [],
+    intervals: [],
+    statusHandler: undefined,
+    files: new Map([
+      [
+        "/etc/openclaw/openclaw.json",
+        JSON.stringify({
+          gateway: { port: 8080 },
+          plugins: { installs: { keep: { source: "npm" } }, load: { paths: ["existing"] } },
+          tools: { alsoAllow: ["existing-tool"] },
+        }),
+      ],
+    ]),
   };
-  const peerServer = peerHttp.createServer((request, response) => {
-    assert.equal(request.url, "/openclaw/plugin-runtime/status");
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(peerStatus));
-  });
-  await new Promise((resolve) => peerServer.listen(0, "127.0.0.1", resolve));
-  const peerPort = peerServer.address().port;
-
-  const runtime = pluginRuntimeSpecForRevision(
-    revision({
-      plugins: codexLinearPluginState({
-        toolDefaults: { approval: "provider_default", reviewer: "auto" },
-      }),
-    }),
-  );
-  const files = new Map([
-    [
-      "/etc/openclaw/openclaw.json",
-      JSON.stringify({
-        gateway: { port: 8080 },
-        plugins: { installs: { keep: { source: "npm" } }, load: { paths: ["existing"] } },
-        tools: { alsoAllow: ["existing-tool"] },
-      }),
-    ],
-  ]);
-  const intervals = [];
-  let statusHandler;
-  let child;
-  try {
-    const sandbox = {
-      AbortSignal,
-      Buffer,
-      JSON,
-      URL,
-      console: { error() {} },
-      fetch,
-      process: {
-        env: {
-          APP_SERVER_TOKEN: "base-app-server-token",
-          APP_SERVER_URL: `ws://127.0.0.1:${peerPort}`,
-          HOME: "/home/node",
-          OPENCLAW_AGENT_REVISION_ID: revisionId,
-          OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
-          OPENCLAW_GATEWAY_PORT: "8080",
-          OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest: runtime }),
-          OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
-          OPENCLAW_PLUGIN_STATUS_PORT: String(peerPort),
-          OPENCLAW_POD_UID: "gateway-pod-1",
-        },
-        on() {},
-        exit() {},
-      },
-      setInterval(callback) {
-        intervals.push(callback);
-        return { unref() {} };
-      },
-      setTimeout() {
-        return { unref() {} };
-      },
-      clearTimeout() {},
-      require(specifier) {
-        if (specifier === "node:http") {
-          return {
-            createServer(handler) {
-              statusHandler = handler;
-              return { listen() {} };
-            },
-          };
-        }
-        if (specifier === "node:fs") {
-          return {
-            existsSync(path) {
-              return files.has(path);
-            },
-            mkdirSync() {},
-            readFileSync(path) {
-              if (!files.has(path)) {
-                throw new Error(`Missing mocked file: ${path}`);
-              }
-              return files.get(path);
-            },
-            writeFileSync(path, data) {
-              files.set(path, String(data));
-            },
-          };
-        }
-        if (specifier === "node:child_process") {
-          return {
-            spawn(command, args) {
-              assert.equal(command, "node");
-              assert.deepEqual(plain(args), ["/app/openclaw.mjs", "gateway", "--port", "8080"]);
-              child = {
-                killed: [],
-                kill(signal) {
-                  this.killed.push(signal);
-                },
-                on() {},
-              };
-              return child;
-            },
-            spawnSync() {
-              throw new Error(
-                "gateway bridge must not run native plugin installers for Codex peers",
-              );
-            },
-          };
-        }
-        return nodeRequire(specifier);
-      },
-    };
-
-    vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
-    await waitForCondition("gateway supervisor start", () => child);
-    assert.equal(intervals.length, 1);
-
-    const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
-    assert.equal(effective.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled, false);
-    assert.deepEqual(readStatusFromHandler(statusHandler).failures, [initialFailure]);
-
-    peerStatus = {
-      ...peerStatus,
-      startupId: "agent-startup-2",
-      podUid: "agent-pod-2",
-      failures: [],
-    };
-    await intervals[0]();
-
-    assert.deepEqual(child.killed, ["SIGTERM"]);
-    const restarting = readStatusFromHandler(statusHandler);
-    assert.equal(restarting.phase, "starting");
-    assert.deepEqual(restarting.failures, [initialFailure]);
-  } finally {
-    await new Promise((resolve) => peerServer.close(resolve));
+  if (bindingDeviceId !== undefined) {
+    fixture.files.set(
+      "/home/node/workspace-node-binding/workspace-node.json",
+      JSON.stringify({ revisionId, deviceId: bindingDeviceId }),
+    );
   }
+  const listen = async (handler) => {
+    const server = peerHttp.createServer(handler);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    return server.address().port;
+  };
+  const peerPort = await listen((request, response) => {
+    assert.equal(request.url, "/openclaw/plugin-runtime/status");
+    if (!fixture.peerAvailable) {
+      response.writeHead(503).end();
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(fixture.peerStatus));
+  });
+  // The native Gateway's own readiness endpoint, answered only while serving.
+  const gatewayPort = await listen((request, response) => {
+    assert.equal(request.url, "/readyz");
+    const live = fixture.children.at(-1);
+    response.writeHead(fixture.serving && live?.exited === undefined ? 200 : 503).end();
+  });
+  fixture.gatewayPort = gatewayPort;
+  const sandbox = {
+    AbortSignal,
+    Buffer,
+    JSON,
+    URL,
+    console: { error() {} },
+    fetch,
+    process: {
+      env: {
+        APP_SERVER_TOKEN: "base-app-server-token",
+        APP_SERVER_URL: `ws://127.0.0.1:${peerPort}`,
+        HOME: "/home/node",
+        OPENCLAW_AGENT_REVISION_ID: revisionId,
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+        OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({
+          manifest: pluginRuntimeSpecForRevision(
+            revision({
+              plugins: codexLinearPluginState({
+                toolDefaults: { approval: "provider_default", reviewer: "auto" },
+              }),
+            }),
+          ),
+        }),
+        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+        OPENCLAW_PLUGIN_STATUS_PORT: String(peerPort),
+        OPENCLAW_POD_UID: "gateway-pod-1",
+        ...(bindingDeviceId === undefined
+          ? {}
+          : {
+              OPENCLAW_WORKSPACE_NODE_PATH: "/home/node/workspace-node-binding/workspace-node.json",
+              OPENCLAW_RUNTIME_STATUS_PORT: "18792",
+              OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
+            }),
+      },
+      on() {},
+      exit(code) {
+        fixture.exits.push(code);
+      },
+    },
+    setInterval(callback) {
+      fixture.intervals.push(callback);
+      return { unref() {} };
+    },
+    clearInterval() {},
+    setTimeout,
+    clearTimeout,
+    require(specifier) {
+      if (specifier === "node:http") {
+        return {
+          createServer(handler) {
+            fixture.statusHandler = handler;
+            return { listen() {} };
+          },
+        };
+      }
+      if (specifier === "node:fs") {
+        return {
+          existsSync: (path) => fixture.files.has(path),
+          mkdirSync() {},
+          readFileSync(path) {
+            if (!fixture.files.has(path)) {
+              throw new Error(`Missing mocked file: ${path}`);
+            }
+            return fixture.files.get(path);
+          },
+          writeFileSync(path, data) {
+            fixture.files.set(path, String(data));
+          },
+        };
+      }
+      if (specifier === "node:child_process") {
+        return {
+          spawn(command, args) {
+            assert.equal(command, "node");
+            assert.deepEqual(plain(args), [
+              "/app/openclaw.mjs",
+              "gateway",
+              "--port",
+              String(gatewayPort),
+            ]);
+            const child = {
+              token: sandbox.process.env.APP_SERVER_TOKEN,
+              config: JSON.parse(fixture.files.get("/home/node/.openclaw/openclaw.json")),
+              killed: [],
+              exited: undefined,
+              listeners: [],
+              kill(signal) {
+                this.killed.push(signal);
+              },
+              on(event, listener) {
+                if (event === "exit") {
+                  this.listeners.push(listener);
+                }
+              },
+              exit(code, signal) {
+                this.exited = { code, signal };
+                for (const listener of this.listeners) {
+                  listener(code, signal);
+                }
+              },
+            };
+            fixture.children.push(child);
+            return child;
+          },
+          spawnSync() {
+            throw new Error("gateway bridge must not run native plugin installers for Codex peers");
+          },
+        };
+      }
+      return nodeRequire(specifier);
+    },
+  };
+  fixture.sandbox = sandbox;
+  fixture.status = () => readStatusFromHandler(fixture.statusHandler);
+  fixture.runtimeStatus = () => readRuntimeStatusFromHandler(fixture.statusHandler);
+  fixture.token = (startupId) =>
+    pluginAppServerToken("base-app-server-token", revisionId, startupId);
+  // The peer poll is the last interval the wrapper registers.
+  fixture.pollPeer = () => fixture.intervals.at(-1)();
+  vm.runInNewContext(GATEWAY_RUNTIME_ENTRYPOINT, sandbox);
+  await waitForCondition("gateway supervisor start", () => fixture.children.length === 1);
+  return fixture;
+}
+
+test("Codex gateway supervisor respawns OpenClaw in place for a changed Harness peer", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  assert.equal(first.token, gateway.token("agent-startup-1"));
+  assert.equal(
+    first.config.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled,
+    false,
+  );
+  assert.equal(gateway.status().phase, "ready");
+
+  // The Harness restarted with a new startup and its plugin now authorized.
+  gateway.peerStatus = {
+    ...gateway.peerStatus,
+    startupId: "agent-startup-2",
+    podUid: "agent-pod-2",
+    failures: [],
+  };
+  gateway.serving = false;
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+  assert.deepEqual(first.killed, ["SIGTERM"]);
+  // Readiness drops before anything else, and nothing new starts while the
+  // stale process (holding the old credential) is still running.
+  assert.equal(gateway.status().phase, "starting");
+  assert.deepEqual(gateway.status().failures, [gateway.initialFailure]);
+  assert.equal(gateway.children.length, 1);
+
+  first.exit(null, "SIGTERM");
+  await waitForCondition("the respawned Gateway", () => gateway.children.length === 2);
+  const second = gateway.children[1];
+  assert.equal(second.token, gateway.token("agent-startup-2"));
+  assert.equal(
+    second.config.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled,
+    true,
+  );
+  // Spawned but not yet serving: still unready.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.equal(gateway.status().phase, "starting");
+
+  gateway.serving = true;
+  await respawn;
+  const ready = gateway.status();
+  assert.equal(ready.phase, "ready");
+  assert.deepEqual(ready.failures, []);
+  assert.deepEqual(gateway.exits, [], "the wrapper, and so the container, keeps running");
+  assert.deepEqual(second.killed, []);
+
+  // An unchanged peer changes nothing.
+  await gateway.pollPeer();
+  assert.equal(gateway.children.length, 2);
+  assert.deepEqual(second.killed, []);
+
+  // An exit of the respawned process that no respawn asked for is still the container's.
+  second.exit(1, null);
+  assert.deepEqual(gateway.exits, [1]);
+});
+
+test("Codex gateway supervisor keeps OpenClaw when the same Harness returns after a status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+  gateway.peerAvailable = true;
+  await poll;
+  assert.equal(gateway.status().phase, "ready");
+  assert.deepEqual(first.killed, [], "the Gateway's credential is still valid");
+  assert.equal(gateway.children.length, 1);
+  assert.deepEqual(gateway.exits, []);
+});
+
+test("Codex gateway supervisor re-applies the workspace node binding on respawn", async (t) => {
+  const deviceId = "a".repeat(64);
+  const gateway = await startCodexGatewaySupervisor(t, { bindingDeviceId: deviceId });
+  const [first] = gateway.children;
+  assert.deepEqual(first.config.plugins.entries["file-transfer"].config.workspaces.main, {
+    nodeId: deviceId,
+    remoteRoot: "/home/node/workspace",
+  });
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+  first.exit(null, "SIGTERM");
+  await respawn;
+  const second = gateway.children[1];
+  assert.deepEqual(second.config.plugins.entries["file-transfer"].config.workspaces.main, {
+    nodeId: deviceId,
+    remoteRoot: "/home/node/workspace",
+  });
+  assert.ok(second.config.gateway.nodes.commands.allow.includes("file.fetch"));
+  // The new process must acknowledge the node itself before the controller sees it.
+  assert.equal(gateway.runtimeStatus().workspaceNodeId, undefined);
+  assert.equal(gateway.status().phase, "ready");
+  assert.deepEqual(gateway.exits, []);
+});
+
+test("Codex gateway supervisor bounds respawn retries and falls back to a container restart", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+  gateway.serving = false;
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => gateway.children[0].killed.length === 1);
+  gateway.children[0].exit(null, "SIGTERM");
+  // Every respawned process dies before it serves.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    // Retries back off by 1 s, then 2 s.
+    const deadline = Date.now() + 5_000;
+    while (gateway.children.length !== attempt + 1) {
+      assert.ok(Date.now() < deadline, `respawn attempt ${attempt} did not start`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    gateway.children[attempt].exit(1, null);
+    assert.equal(gateway.status().phase, "starting");
+    assert.deepEqual(gateway.exits, [], "a respawn retry does not end the wrapper");
+  }
+  await respawn;
+  assert.equal(gateway.children.length, 4);
+  assert.deepEqual(gateway.exits, [1]);
+  assert.equal(gateway.status().phase, "starting");
+});
+
+test("Codex gateway supervisor stops respawning a Gateway whose Harness keeps changing", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  for (let change = 2; change <= 6; change++) {
+    const current = gateway.children.at(-1);
+    gateway.peerStatus = { ...gateway.peerStatus, startupId: `agent-startup-${change}` };
+    const respawn = gateway.pollPeer();
+    await waitForCondition("the stale Gateway stop", () => current.killed.length === 1);
+    current.exit(null, "SIGTERM");
+    await respawn;
+    assert.equal(gateway.status().phase, "ready");
+  }
+  assert.equal(gateway.children.length, 6);
+  assert.deepEqual(gateway.exits, []);
+  // A sixth change within the window: the kubelet's backoff takes over.
+  const last = gateway.children.at(-1);
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-7" };
+  await gateway.pollPeer();
+  assert.deepEqual(last.killed, ["SIGTERM"]);
+  assert.equal(gateway.status().phase, "starting");
+  last.exit(null, "SIGTERM");
+  assert.deepEqual(gateway.exits, [1]);
+  assert.equal(gateway.children.length, 6);
 });
 
 for (const withBroker of [false, true]) {

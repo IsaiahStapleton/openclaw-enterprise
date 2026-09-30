@@ -15,10 +15,12 @@ after the command exits.
 - Have an OpenAI API key that can use [`gpt-6-astra`](https://developers.openai.com/api/docs/models/gpt-6-astra), the default model. To use a
   different model available to your project, set `OPENCLAW_FIRST_AGENT_MODEL`
   to its plain ID, without `openai/`.
-- Keep the key out of commands, Configuration JSON, and chat. The interactive
-  command prompts for it without echoing it. For automation, set
-  `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
-  `OPENAI_API_KEY` through your environment's secret manager.
+- Keep the key out of commands, Configuration JSON, and chat. For automation,
+  set `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
+  `OPENAI_API_KEY` through your environment's secret manager; setting both
+  fails. The command prompts for the key without echoing it only when neither
+  is set. An exported key is used as is, so clear a stale one with
+  `env -u OPENAI_API_KEY` to be prompted instead.
 
 The walkthrough runs from the repository root on your own development
 installation. If you followed [Kubernetes Setup](kubernetes-setup.md) on an

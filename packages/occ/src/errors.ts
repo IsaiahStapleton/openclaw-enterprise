@@ -120,6 +120,16 @@ export class NamespaceNotReadyError extends ResourceConflictError {
   }
 }
 
+/** Dedicated native OpenClaw needs OpenClaw support that the selected runtime image lacks. */
+export class NativeWorkerSupportError extends Error {
+  constructor() {
+    super(
+      "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See docs/reference/harness-execution.md#native-worker-support.",
+    );
+    this.name = "NativeWorkerSupportError";
+  }
+}
+
 export class DriverSelectionError extends Error {
   constructor(message: string) {
     super(message);
