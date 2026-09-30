@@ -137,6 +137,7 @@
         "worker revalidates admitted repository selections through the concrete GitHub Driver and Unix control",
         "worker restart resumes repository maintenance and repairs only Compute's exact missing subset once",
         "credential withdrawal work revokes from the active revision without redeploying it",
+        "an exhausted credential withdrawal stays pending with its reason until a replay retries it",
         "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
         "Agent stop cleans a terminal candidate without an active revision",
         "Agent stop reauthorizes the recorded actor before Compute mutation",

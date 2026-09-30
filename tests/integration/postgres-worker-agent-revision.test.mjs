@@ -3131,6 +3131,90 @@ test(
 );
 
 test(
+  "an exhausted credential withdrawal stays pending with its reason until a replay retries it",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context, { maxAttempts: 2 });
+    const owner = await fixture.agent(
+      "withdraw-exhausted",
+      "embedded",
+      undefined,
+      null,
+      true,
+      false,
+      true,
+    );
+    const active = await fixture.revision(owner, 1);
+    let revoke = false;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async withdrawCredentialSource(_revision, source) {
+          // A Sandbox without a running process never reports REVOKED.
+          return { sourceId: source.id, state: revoke ? "revoked" : "pending" };
+        },
+      },
+      () => {},
+      50,
+      undefined,
+      undefined,
+      withCredentialGateway,
+    );
+    await fixture.work(active, "succeeded");
+    const request = {
+      namespaceId: fixture.namespace.id,
+      agentId: owner.id,
+      credentialSourceId: owner.harnessAuth.sourceId,
+    };
+    const withdrawalWork = async () =>
+      (
+        await fixture.observerPool.query(
+          `SELECT idempotency_key, state FROM occ.controller_work
+           WHERE revision_id = $1 AND agent_target = 'credentials_withdrawn'
+           ORDER BY created_at`,
+          [active.id],
+        )
+      ).rows;
+    await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, request);
+    const [first] = await withdrawalWork();
+    await fixture.work(
+      { id: active.id, idempotencyKey: first.idempotency_key },
+      "failed_permanent",
+    );
+
+    // Exhausting attempts leaves the withdrawal pending, and the row says why.
+    const exhausted = await fixture.controller.readAgentCredentialWithdrawal(
+      fixture.actor.id,
+      request,
+    );
+    assert.equal(exhausted.state, "pending");
+    assert.equal(exhausted.lastReason, "CREDENTIAL_WITHDRAWAL_PENDING");
+    assert.ok(exhausted.lastAttemptAt);
+    const audit = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS reason_code FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.credentials_withdraw'`,
+      [fixture.namespace.id],
+    );
+    assert.deepEqual(audit.rows, [
+      { outcome: "failure", reason_code: "CREDENTIAL_WITHDRAWAL_PENDING" },
+    ]);
+
+    // With no attempt outstanding, a replay queues another one, which can then succeed.
+    revoke = true;
+    await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, request);
+    const work = await withdrawalWork();
+    assert.equal(work.length, 2);
+    await fixture.work({ id: active.id, idempotencyKey: work[1].idempotency_key }, "succeeded");
+    const revoked = await fixture.controller.readAgentCredentialWithdrawal(
+      fixture.actor.id,
+      request,
+    );
+    assert.equal(revoked.state, "revoked");
+    assert.equal(revoked.lastReason, "CREDENTIALS_WITHDRAWN");
+  },
+);
+
+test(
   "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
   requiresPostgres,
   async (context) => {

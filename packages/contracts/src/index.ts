@@ -324,6 +324,9 @@ export interface CredentialWithdrawal {
   readonly requestedBy: string;
   readonly requestedAt: string;
   readonly completedAt?: string;
+  /** The worker's most recent outcome code, for example why the withdrawal is still pending. */
+  readonly lastReason?: string;
+  readonly lastAttemptAt?: string;
 }
 
 export type HarnessAuthBinding =

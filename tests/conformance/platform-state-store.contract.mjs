@@ -1713,7 +1713,22 @@ async function verifyCredentialSourceContract(
     assert.equal(deployment.agentTarget, undefined);
   });
   const completedAt = new Date().toISOString();
+  const attempted = {
+    ...withdrawal,
+    lastReason: "CREDENTIAL_WITHDRAWAL_PENDING",
+    lastAttemptAt: completedAt,
+  };
   await store.transact(async (transaction) => {
+    // The worker's latest outcome is recorded on the pending withdrawal it explains.
+    assert.deepEqual(
+      await transaction.credentialSources.recordCredentialWithdrawalAttempt(
+        sourceNamespace.id,
+        sourceRevision.id,
+        source.id,
+        { reason: "CREDENTIAL_WITHDRAWAL_PENDING", at: completedAt },
+      ),
+      attempted,
+    );
     assert.deepEqual(
       await transaction.credentialSources.markCredentialWithdrawalRevoked(
         sourceNamespace.id,
@@ -1721,7 +1736,16 @@ async function verifyCredentialSourceContract(
         source.id,
         completedAt,
       ),
-      { ...withdrawal, state: "revoked", completedAt },
+      { ...attempted, state: "revoked", completedAt },
+    );
+    assert.equal(
+      await transaction.credentialSources.recordCredentialWithdrawalAttempt(
+        sourceNamespace.id,
+        sourceRevision.id,
+        source.id,
+        { reason: "CREDENTIALS_WITHDRAWN", at: completedAt },
+      ),
+      undefined,
     );
     assert.equal(
       await transaction.credentialSources.markCredentialWithdrawalRevoked(

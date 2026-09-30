@@ -68,6 +68,7 @@ func (app *application) printCredentialWithdrawal(value any) error {
 		{title: "REVISION", key: "revisionId"},
 		{title: "CREDENTIAL SOURCE", key: "credentialSourceId"},
 		{title: "STATE", key: "state"},
+		{title: "REASON", key: "reason"},
 	})
 }
 

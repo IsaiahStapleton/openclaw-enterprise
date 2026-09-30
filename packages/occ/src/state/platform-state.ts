@@ -322,6 +322,13 @@ export interface CredentialSourceRepository extends CredentialSourceReadReposito
   requestCredentialWithdrawal(
     withdrawal: CredentialWithdrawal,
   ): Promise<Readonly<CredentialWithdrawal>>;
+  /** Records the worker's latest outcome code on a pending withdrawal. */
+  recordCredentialWithdrawalAttempt(
+    namespaceId: string,
+    revisionId: string,
+    credentialSourceId: string,
+    attempt: { readonly reason: string; readonly at: string },
+  ): Promise<Readonly<CredentialWithdrawal> | undefined>;
   /** Moves a pending withdrawal to `revoked`; a revoked withdrawal never changes again. */
   markCredentialWithdrawalRevoked(
     namespaceId: string,
@@ -1580,6 +1587,30 @@ function repositories(
       const saved = immutableCopy(withdrawal);
       snapshot.credentialWithdrawals.set(
         withdrawalKey(withdrawal.namespaceId, withdrawal.revisionId, withdrawal.credentialSourceId),
+        saved,
+      );
+      return immutableCopy(saved);
+    },
+    recordCredentialWithdrawalAttempt: async (
+      namespaceId,
+      revisionId,
+      credentialSourceId,
+      attempt,
+    ) => {
+      const current = await findCredentialWithdrawal(namespaceId, revisionId, credentialSourceId);
+      if (current === undefined || current.state !== "pending") {
+        return undefined;
+      }
+      if (!/^[A-Z0-9_]{1,64}$/u.test(attempt.reason)) {
+        throw new ScopeViolationError("A credential withdrawal reason must be a reason code.");
+      }
+      const saved = immutableCopy({
+        ...current,
+        lastReason: attempt.reason,
+        lastAttemptAt: attempt.at,
+      });
+      snapshot.credentialWithdrawals.set(
+        withdrawalKey(namespaceId, revisionId, credentialSourceId),
         saved,
       );
       return immutableCopy(saved);

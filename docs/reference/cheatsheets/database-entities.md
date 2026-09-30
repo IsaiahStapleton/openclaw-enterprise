@@ -151,6 +151,8 @@ Records one credential source withdrawn from one Agent revision, until the gatew
 - `requested_by`
 - `requested_at`
 - `completed_at`
+- `last_reason`
+- `last_attempt_at`
 
 ### `service_accounts`
 

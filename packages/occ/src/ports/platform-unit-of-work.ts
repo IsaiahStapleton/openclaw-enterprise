@@ -64,6 +64,7 @@ export function bindPlatformUnitOfWork(
       "findCredentialWithdrawal",
       "listCredentialWithdrawals",
       "requestCredentialWithdrawal",
+      "recordCredentialWithdrawalAttempt",
       "markCredentialWithdrawalRevoked",
     ]),
     serviceAccounts: bindRepository(repositories.serviceAccounts, lifetime, [

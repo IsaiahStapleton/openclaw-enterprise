@@ -1902,11 +1902,6 @@ export class ControllerWorker {
         });
         return;
       }
-      const denied = await this.authorizeAgentAction(claim, agent, "operate");
-      if (denied !== undefined) {
-        await this.finalizeCredentialWithdrawal(claim, denied);
-        return;
-      }
       const { revision, withdrawal, source } = await this.state.read(async (view) => {
         const found = await view.revisions.findRevision(
           claim.namespaceId,
@@ -1948,6 +1943,12 @@ export class ControllerWorker {
         return;
       }
       credentialSourceId = source.id;
+      // The recorded actor must still operate the Agent before any effect.
+      const denied = await this.authorizeAgentAction(claim, agent, "operate");
+      if (denied !== undefined) {
+        await this.finalizeCredentialWithdrawal(claim, { ...denied, credentialSourceId });
+        return;
+      }
       if (
         revision.compute.id !== this.compute.id ||
         revision.compute.implementation !== this.compute.implementation
@@ -1996,13 +1997,23 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
-      if (result.revoked === true && result.credentialSourceId !== undefined) {
-        await unit.credentialSources.markCredentialWithdrawalRevoked(
+      if (result.credentialSourceId !== undefined) {
+        // The row explains a withdrawal that is still pending, including after the last attempt.
+        const at = new Date().toISOString();
+        await unit.credentialSources.recordCredentialWithdrawalAttempt(
           claim.namespaceId,
           claim.revisionId!,
           result.credentialSourceId,
-          new Date().toISOString(),
+          { reason: result.code, at },
         );
+        if (result.revoked === true) {
+          await unit.credentialSources.markCredentialWithdrawalRevoked(
+            claim.namespaceId,
+            claim.revisionId!,
+            result.credentialSourceId,
+            at,
+          );
+        }
       }
       const terminalFailure =
         result.outcome === "permanent" ||

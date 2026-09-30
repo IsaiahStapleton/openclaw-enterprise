@@ -9146,8 +9146,14 @@
                           "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "lastAttemptAt": { "format": "date-time", "type": "string" },
                         "namespaceId": {
                           "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "reason": {
+                          "description": "Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation.",
+                          "pattern": "^[A-Z0-9_]{1,64}$",
                           "type": "string"
                         },
                         "requestedAt": { "format": "date-time", "type": "string" },
@@ -9294,8 +9300,14 @@
                           "pattern": "^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         },
+                        "lastAttemptAt": { "format": "date-time", "type": "string" },
                         "namespaceId": {
                           "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "reason": {
+                          "description": "Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation.",
+                          "pattern": "^[A-Z0-9_]{1,64}$",
                           "type": "string"
                         },
                         "requestedAt": { "format": "date-time", "type": "string" },

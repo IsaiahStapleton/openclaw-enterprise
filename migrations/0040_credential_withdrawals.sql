@@ -18,6 +18,9 @@ CREATE TABLE occ.credential_withdrawals (
   requested_by text NOT NULL,
   requested_at timestamptz NOT NULL,
   completed_at timestamptz,
+  -- The worker's most recent outcome code, so a withdrawal still pending can say why.
+  last_reason text,
+  last_attempt_at timestamptz,
   CONSTRAINT credential_withdrawals_pkey
     PRIMARY KEY (namespace_id, revision_id, credential_source_id),
   -- A withdrawal ends with its revision or source; it never blocks their deletion.
@@ -34,6 +37,10 @@ CREATE TABLE occ.credential_withdrawals (
     CHECK ((state = 'revoked') = (completed_at IS NOT NULL)),
   CONSTRAINT credential_withdrawals_requested_by_valid CHECK (
     char_length(requested_by) BETWEEN 1 AND 256 AND requested_by = btrim(requested_by)
+  ),
+  CONSTRAINT credential_withdrawals_last_attempt CHECK (
+    (last_reason IS NULL) = (last_attempt_at IS NULL)
+    AND (last_reason IS NULL OR last_reason ~ '^[A-Z0-9_]{1,64}$')
   )
 );
 --> statement-breakpoint
@@ -55,7 +62,8 @@ REVOKE ALL ON occ.credential_withdrawals FROM PUBLIC, occ_app;
 --> statement-breakpoint
 GRANT SELECT, INSERT ON occ.credential_withdrawals TO occ_app;
 --> statement-breakpoint
-GRANT UPDATE (state, completed_at) ON occ.credential_withdrawals TO occ_app;
+GRANT UPDATE (state, completed_at, last_reason, last_attempt_at)
+ON occ.credential_withdrawals TO occ_app;
 --> statement-breakpoint
 -- A revision-scoped withdrawal work item carries out pending withdrawals for an active revision.
 -- It is not a deployment: only revision work without an Agent target reconciles a revision.

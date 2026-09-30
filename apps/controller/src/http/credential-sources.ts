@@ -33,6 +33,8 @@ function clientCredentialWithdrawal(
     state: withdrawal.state,
     requestedAt: withdrawal.requestedAt,
     ...(withdrawal.completedAt === undefined ? {} : { completedAt: withdrawal.completedAt }),
+    ...(withdrawal.lastReason === undefined ? {} : { reason: withdrawal.lastReason }),
+    ...(withdrawal.lastAttemptAt === undefined ? {} : { lastAttemptAt: withdrawal.lastAttemptAt }),
   };
 }
 

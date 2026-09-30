@@ -657,6 +657,14 @@ export const CredentialWithdrawalSchema = Type.Object(
     }),
     requestedAt: Type.String({ format: "date-time" }),
     completedAt: Type.Optional(Type.String({ format: "date-time" })),
+    reason: Type.Optional(
+      Type.String({
+        pattern: "^[A-Z0-9_]{1,64}$",
+        description:
+          "Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation.",
+      }),
+    ),
+    lastAttemptAt: Type.Optional(Type.String({ format: "date-time" })),
   },
   { additionalProperties: false },
 );

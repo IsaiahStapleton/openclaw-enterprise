@@ -533,6 +533,8 @@ export const credentialWithdrawals = occSchema.table(
     requestedBy: text("requested_by").notNull(),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    lastReason: text("last_reason"),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
   },
   (table): PgTableExtraConfigValue[] => [
     primaryKey({
@@ -561,6 +563,10 @@ export const credentialWithdrawals = occSchema.table(
     check(
       "credential_withdrawals_requested_by_valid",
       sql`char_length(${table.requestedBy}) BETWEEN 1 AND 256 AND ${table.requestedBy} = btrim(${table.requestedBy})`,
+    ),
+    check(
+      "credential_withdrawals_last_attempt",
+      sql`(${table.lastReason} IS NULL) = (${table.lastAttemptAt} IS NULL) AND (${table.lastReason} IS NULL OR ${table.lastReason} ~ '^[A-Z0-9_]{1,64}$')`,
     ),
     index("credential_withdrawals_source_idx").on(table.namespaceId, table.credentialSourceId),
   ],

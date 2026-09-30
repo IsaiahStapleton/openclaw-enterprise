@@ -444,7 +444,7 @@ const CREDENTIAL_SOURCE_COLUMNS = `cs.id, cs.namespace_id, cs.name, cs.type, cs.
   ), '{}'::jsonb) AS secret_ids`;
 
 const CREDENTIAL_WITHDRAWAL_COLUMNS = `namespace_id, agent_id, revision_id, credential_source_id,
-  state, requested_by, requested_at, completed_at`;
+  state, requested_by, requested_at, completed_at, last_reason, last_attempt_at`;
 
 function credentialWithdrawalFromRow(row: PostgresRow): Readonly<CredentialWithdrawal> {
   const state = text(row, "state");
@@ -452,6 +452,9 @@ function credentialWithdrawalFromRow(row: PostgresRow): Readonly<CredentialWithd
     throw new DependencyUnavailableError("Persisted credential withdrawal state is invalid.");
   }
   const completedAt = row.completed_at === null ? undefined : timestamp(row, "completed_at");
+  const lastReason = optionalText(row, "last_reason");
+  const lastAttemptAt =
+    row.last_attempt_at === null ? undefined : timestamp(row, "last_attempt_at");
   return Object.freeze({
     namespaceId: text(row, "namespace_id"),
     agentId: text(row, "agent_id"),
@@ -461,6 +464,8 @@ function credentialWithdrawalFromRow(row: PostgresRow): Readonly<CredentialWithd
     requestedBy: text(row, "requested_by"),
     requestedAt: timestamp(row, "requested_at"),
     ...(completedAt === undefined ? {} : { completedAt }),
+    ...(lastReason === undefined ? {} : { lastReason }),
+    ...(lastAttemptAt === undefined ? {} : { lastAttemptAt }),
   });
 }
 
@@ -2320,6 +2325,22 @@ export class PostgresPlatformState implements PlatformStateStore {
           throw new ResourceConflictError("The credential withdrawal could not be recorded.");
         }
         return saved;
+      },
+      recordCredentialWithdrawalAttempt: async (
+        namespaceId,
+        revisionId,
+        credentialSourceId,
+        attempt,
+      ) => {
+        const updated = await client.query(
+          `UPDATE occ.credential_withdrawals SET last_reason = $4, last_attempt_at = $5
+           WHERE namespace_id = $1 AND revision_id = $2 AND credential_source_id = $3
+             AND state = 'pending'`,
+          [namespaceId, revisionId, credentialSourceId, attempt.reason, attempt.at],
+        );
+        return updated.rowCount === 1
+          ? findCredentialWithdrawal(namespaceId, revisionId, credentialSourceId)
+          : undefined;
       },
       markCredentialWithdrawalRevoked: async (
         namespaceId,
