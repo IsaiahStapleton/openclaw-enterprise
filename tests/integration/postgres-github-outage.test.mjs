@@ -340,6 +340,30 @@ test(
       },
     );
 
+    await t.test(
+      "guarded password admission retains a spent device when its proof budget is full",
+      async () => {
+        const signedIn = await passwordSignIn(app, origin, other, "192.0.2.80");
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const cookie = knownDeviceOf(signedIn);
+        assert.ok(cookie);
+        // The same controller/verifier/admission path serves the external-provider profile.
+        // No request after its device budget is spent may gain another credential check.
+        for (let index = 0; index < 10; index += 1) {
+          const response = await signInWith(cookie, { ...other, password: wrong }, "192.0.2.80");
+          assert.equal(response.statusCode, 401, `attempt ${index}: ${response.body}`);
+        }
+        const burst = await Promise.all(
+          Array.from({ length: 8 }, () =>
+            signInWith(cookie, { ...other, password: wrong }, "192.0.2.80"),
+          ),
+        );
+        for (const response of burst) {
+          assert.equal(response.statusCode, 429, response.body);
+        }
+      },
+    );
+
     await t.test("strangers spending the recovery email slow it but never refuse it", async () => {
       const signedIn = await passwordSignIn(app, origin, admin, "192.0.2.64");
       assert.equal(signedIn.statusCode, 200, signedIn.body);

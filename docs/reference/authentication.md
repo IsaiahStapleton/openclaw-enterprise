@@ -127,18 +127,21 @@ the auth secret; `untracked` events have no key and no hash. The email and
 address are never logged. The bundled Collector
 exports the event and lane, not the hash.
 
-Every password sign-in whose password is checked is audited as
-`authentication.login`: success names the account's Principal and `userId`; a
-wrong password or unknown email is `denied` with `INVALID_CREDENTIALS` and no
+Every password sign-in whose password is checked attempts an
+`authentication.login` audit: success names the account's Principal and `userId`;
+a wrong password or unknown email is `denied` with `INVALID_CREDENTIALS` and no
 account. Audit writes fail closed: a success whose audit cannot be written
-returns `503` and keeps no session. In the password-only profile, a wrong
-password whose denial cannot be written returns `503` (`429` in the slow lane)
-but still spends the sign-in budget; with an external sign-in provider it
-returns `503` and does not spend it. A `429` is unaudited
-only when admission refuses it before the password is checked;
-`authentication.sign-in-limited` reports those. An administrator's attempt in the
-slow lane is still checked, so a wrong password there returns `429` and is also
-audited as `denied`.
+returns `503` without issuing a session cookie. A server-side session may
+persist if its creation or cleanup cannot be confirmed. In both profiles, a wrong
+password whose denial cannot be written counts as a credential failure against
+any tracked sign-in budgets. The ordinary response is `503`; the slow lane may
+instead return `429`. An untracked or already-exhausted lane is paced without
+necessarily adding a new tracked failure entry. If the audit write cannot be
+confirmed, its persistence outcome may be unknown. A `429` is also unaudited when admission
+refuses the attempt before the password is checked;
+`authentication.sign-in-limited` reports the limited lane.
+An administrator's attempt in the slow lane is still checked, so a wrong password
+there returns `429` and is audited as `denied` when the write succeeds.
 
 ### Known devices
 
@@ -167,9 +170,14 @@ check. With GitHub or Google sign-in, a disabled account's entries verify
 nothing until it is enabled again; reset the password as well to revoke them for
 good. The controller reads the account only for an entry issued for the attempted
 email, so forged or foreign cookies add no timing signal about which emails exist,
-and a failed read just means no exemption. Rotating the auth secret invalidates
-every entry; the next successful sign-in issues a new one. A new browser gets no
-exemption.
+and a completed read that rejects the binding gives no exemption. Proof reads are
+bounded per controller: 30 per signed entry per minute, two active per entry,
+600 per minute overall, and 16 active overall. There is no proof cache or waiting
+queue. If a read fails or is refused, its signed entry keys also constrain the
+ordinary email/address lane: losing proof cannot reopen a spent device allowance.
+These keys never grant an exemption. Reserved accounts retain the existing paced
+password check. Rotating the auth secret invalidates every entry; the next
+successful sign-in issues a new one. A new browser gets no exemption.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are

@@ -400,6 +400,32 @@ test(
       },
     );
 
+    await t.test(
+      "proof-read saturation cannot reopen a throttled cookie's password allowance",
+      async () => {
+        const account = await createAccount("limit-proof-fairness@example.test", roles.reader.id);
+        const signedIn = await plainSignIn(account);
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const cookie = knownDeviceOf(signedIn).split(";", 1)[0];
+        // Keep one cookie: changing it would select another device instead of exercising
+        // the transition from a verified device to an unavailable proof on the same entry.
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignInWith(cookie, { ...account, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `attempt ${index}: ${response.body}`);
+        }
+        // Start the burst within the same minute; serial slow attempts could legitimately
+        // cross the window boundary and would not test a still-spent allowance.
+        const burst = await Promise.all(
+          Array.from({ length: 8 }, () =>
+            plainSignInWith(cookie, { ...account, password: wrongPassword }),
+          ),
+        );
+        for (const response of burst) {
+          assert.equal(response.statusCode, 429, response.body);
+        }
+      },
+    );
+
     await t.test("a password reset revokes known-device exemptions issued before it", async () => {
       const before = await plainSignIn(knownReset);
       assert.equal(before.statusCode, 200, before.body);

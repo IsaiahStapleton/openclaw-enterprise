@@ -42,6 +42,8 @@ import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./sessio
 import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 import {
   SignInRateLimited,
+  keyedAdmission,
+  admissionKey,
   passwordFailureAdmission,
   passwordFailureBudget,
   type PasswordSignInAdmission,
@@ -1014,6 +1016,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       const passwordHash = createHash("sha256").update(credentials[0]!.password!).digest("hex");
       return `adapter\0${found.user.id}\0${credentials[0]!.id}\0${passwordHash}`;
     });
+  // Bound fresh proof reads before account access. Signed keys constrain resources only;
+  // a refused or failed proof retains those constraints on the ordinary shared lane.
+  const knownDeviceReads = keyedAdmission(
+    { perMinute: 30, concurrent: 2 },
+    { perMinute: 600, concurrent: passwordFailureBudget.slow.evaluating },
+  );
   // Failure-counting admission for password sign-in in both profiles, keyed on email (or a
   // known device) and, behind a trusted proxy, client address. Reserved accounts are slowed,
   // never refused (see admission.ts).
@@ -1305,12 +1313,26 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         const deviceCookie = knownDeviceFromCookieHeader(request.headers.cookie, knownDeviceSecure);
         // The account's state is read only for an entry issued for this email, so a
         // forged or foreign cookie reads nothing; a stale entry just means no exemption.
+        let deviceConstraints: readonly string[] = [];
         const device = await verifyKnownDevice(
           options.secret,
           email,
           deviceCookie,
           Date.now(),
           knownDeviceState,
+          (keys, read) => {
+            deviceConstraints = keys;
+            return knownDeviceReads.admit(
+              keys.map((key) => admissionKey("device", key)),
+              async () => {
+                const state = await read();
+                // A completed fresh read can establish a stale/disabled entry. Only
+                // an unavailable proof retains constraints; it never grants an exemption.
+                deviceConstraints = [];
+                return state;
+              },
+            );
+          },
         );
         // The address lane needs a trusted proxy: without one, browsers behind the ingress
         // share its address, so only the email (or known-device) lane applies.
@@ -1319,7 +1341,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
             ? {}
             : { clientAddress: clientAddressOf(request) }),
           email,
-          ...(device === undefined ? {} : { knownDevice: device.deviceKey }),
+          ...(device === undefined ? { deviceConstraints } : { knownDevice: device.deviceKey }),
         };
         if (humanLogin) {
           // The curated endpoint checks the password, issues the session and marks the

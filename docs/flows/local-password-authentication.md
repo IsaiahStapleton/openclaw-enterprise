@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-30
-last_updated_session: authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f
+last_updated_session: authoring-run/b84d8248-fb41-44b3-8ed5-30d7fd777926
 ---
 
 # Bootstrap and human authentication flow
@@ -138,24 +138,27 @@ under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
 public user identity. Console compares it to invalidate retained views and drafts
 after a new session, including for the same user. Sign-out revokes the session,
 and public signup is disabled. In both profiles
-`auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins; a
-success within the budget clears the email's failures (a slowed-lane success
-does not), and its `onLimited` hook logs
-`authentication.sign-in-limited` once per lane per minute. `auth/known-device.ts`
-verifies the known-device cookie against the attempt's email and the account's
-password state (user, password method, and its `authentication_version`; with an
-external provider, only while the account is enabled), reading the account only
-for an entry issued for that email, and on success reissues it; a verified entry
-replaces the email lane with a device lane.
-In the password-only profile with PostgreSQL State, `passwordSignInAudit` appends `authentication.login` for
-each accepted password (actor: the account's Principal; details: `userId`) and a
-denied event with `INVALID_CREDENTIALS` and no account for each refused one. If
-the success audit fails, the new session is deleted and sign-in returns `503`.
-If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), but
-admission still counts the wrong password against the email and address budgets.
-With an external sign-in provider, `/oce/password` writes the denial itself; if
-that write fails, it answers `503` with `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`, which
-the controller counts the same way.
+`auth/admission.ts:passwordFailureAdmission` counts password failures; fast success
+clears the selected identity's failures, not the address's. `onLimited` reports
+`authentication.sign-in-limited` once per lane/window. `auth/known-device.ts`
+checks the email-bound MAC before a fresh password-state read. Controller-owned
+`keyedAdmission` bounds these reads (see [known devices](../reference/authentication.md#known-devices)).
+A verified binding selects the device lane. Failed or refused reads retain signed
+keys as additional email/address-lane constraints, never exemptions; they cannot
+reopen spent device allowances. A completed read rejecting the binding uses the
+shared lane. Reserved passwords remain checkable through the existing slow lane.
+Before checking credentials, an admitted password-only request captures issuance
+state, preserving reset-race invalidation; successful sign-in may then reissue it.
+In the password-only profile with PostgreSQL State, `passwordSignInAudit` attempts
+`authentication.login`: success names the Principal and `userId`; denial uses
+`INVALID_CREDENTIALS` without an account. A failed success audit returns `503`
+without a session cookie; session creation or cleanup may remain unconfirmed.
+A failed denial audit (`DenialAuditUnavailable`) counts as a credential failure
+against tracked entries, ordinarily returning `503`; the slow lane may return
+`429`. Untracked or exhausted lanes are paced without necessarily adding a
+tracked failure. An unconfirmed audit write has an unknown persistence outcome.
+With an external provider, `/oce/password` marks a failed denial audit with
+`PASSWORD_DENIAL_AUDIT_UNAVAILABLE`; the controller applies the same accounting.
 Better Auth logs only errors, so a wrong password writes no unstructured console
 warning.
 
@@ -328,6 +331,10 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 20:28: Receive bounded device proofs and clarify audit-failure accounting and cookie delivery. (authoring-run/b84d8248-fb41-44b3-8ed5-30d7fd777926 - 2702a01c6c2136cf9fb5b6808d3972379158f2ff)
+
+- 2026-09-30 17:01: Bound fresh device proofs without reopening spent allowances. (authoring-run/bc25e670-bfac-4568-9e6d-d0104391ed45 - 6b43652ca0792ca1a4be0f8bc628f62c1f72fe17)
 
 - 2026-09-30 12:00: Trace the password-only refusal of account and recovery routes. (fix/dogfood-2)
 
