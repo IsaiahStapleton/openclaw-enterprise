@@ -420,6 +420,16 @@
       "path": "tests/conformance/repository-client-environment.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-material-store.test.mjs",
+      "expectedTests": [
+        "expiry during Secret read refuses to create material",
+        "earliest expiry during first creation prevents the next creation and leaves cleanup possible",
+        "unexpired material is created and the retained session is reused",
+        "expiry during retained Secret read is not reported as missing material",
+        "expiry during retained Secret validation is not reported as missing material"
+      ]
+    },
+    {
       "path": "tests/conformance/repository-runtime-material.test.mjs"
     },
     {
