@@ -306,8 +306,8 @@ It is hidden otherwise, when the Installation disables the feature, and until
 the next sign-in or new tab after a denial.
 Installation administrators can [share an Agent](console/agent-sharing.md)
 with an existing person. A stopped Agent reports that it must be started,
-including before its first deployment. If a desired-running Agent has no active revision yet, the panel asks
-you to check the Agent's deployment and refresh access. It also reports when
+including before its first deployment. If a desired-running Agent has no active
+revision yet, the panel asks you to check its deployment and refresh access. It also reports when
 native admin is unsupported.
 
 **Open native admin UI** opens the Agent's active revision in a new tab, even
