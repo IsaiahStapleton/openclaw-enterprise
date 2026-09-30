@@ -1,3 +1,8 @@
+---
+status: Proposed
+status_note: "Original proposal status retained; later delivery evidence and an approved embedded-activation amendment remain in the body."
+---
+
 # RFC: Harness authentication bindings
 
 **Date:** 2026-09-16

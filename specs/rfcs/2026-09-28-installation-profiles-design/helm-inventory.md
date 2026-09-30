@@ -1,3 +1,7 @@
+---
+rfc: index.md
+---
+
 # Helm capability inventory
 
 This inventory supports the [two-profile proposal](index.md).

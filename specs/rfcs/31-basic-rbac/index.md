@@ -1,3 +1,8 @@
+---
+status: Proposed
+status_note: "Deferred past 0.x; retained as direction, not an accepted release commitment."
+---
+
 # RFC: Basic RBAC for personal and team Agents
 
 **Date:** 2026-09-18

@@ -1,3 +1,7 @@
+---
+status: Proposed
+---
+
 # Plugin policy enforcement
 
 Status: **Proposed for alignment**, 2026-09-24. Draft implementation: [#362](https://github.com/openclaw/openclaw-enterprise/pull/362).

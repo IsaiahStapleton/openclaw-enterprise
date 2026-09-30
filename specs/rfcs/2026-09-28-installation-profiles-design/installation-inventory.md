@@ -1,3 +1,7 @@
+---
+rfc: index.md
+---
+
 # Installation capability inventory and qualification
 
 Companion to the [profile proposal](index.md)

@@ -25,14 +25,19 @@ revision of that document, subject to historical preservation.
 ## Draft or revise
 
 For a new document, allocate an RFC ID by the specification process, then use
-the scaffold below the divider in `docs/contributing/rfc-template.md` at
+the frontmatter and proposal scaffold in `docs/contributing/rfc-template.md` at
 `specs/rfcs/<number>-<topic>.md`. This contributor template is the shared source
 for both manual authoring and this skill; do not maintain a second copy in the
 skill assets. If companions are needed, write the main document at
 `specs/rfcs/<number>-<topic>/index.md` and put companions in the same directory.
 When converting an existing single file, preserve its ID and content and update
 all incoming and relative links; do not leave a top-level duplicate.
-Start with decision status **Proposed**. Recheck that the path and number are not
+Start the file with YAML frontmatter containing `status: Proposed`. Companion
+Markdown notes use an `rfc` frontmatter link to the main document and inherit
+its decision status; do not duplicate the status in companions. When adding
+metadata to historical RFCs, use recorded decision evidence. If no decision is
+established, use `status: Unspecified` with a `status_note` explaining the gap,
+without rewriting historical body text. Recheck that the path and number are not
 already assigned before writing. Existing ambiguous historical numbers require
 a full filename or path, not a guessed match.
 

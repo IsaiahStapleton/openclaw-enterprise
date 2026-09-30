@@ -15,6 +15,8 @@ independent plans keep their own numbering sequence.
 New documents use single files by default. Documents with companions use
 `<number>-<topic>/index.md` inside their folder. Store status and verification limits
 in their owning document, rather than repeating them in this index.
+RFC entry points record their decision in `status` frontmatter; companion notes
+link to that entry point through `rfc` frontmatter.
 
 Start a new proposal from the [RFC template](../docs/contributing/rfc-template.md)
 or use `$spec rfc <description>`.

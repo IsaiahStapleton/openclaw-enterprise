@@ -1,3 +1,7 @@
+---
+status: Accepted
+---
+
 # Installation profiles: openclaw and codex
 
 **Date:** 2026-09-28

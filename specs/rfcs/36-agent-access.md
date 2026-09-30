@@ -1,3 +1,7 @@
+---
+status: Proposed
+---
+
 # Agent access (Proposed)
 
 ## Decision

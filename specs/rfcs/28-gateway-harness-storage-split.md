@@ -1,3 +1,8 @@
+---
+status: Proposed
+status_note: "Recorded as proposed; the Memory and Skills placement is superseded by the linked storage-split plan."
+---
+
 # Gateway–Harness storage split
 
 > **Memory and Skills placement is superseded by [spec30](../plans/30-storage-split-integration.md).**

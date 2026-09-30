@@ -1,3 +1,8 @@
+---
+status: Proposed
+status_note: "The first slice shipped; the remaining proposal is explicitly not accepted."
+---
+
 # RFC: Credential Gateway Driver for Sandbox-injected credentials
 
 **Date:** 2026-09-26

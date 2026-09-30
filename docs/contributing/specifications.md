@@ -107,11 +107,29 @@ and recordings remain outside the repository, as required by
 ## Status and review
 
 Keep status in the owning document rather than duplicating it in the index.
+Every RFC entry point must begin with YAML frontmatter containing `status`:
+
+```yaml
+---
+status: Proposed
+---
+```
+
+Companion Markdown notes have an `rfc` frontmatter link to the owning entry
+point, relative to the note (usually `rfc: index.md`). Read the decision status
+there rather than copying it into each companion. An optional `status_note`
+can explain partial supersession, deferred scope, or historical ambiguity.
 
 | Document      | Status values                            |
 | ------------- | ---------------------------------------- |
 | RFC decision  | Proposed, Accepted, Rejected, Superseded |
 | Plan delivery | Planned, In progress, Completed, Stopped |
+
+For historical RFCs whose records do not establish a decision, use
+`status: Unspecified` and explain the missing evidence in `status_note`.
+This is a historical metadata fallback, not a status for new proposals.
+Preserve recorded body text and distinguish implementation progress from an
+RFC decision; adding frontmatter does not establish acceptance or release proof.
 
 New RFCs start **Proposed**. Record acceptance or another decision only when
 supported by the responsible reviewers' decision or the contribution policy;

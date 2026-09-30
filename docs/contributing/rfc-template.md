@@ -1,7 +1,8 @@
 # RFC template
 
-Copy the scaffold below the divider into `specs/rfcs/<number>-<topic>.md` and
-replace the prompts with the actual decision. Allocate the number using the
+Start `specs/rfcs/<number>-<topic>.md` with the YAML frontmatter below, without
+the code fences, followed by the proposal scaffold. Replace the prompts with
+the actual decision. Allocate the number using the
 [specification process](specifications.md#files-and-numbering).
 If the RFC needs companion files, use `<number>-<topic>/index.md` instead.
 Adapt the headings to the change and remove sections that do not apply. See the
@@ -13,10 +14,15 @@ defined in the specification process.
 
 ---
 
+```yaml
+---
+status: Proposed
+---
+```
+
 # Proposal: [Decision or capability]
 
 - **ID:** RFC-[number]
-- **Decision status:** Proposed
 - **Owner:** [Responsible person or team]
 - **Created:** [YYYY-MM-DD]
 - **Last updated:** [YYYY-MM-DD]

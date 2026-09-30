@@ -1,3 +1,7 @@
+---
+status: Proposed
+---
+
 # Feature Spec: Agent workload tags
 
 **Date:** 2026-09-03

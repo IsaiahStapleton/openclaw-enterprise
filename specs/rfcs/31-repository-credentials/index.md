@@ -1,3 +1,8 @@
+---
+status: Unspecified
+status_note: "The record selects interface refinements and records implementation but does not state an RFC acceptance decision."
+---
+
 # RFC: Repository credentials for ordinary Agents
 
 **Status:** Selected interface and ownership refinement. Source behavior, historical qualification and final-artifact acceptance are distinguished below.

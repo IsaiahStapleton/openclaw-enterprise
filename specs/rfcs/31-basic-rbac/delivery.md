@@ -1,3 +1,7 @@
+---
+rfc: index.md
+---
+
 # RBAC delivery and qualification
 
 Read the [current-source and release-scope amendment](index.md#current-source-amendment--2026-09-24)

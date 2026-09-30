@@ -1,3 +1,7 @@
+---
+rfc: index.md
+---
+
 # Repository credentials: restart qualification and follow-up
 
 [Repository credentials RFC](index.md)

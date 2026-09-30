@@ -1,3 +1,8 @@
+---
+status: Unspecified
+status_note: "The record gives the 0.x direction; explicit acceptance applies to the earlier custom proxy, not this replacement direction."
+---
+
 # Agent egress for 0.x
 
 <a id="current-disposition"></a>

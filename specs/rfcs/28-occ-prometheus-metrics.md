@@ -1,3 +1,8 @@
+---
+status: Accepted
+status_note: "The linked implementation plan identifies this as the accepted metrics proposal; runtime and cluster acceptance remain separate."
+---
+
 # Feature Spec: Initial OCC Prometheus metrics
 
 **Date:** 2026-09-15

@@ -1,3 +1,8 @@
+---
+status: Unspecified
+status_note: "The record reports local implementation and qualification, not an RFC acceptance decision."
+---
+
 # Default production observability
 
 Status: Implemented locally on 2026-09-23; default k3d acceptance passed.

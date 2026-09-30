@@ -289,6 +289,10 @@ an independent plan can build on the existing architecture without a new RFC.
 Keep verification in the owning document or its supporting pages, not a separate
 reports area. Keep completed and superseded records in place.
 
+RFC entry points require `status` in YAML frontmatter. Companion notes link to
+their parent through `rfc` frontmatter instead of duplicating its decision
+status. Follow the specification process for historical status uncertainty.
+
 Implementation specifications are point-in-time records. When a later spec
 changes or supersedes an implementation described by an earlier spec, document
 the change in the later spec and the affected current documentation. Do not

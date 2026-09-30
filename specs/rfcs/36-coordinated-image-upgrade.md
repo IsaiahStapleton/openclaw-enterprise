@@ -1,3 +1,7 @@
+---
+status: Proposed
+---
+
 # Independent production image upgrades
 
 Status: Proposed. This specification selects the first production upgrade

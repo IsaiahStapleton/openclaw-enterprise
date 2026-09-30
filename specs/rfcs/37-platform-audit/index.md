@@ -1,3 +1,7 @@
+---
+status: Proposed
+---
+
 # RFC: Platform audit
 
 ## Problem and decision

@@ -1,3 +1,8 @@
+---
+status: Proposed
+status_note: "The incremental implementation is under review; the broader recovery design remains proposed."
+---
+
 # Recover repository credential cleanup after broker loss
 
 **Status: Implementing.** The incremental terminal-receipt path is under review;

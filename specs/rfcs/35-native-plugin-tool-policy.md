@@ -1,3 +1,7 @@
+---
+status: Proposed
+---
+
 # Native OpenClaw plugin tool policies
 
 Status: Proposed. Full policy coverage is requested; the configuration surface
