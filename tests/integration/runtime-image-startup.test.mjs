@@ -2,7 +2,19 @@ import { defaultAgentModel } from "../../apps/controller/src/console/agents/star
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -89,13 +101,37 @@ test("Codex OAuth bootstrap preserves rotated credentials and requires a new sou
   await assert.rejects(run(), /could not initialize private credentials/);
   await assert.rejects(readFile(authPath), { code: "ENOENT" });
 
-  // An explicitly selected fresh authorization may replace the previous generation after shutdown.
+  // A replacement source starts from an empty Codex home. Links planted by the previous
+  // process must not redirect the new bundle into the served workspace.
+  const workspace = join(directory, "workspace");
+  await mkdir(workspace);
+  await mkdir(join(codexHome, "sessions"));
+  await writeFile(join(codexHome, "sessions", "previous.jsonl"), "previous login history");
+  for (const name of ["auth.json.bootstrap", ".oce-oauth.json.bootstrap"]) {
+    await symlink(join("..", "workspace", `${name}.leak`), join(codexHome, name));
+  }
   await run("source-2");
+  assert.deepEqual(await readdir(workspace), []);
+  assert.deepEqual((await readdir(codexHome)).sort(), [".oce-oauth.json", "auth.json"]);
+  assert.ok((await lstat(authPath)).isFile());
   assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), auth);
   assert.deepEqual(JSON.parse(await readFile(join(codexHome, ".oce-oauth.json"), "utf8")), {
     sourceUid: "source-2",
     volumeUid: "volume-1",
   });
+
+  // Restarting with the same source keeps the native generation and its history.
+  await mkdir(join(codexHome, "sessions"));
+  await writeFile(join(codexHome, "sessions", "current.jsonl"), "current login history");
+  await writeFile(authPath, JSON.stringify(refreshed), { mode: 0o600 });
+  await run("source-2");
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), refreshed);
+  assert.deepEqual(await readdir(join(codexHome, "sessions")), ["current.jsonl"]);
+
+  // A linked credential file is not accepted as the native generation.
+  await rm(authPath);
+  await symlink(seedPath, authPath);
+  await assert.rejects(run("source-2"), /could not initialize private credentials/);
 });
 
 test("runtime image seccomp option requires the CI-prepared profile record", async (t) => {

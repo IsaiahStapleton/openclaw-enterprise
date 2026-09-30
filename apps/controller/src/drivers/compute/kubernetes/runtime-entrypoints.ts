@@ -2406,14 +2406,30 @@ const receiptPath = path.join(directory, ".oce-oauth.json");
 const validAuth = (auth) => auth?.auth_mode === "chatgpt" &&
   [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
     .every((value) => typeof value === "string" && value.trim().length > 0);
+const lstat = (target) => {
+  try {
+    return fs.lstatSync(target);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+};
+const readRegularJson = (target) =>
+  lstat(target)?.isFile() ? JSON.parse(fs.readFileSync(target, "utf8")) : undefined;
+if (lstat(directory)?.isDirectory() === false) {
+  fs.rmSync(directory, { force: true });
+}
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 let receipt;
-if (fs.existsSync(receiptPath)) {
-  receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+try {
+  receipt = readRegularJson(receiptPath);
+} catch {
+  // An unreadable receipt proves nothing; seeding below replaces the directory contents.
 }
 if (receipt?.sourceUid === expected.sourceUid) {
-  if (receipt.volumeUid !== expected.volumeUid ||
-    !validAuth(JSON.parse(fs.readFileSync(authPath, "utf8")))) {
+  if (receipt.volumeUid !== expected.volumeUid || !validAuth(readRegularJson(authPath))) {
     throw new Error("OAuth runtime credentials require reconnect.");
   }
 } else {
@@ -2421,11 +2437,15 @@ if (receipt?.sourceUid === expected.sourceUid) {
   if (!validAuth(auth)) {
     throw new Error("OAuth bootstrap credentials are invalid.");
   }
-  // TODO(oauth-reconnect): Use exclusive, non-following temporary writes and validate
-  // the final file before readiness. Deferred beyond the first-deploy MVP on fresh storage.
+  // A new source starts from an empty Codex home: no previous login, sessions, or links.
+  // rmSync removes symbolic links themselves and never follows them.
+  for (const entry of fs.readdirSync(directory)) {
+    fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+  }
   const writeJson = (target, value) => {
     const temporary = target + ".bootstrap";
-    const descriptor = fs.openSync(temporary, "w", 0o600);
+    // Exclusive creation fails on any existing path, including a planted symbolic link.
+    const descriptor = fs.openSync(temporary, "wx", 0o600);
     try {
       fs.writeFileSync(descriptor, JSON.stringify(value));
       fs.fsyncSync(descriptor);
@@ -2441,6 +2461,15 @@ if (receipt?.sourceUid === expected.sourceUid) {
     fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
+  }
+  // Readiness reports only a verified final state.
+  const written = readRegularJson(receiptPath);
+  if (
+    !validAuth(readRegularJson(authPath)) ||
+    written?.sourceUid !== expected.sourceUid ||
+    written.volumeUid !== expected.volumeUid
+  ) {
+    throw new Error("OAuth bootstrap could not verify private credentials.");
   }
 }
 } catch {
