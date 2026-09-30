@@ -216,8 +216,7 @@ The same composition covers the GitHub profile against the fixture provider:
   `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`. With the API stopped,
   `auth:maintain` resets the recovery password and deactivates GitHub sign-in.
 
-`tests/integration/password-default-chart.test.mjs` and
-`sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) check
+`tests/integration/sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) checks
 that the chart renders exactly those settings, and that the API entrypoint
 accepts the rendered settings for every trusted-proxy preset, with and without
 GitHub, and refuses what the chart refuses. Accepted settings get as far as the

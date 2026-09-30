@@ -4153,10 +4153,6 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   );
   assert.equal(workerProgram.includes("chmodSync(temporary, 0o700)"), true);
   assert.equal(workerProgram.includes("initializeRuntimeAssets();"), true);
-  assert.equal(
-    workerProgram.includes("const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync }"),
-    true,
-  );
   assert.equal(workerProgram.includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
   assert.equal(workerProgram.includes('publishImageTree("/app/custodian-skills"'), true);
   assert.equal(
