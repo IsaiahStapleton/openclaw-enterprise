@@ -5,7 +5,7 @@ import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { apiRequests, login, newPage } from "./console-agents-browser-helpers.mjs";
 
 test("Codex OAuth console creates an Agent and keeps plugin editing separate from credential replacement", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
+  const fixture = await createConsoleAppFixture(t, { codexDeviceLogin: true });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("OAuth console", { ready: true });
   const driver = new CodexPluginDriver();

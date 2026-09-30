@@ -37,9 +37,13 @@ export const backendFixtures = Object.freeze([
 
 function computeDriver({
   repositoryCredentials = false,
+  codexDeviceLogin = false,
   discoverHarnessModels = async () => [],
 } = {}) {
-  const driver = createTestKubernetesComputeDriver("console-compute", { repositoryCredentials });
+  const driver = createTestKubernetesComputeDriver("console-compute", {
+    repositoryCredentials,
+    codexDeviceLogin,
+  });
 
   return Object.assign(driver, {
     implementation: "test-memory-lifecycle",
@@ -200,6 +204,7 @@ export async function createConsoleAppFixture(t, options = {}) {
       options.computeDriver ??
       computeDriver({
         repositoryCredentials: options.repositoryCredentials === true,
+        codexDeviceLogin: options.codexDeviceLogin === true,
         discoverHarnessModels: options.discoverHarnessModels,
       }),
     configurationDriver:

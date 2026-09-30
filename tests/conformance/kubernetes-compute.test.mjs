@@ -3841,6 +3841,29 @@ test("direct service account token is confined to the model container and exact 
   );
 });
 
+test("OAuth Harness authentication requires the installation opt-in", () => {
+  const oauth = { ...apiKeyAuth, method: "oauth" };
+  const codex = { id: "codex", version: "1.0.0", mode: "dedicated" };
+  const configuration = { agents: { defaults: { model: "codex/gpt-5" } } };
+  const disabled = new KubernetesComputeDriver(options());
+  assert.equal(disabled.startHarnessDeviceAuthorization, undefined);
+  assert.equal(disabled.pollHarnessDeviceAuthorization, undefined);
+  assert.throws(
+    () => disabled.validateHarnessAuth(codex, oauth, configuration),
+    /device login is not enabled/,
+  );
+  assert.throws(
+    () => new KubernetesComputeDriver(options({ experimental: { codexDeviceLogin: "yes" } })),
+    /boolean codexDeviceLogin/,
+  );
+
+  const enabled = options({ experimental: { codexDeviceLogin: true } });
+  const driver = new KubernetesComputeDriver(enabled);
+  assert.equal(typeof driver.startHarnessDeviceAuthorization, "function");
+  assert.equal(typeof driver.pollHarnessDeviceAuthorization, "function");
+  driver.validateHarnessAuth(codex, oauth, configuration);
+});
+
 test("credential-source authentication renders no model Secret and requires the paired gateway", () => {
   const sandboxDriver = {
     id: "sandbox-openshell",
@@ -9584,6 +9607,7 @@ for (const dualCluster of [false, true]) {
       undefined,
       dualCluster
         ? {
+            experimental: { codexDeviceLogin: true },
             executionCluster: {
               authentication: { mode: "kubeconfig", kubeconfigPath, context: "execution-cluster" },
               harnessRouting: {
@@ -9599,7 +9623,7 @@ for (const dualCluster of [false, true]) {
               },
             },
           }
-        : {},
+        : { experimental: { codexDeviceLogin: true } },
     );
     if (dualCluster) {
       // Distinct transports reject requests sent to the wrong cluster. The production Driver

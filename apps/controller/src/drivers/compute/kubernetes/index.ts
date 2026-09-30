@@ -327,6 +327,11 @@ export interface KubernetesComputeDriverOptions {
     };
   };
   readonly gatewayRouting?: KubernetesGatewayRoutingOptions;
+  /** Installation opt-ins for features whose custody or support boundary is still experimental. */
+  readonly experimental?: {
+    /** Personal Codex device login whose credentials persist on the Agent volume. Default off. */
+    readonly codexDeviceLogin?: boolean;
+  };
 }
 
 interface ManagedKubernetesObject<Kind extends ReadableResourceKind = ManagedResourceKind>
@@ -1341,8 +1346,9 @@ function gatewayConfigurationDocument(
 
 export class KubernetesComputeDriver implements ComputeDriver {
   readonly discoverHarnessModels = discoverHarnessModels;
-  readonly startHarnessDeviceAuthorization = startHarnessDeviceAuthorization;
-  readonly pollHarnessDeviceAuthorization = pollHarnessDeviceAuthorization;
+  // Assigned only when the installation opts in; OCC reports absent methods as unavailable.
+  readonly startHarnessDeviceAuthorization?: typeof startHarnessDeviceAuthorization;
+  readonly pollHarnessDeviceAuthorization?: typeof pollHarnessDeviceAuthorization;
 
   requiresStoppedPredecessors(revision: AgentRevision): boolean {
     return revision.harness.mode === "dedicated";
@@ -1526,6 +1532,13 @@ export class KubernetesComputeDriver implements ComputeDriver {
           },
         },
       },
+      experimental: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          codexDeviceLogin: { type: "boolean" },
+        },
+      },
     },
   });
 
@@ -1682,6 +1695,19 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure(
         "ServicePrincipal credential projection must be explicitly configured.",
       );
+    }
+    if (options.experimental !== undefined) {
+      const experimental = asRecord(options.experimental);
+      if (
+        experimental === undefined ||
+        Object.keys(experimental).some((key) => key !== "codexDeviceLogin") ||
+        (experimental.codexDeviceLogin !== undefined &&
+          typeof experimental.codexDeviceLogin !== "boolean")
+      ) {
+        throw new ConfigurationFailure(
+          "Kubernetes experimental options accept only a boolean codexDeviceLogin.",
+        );
+      }
     }
     if (options.runtime !== undefined) {
       const { transportSecretPrefix, channels } = options.runtime;
@@ -1844,6 +1870,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
     if (options.runtime !== undefined) {
       this.requiresAgentRuntimeCredentials = true;
     }
+    if (options.experimental?.codexDeviceLogin === true) {
+      this.startHarnessDeviceAuthorization = startHarnessDeviceAuthorization;
+      this.pollHarnessDeviceAuthorization = pollHarnessDeviceAuthorization;
+    }
     this.sandboxDriver = selection.sandboxDriver;
     if (selection.credentialGatewayDriver !== undefined && selection.sandboxDriver === undefined) {
       throw new ConfigurationFailure(
@@ -1992,6 +2022,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure(
         "Harness authentication is incompatible with the selected topology.",
       );
+    }
+    if (auth.method === "oauth") {
+      if (this.options.experimental?.codexDeviceLogin !== true) {
+        throw new ConfigurationFailure("Codex device login is not enabled for this installation.");
+      }
     }
     if (
       auth.method === "chatgpt_service_account" &&

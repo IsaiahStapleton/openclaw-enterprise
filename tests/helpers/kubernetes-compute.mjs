@@ -1,7 +1,10 @@
 import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 
 /** Construct the production Kubernetes Driver without starting clients or contacting a cluster. */
-export function createTestKubernetesComputeDriver(id, { repositoryCredentials = false } = {}) {
+export function createTestKubernetesComputeDriver(
+  id,
+  { repositoryCredentials = false, codexDeviceLogin = false } = {},
+) {
   const resources = {
     requests: { cpu: "100m", memory: "64Mi" },
     limits: { cpu: "250m", memory: "128Mi" },
@@ -32,6 +35,7 @@ export function createTestKubernetesComputeDriver(id, { repositoryCredentials = 
           : {}),
       },
       servicePrincipalCredentials: { mode: "disabled" },
+      ...(codexDeviceLogin ? { experimental: { codexDeviceLogin: true } } : {}),
       ...(repositoryCredentials
         ? {
             runtime: {
