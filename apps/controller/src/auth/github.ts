@@ -15,9 +15,10 @@ import {
   signLoginReceipt,
   verifyLoginReceipt,
 } from "./session-binding.ts";
-import type {
-  PostgresHumanAuthentication,
-  HumanAuthenticationProof,
+import {
+  knownDeviceAccountState,
+  type PostgresHumanAuthentication,
+  type HumanAuthenticationProof,
 } from "@openclaw-enterprise/occ";
 import {
   exchangeGoogleSubject,
@@ -244,18 +245,26 @@ export function createHumanLogin(
   const knownDeviceCookie = knownDeviceCookieName(secure);
 
   // A successful sign-in marks this browser as a known device for the account's email,
-  // keeping the browser's entries for up to two other accounts.
+  // bound to the account's current sign-in state, keeping the browser's entries for up to
+  // two other accounts.
   function knownDeviceValue(
     headers: Headers | undefined,
     authSecret: string,
     email: string,
+    accountState: string,
   ): string {
     return issueKnownDevice(
       authSecret,
       email.trim().toLowerCase(),
+      accountState,
       Date.now(),
       knownDeviceFromCookieHeader(headers?.get("cookie"), secure),
     );
+  }
+
+  // The state a known-device entry is bound to; a failed read only skips the marking.
+  function knownDeviceState(email: string): Promise<string | undefined> {
+    return state.knownDeviceState(email.trim().toLowerCase()).catch(() => undefined);
   }
 
   // Callback denials say whether the attempt, the provider, or the identity failed.
@@ -508,12 +517,21 @@ export function createHumanLogin(
               await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
                 maxAge,
               });
-              // An external sign-in also marks the browser, for password fallback.
-              ctx.setCookie(
-                knownDeviceCookie,
-                knownDeviceValue(ctx.headers, ctx.context.secret, snapshot.user.email),
-                knownDeviceCookieAttributes(secure),
-              );
+              // An external sign-in also marks the browser, for password fallback. An
+              // account without a password has no fallback to mark.
+              const deviceState = await knownDeviceState(snapshot.user.email);
+              if (deviceState !== undefined) {
+                ctx.setCookie(
+                  knownDeviceCookie,
+                  knownDeviceValue(
+                    ctx.headers,
+                    ctx.context.secret,
+                    snapshot.user.email,
+                    deviceState,
+                  ),
+                  knownDeviceCookieAttributes(secure),
+                );
+              }
               // The redirect carries no secret. The starting tab exchanges this
               // receipt for the key of exactly the session this attempt created.
               ctx.setCookie(
@@ -621,9 +639,16 @@ export function createHumanLogin(
         await setSessionCookie(ctx, { session, user: snapshot.user }, false, {
           maxAge,
         });
+        // The proof's versions were rechecked when the session was issued, so the entry
+        // is bound to the account state this sign-in proved.
         ctx.setCookie(
           knownDeviceCookie,
-          knownDeviceValue(ctx.headers, ctx.context.secret, email),
+          knownDeviceValue(
+            ctx.headers,
+            ctx.context.secret,
+            email,
+            knownDeviceAccountState(snapshot.proof),
+          ),
           knownDeviceCookieAttributes(secure),
         );
         return ctx.json({
@@ -672,6 +697,8 @@ export function createHumanLogin(
     isRecoveryEmail: (email: string) => recoveryEmail !== undefined && email === recoveryEmail,
     /** Whether the known-device cookie uses its host-only (__Host-) name. */
     knownDeviceSecure: secure,
+    /** The account state known-device entries are bound to (see known-device.ts). */
+    knownDeviceState: (email: string) => state.knownDeviceState(email),
     passwordSignIn: recoveryOnly ? ("recovery-only" as const) : ("all" as const),
   };
 }

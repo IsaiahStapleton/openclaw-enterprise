@@ -151,6 +151,20 @@ function sessionFromRow(row: Row): HumanAuthenticationSession {
   };
 }
 
+/**
+ * The guarded profile's known-device account state: the user, its password method and that
+ * method's authentication version, which the database bumps on every password change. A
+ * known-device entry issued under one state stops verifying under any other. A disabled
+ * account has no state (see `knownDeviceState`). The account version is deliberately left
+ * out: attaching or detaching an external identity must not strand a browser's password
+ * fallback.
+ */
+export function knownDeviceAccountState(
+  proof: Pick<HumanAuthenticationProof, "userId" | "methodId" | "methodVersion">,
+): string {
+  return `guarded\0${proof.userId}\0${proof.methodId}\0${proof.methodVersion}`;
+}
+
 // Pending external sign-in attempts per Installation. A full table evicts its oldest attempts.
 const pendingAttemptCapacity = 1000;
 
@@ -321,6 +335,37 @@ export class PostgresHumanAuthentication {
         [this.installationId, [...providerIds]],
       );
       return rows.map((row) => row.user_id as string);
+    });
+  }
+
+  /**
+   * The known-device account state (see `knownDeviceAccountState`) for an enrolled, enabled
+   * account of this Installation with a password, by normalized email; undefined otherwise,
+   * so a disabled account's entries verify nothing while it stays disabled. A plain read: it
+   * locks nothing and writes no audit.
+   */
+  async knownDeviceState(email: string): Promise<string | undefined> {
+    return this.state.transact(async (unit) => {
+      const rows = await this.query(
+        unit,
+        `SELECT u.id AS user_id, m.id AS method_id, m.authentication_version
+         FROM occ."user" u
+         JOIN occ.human_authentication_accounts h
+           ON h.user_id = u.id AND h.installation_id = $2 AND NOT h.disabled
+         JOIN occ.account m ON m.user_id = u.id AND m.provider_id = 'credential'
+           AND m.password IS NOT NULL AND m.password <> ''
+         WHERE u.email = $1`,
+        [email, this.installationId],
+      );
+      const [row] = rows;
+      if (rows.length !== 1 || row === undefined) {
+        return undefined;
+      }
+      return knownDeviceAccountState({
+        userId: row.user_id as string,
+        methodId: row.method_id as string,
+        methodVersion: row.authentication_version as number,
+      });
     });
   }
 

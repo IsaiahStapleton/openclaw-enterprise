@@ -1,5 +1,5 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
@@ -50,6 +50,7 @@ import {
   knownDeviceFromCookieHeader,
   knownDeviceSetCookie,
   verifyKnownDevice,
+  type KnownDeviceAccountState,
 } from "./known-device.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
@@ -178,6 +179,12 @@ export interface ControllerAuthOptions {
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Replaces the in-memory failure-counting password admission (both profiles). */
   readonly passwordAdmission?: PasswordSignInAdmission;
+  /**
+   * The password-only profile's known-device account state (see known-device.ts). Without
+   * it, and without an external provider, entries are bound to the user and a hash of its
+   * stored password hash, read through Better Auth.
+   */
+  readonly knownDeviceState?: KnownDeviceAccountState;
   /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
   readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
 }
@@ -949,6 +956,27 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
   // external provider its name follows the curated endpoints that issue it.
   const knownDeviceSecure =
     humanLogin?.knownDeviceSecure ?? (secureOrigin && options.secureCookies !== false);
+  // What a known-device entry is bound to: with an external provider, the guarded account
+  // state (versions and enabled state); otherwise the composition's password state.
+  const knownDeviceState: KnownDeviceAccountState =
+    humanLogin?.knownDeviceState ??
+    options.knownDeviceState ??
+    (async (email) => {
+      const found = await (
+        await auth.$context
+      ).internalAdapter.findUserByEmail(email, { includeAccounts: true });
+      const credentials = (found?.accounts ?? []).filter(
+        (account) =>
+          account.providerId === "credential" &&
+          typeof account.password === "string" &&
+          account.password.length > 0,
+      );
+      if (found === null || credentials.length !== 1) {
+        return undefined;
+      }
+      const passwordHash = createHash("sha256").update(credentials[0]!.password!).digest("hex");
+      return `adapter\0${found.user.id}\0${credentials[0]!.id}\0${passwordHash}`;
+    });
   // Failure-counting admission for password sign-in in both profiles, keyed on email (or a
   // known device) and, behind a trusted proxy, client address. Reserved accounts are slowed,
   // never refused (see admission.ts).
@@ -1223,7 +1251,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     await sendAuthEndpoint(
       request,
       reply,
-      () => {
+      async () => {
         // Better Auth server API calls skip origin middleware without a Request context.
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         const input = authBody(request);
@@ -1232,7 +1260,15 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         // is plainly derived from the email alone.
         const email = String(input.email).trim().toLowerCase();
         const deviceCookie = knownDeviceFromCookieHeader(request.headers.cookie, knownDeviceSecure);
-        const device = verifyKnownDevice(options.secret, email, deviceCookie, Date.now());
+        // The account's state is read only for an entry issued for this email, so a
+        // forged or foreign cookie reads nothing; a stale entry just means no exemption.
+        const device = await verifyKnownDevice(
+          options.secret,
+          email,
+          deviceCookie,
+          Date.now(),
+          knownDeviceState,
+        );
         // The address lane needs a trusted proxy: without one, browsers behind the ingress
         // share its address, so only the email (or known-device) lane applies.
         const attempt = {
@@ -1259,12 +1295,18 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           });
           // Only a successful sign-in marks the browser as a known device for this email.
           // Rejections throw; a success leaves the status unset (200).
-          if ((result.status ?? 200) === 200) {
+          // The entry is bound to the account's state after the sign-in; a failed read
+          // only skips the marking.
+          const accountState =
+            (result.status ?? 200) === 200
+              ? await knownDeviceState(email).catch(() => undefined)
+              : undefined;
+          if (accountState !== undefined) {
             result.headers.append(
               "set-cookie",
               knownDeviceSetCookie(
                 knownDeviceSecure,
-                issueKnownDevice(options.secret, email, Date.now(), deviceCookie),
+                issueKnownDevice(options.secret, email, accountState, Date.now(), deviceCookie),
               ),
             );
           }
@@ -1506,6 +1548,33 @@ async function administersInstallation(
   return decision.allowed;
 }
 
+/**
+ * The password-only profile's known-device account state: the user, its one password method
+ * and that method's authentication version. Undefined without exactly one password.
+ */
+async function passwordKnownDeviceState(
+  pool: SchemaAuthPoolV1,
+  email: string,
+): Promise<string | undefined> {
+  const { rows } = await pool.query<{
+    user_id: string;
+    method_id: string;
+    authentication_version: number;
+  }>(
+    `SELECT u.id AS user_id, m.id AS method_id, m.authentication_version
+     FROM occ."user" u
+     JOIN occ.account m ON m.user_id = u.id AND m.provider_id = 'credential'
+       AND m.password IS NOT NULL AND m.password <> ''
+     WHERE u.email = $1`,
+    [email],
+  );
+  const [row] = rows;
+  if (rows.length !== 1 || row === undefined) {
+    return undefined;
+  }
+  return `password\0${row.user_id}\0${row.method_id}\0${row.authentication_version}`;
+}
+
 /** Hash a local password exactly as the controller's password sign-in verifies it. */
 export async function hashLocalPassword(password: string): Promise<string> {
   if (password.length < LOCAL_PASSWORD_MIN_LENGTH || password.length > LOCAL_PASSWORD_MAX_LENGTH) {
@@ -1587,6 +1656,10 @@ export async function createPostgresControllerAuth(
   const auth = createControllerAuth({
     ...controllerOptions,
     ...(humanLogin === undefined ? {} : { humanLogin }),
+    // Password-only: bind known-device entries to the password method's authentication
+    // version, which the database bumps on every password change. The guarded profile's
+    // state (with the account version and enabled state) comes from humanLogin.
+    knownDeviceState: (email: string) => passwordKnownDeviceState(pool, email),
     ...(iamDriver === undefined
       ? {}
       : {
