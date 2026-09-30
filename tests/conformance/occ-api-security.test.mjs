@@ -1121,6 +1121,14 @@ test("runtime log cursors bind one principal and view and are re-authorized on e
     ["before restart"],
   );
   assert.equal(driverReads(fixture).at(-1).previous, true);
+  // Reusing a view's cursor for another instance selection starts a new audited view.
+  const previousWithCursor = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&previous=true&cursor=${encodeURIComponent(next.data.cursor)}`),
+    { session: viewer.session },
+  );
+  assert.equal(previousWithCursor.status, 200, previousWithCursor.text);
+  assert.equal(views().length, 3);
 
   // Cursors are bound to the principal, target and signature.
   const readsBefore = driverReads(fixture).length;

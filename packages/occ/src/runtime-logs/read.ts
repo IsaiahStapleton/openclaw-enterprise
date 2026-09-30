@@ -135,7 +135,15 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   if (query.pod !== undefined && !source.pods.some(({ name }) => name === query.pod)) {
     throw new RuntimeLogReadError("pod_invalid");
   }
-  const prior = decoded?.status === "valid" ? decoded.position : undefined;
+  const cursorPosition = decoded?.status === "valid" ? decoded.position : undefined;
+  // A cursor continues only its own view: the same instance selection and Pod choice.
+  // Anything else is a new view and is audited like a request without a cursor.
+  const prior =
+    cursorPosition !== undefined &&
+    cursorPosition.previous === query.previous &&
+    (query.pod === undefined || query.pod === cursorPosition.pod)
+      ? cursorPosition
+      : undefined;
   const podName = query.pod ?? prior?.pod ?? source.pods[0]?.name;
   const pod =
     source.pods.find(({ name }) => name === podName) ??
@@ -168,9 +176,8 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     prior !== undefined &&
     prior.pod === pod.name &&
     prior.podUid === pod.uid &&
-    prior.restartCount === pod.restartCount &&
-    prior.previous === query.previous;
-  if (prior !== undefined && !sameStream && prior.previous === query.previous) {
+    prior.restartCount === pod.restartCount;
+  if (prior !== undefined && !sameStream) {
     leading.push(runtimeLogGap("stream_replaced", stream));
   }
   const resume = sameStream && prior.lastTime !== null ? prior : undefined;
