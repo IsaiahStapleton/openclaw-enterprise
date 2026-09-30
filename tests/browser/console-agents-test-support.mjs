@@ -173,7 +173,7 @@ export function nativeAdminComputeDriver(endpoint) {
   });
 }
 
-const repositoryProviderFixture = Object.freeze({
+export const repositoryBackendFixture = Object.freeze({
   id: "console-repositories",
   type: "github",
   configuration: Object.freeze({ registryPath: "/unused/console/repositories.json" }),
@@ -186,7 +186,7 @@ export async function createRepositoryLaunchFixture(
   { reloadablePolicy = false } = {},
 ) {
   const fixture = await createConsoleAppFixture(t, {
-    backends: [...backendFixtures, repositoryProviderFixture],
+    backends: [...backendFixtures, repositoryBackendFixture],
     repositoryCredentials: true,
   });
   await fixture.bootstrap();
@@ -220,26 +220,26 @@ export async function createRepositoryLaunchFixture(
 }
 
 function repositoryPolicyDriver(repositories) {
-  const provider = repositoryProviderFixture;
+  const backend = repositoryBackendFixture;
   const registry = validateGitHubRepositoryRegistry(
     {
       version: 1,
-      backendId: provider.id,
+      backendId: backend.id,
       providerInstanceId: "console-repository-provider",
       appId: "123",
       githubInstallationId: "456",
       maximumDurationSeconds: 3600,
       repositories,
     },
-    provider.id,
+    backend.id,
   );
   return new GitHubRepoDriver(
     {
-      id: provider.id,
+      id: backend.id,
       client: new UnixRepositoryCredentialControlClient({
         controlSocket: "/unused/console/repository-control.sock",
       }),
-      drivers: provider.drivers,
+      drivers: backend.drivers,
     },
     registry,
     { sessionDurationSeconds: 600 },

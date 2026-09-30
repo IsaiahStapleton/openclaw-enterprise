@@ -234,10 +234,13 @@ export function validatePresetTemplate(template) {
         "harnessAuth",
         "plugins",
         "pluginApprovers",
+        "repositoryAccess",
+        "repositoryBindings",
         "initialWorkspaceFiles",
       ],
       "agent",
     );
+    validateRepositorySettings(template.agent, true);
     checkInitialWorkspaceFiles(template.agent.initialWorkspaceFiles, "agent.initialWorkspaceFiles");
   }
   const auth = template.agent?.harnessAuth;
@@ -298,7 +301,51 @@ function render(template, inputs, partial) {
   );
   checkInitialWorkspaceFiles(result.agent?.initialWorkspaceFiles, "agent.initialWorkspaceFiles");
   checkSize(result);
+  if (result.agent) {
+    validateRepositorySettings(result.agent, partial);
+  }
   return result;
+}
+
+function validateRepositorySettings(agent, partial) {
+  if (Object.hasOwn(agent, "repositoryAccess") && Object.hasOwn(agent, "repositoryBindings")) {
+    fail("agent", "repositoryAccess and repositoryBindings cannot be combined.");
+  }
+  const access = agent.repositoryAccess;
+  if (Object.hasOwn(agent, "repositoryAccess")) {
+    closedObject(access, ["defaultProfile", "repositories"], "agent.repositoryAccess");
+    if (!Object.hasOwn(access, "defaultProfile") || !Object.hasOwn(access, "repositories")) {
+      fail("agent.repositoryAccess", "requires defaultProfile and repositories.");
+    }
+    selector(access.defaultProfile, "agent.repositoryAccess.defaultProfile");
+  }
+  const entries = access !== undefined ? access.repositories : agent.repositoryBindings;
+  if (entries === undefined) {
+    return;
+  }
+  if (!Array.isArray(entries) || entries.length > 16) {
+    fail("agent.repositoryAccess", "requires at most 16 repository selections.");
+  }
+  const seen = new Set();
+  for (const entry of entries) {
+    closedObject(entry, ["repositoryRef", "profile"], "agent.repositoryAccess.repositories");
+    selector(entry.repositoryRef, "agent.repositoryAccess.repositories.repositoryRef");
+    if (Object.hasOwn(entry, "profile")) {
+      selector(entry.profile, "agent.repositoryAccess.repositories.profile");
+    }
+    if (!partial && seen.has(entry.repositoryRef)) {
+      fail("agent.repositoryAccess.repositories", "repository references must be unique.");
+    }
+    seen.add(entry.repositoryRef);
+  }
+  function selector(value, path) {
+    if (
+      typeof value !== "string" ||
+      (!partial && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.exec(value)?.[0] !== value)
+    ) {
+      fail(path, "requires a repository selector.");
+    }
+  }
 }
 
 /** Render one independent launch draft without changing the template or inputs.

@@ -103,6 +103,10 @@ button:disabled {
   cursor: wait;
   opacity: 0.55;
 }
+.agent-card[inert] button {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -789,6 +793,7 @@ select:not([multiple])[size="1"] {
 .form-field input,
 .form-field select,
 .form-field textarea,
+.repository-discovery input[type="search"],
 .plugin-control select,
 .plugin-json textarea,
 .revision-selector select {
@@ -1762,6 +1767,261 @@ summary:focus-visible {
 @media (max-width: 640px) {
   .harness-auth-fields {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Repository discovery and the selected access stack share one column. */
+.repository-options {
+  grid-template-columns: minmax(0, 1fr);
+}
+.repository-results-heading,
+.repository-selected-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.repository-results-heading {
+  flex-wrap: wrap;
+  margin: 18px 0 10px;
+}
+.repository-results-heading h3 {
+  color: var(--text-strong);
+  font-size: 15px;
+  margin: 0;
+}
+.repository-results-heading p {
+  margin: 0;
+}
+.repository-results-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.repository-result-row {
+  display: flex;
+}
+.repository-result-row + .repository-result-row {
+  margin-top: -1px;
+}
+.repository-result {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--input-border);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+.repository-result-row:first-child .repository-result {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.repository-result-row:last-child .repository-result {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.repository-result-row:only-child .repository-result {
+  border-radius: var(--radius);
+}
+.repository-result:hover:has(input:not(:disabled)) {
+  background: var(--surface-muted);
+}
+.repository-result:has(input:checked) {
+  position: relative;
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.repository-result:has(input:checked):hover {
+  background: var(--accent-subtle);
+}
+.repository-result-row:has(input:checked)
+  + .repository-result-row:has(input:checked)
+  .repository-result {
+  border-top-color: var(--line);
+}
+.repository-result:has(input:focus-visible) {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.repository-result:has(input:disabled) {
+  cursor: not-allowed;
+}
+.repository-result input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+.repository-identity {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.repository-identity strong {
+  color: var(--text-strong);
+}
+.repository-approval {
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 600;
+}
+.repository-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.repository-description {
+  color: var(--muted);
+  font-size: 13px;
+}
+.repository-identity .hint,
+.repository-identity .error {
+  margin: 0;
+  font-size: 13px;
+}
+.repository-discovery > label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 550;
+}
+.repository-discovery input[type="search"] {
+  min-height: 44px;
+}
+.repository-selected {
+  margin-top: 24px;
+}
+.repository-selected-heading {
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.repository-selected-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.repository-card {
+  background: var(--surface);
+  border: 1px solid var(--input-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  margin: 8px 0;
+}
+.repository-card-heading {
+  display: flex;
+  align-items: center;
+  padding-right: 4px;
+}
+.repository-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  min-height: 68px;
+  padding: 14px 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  text-align: left;
+}
+.repository-card-toggle:hover,
+.repository-remove:hover {
+  background: var(--surface-muted);
+}
+.repository-card-toggle:focus-visible {
+  outline-offset: -3px;
+}
+.repository-chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+  margin: 0 4px 0 2px;
+}
+.repository-card-toggle[aria-expanded="true"] > .repository-chevron,
+.repository-customize[open] > summary > .repository-chevron {
+  transform: rotate(45deg);
+}
+.repository-customize > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  list-style: none;
+}
+.repository-customize > summary::-webkit-details-marker {
+  display: none;
+}
+.repository-text-action,
+.repository-remove {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 8px;
+}
+.repository-text-action {
+  color: var(--accent);
+}
+.repository-remove {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.repository-access-summary {
+  justify-self: start;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--primary-hover);
+  background: var(--accent-subtle);
+  font-size: 12px;
+  font-weight: 600;
+}
+.repository-access-summary.is-error {
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+.repository-card-settings {
+  padding: 14px;
+  background: var(--surface-muted);
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.repository-card-settings .repository-option {
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+}
+.repository-card-settings .repository-profiles {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 520px) {
+  .repository-selection {
+    padding: 14px;
+  }
+  .repository-card-settings .repository-profiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .repository-result {
+    transition: none;
   }
 }
 

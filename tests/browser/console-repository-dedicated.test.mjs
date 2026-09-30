@@ -15,6 +15,13 @@ async function openCreateSecretDialog(scope, label) {
   await scope.getByRole("option", { name: "Create new Secret...", exact: true }).click();
 }
 
+function repositoryCheckbox(page, name) {
+  return page
+    .locator("#repository-results .repository-result-row")
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .getByRole("checkbox");
+}
+
 for (const issuesEnabled of [true, false]) {
   test(`one Dedicated Agent retains repository scope through Slack setup, credentials and deployment admission (issues ${issuesEnabled ? "on" : "off"})`, async (t) => {
     const { fixture, namespace, modelSecret, grantModelAccess } =
@@ -31,6 +38,7 @@ for (const issuesEnabled of [true, false]) {
           agent: {
             name: "Repository teammate",
             executionMode: "dedicated",
+            repositoryBindings: [{ repositoryRef: "application" }],
             harnessAuth: { method: "api_key", source: modelSecret.ref },
           },
           configuration: { values: createHarnessConfiguration("codex", "gpt-5.1") },
@@ -66,8 +74,12 @@ for (const issuesEnabled of [true, false]) {
     await page.getByRole("button", { name: "Use Preset" }).click();
     await page.getByLabel("Agent name").fill("Repository teammate");
     await page.getByLabel("Harness", { exact: true }).selectOption("codex");
-    await page.locator("#repository-application").check();
-    await page.locator("#repository-documentation").check();
+    // An omitted profile in a legacy Preset retains the API's git-write default as Custom.
+    await page.getByText("Contributor · no issue management · Custom", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Access for example/application" }).click();
+    await page.locator("#repository-inherit-application").check();
+    await page.getByRole("button", { name: "Access for example/application" }).click();
+    await repositoryCheckbox(page, "example/documentation").click();
     await page.getByRole("radio", { name: /^Contributor / }).check();
     assert.equal(await page.locator(".repository-write-access").isVisible(), false);
     const customize = page.getByText("Customize access", { exact: true });
@@ -78,10 +90,22 @@ for (const issuesEnabled of [true, false]) {
       true,
     );
     await page.getByRole("checkbox", { name: /^Create and manage issues/ }).uncheck();
+    assert.equal(
+      await page
+        .getByRole("radio", {
+          name: "Contributor Push code and work with pull requests.",
+          exact: true,
+        })
+        .isChecked(),
+      true,
+    );
     await page
-      .getByText("Contributor · push code and work with pull requests. Issue management is off.", {
-        exact: true,
-      })
+      .getByText(
+        "Contributor · no issue management applies to repositories using the Agent default.",
+        {
+          exact: true,
+        },
+      )
       .waitFor();
     await page.getByRole("checkbox", { name: /^Create and manage issues/ }).check();
     await customize.press("Enter");
@@ -94,8 +118,8 @@ for (const issuesEnabled of [true, false]) {
       await customize.press("Enter");
       await page.getByRole("checkbox", { name: /^Create and manage issues/ }).uncheck();
       // Changing the repository set must not silently restore issue management.
-      await page.locator("#repository-documentation").uncheck();
-      await page.locator("#repository-documentation").check();
+      await page.getByRole("button", { name: "Remove example/documentation" }).click();
+      await repositoryCheckbox(page, "example/documentation").click();
       assert.equal(
         await page.getByRole("checkbox", { name: /^Create and manage issues/ }).isChecked(),
         false,

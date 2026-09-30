@@ -998,7 +998,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         feedback.textContent = "";
         updateControls();
       },
-      draft.repositoryBindings,
+      { ...agent, ...(draft.repositoryAccess ? { repositoryAccess: draft.repositoryAccess } : {}) },
     )).section,
     pluginFields.section,
     element(
@@ -1079,7 +1079,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     stagedChannelSecrets,
     modelCredentialSource,
     modelCredentialSecret,
-    repositoryBindings: repositories.draftBindings(),
+    repositoryAccess: repositories.access(),
   }));
   function parseObject(input, reportInvalid = false) {
     try {
@@ -1220,6 +1220,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   const updateControls = () => {
     const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     for (const node of form.querySelectorAll("button, input, select, textarea")) {
+      if (repositories?.section.contains(node)) {
+        continue;
+      }
       node.disabled =
         pending || Boolean(savedAgent) || Boolean(provisioningAttempt) || outcomeUnknown;
     }
@@ -1445,6 +1448,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         return;
       }
       provisioningAttempt = null;
+      repositories.recordSuccessfulSave();
       context.navigate(`agents/${agentId}?revision=${revisionId}&tab=configuration`);
     } catch (error) {
       if (!context.isCurrent()) {
@@ -1565,7 +1569,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         workspaceInputs.map(([filename, input]) => [filename, input.value]),
       ),
       workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
-      ...(repositoryBindings.length ? { repositoryBindings } : {}),
+      repositoryAccess: repositories.access(),
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
       ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
       ...(agent.backendId ? { backendId: agent.backendId } : {}),
@@ -1633,6 +1637,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
           method: "POST",
           body: { ...body, configurationId: savedConfiguration.id },
         });
+        repositories.recordSuccessfulSave();
         if (!context.isCurrent()) {
           return;
         }

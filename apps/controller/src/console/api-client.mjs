@@ -1,5 +1,8 @@
 export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = () => null }) {
-  async function request(path, { method = "GET", body, signal, expectedStatus } = {}) {
+  async function request(
+    path,
+    { method = "GET", body, signal, expectedStatus, includeMeta = false } = {},
+  ) {
     const active = lifetime.capture();
     const pinned = sessionKey();
     // A pinned key lets this tab act only as its own session. If another tab
@@ -54,7 +57,7 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
       }
       throw error;
     }
-    return payload.data;
+    return includeMeta ? { data: payload.data, meta: payload.meta } : payload.data;
   }
 
   return request;

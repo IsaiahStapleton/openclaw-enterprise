@@ -52,6 +52,8 @@ from [AGENTS.md](../AGENTS.md#running-integration-tests) instead.
 
 ## Active specifications
 
+[Repository selection and inherited access](37-repository-picker-and-access.md) — Proposed;
+adaptive repository discovery, selected cards, and explicit per-repository overrides.
 [Repository credential recovery](39-repository-credential-recovery.md) — Implementing;
 explore cleanup evidence across broker loss without retaining provider tokens.
 

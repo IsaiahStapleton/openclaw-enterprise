@@ -563,6 +563,10 @@ test(
     const initial = await createFixture(context);
     const namespace = await initial.bootstrapNamespace();
     const repositoryBindings = [{ repositoryRef: "project", profile: "git-read" }];
+    const repositoryAccess = {
+      defaultProfile: "git-read",
+      repositories: [{ repositoryRef: "project" }],
+    };
     const repoDriver = new GitHubRepoDriver(
       {
         id: "provisioning-repositories",
@@ -609,7 +613,7 @@ test(
       ({ operation }) => operation === "create",
     ).length;
     const body = {
-      ...provisioningBody(namespace.id, secrets, { repositoryBindings }),
+      ...provisioningBody(namespace.id, secrets, { repositoryAccess }),
       pluginApprovers: [],
     };
     const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
@@ -619,6 +623,7 @@ test(
 
     const queued = await provisioningRow(fixture.pool, namespace.id, body.requestId);
     assert.deepEqual(queued.plan.repositoryBindings, repositoryBindings);
+    assert.deepEqual(queued.plan.repositoryAccess, repositoryAccess);
     assert.deepEqual(queued.plan.pluginApprovers, []);
     assert.equal(queued.agent_id, null);
     const replay = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
@@ -627,7 +632,7 @@ test(
     assert.equal(replay.status, 202, JSON.stringify(replay.body));
     assert.equal(replay.data.provisioning.workId, admitted.data.provisioning.workId);
     const changed = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
-      body: { ...body, repositoryBindings: [{ repositoryRef: "project", profile: "git-write" }] },
+      body: { ...body, repositoryAccess: { ...repositoryAccess, defaultProfile: "git-write" } },
     });
     assert.equal(changed.status, 409, JSON.stringify(changed.body));
 
@@ -705,17 +710,42 @@ test(
     const agent = await fixture.request("GET", agentPath);
     assert.equal(agent.status, 200, JSON.stringify(agent.body));
     assert.deepEqual(agent.data.repositoryBindings, repositoryBindings);
+    assert.deepEqual(agent.data.repositoryAccess, repositoryAccess);
     assert.deepEqual(agent.data.pluginApprovers, []);
     const revisionPath = `${agentPath}/revisions/${status.revisionId}`;
     const revision = await fixture.request("GET", revisionPath);
     assert.equal(revision.status, 200, JSON.stringify(revision.body));
     assert.deepEqual(revision.data.repositoryCredentials.bindings, repositoryBindings);
     assert.equal(revisions[0].repositoryCredentials.bindings[0].grant.repositoryId, "789");
+    // Persist explicit intent even when equal to the default, then change only that default.
+    const custom = { defaultProfile: "git-write", repositories: repositoryBindings };
+    const customized = await fixture.request("PATCH", agentPath, {
+      body: { configurationId: status.configurationId, repositoryAccess: custom },
+    });
+    assert.equal(customized.status, 200, JSON.stringify(customized.body));
+    assert.deepEqual((await fixture.request("GET", agentPath)).data.repositoryAccess, custom);
+    assert.deepEqual(customized.data.repositoryBindings, repositoryBindings);
+    // Database constraints enforce consistency even when an application writer is bypassed.
+    for (const invalid of [
+      { defaultProfile: "git-write", repositories: [{ repositoryRef: "project" }] },
+      { ...custom, extra: true },
+      { ...custom, repositories: [...repositoryBindings, ...repositoryBindings] },
+      { ...custom, repositories: [{ repositoryRef: "project", profile: null }] },
+    ]) {
+      await assert.rejects(
+        fixture.pool.query(
+          "UPDATE occ.agents SET repository_access = $1::jsonb WHERE namespace_id = $2 AND id = $3",
+          [JSON.stringify(invalid), namespace.id, status.agentId],
+        ),
+        { code: "23514" },
+      );
+    }
     const cleared = await fixture.request("PATCH", agentPath, {
       body: { configurationId: status.configurationId, repositoryBindings: [] },
     });
     assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
     assert.equal(Object.hasOwn(cleared.data, "repositoryBindings"), false);
+    assert.equal(Object.hasOwn(cleared.data, "repositoryAccess"), false);
     const historical = await fixture.request("GET", revisionPath);
     assert.equal(historical.status, 200, JSON.stringify(historical.body));
     assert.deepEqual(historical.data.repositoryCredentials, revision.data.repositoryCredentials);

@@ -52,8 +52,10 @@ import type {
   BackendDefinition,
   BackendRef,
   RepositoryBindingRequest,
+  RepositoryAccess,
   RepositoryBindingSelection,
   RepositoryOption,
+  RepositoryOptions,
   RepoDriver,
   RepositoryCredentialResolution,
   RepositoryRevisionState,
@@ -141,6 +143,8 @@ import { PostgresCommitOutcomeUnknownError } from "./state/postgres-state.ts";
 import { WorkClaimLostError, type ClaimedWork } from "./state/postgres-work-queue.ts";
 import {
   validAdmittedRepositoryBindings,
+  validRepositoryAccess,
+  normalizedRepositoryAccess,
   validRepositoryRevisionState,
 } from "./state/repository-credential-state.ts";
 import {
@@ -350,6 +354,7 @@ export interface CreateAgentInput {
   readonly plugins?: PluginDesiredState;
   readonly pluginApprovers?: PluginApprovers;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
+  readonly repositoryAccess?: RepositoryAccess;
 }
 
 export interface UpdateAgentInput {
@@ -362,6 +367,7 @@ export interface UpdateAgentInput {
   readonly plugins?: PluginDesiredState;
   readonly pluginApprovers?: PluginApprovers | null;
   readonly repositoryBindings?: readonly RepositoryBindingRequest[];
+  readonly repositoryAccess?: RepositoryAccess;
 }
 
 export interface LookupChannelDirectoryInput {
@@ -956,6 +962,13 @@ function validRepositoryOption(value: unknown): value is RepositoryOption {
       const code = character.charCodeAt(0);
       return code <= 0x1f || code === 0x7f;
     }) &&
+    (option?.description === undefined ||
+      (isNonEmptyString(option.description) &&
+        option.description.length <= 512 &&
+        ![...option.description].some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 0x1f || code === 0x7f;
+        }))) &&
     Array.isArray(allowedProfiles) &&
     allowedProfiles.length >= 1 &&
     allowedProfiles.length <= 16 &&
@@ -1565,16 +1578,25 @@ export class OpenClawController {
   async listRepositoryOptions(
     principalId: string,
     namespaceId: string,
-  ): Promise<readonly Readonly<RepositoryOption>[]> {
+    agentId?: string,
+    descriptionRefs: readonly string[] = [],
+  ): Promise<Readonly<RepositoryOptions>> {
     const namespace = await this.read((state) => this.exactNamespace(state, namespaceId));
     if (namespace.status !== "provisioning" && namespace.status !== "ready") {
       throw new ResourceConflictError("The Namespace does not accept new Agents.");
     }
-    await this.authorize(principalId, "create", {
-      kind: "agent",
-      id: namespace.id,
-      namespaceId: namespace.id,
-    });
+    if (agentId !== undefined) {
+      const agent = await this.getAuthorizedAgent(principalId, namespaceId, agentId, "update");
+      if (agent.status !== "active") {
+        throw new ResourceConflictError("The Agent does not accept repository changes.");
+      }
+    } else {
+      await this.authorize(principalId, "create", {
+        kind: "agent",
+        id: namespace.id,
+        namespaceId: namespace.id,
+      });
+    }
     let compute: ComputeDriver;
     try {
       compute = this.selectedDriver("compute");
@@ -1604,9 +1626,9 @@ export class OpenClawController {
         "The selected repository credential Driver is unavailable.",
       );
     }
-    let options: readonly RepositoryOption[];
+    let result: RepositoryOptions;
     try {
-      options = driver.listOptions({ namespaceId: namespace.id });
+      result = await driver.listOptions({ namespaceId: namespace.id, descriptionRefs });
     } catch {
       throw new DependencyUnavailableError(
         "The selected repository credential Driver could not list repository options.",
@@ -1614,10 +1636,13 @@ export class OpenClawController {
     }
     const selected = this.selections.get("repo");
     if (
-      !Array.isArray(options) ||
-      options.length > 128 ||
-      !options.every(validRepositoryOption) ||
-      new Set(options.map((option) => option.repositoryRef)).size !== options.length ||
+      !result ||
+      typeof result.descriptionsPending !== "boolean" ||
+      !Array.isArray(result.options) ||
+      result.options.length > 1000 ||
+      !result.options.every(validRepositoryOption) ||
+      new Set(result.options.map((option) => option.repositoryRef)).size !==
+        result.options.length ||
       selected?.driver !== driver ||
       !this.unchangedDriver(selected)
     ) {
@@ -1625,7 +1650,7 @@ export class OpenClawController {
         "The selected repository credential Driver returned invalid repository options.",
       );
     }
-    return immutableCopy(options);
+    return immutableCopy(result);
   }
 
   async getAgent(
@@ -1872,6 +1897,7 @@ export class OpenClawController {
       ...(input.repositoryBindings === undefined
         ? {}
         : { repositoryBindings: input.repositoryBindings }),
+      ...(input.repositoryAccess === undefined ? {} : { repositoryAccess: input.repositoryAccess }),
     });
     const requestFingerprintHex = createHash("sha256")
       .update(canonicalProvisioningJson(acceptedInput))
@@ -1947,10 +1973,7 @@ export class OpenClawController {
           : { secretBindings: configurationInput.secretBindings }),
         createdAt: this.timestamp(),
       });
-      const repositoryBindings = this.repositoryBindingSelections(
-        namespace.id,
-        input.repositoryBindings,
-      );
+      const { repositoryBindings, repositoryAccess } = this.repositorySettings(namespace.id, input);
       const record = await state.provisioning.create({
         workId,
         namespaceId: namespace.id,
@@ -1966,6 +1989,7 @@ export class OpenClawController {
           ...(plugins === undefined ? {} : { plugins }),
           ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+          ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
           ...(workspace.initialWorkspaceFiles === undefined
             ? {}
             : { initialWorkspaceFiles: workspace.initialWorkspaceFiles }),
@@ -4110,10 +4134,7 @@ export class OpenClawController {
         namespace.id,
         this.bindings(configuration.secretBindings),
       );
-      const repositoryBindings = this.repositoryBindingSelections(
-        namespace.id,
-        input.repositoryBindings,
-      );
+      const { repositoryBindings, repositoryAccess } = this.repositorySettings(namespace.id, input);
 
       const agent = await state.agents.createAgent({
         id: agentId,
@@ -4126,6 +4147,7 @@ export class OpenClawController {
         ...(plugins === undefined ? {} : { plugins }),
         ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+        ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
         servicePrincipalId: `service-agent-${agentId}`,
         desiredRuntimeState: "stopped",
         status: "active",
@@ -4200,10 +4222,13 @@ export class OpenClawController {
       const secretBindings = this.bindings(configuration.secretBindings);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
       const backendId = this.backendId(input.backendId, agent.backendId);
+      const repositoryChange =
+        input.repositoryBindings !== undefined || input.repositoryAccess !== undefined;
+      const settings = repositoryChange ? this.repositorySettings(namespace.id, input) : undefined;
       const repositoryBindings =
-        input.repositoryBindings === undefined
-          ? undefined
-          : (this.repositoryBindingSelections(namespace.id, input.repositoryBindings) ?? []);
+        settings === undefined ? undefined : (settings.repositoryBindings ?? []);
+      const repositoryAccess =
+        settings === undefined ? undefined : (settings.repositoryAccess ?? null);
       this.validatePluginPolicies(
         plugins ?? agent.plugins,
         pluginApprovers === null ? undefined : (pluginApprovers ?? agent.pluginApprovers),
@@ -4218,6 +4243,7 @@ export class OpenClawController {
         plugins,
         repositoryBindings,
         pluginApprovers,
+        repositoryAccess,
       );
       if (!updated) {
         throw new ResourceConflictError("The Agent Configuration changed during its update.");
@@ -5843,6 +5869,10 @@ export class OpenClawController {
         namespace.id,
         planRecord.repositoryBindings as readonly RepositoryBindingRequest[] | undefined,
       );
+      const repositoryAccess = normalizedRepositoryAccess(
+        planRecord.repositoryAccess,
+        repositoryBindings,
+      );
       const workspace = normalizeProvisioningWorkspace(
         planRecord.initialWorkspaceFiles,
         planRecord.workspaceDefaultsId,
@@ -5878,6 +5908,7 @@ export class OpenClawController {
           ...(plugins === undefined ? {} : { plugins }),
           ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+          ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
           servicePrincipalId: `service-agent-${agentId}`,
           desiredRuntimeState: "stopped",
           status: "active",
@@ -6825,6 +6856,37 @@ export class OpenClawController {
     }
   }
 
+  private repositorySettings(
+    namespaceId: string,
+    input: {
+      readonly repositoryBindings?: readonly RepositoryBindingRequest[];
+      readonly repositoryAccess?: RepositoryAccess;
+    },
+  ): {
+    repositoryBindings: readonly RepositoryBindingSelection[] | undefined;
+    repositoryAccess?: RepositoryAccess;
+  } {
+    if (input.repositoryAccess === undefined) {
+      return {
+        repositoryBindings: this.repositoryBindingSelections(namespaceId, input.repositoryBindings),
+      };
+    }
+    if (input.repositoryBindings !== undefined || !validRepositoryAccess(input.repositoryAccess)) {
+      throw new ScopeViolationError(
+        "Provide valid repositoryAccess or repositoryBindings, not both.",
+      );
+    }
+    const requested = input.repositoryAccess.repositories.map((entry) => ({
+      repositoryRef: entry.repositoryRef,
+      profile: entry.profile ?? input.repositoryAccess!.defaultProfile,
+    }));
+    const repositoryBindings = this.repositoryBindingSelections(namespaceId, requested);
+    return {
+      repositoryBindings,
+      repositoryAccess: normalizedRepositoryAccess(input.repositoryAccess, repositoryBindings)!,
+    };
+  }
+
   private resolveRepositoryBindings(
     namespaceId: string,
     bindings: readonly RepositoryBindingRequest[] | undefined,
@@ -6904,14 +6966,16 @@ export class OpenClawController {
     bindings: readonly RepositoryBindingRequest[] | undefined,
   ): readonly RepositoryBindingSelection[] | undefined {
     const resolved = this.resolveRepositoryBindings(namespaceId, bindings);
-    return resolved === undefined
-      ? undefined
-      : immutableCopy(
-          resolved.resolution.bindings.map(({ repositoryRef, profile }) => ({
-            repositoryRef,
-            profile,
-          })),
-        );
+    if (resolved === undefined || bindings === undefined) {
+      return undefined;
+    }
+    const selections = new Map(
+      resolved.resolution.bindings.map(({ repositoryRef, profile }) => [
+        repositoryRef,
+        { repositoryRef, profile },
+      ]),
+    );
+    return immutableCopy(bindings.map(({ repositoryRef }) => selections.get(repositoryRef)!));
   }
 
   private admitRepositoryCredentials(

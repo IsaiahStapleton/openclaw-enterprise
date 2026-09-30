@@ -105,12 +105,16 @@ Unsaved edits block deployment; pending saves block tab and version changes.
 admitted revisions. Driver validation precedes deployment's immutable snapshot. See the
 [plugin deployment flow](../agent-plugins.md).
 
+**Repositories** uses `createRepositoryFields` with exact-Agent discovery and
+PATCHes `repositoryAccess`. Dirty, pending, or uncertain saves block tabs and
+deployment; failed discovery leaves access unverified.
+
 Deployment rereads Agent and Configuration, requires harness authentication and
 Slack bindings, and blocks Teams. Changed association, generation, authentication,
-or plugins require refresh. Snapshot views deploy current settings. Failed reads
+plugins, execution mode, Backend, or repository access require reload; controls
+stay locked while the request is pending. Snapshot views deploy current settings. Failed reads
 send no bodyless deploy POST; success opens the revision. Uncertain POSTs require
-history readback before retry. OCC provisions initial transport credentials;
-browser reads are not atomic with admission.
+history readback before retry; browser reads are not atomic with admission.
 
 `apps/controller/src/console/drafts.mjs:createDraftStore` holds document-local drafts.
 `console.mjs:resetReads` and `detail.mjs:renderTab` capture fields before teardown,
@@ -214,9 +218,8 @@ does not establish provider readiness.
 source. It requires readable revision history and an unchanged draft;
 API authorization and Driver compatibility checks remain authoritative.
 
-**Create new version** shows bound channel Secrets when Slack is enabled. The browser
-requests no generated transport input or status. Bound Secrets do not prove
-live health.
+With Slack enabled, **Create new version** shows bound channel Secrets; they do
+not prove live health.
 
 When Compute needs generated credentials, `OpenClawController.deployAgent`
 checks transport status before admission. If missing and no revision exists, it
@@ -224,11 +227,12 @@ requires Agent `read` and `operate` alongside `deploy`, then calls Compute. The
 Driver derives Secret names, checks ownership and workloads, creates only
 missing whole Secrets, and preserves matching groups on retry. Credential bytes
 enter neither Configuration nor audit. Failure creates no revision; retry checks
-status again. Lost deployment replies require revision-history readback. Missing
+status again. Missing
 credentials after a historical revision require operator investigation. Model
 and channel Secrets remain separate.
 
-On explicit submission, the browser PATCHes selected Secret references while
+On explicit submission, the browser rereads Agent and Configuration; a changed
+ID or generation requires reload. It then PATCHes selected Secret references while
 preserving other bindings, then calls `ensureSecretOperateBinding` for changed
 and pending Secrets. A post-PATCH grant failure leaves bindings saved and blocks
 deployment in the current view. Subsequent saves retry still-referenced pending
@@ -274,11 +278,8 @@ admission, not completed Compute shutdown.
 
 **Refresh stop status** reads the exact Agent again. It displays desired runtime
 state and selected revision without inferring live health or completion from a
-missing revision. Permission denial stays inline. A
-change to desired state or selected revision reloads the surrounding detail
-view so native-admin and workspace controls refresh too. An uncertain write
-blocks another stop until a successful read; the browser never
-retries the mutation automatically. Deployment remains the resume operation,
+missing revision. Permission denial stays inline; state changes reload the
+detail view. An uncertain write blocks another stop until a successful read. Deployment remains the resume operation,
 admitting a new revision. The [stop lifecycle](../../reference/agents/deployment.md#stop-and-resume) owns
 worker shutdown and preservation of revisions, credentials, and state.
 
@@ -296,7 +297,7 @@ detail page in a deleting state, with **Refresh deletion status** for an exact
 Agent read. Only a not-found read after
 an accepted or uncertain request, or when an already-deleting Agent is opened,
 returns to the Agents list in the selected Namespace. An uncertain deletion
-blocks another write until a successful read establishes the current state; the browser never automatically retries it.
+blocks writes until a successful read; the browser never retries it.
 
 `packages/occ/src/index.ts:deleteAgent` owns deletion admission. The
 [Agent deletion reference](../../reference/agents.md#deletion) covers
@@ -313,8 +314,6 @@ worker cleanup and the Namespace-owned resources it preserves.
 - Compare saved `Agent.plugins` with the viewed revision's plugin snapshot after
   a plugin edit. A successful Agent update does not install or activate plugins;
   deploy and inspect startup status separately.
-- Stop requires exact-Agent `operate`. An accepted stop or an empty selected
-  revision does not prove Compute shutdown finished.
 - On `403`, check `delete` permission on the exact Agent; Agent `read` and
   `operate` do not authorize deletion. Use the displayed request ID when present.
 - An accepted deletion remains in progress until the exact Agent read reports
@@ -335,6 +334,8 @@ worker cleanup and the Namespace-owned resources it preserves.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:00: Trace draft repository editing and save guards. (public-pr/374)
 
 - 2026-09-29 02:55: Trace Gateway password access staging through the existing Configuration editor and save path. (01a0eb0e-dbc1-78d1-91b0-ea91ee87c00f - fdccee5cab532bc7ef2085c5ec6f8f922663f5ce)
 - 2026-09-28 21:31: Trace metadata-preserving browsing and unreadable saved settings in the accompanying change. (01a0e9c2-e0cd-7ed2-a1b9-a70247c43db2 - 176a52892f72aefc45505f89ae6d33e7526fe4da)

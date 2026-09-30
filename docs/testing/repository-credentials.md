@@ -37,9 +37,9 @@ parses `composition/repository-credentials/`, `drivers/repo/credentials/`,
 pinned Prettier TypeScript parser. Runtime imports and re-exports must stay within the
 scanned source or use reviewed external modules and named members. Erased
 `import type` and `export type` declarations remain available; inline type
-specifiers can preserve a runtime module load. The two raw HTTPS sender helpers have explicit
-consumer lists; the listener, private-file, signing, and client-command owners
-have separate I/O allowances. New network packages, raw global network or loader
+specifiers can preserve a runtime module load. Provider, metadata and Agent
+upstream HTTPS owners have consumer lists; listener, private-file, signing and
+client-command owners have separate I/O allowances. New network packages, raw global network or loader
 access, and new process-output owners fail the check.
 
 Maintainers own the [source guard](../../scripts/verify-repository-credentials-boundary.mjs)
@@ -47,6 +47,11 @@ allowlists. New privileged members, owners, sender consumers or dependencies
 require explicit security review: identify the authority, caller, scope and
 protecting negative test. Never substitute wildcard allowances. The [guard regression test](../../tests/conformance/repository-credentials-source-boundary.test.mjs)
 adds forbidden capabilities to a disposable copy of the real source tree.
+
+Only credential-service configuration may use the GitHub metadata sender: one
+bounded HTTPS GET per approved repository with a metadata-only token, checking the
+returned repository ID. Metadata tests cover filtering, routes, retirement and
+timeouts.
 
 The native hook dispatcher can inspect Git configuration and executable hooks,
 read Git's hook input and delegate ordinary hooks. It has no direct credential-file
