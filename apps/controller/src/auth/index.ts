@@ -468,20 +468,29 @@ function ensureEmailPassword(input: Record<string, unknown>): { email: string; p
   return { email, password };
 }
 
+function untrustedOrigin(): AdmissionFailure {
+  return new AdmissionFailure(
+    403,
+    "FORBIDDEN",
+    "The browser origin is not trusted.",
+    "untrusted_origin",
+  );
+}
+
 function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: string): void {
   const origin = request.headers.origin;
   if (Array.isArray(origin)) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
   if (origin !== undefined) {
     if (origin !== expectedOrigin) {
-      throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+      throw untrustedOrigin();
     }
     return;
   }
 
   if (request.headers["sec-fetch-site"] === "cross-site") {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
 }
 
@@ -518,7 +527,7 @@ function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string):
     headers.get("origin") !== expectedOrigin ||
     (fetchSite !== null && fetchSite !== "same-origin")
   ) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
 }
 
