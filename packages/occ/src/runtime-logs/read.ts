@@ -8,6 +8,7 @@ import type {
 import {
   newRuntimeLogViewId,
   runtimeLogLineHash,
+  validRuntimeLogFrontierTime,
   type RuntimeLogCursorBinding,
   type RuntimeLogCursorCodec,
   type RuntimeLogCursorPosition,
@@ -247,7 +248,8 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     leading.push(runtimeLogGap("stream_replaced", observedStream));
   }
   // The byte limit cuts the final line; a partial line may end inside a token.
-  let lines = chunk.truncated ? chunk.lines.slice(0, -1) : chunk.lines;
+  const completeLines = chunk.truncated ? chunk.lines.slice(0, -1) : chunk.lines;
+  let lines = completeLines;
   if (resume !== undefined && !replacedDuringRead) {
     const lastTime = resume.lastTime!;
     const seen = new Set(resume.lastHashes);
@@ -280,11 +282,57 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     }
     delivered.push(line);
   }
-  const sanitized = sanitizeRuntimeLogChunk({
-    stream: observedStream,
-    lines: delivered,
-    truncated: false,
-  });
+  // Context belongs AFTER the authenticated delivered frontier, never before the
+  // fetched overlap. Hashes and equal timestamps cannot prove a new closing line.
+  const pemPrior =
+    sameStream && !replacedDuringRead && prior.pemOpen !== undefined ? prior : undefined;
+  // Locate the consumed prefix by the actual subsequence retained above, not by
+  // hashes. Validate ordering only through the last delivered line: future fetched
+  // lines must neither close context nor advance its persistent frontier.
+  let nextDelivered = 0;
+  let prefixEnd = 0;
+  for (const [index, line] of completeLines.entries()) {
+    if (nextDelivered < delivered.length && line === delivered[nextDelivered]) {
+      nextDelivered += 1;
+      prefixEnd = index + 1;
+    }
+  }
+  const prefix = completeLines.slice(0, prefixEnd);
+  const ordered = prefix.every(
+    (line, index) =>
+      validRuntimeLogFrontierTime(line.time) &&
+      (index === 0 || compareRuntimeLogTime(line.time, prefix[index - 1]!.time!) >= 0),
+  );
+  const canClose =
+    pemPrior === undefined
+      ? undefined
+      : delivered.map(
+          (line) =>
+            ordered &&
+            pemPrior.pemAfterTime != null &&
+            line.time !== null &&
+            compareRuntimeLogTime(line.time, pemPrior.pemAfterTime) > 0,
+        );
+  const sanitized = sanitizeRuntimeLogChunk(
+    {
+      stream: observedStream,
+      lines: delivered,
+      truncated: false,
+    },
+    { open: pemPrior?.pemOpen, canClose },
+  );
+  let pemAfterTime = pemPrior?.pemAfterTime ?? null;
+  if (delivered.length > 0) {
+    if (!ordered || (pemPrior !== undefined && pemPrior.pemAfterTime === null)) {
+      // A later timestamped page cannot reconstruct an unknown boundary.
+      pemAfterTime = null;
+    } else {
+      const deliveredTime = delivered.at(-1)!.time!;
+      if (pemAfterTime === null || compareRuntimeLogTime(deliveredTime, pemAfterTime) > 0) {
+        pemAfterTime = deliveredTime;
+      }
+    }
+  }
   const truncated = chunk.truncated || pageCut;
   const records = [
     ...leading,
@@ -315,6 +363,7 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     previous: query.previous,
     lastTime,
     lastHashes: lastHashes.slice(-16),
+    ...(sanitized.pemOpen === undefined ? {} : { pemOpen: sanitized.pemOpen, pemAfterTime }),
     issuedAt: now(),
   };
   return Object.freeze({
