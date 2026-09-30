@@ -144,7 +144,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
   await versionRecord.getByText("Recorded outcome: succeeded").waitFor();
   const observations = page.locator(".version-diagnostics");
   await observations
-    .getByText(/For Kubernetes Compute, Gateway checks currently cover Slack configuration/)
+    .getByText(/For Kubernetes Compute, Gateway checks cover only the Slack channel/)
     .waitFor();
   await observations
     .getByText("No current observation has been requested for this version.")

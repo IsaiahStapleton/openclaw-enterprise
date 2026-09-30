@@ -119,7 +119,7 @@ requires exact Agent `read`/`update` and a catalog-capable Driver. The curated
 catalog needs no Secret. Hosted browsing reads bound `codex_pat` server-side and
 requires caller and Agent ServicePrincipal Secret `operate`.
 **Save plugin selections** updates the Agent; deployment snapshots them.
-Admitted versions are read-only. **Operator-managed credentials** saves
+**Operator-managed credentials** saves
 `{ "method": "runtime" }` for SSH embedded OpenClaw; OCC does not validate host
 credentials or generate metadata for that binding. API permissions and topology
 checks still apply. **Current version** displays `activeRevisionId`, which
@@ -127,12 +127,13 @@ can differ from the viewed snapshot without proving live serving.
 **Deployment activity** shows the latest visible version's persisted result;
 the viewed version shows its own recorded outcome.
 
-**Current observations** runs only when **Run diagnostics for this version** is
-selected. The bodyless POST checks the exact viewed version and returns an
-observation time and bounded checks marked `succeeded`, `failed`, or `unknown`.
-Agent `read` and `operate` plus exact AgentRevision `read` are required.
-An unavailable request shows an error. Results do not change deployment history,
-repeat the startup model probe, or prove message delivery.
+**Current observations** runs on **Run diagnostics for this version**: a
+bodyless POST checking the exact viewed version. Kubernetes checks cover only
+Slack (`NOT_CONFIGURED`: no Slack channel), never model credentials; recorded
+failures stay shown. Checks are timestamped `succeeded`, `failed`, or `unknown`.
+Agent `read`/`operate` and exact AgentRevision `read` are required. Unavailable
+requests show an error. Results do not change deployment history, repeat the
+startup model probe, or prove message delivery.
 
 **Save authentication source** stores the binding and confirms exact
 `secret:operate` access for the Agent principal on an API-key or Service Accounts
