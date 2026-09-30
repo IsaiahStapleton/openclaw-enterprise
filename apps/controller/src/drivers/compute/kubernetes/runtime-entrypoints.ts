@@ -5,6 +5,22 @@ import { nodeProgramArguments } from "../node-program.ts";
 // and 5s supervisor margin. Idle Gateways exit as soon as their work settles.
 export const GATEWAY_STOP_TIMEOUT_MS = 330_000;
 
+// Every runtime wrapper runs under tini. As PID 1, Node ignores SIGTERM until
+// a wrapper installs its handler, and cannot run one inside a blocking model
+// probe, so a Pod stop waited for SIGKILL. Under tini the wrapper exits on
+// SIGTERM in every phase, and container exit ends its children. -e 143 reports
+// that termination as exit 0, as a running wrapper does. -s keeps reaping
+// orphans when a Sandbox provider runs this below PID 1.
+export const RUNTIME_WRAPPER_COMMAND: readonly string[] = Object.freeze([
+  "/usr/bin/tini",
+  "-s",
+  "-e",
+  "143",
+  "--",
+  "node",
+  "-e",
+]);
+
 export const PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN = "openclaw-plugin-runtime/app-server-token/v1";
 
 const STARTUP_PHASE_EVENT = "runtime.startup_phase";
@@ -2608,7 +2624,8 @@ function probeCodexAuthentication(timeout) {
 }
 
 // A single startup budget includes both process attempts and the retry delay.
-// No signal handler is installed during backoff, so termination exits promptly.
+// No signal handler is installed before app-server starts, so under tini
+// SIGTERM ends the probe, its backoff or a held failure at once.
 function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 61000) {
   const startedAt = performance.now();
   const timeout = Math.min(30000, Math.floor(deadline - startedAt));

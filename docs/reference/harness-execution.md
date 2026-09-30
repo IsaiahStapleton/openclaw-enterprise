@@ -139,8 +139,9 @@ remain separate. A dedicated gateway receives no model credential. Model auth
 cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
 
-Kubernetes OpenClaw performs one bounded native model probe in the process that
-owns model access, for both initial and replacement deployments. Embedded activation uses
+Kubernetes OpenClaw performs one native model probe (20 seconds plus 45
+CPU-seconds at its CPU limit) in the process that owns model access, for initial
+and replacement deployments. Embedded activation uses
 the shared gateway's `Recreate` strategy: cutover can stop the working gateway
 before the replacement validates its credentials. Invalid credentials or a
 provider failure leave the replacement unready and the Agent unavailable until
@@ -157,10 +158,10 @@ native output without logging its contents. Dedicated Codex retries a confirmed
 subprocess timeout once after one second. Each attempt has a 30-second cap within
 one 61-second budget, including the delay. Authentication rejection, malformed
 output, tool events, and external signals without timeout evidence do not retry.
-Termination during the delay exits without starting another probe. Exhausted or
-nonretryable failure holds the process unready until restart; readiness polling
-never starts another model call. Embedded OpenClaw probes once, within 20
-seconds plus 45 CPU-seconds at its CPU limit.
+Wrappers run under `tini`, so termination during a probe, its delay, or a held
+failure exits at once without another probe. Exhausted or nonretryable failure
+holds the process unready until restart or Pod stop; readiness polling never
+starts another model call.
 
 Codex emits a structured `codex.model_probe` log for each attempt with its number,
 elapsed milliseconds, exit code, recognized termination signal, and final code
@@ -173,8 +174,8 @@ rejected the credential: an OpenClaw probe result with status `auth` (provider
 401/403 or invalid key), or a Codex probe `turn.failed` event or access-token
 login error reporting HTTP 401 or 403. The worker then fails the deployment with
 `RUNTIME_AUTHENTICATION_FAILED` instead of waiting for the convergence deadline.
-An OpenClaw probe starved of CPU at its cap reports `MODEL_PROBE_CPU_STARVED`;
-the worker fails with `RUNTIME_CPU_STARVED`.
+A CPU-starved OpenClaw probe reports `MODEL_PROBE_CPU_STARVED`, failing with
+`RUNTIME_CPU_STARVED`.
 Other timeouts, provider server errors, and transport failures keep `MODEL_PROBE_TIMEOUT`,
 `MODEL_PROBE_FAILED`, or `LOGIN_FAILED` and remain pending.
 
