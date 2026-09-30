@@ -196,6 +196,10 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
    app-server. Check the corresponding `openclaw-gateway` or `codex-app-server`
    records and `openclaw.agent.id` / `openclaw.revision.id` resource attributes.
 
+Retained record bodies hold only the event name. Search for a request, Agent,
+or revision by its attribute, not by body text; in Loki these are structured
+metadata, for example `{service_name="occ-worker"} | occ_revision_id="<id>"`.
+
 A healthy Collector and local container output do not prove that the backend
 received the records. Only approved runtime events appear. Receiving API logs
 does not verify model turns or other integrations.
