@@ -154,8 +154,7 @@ and model fallback. Codex ignores user configuration and rules, disables executi
 and external tools, and uses read-only filesystem policy without approval grants;
 a tool event cannot satisfy its success check. The Codex probe runs with a minimal
 environment that keeps only the runtime's TLS trust variables (`SSL_CERT_FILE`,
-`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Each probe captures
-native output without logging its contents. Dedicated Codex retries a confirmed
+`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Probes never log native output. Dedicated Codex retries a confirmed
 subprocess timeout once after one second. Each attempt has a 30-second cap within
 one 61-second budget, including the delay. Authentication rejection, malformed
 output, tool events, and external signals without timeout evidence do not retry.
@@ -171,9 +170,9 @@ elapsed milliseconds, exit code, recognized termination signal, and final code
 failure status is published only after retries end.
 
 The runtime failure code is `AUTHENTICATION_FAILED` only when the provider
-rejected the credential: an OpenClaw probe result with status `auth` (provider
-401/403 or invalid key), or a Codex probe `turn.failed` event or access-token
-login error reporting HTTP 401 or 403. The worker then fails the deployment with
+rejected the credential: an OpenClaw probe status `auth` (provider 401/403 or
+invalid key), or a Codex probe `turn.failed` event or access-token login error
+reporting HTTP 401 or 403. The worker then fails the deployment with
 `RUNTIME_AUTHENTICATION_FAILED` instead of waiting for the convergence deadline.
 A CPU-starved OpenClaw probe reports `MODEL_PROBE_CPU_STARVED`, failing with
 `RUNTIME_CPU_STARVED`.
@@ -181,9 +180,9 @@ Other timeouts, provider server errors, and transport failures keep `MODEL_PROBE
 `MODEL_PROBE_FAILED`, or `LOGIN_FAILED` and remain pending.
 
 Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
-per startup phase, such as login, model probe, peer plugin status, plugin
-install, workspace setup, and native process spawn, with its container, phase name, `ok` or `failed` outcome,
-duration, and time since the wrapper started. A Gateway also logs
+per phase (login, model probe, peer plugin status, plugin install, workspace
+setup, process spawn) with its container, phase, outcome (`ok` or `failed`),
+duration, and time since wrapper start. A Gateway also logs
 `peer-status-changed` when its Harness is replaced, then `gateway-respawn` once
 the OpenClaw process it restarts in place serves again. These
 logs carry no provider, model, credential, or path values.
@@ -197,17 +196,17 @@ seconds. The deployment's convergence deadline governs a Harness that never
 reports. A redeploy keeps the Service on the serving revision until activation.
 
 These startup checks make provider requests and may incur model usage charges.
-They do not verify access to other configured models or guarantee continued validity
-after upstream revocation. Embedded probe transport configuration must use
+They verify neither other configured models nor validity after upstream
+revocation. Embedded probe transport configuration must use
 literal metadata rather than additional environment or Secret references. The
-canonical `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` alias for the selected provider remains supported, and unrelated
-gateway/channel configuration bindings remain separate.
+selected provider's `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` alias remains
+supported; gateway/channel configuration bindings stay separate.
 
 The revision freezes the admitted source reference, not historical Secret bytes.
 A managed account snapshot also retains its exact credential and verified private
 Backend/workspace ownership. Later reconciliation cannot substitute a newly
-issued account credential. Source updates require explicit deployment and a real
-model turn to verify consumption; selected metadata does not establish readiness.
+issued account credential. Source updates take effect only through a new deployment
+whose real model turn succeeds; metadata alone does not establish readiness.
 See [renewal and revocation](../guides/deploy/credential-lifecycle.md).
 
 ## Runtime logging
