@@ -115,11 +115,14 @@ per client address with [`api.trustedProxy`](settings/production.md#github-sign-
 attempts wait 1–8 s and return `429` with `Retry-After`, whether or not the email
 exists; an Installation administrator's correct password still signs in. Without
 one, browsers share the ingress address and startup logs
-`authentication.sign-in-limit-warning`. A successful sign-in clears that email's
-failures, not the address's. The first slowed attempt per lane each minute logs
-`authentication.sign-in-limited` at WARN with its `lane` (`email`, `address`, or
-`untracked` when the budget table is full) and `keyHash`, a truncated HMAC under
-the auth secret; the email and address are never logged. The bundled Collector
+`authentication.sign-in-limit-warning`. A successful sign-in within the budget
+clears that email's failures, not the address's; an administrator's success in
+the slowed lane does not, so pacing lasts until the minute rolls over. The first
+slowed attempt per lane each minute logs `authentication.sign-in-limited` at WARN
+with its `lane` (`email`, `address`, or `untracked` when the budget table is
+full). `email` and `address` events also carry `keyHash`, a truncated HMAC under
+the auth secret; `untracked` events have no key and no hash. The email and
+address are never logged. The bundled Collector
 exports the event and lane, not the hash.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`

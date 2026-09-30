@@ -139,7 +139,8 @@ public user identity. Console compares it to invalidate retained views and draft
 after a new session, including for the same user. Sign-out revokes the session,
 and public signup is disabled. Without an external provider,
 `auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins; a
-success clears the email's failures, and its `onLimited` hook logs
+success within the budget clears the email's failures (a slowed-lane success
+does not), and its `onLimited` hook logs
 `authentication.sign-in-limited` once per lane per minute.
 
 `requireSessionKey` applies the optional `x-occ-session-key` header after the
