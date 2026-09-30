@@ -144,12 +144,31 @@ async function setup(
     backendId = null,
     grantHarnessSecret = true,
     runtimeAuth = false,
+    credentialSource = false,
   ) {
     const id = `agt_${randomUUID()}`;
     const configurationId = `cfg_${randomUUID()}`;
     let harnessAuth;
     if (runtimeAuth) {
       harnessAuth = { method: "runtime" };
+    } else if (credentialSource) {
+      // A gateway-held model key, as registration leaves it once the gateway confirms its copy.
+      const source = {
+        id: `cs_${randomUUID()}`,
+        namespaceId: namespace.id,
+        name: `${label}-${randomUUID()}`,
+        type: "openai",
+        config: {},
+        secrets: {},
+        driverId: CREDENTIAL_GATEWAY_FIXTURE_ID,
+        state: "registering",
+        createdAt: new Date().toISOString(),
+      };
+      await state.transact(async (unit) => {
+        await unit.credentialSources.createCredentialSource(source);
+        await unit.credentialSources.markCredentialSourceReady(namespace.id, source.id);
+      });
+      harnessAuth = { method: "credential_source", sourceId: source.id };
     } else if (serviceAccountId === undefined) {
       const identity = {
         id: `sec_${randomUUID()}`,
@@ -192,6 +211,32 @@ async function setup(
         createdAt: new Date().toISOString(),
       });
     });
+    if (harnessAuth.method === "credential_source") {
+      // Deployment requires the Agent, like the deploying actor, to operate its source.
+      const sourceRoleId = `role-${randomUUID()}`;
+      await observerPool.query(
+        `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          sourceRoleId,
+          namespace.id,
+          `Credential sources ${randomUUID()}`,
+          JSON.stringify([{ action: "operate", resourceKind: "credential_source" }]),
+        ],
+      );
+      await observerPool.query(
+        `INSERT INTO occ.iam_access_bindings
+          (id, namespace_id, identity_subject_id, group_subject_id, role_id, resource_kind, resource_id)
+         VALUES ($1, $2, $3, NULL, $4, 'credential_source', $5)`,
+        [
+          `binding-${randomUUID()}`,
+          namespace.id,
+          owner.servicePrincipalId,
+          sourceRoleId,
+          harnessAuth.sourceId,
+        ],
+      );
+    }
     if (
       (harnessAuth.method === "api_key" || harnessAuth.method === "codex_pat") &&
       grantHarnessSecret
@@ -223,6 +268,17 @@ async function setup(
     let harnessAuth;
     if (owner.harnessAuth.method === "runtime") {
       harnessAuth = owner.harnessAuth;
+    } else if (owner.harnessAuth.method === "credential_source") {
+      const source = await state.read((view) =>
+        view.credentialSources.findCredentialSource(namespace.id, owner.harnessAuth.sourceId),
+      );
+      harnessAuth = {
+        method: "credential_source",
+        sourceId: source.id,
+        credentialGatewayId: source.driverId,
+        sourceType: source.type,
+        loginMode: "api_key",
+      };
     } else if (owner.harnessAuth.method === "chatgpt_service_account") {
       const account = await state.read((view) =>
         view.serviceAccounts.findServiceAccount(namespace.id, owner.harnessAuth.serviceAccountId),
@@ -368,6 +424,63 @@ async function setup(
     stop,
     createWorkerPool,
     workerPool,
+  };
+}
+
+const CREDENTIAL_GATEWAY_FIXTURE_ID = "credential-gateway-worker-fixture";
+
+// Selects a paired Sandbox and Credential Gateway so the worker admits credential-source
+// revisions. Compute stands in for the gateway calls; these doubles only identify the pair.
+function withCredentialGateway(drivers) {
+  const sandboxDriver = {
+    id: "sandbox-worker-fixture",
+    capability: "sandbox",
+    implementation: "sandbox-worker-fixture",
+    facets: ["networking"],
+    async cleanup() {},
+  };
+  const credentialGatewayDriver = {
+    id: CREDENTIAL_GATEWAY_FIXTURE_ID,
+    capability: "credential_gateway",
+    implementation: "credential-gateway-worker-fixture",
+    async listSourceTypes() {
+      return [];
+    },
+    async registerSource() {
+      return { state: "ready" };
+    },
+    async updateSource() {
+      return { state: "ready" };
+    },
+    async rotateSource() {
+      return { state: "ready" };
+    },
+    async sourceStatus() {
+      return { state: "ready" };
+    },
+    async removeSource() {},
+    async attachForRevision() {
+      return [];
+    },
+    async attachmentStatus() {
+      return [];
+    },
+    async withdraw(context) {
+      return { sourceId: context.sourceId, state: "pending" };
+    },
+  };
+  return {
+    ...drivers,
+    installation: {
+      ...drivers.installation,
+      drivers: {
+        ...drivers.installation.drivers,
+        sandbox: { id: sandboxDriver.id, configuration: {} },
+        credential_gateway: { id: credentialGatewayDriver.id, configuration: {} },
+      },
+    },
+    sandboxDriver,
+    credentialGatewayDriver,
   };
 }
 
@@ -2907,7 +3020,15 @@ test(
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context);
-    const owner = await fixture.agent("withdraw-target");
+    const owner = await fixture.agent(
+      "withdraw-target",
+      "embedded",
+      undefined,
+      null,
+      true,
+      false,
+      true,
+    );
     const active = await fixture.revision(owner, 1);
     const prepared = [];
     const withdrawn = [];
@@ -2933,25 +3054,17 @@ test(
       },
       () => {},
       50,
+      undefined,
+      undefined,
+      withCredentialGateway,
     );
     await fixture.work(active, "succeeded");
     const deployments = prepared.length;
 
     // Record the withdrawal the way the API does: a pending row plus revision-scoped work.
-    const source = {
-      id: `cs_${randomUUID()}`,
-      namespaceId: fixture.namespace.id,
-      name: `withdrawn-${randomUUID()}`,
-      type: "openai",
-      config: {},
-      secrets: {},
-      driverId: "credential-gateway-worker-fixture",
-      state: "ready",
-      createdAt: new Date().toISOString(),
-    };
+    const source = { id: owner.harnessAuth.sourceId };
     const operationId = randomUUID();
     await fixture.state.transact(async (unit) => {
-      await unit.credentialSources.createCredentialSource(source);
       await unit.credentialSources.requestCredentialWithdrawal({
         namespaceId: fixture.namespace.id,
         agentId: owner.id,
