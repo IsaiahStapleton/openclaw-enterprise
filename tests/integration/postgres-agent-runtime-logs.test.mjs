@@ -47,7 +47,7 @@ async function ensureBootstrap(t) {
 }
 
 test(
-  "runtime log views persist one audit row before the read and fail closed without it",
+  "runtime log views and downloads persist audit rows before the read and fail closed without them",
   requiresPostgres,
   async (t) => {
     await ensureBootstrap(t);
@@ -202,5 +202,37 @@ test(
       ["second"],
     );
     assert.equal((await viewRows()).rowCount, 1);
+
+    // Every download is its own durable row with the forced tail, never the text.
+    const downloadRows = () =>
+      pool.query(
+        `SELECT kind, actor_id, outcome, details
+         FROM occ.audit_events
+         WHERE action = 'openclaw.agents.runtime_logs.download' AND resource_id = $1
+         ORDER BY occurred_at`,
+        [agent.id],
+      );
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const download = await inject("GET", `${logs}&tailLines=10&download=true`, session);
+      assert.equal(download.statusCode, 200, download.body);
+      assert.match(download.headers["content-type"], /^text\/plain/);
+      assert.match(download.body, /first line/);
+      assert.equal((await downloadRows()).rowCount, attempt);
+    }
+    const downloaded = (await downloadRows()).rows;
+    assert.deepEqual(
+      downloaded.map(({ kind, actor_id: actorId, outcome }) => ({ kind, actorId, outcome })),
+      [
+        { kind: "mutation", actorId: principal.id, outcome: "success" },
+        { kind: "mutation", actorId: principal.id, outcome: "success" },
+      ],
+    );
+    assert.equal(downloaded[0].details.runtimeLogs.tailLines, 1000);
+    assert.notEqual(
+      downloaded[0].details.runtimeLogs.viewId,
+      downloaded[1].details.runtimeLogs.viewId,
+    );
+    assert.equal(JSON.stringify(downloaded).includes("first line"), false);
+    assert.equal((await viewRows()).rowCount, 1, "downloads are not views");
   },
 );

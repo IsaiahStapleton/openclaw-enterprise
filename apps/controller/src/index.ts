@@ -90,7 +90,11 @@ import {
 } from "@openclaw-enterprise/occ";
 import type { AdmittedCaller } from "./admission/admission-verifier.ts";
 import {
+  isRuntimeLogDownload,
+  RUNTIME_LOG_DOWNLOAD_ACTION,
   RuntimeLogLimiter,
+  runtimeLogDownloadBody,
+  runtimeLogDownloadFileName,
   runtimeLogPageBody,
   runtimeLogQuery,
   type AgentRuntimeLogsConfig,
@@ -1274,7 +1278,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   },
                 }),
           }),
-      action: operation.action,
+      action: auditAction(operation, request),
       resource,
       outcome,
       ...(result?.reasonCode === undefined
@@ -1283,6 +1287,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           : {}
         : { reasonCode: result.reasonCode }),
     });
+  }
+
+  /** Log views and downloads share a route and permissions but not an audit action. */
+  function auditAction(operation: OccApiRoute, request: FastifyRequest): string {
+    return operation.operationId === "getAgentDeploymentRuntimeLogs" &&
+      isRuntimeLogDownload(request.query as AgentRuntimeLogsQuery)
+      ? RUNTIME_LOG_DOWNLOAD_ACTION
+      : operation.action;
   }
 
   function selectedIAMDriver(): IAMDriver {
@@ -2977,17 +2989,28 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           return;
         }
         const target: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+        const query = request.query as AgentRuntimeLogsQuery;
+        const download = isRuntimeLogDownload(query);
+        // A download is a fresh snapshot; it never continues a follow view.
+        if (download && query.cursor !== undefined) {
+          throw failure(
+            400,
+            "INVALID_REQUEST",
+            "The request does not match the operation contract.",
+          );
+        }
         const page = await runtimeLogLimiter.run(() =>
           controller!.readAgentRuntimeLogs(
             context.actorId,
             namespaceId,
             agentId,
             params.deploymentId as string,
-            runtimeLogQuery(request.query as AgentRuntimeLogsQuery),
+            runtimeLogQuery(query),
             {
               codec: runtimeLogCursor,
               signal: disconnected.signal,
-              // Once per view, before the first Driver read; failure means no content.
+              // Once per view or download, before the first Driver read; failure means
+              // no content.
               admitView: async (admission) => {
                 const base = event(operation, request, target, "mutation", context);
                 await options.auditSink.append({
@@ -2998,6 +3021,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             },
           ),
         );
+        if (download) {
+          reply
+            .header("content-type", "text/plain; charset=utf-8")
+            .header(
+              "content-disposition",
+              `attachment; filename="${runtimeLogDownloadFileName(page, agentId)}"`,
+            )
+            .send(runtimeLogDownloadBody(page, agentId));
+          return;
+        }
         reply.send({ data: runtimeLogPageBody(page), meta: { requestId: request.id } });
         return;
       } finally {

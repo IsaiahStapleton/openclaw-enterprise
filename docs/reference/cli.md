@@ -76,6 +76,8 @@ input is not supported. The server validates document fields against the
 | `occ agent runtime-credentials get ID`           | Reads whether generated runtime credentials are configured for the Agent.                                                                                        |
 | `occ agent runtime-credentials provision ID`     | Creates the initial generated runtime credential bundle (empty request body).                                                                                    |
 | `occ agent stop ID`                              | Requests a stop while retaining revisions and persistent state.                                                                                                  |
+| `occ agent runtime ID`                           | Reads Pod status, restarts, last termination and log sources for a revision. See [runtime logs](#runtime-status-and-logs).                                       |
+| `occ agent logs ID --source SOURCE`              | Prints one redacted page of container output, or follows it. See [runtime logs](#runtime-status-and-logs).                                                       |
 
 Use the [HTTP API](api.md) to work with ServiceAccounts and configured
 Backends; the CLI has no commands for these. Neither the CLI nor the HTTP API
@@ -99,6 +101,40 @@ eligible for coordinated deployment. It fails instead of silently omitting an
 unauthorized resource. JSON and YAML output include each Agent's desired runtime
 state, execution mode, active revision, and whether deployment work is queued or
 claimed.
+
+## Runtime status and logs
+
+`occ agent runtime AGENT_ID` and `occ agent logs AGENT_ID` read the
+[Agent logs](../guides/topics/agent-logs.md) routes. Both use the Agent's active
+revision unless you pass `--revision ID`. `runtime` accepts `-o table|json|yaml`
+and needs Agent `operate` and `read` plus `read` on the revision. `logs` needs
+Agent `administer` and `read` plus `read` on the revision, and each view is
+audited.
+
+| `occ agent logs` flag  | Meaning                                                         |
+| ---------------------- | --------------------------------------------------------------- |
+| `--source SOURCE`      | Required: `gateway` or `agent` (dedicated Harness container).   |
+| `--revision ID`        | Revision to read; defaults to the active revision.              |
+| `--pod NAME`           | Pod to read when the source has more than one.                  |
+| `--previous`           | Read the container instance before the last restart.            |
+| `--tail N`             | Lines from the end of the stream, 1 to 1000 (default 200).      |
+| `--since DURATION`     | Only lines newer than a Go duration such as `10m`, up to `24h`. |
+| `--follow`             | Poll every 2 seconds with the view's cursor until Ctrl-C.       |
+| `-o text` or `-o json` | Text lines (default) or NDJSON, one API record per line.        |
+
+Text output prints `TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value` per line.
+Gap and withheld records are printed to stderr as `notice:` lines; in JSON mode
+they are also records on stdout. With `--follow`, the CLI waits for
+`Retry-After` after a `429`, retries after a `504`, starts a new audited view
+when the cursor is rejected, and exits cleanly on Ctrl-C. `501`, `503` and
+permission errors end the command with a nonzero exit. `--follow` cannot be
+combined with `--previous`.
+
+```sh
+occ agent runtime agt_...
+occ agent logs agt_... --source gateway --since 10m
+occ agent logs agt_... --source gateway --follow -o json | jq -r .message
+```
 
 ## Output and errors
 

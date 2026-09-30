@@ -998,6 +998,24 @@ export function installFixture(scenario, evidence) {
           method === "GET"
         ) {
           const revisionId = suffix.split("/")[2];
+          if (url.searchParams.get("download") === "true") {
+            // Downloads are a text/plain attachment, not a JSON envelope.
+            return new Response(
+              [
+                "2026-09-27T11:40:01.120Z info wrapper runtime.startup_phase container=gateway phase=config outcome=ok ms=12",
+                "2026-09-27T11:40:03.400Z info openclaw [gateway] gateway listening",
+                "2026-09-27T11:41:10.000Z warn openclaw [channels/slack] slack socket reconnect with token=[redacted:key-value]",
+                "",
+              ].join("\n"),
+              {
+                status: 200,
+                headers: {
+                  "content-type": "text/plain; charset=utf-8",
+                  "content-disposition": `attachment; filename="${revisionId}-gateway.log"`,
+                },
+              },
+            );
+          }
           const stream = {
             source: "gateway",
             pod: "gateway-7d9f8c-x2k4q",

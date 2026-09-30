@@ -118,6 +118,24 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
     }
     assert.equal(logs.text.includes(value), false, `canary ${name} leaked into the response`);
   }
+  // The download is the same sanitized page in a second serializer.
+  const download = await fixture.request("GET", target.logsPath("source=gateway&download=true"));
+  assert.equal(download.status, 200, download.text);
+  assert.equal(download.headers.get("cache-control"), "no-store");
+  for (const [name, value] of Object.entries({ ...values, SPLIT: splitFragment })) {
+    if (name === "CONTROL") {
+      continue;
+    }
+    assert.equal(download.text.includes(value), false, `canary ${name} leaked into the download`);
+  }
+  assert.match(download.text, /\[redacted:/);
+  assert.match(download.text, / WITHHELD 2 unrecognised_structured$/m);
+  assert.match(download.text, / GAP truncated: /);
+  const controls = [...download.text].filter((character) => {
+    const code = character.codePointAt(0);
+    return (code < 0x20 && code !== 0x0a) || code === 0x7f;
+  });
+  assert.deepEqual(controls, [], "the download carries no control characters");
   // `content` is reserved and has no producer.
   assert.ok(logs.data.records.length > 0);
   assert.ok(

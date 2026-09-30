@@ -1348,7 +1348,21 @@ export const occApiRoutes = [
     schema: {
       querystring: AgentRuntimeLogsQuery,
       params: DeploymentParams,
-      response: { 200: AgentRuntimeLogsResponse, ...runtimeReadErrors },
+      response: {
+        200: {
+          description: "One page of records, or a text/plain attachment when `download=true`",
+          content: {
+            "application/json": { schema: AgentRuntimeLogsResponse },
+            "text/plain": {
+              schema: Type.String({
+                description:
+                  "The same sanitized records as the JSON page, one per line, for `download=true`.",
+              }),
+            },
+          },
+        },
+        ...runtimeReadErrors,
+      },
     },
   },
 ] as const;
