@@ -9,6 +9,7 @@ import type {
   AuthorizationDecision,
   AuthorizationRequest,
   ComputeDriver,
+  CredentialWithdrawal,
   PluginDeploymentWarning,
   PluginDriver,
   ComputeReadiness,
@@ -42,6 +43,7 @@ import {
   PostgresWorkQueue,
   OpenClawController,
   WorkClaimLostError,
+  CREDENTIAL_WITHDRAWAL_TARGET,
   isCredentialWithdrawalWork,
   isRepositoryCleanupWork,
   repositoryCleanupRevisionId,
@@ -2090,6 +2092,58 @@ export class ControllerWorker {
     });
   }
 
+  /**
+   * Maintenance of a revision whose source was withdrawn cannot prepare it without re-attaching
+   * the source, so it only follows the withdrawal: while it is pending, the pass makes sure an
+   * attempt is queued and keeps the maintenance chain; once it is revoked, maintenance stops
+   * until a redeploy replaces the revision.
+   */
+  private async completeWithdrawnRevisionMaintenance(
+    claim: ClaimedWork,
+    revision: Readonly<AgentRevision>,
+    withdrawal: Readonly<CredentialWithdrawal>,
+  ): Promise<void> {
+    const pending = withdrawal.state === "pending";
+    await this.state.transactWithQueue(async (unit, queue) => {
+      if ((await queue.heartbeat(claim)) === undefined) {
+        throw new WorkClaimLostError();
+      }
+      if (
+        pending &&
+        !(await unit.operations.hasOutstandingCredentialWithdrawalWork(
+          revision.namespaceId,
+          revision.id,
+        ))
+      ) {
+        // The requester's authority is re-checked by the withdrawal work, as for a replay.
+        await unit.operations.append({
+          kind: "agent_revision",
+          action: "reconcile",
+          target: CREDENTIAL_WITHDRAWAL_TARGET,
+          namespaceId: revision.namespaceId,
+          resourceId: revision.id,
+          actorId: withdrawal.requestedBy,
+          operationId: randomUUID(),
+        });
+      }
+      await queue.complete(claim, { code: "CREDENTIAL_WITHDRAWN" });
+      if (pending && this.revisionMaintenanceInterval(revision) !== undefined) {
+        await this.enqueueMaintenance(queue, claim, revision);
+      }
+    }, this.queueOptions);
+    this.passOutcome = "success";
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      revisionId: claim.revisionId,
+      result: "success",
+      outcome: "success",
+      code: "CREDENTIAL_WITHDRAWN",
+    });
+  }
+
   private beginDeployPass(claim: ClaimedWork): void {
     // Maintenance, cleanup and stop work are not deployments.
     if (claim.idempotencyKey !== `agent_revision:${claim.revisionId}:reconcile`) {
@@ -2310,6 +2364,25 @@ export class ControllerWorker {
         await this.assertRepositoryAuthority(claim, revision);
         this.repositoryCredentials.validate(revision);
       }
+      if (
+        agent.activeRevisionId === revision.id &&
+        revision.harnessAuth.method === "credential_source" &&
+        claim.idempotencyKey.startsWith(`agent_revision:${revision.id}:maintenance:`)
+      ) {
+        const sourceId = revision.harnessAuth.sourceId;
+        const withdrawal = await this.state.read((view) =>
+          view.credentialSources.findCredentialWithdrawal(
+            revision.namespaceId,
+            revision.id,
+            sourceId,
+          ),
+        );
+        if (withdrawal !== undefined) {
+          await this.completeWithdrawnRevisionMaintenance(claim, revision, withdrawal);
+          return;
+        }
+      }
+      // Deploy and repair work must never re-attach a withdrawn source.
       const secretContext = await this.resolveRevisionSecretContext(revision);
       if ("result" in secretContext) {
         if (agent.activeRevisionId === revision.id) {

@@ -3215,6 +3215,110 @@ test(
 );
 
 test(
+  "maintenance of a withdrawn revision retries the withdrawal and stops once it is revoked",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent(
+      "withdraw-maintenance",
+      "embedded",
+      undefined,
+      null,
+      true,
+      false,
+      true,
+    );
+    const active = await fixture.revision(owner, 1);
+    const prepared = [];
+    let revoke = false;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        maintenanceIntervalMs: 3_600_000,
+        async prepareRevision(revision, revisionContext) {
+          prepared.push(revision.id);
+          return fixture.compute.prepareRevision(revision, revisionContext);
+        },
+        async withdrawCredentialSource(_revision, source) {
+          return { sourceId: source.id, state: revoke ? "revoked" : "pending" };
+        },
+      },
+      () => {},
+      50,
+      undefined,
+      undefined,
+      withCredentialGateway,
+    );
+    await fixture.work(active, "succeeded");
+    const deployments = prepared.length;
+    const sourceId = owner.harnessAuth.sourceId;
+
+    // A pending withdrawal with no attempt outstanding, as exhausted attempts leave it.
+    await fixture.state.transact((unit) =>
+      unit.credentialSources.requestCredentialWithdrawal({
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        revisionId: active.id,
+        credentialSourceId: sourceId,
+        state: "pending",
+        requestedBy: fixture.actor.id,
+        requestedAt: new Date().toISOString(),
+      }),
+    );
+    const runMaintenance = async () => {
+      const due = await fixture.observerPool.query(
+        `UPDATE occ.controller_work SET available_at = clock_timestamp()
+         WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+         RETURNING idempotency_key`,
+        [active.id, `agent_revision:${active.id}:maintenance:%`],
+      );
+      assert.equal(due.rowCount, 1);
+      const pass = { id: active.id, idempotencyKey: due.rows[0].idempotency_key };
+      await fixture.work(pass, "succeeded");
+      return pass;
+    };
+    const queuedWork = async (pattern) =>
+      (
+        await fixture.observerPool.query(
+          `SELECT idempotency_key FROM occ.controller_work
+           WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2`,
+          [active.id, pattern],
+        )
+      ).rows;
+
+    // Maintenance never re-attaches the source; it queues a withdrawal attempt and keeps going.
+    const first = await runMaintenance();
+    const withdrawal = await fixture.observerPool.query(
+      `SELECT idempotency_key, actor_id FROM occ.controller_work
+       WHERE revision_id = $1 AND agent_target = 'credentials_withdrawn'`,
+      [active.id],
+    );
+    assert.equal(withdrawal.rowCount, 1);
+    assert.equal(withdrawal.rows[0].actor_id, fixture.actor.id);
+    await fixture.work(
+      { id: active.id, idempotencyKey: withdrawal.rows[0].idempotency_key },
+      "failed_permanent",
+    );
+    const [next] = await queuedWork(`agent_revision:${active.id}:maintenance:%`);
+    assert.notEqual(next.idempotency_key, first.idempotencyKey);
+    assert.equal(prepared.length, deployments);
+
+    // The next pass queues another attempt, which is revoked; after that maintenance stops.
+    revoke = true;
+    await runMaintenance();
+    await waitFor("the withdrawal to be revoked", async () => {
+      const found = await fixture.state.read((view) =>
+        view.credentialSources.findCredentialWithdrawal(fixture.namespace.id, active.id, sourceId),
+      );
+      return found.state === "revoked" ? found : undefined;
+    });
+    await runMaintenance();
+    assert.deepEqual(await queuedWork(`agent_revision:${active.id}:%`), []);
+    assert.equal(prepared.length, deployments);
+  },
+);
+
+test(
   "Agent stop clears only the exact active pointer after Compute shutdown and retries safely",
   requiresPostgres,
   async (context) => {
