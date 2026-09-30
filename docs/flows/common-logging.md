@@ -148,8 +148,13 @@ Driver-owned pipelines also have separate guarantees.
 `deploy/logging/collector.yaml:transform/operational`
 
 The bundled Collector keeps transport-derived identity before parsing untrusted
-JSON. It classifies fixed OCC event names, `gateway` subsystem records, and Codex
-stderr records from `codex_app_server`. For retained records it keeps allowlisted
+JSON. It classifies fixed OCC event names, `gateway` subsystem records, Codex
+stderr records from `codex_app_server`, and the Gateway and Harness wrappers'
+stderr diagnostics: `runtime.startup_phase` keeps `occ.startup.phase`, and
+`runtime.workspace_node` and the model probes keep `occ.code`. A failed phase or
+non-`READY` probe is WARN, so a startup failure's cause reaches the backend.
+Kubernetes resources drop the `latest` image tag that metadata extraction reports
+for a digest-only image. For retained records it keeps allowlisted
 attributes and replaces the body with the event name, stripping arbitrary content.
 OCC `compute.preflight-warning` records retain WARN severity and bounded `occ.code`;
 the local diagnostic message is excluded from remote export.

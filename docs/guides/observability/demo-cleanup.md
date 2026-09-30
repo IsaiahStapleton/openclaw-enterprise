@@ -1,6 +1,6 @@
 # Recover or remove the observability demo
 
-These steps continue [the observability demonstration stack](demo.md). Run them in the shell that ran its setup, with `HELM_KUBECONTEXT`, `$OBS_FILES` and the `release_digest` function from that page still defined.
+These steps continue [the observability demonstration stack](demo.md). Run them in the shell that ran its setup, with `HELM_KUBECONTEXT`, `OBS_OCC_RELEASE`, `OBS_OCC_NAMESPACE`, `$OBS_FILES` and the `release_digest` function from that page still defined.
 
 ## Recover an incomplete setup
 
@@ -40,7 +40,7 @@ Redirect external Collectors away from Loki and allow active work to finish;
 rollback can restart OCC Pods. Compare current and original manifests with live
 resources, UIDs and Helm ownership annotations, including objects rollback can
 delete or replace and failed-upgrade remnants. Retrieve the original hooks with
-`helm get hooks oce -n openclaw-system --revision "$(cat "$OBS_FILES/occ-revision")"`.
+`helm get hooks "$OBS_OCC_RELEASE" -n "$OBS_OCC_NAMESPACE" --revision "$(cat "$OBS_FILES/occ-revision")"`.
 Inspect every pre/post-rollback hook, deletion policy, live name, UID and side
 effect under the upgrade inspection rules. Stop on failed inspection or an unowned,
 replaced or ambiguous object. Preserve backend, Secrets, history and backup; do
@@ -69,21 +69,22 @@ original revision.
   test "$(kubectl --context "$HELM_KUBECONTEXT" get namespace kube-system -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/cluster-uid")"
   (cd "$OBS_FILES" && sha256sum -c occ-backup.sha256)
   revision=$(cat "$OBS_FILES/occ-revision")
-  test "$(kubectl --context "$HELM_KUBECONTEXT" -n openclaw-system get secret \
-    "sh.helm.release.v1.oce.v$revision" -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/occ-release-uid")"
+  test "$(kubectl --context "$HELM_KUBECONTEXT" -n "$OBS_OCC_NAMESPACE" get secret \
+    "sh.helm.release.v1.$OBS_OCC_RELEASE.v$revision" -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/occ-release-uid")"
   test "$(release_digest)" = "$(cat "$OBS_FILES/occ-release-digest")"
   (cd "$OBS_FILES" && sha256sum -c occ-demo.sha256)
-  helm get values oce -n openclaw-system --revision "$revision" --all -o yaml > "$OBS_FILES/occ-restore-values.yaml"
-  helm get manifest oce -n openclaw-system --revision "$revision" > "$OBS_FILES/occ-restore-manifest.yaml"
+  helm get values "$OBS_OCC_RELEASE" -n "$OBS_OCC_NAMESPACE" --revision "$revision" --all -o yaml > "$OBS_FILES/occ-restore-values.yaml"
+  helm get manifest "$OBS_OCC_RELEASE" -n "$OBS_OCC_NAMESPACE" --revision "$revision" > "$OBS_FILES/occ-restore-manifest.yaml"
   cmp "$OBS_FILES/occ-before.yaml" "$OBS_FILES/occ-restore-values.yaml"
   cmp "$OBS_FILES/occ-before-manifest.yaml" "$OBS_FILES/occ-restore-manifest.yaml"
-  helm status oce -n openclaw-system -o json > "$OBS_FILES/occ-current-status.json"
+  helm status "$OBS_OCC_RELEASE" -n "$OBS_OCC_NAMESPACE" -o json > "$OBS_FILES/occ-current-status.json"
   current=$(python3 - "$OBS_FILES/occ-current-status.json" "$revision" <<'PY_STATUS'
-import json, sys
+import json, os, sys
 s = json.load(open(sys.argv[1]))
 original = int(sys.argv[2])
 v = s.get("version")
-if (s.get("name") != "oce" or s.get("namespace") != "openclaw-system"
+if (s.get("name") != os.environ["OBS_OCC_RELEASE"]
+    or s.get("namespace") != os.environ["OBS_OCC_NAMESPACE"]
     or type(v) is not int or v not in (original, original + 1)
     or s.get("info", {}).get("status") not in ("deployed", "failed")
     or (v == original and s.get("info", {}).get("status") != "deployed")):
@@ -94,7 +95,7 @@ PY_STATUS
   if test "$current" != "$revision"; then
     test "$inspected" = 1
     test "$(release_digest "$current" chart)" = "$(cat "$OBS_FILES/occ-chart-digest")"
-    helm get values oce -n openclaw-system --revision "$current" -o json > "$OBS_FILES/occ-current-values.json"
+    helm get values "$OBS_OCC_RELEASE" -n "$OBS_OCC_NAMESPACE" --revision "$current" -o json > "$OBS_FILES/occ-current-values.json"
     yq -o=json '.' "$OBS_FILES/occ-demo.yaml" > "$OBS_FILES/occ-demo-values.json"
     python3 - "$OBS_FILES/occ-current-values.json" "$OBS_FILES/occ-demo-values.json" <<'PY_VALUES'
 import json, sys
@@ -102,7 +103,7 @@ with open(sys.argv[1]) as a, open(sys.argv[2]) as b:
     if json.load(a) != json.load(b):
         sys.exit("The current revision does not match the demo values; stop.")
 PY_VALUES
-    helm rollback oce "$revision" -n openclaw-system --history-max 0 --wait --timeout 5m
+    helm rollback "$OBS_OCC_RELEASE" "$revision" -n "$OBS_OCC_NAMESPACE" --history-max 0 --wait --timeout 5m
   fi
   touch "$OBS_FILES/occ-rollback-finished"
 )
@@ -114,7 +115,7 @@ and live resources with the saved revision. Save DaemonSets and Pods; their
 configuration may be sensitive:
 
 ```bash
-kubectl --context "$HELM_KUBECONTEXT" -n openclaw-system get daemonsets,pods \
+kubectl --context "$HELM_KUBECONTEXT" -n "$OBS_OCC_NAMESPACE" get daemonsets,pods \
   -o yaml > "$OBS_FILES/occ-live-workloads.yaml"
 ```
 

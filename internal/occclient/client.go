@@ -236,6 +236,11 @@ func (client *Client) CreateSecret(namespaceID string, body jsontext.Value) (any
 	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "secrets"}, body)
 }
 
+// ListSecrets lists Secret metadata in a Namespace without material.
+func (client *Client) ListSecrets(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "secrets")
+}
+
 // GetSecret fetches Secret metadata without material.
 func (client *Client) GetSecret(namespaceID, secretID string) (any, error) {
 	return client.get("namespaces", namespaceID, "secrets", secretID)
@@ -324,6 +329,11 @@ func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 		[]string{"namespaces", namespaceID, "agents", agentID, "deploy"},
 		nil,
 	)
+}
+
+// ListAgentRevisions lists the readable immutable revisions of an Agent.
+func (client *Client) ListAgentRevisions(namespaceID, agentID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", agentID, "revisions")
 }
 
 // GetAgentDeployment fetches durable deployment status for one Agent revision.

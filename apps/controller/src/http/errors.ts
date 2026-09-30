@@ -318,7 +318,9 @@ export function requestFailure(error: unknown): RequestFailure {
     );
   }
   if (error instanceof NamespaceNotEmptyError) {
-    return failure(409, "NAMESPACE_NOT_EMPTY", "The requested Namespace is not empty.");
+    const contents =
+      error.contents.length === 0 ? "" : ` It still contains: ${error.contents.join(", ")}.`;
+    return failure(409, "NAMESPACE_NOT_EMPTY", `The requested Namespace is not empty.${contents}`);
   }
   if (error instanceof AgentDeletingError) {
     return failure(409, "AGENT_DELETING", "The requested Agent is being deleted.");

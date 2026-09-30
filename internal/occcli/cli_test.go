@@ -182,6 +182,9 @@ func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 	for _, args := range [][]string{
 		{"agent", "logs", "agt_1"},
 		{"agent", "logs", "agt_1", "--source", "kubelet"},
+		{"agent", "logs", "agt_1", "--source", "sandbox"},
+		{"agent", "logs", "my-agent", "--source", "gateway"},
+		{"agent", "runtime", "my-agent"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "--tail", "0"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "--tail", "1001"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "--since", "25h"},

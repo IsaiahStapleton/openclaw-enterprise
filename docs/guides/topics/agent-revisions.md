@@ -65,7 +65,7 @@ beside the list. **Create new version** opens the current saved Configuration;
 **Deploy new version** uses those saved settings and Agent plugin selections.
 Viewing an older version does not select it for deployment. The
 [HTTP API](../../reference/api.md#agent-revisions)
-also lists and reads revisions; the CLI has no revision history command.
+also lists and reads revisions; `occ agent revisions "$AGENT_ID"` lists them.
 
 The **Plugins** tab shows the saved Agent selections in **Create new version** and the
 frozen selections in an admitted revision. Change and save draft plugin policies
