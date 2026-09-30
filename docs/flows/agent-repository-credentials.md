@@ -17,10 +17,9 @@ See [service forwarding and retirement](repository-credentials.md) and
 ## Entry Points
 
 - `apps/controller/src/index.ts:createFastifyApp` registers repository-option and
-  Agent lifecycle routes. Options and creation share Namespace-scoped Agent-create
-  authorization.
+  Agent lifecycle routes. Discovery requires Agent-create or exact-Agent update.
 - `apps/controller/src/console/agents/repositories.mjs:createRepositoryFields`
-  renders repository and access-level selection.
+  renders discovery and inherited or custom access.
 - `apps/controller/src/worker.ts:ControllerWorker.prepareRevision` prepares
   repository sessions before invoking Compute.
 
@@ -32,6 +31,7 @@ share an immutable registry; the Namespace is ready. Unbound Agents bypass this.
 ```mermaid
 graph TD
   Console["<b>Console create form</b><br/>Load safe Namespace choices"] --> Options["<b>Repo Driver projection</b><br/>Refs, names, allowed profiles"]
+  Options -->|Visible refs| Metadata["<b>Credential service</b><br/>Optional descriptions"]
   Options --> API["<b>Agent API</b><br/>Recheck and save refs"]
   Options -->|Unverified authorization or discovery error| CreateBlocked["<b>Create blocked</b><br/>Retry before any write"]
   API -->|Known zero-binding rejection| OrdinaryRetry["<b>Ordinary retry</b><br/>Reuse Configuration directly"]
@@ -84,7 +84,7 @@ graph TD
   classDef operation fill:#EBF3F0,stroke:#7F9D93,color:#2B4038,stroke-width:1px
   classDef condition fill:#F7F1E5,stroke:#B3A078,color:#514532,stroke-width:1px
   class API,Revision,Attempt,Queue,FormLocked,Receipt,Terminal state
-  class Console,Options,Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
+  class Console,Options,Metadata,Worker,Service,New,Retained,Compute,Pod,Command,Gateway,Close,Done,Delete,Finalize operation
   class Recover,Repair,Refuse,Wait,ViewStop,CreateBlocked,OrdinaryRetry,Reselect,PushRefs,PushDenied,Capability,Blocked condition
 ```
 
@@ -92,47 +92,47 @@ graph TD
 
 ### 1. Project choices and resolve Namespace policy during Agent admission
 
-`OpenClawController.listRepositoryOptions` authorizes Namespace-scoped Agent
-creation, checks Compute-owned availability, then projects opaque references,
+`OpenClawController.listRepositoryOptions` authorizes Namespace Agent creation
+or exact-Agent update, checks Compute-owned availability, then projects opaque references,
 names and profiles through `GitHubRepoDriver.listOptions`. Exact Harness validation
-remains at deployment. No approvals yields an empty list; a closed Namespace conflicts.
-Only classified optional discovery failure after authorization becomes
-`RepositoryOptionsUnavailableError`, mapped by the options route to
-`503 REPOSITORY_OPTIONS_UNAVAILABLE`. Generic failures do not establish authorization.
+remains at deployment. No approvals yields `[]`; closed Namespaces conflict.
+Classified optional discovery failures map to `503 REPOSITORY_OPTIONS_UNAVAILABLE`.
 
-`createRepositoryFields` permits 16 selections with one explicit `git-read`,
-`git-write` or `git-full` profile. Discovery success or that optional-outage code
-permits creation. Transport, malformed, throttled and generic failures block both
-writes; denial and lifecycle conflict remain distinct. Model selection is independent; toggles preserve focus.
+`createRepositoryFields` searches up to 1,000 choices with 16 attachments;
+`repositorySettings` resolves inheritance intent through RepoDriver and the
+database checks concrete bindings. Only fresh, empty drafts permit the classified
+outage. For up to 20 visible refs,
+`apps/controller/src/drivers/repo/github/credentials/descriptions.ts:createGitHubRepositoryDescriptions`
+fetches descriptions with repository-scoped, metadata-only tokens, sharing the
+provider queue and cleanup lifecycle. Missing metadata never blocks selection.
 
 The form saves Configuration first and preserves it after known Agent rejections.
-Retries reuse it; repository retries require successful reload, nonempty reselection
-and explicit profile. Empty selections cannot downgrade the attempt. Failed reloads
-block creation, expiry signs out, and obsolete completions cannot mutate the view.
+Retries reuse it; repository retries require successful reload and nonempty
+reselection. Failed reloads block creation; obsolete completions cannot mutate the view.
 Unknown outcomes require stored Agent and Configuration reads.
 
 `packages/occ/src/index.ts:OpenClawController.repositoryBindingSelections`
 uses `resolveRepositoryBindings` after existing authorization. Inputs contain distinct opaque references and optional profiles, never provider tokens
-or caller-selected grant identities. The concrete
+or caller-selected grant identities; selections keep request order. The concrete
 `apps/controller/src/drivers/repo/github/driver.ts:GitHubRepoDriver.resolve`
-uses local registry policy, defaulting to Contributor (`git-write`), without
-control-socket or GitHub calls.
+uses local registry policy, defaults omitted legacy profiles to `git-write`, and
+makes no control-socket or GitHub calls.
 
 `apps/controller/src/drivers/repo/github/credentials/registry.ts:resolveGitHubRepositoryBinding`
 requires the exact Namespace/reference/profile combination. Its fingerprint
-binds provider/App/installation/repository identity, duration policy and the
-Namespace's complete profile policy, exact permissions and optional normalized
-push-ref allowlist. Each binding has one grant; installations can supply several repositories. OCC stores normalized Agent selections; an omitted update array
+binds provider/App/installation/repository identity, duration policy and complete
+Namespace profile policy, exact permissions and optional normalized
+push-ref allowlist. Each binding has one grant; installations can supply several
+repositories. OCC stores normalized Agent selections; an omitted update array
 preserves them and an empty array clears them.
 
 ### 2. Freeze a deployable revision
 
 `packages/occ/src/index.ts:OpenClawController.admitRepositoryCredentials`
-re-resolves the draft, validates topology through Compute and freezes Driver
-identity, exact grants and an absolute deadline unaffected by renewal or recovery.
-Duration `86400` allows 24 hours from admission. The public `clientRevision`
-serializer in `apps/controller/src/index.ts` returns only Driver identity,
-references, profiles and deadline.
+re-resolves the draft, validates Compute topology and freezes Driver identity,
+grants and an absolute deadline unaffected by renewal or recovery. Duration
+`86400` allows 24 hours. `apps/controller/src/index.ts:clientRevision` returns
+only Driver identity, references, profiles and deadline.
 
 `apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
 constructs `GitHubRepoDriver` for capability `repo` from a Backend-owned Unix
@@ -160,9 +160,9 @@ The client validates each status before projection. `DISPOSED` permits historica
 revoked or expired counts, but no active, pending or uncertain obligations.
 
 Only a created response contains the bearer. The Driver encodes transient files with
-`apps/controller/src/drivers/repo/github/credentials/client/config.ts:encodeRepositoryCredentialSessionFiles`
-and returns status with that closed file map. The worker records the
-session ID before passing files through
+`apps/controller/src/drivers/repo/github/credentials/client/config.ts:encodeRepositoryCredentialSessionFiles`,
+returning status with that closed file map. The worker
+records the session ID before passing files to
 `ComputeRevisionContext.repositoryCredentials`.
 
 A confirmed open session yields a `retained` binding without files. `recoverOnly`
@@ -198,9 +198,9 @@ files into memory-backed storage. `REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT` mounts
 that private subPath at `/run/oce/repository-credentials`, avoiding the
 fsGroup-writable volume root. It calls
 `apps/controller/src/drivers/repo/github/credentials/client/native-git.ts:prepareNativeGitConfiguration`
-with unchanged private-file checks. Retry removes only a validated private
-`gitconfig`. Both init completions gate consumer startup; the consumer mounts
-material read-only. Public metadata and gateway bearers remain separate files.
+with private-file checks. Retry removes only a validated private `gitconfig`.
+Both init steps gate startup; the consumer mounts material read-only. Public
+metadata and gateway bearers remain separate.
 
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.activateRevision`
 replaces the consumer when material changes, including within one revision.
@@ -239,10 +239,10 @@ confinement.
 See the [routing limits](../reference/repository-credentials.md#client-routing-and-limits).
 `pushRefAllowlist` selects image-owned hooks.
 `apps/controller/src/drivers/repo/github/credentials/client/hook-dispatch.ts:checkPush`
-matches the actual destination, normalizing trailing slashes and validating
+matches the destination, normalizing trailing slashes and validating
 usernames after binding selection; duplicate grants remain ambiguous. It checks
 every destination ref and rejects the whole push before updates, though discovery
-may contact the service. It delegates original arguments and input to ordinary
+may contact the service. It delegates original arguments and input to
 common-directory hooks. `commonDirectory` uses Git-supplied directories before
 initial `HEAD`; linked worktrees resolve their shared directory through Git.
 Custom hook paths and
@@ -255,7 +255,7 @@ and preserves HOME without mutating shared selection.
 
 `apps/controller/src/drivers/repo/github/credentials/profiles.ts` owns the exact
 Reader, Contributor and Collaborator permission maps. The GitHub route classifier
-admits selected REST operations for that profile and token-bounded GraphQL for
+admits profile-selected REST operations and token-bounded GraphQL for
 all three. Every GraphQL POST remains a possible write; Reader's token, not a
 query parser, enforces its read-only grant. See
 [access levels](../reference/repository-credentials/access-levels.md).
@@ -345,6 +345,8 @@ Ready Pods and local commands do not prove live writes.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:00: Trace repository descriptions, inheritance and overrides. (public-pr/374)
 
 - 2026-09-28 21:24: Stabilize retained projection ordering. (public authoring-run/75044c27-6c5b-4cff-a6cf-9e31fd688ac2 - 8352c0932bcbde43e88b44c6975496ca5431ff55)
 

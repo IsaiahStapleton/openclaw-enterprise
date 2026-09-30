@@ -760,6 +760,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       return;
     }
     const agentContext = {
+      operatorId: session.user.id,
       drafts: drafts.scope(namespaceId, current.agentId ?? "create"),
       suspendDrafts: () => drafts.suspend(),
       view: shell.view,

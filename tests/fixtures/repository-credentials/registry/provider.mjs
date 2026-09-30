@@ -84,6 +84,8 @@ export async function startRegistryProviderFixtures(
       keyPair,
       repository: entry.repository,
       repositoryId: entry.repositoryId,
+      description: entry.description,
+      beforeMetadataResponse: entry.beforeMetadataResponse,
       tokenLifetimeMs: tokenLifetimeMs,
       tokenResponse(packet) {
         tokenOwners.set(packet.token, entry);

@@ -1,21 +1,19 @@
 ---
 created: 2026-08-24
-updated: 2026-09-26
-last_updated_session: authoring-run/6d7cf57f-03f3-4ea7-8694-38edd9f3c9c2
+updated: 2026-09-30
+last_updated_session: authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f
 ---
 
 # Bootstrap and human authentication flow
 
 ## Overview
 
-Fresh native-IAM bootstrap creates human and service administrators, delivers
-the initial service key through protected storage, and commits their shared Role
-and separate bindings with the Installation. Production also delivers a generated
-human password; development uses its configured password. This flow follows both
-environment modes of the shared initializer into human sign-in and exact IAM
-authorization. Ongoing
-service-key verification, rotation, and revocation continue in the
-[service API key flow](service-api-keys.md).
+Fresh native-IAM bootstrap creates human and service administrators, shares their
+Role through separate bindings, and commits them with the Installation. It writes
+the initial service key to protected storage. Production also delivers a generated
+human password; development uses its configured password. This flow covers
+initialization, human sign-in, and exact IAM authorization. The
+[service API key flow](service-api-keys.md) covers verification, rotation, and revocation.
 
 ## Entry Points
 
@@ -66,19 +64,16 @@ graph TD
 ### 1. Load state and create the fresh administrator identities
 
 [`scripts/bootstrap-installation.mjs`](../../scripts/bootstrap-installation.mjs)
-first loads the singleton Installation. Existing Installations verify the
-configured administrator's immutable account/IAM identity and return without
-issuing keys, touching output, or repairing identity/grant changes. This includes
-Installations created before service-administrator bootstrap existed.
+loads the singleton Installation. Existing Installations only verify the
+configured administrator's immutable account/IAM identity: no key issuance,
+output changes, or identity/grant repair, including Installations predating service-administrator bootstrap.
 
 For fresh setup, production creates a Better Auth account with a random password;
 development creates the configured `OPENCLAW_DEV_EMAIL`/`OPENCLAW_DEV_PASSWORD`
-account. `packages/iam/src/index.ts:createBootstrapAdministratorSeed` adds a non-Agent
-`spn_<uuid>` with no Namespace and binds it to the same administrator Role as
-the human, using a separate unrestricted binding. The
-[authorization reference](../reference/authorization.md#supported-policy-surface)
-owns the exact action matrix. Additional-account provisioning does not create
-another service administrator.
+account. `packages/iam/src/index.ts:createBootstrapAdministratorSeed` adds a
+non-Agent `spn_<uuid>` without a Namespace and a separate unrestricted binding to
+the human's administrator Role. The [authorization reference](../reference/authorization.md#supported-policy-surface)
+defines exact actions. Additional-account provisioning creates no service administrator.
 
 ### 2. Issue private output, then commit the Installation
 
@@ -128,6 +123,11 @@ retains its non-secret IDs. Lost output does not trigger regeneration; normal
 [service-key management](service-api-keys.md) owns replacement and revocation.
 
 ### 3. Construct session authentication
+
+`apps/controller/src/auth/index.ts:createPostgresControllerAuth` uses OCC's
+[public binding](../reference/postgres-auth-binding.md): the caller-owned pool and
+full schema, no construction I/O or teardown, rejection without fallback, and
+unchanged PostgreSQL/camelCase/transaction settings.
 
 `apps/controller/src/auth/index.ts:createControllerAuth` configures Better Auth
 email/password authentication, protected session cookies, and durable PostgreSQL
@@ -187,10 +187,10 @@ session. Password sign-in in this profile returns the same key. Callback denials
 (transport failure, deadline, 429/5xx, malformed body), or `EXTERNAL_IDENTITY_REJECTED`;
 State dependency failure or uncertain session completion is not a denial. Neither path retries.
 
-Google uses the same start, callback, and result code through
-`apps/controller/src/auth/github.ts:externalProviderEndpoints`, with provider instance
-`google:<sha256(client ID)>`. Its authorization request adds scope `openid email` and a
-nonce, an HMAC of the attempt state under the auth secret, so it needs no extra storage.
+Google reuses `apps/controller/src/auth/github.ts:externalProviderEndpoints` for
+start, callback, and result, with provider instance `google:<sha256(client ID)>`.
+Authorization adds scope `openid email` and an auth-secret HMAC of attempt state
+as nonce, without extra storage.
 `apps/controller/src/auth/google.ts:exchangeGoogleSubject` exchanges the code, fetches
 Google's signing keys through the same bounded transport, verifies the RS256 ID token's
 signature, issuer, audience, expiry, and nonce (plus `hd` and `email_verified` when
@@ -202,8 +202,8 @@ State sets the five-minute attempt and eight-hour session deadlines. Cookie
 Max-Age subtracts monotonic elapsed work from that persisted lifetime; expired
 completion cannot release a cookie.
 
-Before activation the deployment stops admission, drains or terminates admitted
-requests, and stops every old controller. Both PostgreSQL compositions reject
+Activation requires stopped admission, drained or terminated requests, and every
+old controller stopped. Both PostgreSQL compositions reject
 GitHub with enabled native administration, even when its cookie domain is missing.
 `apps/controller/src/auth/index.ts:createPostgresControllerAuth` constructs and
 initializes authentication before activation, checking the secret, canonical HTTP
@@ -304,6 +304,8 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 01:03: Receive the PostgreSQL binding and independent schema views. (authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f - f2c9f98b0b89762cc9edda189c102ed8c593c678)
 
 - 2026-09-28 04:00: Trace the GitHub attempt receipt, result exchange, and `x-occ-session-key` narrowing in the accompanying source change. (feat/github-session-binding-20260928)
 

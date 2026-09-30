@@ -117,9 +117,8 @@ a separate credential action. Its initial state is not a Stop request; OCC
 generation is simulated.
 
 Choose a Preset, fill its variables, review seeded workspace files, and create
-an Agent with the Codex harness. The Console submits its inline Configuration
-and saved Secret references, follows simulated provisioning and deployment
-activation, and opens Workspace files for the returned revision. A separate flow
+an Agent with the Codex harness. The Console submits inline Configuration and
+Secret references, then follows simulated provisioning. A separate flow
 starts without a Preset, selects OpenAI with Codex, creates or selects a model
 Secret, selects a model, edits IDENTITY.md, and clears USER.md before creation.
 OpenClaw and unsupported-runtime stories retain the draft workflow: provision
@@ -269,9 +268,11 @@ banner scope and navigation. No story proves live serving.
 
 **Current observations** starts unrequested. Compare
 **Current observations for v7**, **Unknown observation for v6**, and
-**Current observation unavailable**. Clicking requests that version's diagnostics
-through a bodyless POST, returning timestamped checks or an error; the recorded
-deployment result stays unchanged.
+**Current observation unavailable**. Clicking requests that version's timestamped
+diagnostics without changing the recorded deployment result.
+
+Outcome-unknown stories in **Components/Channels** and **Components/Credentials**
+disable deployment until **Reload draft**; they cannot prove a write committed.
 
 **Create new version** opens saved settings. Save edits, then **Deploy new version**
 to admit an immutable snapshot. Browsing does not deploy. Credentials need deployment;

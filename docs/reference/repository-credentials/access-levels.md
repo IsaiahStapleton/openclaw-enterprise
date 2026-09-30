@@ -14,13 +14,33 @@ These columns and shared permissions form the complete token permission map;
 OCE requests one numeric repository ID and rejects a different returned grant.
 App permissions must be approved on the installation before use.
 
-In Agent bindings, omitting `profile` selects **`git-write`** (Contributor with issue management off). This includes PR and read API
-permissions; it is not the former Git-only write grant. Existing profile values
-are unchanged, but the immutable grant fingerprint includes the permission
-contract. A revision admitted under a different contract cannot silently acquire
-the new authority. The Console requires an explicit choice. Its Contributor choice defaults to
-`git-full` when approved. **Customize access** can select `git-write`; only
-profiles shared by all selected repositories are available.
+The Console starts with Contributor as the Agent default. Added repositories
+inherit it until customized by expanding their card. Turning off issue management
+selects `git-write`; each repository must permit its resulting profile.
+
+Agent create, provision, and update requests can use `repositoryAccess`:
+
+```json
+{
+  "defaultProfile": "git-full",
+  "repositories": [
+    { "repositoryRef": "application" },
+    { "repositoryRef": "documentation", "profile": "git-read" }
+  ]
+}
+```
+
+An omitted entry profile inherits `defaultProfile`. An explicit profile remains
+custom even when equal to the default. Responses retain this intent alongside
+resolved `repositoryBindings`; admitted revisions contain concrete profiles.
+Changing desired access affects future deployments only. An empty repositories
+array removes attachments while retaining the default.
+
+`repositoryAccess` and `repositoryBindings` are mutually exclusive request fields.
+For direct `repositoryBindings`, omitting `profile` still selects **`git-write`**.
+Agents without saved intent open with their existing profiles marked custom.
+Omitting both fields during update preserves existing settings; updating direct
+bindings clears inheritance intent. Profiles remain subject to Namespace policy.
 
 ## API and branch boundaries
 

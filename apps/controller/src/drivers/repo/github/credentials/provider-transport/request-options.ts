@@ -1,5 +1,5 @@
 import type { RequestOptions } from "node:https";
-import type { GitHubProfile } from "../types.ts";
+import type { GitHubTokenProfile } from "../types.ts";
 import { permissionsForProfile } from "../profiles.ts";
 
 declare const scopeIdentity: unique symbol;
@@ -20,7 +20,7 @@ function numericId(value: string): number {
 
 export function prepareProviderScope(
   origin: string,
-  scope: Readonly<{ installationId: string; repositoryId: string; profile: GitHubProfile }>,
+  scope: Readonly<{ installationId: string; repositoryId: string; profile: GitHubTokenProfile }>,
 ): ProviderScope {
   const url = new URL(origin);
   if (url.protocol !== "https:" || url.origin !== origin || url.username || url.password) {
