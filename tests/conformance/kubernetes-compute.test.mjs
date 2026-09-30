@@ -11814,6 +11814,13 @@ test("embedded redeploy repairs a never-served unready Gateway while workspace s
     objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
     `${gatewayName}-inactive`,
   );
+  const revisionArtifacts = (target) => [
+    `Secret:${namespace}:harness-secrets-${digest(target.agentId)}-${digest(target.id)}`,
+    `ConfigMap:${namespace}:${gatewayName}-rev-${digest(target.id)}`,
+  ];
+  for (const artifact of revisionArtifacts(revision)) {
+    assert.ok(objects.has(artifact), `${artifact} is projected for the first deploy`);
+  }
 
   const successor = { ...revision, id: "redeploy-successor", revision: revision.revision + 1 };
   const successorContext = { ...context, ...authContext(successor) };
@@ -11821,6 +11828,14 @@ test("embedded redeploy repairs a never-served unready Gateway while workspace s
   assert.equal((await driver.prepareRevision(successor, successorContext)).ready, false);
   const repaired = objects.get(gatewayKey);
   assert.equal(repaired.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
+  // The repaired Gateway no longer runs the failed predecessor, so its credential
+  // and configuration copies go now rather than on stop or delete.
+  for (const artifact of revisionArtifacts(revision)) {
+    assert.equal(objects.has(artifact), false, `${artifact} is removed once superseded`);
+  }
+  for (const artifact of revisionArtifacts(successor)) {
+    assert.ok(objects.has(artifact), `${artifact} is kept for the repairing successor`);
+  }
   assert.equal(
     objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
     `${gatewayName}-inactive`,
