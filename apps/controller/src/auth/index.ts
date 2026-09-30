@@ -178,6 +178,14 @@ export interface ControllerAuthOptions {
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Replaces the in-memory failure-counting password admission (both profiles). */
   readonly passwordAdmission?: PasswordSignInAdmission;
+  /**
+   * Password-only profile: audits each password sign-in Better Auth accepted (with the
+   * account) or refused (without it). The guarded profile audits in State itself.
+   */
+  readonly passwordSignInAudit?: {
+    accepted(userId: string): Promise<void>;
+    refused(): Promise<void>;
+  };
   /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
   readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
 }
@@ -485,8 +493,23 @@ function authFailure(error: unknown): { readonly status: number; readonly code: 
   return { status: 503, code: "DEPENDENCY_UNAVAILABLE" };
 }
 
-// Credential rejections spend the password budget; dependency failures do not.
+/**
+ * A rejected password whose denial audit could not be written. The response is 503 (audit
+ * outages fail closed), yet admission still counts it as a credential failure.
+ */
+class DenialAuditUnavailable extends Error {
+  constructor(cause: unknown) {
+    super("The sign-in denial could not be audited.", { cause });
+    this.name = "DenialAuditUnavailable";
+  }
+}
+
+// Credential rejections spend the password budget; dependency failures do not, except a
+// rejection whose denial audit failed.
 function countsAsSignInFailure(error: unknown): boolean {
+  if (error instanceof DenialAuditUnavailable) {
+    return true;
+  }
   const { status } = authFailure(error);
   return status >= 400 && status < 500;
 }
@@ -880,7 +903,11 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         },
       ),
     ...(humanLogin === undefined
-      ? {}
+      ? {
+          // Credential refusals are Better Auth warnings with no request or account; the
+          // sign-in audit records them instead. Errors still reach the console.
+          logger: { level: "error" },
+        }
       : {
           session: {
             expiresIn: 8 * 60 * 60,
@@ -1250,13 +1277,37 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           );
         }
         return passwordAdmission.admit(attempt, async () => {
-          const result = await api.signInEmail({
-            body: { ...body, rememberMe: true },
-            headers: authHeaders(request.headers),
-            asResponse: false,
-            returnHeaders: true,
-            returnStatus: true,
-          });
+          const audit = options.passwordSignInAudit;
+          let result;
+          try {
+            result = await api.signInEmail({
+              body: { ...body, rememberMe: true },
+              headers: authHeaders(request.headers),
+              asResponse: false,
+              returnHeaders: true,
+              returnStatus: true,
+            });
+          } catch (error) {
+            if (audit !== undefined && countsAsSignInFailure(error)) {
+              try {
+                await audit.refused();
+              } catch (auditError) {
+                // Denial audits fail closed (503), but the wrong password still spends budget.
+                throw new DenialAuditUnavailable(auditError);
+              }
+            }
+            throw error;
+          }
+          if (audit !== undefined) {
+            try {
+              await audit.accepted(result.response.user.id);
+            } catch (error) {
+              // No unaudited session is handed out.
+              const context = await auth.$context;
+              await context.internalAdapter.deleteSession(result.response.token).catch(() => {});
+              throw error;
+            }
+          }
           // Only a successful sign-in marks the browser as a known device for this email.
           // Rejections throw; a success leaves the status unset (200).
           if ((result.status ?? 200) === 200) {
@@ -1592,6 +1643,14 @@ export async function createPostgresControllerAuth(
       : {
           passwordAdministrator: (userId: string) =>
             administersInstallation(iamDriver, options.installationId, userId),
+        }),
+    ...(humanLogin !== undefined || persistence === undefined
+      ? {}
+      : {
+          passwordSignInAudit: {
+            accepted: (userId: string) => persistence.recordPasswordLogin(userId),
+            refused: () => persistence.recordDenied("INVALID_CREDENTIALS"),
+          },
         }),
     database: await createOccAuthDatabase(pool),
   });
