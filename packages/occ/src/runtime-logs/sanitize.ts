@@ -258,10 +258,21 @@ const JSON_CONTINUATION_LINE = /^(?:["{}[\]\-\d]|true\b|false\b|null\b)/;
 /**
  * Tracks one multi-line JSON value within a chunk. JSON.parse sees one line at a time,
  * so the `{` line alone is malformed and every inner line would otherwise read as text.
+ *
+ * Depth only falls on closing brackets or a line that cannot continue JSON, so after an
+ * unclosed `{` (or a bare quoted-string line) plain lines that start with a digit, `-`,
+ * `"`, `{`, `[`, `true`, `false` or `null` stay withheld until such a line appears. That
+ * errs toward withholding, never toward showing payload. Bracket-tagged text lines such
+ * as `[node-host] ...` always end the block.
  */
 interface JsonBlock {
   depth: number;
 }
+
+// A plain-text line tagged with a bracketed component name, such as
+// `[node-host] advertised commands: ...`. The tag starts with a letter and holds no
+// quotes, commas, braces or spaces, so no JSON array (or fragment of one) matches.
+const BRACKET_TAG = /^\[(?!(?:true|false|null)\])[A-Za-z][\w.:/@-]{0,63}\](?:\s|$)/;
 
 function classify(line: string, block: JsonBlock): Classified {
   if (byteLength(line) > RUNTIME_LOG_MAX_INPUT_BYTES) {
@@ -270,7 +281,11 @@ function classify(line: string, block: JsonBlock): Classified {
   const text = stripRuntimeLogControls(line);
   const trimmed = text.trim();
   if (block.depth > 0) {
-    if (JSON_CONTINUATION_LINE.test(trimmed) && !parsesAlone(trimmed)) {
+    if (
+      JSON_CONTINUATION_LINE.test(trimmed) &&
+      !BRACKET_TAG.test(trimmed) &&
+      !parsesAlone(trimmed)
+    ) {
       block.depth += bracketDelta(trimmed);
       return { type: "withheld", reason: "malformed" };
     }
@@ -282,7 +297,7 @@ function classify(line: string, block: JsonBlock): Classified {
     block.depth = Math.max(0, 1 + bracketDelta(trimmed));
     return { type: "withheld", reason: "malformed" };
   }
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+  if (trimmed.startsWith("{") || (trimmed.startsWith("[") && !BRACKET_TAG.test(trimmed))) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);

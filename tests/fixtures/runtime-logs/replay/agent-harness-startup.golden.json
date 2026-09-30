@@ -1,6 +1,6 @@
 {
   "input": 16,
-  "withheld": 8,
+  "withheld": 7,
   "records": [
     {
       "type": "withheld",
@@ -104,7 +104,7 @@
       }
     },
     {
-      "type": "withheld",
+      "type": "line",
       "time": "2026-09-30T17:37:36.927337215Z",
       "stream": {
         "source": "agent",
@@ -113,8 +113,10 @@
         "container": "agent",
         "restartCount": 0
       },
-      "count": 1,
-      "reason": "malformed"
+      "contentClass": "operational",
+      "kind": "text",
+      "level": "unknown",
+      "message": "[node-host] advertised commands: dir.list, file.create, file.fetch, file.stat, file.write, workspace.memory, workspace.skills"
     },
     {
       "type": "line",

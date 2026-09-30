@@ -279,6 +279,57 @@ test("pretty-printed JSON is withheld as one run, not shown line by line", () =>
     stray.records.map((record) => (record.type === "withheld" ? record.type : record.message)),
     ["withheld", "plain text resumes"],
   );
+
+  // A bracket-tagged text line ends an open block instead of reading as its continuation.
+  const tagged = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: ["{ x", "[node-host] advertised commands: a, b"].map((line, index) => ({
+      time: lineTime(index),
+      raw: line,
+    })),
+  });
+  assert.deepEqual(
+    tagged.records.map((record) =>
+      record.type === "withheld" ? `withheld ${record.count}` : record.message,
+    ),
+    ["withheld 1", "[node-host] advertised commands: a, b"],
+  );
+});
+
+test("the sanitizer keeps bracket-tagged text lines but withholds malformed JSON arrays", () => {
+  const stream = { source: "agent", pod: "agent-0", container: "agent" };
+  const canary = `array-canary-${randomUUID()}`;
+  const tagged = [
+    "[node-host] advertised commands: dir.list, file.create, file.fetch",
+    "[DF3-P10] bracket-prefixed operational line",
+    "[gateway/ws] reconnecting",
+    "[plugins]",
+  ];
+  const arrays = [
+    "[",
+    `["${canary}",`,
+    `[{"role":"user","text":"${canary}"}`,
+    `[ "${canary}" ] trailing`,
+    `[null, "${canary}"`,
+    `[true] ${canary}`,
+    `[${canary}`,
+  ];
+  const page = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [...tagged, ...arrays].map((raw, index) => ({ time: lineTime(index), raw })),
+  });
+  assert.deepEqual(
+    page.records.map(({ type, kind, message, reason, count }) =>
+      type === "line" ? { kind, message } : { reason, count },
+    ),
+    [
+      ...tagged.map((message) => ({ kind: "text", message })),
+      { reason: "malformed", count: arrays.length },
+    ],
+  );
+  assert.equal(JSON.stringify(page).includes(canary), false);
 });
 
 // The redactor runs synchronously on workload-controlled lines of up to 32 KiB, before
