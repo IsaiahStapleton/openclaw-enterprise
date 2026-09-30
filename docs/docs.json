@@ -902,8 +902,8 @@
               "flows/repository-credentials",
               "flows/repository-credential-configuration",
               "testing/repository-credentials",
-              "testing/repository-credentials-platform",
               "testing/repository-credentials-artifacts",
+              "testing/repository-credentials-platform",
               "flows/agent-presets"
             ]
           }
