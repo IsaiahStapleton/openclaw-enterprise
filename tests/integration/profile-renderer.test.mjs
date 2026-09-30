@@ -718,6 +718,7 @@ test(
       /github:\n {4}enabled: true\n {4}egressCidrs:\n {6}- 140\.82\.112\.0\/20/,
     );
     assert.match(github.values, /trustedProxy:\n {4}preset: ingress-nginx/);
+    assert.doesNotMatch(github.preflight.warnings.join("\n"), /trustedProxy is not set/);
     assert.doesNotMatch(github.preflight.prerequisites.join("\n"), /native admin domain/);
     const manifests = helmTemplate(github);
     assert.match(manifests, /name: OCC_AUTH_GITHUB_CLIENT_ID/);
@@ -750,6 +751,22 @@ test(
     assert.match(helmTemplate(nativeAdmin), /name: OCC_AUTH_TRUSTED_PROXY_PRESET/);
   },
 );
+
+test("preflight warns, without failing, when no trusted proxy is set", () => {
+  const github = render("openclaw", externalSignInInput());
+  assert.equal(github.summary.ok, true);
+  assert.match(
+    github.preflight.warnings.join("\n"),
+    /controlPlane\.trustedProxy is not set: .*every browser shares one address budget/,
+  );
+  assert.doesNotMatch(github.values, /trustedProxy:/);
+  const password = render("openclaw", baseInput());
+  assert.equal(password.summary.ok, true);
+  assert.match(
+    password.preflight.warnings.join("\n"),
+    /controlPlane\.trustedProxy is not set: failed password sign-ins are limited per email only/,
+  );
+});
 
 test("preflight rejects external sign-in and trusted proxy inputs Helm would reject", () => {
   assertPreflightFailure(

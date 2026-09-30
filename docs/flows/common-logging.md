@@ -152,7 +152,10 @@ JSON. It classifies fixed OCC event names, `gateway` subsystem records, and Code
 stderr records from `codex_app_server`. For retained records it keeps allowlisted
 attributes and replaces the body with the event name, stripping arbitrary content.
 OCC `compute.preflight-warning` records retain WARN severity and bounded `occ.code`;
-the local diagnostic message is excluded from remote export. It drops malformed,
+the local diagnostic message is excluded from remote export.
+`authentication.sign-in-limit-warning` keeps `occ.code`, and
+`authentication.sign-in-limited` keeps only `occ.sign_in.lane`; its local key
+hash is not exported. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex protocol stdout records.
 Collector-only configuration holds exporter credentials and TLS settings. Finite
 queues and retries make logs best-effort; outage or overflow cannot block API

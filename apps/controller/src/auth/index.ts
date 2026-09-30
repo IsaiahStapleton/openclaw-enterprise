@@ -1,5 +1,5 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { domainToASCII } from "node:url";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { APIError, betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
@@ -144,6 +144,17 @@ export interface ControllerAuthOptions {
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Password-only profile: replaces the in-memory failure-counting admission. */
   readonly passwordAdmission?: PasswordSignInAdmission;
+  /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
+  readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
+}
+
+/**
+ * The logged form of a limited sign-in lane's key: keyed by the auth secret, so a log
+ * reader cannot test candidate emails or addresses against it, and truncated. Stable for
+ * one secret, so repeated reports about one target correlate.
+ */
+export function signInLimitKeyHash(secret: string, key: string): string {
+  return createHmac("sha256", secret).update(`sign-in-limited\0${key}`).digest("hex").slice(0, 16);
 }
 
 export interface PostgresControllerAuthOptions extends Omit<
@@ -891,6 +902,18 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         passwordFailureAdmission({
           ...passwordFailureBudget,
           countsAsFailure: countsAsSignInFailure,
+          ...(options.onOperationalEvent === undefined
+            ? {}
+            : {
+                onLimited: ({ lane, key }) =>
+                  options.onOperationalEvent!({
+                    event: "authentication.sign-in-limited",
+                    lane,
+                    ...(key === undefined
+                      ? {}
+                      : { keyHash: signInLimitKeyHash(options.secret, key) }),
+                  }),
+              }),
           // Timing differences here are hidden by the slow lane's floor. Lookup failures
           // propagate, so an outage is 503 rather than a refusal.
           async isReserved(email) {

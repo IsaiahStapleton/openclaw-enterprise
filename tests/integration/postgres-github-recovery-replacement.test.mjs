@@ -241,7 +241,8 @@ test(
           log.events
             .filter(({ event }) => event.startsWith("authentication."))
             .map(({ event }) => event),
-          ["authentication.recovery-seed-warning"],
+          // The fixture sets no trusted proxy, so startup also warns about the shared address.
+          ["authentication.recovery-seed-warning", "authentication.sign-in-limit-warning"],
         );
         assert.deepEqual(await designations(), [holder.id]);
         adminHeaders = await signedInHeaders(app, origin, admin, address());

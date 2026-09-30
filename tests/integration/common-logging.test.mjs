@@ -227,6 +227,34 @@ test("OCC event severity mapping treats failed diagnostics as errors and warning
   );
 });
 
+test("a limited sign-in lane logs a warning with its lane and hashed key only", () => {
+  const output = memoryDestination();
+  const logger = createOccLogger({
+    component: "occ-api",
+    level: "info",
+    destination: output.destination,
+  });
+
+  emitOccLogEvent(logger, {
+    event: "authentication.sign-in-limited",
+    lane: "email",
+    keyHash: "0123456789abcdef",
+    email: "victim@example.test",
+    clientAddress: "203.0.113.7",
+  });
+
+  assert.equal(output.lines.length, 1);
+  const { time, ...line } = output.lines[0];
+  assert.ok(time);
+  assert.deepEqual(line, {
+    severity: "WARN",
+    service: "occ-api",
+    event: "authentication.sign-in-limited",
+    lane: "email",
+    keyHash: "0123456789abcdef",
+  });
+});
+
 test("OCC event sanitizer drops arbitrary fields and unsafe diagnostic text", () => {
   const output = memoryDestination();
   const logger = createOccLogger({

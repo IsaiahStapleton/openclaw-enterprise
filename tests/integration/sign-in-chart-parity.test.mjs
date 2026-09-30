@@ -18,6 +18,7 @@ import {
   renderChart,
   repository,
   signInSettings,
+  trustedProxyNotice,
 } from "../helpers/sign-in-chart.mjs";
 import {
   defaultInstallSettings,
@@ -501,6 +502,31 @@ test(
       ],
     ]) {
       assert.match(await chartRefusal(values), chart, name);
+    }
+  },
+);
+
+test(
+  "install notes warn when sign-in is exposed without a trusted proxy, and never fail",
+  tooling,
+  async () => {
+    const github = await trustedProxyNotice(githubUpgradeValues(recoveryUserId));
+    assert.match(github, /^WARNING: api\.trustedProxy is not set\./);
+    assert.match(github, /10 password sign-in attempts and 30\nGitHub or Google sign-in requests/);
+    const google = await trustedProxyNotice(googleUpgradeValues(recoveryUserId));
+    assert.match(google, /^WARNING: api\.trustedProxy is not set\./);
+    assert.match(
+      await trustedProxyNotice(),
+      /^NOTE: api\.trustedProxy is not set, so failed password sign-ins are limited per\nemail only/,
+    );
+    for (const { values } of Object.values(presets).filter(
+      ({ values }) => values["api.trustedProxy.preset"],
+    )) {
+      assert.equal(
+        await trustedProxyNotice({ ...githubUpgradeValues(recoveryUserId), ...values }),
+        "",
+      );
+      assert.equal(await trustedProxyNotice(values), "");
     }
   },
 );
