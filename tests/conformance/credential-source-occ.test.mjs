@@ -92,6 +92,9 @@ function createTestCredentialGateway(options = {}) {
       if (options.updateError !== undefined) {
         throw options.updateError;
       }
+      if (options.updateStatus !== undefined) {
+        return options.updateStatus;
+      }
       if (!stored.has(context.source.id)) {
         return { state: "absent" };
       }
@@ -745,7 +748,7 @@ test("a credential source, including one being deleted, keeps its Namespace none
 });
 
 test("an update re-sends current or replacement Secret values and keeps config immutable", async () => {
-  const { controller, gateway, makeReady, modelSecret, namespace } = await fixture();
+  const { controller, gateway, makeReady, modelSecret, namespace, state } = await fixture();
   await makeReady();
   const original = await modelSecret();
   const source = await controller.createCredentialSource(administrator, {
@@ -767,6 +770,14 @@ test("an update re-sends current or replacement Secret values and keeps config i
   });
   assert.deepEqual(resynced.status, { state: "ready" });
   assert.deepEqual(gateway.stored.get(source.id), { api_key: "rotated-model-key" });
+  // Only the gateway holds the value: the response, the read, and OCC's record carry references.
+  assert.equal(JSON.stringify(resynced).includes("rotated-model-key"), false);
+  const reread = await controller.readCredentialSource(administrator, namespace.id, source.id);
+  assert.equal(JSON.stringify(reread).includes("rotated-model-key"), false);
+  const persisted = await state.read((view) =>
+    view.credentialSources.findCredentialSource(namespace.id, source.id),
+  );
+  assert.equal(JSON.stringify(persisted).includes("rotated-model-key"), false);
 
   // Replacement references switch the source to another same-Namespace Secret.
   const replacement = await modelSecret();
@@ -867,30 +878,38 @@ test("an update whose commit fails after the gateway accepted it converges when 
   assert.deepEqual(gateway.stored.get(source.id), { api_key: "replacement-model-key" });
 });
 
-test("a failed gateway update keeps the source and its Secret references unchanged", async () => {
-  const { controller, makeReady, modelSecret, namespace } = await fixture({
-    gateway: { updateError: new Error("gateway unavailable") },
-  });
-  await makeReady();
-  const original = await modelSecret();
-  const source = await controller.createCredentialSource(administrator, {
-    namespaceId: namespace.id,
-    name: "openai",
-    type: "openai",
-    secrets: { api_key: original.ref },
-  });
-  const replacement = await modelSecret();
-  await assert.rejects(
-    controller.updateCredentialSource(administrator, {
+for (const [failure, gatewayOptions] of [
+  ["throws", { updateError: new Error("gateway unavailable") }],
+  // The gateway lost its copy while OCC still records the source as ready.
+  ["reports the copy absent", { updateStatus: { state: "absent" } }],
+  ["reports the update failed", { updateStatus: { state: "failed" } }],
+]) {
+  test(`a gateway update that ${failure} keeps the source and its Secret references unchanged`, async () => {
+    const { controller, makeReady, modelSecret, namespace } = await fixture({
+      gateway: gatewayOptions,
+    });
+    await makeReady();
+    const original = await modelSecret();
+    const source = await controller.createCredentialSource(administrator, {
       namespaceId: namespace.id,
-      credentialSourceId: source.id,
-      secrets: { api_key: replacement.ref },
-    }),
-    DependencyUnavailableError,
-  );
-  const retained = await controller.readCredentialSource(administrator, namespace.id, source.id);
-  assert.deepEqual(retained.secrets, { api_key: original.ref });
-});
+      name: "openai",
+      type: "openai",
+      secrets: { api_key: original.ref },
+    });
+    const replacement = await modelSecret();
+    await assert.rejects(
+      controller.updateCredentialSource(administrator, {
+        namespaceId: namespace.id,
+        credentialSourceId: source.id,
+        secrets: { api_key: replacement.ref },
+      }),
+      DependencyUnavailableError,
+    );
+    const retained = await controller.readCredentialSource(administrator, namespace.id, source.id);
+    assert.equal(retained.state, "ready");
+    assert.deepEqual(retained.secrets, { api_key: original.ref });
+  });
+}
 
 test("withdrawal is recorded for the active revision and queued for the worker once", async () => {
   const {
