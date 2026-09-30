@@ -415,12 +415,12 @@ function operationTarget(
   ) {
     return { kind: "credential_source", id: namespaceId, namespaceId };
   }
-  // Agent routes that name a credential source, such as withdrawal, authorize the Agent.
-  if (credentialSourceId && agentId && namespaceId) {
-    return { kind: "agent", id: agentId, namespaceId };
-  }
+  // A route naming a credential source authorizes the resource kind it declares: withdrawal
+  // routes declare the Agent.
   if (credentialSourceId && namespaceId) {
-    return { kind: "credential_source", id: credentialSourceId, namespaceId };
+    return operation.resourceKind === "agent" && agentId
+      ? { kind: "agent", id: agentId, namespaceId }
+      : { kind: "credential_source", id: credentialSourceId, namespaceId };
   }
   if (
     (operation.operationId === "createAgent" ||
