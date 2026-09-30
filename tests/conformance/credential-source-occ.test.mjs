@@ -19,6 +19,7 @@ import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 const administrator = "principal-source-administrator";
 const deployer = "principal-source-deployer";
 const zeroGrant = "principal-source-zero-grant";
+const updater = "principal-source-updater";
 const installation = Object.freeze({
   id: "installation-credential-source-occ",
   name: "Credential source OCC conformance",
@@ -134,7 +135,7 @@ function createTestSandbox() {
 
 async function fixture(options = {}) {
   const iamState = {
-    identities: [administrator, deployer, zeroGrant].map((id) => ({
+    identities: [administrator, deployer, zeroGrant, updater].map((id) => ({
       kind: "principal",
       id,
       issuer: "credential-source-occ",
@@ -180,6 +181,15 @@ async function fixture(options = {}) {
         id: "source-agent-role",
         permissions: [{ action: "operate", resourceKind: "credential_source" }],
       },
+      {
+        // May update sources but may not operate on the Secret material an update reads.
+        id: "source-updater-role",
+        permissions: [
+          { action: "read", resourceKind: "namespace" },
+          { action: "read", resourceKind: "credential_source" },
+          { action: "update", resourceKind: "credential_source" },
+        ],
+      },
     ],
     bindings: [
       {
@@ -193,6 +203,12 @@ async function fixture(options = {}) {
         subjectKind: "identity",
         subjectId: deployer,
         roleId: "source-deployer-role",
+      },
+      {
+        id: "source-updater-binding",
+        subjectKind: "identity",
+        subjectId: updater,
+        roleId: "source-updater-role",
       },
     ],
     restrictions: [],
@@ -796,7 +812,59 @@ test("an update requires update on the source and operate on every Secret it rea
     }),
     AuthorizationDeniedError,
   );
+  // Update on the source alone is not enough: every Secret it reads needs operate too.
+  await assert.rejects(
+    controller.updateCredentialSource(updater, {
+      namespaceId: namespace.id,
+      credentialSourceId: source.id,
+    }),
+    (error) =>
+      error instanceof AuthorizationDeniedError &&
+      error.authorization?.resource.kind === "secret" &&
+      error.authorization.resource.id === secret.id,
+  );
   assert.equal(gateway.calls.filter(({ operation }) => operation === "updateSource").length, 0);
+});
+
+test("an update whose commit fails after the gateway accepted it converges when repeated", async () => {
+  const { controller, gateway, makeReady, modelSecret, namespace } = await fixture();
+  await makeReady();
+  const original = await modelSecret();
+  const source = await controller.createCredentialSource(administrator, {
+    namespaceId: namespace.id,
+    name: "openai",
+    type: "openai",
+    secrets: { api_key: original.ref },
+  });
+  const replacement = await modelSecret();
+  await controller.updateSecret(administrator, {
+    namespaceId: namespace.id,
+    secretId: replacement.id,
+    value: "replacement-model-key",
+  });
+  const input = {
+    namespaceId: namespace.id,
+    credentialSourceId: source.id,
+    secrets: { api_key: replacement.ref },
+  };
+
+  // The gateway call runs inside the request's transaction; a later failure, such as its
+  // audit append, rolls back OCC's references while the gateway copy is already newer.
+  await assert.rejects(
+    controller.transact(async () => {
+      await controller.updateCredentialSource(administrator, input);
+      throw new Error("audit append failed");
+    }),
+    /audit append failed/,
+  );
+  assert.deepEqual(gateway.stored.get(source.id), { api_key: "replacement-model-key" });
+  const retained = await controller.readCredentialSource(administrator, namespace.id, source.id);
+  assert.deepEqual(retained.secrets, { api_key: original.ref });
+
+  // Repeating the same request brings OCC level with the gateway.
+  const repeated = await controller.updateCredentialSource(administrator, input);
+  assert.deepEqual(repeated.secrets, { api_key: replacement.ref });
+  assert.deepEqual(gateway.stored.get(source.id), { api_key: "replacement-model-key" });
 });
 
 test("a failed gateway update keeps the source and its Secret references unchanged", async () => {
