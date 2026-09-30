@@ -220,10 +220,12 @@ boundary.
 
 The Agent and gateway derive an app-server credential from the transport Secret,
 revision ID, and Agent startup ID. The gateway receives it after matching status
-and rendering exclusions. After restart, the old gateway cannot authenticate
-while its supervisor awaits status. For a changed peer, the supervisor publishes
-non-ready, restarts only OpenClaw and rechecks peer startup, Pod, successes and
-failures after it serves. Changed or unavailable peers trigger container restart.
+and rendering exclusions. After a Harness restart, the old credential cannot open
+a new authenticated app-server WebSocket to the replacement Harness. It does not
+revoke access to a still-running old Harness or an established connection. For a
+changed peer, the supervisor publishes non-ready, restarts only OpenClaw and
+rechecks peer startup, Pod, successes and failures after it serves. Changed or
+unavailable peers trigger container restart.
 During an outage, the supervisor reports unready. Kubernetes propagates that
 state asynchronously, so the signal alone is not a per-request traffic fence.
 If OpenClaw exits while the supervisor waits for its peer, the wrapper exits
