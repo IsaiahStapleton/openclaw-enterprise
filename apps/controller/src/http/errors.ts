@@ -17,7 +17,9 @@ import {
   PluginPolicyValidationError,
   PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
+  RuntimeLogsError,
   ScopeViolationError,
+  type RuntimeLogsErrorCode,
 } from "@openclaw-enterprise/occ";
 import {
   ConfigurationOwnershipError,
@@ -138,9 +140,51 @@ export function isDependencyUnavailable(error: unknown): boolean {
   );
 }
 
+const RUNTIME_LOG_FAILURES: Readonly<
+  Record<RuntimeLogsErrorCode, { readonly status: number; readonly message: string }>
+> = Object.freeze({
+  RUNTIME_LOGS_CURSOR_INVALID: {
+    status: 400,
+    message: "The runtime log cursor is invalid for this caller and view. Start a new view.",
+  },
+  RUNTIME_LOGS_POD_INVALID: {
+    status: 400,
+    message: "The requested Pod is not a current Pod of this Agent version and source.",
+  },
+  RUNTIME_LOGS_SOURCE_UNAVAILABLE: {
+    status: 400,
+    message: "This Agent version has no such runtime log source.",
+  },
+  RUNTIME_LOGS_RATE_LIMITED: {
+    status: 429,
+    message: "Too many runtime log requests. Wait for Retry-After and try again.",
+  },
+  RUNTIME_LOGS_CLUSTER_RBAC: {
+    status: 503,
+    message:
+      "The cluster denied the runtime log read. Ask a platform operator to enable agentRuntimeLogs and the documented roles.",
+  },
+  RUNTIME_LOGS_UNAVAILABLE: {
+    status: 503,
+    message: "Runtime status or logs are unavailable. Retry later.",
+  },
+  RUNTIME_LOGS_AUDIT_UNAVAILABLE: {
+    status: 503,
+    message: "The runtime log view could not be audited, so no output was read.",
+  },
+  RUNTIME_LOGS_TIMEOUT: {
+    status: 504,
+    message: "The runtime status or log read timed out.",
+  },
+});
+
 export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof RequestFailure) {
     return error;
+  }
+  if (error instanceof RuntimeLogsError) {
+    const mapped = RUNTIME_LOG_FAILURES[error.code];
+    return failure(mapped.status, error.code, mapped.message);
   }
   if (error instanceof ChannelCredentialError) {
     const messages = {

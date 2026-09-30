@@ -205,6 +205,41 @@ nonblocking with finite Engine and container-local buffers. Export outage or
 overflow can lose operational logs but cannot block reconciliation, weaken IAM,
 or change audit persistence.
 
+### Console and API runtime log reads
+
+OCC also offers a second, non-exported read path: the
+[Agent logs](../guides/topics/agent-logs.md) routes fetch one bounded page of
+Kubernetes container output, Pod status and Pod Events on demand. It does not
+change the Collector boundary above; nothing is stored, cached, logged or sent
+to the Collector, and responses carry `Cache-Control: no-store`.
+
+- **Access.** Pod status and Events need Agent `operate` and `read` plus
+  revision `read`. Log text needs Agent `administer` and `read` plus revision
+  `read`, the audience that already reaches Gateway logs through the native admin
+  UI. Every poll is authorized again; a denial is audited and reaches no Driver.
+- **Audit.** OCC writes `openclaw.agents.runtime_logs.view` before the first log
+  read of a view. If that write fails the request returns `503` with no content.
+- **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
+  Codex tracing and short plain-text lines. Other structured output, including
+  Codex protocol traffic and payload keys such as `prompt` and `content`, is
+  withheld and counted. Retained text passes pattern redaction, which is
+  best-effort. The `content` class has no producer.
+- **Events.** Pod Event reasons and messages reach the `operate` audience after
+  credential redaction. Node names, image references and Secret and ConfigMap
+  names are masked in the standard scheduler and kubelet message shapes; the
+  masking is best-effort, so other Event text can still name cluster objects.
+- **Errors.** Driver and cluster error text never reaches a client; failures map
+  to fixed codes.
+- **Ordering.** The operator switch (`501`) and the per-principal rate limit
+  run before authorization, so a principal without grants learns only whether
+  the feature is on and can spend only its own request budget.
+- **Cluster access.** The tenant API, Gateway observer and execution tenant API
+  roles gain read-only `pods/log get` and `events get,list` through
+  `agentRuntimeLogs.enabled`. RBAC cannot separate Agents, so OCC reads only
+  Pods carrying the exact Agent and revision labels and re-checks them on every
+  read. Cursors are HMAC-signed with the auth secret and bound to one principal,
+  Agent, revision and source.
+
 ## Related
 
 - [Image and Helm testing](../testing/images.md)

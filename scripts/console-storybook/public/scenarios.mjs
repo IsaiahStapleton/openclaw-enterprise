@@ -2619,6 +2619,47 @@ export const scenarios = {
     description:
       "A failed on-demand check reports its own error. The viewed v7 deployment record remains succeeded.",
   },
+  runtimeLogs: {
+    group: "Pages/Agent detail",
+    name: "Runtime status and logs for v7",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    description:
+      "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsDenied: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs without administer",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/runtime/logs",
+        status: 403,
+        code: "FORBIDDEN",
+      },
+    ],
+    description:
+      "An Agent operator sees Pod status and Events but no log text. The page names the missing grants and does not request the log view again.",
+  },
+  runtimeLogsClusterRbac: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs blocked by cluster RBAC",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/runtime/logs",
+        status: 503,
+        code: "RUNTIME_LOGS_CLUSTER_RBAC",
+      },
+    ],
+    description:
+      "The cluster denied pods/log. The page asks the platform operator to enable agentRuntimeLogs in the Helm chart.",
+  },
   agentMissing: {
     group: "Pages/Agent detail",
     name: "Agent unavailable",

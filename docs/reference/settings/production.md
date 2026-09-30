@@ -41,6 +41,10 @@ setting is used, the chart renders no proxy egress rule, and Slack lookup and
 credential validation require another approved network route. See the
 [Slack Channel Driver](../drivers/slack-channel.md#enable-lookup-in-production).
 
+`OCC_AGENT_RUNTIME_LOGS_ENABLED` (`true` or `false`, default `true`) switches the
+[Agent logs](../../guides/topics/agent-logs.md) routes; `false` makes them answer
+`501`. The chart sets it from `agentRuntimeLogs.enabled`.
+
 When the native admin pilot is enabled, the API also requires:
 
 | Variable                         | Required value or format                                                                                                                                     | Behavior                                                                                                    |

@@ -180,6 +180,12 @@ function configuration() {
   }
 
   const nativeAdminEnabled = optionalBooleanEnvironment("OCC_AGENT_NATIVE_ADMIN_ENABLED");
+  // Default on: the routes are IAM-gated and audited; the chart value turns them off.
+  const agentRuntimeLogsEnabled =
+    process.env.OCC_AGENT_RUNTIME_LOGS_ENABLED === undefined ||
+    process.env.OCC_AGENT_RUNTIME_LOGS_ENABLED.trim().length === 0
+      ? true
+      : optionalBooleanEnvironment("OCC_AGENT_RUNTIME_LOGS_ENABLED");
   const nativeAdminDomain = process.env.OCC_AGENT_NATIVE_ADMIN_DOMAIN;
   const authCookieDomain = process.env.OCC_AUTH_COOKIE_DOMAIN;
   const nativeAdmin =
@@ -221,6 +227,7 @@ function configuration() {
         ? {}
         : { channelDirectoryManagedProxyHost }),
       ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
+      agentRuntimeLogsEnabled,
     });
   }
 
@@ -241,6 +248,7 @@ function configuration() {
     ...humanLogin,
     ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
+    agentRuntimeLogsEnabled,
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
     ...(trustedDevelopmentForwarderCidr === undefined || trustedDevelopmentForwarderCidr === ""
       ? {}

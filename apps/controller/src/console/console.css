@@ -2103,3 +2103,89 @@ summary:focus-visible {
     font-size: 16px;
   }
 }
+
+.runtime-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 8px 0 20px;
+}
+.runtime-pod {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px 14px;
+}
+.runtime-pod h4 {
+  margin: 0;
+}
+.runtime-pod .credential-status-list {
+  grid-template-columns: 120px minmax(0, 1fr);
+  margin: 8px 0 0;
+}
+.runtime-events {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--warning);
+  font-size: 13px;
+}
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0;
+}
+.log-pane {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  padding: 6px 0;
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.log-row {
+  padding: 1px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.log-row summary {
+  cursor: pointer;
+}
+.log-line > span + span {
+  margin-left: 8px;
+}
+.log-time,
+.log-kind,
+.log-subsystem {
+  color: var(--muted);
+}
+.log-level-error {
+  color: var(--danger);
+}
+.log-level-warn {
+  color: var(--warning);
+}
+.log-row-gap,
+.log-row-withheld {
+  color: var(--muted);
+  font-style: italic;
+  background: var(--hover);
+}
+.log-fields {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 4px 0 6px 18px;
+}
+.log-fields dt {
+  color: var(--muted);
+}
+.log-fields dd {
+  margin: 0;
+}

@@ -16,6 +16,9 @@
       "path": "tests/browser/console-agent-detail.test.mjs"
     },
     {
+      "path": "tests/browser/console-agent-logs.test.mjs"
+    },
+    {
       "path": "tests/browser/console-agent-presets.test.mjs"
     },
     {

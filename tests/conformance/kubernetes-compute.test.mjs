@@ -11375,6 +11375,402 @@ for (const embedded of [true, false]) {
   });
 }
 
+// Runtime status and log reads. The fixture supplies Kubernetes API responses only;
+// plane selection, ownership re-checks, Event filtering, the typed 403 and byte-limit
+// detection run through the production Driver.
+function runtimeLogDriverFixture({ twoCluster = false } = {}) {
+  const namespaceName = kubernetesNamespaceName(tenant.id);
+  const gatewayNamespaceName = kubernetesGatewayNamespaceName(tenant.id);
+  const driver = createKubernetesComputeDriver(
+    twoCluster
+      ? routedOptions({
+          runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+          executionCluster: {
+            authentication: { mode: "kubeconfig", kubeconfigPath, context: contextName },
+            harnessRouting: {
+              ...gatewayRouting,
+              gatewayName: "harnesses",
+              hostname: "harness.example.test",
+            },
+            network: {
+              dns: options().network.dns,
+              harnessEndpointCidrs: ["192.0.2.2/32"],
+              gatewayEndpointCidrs: ["192.0.2.1/32"],
+              pluginStatusProxySourceCidrs: ["192.0.2.2/32"],
+            },
+          },
+        })
+      : options({
+          runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
+        }),
+  );
+  const agent = {
+    id: "agent-runtime-logs",
+    namespaceId: tenant.id,
+    name: "Runtime logs Agent",
+    configurationId: "cfg_runtime_logs",
+    providerId: null,
+    executionMode: "dedicated",
+    servicePrincipalId: "service-principal-runtime-logs",
+    createdAt: tenant.createdAt,
+  };
+  const revision = routedRevision(driver, {
+    id: "revision-runtime-logs",
+    agentId: agent.id,
+    configurationId: agent.configurationId,
+    servicePrincipalId: agent.servicePrincipalId,
+  });
+  const state = {
+    restartCount: { agent: 0, gateway: 2 },
+    foreignPod: false,
+    logs: { agent: "", gateway: "" },
+    logError: undefined,
+    eventError: undefined,
+  };
+  const pod = (role) => ({
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: {
+      name: `${role}-runtime-logs-pod`,
+      namespace: role === "gateway" ? gatewayNamespaceName : namespaceName,
+      uid: `${role}-runtime-logs-uid`,
+      creationTimestamp: new Date("2026-09-30T10:00:00Z"),
+      labels: {
+        "openclaw.dev/agent": revision.agentId,
+        "openclaw.dev/revision": revision.id,
+        "openclaw.dev/workload-role": role,
+      },
+    },
+    status: {
+      phase: "Running",
+      conditions: [{ type: "Ready", status: "True" }],
+      containerStatuses: [
+        {
+          name: role,
+          ready: true,
+          restartCount: state.restartCount[role],
+          state: { running: { startedAt: new Date("2026-09-30T11:00:00Z") } },
+          ...(state.restartCount[role] === 0
+            ? {}
+            : {
+                lastState: {
+                  terminated: {
+                    reason: "OOMKilled",
+                    exitCode: 137,
+                    finishedAt: new Date("2026-09-30T10:59:00Z"),
+                  },
+                },
+              }),
+        },
+      ],
+    },
+  });
+  const calls = [];
+  const clientsFor = (plane) => ({
+    core: {
+      async listNamespace({ labelSelector }) {
+        assert.equal(labelSelector, `openclaw.dev/namespace=${tenant.id}`);
+        calls.push({ plane, call: "listNamespace" });
+        return {
+          apiVersion: "v1",
+          kind: "NamespaceList",
+          items: [
+            {
+              ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
+              status: { phase: "Active" },
+            },
+          ],
+        };
+      },
+      async readNamespace({ name }) {
+        assert.equal(name, namespaceName);
+        return {
+          ...driver.manifest("v1", "Namespace", namespaceName, { namespaceId: tenant.id }),
+          status: { phase: "Active" },
+        };
+      },
+      async listNamespacedPod({ namespace, labelSelector }) {
+        const role = labelSelector.includes("openclaw.dev/workload-role=agent")
+          ? "agent"
+          : "gateway";
+        calls.push({ plane, call: "listNamespacedPod", namespace, role });
+        const items = [pod(role)];
+        if (state.foreignPod) {
+          // A Pod in the namespace that belongs to another Agent must never be accepted.
+          const foreign = pod(role);
+          foreign.metadata.name = "foreign-pod";
+          foreign.metadata.labels["openclaw.dev/agent"] = "another-agent";
+          items.push(foreign);
+        }
+        return { apiVersion: "v1", kind: "PodList", items };
+      },
+      async listNamespacedEvent({ namespace, fieldSelector, limit }) {
+        calls.push({ plane, call: "listNamespacedEvent", namespace, fieldSelector, limit });
+        if (state.eventError !== undefined) {
+          throw state.eventError;
+        }
+        const uid = fieldSelector.replace("involvedObject.uid=", "");
+        return {
+          items: [
+            {
+              type: "Warning",
+              reason: "BackOff",
+              message: "Back-off restarting failed container",
+              count: 4,
+              lastTimestamp: new Date("2026-09-30T11:01:00Z"),
+              involvedObject: { kind: "Pod", uid, namespace },
+            },
+            // A field selector the server ignored must not leak another object's Events.
+            {
+              type: "Warning",
+              reason: "Foreign",
+              message: "another Pod",
+              involvedObject: { kind: "Pod", uid: "someone-else", namespace },
+            },
+          ],
+        };
+      },
+      async readNamespacedPodLog(request) {
+        calls.push({ plane, call: "readNamespacedPodLog", ...request });
+        if (state.logError !== undefined) {
+          throw state.logError;
+        }
+        const role = request.container;
+        state.restartCount[role] += state.restartDuringRead ? 1 : 0;
+        return state.logs[role];
+      },
+    },
+  });
+  driver.apiClients = Promise.resolve(clientsFor("control"));
+  if (twoCluster) {
+    driver.executionApiClients = Promise.resolve(clientsFor("execution"));
+  }
+  const binding = { namespace: tenant, agent, revision };
+  const request = (role, overrides = {}) => ({
+    source: role,
+    pod: `${role}-runtime-logs-pod`,
+    podUid: `${role}-runtime-logs-uid`,
+    container: role,
+    previous: false,
+    tailLines: 200,
+    limitBytes: 1024 * 1024,
+    signal: new AbortController().signal,
+    ...overrides,
+  });
+  return { driver, binding, calls, state, request, namespaceName, gatewayNamespaceName };
+}
+
+test("Kubernetes runtime description reads each plane's Pods and only their own Events", async () => {
+  const fixture = runtimeLogDriverFixture({ twoCluster: true });
+  const description = await fixture.driver.describeAgentRuntime(
+    fixture.binding,
+    new AbortController().signal,
+  );
+  assert.equal(description.revisionId, fixture.binding.revision.id);
+  assert.deepEqual(
+    description.pods.map(({ role, cluster, name }) => ({ role, cluster, name })),
+    [
+      { role: "agent", cluster: "execution", name: "agent-runtime-logs-pod" },
+      { role: "gateway", cluster: "control", name: "gateway-runtime-logs-pod" },
+    ],
+  );
+  const gateway = description.pods[1];
+  assert.deepEqual(gateway.containers[0], {
+    name: "gateway",
+    state: "running",
+    reason: null,
+    ready: true,
+    restartCount: 2,
+    startedAt: "2026-09-30T11:00:00.000Z",
+    lastTermination: { reason: "OOMKilled", exitCode: 137, finishedAt: "2026-09-30T10:59:00.000Z" },
+  });
+  assert.deepEqual(
+    gateway.events.map(({ reason, count }) => ({ reason, count })),
+    [{ reason: "BackOff", count: 4 }],
+  );
+  assert.deepEqual(
+    description.sources.map(({ id, pods }) => ({ id, pods })),
+    [
+      {
+        id: "agent",
+        pods: [
+          {
+            name: "agent-runtime-logs-pod",
+            uid: "agent-runtime-logs-uid",
+            container: "agent",
+            restartCount: 0,
+          },
+        ],
+      },
+      {
+        id: "gateway",
+        pods: [
+          {
+            name: "gateway-runtime-logs-pod",
+            uid: "gateway-runtime-logs-uid",
+            container: "gateway",
+            restartCount: 2,
+          },
+        ],
+      },
+    ],
+  );
+  // The Harness Pod and its Events come from the execution cluster; the dedicated
+  // Gateway from the control-plane Gateway namespace.
+  const reads = fixture.calls.filter(({ call }) =>
+    ["listNamespacedPod", "listNamespacedEvent"].includes(call),
+  );
+  assert.deepEqual(
+    reads.map(({ plane, call, namespace }) => ({ plane, call, namespace })),
+    [
+      { plane: "execution", call: "listNamespacedPod", namespace: fixture.namespaceName },
+      { plane: "execution", call: "listNamespacedEvent", namespace: fixture.namespaceName },
+      { plane: "control", call: "listNamespacedPod", namespace: fixture.gatewayNamespaceName },
+      { plane: "control", call: "listNamespacedEvent", namespace: fixture.gatewayNamespaceName },
+    ],
+  );
+  assert.ok(
+    reads.filter(({ call }) => call === "listNamespacedEvent").every(({ limit }) => limit === 100),
+  );
+
+  // A Pod of another Agent in the same namespace fails the whole description.
+  fixture.state.foreignPod = true;
+  await assert.rejects(
+    fixture.driver.describeAgentRuntime(fixture.binding, new AbortController().signal),
+    /invalid Pod/,
+  );
+});
+
+test("Kubernetes runtime description for a log read lists one source's Pods and no Events", async () => {
+  const fixture = runtimeLogDriverFixture({ twoCluster: true });
+  const description = await fixture.driver.describeAgentRuntime(
+    fixture.binding,
+    new AbortController().signal,
+    { source: "gateway", events: false },
+  );
+  assert.deepEqual(
+    description.sources.map(({ id }) => id),
+    ["gateway"],
+  );
+  assert.deepEqual(
+    description.pods.map(({ role, events }) => ({ role, events })),
+    [{ role: "gateway", events: [] }],
+  );
+  assert.deepEqual(
+    fixture.calls
+      .filter(({ call }) => ["listNamespacedPod", "listNamespacedEvent"].includes(call))
+      .map(({ plane, call }) => ({ plane, call })),
+    [{ plane: "control", call: "listNamespacedPod" }],
+  );
+});
+
+test("Kubernetes runtime log reads are bounded, timestamped and re-check the Pod", async () => {
+  const fixture = runtimeLogDriverFixture();
+  fixture.state.logs.gateway =
+    '2026-09-30T12:00:00.123456789Z {"level":"info","message":"ready"}\n2026-09-30T12:00:01Z plain text\n';
+  const chunk = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway", { previous: true, sinceSeconds: 30, tailLines: 50 }),
+  );
+  assert.deepEqual(chunk.lines, [
+    { time: "2026-09-30T12:00:00.123456789Z", raw: '{"level":"info","message":"ready"}' },
+    { time: "2026-09-30T12:00:01Z", raw: "plain text" },
+  ]);
+  assert.equal(chunk.truncated, false);
+  assert.deepEqual(chunk.stream, {
+    source: "gateway",
+    pod: "gateway-runtime-logs-pod",
+    podUid: "gateway-runtime-logs-uid",
+    container: "gateway",
+    restartCount: 2,
+  });
+  const logRead = fixture.calls.find(({ call }) => call === "readNamespacedPodLog");
+  assert.deepEqual(
+    {
+      namespace: logRead.namespace,
+      name: logRead.name,
+      container: logRead.container,
+      previous: logRead.previous,
+      sinceSeconds: logRead.sinceSeconds,
+      tailLines: logRead.tailLines,
+      limitBytes: logRead.limitBytes,
+      timestamps: logRead.timestamps,
+      follow: logRead.follow,
+    },
+    {
+      namespace: fixture.gatewayNamespaceName,
+      name: "gateway-runtime-logs-pod",
+      container: "gateway",
+      previous: true,
+      sinceSeconds: 30,
+      tailLines: 50,
+      limitBytes: 1024 * 1024,
+      timestamps: true,
+      follow: false,
+    },
+  );
+  // The Pod is listed before and after the read, so a restart during the read is visible.
+  fixture.state.restartDuringRead = true;
+  const restarted = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway"),
+  );
+  assert.equal(restarted.stream.restartCount, 3);
+  fixture.state.restartDuringRead = false;
+
+  // Output that fills the byte limit is reported as truncated.
+  fixture.state.logs.gateway = `2026-09-30T12:00:02Z ${"x".repeat(64)}`;
+  const cut = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway", { limitBytes: 32 }),
+  );
+  assert.equal(cut.truncated, true);
+
+  // A Pod name the revision does not own never reaches readNamespacedPodLog.
+  const before = fixture.calls.filter(({ call }) => call === "readNamespacedPodLog").length;
+  await assert.rejects(
+    fixture.driver.readAgentRuntimeLogs(
+      fixture.binding,
+      fixture.request("gateway", { pod: "kube-apiserver", podUid: "gateway-runtime-logs-uid" }),
+    ),
+    /no longer available/,
+  );
+  await assert.rejects(
+    fixture.driver.readAgentRuntimeLogs(
+      fixture.binding,
+      fixture.request("gateway", { container: "agent" }),
+    ),
+    /does not match/,
+  );
+  assert.equal(fixture.calls.filter(({ call }) => call === "readNamespacedPodLog").length, before);
+});
+
+test("Kubernetes runtime log and Event 403s become the typed cluster RBAC error", async () => {
+  const { RuntimeLogsForbiddenByClusterError } = await import("../../packages/occ/src/index.ts");
+  const forbidden = () =>
+    Object.assign(new Error("pods/log is forbidden: secret detail"), { statusCode: 403 });
+  const fixture = runtimeLogDriverFixture();
+  fixture.state.logError = forbidden();
+  await assert.rejects(
+    fixture.driver.readAgentRuntimeLogs(fixture.binding, fixture.request("gateway")),
+    RuntimeLogsForbiddenByClusterError,
+  );
+  fixture.state.eventError = forbidden();
+  await assert.rejects(
+    fixture.driver.describeAgentRuntime(fixture.binding, new AbortController().signal),
+    RuntimeLogsForbiddenByClusterError,
+  );
+  // A container without a previous instance yields no lines instead of an error.
+  fixture.state.logError = Object.assign(new Error("previous terminated container not found"), {
+    statusCode: 400,
+  });
+  const empty = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway", { previous: true }),
+  );
+  assert.deepEqual(empty.lines, []);
+});
+
 // A first embedded deploy that never became ready (for example rejected model
 // auth) leaves an unready Gateway behind an inactive Service while workspace
 // setup is still pending. The next deploy must repair it with its own template
