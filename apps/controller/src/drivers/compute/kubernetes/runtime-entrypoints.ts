@@ -1725,9 +1725,10 @@ function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
 // local work into MODEL_PROBE_TIMEOUT before the turn finished. The cap is now
 // the 15-second turn, 5 seconds of slack, and 45 CPU-seconds of local work at
 // the container's CPU limit (cgroup cpu.max, at most one core), at most 600 s.
-// A probe that still reaches it after waiting for CPU (cgroup cpu.pressure,
-// which counts throttling) for over a quarter of the time reports
-// MODEL_PROBE_CPU_STARVED: a restart would get the same CPU.
+// A probe that still reaches it after waiting for CPU for over a quarter of the
+// time reports MODEL_PROBE_CPU_STARVED: a restart would get the same CPU. The
+// wait is cgroup cpu.pressure (throttling and node contention) or, on kernels
+// without pressure accounting, cpu.stat throttled_usec (throttling only).
 // OpenClaw buckets provider 401/403 and invalid-key responses as "auth". Only
 // that deterministic rejection fails the deployment before its deadline.
 // The Gateway times its model-probe phase from wrapper start: it is the first step.
@@ -1739,7 +1740,7 @@ function probeOpenClawAuthenticationFailureCode() {
   const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
   const [quota, period] = cgroup("cpu.max").split(" ");
   const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
-  const waited = () => /^some .*total=(\d+)/m.exec(cgroup("cpu.pressure"))?.[1] / 1000;
+  const waited = () => (/^some .*total=(\d+)/m.exec(cgroup("cpu.pressure")) ?? /throttled_usec (\d+)/.exec(cgroup("cpu.stat")))?.[1] / 1000;
   const startedAt = Date.now(), before = waited();
   let code = runOpenClawAuthenticationProbe(fs, capMs);
   const elapsedMs = Date.now() - startedAt, cpuWaitMs = Math.round(waited() - before);

@@ -478,13 +478,16 @@ test(
     });
     const { events, phases, output } = run.snapshot;
     const detail = `\n${output}\n${JSON.stringify(events)}`;
+    // CI keeps only a failed assertion's location: each cause fails on its own line.
+    const probe = jsonLines(output).find(({ event }) => event === "openclaw.model_probe");
+    assert.ok(probe, `the wrapper logged its probe${detail}`);
+    assert.equal(probe.capMs, 110_000, `cap from the 500m cgroup limit${detail}`);
+    assert.ok(probe.elapsedMs >= probe.capMs, `the probe reached its cap${detail}`);
+    assert.notEqual(probe.cpuWaitMs, null, `the cgroup reported CPU waiting${detail}`);
+    assert.ok(probe.cpuWaitMs > probe.elapsedMs / 4, `mostly waiting for CPU${detail}`);
     assert.equal(runtimeFailure(events), "MODEL_PROBE_CPU_STARVED", detail);
     assert.equal(phaseAt(phases, "model-probe")?.outcome, "failed", detail);
     assert.equal(phaseAt(phases, "native-spawn"), undefined, detail);
-    const probe = jsonLines(output).find(({ event }) => event === "openclaw.model_probe");
-    assert.equal(probe?.capMs, 110_000, detail);
-    assert.ok(probe.elapsedMs >= probe.capMs, detail);
-    assert.ok(probe.cpuWaitMs > probe.elapsedMs / 4, detail);
     t.diagnostic(
       `CPU-starved probe at --cpus ${productionGatewayCpuLimit}: ${JSON.stringify(probe)}`,
     );

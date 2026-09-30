@@ -5644,6 +5644,12 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
       // the failure CPU starvation, which fails the deployment at once.
       ["cap exceeded while waiting for CPU", undefined, "MODEL_PROBE_CPU_STARVED"],
       ["cap exceeded without CPU waiting", undefined, "MODEL_PROBE_TIMEOUT"],
+      // Without pressure accounting, CPU-limit throttling is the waiting evidence.
+      [
+        "cap exceeded while throttled without pressure accounting",
+        undefined,
+        "MODEL_PROBE_CPU_STARVED",
+      ],
     ]) {
       const accepted = failureCode === undefined;
       await t.test(`${provider}: ${variant}`, async () => {
@@ -5726,14 +5732,23 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                   files.set(path, value);
                 },
                 rmSync() {},
-                // A 500m CPU limit; pressure grows 100 s across a starved probe.
+                // A 500m CPU limit; waiting grows 100 s across a starved probe.
                 readFileSync(path) {
+                  const starved =
+                    variant.includes("waiting for CPU") || variant.includes("throttled");
                   if (path === "/sys/fs/cgroup/cpu.max") {
                     return "50000 100000\n";
                   }
-                  if (path === "/sys/fs/cgroup/cpu.pressure") {
-                    const total = variant.includes("waiting for CPU") ? pressureReads++ * 1e8 : 0;
+                  if (
+                    path === "/sys/fs/cgroup/cpu.pressure" &&
+                    !variant.includes("pressure accounting")
+                  ) {
+                    const total = starved ? pressureReads++ * 1e8 : 0;
                     return `some avg10=0.00 avg60=0.00 avg300=0.00 total=${total}\nfull total=0\n`;
+                  }
+                  if (path === "/sys/fs/cgroup/cpu.stat") {
+                    const throttled = starved ? pressureReads++ * 1e8 : 0;
+                    return `usage_usec 1\nnr_throttled 1\nthrottled_usec ${throttled}\n`;
                   }
                   throw Object.assign(new Error("unexpected read"), { code: "ENOENT" });
                 },
@@ -5820,7 +5835,10 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(probeLines.length, 1);
         const probeLog = JSON.parse(probeLines[0]);
         assert.deepEqual([probeLog.code, probeLog.capMs], [failureCode ?? "READY", 110_000]);
-        assert.equal(probeLog.cpuWaitMs, variant.includes("waiting for CPU") ? 100_000 : 0);
+        assert.equal(
+          probeLog.cpuWaitMs,
+          variant.includes("waiting for CPU") || variant.includes("throttled") ? 100_000 : 0,
+        );
         assert.doesNotMatch(
           probeLines[0],
           new RegExp([provider, model, credentialName, "fixture-model-key"].join("|")),
