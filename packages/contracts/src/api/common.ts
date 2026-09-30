@@ -414,6 +414,7 @@ export const PermissionActionSchema = Type.Union([
   Type.Literal("deploy"),
   Type.Literal("operate"),
   Type.Literal("administer"),
+  Type.Literal("read_logs"),
 ]);
 
 export const ResourceKindSchema = Type.Union([

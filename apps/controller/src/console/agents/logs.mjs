@@ -30,7 +30,7 @@ const WITHHELD_LABELS = {
 function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
     return tier === "logs"
-      ? "Log text requires Agent administer and read access plus read access to this version."
+      ? "Log text requires Agent read_logs (or administer) and read access plus read access to this version."
       : "Runtime status requires Agent operate and read access plus read access to this version.";
   }
   if (error.status === 501) {

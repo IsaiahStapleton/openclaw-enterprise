@@ -26,7 +26,9 @@ download is a local file on the reader's device.
   and `readAgentRuntimeLogs`.
 - Assumptions: `deploymentId` is an admitted AgentRevision ID. Status needs exact
   Agent `operate` and `read` plus AgentRevision `read`; log text needs Agent
-  `administer` instead of `operate`.
+  `read_logs` or `administer` instead of `operate`
+  (`OpenClawController.authorizeRuntimeLogRead` tries `read_logs` first and
+  falls back to `administer` unless a Restriction denied `read_logs`).
 
 ## Flow
 
@@ -86,7 +88,8 @@ Event messages.
 (`runtime-logs/cursor.ts`) against the principal, Agent, revision and source,
 and accepts only a Pod the description listed. A request without a cursor, or
 with one older than an hour, or a cursor whose Pod is gone, starts a view: the controller appends
-`openclaw.agents.runtime_logs.view` before any log read. The Driver re-checks
+`openclaw.agents.runtime_logs.view`, an `access` audit event naming the admitting
+action, before any log read. The Driver re-checks
 Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 `previous`, a 1 MiB `limitBytes` and timestamps, and re-reads the Pod. OCC
 drops lines already delivered at the cursor time, emits `stream_replaced`,

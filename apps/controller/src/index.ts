@@ -49,6 +49,7 @@ import {
   type AgentRevision,
   type AgentRuntimeCredentialsBody,
   type AuditEvent,
+  type AuditEventKind,
   type AuthorizationEvidence,
   type ConfigurationDriver,
   type ChannelDriver,
@@ -239,7 +240,8 @@ interface RequiredPermission {
     | "iam_binding_target"
     | "provisioning_work"
     | "missing_runtime_credentials"
-    | "authenticated_plugin_discovery";
+    | "authenticated_plugin_discovery"
+    | "read_logs_alternative";
 }
 
 interface DocumentedFastifySchema extends FastifySchema {
@@ -726,7 +728,13 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
 
   if (operation.operationId === "getAgentDeploymentRuntimeLogs") {
     return [
-      { action: "administer", resourceKind: "agent", scope: "requested" },
+      { action: "read_logs", resourceKind: "agent", scope: "requested" },
+      {
+        action: "administer",
+        resourceKind: "agent",
+        scope: "requested",
+        condition: "read_logs_alternative",
+      },
       { action: "read", resourceKind: "agent", scope: "requested" },
       { action: "read", resourceKind: "agent_revision", scope: "requested" },
     ];
@@ -817,6 +825,9 @@ function permissionDescription(
       }
       if (condition === "authenticated_plugin_discovery") {
         return `Requires ${action} permission on the Agent's bound ${name} when the selected Plugin Driver requires a discovery credential.`;
+      }
+      if (condition === "read_logs_alternative") {
+        return `Without read_logs, ${action} permission on the requested ${name} also admits the read.`;
       }
       if (condition === "iam_binding_target") {
         return `Requires ${action} permission on the request body ${name} when the AccessBinding targets that resource kind.`;
@@ -1218,7 +1229,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     operation: OccApiRoute,
     request: FastifyRequest,
     resource: ResourceRef,
-    kind: "bootstrap" | "mutation" | "authorization_denial",
+    kind: AuditEventKind,
     context?: RequestContext,
     evidence?: AuthorizationEvidence,
     result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
@@ -1226,8 +1237,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     validatedAuthorization?: Readonly<DeployAgentAuthorization>,
   ): AuditEvent {
     const authorizationEvidence = validatedAuthorization?.decision.evidence ?? evidence;
-    const outcome =
-      result?.outcome ?? (kind === "bootstrap" || kind === "mutation" ? "success" : "denied");
+    const outcome = result?.outcome ?? (kind === "authorization_denial" ? "denied" : "success");
     return factory.create({
       installationId,
       ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
@@ -3011,8 +3021,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               signal: disconnected.signal,
               // Once per view or download, before the first Driver read; failure means
               // no content.
-              admitView: async (admission) => {
-                const base = event(operation, request, target, "mutation", context);
+              admitView: async (admission, grant) => {
+                const base = event(
+                  operation,
+                  request,
+                  target,
+                  "access",
+                  context,
+                  undefined,
+                  undefined,
+                  { action: grant.action, resource: target },
+                );
                 await options.auditSink.append({
                   ...base,
                   details: { ...base.details, runtimeLogs: { ...admission } },
