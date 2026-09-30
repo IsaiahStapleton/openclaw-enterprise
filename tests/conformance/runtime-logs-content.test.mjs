@@ -131,7 +131,11 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
   assert.match(download.text, /\[redacted:/);
   assert.match(download.text, / WITHHELD 2 unrecognised_structured$/m);
   assert.match(download.text, / GAP truncated: /);
-  assert.equal(/[\u0000-\u0009\u000b-\u001f\u007f]/.test(download.text), false);
+  const controls = [...download.text].filter((character) => {
+    const code = character.codePointAt(0);
+    return (code < 0x20 && code !== 0x0a) || code === 0x7f;
+  });
+  assert.deepEqual(controls, [], "the download carries no control characters");
   // `content` is reserved and has no producer.
   assert.ok(logs.data.records.length > 0);
   assert.ok(

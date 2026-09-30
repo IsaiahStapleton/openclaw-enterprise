@@ -21,7 +21,9 @@ event before any output is read, with the version, source, Pod, container,
 previous-instance flag, line count and a view ID, never the log text. Follow
 polls within the view are not recorded again; a poll that has to read another
 Pod, because the view's Pod is gone, records a new view. If the event cannot be written,
-no output is returned. Runtime status reads are not audited.
+no output is returned. Each log download records one
+`openclaw.agents.runtime_logs.download` event with the same details, before the
+read. Runtime status reads are not audited.
 
 ## Access and limitations
 

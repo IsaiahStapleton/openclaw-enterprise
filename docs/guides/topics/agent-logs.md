@@ -22,6 +22,26 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 5. Select **Previous instance** after a restart to read the output of the
    container that exited. Following is off for the previous instance.
 
+### Filter the loaded output
+
+The level chips (**error**, **warn**, **info**, **debug**, **unknown**) and the
+**Filter** box narrow the rows already loaded in this view: up to 5000 rows of
+the current page and later follow polls. The text filter is case-insensitive and
+matches the message, kind, subsystem and field values. Filters never ask the
+server for more output and do not search the whole container log; to look
+further back, use **Download** or the CLI with `--since`. Gap and withheld rows
+stay visible while filtering, so hidden loss is never filtered away.
+
+### Download
+
+**Download** saves the last 1000 lines of the selected source, Pod and instance
+as a text file named `<agent>-<revision>-<source>-<pod>.log`, using IDs. The
+file holds the same classified and redacted records as the page, one per line
+(`TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value`, plus `GAP` and `WITHHELD`
+rows), after a `#` header naming the Agent, revision, Pod and container.
+Filters do not apply to the download. Each download is a separate audited read;
+nothing is kept on the server.
+
 The HTTP API has the same two reads:
 
 ```sh
@@ -30,16 +50,35 @@ GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{revisionId}/runtime/
 ```
 
 `runtime/logs` accepts only `source` (`gateway` or `agent`), `pod`, `previous`,
-`tailLines` (1 to 1000, default 200), `sinceSeconds` (1 to 86400) and `cursor`.
-Pass the returned `cursor` to read only newer lines of the same view. See the
+`tailLines` (1 to 1000, default 200), `sinceSeconds` (1 to 86400), `cursor` and
+`download`. Pass the returned `cursor` to read only newer lines of the same view.
+`download=true` answers `text/plain` with `Content-Disposition: attachment`,
+always reads 1000 lines, and cannot be combined with `cursor` (`400`). See the
 [API reference](../../reference/api.md).
+
+## Command line
+
+`occ agent runtime AGENT_ID` prints the Pods and sources; `occ agent logs
+AGENT_ID --source gateway` prints one page, and `--follow` keeps polling every
+2 seconds until Ctrl-C:
+
+```sh
+occ agent logs agt_... --source gateway --since 10m --follow
+occ agent logs agt_... --source agent --previous -o json
+```
+
+Both use the active revision unless you pass `--revision`. Gaps and withheld
+counts are printed to stderr as notices; `-o json` prints NDJSON records. The
+command waits out `429` responses and exits nonzero on `501` and `503`. See the
+[CLI reference](../../reference/cli.md#runtime-status-and-logs).
 
 ## Who can see what
 
-| Read                                                                       | Required grants                                          | Audited                                              |
-| -------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
-| Runtime status: Pods, phase, readiness, restarts, last termination, Events | Agent `operate` and `read`, and `read` on the version    | No, like [diagnostics](../../reference/agents.md)    |
-| Log text                                                                   | Agent `administer` and `read`, and `read` on the version | Once per view as `openclaw.agents.runtime_logs.view` |
+| Read                                                                       | Required grants                                          | Audited                                                   |
+| -------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| Runtime status: Pods, phase, readiness, restarts, last termination, Events | Agent `operate` and `read`, and `read` on the version    | No, like [diagnostics](../../reference/agents.md)         |
+| Log text                                                                   | Agent `administer` and `read`, and `read` on the version | Once per view as `openclaw.agents.runtime_logs.view`      |
+| Log download                                                               | Same as log text                                         | Every download as `openclaw.agents.runtime_logs.download` |
 
 Installation administrators hold Agent `administer`. The same principals can
 already open the [native admin UI](../../reference/agent-native-admin.md), whose
