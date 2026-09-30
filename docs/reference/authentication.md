@@ -119,11 +119,30 @@ one, browsers share the ingress address and startup logs
 clears that email's failures, not the address's; an administrator's success in
 the slowed lane does not, so pacing lasts until the minute rolls over. The first
 slowed attempt per lane each minute logs `authentication.sign-in-limited` at WARN
-with its `lane` (`email`, `address`, or `untracked` when the budget table is
-full). `email` and `address` events also carry `keyHash`, a truncated HMAC under
+with its `lane` (`email`, `device`, `address`, or `untracked` when the budget table is
+full). `email`, `device`, and `address` events also carry `keyHash`, a truncated HMAC under
 the auth secret; `untracked` events have no key and no hash. The email and
 address are never logged. The bundled Collector
 exports the event and lane, not the hash.
+
+### Known devices
+
+Every successful sign-in, password or external, sets `__Host-occ_known_device`
+(`occ_known_device` over plain HTTP): HttpOnly, `SameSite=Strict`, `Path=/`, no
+`Domain`, 90 days. It holds up to three entries, one per recent account, each an
+HMAC under the auth secret over a hash of the account's email and the issue time;
+it never carries the email. A later password attempt for an email with a valid
+entry spends that browser's own budget, the size of the email's, instead of the
+email's, and does not wait for the email's slowed slots. Strangers who spend an
+email's budget therefore cannot refuse or crowd out a browser that signed in to
+that account before, including an administrator's. In the external-provider
+profile the same applies to the email and recovery lanes.
+
+The cookie never authenticates: a wrong password with it is `401` and spends the
+browser's lane, and the address lane and global caps still apply. Tampered,
+expired, foreign-account, or duplicated cookies are ignored, returning the
+attempt to the shared lane. Rotating the auth secret invalidates every entry; the
+next successful sign-in issues a new one. A new browser gets no exemption.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are

@@ -45,6 +45,12 @@ import {
   passwordFailureBudget,
   type PasswordSignInAdmission,
 } from "./admission.ts";
+import {
+  issueKnownDevice,
+  knownDeviceFromCookieHeader,
+  knownDeviceSetCookie,
+  verifyKnownDevice,
+} from "./known-device.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
 export {
@@ -893,6 +899,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     },
   });
   const api = auth.api;
+  // The known-device cookie is host-only (__Host-) whenever the origin is HTTPS.
+  const knownDeviceSecure = secureOrigin && options.secureCookies !== false;
   // Password-only profile: failure-counting admission keyed on email and, behind a trusted
   // proxy, client address; administrators are slowed, never refused (see admission.ts).
   const passwordAdmission =
@@ -1167,25 +1175,40 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         if (humanLogin) {
           return runPrivateEndpoint(request, "/oce/password", body);
         }
+        // Read from the validated input, not the credential pair, so the admission key
+        // is plainly derived from the email alone.
+        const email = String(input.email).trim().toLowerCase();
+        const deviceCookie = knownDeviceFromCookieHeader(request.headers.cookie, knownDeviceSecure);
+        const device = verifyKnownDevice(options.secret, email, deviceCookie, Date.now());
         // The address lane needs a trusted proxy: without one, browsers behind the ingress
-        // share its address, so only the email lane applies.
+        // share its address, so only the email (or known-device) lane applies.
         const attempt = {
           ...(options.clientAddress === undefined
             ? {}
             : { clientAddress: clientAddressOf(request) }),
-          // Read from the validated input, not the credential pair, so the admission key
-          // is plainly derived from the email alone.
-          email: String(input.email).trim().toLowerCase(),
+          email,
+          ...(device === undefined ? {} : { knownDevice: device.deviceKey }),
         };
-        return passwordAdmission!.admit(attempt, () =>
-          api.signInEmail({
+        return passwordAdmission!.admit(attempt, async () => {
+          const result = await api.signInEmail({
             body: { ...body, rememberMe: true },
             headers: authHeaders(request.headers),
             asResponse: false,
             returnHeaders: true,
             returnStatus: true,
-          }),
-        );
+          });
+          // Only a successful sign-in marks the browser as a known device for this email.
+          if (result.status === 200) {
+            result.headers.append(
+              "set-cookie",
+              knownDeviceSetCookie(
+                knownDeviceSecure,
+                issueKnownDevice(options.secret, email, Date.now(), deviceCookie),
+              ),
+            );
+          }
+          return result;
+        });
       },
       (response) => {
         const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;

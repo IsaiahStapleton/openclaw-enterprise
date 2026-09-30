@@ -464,6 +464,9 @@
       "path": "tests/integration/password-sign-in-admission.test.mjs"
     },
     {
+      "path": "tests/integration/known-device-cookie.test.mjs"
+    },
+    {
       "path": "tests/conformance/postgres-auth-binding.test.mjs"
     },
     {

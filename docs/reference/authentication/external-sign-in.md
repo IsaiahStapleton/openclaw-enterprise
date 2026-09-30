@@ -127,7 +127,9 @@ Password reset and deletion remain deferred.
 Password sign-in allows 10 requests/minute, two active, per client address and
 per email; GitHub start/callback (even invalid) allows 30 and four per
 address. Global caps: four and eight active. The recovery email has a
-reserved lane (20, two active). A 4,096-key table bounds memory. Clients behind
+reserved lane (20, two active). A browser with a valid
+[known-device cookie](../authentication.md#known-devices) for the email spends its own
+per-email or recovery budget instead of the shared one. A 4,096-key table bounds memory. Clients behind
 an ingress share its address unless
 [trusted proxies](../cheatsheets/environment-variables.md#controller-and-authentication)
 are set, so the whole Installation shares one budget; startup and Helm's install
