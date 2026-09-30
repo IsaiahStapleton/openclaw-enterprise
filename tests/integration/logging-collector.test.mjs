@@ -279,6 +279,13 @@ test(
           requestId: `req_${randomUUID()}`,
           ...payload,
         }),
+        JSON.stringify({
+          event: "authentication.sign-in-limited",
+          severity: "WARN",
+          lane: "email",
+          keyHash: `limitkey${fixture.suffix}`,
+          ...payload,
+        }),
       ],
       [],
       ["com.docker.compose.service=controller"],
@@ -294,14 +301,15 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 4);
+    await waitFor(async () => (await records()).length >= 5);
     const initial = await records();
-    assert.equal(initial.length, 4, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 5, "only reviewed JSON classes and Codex stderr pass");
+    const warningEvents = ["compute.preflight-warning", "authentication.sign-in-limited"];
     for (const { resource, record } of initial) {
       assert.ok(record.timeUnixNano, "OTLP record has an Engine timestamp");
       assert.equal(
         record.severityNumber,
-        resource["service.name"] === "occ-worker" ? 13 : 9,
+        warningEvents.includes(record.body.stringValue) ? 13 : 9,
         "severity maps to OTel WARN or INFO, not Pino's numeric level",
       );
       assert.equal(resource["openclaw.agent.id"], agentId);
@@ -312,10 +320,11 @@ test(
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
       "occ-api",
+      "occ-api",
       "occ-worker",
       "openclaw-gateway",
     ]);
-    const http = initial.find(({ resource }) => resource["service.name"] === "occ-api");
+    const http = initial.find(({ record }) => record.body.stringValue === "http.completed");
     const httpAttributes = Object.fromEntries(
       http.record.attributes.map(({ key, value }) => [
         key,
@@ -332,8 +341,19 @@ test(
       "log.iostream": "stdout",
       "occ.code": "KUBERNETES_VERSION_BELOW_MINIMUM",
     });
+    // A limited sign-in lane is promoted with its lane; the hashed key stays in local logs.
+    const limited = initial.find(
+      ({ record }) => record.body.stringValue === "authentication.sign-in-limited",
+    );
+    assert.equal(limited.record.severityText, "WARN");
+    assert.deepEqual(attributes(limited.record.attributes), {
+      "event.name": "authentication.sign-in-limited",
+      "log.iostream": "stdout",
+      "occ.sign_in.lane": "email",
+    });
     const serialized = JSON.stringify(initial);
     assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
+    assert.equal(serialized.includes(`limitkey${fixture.suffix}`), false);
     for (const value of [...canaries, "forged-service", "forged-agent"]) {
       assert.equal(serialized.includes(value), false);
     }

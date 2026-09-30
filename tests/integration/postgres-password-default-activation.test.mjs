@@ -117,6 +117,16 @@ test(
       sessionBinding: true,
     });
 
+    await t.test("the guarded profile warns at startup when no trusted proxy is set", () => {
+      const warnings = log.events.filter(
+        ({ event }) => event === "authentication.sign-in-limit-warning",
+      );
+      assert.deepEqual(
+        warnings.map(({ code, severity }) => ({ code, severity })),
+        [{ code: "TRUSTED_PROXY_NOT_CONFIGURED", severity: "WARN" }],
+      );
+    });
+
     await t.test("activation enrols qualifying accounts and reports the rest", async () => {
       const warnings = log.events.filter(
         ({ event }) => event === "authentication.activation-warning",
