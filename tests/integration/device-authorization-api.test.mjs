@@ -466,3 +466,34 @@ test("one poll owns the exchange and cancellation fences its late completion wit
   );
   assertNoCredentials(fixture);
 });
+
+test("an expired device login erases its provider material when next touched", async (t) => {
+  const fixture = await createFixture(t);
+  const login = await fixture.start();
+  const sealed = await fixture.start();
+  await fixture.clock.advance(5000);
+  assert.equal((await fixture.poll(login)).data.status, "ready");
+  assert.equal((await fixture.poll(sealed)).data.status, "ready");
+  await fixture.clock.advance(24 * 60 * 60 * 1000);
+
+  assert.equal((await fixture.poll(login)).status, 409);
+  const erased = JSON.parse(fixture.secretDriver.valueFor(await fixture.stored(login)));
+  assert.equal(erased.phase, "cancelled");
+  assert.equal(erased.credential, undefined);
+  assert.equal(erased.privateState, undefined);
+  const discovery = await fixture.request("POST", fixture.pluginsPath, {
+    body: { oauthLogin: login.source, q: "knowledge" },
+  });
+  assert.equal(discovery.status, 409);
+  const discarded = await fixture.rawRequest("DELETE", `${fixture.path}/${login.source.id}`, {
+    headers: authenticatedHeaders(await fixture.signIn(), { origin: fixture.origin }),
+  });
+  assert.equal(discarded.response.status, 204);
+
+  // A source the runtime has sealed refuses the swap; it stays unusable and unchanged here.
+  const before = fixture.secretDriver.valueFor(await fixture.stored(sealed));
+  t.mock.method(fixture.secretDriver, "compareAndSwap", async () => false);
+  assert.equal((await fixture.poll(sealed)).status, 409);
+  assert.equal(fixture.secretDriver.valueFor(await fixture.stored(sealed)), before);
+  assertNoCredentials(fixture);
+});

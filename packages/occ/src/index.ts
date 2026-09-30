@@ -3662,6 +3662,22 @@ export class OpenClawController {
     ) {
       throw new ScopeViolationError("The login belongs to another actor or Agent scope.");
     }
+    if (
+      session.phase !== "cancelled" &&
+      Date.parse(session.expiresAt) <= Date.parse(this.timestamp())
+    ) {
+      // Expiry erases provider material on first touch instead of only blocking use.
+      // A source sealed by the runtime refuses the swap and keeps its own lifecycle.
+      const expired = JSON.stringify({
+        ...session,
+        phase: "cancelled",
+        privateState: undefined,
+        credential: undefined,
+      });
+      if (await this.secretOperation(() => driver.compareAndSwap!(secret, value, expired))) {
+        return { secret, driver, value: expired, session: deviceAuthorizationSession(expired) };
+      }
+    }
     return { secret, driver, value, session };
   }
 
