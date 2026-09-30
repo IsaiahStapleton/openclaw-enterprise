@@ -1059,6 +1059,29 @@ export class PostgresHumanAuthentication {
     });
   }
 
+  /**
+   * Password-only profile: audits a password sign-in that Better Auth already accepted. The
+   * guarded profile audits in the session's own transaction (issueSession); this profile's
+   * sessions are written by Better Auth, so the caller revokes the session if this fails.
+   */
+  async recordPasswordLogin(userId: string): Promise<void> {
+    await this.state.transact(async (unit) => {
+      const principalId = await this.findPrincipal(unit, userId);
+      await unit.audit.append({
+        id: `aud_${randomUUID()}`,
+        installationId: this.installationId,
+        occurredAt: new Date().toISOString(),
+        kind: "mutation",
+        actorId: principalId ?? "unresolved",
+        actor: principalId === undefined ? { unresolved: true } : { principalId },
+        action: "authentication.login",
+        resource: { kind: "installation", id: this.installationId },
+        outcome: "success",
+        details: { userId },
+      });
+    });
+  }
+
   async recordDenied(reason: HumanAuthenticationDenial): Promise<void> {
     if (
       ![

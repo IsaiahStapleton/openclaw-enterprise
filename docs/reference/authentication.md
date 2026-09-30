@@ -125,6 +125,12 @@ the auth secret; `untracked` events have no key and no hash. The email and
 address are never logged. The bundled Collector
 exports the event and lane, not the hash.
 
+Every password sign-in is audited as `authentication.login`: success names the
+account's Principal and `userId`; a wrong password or unknown email is `denied`
+with `INVALID_CREDENTIALS` and no account. A success whose audit cannot be
+written returns `503` and keeps no session. Rate-limited `429` attempts are not
+audited; `authentication.sign-in-limited` reports them.
+
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
 HTTP-only, use `SameSite=Lax`, and cover `/`. Production enables secure cookies;

@@ -141,7 +141,12 @@ and public signup is disabled. Without an external provider,
 `auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins; a
 success within the budget clears the email's failures (a slowed-lane success
 does not), and its `onLimited` hook logs
-`authentication.sign-in-limited` once per lane per minute.
+`authentication.sign-in-limited` once per lane per minute. With PostgreSQL State,
+`passwordSignInAudit` appends `authentication.login` for each accepted password
+(actor: the account's Principal; details: `userId`) and a denied event with
+`INVALID_CREDENTIALS` and no account for each refused one. If the success audit
+fails, the new session is deleted and sign-in returns `503`. Better Auth logs
+only errors, so a wrong password writes no unstructured console warning.
 
 `requireSessionKey` applies the optional `x-occ-session-key` header after the
 cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API

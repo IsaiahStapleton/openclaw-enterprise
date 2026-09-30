@@ -144,6 +144,14 @@ export interface ControllerAuthOptions {
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Password-only profile: replaces the in-memory failure-counting admission. */
   readonly passwordAdmission?: PasswordSignInAdmission;
+  /**
+   * Password-only profile: audits each password sign-in Better Auth accepted (with the
+   * account) or refused (without it). The guarded profile audits in State itself.
+   */
+  readonly passwordSignInAudit?: {
+    accepted(userId: string): Promise<void>;
+    refused(): Promise<void>;
+  };
   /** Receives runtime operational events, such as a sign-in lane entering the slow lane. */
   readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
 }
@@ -828,7 +836,11 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         },
       ),
     ...(humanLogin === undefined
-      ? {}
+      ? {
+          // Credential refusals are Better Auth warnings with no request or account; the
+          // sign-in audit records them instead. Errors still reach the console.
+          logger: { level: "error" },
+        }
       : {
           session: {
             expiresIn: 8 * 60 * 60,
@@ -1177,15 +1189,35 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           // is plainly derived from the email alone.
           email: String(input.email).trim().toLowerCase(),
         };
-        return passwordAdmission!.admit(attempt, () =>
-          api.signInEmail({
-            body: { ...body, rememberMe: true },
-            headers: authHeaders(request.headers),
-            asResponse: false,
-            returnHeaders: true,
-            returnStatus: true,
-          }),
-        );
+        return passwordAdmission!.admit(attempt, async () => {
+          const audit = options.passwordSignInAudit;
+          let result;
+          try {
+            result = await api.signInEmail({
+              body: { ...body, rememberMe: true },
+              headers: authHeaders(request.headers),
+              asResponse: false,
+              returnHeaders: true,
+              returnStatus: true,
+            });
+          } catch (error) {
+            if (audit !== undefined && countsAsSignInFailure(error)) {
+              await audit.refused();
+            }
+            throw error;
+          }
+          if (audit !== undefined) {
+            try {
+              await audit.accepted(result.response.user.id);
+            } catch (error) {
+              // No unaudited session is handed out.
+              const context = await auth.$context;
+              await context.internalAdapter.deleteSession(result.response.token).catch(() => {});
+              throw error;
+            }
+          }
+          return result;
+        });
       },
       (response) => {
         const sessionKey = (response as { readonly sessionKey?: unknown } | null)?.sessionKey;
@@ -1493,6 +1525,14 @@ export async function createPostgresControllerAuth(
       : {
           passwordAdministrator: (userId: string) =>
             administersInstallation(iamDriver, options.installationId, userId),
+        }),
+    ...(humanLogin !== undefined || persistence === undefined
+      ? {}
+      : {
+          passwordSignInAudit: {
+            accepted: (userId: string) => persistence.recordPasswordLogin(userId),
+            refused: () => persistence.recordDenied("INVALID_CREDENTIALS"),
+          },
         }),
     database: await createOccAuthDatabase(pool),
   });
