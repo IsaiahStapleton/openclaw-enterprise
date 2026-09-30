@@ -80,6 +80,11 @@ import { ComputeLifecycleDispatcher } from "../lifecycle-hooks.ts";
 import { nodeProgramArguments } from "../node-program.ts";
 import { discoverHarnessModels } from "../model-discovery.ts";
 import { pollHarnessDeviceAuthorization, startHarnessDeviceAuthorization } from "../device-auth.ts";
+import {
+  OAUTH_AGENT_ANNOTATION,
+  OAUTH_PHASE_ANNOTATION,
+  OAUTH_VOLUME_ANNOTATION,
+} from "../../kubernetes/oauth-seal.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
 import type { GatewayNodeEnrollment } from "../../../gateway/node-enrollment-client.ts";
@@ -618,9 +623,6 @@ const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
 ] as const);
 const HARNESS_WORKSPACE_VOLUME = "openclaw-workspace";
 const HARNESS_AUTH_VOLUME = "openclaw-harness-auth";
-const OAUTH_AGENT_ANNOTATION = "openclaw.dev/oauth-agent-id";
-const OAUTH_VOLUME_ANNOTATION = "openclaw.dev/oauth-volume-uid";
-const OAUTH_PHASE_ANNOTATION = "openclaw.dev/oauth-phase";
 const HARNESS_WORKSPACE_SIZE = "40Gi";
 type WorkspaceRole = "agent" | "gateway";
 const HARNESS_WORKSPACE_CATEGORIES = Object.freeze([

@@ -22,6 +22,7 @@ import {
 } from "@openclaw-enterprise/occ";
 import { resolveKubernetesControlNamespace } from "../../compute/kubernetes/index.ts";
 import { createKubernetesClientConfiguration } from "../../kubernetes/client.ts";
+import { OAUTH_PHASE_ANNOTATION } from "../../kubernetes/oauth-seal.ts";
 import {
   currentComputeAbortSignal,
   withComputeAbortSignal,
@@ -61,7 +62,6 @@ const NAMESPACE_ANNOTATION = "openclaw.dev/namespace-id";
 const SECRET_ANNOTATION = "openclaw.dev/secret-id";
 const SECRET_NAME_ANNOTATION = "openclaw.dev/secret-name";
 const DRIVER_ANNOTATION = "openclaw.dev/secret-driver-id";
-const OAUTH_PHASE_ANNOTATION = "openclaw.dev/oauth-phase";
 
 function required(value: unknown, description: string): string {
   if (!isNonEmptyString(value)) {
