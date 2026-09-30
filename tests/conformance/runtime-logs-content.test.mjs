@@ -206,7 +206,23 @@ test("redaction stays linear on hostile 32 KiB lines", () => {
     unit.repeat(Math.ceil((32 * 1024) / unit.length)).slice(0, 32 * 1024 - suffix.length) + suffix;
   redactRuntimeLogText(line("warm-up "));
   maskRuntimeEventText(line("warm-up "));
-  const units = ["a-", "a.", "-", "--a-", "=/", "(/", '"a-', "a0a", "tokena-", "bearer "];
+  const units = [
+    "a-",
+    "a.",
+    "-",
+    "--a-",
+    "=/",
+    "(/",
+    '"a-',
+    "a0a",
+    "tokena-",
+    "bearer ",
+    "-eyJa",
+    "-eyJ_",
+    "_eyJa",
+    "-eyJa-",
+    "-eyJaaaa",
+  ];
   for (const unit of units) {
     for (const suffix of ["", "?", "token", "=x"]) {
       const input = line(unit, suffix);
@@ -232,6 +248,107 @@ test("redaction stays linear on hostile 32 KiB lines", () => {
   });
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 50 * budgetMs, `50 hostile lines took ${elapsed.toFixed(0)} ms`);
+});
+
+test("redaction stays linear on a generated sweep of short repeated units", () => {
+  // Guards shapes nobody enumerated: every unit of 2 characters over an alphabet of
+  // pattern delimiters and prefix letters, every 3-character unit over a smaller one, and
+  // each delimiter ahead of the JWT, token and bearer prefixes.
+  const budgetMs = 100;
+  const alphabet = [
+    "a",
+    "-",
+    ".",
+    "=",
+    "/",
+    "?",
+    '"',
+    ":",
+    "_",
+    "+",
+    "@",
+    "e",
+    "y",
+    "J",
+    "t",
+    "o",
+    "k",
+    "n",
+    " ",
+  ];
+  const units = [];
+  for (const x of alphabet) {
+    for (const y of alphabet) {
+      units.push(x + y);
+    }
+  }
+  const short = ["a", "-", ".", "=", "/", '"', "_", "e", "J", " "];
+  for (const x of short) {
+    for (const y of short) {
+      for (const z of short) {
+        units.push(x + y + z);
+      }
+    }
+  }
+  for (const x of alphabet) {
+    units.push(`${x}eyJ`, `${x}eyJa`, `${x}eyJa.`, `${x}token`, `${x}bearer`);
+  }
+  const length = 32 * 1024;
+  redactRuntimeLogText("warm-up ".repeat(length / 8));
+  let worst = { unit: "", elapsed: 0 };
+  const started = performance.now();
+  for (const unit of units) {
+    const input = unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
+    const unitStarted = performance.now();
+    redactRuntimeLogText(input);
+    maskRuntimeEventText(input);
+    const elapsed = performance.now() - unitStarted;
+    if (elapsed > worst.elapsed) {
+      worst = { unit, elapsed };
+    }
+  }
+  const total = performance.now() - started;
+  assert.ok(
+    worst.elapsed < budgetMs,
+    `${JSON.stringify(worst.unit)} took ${worst.elapsed.toFixed(0)} ms (sweep total ${total.toFixed(0)} ms)`,
+  );
+});
+
+test("the jwt rule masks tokens in every delimiter context but not inside a longer word", () => {
+  const base64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const jwt = `${base64url({ alg: "HS256" })}.${base64url({ sub: randomUUID() })}.${randomString(43)}`;
+  for (const [before, after] of [
+    ["", ""],
+    ["token ", " next"],
+    ["auth=", "&x=1"],
+    ['{"t":"', '"}'],
+    ["(", ")"],
+    ["/", "/"],
+    [":", ","],
+  ]) {
+    const output = redactRuntimeLogText(`${before}${jwt}${after}`);
+    assert.ok(!output.includes(jwt), `${JSON.stringify(before)} context leaked the token`);
+    assert.match(output, /\[redacted:/);
+  }
+  // `-` and `.` are word boundaries inside a run; a word character ahead of `eyJ` is not.
+  assert.equal(redactRuntimeLogText(`x-token-${jwt} next`), "x-token-[redacted:jwt] next");
+  assert.equal(redactRuntimeLogText(`a.${jwt}.b`), "a.[redacted:jwt].b");
+  assert.equal(redactRuntimeLogText(`${jwt}.${jwt}`), "[redacted:jwt].[redacted:jwt]");
+  assert.equal(redactRuntimeLogText("xeyJabcd.efgh.ij"), "xeyJabcd.efgh.ij");
+});
+
+test("the linear jwt scan matches the reference regex on random runs", () => {
+  const reference = /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g;
+  const pieces = ["eyJ", "a", "b", "-", ".", "_", "0", " ", "/", "e", "J"];
+  for (let round = 0; round < 3000; round += 1) {
+    const input = Array.from(
+      { length: randomInt(1, 13) },
+      () => pieces[randomInt(pieces.length)],
+    ).join("");
+    const expected = input.replace(reference, "[redacted:jwt]");
+    // Only the jwt rule can fire here: no key names or URLs, and at most 36 characters.
+    assert.equal(redactRuntimeLogText(input), expected, JSON.stringify(input));
+  }
 });
 
 test("bounded key and path patterns still mask the shapes they did before", () => {

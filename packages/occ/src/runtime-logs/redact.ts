@@ -112,9 +112,14 @@ const RULES: readonly Rule[] = [
     replace: (match, prefix, value) => (/[0-9]/.test(value) ? `${prefix}${mark("bearer")}` : match),
   },
   {
+    // `eyJ<4+>.<4+>.<sig>` starting at a word boundary. The regex only takes each maximal
+    // run of the JWT alphabet plus `.` once (the lookahead/backreference pair is atomic);
+    // `maskJwts` then finds the tokens inside the run in linear time. A plain
+    // `\beyJ[A-Za-z0-9_-]{4,}\.` backtracks quadratically on runs such as `-eyJa-eyJa-...`,
+    // where `\b` holds before every `eyJ` and `-` is inside the segment alphabet.
     name: "jwt",
-    pattern: /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g,
-    replace: () => mark("jwt"),
+    pattern: /(?<![A-Za-z0-9_.-])(?=([A-Za-z0-9_.-]{11,}))\1/g,
+    replace: (match) => (match.includes("eyJ") ? maskJwts(match) : match),
   },
   {
     // URL userinfo: `scheme://user:password@host` and `scheme://token@host`.
@@ -200,6 +205,50 @@ const RULES: readonly Rule[] = [
         : match,
   },
 ];
+
+const isJwtSegmentChar = (char: string) => /[A-Za-z0-9_-]/.test(char);
+
+/**
+ * Masks every `eyJ<4+>.<4+>.<sig>` token in a run of `[A-Za-z0-9_.-]`, with the same
+ * matches a global `\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*` would find:
+ * a token starts at the run start or after `-` or `.` (the run's only non-word characters).
+ * Each dot-separated segment is measured once, so the scan is linear in the run length.
+ */
+function maskJwts(run: string): string {
+  // segmentEnd[i]: index of the first `.` at or after i, or run.length.
+  const segmentEnd = new Array<number>(run.length + 1);
+  segmentEnd[run.length] = run.length;
+  for (let index = run.length - 1; index >= 0; index -= 1) {
+    segmentEnd[index] = run[index] === "." ? index : segmentEnd[index + 1]!;
+  }
+  let output = "";
+  let copied = 0;
+  let index = 0;
+  while (index < run.length) {
+    const start = run.indexOf("eyJ", index);
+    if (start === -1) {
+      break;
+    }
+    const boundary = start === 0 || !isJwtSegmentChar(run[start - 1]!) || run[start - 1] === "-";
+    const headerEnd = segmentEnd[start]!;
+    const payloadEnd = headerEnd < run.length ? segmentEnd[headerEnd + 1]! : run.length;
+    if (
+      boundary &&
+      headerEnd - start >= 7 &&
+      headerEnd < run.length &&
+      payloadEnd - headerEnd - 1 >= 4 &&
+      payloadEnd < run.length
+    ) {
+      const end = segmentEnd[payloadEnd + 1]!;
+      output += `${run.slice(copied, start)}${mark("jwt")}`;
+      copied = end;
+      index = end;
+    } else {
+      index = start + 1;
+    }
+  }
+  return copied === 0 ? run : `${output}${run.slice(copied)}`;
+}
 
 /** Masks credential-shaped substrings. Input is a single log line or field value. */
 export function redactRuntimeLogText(value: string): string {
