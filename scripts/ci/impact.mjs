@@ -18,7 +18,11 @@ function git(...args) {
 }
 
 function documentationPath(path) {
-  if (/^(?:docs|specs)\/(?:[\s\S]*\/)?AGENTS\.md$/.test(path)) {
+  if (
+    /^(?:docs|specs)\/(?:[\s\S]*\/)?AGENTS\.md$/.test(path) ||
+    ["docs/reference/api.md", "docs/reference/cheatsheets/api.md"].includes(path) ||
+    /^docs\/reference\/api\/[\s\S]+\.md$/.test(path)
+  ) {
     return false;
   }
   return (

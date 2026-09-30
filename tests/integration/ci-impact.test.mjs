@@ -117,6 +117,46 @@ test("mixed code, Helm, workflow and tooling changes select full", (t) => {
   }
 });
 
+test("generated API reference changes select full across additions, edits, deletions and renames", (t) => {
+  for (const path of [
+    "docs/reference/api.md",
+    "docs/reference/cheatsheets/api.md",
+    "docs/reference/api/extra.md",
+    "docs/reference/api/nested/space and\nnewline.md",
+  ]) {
+    // The check also rejects unexpected Markdown anywhere in the generated directory.
+    fixture(t, ({ put }) => put(path)).expect("full");
+    fixture(t, ({ put }) => put(path, "changed\n"), { [path]: "old\n" }).expect("full");
+    fixture(t, ({ repo }) => rmSync(join(repo, path)), { [path]: "old\n" }).expect("full");
+    for (const [from, to] of [
+      [path, "docs/ordinary.md"],
+      ["docs/ordinary.md", path],
+    ]) {
+      fixture(
+        t,
+        ({ git, repo }) => {
+          mkdirSync(dirname(join(repo, to)), { recursive: true });
+          git("mv", from, to);
+        },
+        { [from]: "same\n" },
+      ).expect("full");
+    }
+  }
+});
+
+test("Markdown near generated API reference paths remains documentation", (t) => {
+  for (const path of [
+    "docs/reference/api-other.md",
+    "docs/reference/apis/page.md",
+    "docs/reference/api2/page.md",
+    "docs/reference/cheatsheets/api-extra.md",
+    "docs/reference/cheatsheets/other.md",
+    "specs/reference/api.md",
+  ]) {
+    fixture(t, ({ put }) => put(path)).expect("docs");
+  }
+});
+
 test("instruction files under docs and specs select full when added or modified", (t) => {
   for (const root of ["docs", "specs"]) {
     for (const path of [`${root}/AGENTS.md`, `${root}/nested/AGENTS.md`]) {
