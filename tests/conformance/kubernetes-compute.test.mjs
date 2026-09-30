@@ -2881,7 +2881,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   );
   assert.match(
     nativeAdminPod.initContainers[0].args[0],
-    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/home\/node\/\.openclaw\/openclaw\.json"\)/,
+    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/runtime-state\/home\/\.openclaw\/openclaw\.json"\)/,
   );
 
   const privateRuntimeDriver = createKubernetesComputeDriver(
@@ -7462,6 +7462,60 @@ test("revision lifecycle rejects another driver or missing identity before clust
     }),
     /another Compute Driver/i,
   );
+});
+
+// options() shares one resource object across roles; give each role its own.
+function separateResources() {
+  const configured = options();
+  const { gateway, agent, namespace } = configured.resources;
+  configured.resources = {
+    gateway: structuredClone(gateway),
+    agent: structuredClone(agent),
+    namespace: {
+      quota: structuredClone(namespace.quota),
+      containerDefaults: structuredClone(namespace.containerDefaults),
+    },
+  };
+  return configured;
+}
+
+test("resource quantities written as bare numbers name the field and the quoting fix", () => {
+  const cases = [
+    ["gateway", "limits", "cpu", 4, /Gateway CPU limit \(resources\.gateway\.limits\.cpu\)/],
+    ["agent", "limits", "cpu", 1, /Agent CPU limit \(resources\.agent\.limits\.cpu\)/],
+    ["agent", "requests", "cpu", 0.5, /Agent CPU request \(resources\.agent\.requests\.cpu\)/],
+  ];
+  for (const [role, kind, field, value, name] of cases) {
+    const configured = separateResources();
+    configured.resources[role][kind][field] = value;
+    assert.throws(() => KubernetesComputeDriver.validateConfiguration(configured), name);
+    assert.throws(
+      () => KubernetesComputeDriver.validateConfiguration(configured),
+      new RegExp(`must be a quoted Kubernetes quantity string: write "${value}", not ${value}\\.`),
+    );
+  }
+  const defaults = separateResources();
+  defaults.resources.namespace.containerDefaults.limits.cpu = 4;
+  assert.throws(
+    () => KubernetesComputeDriver.validateConfiguration(defaults),
+    /Namespace default CPU limit \(resources\.namespace\.containerDefaults\.limits\.cpu\) must be a quoted/,
+  );
+  const quota = separateResources();
+  quota.resources.namespace.quota.pods = 10;
+  assert.throws(
+    () => KubernetesComputeDriver.validateConfiguration(quota),
+    /Quota pods \(resources\.namespace\.quota\.pods\) must be a quoted/,
+  );
+  // A missing value is still reported as missing, and quoted cores pass.
+  const missing = separateResources();
+  delete missing.resources.gateway.limits.cpu;
+  assert.throws(
+    () => KubernetesComputeDriver.validateConfiguration(missing),
+    /Gateway CPU limit must be explicitly configured/,
+  );
+  const quoted = separateResources();
+  quoted.resources.gateway.limits.cpu = "4";
+  KubernetesComputeDriver.validateConfiguration(quoted);
 });
 
 test("real gateways require an explicit SQLite-compatible storage class", () => {

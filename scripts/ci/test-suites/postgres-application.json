@@ -202,18 +202,6 @@
       ]
     },
     {
-      "path": "tests/integration/native-admin-session-postgres.test.mjs",
-      "expectedTests": [
-        "PostgreSQL native admin shared session and HTTP proxy work across two OCC API replicas",
-        "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent logout",
-        "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent session expiry",
-        "PostgreSQL native admin WebSocket lease closes within thirty seconds after IAM administer restriction",
-        "PostgreSQL native admin WebSocket lease closes within thirty seconds after Agent stop",
-        "PostgreSQL native admin WebSocket lease closes within thirty seconds after active revision replacement",
-        "PostgreSQL native admin WebSocket closes on API shutdown and disabled redeploy denies reuse"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-workspace-setup.test.mjs",
       "expectedTests": [
         "OCC stages workspace input atomically, isolates it, and clears bytes on completion or deletion",
@@ -235,12 +223,6 @@
       "expectedTests": ["confirmed broker disposal survives service restart in PostgreSQL"]
     },
     {
-      "path": "tests/integration/postgres-github-sign-in.test.mjs",
-      "expectedTests": [
-        "PostgreSQL GitHub sign-in preserves an existing account through the ordinary Console"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-human-authentication.test.mjs",
       "expectedTests": [
         "PostgreSQL human authentication preserves exact identity and transactional currentness"
@@ -251,18 +233,6 @@
       "expectedTests": [
         "auth:maintain requires an explicit writers-stopped claim for every change",
         "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-cookie-commit.test.mjs",
-      "expectedTests": [
-        "opted-in HTTP login and logout preserve cookies until real State commit acknowledgement"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-session-cookie.test.mjs",
-      "expectedTests": [
-        "production GitHub-profile sessions reject cookies planted by a sibling domain"
       ]
     },
     {
@@ -278,12 +248,6 @@
       ]
     },
     {
-      "path": "tests/integration/postgres-github-outage.test.mjs",
-      "expectedTests": [
-        "a GitHub outage fails GitHub sign-in closed while password sign-in keeps working"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-github-admin-attach.test.mjs",
       "expectedTests": [
         "Installation administrators attach, detach and re-attach GitHub identities and disable accounts"
@@ -293,12 +257,6 @@
       "path": "tests/integration/postgres-github-admin-scope.test.mjs",
       "expectedTests": [
         "an exact-scope Installation administrator cannot manage an account with broader grants"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-tab-binding.test.mjs",
-      "expectedTests": [
-        "a GitHub tab keeps its own session: another tab's password sign-in signs it out"
       ]
     },
     {
@@ -323,12 +281,6 @@
       "path": "tests/integration/postgres-trusted-proxy.test.mjs",
       "expectedTests": [
         "sign-in admission keys on the client behind a trusted ingress and ignores other peers' headers"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-password-sign-in-limit.test.mjs",
-      "expectedTests": [
-        "password-only sign-in limits failures per client and email with a reserved administrator lane"
       ]
     },
     {

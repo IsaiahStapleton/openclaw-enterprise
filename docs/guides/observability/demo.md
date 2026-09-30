@@ -125,7 +125,7 @@ PY_COMPARE
 The digest binds chart, values, manifest and hooks, excluding status.
 Compare the saved manifest with live OCC resources, including Collector Pods and
 failure remnants. Stop on uncertain identity, ownership or state; follow
-[recovery](#recover-an-incomplete-setup) after interrupted creation.
+[recovery](demo-cleanup.md#recover-an-incomplete-setup) after interrupted creation.
 
 Use the Kubernetes API's translated IPv4 addresses as `/32` and port in
 `$OBS_FILES/demo.yaml`:
@@ -155,7 +155,7 @@ grafana:
 ```
 
 A failed or interrupted install can reserve the name and create resources without
-a marker; follow [recovery](#recover-an-incomplete-setup).
+a marker; follow [recovery](demo-cleanup.md#recover-an-incomplete-setup).
 
 Services use `ClusterIP`. Prometheus reads Pod metadata, not Secrets. Grafana
 bundles plugins; startup downloads are disabled.
@@ -190,7 +190,7 @@ For the chart-managed Collector, create dedicated demo Secrets:
 ```
 
 If Secret creation fails, the first may exist. Follow
-[recovery](#recover-an-incomplete-setup).
+[recovery](demo-cleanup.md#recover-an-incomplete-setup).
 
 Create `$OBS_FILES/occ-demo.yaml` from saved values. Replace selector maps because
 Helm merges overlays and can retain old labels. Keep `occ-before.yaml` unchanged
@@ -367,128 +367,10 @@ growth. The log endpoint is `/otlp/v1/logs`, not `/v1/logs`.
 
 ## Recover an incomplete setup
 
-Do not rerun failed or interrupted commands: an absent marker does not prove
-no changes. Confirm cluster UID, OCC status, complete history, saved revision
-and live resources. If upgrade was never invoked and OCC matches the saved
-revision, no rollback is needed. Otherwise retain dependencies and inspect for
-rollback below or escalate. If backup or cluster identity is unavailable, stop
-and reconcile with a qualified operator.
-
-Inspect demo status, every relevant history revision, manifests, hooks and live objects
-in both namespaces, including the OCC discovery Role and RoleBinding, Grafana
-Secret and both Collector Secrets. Record UIDs and establish creation and ownership
-from independent records, not names or labels. Check workloads, Pods and external
-Collectors for references. Retain and escalate on failed reads or ambiguity.
-Account for objects without a release record or outside the latest manifest.
-
-Once OCC and external exporters no longer depend on the demo, if the release
-exists, a qualified operator must establish ownership and revision. Inspect the
-latest manifest, pre/post-delete hooks, policies and effects, and every live
-object Helm can delete. Confirm unchanged release and object UIDs and exclude
-other writers. Run `helm uninstall demo -n oce-observability-demo --wait --timeout 5m`
-once, or skip it if the release is confirmed absent. Reconcile failure or
-interruption without retrying; verify the release and resources are gone.
-
-Delete separately created or leftover resources through the Kubernetes API with
-UID preconditions, only after proving creation, current UID and no references.
-Check namespace UID, contents, finalizers and dependencies before deleting it;
-retain anything unproved. Restart only with an owned, clean namespace and
-unreserved release name. If either cannot be reconciled, use fresh names and
-retain the backup. Otherwise, after verified cleanup, confirm `$OBS_FILES` names
-the setup directory, delete it, and unset it.
+Do not rerun failed or interrupted commands. Follow [recover an incomplete setup](demo-cleanup.md#recover-an-incomplete-setup).
 
 ## Remove only the demo
 
-Redirect external Collectors away from Loki and allow active work to finish;
-rollback can restart OCC Pods. Compare current and original manifests with live
-resources, UIDs and Helm ownership annotations, including objects rollback can
-delete or replace and failed-upgrade remnants. Retrieve the original hooks with
-`helm get hooks oce -n openclaw-system --revision "$(cat "$OBS_FILES/occ-revision")"`.
-Inspect every pre/post-rollback hook, deletion policy, live name, UID and side
-effect under the upgrade inspection rules. Stop on failed inspection or an unowned,
-replaced or ambiguous object. Preserve backend, Secrets, history and backup; do
-not blindly repeat operations. After inspection, `touch "$OBS_FILES/rollback-inspected"`;
-the command consumes it before rollback. Reinspect after failure or interruption.
+Redirect external Collectors away from Loki first. [Remove only the demo](demo-cleanup.md#remove-only-the-demo) restores the saved OCC revision and verifies the Collector state.
 
-Rollback uses the original revision's chart, values, manifest and hooks. Only it
-or the immediately following demo revision is accepted. Stop for manual
-reconciliation on pending or unexpected states, pruned or changed backup, UID,
-chart or values, or interrupted rollback. `--history-max 0` prevents pruning the
-original revision.
-
-```bash
-(
-  set -euo pipefail
-  rm -f "$OBS_FILES/occ-rollback-finished" "$OBS_FILES/occ-restored"
-  inspected=0
-  if test -f "$OBS_FILES/rollback-inspected"; then
-    rm -f "$OBS_FILES/rollback-inspected"
-    inspected=1
-  fi
-  test -f "$OBS_FILES/setup-complete"
-  test -f "$OBS_FILES/occ-change-started"
-  test "${HELM_DRIVER:-}" = secret
-  test -s "$OBS_FILES/cluster-uid"
-  test "$(kubectl --context "$HELM_KUBECONTEXT" get namespace kube-system -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/cluster-uid")"
-  (cd "$OBS_FILES" && sha256sum -c occ-backup.sha256)
-  revision=$(cat "$OBS_FILES/occ-revision")
-  test "$(kubectl --context "$HELM_KUBECONTEXT" -n openclaw-system get secret \
-    "sh.helm.release.v1.oce.v$revision" -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/occ-release-uid")"
-  test "$(release_digest)" = "$(cat "$OBS_FILES/occ-release-digest")"
-  (cd "$OBS_FILES" && sha256sum -c occ-demo.sha256)
-  helm get values oce -n openclaw-system --revision "$revision" --all -o yaml > "$OBS_FILES/occ-restore-values.yaml"
-  helm get manifest oce -n openclaw-system --revision "$revision" > "$OBS_FILES/occ-restore-manifest.yaml"
-  cmp "$OBS_FILES/occ-before.yaml" "$OBS_FILES/occ-restore-values.yaml"
-  cmp "$OBS_FILES/occ-before-manifest.yaml" "$OBS_FILES/occ-restore-manifest.yaml"
-  helm status oce -n openclaw-system -o json > "$OBS_FILES/occ-current-status.json"
-  current=$(python3 - "$OBS_FILES/occ-current-status.json" "$revision" <<'PY_STATUS'
-import json, sys
-s = json.load(open(sys.argv[1]))
-original = int(sys.argv[2])
-v = s.get("version")
-if (s.get("name") != "oce" or s.get("namespace") != "openclaw-system"
-    or type(v) is not int or v not in (original, original + 1)
-    or s.get("info", {}).get("status") not in ("deployed", "failed")
-    or (v == original and s.get("info", {}).get("status") != "deployed")):
-    sys.exit("Unexpected release state; stop and reconcile it.")
-print(v)
-PY_STATUS
-  )
-  if test "$current" != "$revision"; then
-    test "$inspected" = 1
-    test "$(release_digest "$current" chart)" = "$(cat "$OBS_FILES/occ-chart-digest")"
-    helm get values oce -n openclaw-system --revision "$current" -o json > "$OBS_FILES/occ-current-values.json"
-    yq -o=json '.' "$OBS_FILES/occ-demo.yaml" > "$OBS_FILES/occ-demo-values.json"
-    python3 - "$OBS_FILES/occ-current-values.json" "$OBS_FILES/occ-demo-values.json" <<'PY_VALUES'
-import json, sys
-with open(sys.argv[1]) as a, open(sys.argv[2]) as b:
-    if json.load(a) != json.load(b):
-        sys.exit("The current revision does not match the demo values; stop.")
-PY_VALUES
-    helm rollback oce "$revision" -n openclaw-system --history-max 0 --wait --timeout 5m
-  fi
-  touch "$OBS_FILES/occ-rollback-finished"
-)
-```
-
-Rollback completion does not prove restoration or deletion. Keep dependencies
-and backup while a qualified operator compares status, history, restored manifest
-and live resources with the saved revision. Save DaemonSets and Pods; their
-configuration may be sensitive:
-
-```bash
-kubectl --context "$HELM_KUBECONTEXT" -n openclaw-system get daemonsets,pods \
-  -o yaml > "$OBS_FILES/occ-live-workloads.yaml"
-```
-
-If the read fails, retain resources. Check the Collector DaemonSet and every
-owned or terminating Pod: owner UID, rollout, configuration, Secret references
-and exporter. If originally disabled, verify the demo DaemonSet **and Pods** are
-gone; otherwise verify original ownership, configuration and rollout. Check other
-workloads and external Collectors for demo Secret or Loki references. An OCC read
-alone does not prove these conditions; retain dependencies on incomplete or
-ambiguous readback.
-
-Stop the port-forward and follow
-[cleanup](#recover-an-incomplete-setup) for the release and remaining resources.
 See [observability acceptance](../../testing/metrics.md#kubernetes-observability-acceptance) for local and CI proof.

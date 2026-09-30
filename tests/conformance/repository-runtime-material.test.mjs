@@ -1344,23 +1344,28 @@ test("Embedded Codex plugin runtime receives broker network policy centrally", a
   });
 });
 
-test("Dedicated Codex repository material projects a combined broker CA bundle", async () => {
-  const f = await fixture("dedicated");
-  const publicCa = Buffer.from("-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n");
-  await f.driver.prepareRevision(
-    f.revision,
-    f.context([runtimeBinding("session_with_ca", publicCa)]),
-  );
-  const environment = Object.fromEntries(
-    f.consumer().spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]),
-  );
-  assert.match(
-    environment.SSL_CERT_FILE,
-    /^\/run\/oce\/repository-credentials\/sessions\/[a-f0-9]{64}\/ca-bundle\.pem$/,
-  );
-  assert.equal(environment.GIT_SSL_CAINFO, environment.SSL_CERT_FILE);
-  assert.equal(environment.NODE_EXTRA_CA_CERTS, environment.SSL_CERT_FILE);
-});
+// Both consumer shapes must trust the projected CA without disabling TLS verification.
+for (const mode of ["embedded", "dedicated"]) {
+  test(`Repository consumer projects a combined broker CA bundle (${mode})`, async () => {
+    const f = await fixture(mode);
+    const publicCa = Buffer.from(
+      "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n",
+    );
+    await f.driver.prepareRevision(
+      f.revision,
+      f.context([runtimeBinding("session_with_ca", publicCa)]),
+    );
+    const environment = Object.fromEntries(
+      f.consumer().spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]),
+    );
+    assert.match(
+      environment.SSL_CERT_FILE,
+      /^\/run\/oce\/repository-credentials\/sessions\/[a-f0-9]{64}\/ca-bundle\.pem$/,
+    );
+    assert.equal(environment.GIT_SSL_CAINFO, environment.SSL_CERT_FILE);
+    assert.equal(environment.NODE_EXTRA_CA_CERTS, environment.SSL_CERT_FILE);
+  });
+}
 
 test("Kubernetes projects the repository client into native exec paths without changing admitted configuration", async (t) => {
   for (const roster of ["list", "entries"]) {

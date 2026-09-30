@@ -68,6 +68,17 @@ cover that host. For direct standalone startup, use the
 [standalone configuration](../../reference/repository-credentials.md#standalone-service-inputs)
 with explicit file paths instead.
 
+Plan session capacity before enabling many Agents. The single sidecar holds
+every repository session in the installation: one per binding of each deployed
+revision. A closing session keeps its slot until disposal, so stopped or
+replaced revisions can hold slots for a while. The default limit is 16
+sessions, and one Agent may have up to 16 bindings. When the limit is reached, new sessions
+fail with a retryable `overloaded` error until slots free. To raise it, add
+`"limits": { "sessions": 64 }` (any positive integer) to `config.json`. Other
+[service bounds](../../reference/repository-credentials.md#client-routing-and-limits),
+such as 32 concurrent exchanges, stay unchanged; raise them only with measured
+load.
+
 ```bash
 chmod 700 /secure/occ/repositories
 chmod 600 /secure/occ/repositories/config.json \
