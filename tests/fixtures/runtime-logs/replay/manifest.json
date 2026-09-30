@@ -26,7 +26,7 @@
       "source": "agent",
       "provenance": "captured",
       "origin": "stderr of codex app-server with LOG_FORMAT=json and RUST_LOG=info,codex_otel=off, codex-cli 0.158.0 in the runtime image, local k3d, 2026-09-30; each distinct target and message kept once; kubelet timestamp prefixes added from each record's timestamp",
-      "scrubbed": "installation_id set to a fixed UUID, Pod name in server_name replaced, scratch CODEX_HOME path replaced with /home/node/.codex"
+      "scrubbed": "installation_id set to a fixed UUID, Pod name in server_name replaced, scratch CODEX_HOME path replaced with /home/node/.codex; this rewrites the plain-text WARNING line, which Codex prints only when CODEX_HOME is under /tmp, so its codex_home no longer matches the temporary dir it names"
     },
     {
       "file": "sandbox-ocsf-decisions.json",

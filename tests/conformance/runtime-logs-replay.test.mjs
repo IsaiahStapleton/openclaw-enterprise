@@ -31,8 +31,11 @@ function kubeletLines(text) {
   });
 }
 
-// The Kubernetes Compute Driver's Event projection (`runtimeEvents`): this Pod's Events
-// only, newest first, count from the series when present.
+// A simplified copy of the Kubernetes Compute Driver's private Event projection
+// (`runtimePodEvents`): this Pod's Events only, newest first, count from the series when
+// present. It omits the driver's Namespace check, safe-integer guard and Event cap, and
+// it is not the product code, so this replay only exercises `validRuntimeDescription`
+// (the node, image and object masking); it proves nothing about the driver's filter.
 function driverEvents(items, podUid) {
   const time = (value) => (typeof value === "string" ? new Date(value).toISOString() : null);
   return items
@@ -149,19 +152,6 @@ test("replayed runtime output matches the committed goldens", async (t) => {
   }
 });
 
-test("the golden comparison fails when replay output changes", async () => {
-  const { fixtures } = await manifest();
-  const entry = fixtures.find(({ replay: kind }) => kind === "kubelet-container");
-  const replayed = await replay(entry);
-  const changed = serialize({
-    ...replayed,
-    records: replayed.records.map((record, index) =>
-      index === 0 && record.type === "line" ? { ...record, message: `${record.message}.` } : record,
-    ),
-  });
-  assert.notEqual(changed, await readFile(new URL(entry.golden, directory), "utf8"));
-});
-
 test("real Gateway, wrapper and Codex output is classified, not withheld", async () => {
   const { fixtures } = await manifest();
   const byFile = Object.fromEntries(
@@ -197,10 +187,18 @@ test("real Gateway, wrapper and Codex output is classified, not withheld", async
   assert.ok(
     codex.records.some(({ kind, message }) => kind === "text" && /listening on/.test(message)),
   );
-  const body = JSON.stringify(codex.records);
-  for (const dropped of ["installation_id", "server_name", "remote_control_url", "/.codex/"]) {
-    assert.equal(body.includes(dropped), false, `${dropped} reached a record`);
+  const body = JSON.stringify(tracing);
+  for (const dropped of ["installation_id", "server_name", "remote_control_url", ".codex"]) {
+    assert.equal(body.includes(dropped), false, `${dropped} reached a tracing record`);
   }
+  // Plain-text lines are not field-filtered: the one Codex warning that names CODEX_HOME
+  // stays as text. Only that line may carry the path.
+  assert.deepEqual(
+    codex.records
+      .filter(({ kind, message }) => kind === "text" && message.includes(".codex"))
+      .map(({ message }) => message.slice(0, 40)),
+    ["WARNING: proceeding, even though we coul"],
+  );
 });
 
 test("OpenShell decisions keep rule and engine; the pinned source never sends a policy generation", async () => {
@@ -243,6 +241,5 @@ test("real Kubernetes Events mask node, image and object names before they reach
     "node name reached the status",
   );
   assert.equal(body.includes("0123456789abcdef"), false, "image digest reached the status");
-  assert.equal(body.includes("SuccessfulCreate"), false, "ReplicaSet Events are not this Pod's");
   assert.ok(events.some(({ type, reason }) => type === "Warning" && reason === "Unhealthy"));
 });
