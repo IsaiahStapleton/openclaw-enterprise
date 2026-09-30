@@ -1300,10 +1300,27 @@ func (app *application) printRuntime(description any) error {
 	}
 	pods, _ := resource["pods"].([]any)
 	rows := make([]any, 0, len(pods))
+	events := []any{}
 	for _, item := range pods {
 		pod, ok := item.(map[string]any)
 		if !ok {
 			return fmt.Errorf("OCC returned an invalid runtime description")
+		}
+		podEvents, _ := pod["events"].([]any)
+		for _, entry := range podEvents {
+			event, ok := entry.(map[string]any)
+			if !ok {
+				return fmt.Errorf("OCC returned an invalid runtime description")
+			}
+			events = append(events, map[string]any{
+				"pod":            pod["name"],
+				"container":      event["container"],
+				"type":           event["type"],
+				"reason":         event["reason"],
+				"count":          event["count"],
+				"lastObservedAt": event["lastObservedAt"],
+				"message":        event["message"],
+			})
 		}
 		row := map[string]any{
 			"role":    pod["role"],
@@ -1347,16 +1364,33 @@ func (app *application) printRuntime(description any) error {
 		return err
 	}
 	sources, _ := resource["sources"].([]any)
-	if len(sources) == 0 {
+	if len(sources) > 0 {
+		if _, err := fmt.Fprintln(app.out); err != nil {
+			return err
+		}
+		if err := printTable(app.out, sources, []column{
+			{title: "SOURCE", key: "id"},
+			{title: "AVAILABLE", key: "available"},
+			{title: "RETENTION", key: "retention"},
+		}); err != nil {
+			return err
+		}
+	}
+	if len(events) == 0 {
 		return nil
 	}
 	if _, err := fmt.Fprintln(app.out); err != nil {
 		return err
 	}
-	return printTable(app.out, sources, []column{
-		{title: "SOURCE", key: "id"},
-		{title: "AVAILABLE", key: "available"},
-		{title: "RETENTION", key: "retention"},
+	// Pod Events arrive newest first per Pod; CONTAINER is "-" for Pod-level Events.
+	return printTable(app.out, events, []column{
+		{title: "POD", key: "pod"},
+		{title: "CONTAINER", key: "container"},
+		{title: "TYPE", key: "type"},
+		{title: "REASON", key: "reason"},
+		{title: "COUNT", key: "count"},
+		{title: "LAST SEEN", key: "lastObservedAt"},
+		{title: "MESSAGE", key: "message"},
 	})
 }
 

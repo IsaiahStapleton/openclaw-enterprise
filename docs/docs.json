@@ -645,6 +645,10 @@
                   {
                     "page": "contributing/README",
                     "label": "Overview"
+                  },
+                  {
+                    "page": "contributing/sprints",
+                    "label": "Sprint Planning"
                   }
                 ]
               },

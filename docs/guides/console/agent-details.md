@@ -41,9 +41,10 @@ another version or the draft. Its milestones use the persisted record:
 
 A `failed` result shows the stored error. Startup evidence may identify the
 runtime component, failed check, code, and check time. Plugin warnings describe
-that attempt. An unavailable record has unknown status. **Refresh deployment**
-rereads it, the selected version, and that version's deployment record without
-retrying work.
+that attempt. An unavailable record has unknown status. While the record is
+`queued` or `running`, the panel rereads it every few seconds and stops at
+`succeeded`, `failed`, or a read error. **Refresh deployment** rereads it, the
+selected version, and that version's deployment record without retrying work.
 
 Pending work shows its **Last recorded result** and **Last checked** time,
 including deferred readiness checks and a running worker's previous result.

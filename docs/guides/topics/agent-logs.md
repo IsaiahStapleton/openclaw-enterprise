@@ -14,7 +14,8 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 1. Open the Agent and select a deployed version. The editable draft is not a
    version and has no runtime; a version without a running Pod shows no Pod.
-2. Select **Logs**. The runtime strip refreshes every 10 seconds.
+2. Select **Logs**. The runtime strip refreshes every 10 seconds. Each Pod card
+   lists its recent warning Events, prefixed with the container they concern.
 3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
    **Agent (Harness)** (the dedicated Codex or OpenClaw Harness container, only
    for dedicated execution), or **Sandbox (policy decisions)** (see
@@ -62,7 +63,8 @@ always reads 1000 lines, and cannot be combined with `cursor` (`400`). See the
 
 ## Command line
 
-`occ agent runtime AGENT_ID` prints the Pods and sources; `occ agent logs
+`occ agent runtime AGENT_ID` prints the Pods, sources and Events (with the
+container each concerns); `occ agent logs
 AGENT_ID --source gateway` prints one page, and `--follow` keeps polling every
 2 seconds until Ctrl-C:
 
@@ -90,9 +92,11 @@ already open the [native admin UI](../../reference/agent-native-admin.md), whose
 Logs page shows Gateway log text. To let someone read logs without that
 access, grant a Namespace Role with Agent `read_logs` and `read` plus version
 `read` on the exact Agent; a `read_logs` Restriction blocks log text for
-everyone, administrators included. Service principals may call both routes under
-the same grants. Every request, including each follow poll, is authorized again,
-so revoking a grant stops the next poll. See
+everyone, administrators included. Without `operate`, the Logs tab shows no
+runtime strip and no Pod picker: it offers every source, reads the source's
+current Pod, and says so when this version lacks a source. Service principals
+may call both routes under the same grants. Every request, including each follow
+poll, is authorized again, so revoking a grant stops the next poll. See
 [authorization](../../reference/authorization.md).
 
 ## What the output contains
@@ -101,16 +105,20 @@ OCC classifies every line against an allowlist of operational output before
 returning it:
 
 - **wrapper**: runtime startup and model-probe events, with fixed fields only.
+  The wrapper's fixed plain line
+  `Harness model authentication probe failed.` is also a wrapper `error`. A
+  line's `code` field shows on the collapsed row.
 - **openclaw**: Gateway JSON console records (level, subsystem, message and a
   short list of operational fields such as `status`, `method` and `durationMs`).
   Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are
   dropped.
 - **codex**: Codex tracing records (level, target, message).
-- **text**: plain lines up to 4 KiB.
+- **text**: plain lines up to 4 KiB, including lines that start with a bracketed
+  component tag such as `[node-host] advertised commands: ...`.
 
 Any other structured output, including Codex JSON-RPC protocol traffic, is
-**withheld**: the page shows a count, never the content. Oversized and malformed
-structured lines are withheld the same way.
+**withheld**: the page shows a count, never the content. Oversized lines, and
+malformed lines that start like a JSON object or array, are withheld the same way.
 
 Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
@@ -231,18 +239,19 @@ The logs cannot tell you, and you should not infer:
 
 ## Errors
 
-| Response                             | Meaning and action                                                                            |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `403 FORBIDDEN`                      | Missing grants for that tier. The console stops asking and shows which grants are needed.     |
-| `400 RUNTIME_LOGS_CURSOR_INVALID`    | The cursor belongs to another principal, version or source, or was altered. Start a new view. |
-| `400 RUNTIME_LOGS_POD_INVALID`       | The Pod is not a current Pod of this version and source.                                      |
-| `429 RUNTIME_LOGS_RATE_LIMITED`      | Wait for `Retry-After`.                                                                       |
-| `501 NOT_IMPLEMENTED`                | The Compute Driver does not expose runtime logs, or an operator disabled them.                |
-| `503 RUNTIME_LOGS_CLUSTER_RBAC`      | The cluster or OpenShell denied the read. An operator must grant the roles or scope.          |
-| `503 RUNTIME_LOGS_SANDBOX_NOT_FOUND` | OpenShell reports no such sandbox: not provisioned yet, removed, or outside OCC's Workspace.  |
-| `503 RUNTIME_LOGS_AUDIT_UNAVAILABLE` | The view could not be audited, so nothing was read. Retry.                                    |
-| `503 RUNTIME_LOGS_UNAVAILABLE`       | The runtime or cluster is unreachable. Retry.                                                 |
-| `504 RUNTIME_LOGS_TIMEOUT`           | The read exceeded 10 seconds. Retry or read fewer lines.                                      |
+| Response                              | Meaning and action                                                                            |
+| ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `403 FORBIDDEN`                       | Missing grants for that tier. The console stops asking and shows which grants are needed.     |
+| `400 RUNTIME_LOGS_CURSOR_INVALID`     | The cursor belongs to another principal, version or source, or was altered. Start a new view. |
+| `400 RUNTIME_LOGS_POD_INVALID`        | The Pod is not a current Pod of this version and source.                                      |
+| `400 RUNTIME_LOGS_SOURCE_UNAVAILABLE` | This version has no such source, for example no Sandbox log or no dedicated Harness.          |
+| `429 RUNTIME_LOGS_RATE_LIMITED`       | Wait for `Retry-After`.                                                                       |
+| `501 NOT_IMPLEMENTED`                 | The Compute Driver does not expose runtime logs, or an operator disabled them.                |
+| `503 RUNTIME_LOGS_CLUSTER_RBAC`       | The cluster or OpenShell denied the read. An operator must grant the roles or scope.          |
+| `503 RUNTIME_LOGS_SANDBOX_NOT_FOUND`  | OpenShell reports no such sandbox: not provisioned yet, removed, or outside OCC's Workspace.  |
+| `503 RUNTIME_LOGS_AUDIT_UNAVAILABLE`  | The view could not be audited, so nothing was read. Retry.                                    |
+| `503 RUNTIME_LOGS_UNAVAILABLE`        | The runtime or cluster is unreachable. Retry.                                                 |
+| `504 RUNTIME_LOGS_TIMEOUT`            | The read exceeded 10 seconds. Retry or read fewer lines.                                      |
 
 ## Enable or disable (operators)
 

@@ -78,7 +78,9 @@ never substitutes defaults. Exact-resource permissions still apply.
 **Current version** uses `activeRevisionId`; **View version vN** opens read-only
 details without activating it. **Deployment activity** shows the newest readable
 version's persisted `queued`, `running`, `succeeded`, or `failed` status, not live
-health. Viewed versions show their own results. **Refresh deployment** rereads
+health. Viewed versions show their own results. Pending activity is reread every
+`DEPLOYMENT_POLL_MS` (`apps/controller/src/console/agents/detail.mjs`) until a
+result or read error; a new result also rereads selection. **Refresh deployment** rereads
 activity and selection. **Current observations** requests timestamped
 `succeeded`, `failed`, or `unknown` diagnostics without changing deployment status.
 Its bodyless POST requires Agent `read`/`operate` and exact AgentRevision `read`.

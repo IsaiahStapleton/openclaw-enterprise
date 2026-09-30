@@ -142,8 +142,11 @@ and public signup is disabled. In both profiles
 success within the budget clears the email's failures (a slowed-lane success
 does not), and its `onLimited` hook logs
 `authentication.sign-in-limited` once per lane per minute. `auth/known-device.ts`
-verifies the known-device cookie against the attempt's email and, on success,
-reissues it; a verified entry replaces the email lane with a device lane.
+verifies the known-device cookie against the attempt's email and the account's
+password state (user, password method, and its `authentication_version`; with an
+external provider, only while the account is enabled), reading the account only
+for an entry issued for that email, and on success reissues it; a verified entry
+replaces the email lane with a device lane.
 In the password-only profile with PostgreSQL State, `passwordSignInAudit` appends `authentication.login` for
 each accepted password (actor: the account's Principal; details: `userId`) and a
 denied event with `INVALID_CREDENTIALS` and no account for each refused one. If
@@ -151,7 +154,8 @@ the success audit fails, the new session is deleted and sign-in returns `503`.
 If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), but
 admission still counts the wrong password against the email and address budgets.
 With an external sign-in provider, `/oce/password` writes the denial itself; if
-that write fails, sign-in returns `503` and the guess is not counted.
+that write fails, it answers `503` with `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`, which
+the controller counts the same way.
 Better Auth logs only errors, so a wrong password writes no unstructured console
 warning.
 
