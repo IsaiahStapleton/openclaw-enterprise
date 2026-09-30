@@ -123,7 +123,9 @@ import {
 } from "./errors.ts";
 import {
   readRuntimeLogPage,
+  readSandboxLogPage,
   RuntimeLogReadError,
+  SANDBOX_LOG_RETENTION,
   validRuntimeDescription,
   type RuntimeLogCursorCodec,
   type RuntimeLogPage,
@@ -219,6 +221,7 @@ export {
   RUNTIME_LOG_LIMIT_BYTES,
   RUNTIME_LOG_MAX_TAIL_LINES,
   sanitizeRuntimeLogChunk,
+  sanitizeSandboxLogLines,
   type RuntimeLogCursorCodec,
   type RuntimeLogPage,
   type RuntimeLogQuery,
@@ -684,6 +687,8 @@ function driverHasCapabilityContract(driver: Driver): boolean {
         typeof candidate.ensureNamespace === "function") &&
       (candidate.provisionHarness === undefined ||
         typeof candidate.provisionHarness === "function") &&
+      (candidate.readSandboxLogs === undefined ||
+        typeof candidate.readSandboxLogs === "function") &&
       typeof candidate.cleanup === "function"
     );
   }
@@ -2410,8 +2415,11 @@ export class OpenClawController {
       deploymentId,
       "operate",
     );
-    return this.runtimeLogOperation(signal, (deadline) =>
-      this.describedAgentRuntime(driver, binding, deadline),
+    return this.runtimeLogOperation(signal, async (deadline) =>
+      this.withSandboxLogSource(
+        await this.describedAgentRuntime(driver, binding, deadline),
+        binding.revision,
+      ),
     );
   }
 
@@ -2438,6 +2446,10 @@ export class OpenClawController {
       deploymentId,
       "administer",
     );
+    const source = query.source;
+    if (source === "sandbox") {
+      return this.readSandboxLogs(principalId, agentId, driver, binding, query, options);
+    }
     if (typeof driver.readAgentRuntimeLogs !== "function") {
       throw new NotImplementedError(
         "readAgentRuntimeLogs",
@@ -2448,7 +2460,7 @@ export class OpenClawController {
       // Every follow poll describes the runtime again for the ownership re-check; it
       // needs only the requested source's Pods, not their Events.
       const description = await this.describedAgentRuntime(driver, binding, deadline, {
-        source: query.source,
+        source,
         events: false,
       });
       try {
@@ -2487,6 +2499,124 @@ export class OpenClawController {
         }
         throw error;
       }
+    });
+  }
+
+  /**
+   * The revision's Sandbox log, read through the Sandbox Driver that provisioned it. The
+   * Sandbox is derived from the revision; no caller-named Sandbox reaches the Driver.
+   */
+  private async readSandboxLogs(
+    principalId: string,
+    agentId: string,
+    compute: ComputeDriver,
+    binding: ComputeAgentRevisionBinding,
+    query: RuntimeLogQuery,
+    options: {
+      readonly codec: RuntimeLogCursorCodec;
+      readonly admitView: (admission: RuntimeLogViewAdmission) => Promise<void>;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Readonly<RuntimeLogPage>> {
+    const sandbox = this.sandboxLogDriver(binding.revision);
+    if (sandbox === undefined || compute.resolveSandboxNamespace === undefined) {
+      throw new RuntimeLogsError("RUNTIME_LOGS_SOURCE_UNAVAILABLE");
+    }
+    const description = this.withSandboxLogSource(
+      Object.freeze({
+        revisionId: binding.revision.id,
+        observedAt: this.clock().toISOString(),
+        pods: Object.freeze([]),
+        sources: Object.freeze([]),
+      }),
+      binding.revision,
+    );
+    return this.runtimeLogOperation(options.signal, async (deadline) => {
+      try {
+        return await readSandboxLogPage({
+          description,
+          query,
+          codec: options.codec,
+          binding: { principalId, agentId, revisionId: binding.revision.id, source: "sandbox" },
+          admitView: async (admission) => {
+            try {
+              await options.admitView(admission);
+            } catch {
+              throw new RuntimeLogsError("RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+            }
+          },
+          readLogs: async (request) => {
+            try {
+              // The Sandbox lives in Compute's placement of the Namespace, as at provisioning.
+              const namespace = await compute.resolveSandboxNamespace!.call(
+                compute,
+                binding.namespace,
+              );
+              return await sandbox.readSandboxLogs!(
+                { namespace, revision: binding.revision, signal: deadline },
+                request,
+              );
+            } catch (error) {
+              throw this.runtimeLogDriverFailure(error, deadline);
+            }
+          },
+        });
+      } catch (error) {
+        if (error instanceof RuntimeLogReadError) {
+          throw new RuntimeLogsError(
+            error.reason === "cursor_invalid"
+              ? "RUNTIME_LOGS_CURSOR_INVALID"
+              : error.reason === "pod_invalid"
+                ? "RUNTIME_LOGS_POD_INVALID"
+                : error.reason === "source_unavailable"
+                  ? "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+                  : "RUNTIME_LOGS_UNAVAILABLE",
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  /** The selected Sandbox Driver, when it provisioned this revision and exposes its log. */
+  private sandboxLogDriver(revision: Readonly<AgentRevision>): SandboxDriver | undefined {
+    if (revision.sandboxDriverId === undefined || !this.selections.has("sandbox")) {
+      return undefined;
+    }
+    let sandbox: SandboxDriver;
+    try {
+      sandbox = this.selectedDriver("sandbox");
+    } catch {
+      return undefined;
+    }
+    return sandbox.id === revision.sandboxDriverId && typeof sandbox.readSandboxLogs === "function"
+      ? sandbox
+      : undefined;
+  }
+
+  /** Appends the `sandbox` source when the revision's Sandbox Driver exposes its log. */
+  private withSandboxLogSource(
+    description: Readonly<AgentRuntimeDescription>,
+    revision: Readonly<AgentRevision>,
+  ): Readonly<AgentRuntimeDescription> {
+    if (
+      this.sandboxLogDriver(revision) === undefined ||
+      description.sources.some(({ id }) => id === "sandbox")
+    ) {
+      return description;
+    }
+    return Object.freeze({
+      ...description,
+      sources: Object.freeze([
+        ...description.sources,
+        Object.freeze({
+          id: "sandbox" as const,
+          kind: "sandbox" as const,
+          pods: Object.freeze([]),
+          available: true,
+          retention: SANDBOX_LOG_RETENTION,
+        }),
+      ]),
     });
   }
 

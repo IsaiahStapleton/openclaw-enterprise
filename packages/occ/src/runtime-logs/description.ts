@@ -4,14 +4,14 @@ import type {
   AgentRuntimeEvent,
   AgentRuntimeLogSource,
   AgentRuntimePodStatus,
-  RuntimeLogSourceId,
+  RuntimeLogContainerSourceId,
 } from "@openclaw-enterprise/contracts";
 import { maskRuntimeEventText } from "./redact.ts";
 import { sanitizeRuntimeLogText } from "./sanitize.ts";
 
 const KUBERNETES_NAME = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
 const KUBERNETES_UID = /^[A-Za-z0-9-]{1,64}$/;
-const SOURCES: ReadonlySet<string> = new Set<RuntimeLogSourceId>(["gateway", "agent"]);
+const SOURCES: ReadonlySet<string> = new Set<RuntimeLogContainerSourceId>(["gateway", "agent"]);
 const CONTAINER_STATES: ReadonlySet<string> = new Set([
   "waiting",
   "running",
@@ -135,7 +135,7 @@ function pod(value: unknown): AgentRuntimePodStatus {
     invalid();
   }
   return Object.freeze({
-    role: item.role as RuntimeLogSourceId,
+    role: item.role as RuntimeLogContainerSourceId,
     cluster: item.cluster,
     name: name(item.name),
     uid: uid(item.uid),
@@ -158,7 +158,7 @@ function source(value: unknown, pods: readonly AgentRuntimePodStatus[]): AgentRu
   ) {
     invalid();
   }
-  const id = item.id as RuntimeLogSourceId;
+  const id = item.id as RuntimeLogContainerSourceId;
   const sourcePods = list(item.pods, 16).map((entry) => {
     const described = record(entry);
     const result = Object.freeze({

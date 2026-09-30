@@ -1125,6 +1125,12 @@ export interface SandboxDriver extends Driver {
   cleanup(
     context: SandboxNamespaceContext & { readonly revision?: Readonly<AgentRevision> },
   ): Promise<void>;
+  /**
+   * Bounded raw log lines of the revision's Sandbox. Read-only: an implementation must
+   * reach its runtime through a read-only interface. The Sandbox name is the Driver's own
+   * derivation from the revision; callers never name it.
+   */
+  readSandboxLogs?(context: SandboxLogContext, request: SandboxLogRequest): Promise<SandboxLogChunk>;
 }
 
 export interface PluginDriverContext {
@@ -1274,20 +1280,24 @@ export interface ComputeAgentRevisionBinding extends ComputeAgentBinding {
  * `content` (message text, prompts, tool output) is reserved and has no producer.
  */
 export type RuntimeLogContentClass = "operational" | "activity" | "content";
-export type RuntimeLogSourceId = "gateway" | "agent";
+/** Container sources are Pods the Compute Driver lists; `sandbox` is the Sandbox Driver's log. */
+export type RuntimeLogContainerSourceId = "gateway" | "agent";
+export type RuntimeLogSourceId = RuntimeLogContainerSourceId | "sandbox";
 export type RuntimeLogLevel = "error" | "warn" | "info" | "debug" | "unknown";
-export type RuntimeLogKind = "wrapper" | "openclaw" | "codex" | "text";
+export type RuntimeLogKind = "wrapper" | "openclaw" | "codex" | "sandbox" | "text";
 export type RuntimeLogGapReason =
-  "stream_replaced" | "window_exceeded" | "cursor_expired" | "truncated";
+  "stream_replaced" | "window_exceeded" | "cursor_expired" | "truncated" | "buffer_lost";
 export type RuntimeLogWithheldReason = "unrecognised_structured" | "oversized" | "malformed";
 
-/** One container instance, keyed on server-observed identity only. */
+/** One container instance or sandbox, keyed on server-observed identity only. */
 export interface RuntimeLogStream {
   readonly source: RuntimeLogSourceId;
   readonly pod?: string;
   readonly podUid?: string;
   readonly container?: string;
   readonly restartCount?: number;
+  /** Sandbox source: the OCC-derived Sandbox name of this revision. */
+  readonly sandbox?: string;
 }
 
 export type RuntimeLogRecord =
@@ -1341,7 +1351,7 @@ export interface AgentRuntimeEvent {
 }
 
 export interface AgentRuntimePodStatus {
-  readonly role: RuntimeLogSourceId;
+  readonly role: RuntimeLogContainerSourceId;
   /** `execution` only when the Pod runs on a separately configured execution cluster. */
   readonly cluster: "control" | "execution";
   readonly name: string;
@@ -1356,7 +1366,8 @@ export interface AgentRuntimePodStatus {
 
 export interface AgentRuntimeLogSource {
   readonly id: RuntimeLogSourceId;
-  readonly kind: "container";
+  /** `sandbox` sources list no Pods; OCC derives the Sandbox from the revision. */
+  readonly kind: "container" | "sandbox";
   readonly pods: readonly {
     readonly name: string;
     readonly uid: string;
@@ -1379,13 +1390,13 @@ export interface AgentRuntimeDescription {
 /** Narrows a description for a log read, which needs one source's Pods and no Events. */
 export interface AgentRuntimeDescribeOptions {
   /** Describe only this source's Pods; other sources are omitted. */
-  readonly source?: RuntimeLogSourceId;
+  readonly source?: RuntimeLogContainerSourceId;
   /** `false` skips Pod Event lists; each Pod then carries no Events. */
   readonly events?: boolean;
 }
 
 export interface AgentRuntimeLogRequest {
-  readonly source: RuntimeLogSourceId;
+  readonly source: RuntimeLogContainerSourceId;
   readonly pod: string;
   readonly podUid: string;
   readonly container: string;
@@ -1404,6 +1415,45 @@ export interface AgentRuntimeLogChunk {
   readonly lines: readonly { readonly time: string | null; readonly raw: string }[];
   /** The byte limit cut the output; the final line may be partial. */
   readonly truncated: boolean;
+}
+
+/** Where a Sandbox Driver finds one revision's Sandbox; the Namespace is Compute's placement. */
+export interface SandboxLogContext {
+  readonly namespace: Readonly<Namespace>;
+  readonly revision: Readonly<AgentRevision>;
+  readonly signal: AbortSignal;
+}
+
+export interface SandboxLogRequest {
+  /** Most recent lines to return, 1 to 1000. */
+  readonly lines: number;
+  /** Only lines at or after this RFC 3339 time. */
+  readonly sinceTime?: string;
+}
+
+/** One raw Sandbox log line as the Sandbox runtime reported it; OCC sanitizes every field. */
+export interface SandboxLogLine {
+  readonly time: string | null;
+  readonly sandboxId: string;
+  readonly level: string;
+  readonly target: string;
+  readonly message: string;
+  /** Where the line was produced, for example `gateway` or `sandbox`. */
+  readonly source: string;
+  readonly fields: Readonly<Record<string, string>>;
+}
+
+/** Raw, bounded Sandbox log lines in chronological order. */
+export interface SandboxLogChunk {
+  /** The Sandbox name the Driver read; OCC checks it against the revision. */
+  readonly sandbox: string;
+  readonly observedAt: string;
+  readonly lines: readonly SandboxLogLine[];
+  /**
+   * Lines the source examined before applying `sinceTime`: the requested line count
+   * when the buffer held at least that many, otherwise the whole buffer.
+   */
+  readonly bufferTotal: number;
 }
 
 /** Observed workload image identity; missing provenance must never be inferred from a tag. */

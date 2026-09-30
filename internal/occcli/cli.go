@@ -1088,8 +1088,9 @@ func (app *application) agentLogsCommand() *cobra.Command {
 	options := runtimeLogOptions{}
 	command := &cobra.Command{
 		Use:   "logs AGENT_ID",
-		Short: "Print redacted container output for an Agent revision",
-		Long: "Print one bounded, redacted page of Gateway or Harness container output.\n" +
+		Short: "Print redacted container or sandbox output for an Agent revision",
+		Long: "Print one bounded, redacted page of Gateway or Harness container output, or of the\n" +
+			"Agent's sandbox policy decisions (--source sandbox).\n" +
 			"Requires Agent administer and read, and read on the revision. Each view is audited.\n" +
 			"--follow polls every 2 seconds with the view's cursor until interrupted.",
 		Args:        idArgs(agentIDArg),
@@ -1099,7 +1100,7 @@ func (app *application) agentLogsCommand() *cobra.Command {
 		},
 	}
 	flags := command.Flags()
-	flags.StringVar(&options.source, "source", "", "Log source: gateway or agent")
+	flags.StringVar(&options.source, "source", "", "Log source: gateway, agent or sandbox")
 	flags.StringVar(&options.revision, "revision", "", "Revision ID (default: the active revision)")
 	flags.StringVar(&options.pod, "pod", "", "Pod name (default: the source's first Pod)")
 	flags.BoolVar(&options.previous, "previous", false, "Read the previous container instance")
@@ -1113,8 +1114,12 @@ func (app *application) agentLogsCommand() *cobra.Command {
 func (options runtimeLogOptions) query() (url.Values, error) {
 	switch options.source {
 	case "gateway", "agent":
+	case "sandbox":
+		if options.pod != "" || options.previous {
+			return nil, fmt.Errorf("--pod and --previous do not apply to --source sandbox")
+		}
 	default:
-		return nil, fmt.Errorf("invalid --source %q: expected gateway or agent", options.source)
+		return nil, fmt.Errorf("invalid --source %q: expected gateway, agent or sandbox", options.source)
 	}
 	if options.tail < 1 || options.tail > 1000 {
 		return nil, fmt.Errorf("--tail must be between 1 and 1000")

@@ -38,8 +38,9 @@ export interface RuntimeLogViewAdmission {
   readonly viewId: string;
   readonly revisionId: string;
   readonly source: RuntimeLogSourceId;
-  readonly pod: string;
-  readonly container: string;
+  /** Container sources only; a Sandbox view is identified by its revision. */
+  readonly pod?: string;
+  readonly container?: string;
   readonly previous: boolean;
   readonly tailLines: number;
 }
@@ -128,8 +129,9 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   if (decoded?.status === "invalid") {
     throw new RuntimeLogReadError("cursor_invalid");
   }
-  const source = description.sources.find(({ id }) => id === query.source);
-  if (source === undefined) {
+  const sourceId = query.source;
+  const source = description.sources.find(({ id }) => id === sourceId);
+  if (sourceId === "sandbox" || source === undefined || source.kind !== "container") {
     throw new RuntimeLogReadError("source_unavailable");
   }
   if (query.pod !== undefined && !source.pods.some(({ name }) => name === query.pod)) {
@@ -162,7 +164,7 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     });
   }
   const stream: RuntimeLogStream = {
-    source: query.source,
+    source: sourceId,
     pod: pod.name,
     podUid: pod.uid,
     container: pod.container,
@@ -209,7 +211,7 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
       : query.sinceSeconds;
   const chunk = validChunk(
     await input.readLogs({
-      source: query.source,
+      source: sourceId,
       pod: pod.name,
       podUid: pod.uid,
       container: pod.container,
@@ -219,10 +221,10 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
       limitBytes: RUNTIME_LOG_LIMIT_BYTES,
       signal: input.signal,
     }),
-    query.source,
+    sourceId,
   );
   const observedStream: RuntimeLogStream = {
-    source: query.source,
+    source: sourceId,
     pod: pod.name,
     podUid:
       typeof chunk.stream.podUid === "string" && /^[A-Za-z0-9-]{1,64}$/.test(chunk.stream.podUid)

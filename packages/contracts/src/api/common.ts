@@ -137,7 +137,7 @@ export const DeploymentParams = Type.Object(
 /** Query strings are not coerced; numeric and boolean values are exact decimal text. */
 export const AgentRuntimeLogsQuery = Type.Object(
   {
-    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent")]),
+    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent"), Type.Literal("sandbox")]),
     pod: Type.Optional(
       Type.String({ minLength: 1, maxLength: 253, pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" }),
     ),
