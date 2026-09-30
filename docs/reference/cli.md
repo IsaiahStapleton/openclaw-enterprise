@@ -33,7 +33,8 @@ with an error instead of waiting for `--timeout-seconds` to expire.
 Replace `ID` with the corresponding resource ID, `NAME` with a Namespace name,
 and `FILE` with a JSON file path. `--file` reads a local file, not stdin; YAML
 input is not supported. The server validates document fields against the
-[HTTP API contract](api.md).
+[HTTP API contract](api.md). `--help` on `configuration`, `secret`, `agent`,
+`iam role`, and `iam access-binding` `create` shows a minimal sample document.
 
 | Command                                        | What it does                                                                                                                                                     |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
