@@ -171,7 +171,7 @@ Retain further successor obligations with explicit owners: authority/Work owns r
 [flow]: ../../../docs/flows/repository-credentials.md
 [configuration]: ../../../docs/flows/repository-credential-configuration.md
 [agent-flow]: ../../../docs/flows/agent-repository-credentials.md
-[validation]: ../../apps/controller/src/providers/repository-credentials/control-client.ts
+[validation]: ../../../apps/controller/src/backends/repository-credentials/control-client.ts
 [driver]: ../../../apps/controller/src/drivers/repo/github/driver.ts
 [limits]: ../../../docs/reference/repository-credentials.md#client-routing-and-limits
 [routes]: ../../../apps/controller/src/drivers/repo/github/credentials/routes/classification.ts

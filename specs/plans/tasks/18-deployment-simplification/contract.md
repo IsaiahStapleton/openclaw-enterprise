@@ -12,7 +12,7 @@
 | Controller image, system Secret references, bootstrap claim, API endpoint/client selectors, dependency egress | [Helm values](../../../../deploy/helm/openclaw-enterprise/values.yaml) |
 | Driver selections, gateway/Agent images, projected workload identity, runtime networking/storage | [Installation startup YAML](../../../../docs/reference/configuration.md#installation-startup-configuration) |
 | PostgreSQL roles, immutable image approval, TLS, enforced NetworkPolicies and storage suitability | Operator infrastructure and security policy |
-| Optional managed Provider, tenant RoleBindings, execution mode and Agent credentials | Existing [Provider](../../docs/reference/providers.md), [Kubernetes Compute](../../../../docs/reference/drivers/kubernetes-compute.md) and [Agent](../../../../docs/reference/agents.md) contracts |
+| Optional managed Provider, tenant RoleBindings, execution mode and Agent credentials | Existing [Provider](../../../../docs/reference/backends.md), [Kubernetes Compute](../../../../docs/reference/drivers/kubernetes-compute.md) and [Agent](../../../../docs/reference/agents.md) contracts |
 
 Ship editable `deploy/examples/production/values.yaml`, `installation.yaml`, and `bootstrap-pvc.yaml` using existing Helm, Installation, and Kubernetes schemas. Required site-specific fields remain explicit placeholders. The default example omits the optional ChatGPT Provider and its service-account Driver; the guide links the existing paired configuration when selected. Secrets remain file-backed operator inputs, outside version control. Example files contain no credential values.
 
