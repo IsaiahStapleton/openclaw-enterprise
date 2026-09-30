@@ -333,7 +333,7 @@ async function scenario(entrypoint, channel, label) {
     OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest }), OPENCLAW_GATEWAY_PORT: "18789",
     OPENCLAW_RUNTIME_STATUS_PORT: "18888", OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
     OPENCLAW_AGENT_REVISION_ID: "rev_approver-startup", OPENCLAW_POD_UID: "pod_approver-startup" };
-  const child = cp.spawn("node", ["-e", entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+  const child = cp.spawn("node", ["-e", ...entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", value => { output += value; });
   child.stderr.on("data", value => { output += value; });
@@ -404,8 +404,8 @@ async function scenario(entrypoint, channel, label) {
       ],
       { timeout: 180_000 * imageSmokeTimeoutMultiplier },
       JSON.stringify({
-        docker: DOCKER_GATEWAY_RUNTIME_ENTRYPOINT,
-        kubernetes: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        docker: nodeProgramArguments(DOCKER_GATEWAY_RUNTIME_ENTRYPOINT),
+        kubernetes: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
       }),
     );
     assert.match(stdout, /PLUGIN_APPROVER_STARTUP_PASSED/);
@@ -1061,7 +1061,7 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
     "node",
     image,
     "-e",
-    entrypoint,
+    ...nodeProgramArguments(entrypoint),
   ]);
   if (!waitUntilReady) {
     return { containerName };
@@ -1506,7 +1506,7 @@ test(
     const launch = String.raw`
 const fs = require("node:fs");
 const cp = require("node:child_process");
-const { gateway, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { gatewayArgs, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
 const model = "openai/runtime-image-schema";
 function validate(path) {
   const home = fs.mkdtempSync("/tmp/oce-config-validate-");
@@ -1533,7 +1533,7 @@ function run(args, env) {
 (async () => {
   fs.mkdirSync("/tmp/gateway", { recursive: true });
   fs.copyFileSync("/etc/openclaw/openclaw.json", "/tmp/gateway/base.json");
-  const gatewayRun = await run(["-e", gateway], {
+  const gatewayRun = await run(["-e", ...gatewayArgs], {
     OPENCLAW_CONFIG_PATH: "/tmp/gateway/base.json",
     OPENCLAW_STATE_DIR: "/home/node/.openclaw",
     OPENCLAW_GATEWAY_PORT: "18789",
@@ -1599,7 +1599,7 @@ function run(args, env) {
       ],
       { timeout: 300_000 * imageSmokeTimeoutMultiplier },
       JSON.stringify({
-        gateway: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        gatewayArgs: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
         harness: NATIVE_WORKER_ENTRYPOINT,
         workspaceNodeId: randomBytes(32).toString("hex"),
       }),
@@ -1820,78 +1820,103 @@ test(
   },
 );
 
+async function assertGatewayExitsDuringPeerScenario(t, scenario, expectedPhase) {
+  const directory = await mkdtemp(join(tmpdir(), "oce-runtime-image-config-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const configurationPath = join(directory, "openclaw.json");
+  await writeFile(
+    configurationPath,
+    JSON.stringify(createAdmittedRuntimeImageConfiguration("codex")),
+  );
+  const manifest = {
+    kind: "codex",
+    selections: {
+      "codex-plugin:linear@openai-curated-remote": {
+        enabled: true,
+        toolDefaults: { approval: "provider_default" },
+      },
+    },
+  };
+  const { containerName } = await runGatewaySmoke(t, "codex", {
+    configurationPath: "/etc/openclaw/openclaw.json",
+    entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+    volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+    extraEnvironment: [
+      "APP_SERVER_URL=ws://[::1]:4500",
+      `OPENCLAW_PLUGIN_RUNTIME_JSON=${JSON.stringify({ manifest })}`,
+      "OPENCLAW_PLUGIN_STATUS_CONTAINER=gateway",
+      "OPENCLAW_PLUGIN_STATUS_PORT=18791",
+      "OPENCLAW_AGENT_REVISION_ID=revision-peer-respawn",
+      "OPENCLAW_POD_UID=pod-peer-respawn",
+      "OPENCLAW_WORKSPACE_DIR=/home/node/workspace",
+    ],
+    waitUntilReady: false,
+  });
+  const fixture = await readFile(
+    new URL("../fixtures/runtime-gateway-peer-respawn.mjs", import.meta.url),
+    "utf8",
+  );
+  let failure;
+  try {
+    await runDocker(
+      [
+        "exec",
+        "-e",
+        `OCC_TEST_GATEWAY_SCENARIO=${scenario}`,
+        "-e",
+        `OCC_TEST_GATEWAY_READINESS=${GATEWAY_READINESS_ENTRYPOINT}`,
+        "-e",
+        `OCC_TEST_TOKEN_DOMAIN=${PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN}`,
+        containerName,
+        "node",
+        "--input-type=module",
+        "-e",
+        fixture,
+      ],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure, `the container should exit for ${scenario}`);
+  if (!(failure.stdout ?? "").includes(`"phase":"${expectedPhase}"`)) {
+    const logs = await runDocker(["logs", containerName]).catch((error) => error);
+    assert.fail(
+      `Expected ${expectedPhase} was not observed.\n${commandOutput(failure)}\n${commandOutput(logs)}`,
+    );
+  }
+  const inspect = await runDocker(["inspect", containerName, "--format", "{{json .State}}"]);
+  const state = JSON.parse(inspect.stdout);
+  assert.equal(state.Status, "exited");
+  assert.equal(state.ExitCode, 1);
+  if (scenario === "stale-replacement") {
+    const logs = await runDocker(["logs", containerName]);
+    const entries = jsonLogEntries(`${logs.stdout}\n${logs.stderr}`);
+    assert.ok(
+      entries.some(
+        (entry) =>
+          entry.event === "runtime.startup_phase" &&
+          entry.phase === "peer-verification-changed" &&
+          entry.outcome === "failed",
+      ),
+      "the Gateway must reject the changed peer, not merely fail its status request",
+    );
+  }
+}
+
 test(
   "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
   imageTestOptions,
   async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), "oce-runtime-image-config-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
-    const configurationPath = join(directory, "openclaw.json");
-    await writeFile(
-      configurationPath,
-      JSON.stringify(createAdmittedRuntimeImageConfiguration("codex")),
-    );
-    const manifest = {
-      kind: "codex",
-      selections: {
-        "codex-plugin:linear@openai-curated-remote": {
-          enabled: true,
-          toolDefaults: { approval: "provider_default" },
-        },
-      },
-    };
-    const { containerName } = await runGatewaySmoke(t, "codex", {
-      configurationPath: "/etc/openclaw/openclaw.json",
-      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
-      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
-      extraEnvironment: [
-        "APP_SERVER_URL=ws://[::1]:4500",
-        `OPENCLAW_PLUGIN_RUNTIME_JSON=${JSON.stringify({ manifest })}`,
-        "OPENCLAW_PLUGIN_STATUS_CONTAINER=gateway",
-        "OPENCLAW_PLUGIN_STATUS_PORT=18791",
-        "OPENCLAW_AGENT_REVISION_ID=revision-peer-respawn",
-        "OPENCLAW_POD_UID=pod-peer-respawn",
-        "OPENCLAW_WORKSPACE_DIR=/home/node/workspace",
-      ],
-      waitUntilReady: false,
-    });
-    const fixture = await readFile(
-      new URL("../fixtures/runtime-gateway-peer-respawn.mjs", import.meta.url),
-      "utf8",
-    );
-    let failure;
-    try {
-      await runDocker(
-        [
-          "exec",
-          "-e",
-          "OCC_TEST_GATEWAY_SCENARIO=peer-outage-exit",
-          "-e",
-          `OCC_TEST_GATEWAY_READINESS=${GATEWAY_READINESS_ENTRYPOINT}`,
-          "-e",
-          `OCC_TEST_TOKEN_DOMAIN=${PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN}`,
-          containerName,
-          "node",
-          "--input-type=module",
-          "-e",
-          fixture,
-        ],
-        { timeout: 300_000 * imageSmokeTimeoutMultiplier },
-      );
-    } catch (error) {
-      failure = error;
-    }
-    assert.ok(failure, "the container should exit after its Gateway child crashes");
-    if (!/"phase":"peer-unready"/.test(failure.stdout ?? "")) {
-      const logs = await runDocker(["logs", containerName]).catch((error) => error);
-      assert.fail(
-        `Peer outage was not observed.\n${commandOutput(failure)}\n${commandOutput(logs)}`,
-      );
-    }
-    const inspect = await runDocker(["inspect", containerName, "--format", "{{json .State}}"]);
-    const state = JSON.parse(inspect.stdout);
-    assert.equal(state.Status, "exited");
-    assert.equal(state.ExitCode, 1);
+    await assertGatewayExitsDuringPeerScenario(t, "peer-outage-exit", "peer-unready");
+  },
+);
+
+test(
+  "runtime image Gateway rejects a peer changed during replacement startup",
+  imageTestOptions,
+  async (t) => {
+    await assertGatewayExitsDuringPeerScenario(t, "stale-replacement", "stale-peer-verified");
   },
 );
 

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-30
-last_updated_session: authoring-run/bf3b8146-9d72-42a4-84e5-2293581c890c
+last_updated_session: authoring-run/fc09b5f8-3fc8-4144-ac80-8bfd8ef24f52
 ---
 
 # Agent Plugin Deployment Flow
@@ -199,9 +199,9 @@ authentication. Transport loss, timeouts, signals, malformed responses,
 discovery failures, and policy failures retain ordinary startup failure
 behavior. Provider-owned Harnesses keep their existing startup path.
 
-After configuration verification, the runtime exposes private startup status.
-Kubernetes Compute validates workload, revision, startup instance, selection
-keys, and warning codes for readiness, recomputing status on restart.
+After verification, runtime exposes private startup status. Kubernetes Compute
+validates workload, revision, startup instance, selection keys, and warning
+codes for readiness; restart recomputes status.
 
 Dedicated Codex runs separately and receives runtime-binary reads even without
 plugins. Startup symlinks
@@ -221,10 +221,11 @@ boundary.
 The Agent and gateway derive an app-server credential from the transport Secret,
 revision ID, and Agent startup ID. The gateway receives it after matching status
 and rendering exclusions. After restart, the old gateway cannot authenticate
-while its supervisor awaits status. A changed peer makes the supervisor publish
-non-ready status and restart only OpenClaw, reporting ready once it serves.
-While peer status is unavailable, the gateway stays unready; if it exits during
-that wait, the wrapper exits so the container can recover.
+while its supervisor awaits status. For a changed peer, the supervisor publishes
+non-ready, restarts only OpenClaw and rechecks peer startup, Pod and failures
+after it serves. Changed or unavailable peers trigger container restart.
+During an outage, the gateway stays unready; its exit ends the wrapper for
+container recovery.
 
 ### 5. Complete revision reconciliation
 
@@ -241,12 +242,12 @@ Successful completion reports `REVISION_ACTIVATED` or `REVISION_ALREADY_ACTIVE`.
 A candidate pointer alone is not readiness evidence. Agent turns use native
 policy; the workspace and gateway database remain Agent-owned.
 
-The worker stores current plugin warnings in the successful work result under its
-live claim; the [worker flow](controller-worker.md#7-defer-retry-or-stop-and-hand-off-the-next-iteration)
-explains persistence and the deployment status projection. Claim loss prevents a stale completion write; a later worker reads
-current readiness again. There is no receipt acknowledgment, failed-plugin
-shutdown, or permanent failure latch. Saved deployment warnings describe the
-completed deployment attempt rather than ongoing runtime health.
+Under its live claim, the worker stores current plugin warnings in the successful
+work result; the [worker flow](controller-worker.md#7-defer-retry-or-stop-and-hand-off-the-next-iteration)
+explains persistence and deployment status projection. Claim loss prevents stale
+completion; a later worker rechecks readiness. There is no receipt acknowledgment,
+failed-plugin shutdown, or permanent failure latch. Deployment warnings describe
+the completed attempt, not ongoing runtime health.
 
 ## Debugging and Verification
 
@@ -287,6 +288,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 02:10: Recheck the peer before replacement readiness. (authoring-run/fc09b5f8-3fc8-4144-ac80-8bfd8ef24f52 - ed69e6eee87ca004d2970069e8e18cf4cce29a32)
 
 - 2026-09-30 00:33: Propagate Gateway exits while awaiting peer recovery. (authoring-run/bf3b8146-9d72-42a4-84e5-2293581c890c - 0d72f6a4e4e3003d457c4498e81e7de414f85649)
 
