@@ -67,8 +67,8 @@ drivers:
         # See [Images and resources](../../../docs/reference/drivers/kubernetes-compute.md#images-and-resources).
         requireImmutableDigest: true
       # Requests reserve capacity; limits bound both workload roles.
-      # The Gateway may burst to one core so its startup model probe finishes
-      # sooner; its request, and so its scheduling reservation, stays 100m.
+      # Limits let tenant runtimes burst to four cores; the 100m requests set
+      # the scheduling reservation. Quote whole cores: cpu: "4", not cpu: 4.
       # See [Images and resources](../../../docs/reference/drivers/kubernetes-compute.md#images-and-resources).
       resources:
         gateway:
@@ -76,14 +76,14 @@ drivers:
             cpu: 100m
             memory: 128Mi
           limits:
-            cpu: "1"
+            cpu: "4"
             memory: 2Gi
         agent:
           requests:
             cpu: 100m
             memory: 128Mi
           limits:
-            cpu: 500m
+            cpu: "4"
             memory: 2Gi
         # Each tenant namespace receives a Pod quota and default container bounds.
         # See [Namespace isolation](../../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#namespaces-and-isolation).
@@ -95,7 +95,7 @@ drivers:
               cpu: 100m
               memory: 128Mi
             limits:
-              cpu: 500m
+              cpu: "4"
               memory: 2Gi
       network:
         # With repositoryCredentials.enabled, add this exact service endpoint peer.

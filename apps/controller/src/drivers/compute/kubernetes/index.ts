@@ -726,17 +726,28 @@ function mergeDomainDecision(
   domains[host] = "allow";
 }
 
-function validateResources(value: V1ResourceRequirements, description: string): void {
+function validateResources(value: V1ResourceRequirements, description: string, path: string): void {
   const resources = asRecord(value);
   const requests = asRecord(resources?.requests);
   const limits = asRecord(resources?.limits);
   if (requests === undefined || limits === undefined) {
     throw new ConfigurationFailure(`${description} requests and limits must be configured.`);
   }
-  required(requests.cpu, `${description} CPU request`);
-  required(requests.memory, `${description} memory request`);
-  required(limits.cpu, `${description} CPU limit`);
-  required(limits.memory, `${description} memory limit`);
+  resourceQuantity(requests.cpu, `${description} CPU request`, `${path}.requests.cpu`);
+  resourceQuantity(requests.memory, `${description} memory request`, `${path}.requests.memory`);
+  resourceQuantity(limits.cpu, `${description} CPU limit`, `${path}.limits.cpu`);
+  resourceQuantity(limits.memory, `${description} memory limit`, `${path}.limits.memory`);
+}
+
+// Quantities stay strings, as Kubernetes returns them: an unquoted YAML `4` is a
+// number, so name the fix instead of reporting the value as missing.
+function resourceQuantity(value: unknown, description: string, path: string): string {
+  if (typeof value === "number") {
+    throw new ConfigurationFailure(
+      `${description} (${path}) must be a quoted Kubernetes quantity string: write "${value}", not ${value}.`,
+    );
+  }
+  return required(value, description);
 }
 
 function validatePeer(value: KubernetesWorkloadPeer, description: string): void {
@@ -1604,16 +1615,20 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new ConfigurationFailure("Workload and namespace resource policies are required.");
     }
-    validateResources(options.resources.gateway, "Gateway");
-    validateResources(options.resources.agent, "Agent");
-    validateResources(options.resources.namespace.containerDefaults, "Namespace default");
+    validateResources(options.resources.gateway, "Gateway", "resources.gateway");
+    validateResources(options.resources.agent, "Agent", "resources.agent");
+    validateResources(
+      options.resources.namespace.containerDefaults,
+      "Namespace default",
+      "resources.namespace.containerDefaults",
+    );
     const quota = asRecord(options.resources.namespace.quota);
     if (quota === undefined || Object.keys(quota).length === 0) {
       throw new ConfigurationFailure("Namespace resource quota must be configured.");
     }
     for (const [key, quantity] of Object.entries(quota)) {
       required(key, "Quota resource");
-      required(quantity, `Quota ${key}`);
+      resourceQuantity(quantity, `Quota ${key}`, `resources.namespace.quota.${key}`);
     }
     if (asRecord(options.network) === undefined) {
       throw new ConfigurationFailure("Network policy is required.");

@@ -924,20 +924,21 @@ function buildRendered(profile, parsed, diagnostics) {
             requireImmutableDigest: true,
           },
           resources: {
-            // One core halves embedded Gateway startup; the request stays 100m.
+            // Tenant runtimes may burst to four cores; 100m requests keep the
+            // scheduling reservation unchanged.
             gateway: {
               requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "1", memory: "2Gi" },
+              limits: { cpu: "4", memory: "2Gi" },
             },
             agent: {
               requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "500m", memory: "2Gi" },
+              limits: { cpu: "4", memory: "2Gi" },
             },
             namespace: {
               quota: { pods: "10" },
               containerDefaults: {
                 requests: { cpu: "100m", memory: "128Mi" },
-                limits: { cpu: "500m", memory: "2Gi" },
+                limits: { cpu: "4", memory: "2Gi" },
               },
             },
           },
