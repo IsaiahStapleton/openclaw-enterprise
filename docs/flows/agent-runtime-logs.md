@@ -97,7 +97,9 @@ Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 drops lines already delivered at the cursor time, emits `stream_replaced`,
 `window_exceeded`, `cursor_expired` or `truncated` gaps, and passes the rest to
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
-`SanitizedRuntimeLogRecord`.
+`SanitizedRuntimeLogRecord`. It classifies the whole page first, so
+`runtime-logs/redact.ts:maskPemBlockLines` can mask a PEM block whose BEGIN,
+body and END lines arrive as separate plain-text lines.
 
 `source=sandbox` skips the Compute description. `OpenClawController.readSandboxLogs`
 lists the source only when the selected Sandbox Driver provisioned the revision
