@@ -139,7 +139,9 @@ the chart's Secret defaults) renders `auth.github` or `auth.google` with
 [Enable GitHub browser sign-in](production-installation.md#enable-github-browser-sign-in).
 Behind a proxy that adds forwarded headers, such as ingress-nginx, set
 `trustedProxy` ([presets](../../reference/settings/production.md#github-sign-in-and-trusted-proxies));
-it works with or without external sign-in.
+it works with or without external sign-in. Without it, preflight warns (it does
+not fail), because an Installation whose API sees each client's own address, such
+as behind a source-preserving NLB, needs none.
 
 ```json
 {

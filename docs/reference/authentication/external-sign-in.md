@@ -130,6 +130,8 @@ address. Global caps: four and eight active. The recovery email has a
 reserved lane (20, two active). A 4,096-key table bounds memory. Clients behind
 an ingress share its address unless
 [trusted proxies](../cheatsheets/environment-variables.md#controller-and-authentication)
-are set. Pending attempts cap at 1,000, oldest evicted. Provider
+are set, so the whole Installation shares one budget; startup and Helm's install
+notes warn ([trusted proxies](../settings/production.md#github-sign-in-and-trusted-proxies)).
+Pending attempts cap at 1,000, oldest evicted. Provider
 calls share a ten-second deadline, refuse redirects, read at most 64 KiB. Limits
 are per controller.

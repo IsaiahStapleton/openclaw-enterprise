@@ -162,6 +162,39 @@ test(
       },
     );
 
+    await t.test("a successful sign-in resets that email's failures", async () => {
+      const typist = await createAccount("limit-typist@example.test", roles.reader.id);
+      for (let round = 0; round < 2; round += 1) {
+        for (let index = 0; index < 9; index += 1) {
+          const response = await plainSignIn({ ...typist, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `round ${round} typo ${index}: ${response.body}`);
+        }
+        const correct = await plainSignIn(typist);
+        assert.equal(correct.statusCode, 200, `round ${round}: ${correct.body}`);
+      }
+    });
+
+    await t.test(
+      "a limited email lane logs one warning with a keyed hash and no email or address",
+      () => {
+        const limited = plainLog.events.filter(
+          (event) => event.event === "authentication.sign-in-limited",
+        );
+        for (const event of limited) {
+          assert.equal(event.severity, "WARN");
+          assert.equal(event.lane, "email");
+          assert.match(event.keyHash, /^[a-f0-9]{16}$/);
+        }
+        // One report per lane per window: the slowed administrator and the spent target.
+        assert.equal(limited.length, 2, `reports: ${limited.length}`);
+        assert.equal(new Set(limited.map((event) => event.keyHash)).size, limited.length);
+        const serialized = JSON.stringify(plainLog.events);
+        for (const value of [plainAdmin.email, target.email, "example.test", ingress]) {
+          assert.equal(serialized.includes(value), false, value);
+        }
+      },
+    );
+
     await t.test("repeated successful sign-ins are not limited", async () => {
       for (let index = 0; index < 30; index += 1) {
         const response = await signIn("198.51.100.1", member);
@@ -271,6 +304,17 @@ test(
         assert.equal(correct.statusCode, 200, correct.body);
       },
     );
+
+    await t.test("a limited client address is reported with the address lane", () => {
+      const lanes = proxiedLog.events
+        .filter((event) => event.event === "authentication.sign-in-limited")
+        .map((event) => event.lane);
+      assert.ok(lanes.includes("address"), `lanes: ${lanes.join(", ")}`);
+      const serialized = JSON.stringify(proxiedLog.events);
+      for (const value of [attacker, "example.test"]) {
+        assert.equal(serialized.includes(value), false, value);
+      }
+    });
 
     await t.test("existing and unknown emails look the same in status and timing", async () => {
       const client = "203.0.113.50";

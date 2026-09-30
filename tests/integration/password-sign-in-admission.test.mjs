@@ -185,3 +185,77 @@ test("a failing administrator lookup surfaces as a dependency error", async () =
   const { error } = await outcome(limiter.admit({ email }, right));
   assert.equal(error, outage);
 });
+
+test("a success resets the email's failures but not the address's", async () => {
+  const limiter = admission();
+  const email = "typo@example.test";
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  assert.equal(await status(limiter, { email }, right), 200);
+  // The earlier typos no longer count: the email has its whole budget again, and no more.
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401, `failure ${index}`);
+  }
+  assert.equal(await status(limiter, { email }, right), 429);
+
+  // The address lane is shared by every account behind it, so one success clears nothing.
+  const clientAddress = "203.0.113.40";
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: "own@example.test" }), 401);
+  }
+  assert.equal(await status(limiter, { clientAddress, email: "own@example.test" }, right), 200);
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: "other@example.test" }), 401);
+  }
+  assert.equal(await status(limiter, { clientAddress, email: "third@example.test" }), 429);
+});
+
+test("entering the slow lane reports once per lane per window, with hashed keys", async () => {
+  const reports = [];
+  const limiter = admission({ onLimited: (limited) => reports.push(limited) });
+  const email = "victim@example.test";
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  assert.deepEqual(reports, []);
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 429);
+  }
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].lane, "email");
+  assert.match(reports[0].key, /^email:[a-f0-9]{64}$/);
+
+  const clientAddress = "203.0.113.77";
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: `a-${index}@example.test` }), 401);
+  }
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: `b-${index}@example.test` }), 429);
+  }
+  assert.equal(reports.length, 2);
+  assert.equal(reports[1].lane, "address");
+  assert.match(reports[1].key, /^ip:[a-f0-9]{64}$/);
+  const serialized = JSON.stringify(reports);
+  assert.equal(serialized.includes("victim"), false);
+  assert.equal(serialized.includes("203.0.113"), false);
+});
+
+test("a full table reports the untracked lane once, and a failing reporter changes nothing", async () => {
+  const reports = [];
+  const limiter = admission({
+    tableCapacity: 2,
+    onLimited: (limited) => {
+      reports.push(limited);
+      throw new Error("log sink unavailable");
+    },
+  });
+  assert.equal(await status(limiter, { clientAddress: "203.0.113.1", email: "x@x.test" }), 401);
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(
+      await status(limiter, { clientAddress: "198.51.100.9", email: `m-${index}@x.test` }, right),
+      200,
+    );
+  }
+  assert.deepEqual(reports, [{ lane: "untracked" }]);
+});
