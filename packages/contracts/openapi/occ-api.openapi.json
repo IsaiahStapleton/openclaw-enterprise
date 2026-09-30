@@ -11278,7 +11278,7 @@
     },
     "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime/logs": {
       "get": {
-        "description": "Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.",
+        "description": "Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent.",
         "operationId": "getAgentDeploymentRuntimeLogs",
         "parameters": [
           {
@@ -11804,8 +11804,7 @@
             "resourceKind": "agent",
             "scope": "requested"
           },
-          { "action": "read", "resourceKind": "agent", "scope": "requested" },
-          { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
         ]
       }
     },

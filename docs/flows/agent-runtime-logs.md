@@ -26,9 +26,11 @@ download is a local file on the reader's device.
   and `readAgentRuntimeLogs`.
 - Assumptions: `deploymentId` is an admitted AgentRevision ID. Status needs exact
   Agent `operate` and `read` plus AgentRevision `read`; log text needs Agent
-  `read_logs` or `administer` instead of `operate`
+  `read_logs` or `administer` instead of `operate`, and no AgentRevision grant
   (`OpenClawController.authorizeRuntimeLogRead` tries `read_logs` first and
-  falls back to `administer` unless a Restriction denied `read_logs`).
+  falls back to `administer` unless a Restriction denied `read_logs`). The
+  revision must still belong to the exact Agent, so an Agent grant covers every
+  revision that Agent deploys.
 
 ## Flow
 
@@ -63,8 +65,9 @@ graph TD
 a closed query schema. `apps/controller/src/index.ts:perform` answers `501` when
 `agentRuntimeLogs` is disabled and applies the replica-local
 `apps/controller/src/http/runtime-logs.ts:RuntimeLogLimiter`.
-`OpenClawController.runtimeLogTarget` authorizes revision `read`, the tier action
-and Agent `read`, then rejects a Driver without `describeAgentRuntime` or with
+`OpenClawController.runtimeLogTarget` authorizes the tier action and Agent `read`
+(plus revision `read` for status only), resolves the revision within the exact
+Agent, then rejects a Driver without `describeAgentRuntime` or with
 `runtimeLogging: "driver"`.
 
 ### 2. Describe the runtime
