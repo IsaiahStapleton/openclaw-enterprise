@@ -9,7 +9,6 @@ import type {
   AuthorizationDecision,
   AuthorizationRequest,
   ComputeDriver,
-  CredentialSource,
   PluginDeploymentWarning,
   PluginDriver,
   ComputeReadiness,
@@ -120,8 +119,10 @@ interface AgentStopDispatchResult extends DispatchResult {
 }
 
 interface CredentialWithdrawalDispatchResult extends DispatchResult {
-  /** Withdrawals the gateway confirmed during this attempt, recorded even when others retry. */
-  readonly revoked?: readonly string[];
+  /** The pending withdrawal's source; absent when no withdrawal was pending. */
+  readonly credentialSourceId?: string;
+  /** True once the gateway confirmed revocation or the Sandbox no longer exists. */
+  readonly revoked?: boolean;
 }
 
 interface AgentDeletionDispatchResult extends DispatchResult {
@@ -1875,12 +1876,12 @@ export class ControllerWorker {
   }
 
   /**
-   * Revokes each pending withdrawal from the revision's Sandbox. A withdrawal is marked
+   * Revokes the source the revision authenticates with from its Sandbox. A withdrawal is marked
    * `revoked` only after the gateway confirms it; anything still pending retries with backoff.
    */
   private async processCredentialWithdrawal(claim: ClaimedWork): Promise<void> {
     let result: CredentialWithdrawalDispatchResult;
-    const revoked: string[] = [];
+    let credentialSourceId: string | undefined;
     try {
       if (claim.agentId === undefined || claim.revisionId === undefined) {
         await this.finalizeCredentialWithdrawal(claim, {
@@ -1904,29 +1905,28 @@ export class ControllerWorker {
         await this.finalizeCredentialWithdrawal(claim, denied);
         return;
       }
-      const { revision, withdrawals, sources } = await this.state.read(async (view) => {
+      const { revision, withdrawal, source } = await this.state.read(async (view) => {
         const found = await view.revisions.findRevision(
           claim.namespaceId,
           claim.agentId!,
           claim.revisionId!,
         );
-        const pending = (
-          await view.credentialSources.listCredentialWithdrawals(
-            claim.namespaceId,
-            claim.revisionId!,
-          )
-        ).filter((withdrawal) => withdrawal.state === "pending");
-        const loaded = new Map<string, Readonly<CredentialSource>>();
-        for (const withdrawal of pending) {
-          const source = await view.credentialSources.findCredentialSource(
-            claim.namespaceId,
-            withdrawal.credentialSourceId,
-          );
-          if (source !== undefined) {
-            loaded.set(source.id, source);
-          }
+        // Admission withdraws only the source the revision authenticates with.
+        if (found?.harnessAuth.method !== "credential_source") {
+          return { revision: found, withdrawal: undefined, source: undefined };
         }
-        return { revision: found, withdrawals: pending, sources: loaded };
+        return {
+          revision: found,
+          withdrawal: await view.credentialSources.findCredentialWithdrawal(
+            claim.namespaceId,
+            found.id,
+            found.harnessAuth.sourceId,
+          ),
+          source: await view.credentialSources.findCredentialSource(
+            claim.namespaceId,
+            found.harnessAuth.sourceId,
+          ),
+        };
       });
       // A retired revision took its Sandbox and attachments with it.
       if (revision === undefined) {
@@ -1936,6 +1936,15 @@ export class ControllerWorker {
         });
         return;
       }
+      // An earlier attempt already revoked it, or the source's deletion removed it.
+      if (withdrawal?.state !== "pending" || source === undefined) {
+        await this.finalizeCredentialWithdrawal(claim, {
+          outcome: "success",
+          code: "CREDENTIALS_WITHDRAWN",
+        });
+        return;
+      }
+      credentialSourceId = source.id;
       if (
         revision.compute.id !== this.compute.id ||
         revision.compute.implementation !== this.compute.implementation
@@ -1943,6 +1952,7 @@ export class ControllerWorker {
         await this.finalizeCredentialWithdrawal(claim, {
           outcome: "permanent",
           code: "COMPUTE_DRIVER_MISMATCH",
+          credentialSourceId,
         });
         return;
       }
@@ -1951,32 +1961,26 @@ export class ControllerWorker {
         await this.finalizeCredentialWithdrawal(claim, {
           outcome: "permanent",
           code: "CREDENTIAL_WITHDRAWAL_UNSUPPORTED",
+          credentialSourceId,
         });
         return;
       }
-      let pending = false;
-      for (const withdrawal of withdrawals) {
-        const source = sources.get(withdrawal.credentialSourceId);
-        if (source === undefined) {
-          continue;
-        }
-        const status = await this.withClaimHeartbeat(claim, (signal) =>
-          withdraw(revision, source, signal),
-        );
-        if (status.state === "revoked" || status.state === "absent") {
-          revoked.push(withdrawal.credentialSourceId);
-        } else {
-          pending = true;
-        }
-      }
-      result = pending
-        ? { outcome: "retry", code: "CREDENTIAL_WITHDRAWAL_PENDING", revoked }
-        : { outcome: "success", code: "CREDENTIALS_WITHDRAWN", revoked };
+      const status = await this.withClaimHeartbeat(claim, (signal) =>
+        withdraw(revision, source, signal),
+      );
+      result =
+        status.state === "revoked" || status.state === "absent"
+          ? { outcome: "success", code: "CREDENTIALS_WITHDRAWN", credentialSourceId, revoked: true }
+          : { outcome: "retry", code: "CREDENTIAL_WITHDRAWAL_PENDING", credentialSourceId };
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
         throw error;
       }
-      result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE", revoked };
+      result = {
+        outcome: "retry",
+        code: "DEPENDENCY_UNAVAILABLE",
+        ...(credentialSourceId === undefined ? {} : { credentialSourceId }),
+      };
     }
     await this.finalizeCredentialWithdrawal(claim, result);
   }
@@ -1989,13 +1993,12 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
-      const completedAt = new Date().toISOString();
-      for (const credentialSourceId of result.revoked ?? []) {
+      if (result.revoked === true && result.credentialSourceId !== undefined) {
         await unit.credentialSources.markCredentialWithdrawalRevoked(
           claim.namespaceId,
           claim.revisionId!,
-          credentialSourceId,
-          completedAt,
+          result.credentialSourceId,
+          new Date().toISOString(),
         );
       }
       const terminalFailure =
@@ -2063,9 +2066,9 @@ export class ControllerWorker {
         computeDriverId: this.compute.id,
         reasonCode: result.code,
         ...(claim.revisionId === undefined ? {} : { revisionId: claim.revisionId }),
-        ...(result.revoked === undefined || result.revoked.length === 0
-          ? {}
-          : { credentialSourceIds: [...result.revoked] }),
+        ...(result.revoked === true && result.credentialSourceId !== undefined
+          ? { credentialSourceIds: [result.credentialSourceId] }
+          : {}),
       },
     });
   }
