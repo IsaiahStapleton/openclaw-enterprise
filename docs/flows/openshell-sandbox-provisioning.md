@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
-updated: 2026-09-28
-last_updated_session: oce-pr-440-sync
+updated: 2026-09-30
+last_updated_session: authoring-run/f1c1bde3-0893-42d4-89ed-3251c885a893
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -219,6 +219,14 @@ revision UUID as `request_id`. Codex requests one unnamed exposure for
 outbound, so it requests no exposure and rejects any returned URL. A replay
 returns the same result; a Sandbox that predates replayable creation fails.
 
+For each unary Gateway call, the client checks cancellation after client setup
+and credential-metadata preparation and before dispatch. An abort during setup
+is observed when the pending setup step settles; it does not bound a stalled
+initialization or file read. Once dispatched, an abort requests cancellation
+of the local gRPC call and rejects the caller. That request does not prove a
+remote mutation stopped; the calling lifecycle must handle any uncertain
+effect through its existing recovery and cleanup path.
+
 Stock `v0.1.0` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
 mounted by Kubernetes Compute. Any request that reaches
@@ -313,6 +321,8 @@ Kubernetes Compute delete the Kubernetes namespace.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 09:49: Documented Gateway call cancellation and uncertain remote effects. (authoring-run/f1c1bde3-0893-42d4-89ed-3251c885a893 - 90899dc55ab79d0244533b7dcde657fecf35bb08)
 
 - 2026-09-28 02:55: Added outbound-only native OpenClaw with broker CA trust. (oce-pr-440-sync - e2b739f51f89)
 
