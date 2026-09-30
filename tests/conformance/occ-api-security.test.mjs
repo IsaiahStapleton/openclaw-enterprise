@@ -1305,7 +1305,11 @@ test("runtime log failures are fixed, content-free and never read after an audit
   const append = auditSink.append.bind(auditSink);
   let failViews = true;
   auditSink.append = async (event) => {
-    if (failViews && event.action === "openclaw.agents.runtime_logs.view") {
+    if (
+      failViews &&
+      (event.action === "openclaw.agents.runtime_logs.view" ||
+        event.action === "openclaw.agents.runtime_logs.download")
+    ) {
       throw new Error("audit store unavailable");
     }
     await append(event);
@@ -1318,6 +1322,13 @@ test("runtime log failures are fixed, content-free and never read after an audit
   assert.equal(unaudited.status, 503);
   assert.equal(unaudited.body.error.code, "RUNTIME_LOGS_AUDIT_UNAVAILABLE");
   assert.equal(unaudited.text.includes("must not be returned"), false);
+  const undownloaded = await fixture.request(
+    "GET",
+    target.logsPath("source=gateway&download=true"),
+  );
+  assert.equal(undownloaded.status, 503);
+  assert.equal(undownloaded.body.error.code, "RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+  assert.equal(undownloaded.text.includes("must not be returned"), false);
   assert.equal(driverReads(fixture).length, 0);
   failViews = false;
 
