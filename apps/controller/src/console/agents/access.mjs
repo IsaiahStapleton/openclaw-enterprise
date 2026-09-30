@@ -2,6 +2,17 @@ import { button, element } from "../dom.mjs";
 import { message, namespacePath } from "./list.mjs";
 
 const discoveryPermissions = [{ action: "read", resourceKind: "namespace" }];
+// People receive `prn_` Principal IDs; emails and other text never name an IAM subject.
+const principalIdPattern = /^prn_[A-Za-z0-9-]{1,196}$/;
+
+function principalIdProblem(value) {
+  if (principalIdPattern.test(value)) {
+    return null;
+  }
+  return value.includes("@")
+    ? "Enter the person’s Principal ID (it starts with prn_), not an email address. Sharing does not look up accounts by email."
+    : "Enter a Principal ID that starts with prn_, exactly as returned when the person was provisioned.";
+}
 const agentPermissions = [
   { action: "read", resourceKind: "agent" },
   { action: "administer", resourceKind: "agent" },
@@ -183,7 +194,7 @@ export function renderAgentAccess(context, agent) {
     state.loaded = true;
   }
 
-  function failure(error, mutation) {
+  function failure(error, mutation, sharing = false) {
     if (error.status === 401) {
       context.onExpired();
       return;
@@ -192,7 +203,9 @@ export function renderAgentAccess(context, agent) {
     state.error =
       error.status === 403
         ? "Sharing policy requires Installation administration. Your other Agent controls remain available according to their own permissions."
-        : message(error, mutation);
+        : error.status === 404 && sharing
+          ? "No existing person with that Principal ID can be granted access here, or this Agent is no longer available. Check the Principal ID."
+          : message(error, mutation);
     state.error += " Refresh sharing to inspect current policy before another change.";
     if (error.requestId) {
       state.error += ` Request ID: ${error.requestId}`;
@@ -262,7 +275,7 @@ export function renderAgentAccess(context, agent) {
     state.bindings.push(binding);
   }
 
-  async function mutate(work) {
+  async function mutate(work, sharing = false) {
     if (state.pending || !state.loaded || state.needsRefresh || !context.isCurrent()) {
       return;
     }
@@ -278,7 +291,7 @@ export function renderAgentAccess(context, agent) {
       await work();
     } catch (error) {
       if (context.isCurrent()) {
-        failure(error, mutationStarted);
+        failure(error, mutationStarted, sharing && mutationStarted);
       }
     } finally {
       if (context.isCurrent()) {
@@ -310,6 +323,14 @@ export function renderAgentAccess(context, agent) {
     if (!subjectId || !acknowledge.checked) {
       return;
     }
+    const problem = principalIdProblem(subjectId);
+    if (problem) {
+      state.progress = [];
+      state.error = problem;
+      render();
+      principal.focus();
+      return;
+    }
     void mutate(async () => {
       await ensureGrant(
         subjectId,
@@ -331,7 +352,7 @@ export function renderAgentAccess(context, agent) {
         "Agent access is shared. Effective access remains subject to current IAM policy.",
       );
       acknowledge.checked = false;
-    });
+    }, true);
   });
   render();
   void load();

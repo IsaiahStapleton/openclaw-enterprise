@@ -701,7 +701,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     statusLine,
     deploymentStatus,
     renderNativeAdminAccess(context, path),
-    renderAgentAccess(context, agent),
+    // Sharing policy reads need Installation administration and a denial is audited, so
+    // skip the panel when the session probe already showed that access is missing.
+    ...(context.installationAdmin === false ? [] : [renderAgentAccess(context, agent)]),
     versionLayout,
   );
   let details;
