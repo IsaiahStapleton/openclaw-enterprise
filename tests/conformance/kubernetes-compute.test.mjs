@@ -12,6 +12,7 @@ import {
   AGENT_RUNTIME_ENTRYPOINT,
   AGENT_WITH_NODE_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
+  RUNTIME_WRAPPER_COMMAND,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
@@ -1198,7 +1199,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
       mountPath: "/run/openclaw-node-setup",
       readOnly: true,
     },
-    command: ["/usr/bin/tini", "-s", "--", "node", "-e"],
+    command: [...RUNTIME_WRAPPER_COMMAND],
   });
   const renderedConfiguration = JSON.parse(
     read(
@@ -2879,7 +2880,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   );
   assert.match(
     nativeAdminPod.initContainers[0].args[0],
-    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/home\/node\/\.openclaw\/openclaw\.json"\)/,
+    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/runtime-state\/home\/\.openclaw\/openclaw\.json"\)/,
   );
 
   const privateRuntimeDriver = createKubernetesComputeDriver(
@@ -5682,6 +5683,17 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
       // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
       ["credentials rejected", "auth", "AUTHENTICATION_FAILED"],
       ["provider unavailable", "unknown", "MODEL_PROBE_FAILED"],
+      ["provider timeout", "timeout", "MODEL_PROBE_TIMEOUT"],
+      // The wrapper's cap ends the probe. Only CPU waiting for most of it makes
+      // the failure CPU starvation, which fails the deployment at once.
+      ["cap exceeded while waiting for CPU", undefined, "MODEL_PROBE_CPU_STARVED"],
+      ["cap exceeded without CPU waiting", undefined, "MODEL_PROBE_TIMEOUT"],
+      // Without pressure accounting, CPU-limit throttling is the waiting evidence.
+      [
+        "cap exceeded while throttled without pressure accounting",
+        undefined,
+        "MODEL_PROBE_CPU_STARVED",
+      ],
     ]) {
       const accepted = failureCode === undefined;
       await t.test(`${provider}: ${variant}`, async () => {
@@ -5705,6 +5717,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         const exits = [];
         const timers = [];
         let probeTemplate;
+        let pressureReads = 0;
         let started = false;
         let held = false;
         let statusHandler;
@@ -5763,12 +5776,45 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                   files.set(path, value);
                 },
                 rmSync() {},
+                // A 500m CPU limit; waiting grows 100 s across a starved probe.
+                readFileSync(path) {
+                  const starved =
+                    variant.includes("waiting for CPU") || variant.includes("throttled");
+                  if (path === "/sys/fs/cgroup/cpu.max") {
+                    return "50000 100000\n";
+                  }
+                  if (
+                    path === "/sys/fs/cgroup/cpu.pressure" &&
+                    !variant.includes("pressure accounting")
+                  ) {
+                    const total = starved ? pressureReads++ * 1e8 : 0;
+                    return `some avg10=0.00 avg60=0.00 avg300=0.00 total=${total}\nfull total=0\n`;
+                  }
+                  if (path === "/sys/fs/cgroup/cpu.stat") {
+                    const throttled = starved ? pressureReads++ * 1e8 : 0;
+                    return `usage_usec 1\nnr_throttled 1\nthrottled_usec ${throttled}\n`;
+                  }
+                  throw Object.assign(new Error("unexpected read"), { code: "ENOENT" });
+                },
               };
             }
             if (specifier === "node:child_process") {
               return {
                 spawnSync(command, args, options) {
-                  calls.push({ command, args: Array.from(args), environment: { ...options.env } });
+                  calls.push({
+                    command,
+                    args: Array.from(args),
+                    environment: { ...options.env },
+                    timeout: options.timeout,
+                  });
+                  if (variant.startsWith("cap exceeded")) {
+                    return {
+                      status: null,
+                      signal: "SIGKILL",
+                      stdout: "",
+                      error: { code: "ETIMEDOUT" },
+                    };
+                  }
                   return {
                     status: 0,
                     stdout: JSON.stringify({
@@ -5808,6 +5854,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(calls.length, 1);
         assert.equal(probeTemplate, "/approved-temporary/openclaw-auth-probe-");
         assert.equal(calls[0].environment.TMPDIR, "/isolated-probe");
+        // 15 s model turn, 5 s slack, and 45 CPU-seconds at the 500m limit.
+        assert.equal(calls[0].timeout, 110_000);
         assert.equal(calls[0].environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
         assert.equal(calls[0].environment.SSL_CERT_FILE, "/run/openshell/ca-bundle.crt");
         assert.equal(calls[0].args[calls[0].args.indexOf("--probe-provider") + 1], provider);
@@ -5823,9 +5871,21 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(started, accepted);
         assert.equal(held, !accepted);
         const phaseLines = errors.filter((line) => line.includes('"runtime.startup_phase"'));
+        const probeLines = errors.filter((line) => line.includes('"openclaw.model_probe"'));
         assert.deepEqual(
-          errors.filter((line) => !phaseLines.includes(line)),
+          errors.filter((line) => !phaseLines.includes(line) && !probeLines.includes(line)),
           accepted ? [] : ["Harness model authentication probe failed."],
+        );
+        assert.equal(probeLines.length, 1);
+        const probeLog = JSON.parse(probeLines[0]);
+        assert.deepEqual([probeLog.code, probeLog.capMs], [failureCode ?? "READY", 110_000]);
+        assert.equal(
+          probeLog.cpuWaitMs,
+          variant.includes("waiting for CPU") || variant.includes("throttled") ? 100_000 : 0,
+        );
+        assert.doesNotMatch(
+          probeLines[0],
+          new RegExp([provider, model, credentialName, "fixture-model-key"].join("|")),
         );
         // Startup timing names phases only, never the provider, model or credential.
         assert.deepEqual(
@@ -9945,10 +10005,11 @@ test("rendered exec arguments and environment values stay within the per-string 
     state.ready = true;
     await driver.prepareRevision(revision, context);
     const workloads = [...objects.values()].filter(({ kind }) => kind === "Deployment");
-    assert.equal(
-      workloads.some(({ spec }) => spec.template.spec.containers[0].command[0] === "/usr/bin/tini"),
-      !embedded,
-    );
+    // Every runtime wrapper runs under tini, so it is never PID 1: a Pod stop's
+    // SIGTERM ends it in every startup phase, not only once it installs a handler.
+    for (const { spec } of workloads) {
+      assert.deepEqual(spec.template.spec.containers[0].command, [...RUNTIME_WRAPPER_COMMAND]);
+    }
     assertExecStringsWithinBudget(workloads);
     for (const { spec } of workloads) {
       // Runtime programs travel as bounded pieces and arrive intact.

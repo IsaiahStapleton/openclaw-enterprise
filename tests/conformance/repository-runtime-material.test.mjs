@@ -878,6 +878,30 @@ for (const mode of ["embedded", "dedicated"]) {
   });
 }
 
+test("Embedded successor is not ready when material expires during policy reconciliation", async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const f = await fixture("embedded");
+  const original = runtimeBinding();
+  await f.driver.prepareRevision(f.revision, f.context([original]));
+  f.markReady();
+  await f.driver.activateRevision(f.revision, f.context([original]));
+
+  const successor = { ...f.revision, id: "revision-successor", revision: 2 };
+  const replacement = runtimeBinding("session_successor");
+  const patchPolicy = f.clients.networking.patchNamespacedNetworkPolicy;
+  let policyObserved = false;
+  f.clients.networking.patchNamespacedNetworkPolicy = async (...args) => {
+    const result = await patchPolicy(...args);
+    policyObserved = true;
+    clock = deadlineWallMs;
+    return result;
+  };
+  const result = await f.driver.prepareRevision(successor, f.context([replacement]));
+  assert.equal(policyObserved, true);
+  assert.equal(result.ready, false);
+});
+
 test("Dedicated successor material is rechecked after workspace-node status", async () => {
   let loseMaterialReadiness = false;
   let statusObserved = false;
@@ -932,6 +956,72 @@ test("Dedicated successor material is rechecked after workspace-node status", as
   loseMaterialReadiness = false;
   f.markReady();
   assert.equal((await prepare()).ready, true);
+});
+
+test("Dedicated successor is not ready when material expires during workspace-node status", async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  let expireOnStatus = false;
+  let statusObserved = false;
+  const f = await fixture("dedicated", {
+    async createSetup() {
+      throw new Error("The material fixture already has an enrolled node.");
+    },
+    async isConnected() {
+      if (expireOnStatus) {
+        statusObserved = true;
+        clock = deadlineWallMs;
+      }
+      return true;
+    },
+  });
+  f.enroll(f.revision);
+  const original = runtimeBinding();
+  await f.driver.prepareRevision(f.revision, f.context([original]));
+  f.markReady();
+  await f.driver.activateRevision(f.revision, f.context([original]));
+
+  const successor = { ...f.revision, id: "revision-successor", revision: 2 };
+  f.enroll(successor);
+  const replacement = runtimeBinding("session_successor");
+  const prepare = () => f.driver.prepareRevision(successor, f.context([replacement]));
+  await prepare();
+  f.markReady();
+  assert.equal((await prepare()).ready, true);
+  expireOnStatus = true;
+  assert.equal((await prepare()).ready, false);
+  assert.equal(statusObserved, true);
+});
+
+test("Dedicated activation refuses material that expires during workspace-node status", async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  let expireOnStatus = false;
+  let statusObserved = false;
+  const f = await fixture("dedicated", {
+    async createSetup() {
+      throw new Error("The material fixture already has an enrolled node.");
+    },
+    async isConnected() {
+      if (expireOnStatus) {
+        statusObserved = true;
+        clock = deadlineWallMs;
+      }
+      return true;
+    },
+  });
+  f.enroll(f.revision);
+  const binding = runtimeBinding();
+  await f.driver.prepareRevision(f.revision, f.context([binding]));
+  f.markReady();
+  await f.driver.activateRevision(f.revision, f.context([binding]));
+  f.markReady();
+
+  expireOnStatus = true;
+  await assert.rejects(f.driver.activateRevision(f.revision, f.context([binding])), {
+    message: "The exact repository credential runtime generation is not ready.",
+  });
+  assert.equal(statusObserved, true);
 });
 
 test("Dedicated retained-material loss reports only the missing session and accepts worker replacement", async () => {
@@ -1254,23 +1344,28 @@ test("Embedded Codex plugin runtime receives broker network policy centrally", a
   });
 });
 
-test("Dedicated Codex repository material projects a combined broker CA bundle", async () => {
-  const f = await fixture("dedicated");
-  const publicCa = Buffer.from("-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n");
-  await f.driver.prepareRevision(
-    f.revision,
-    f.context([runtimeBinding("session_with_ca", publicCa)]),
-  );
-  const environment = Object.fromEntries(
-    f.consumer().spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]),
-  );
-  assert.match(
-    environment.SSL_CERT_FILE,
-    /^\/run\/oce\/repository-credentials\/sessions\/[a-f0-9]{64}\/ca-bundle\.pem$/,
-  );
-  assert.equal(environment.GIT_SSL_CAINFO, environment.SSL_CERT_FILE);
-  assert.equal(environment.NODE_EXTRA_CA_CERTS, environment.SSL_CERT_FILE);
-});
+// Both consumer shapes must trust the projected CA without disabling TLS verification.
+for (const mode of ["embedded", "dedicated"]) {
+  test(`Repository consumer projects a combined broker CA bundle (${mode})`, async () => {
+    const f = await fixture(mode);
+    const publicCa = Buffer.from(
+      "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n",
+    );
+    await f.driver.prepareRevision(
+      f.revision,
+      f.context([runtimeBinding("session_with_ca", publicCa)]),
+    );
+    const environment = Object.fromEntries(
+      f.consumer().spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]),
+    );
+    assert.match(
+      environment.SSL_CERT_FILE,
+      /^\/run\/oce\/repository-credentials\/sessions\/[a-f0-9]{64}\/ca-bundle\.pem$/,
+    );
+    assert.equal(environment.GIT_SSL_CAINFO, environment.SSL_CERT_FILE);
+    assert.equal(environment.NODE_EXTRA_CA_CERTS, environment.SSL_CERT_FILE);
+  });
+}
 
 test("Kubernetes projects the repository client into native exec paths without changing admitted configuration", async (t) => {
   for (const roster of ["list", "entries"]) {

@@ -32,7 +32,9 @@ import {
   GATEWAY_STOP_TIMEOUT_MS,
   NATIVE_WORKER_ENTRYPOINT,
   PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN,
+  RUNTIME_WRAPPER_COMMAND,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import {
   REPOSITORY_MATERIAL_INIT_ENTRYPOINT,
   REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT,
@@ -2649,8 +2651,8 @@ process.stdout.write("shared-codex-0.158.0-ready\n");
 // answers the Responses API as api.openai.com (mapped to loopback, trusted
 // through a private CA), and observes the wrapper from outside.
 // The Codex wrapper runs under the production example's 500m CPU limit. The
-// embedded Gateway gets one CPU: at 500m its serial probe's node boot alone can
-// take most of the 30-second attempt cap (board finding 181).
+// embedded Gateway gets one CPU to keep these cases quick;
+// runtime-image-model-probe.test.mjs covers it at 500m.
 const startupProbeCpuLimit = "0.5";
 const gatewayStartupProbeCpuLimit = "1";
 const startupProbeMemoryLimit = "2g";
@@ -2784,6 +2786,37 @@ function startupProbeWrapper(kind) {
       ],
     };
   }
+  if (kind === "dedicated-gateway") {
+    // A Codex peer with an enabled plugin: the Gateway waits for the Harness's
+    // plugin status before it starts OpenClaw. The peer never answers here.
+    const configuration = createAdmittedRuntimeImageConfiguration("codex");
+    const manifest = {
+      kind: "codex",
+      selections: {
+        "codex-plugin:linear@openai-curated-remote": {
+          enabled: true,
+          toolDefaults: { approval: "provider_default" },
+        },
+      },
+    };
+    return {
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      readiness: GATEWAY_READINESS_ENTRYPOINT,
+      cpus: startupProbeCpuLimit,
+      nativePort: 8080,
+      configuration,
+      environment: [
+        "HOME=/home/node",
+        "OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json",
+        "OPENCLAW_GATEWAY_PORT=8080",
+        "OPENCLAW_GATEWAY_PASSWORD=openclaw-runtime-probe-password",
+        "OPENCLAW_STATE_DIR=/home/node/.openclaw",
+        "APP_SERVER_URL=ws://127.0.0.1:4500",
+        `OPENCLAW_PLUGIN_RUNTIME_JSON=${JSON.stringify({ manifest })}`,
+        ...status,
+      ],
+    };
+  }
   const configuration = createAdmittedRuntimeImageConfiguration("openclaw");
   const model = configuration.agents.defaults.model;
   const provider = model.split("/", 1)[0];
@@ -2836,7 +2869,8 @@ function startupProbeWrapper(kind) {
 
 // Runs one wrapper start against the stand-in provider. `mode` is the
 // provider's behaviour: "answer" after `delayMs`, "reject" with HTTP 401, or
-// "hang". `until` returns true once the scenario has what it needs to check.
+// "hang". `until` returns true once the scenario has what it needs to check;
+// `act`, if given, then runs against the live containers.
 async function runStartupProbeScenario(t, { kind, mode, delayMs = 0, until, act }) {
   const wrapper = startupProbeWrapper(kind);
   const material = await createStartupProbeMaterial(t, wrapper.readiness);
@@ -2893,7 +2927,9 @@ async function runStartupProbeScenario(t, { kind, mode, delayMs = 0, until, act 
     "/fixture/endpoint.mjs",
   ]);
   await waitForDockerLog(sidecar, /"event":"listening"/);
-  // The wrapper runs as PID 1 with no init, as in a Kubernetes container.
+  // The container command the Compute driver renders, with the wrapper program
+  // in the same bounded pieces: PID 1 is whatever that command starts.
+  const [command, ...commandArguments] = RUNTIME_WRAPPER_COMMAND;
   await runDocker([
     "run",
     "--name",
@@ -2927,10 +2963,10 @@ async function runStartupProbeScenario(t, { kind, mode, delayMs = 0, until, act 
       : ["--volume", `${join(material, "openclaw.json")}:/etc/openclaw/openclaw.json:ro`]),
     ...wrapper.environment.flatMap((value) => ["-e", value]),
     "--entrypoint",
-    "node",
+    command,
     image,
-    "-e",
-    wrapper.entrypoint,
+    ...commandArguments,
+    ...nodeProgramArguments(wrapper.entrypoint),
   ]);
   const startedAt = containerStartedAt(
     (await runDocker(["inspect", containerName, "--format", "{{.State.StartedAt}}"])).stdout,
@@ -3156,7 +3192,7 @@ test(
   "runtime image embedded Gateway probes its model before it starts OpenClaw",
   { ...imageTestOptions, timeout: 600_000 },
   async (t) => {
-    // A short turn keeps the probe well inside its 30-second attempt cap.
+    // A short turn keeps the probe well inside its attempt cap.
     await assertProbeGatesStartup(t, "gateway", 2_000);
   },
 );
@@ -3169,85 +3205,118 @@ test(
   },
 );
 
-// Kubernetes sends SIGTERM and waits the termination grace period before
-// SIGKILL. The wrapper is PID 1, so a signal it has no handler for is ignored.
-// On main the Codex wrapper installs no SIGTERM handler during its blocking
-// probe or while it holds a failure, so both cases below wait for SIGKILL
-// (verified on the runtime image). The images lane fails on any skipped test,
-// so these cases stay unregistered until the fix on branch
-// fix/runtime-pid1-sigterm lands; that change sets this flag and adds both
-// names to scripts/ci/test-suites/images-packaging.json.
-const runtimeWrapperEndsOnSigterm = false;
+// Runtime wrapper termination. A Pod stop sends SIGTERM to the container's
+// PID 1, waits terminationGracePeriodSeconds (the Gateway's is 330 seconds),
+// then sends SIGKILL; an embedded Gateway redeploy uses Recreate, so the new
+// Pod waits for the old one. These tests send SIGTERM to the real wrappers,
+// started with the container command the Compute driver renders, in each
+// startup phase.
+// Well below the 30-second default grace a Harness Pod gets, and far below the
+// Gateway's 330 seconds: a wrapper that ignores SIGTERM never meets it.
+const promptTerminationMs = 15_000;
 
-async function terminateWrapper(containerName) {
+// Sends SIGTERM as the kubelet does and measures how long the container takes
+// to stop. Container exit ends its PID namespace, so no child outlives it.
+async function assertPromptTermination(t, { containerName, collect }, description) {
   const signalledAt = Date.now();
   await runDocker(["kill", "--signal", "TERM", containerName]);
-  const graceMs = 20_000 * imageSmokeTimeoutMultiplier;
-  const exited = await runDocker(["wait", containerName], { timeout: graceMs }).then(
-    () => true,
-    () => false,
+  const deadline = signalledAt + promptTerminationMs * imageSmokeTimeoutMultiplier;
+  let state = await collect();
+  while (state.running && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    state = await collect();
+  }
+  const elapsedMs = Date.now() - signalledAt;
+  t.diagnostic(
+    `${description}: ${state.running ? "still running" : `exit ${state.exitCode}`} ` +
+      `${elapsedMs} ms after SIGTERM`,
   );
-  return { signalledAt, exited };
+  if (state.running) {
+    assert.fail(
+      `${description}: SIGTERM did not stop the wrapper in ${elapsedMs} ms.\n${state.output}`,
+    );
+  }
+  // A terminated wrapper exits cleanly in every phase, as it does once running.
+  assert.equal(state.exitCode, 0, `${description}: exit code`);
 }
 
-if (runtimeWrapperEndsOnSigterm) {
-  test(
-    "runtime image Codex Harness exits on SIGTERM while it holds a probe failure",
-    { ...imageTestOptions, timeout: 600_000 },
-    async (t) => {
-      let termination;
-      const run = await runStartupProbeScenario(t, {
-        kind: "codex",
-        mode: "reject",
-        until: heldFailure("AUTHENTICATION_FAILED"),
-        act: async ({ containerName }) => {
-          termination = await terminateWrapper(containerName);
-        },
-      });
-      await withStartupProbeEvidence(run, async () => {
-        assert.equal(termination.exited, true, "the holding wrapper ignored SIGTERM");
-        assert.equal(run.snapshot.exitCode, 0);
-        t.diagnostic(
-          `codex holding wrapper exited ${run.snapshot.finishedAt - termination.signalledAt} ms after SIGTERM`,
-        );
-      });
-    },
-  );
+// Starts one wrapper, waits for `until`, then sends SIGTERM.
+async function runTerminationScenario(t, { kind, mode, until, description }) {
+  return runStartupProbeScenario(t, {
+    kind,
+    mode,
+    until,
+    act: (scenario) => assertPromptTermination(t, scenario, description),
+  });
 }
 
-if (runtimeWrapperEndsOnSigterm) {
-  test(
-    "runtime image Codex Harness exits on SIGTERM during its model probe",
-    { ...imageTestOptions, timeout: 600_000 },
-    async (t) => {
-      let termination;
-      const run = await runStartupProbeScenario(t, {
-        kind: "codex",
-        mode: "hang",
-        until: ({ events }) => events.some(isModelTurn),
-        act: async ({ containerName }) => {
-          termination = await terminateWrapper(containerName);
-        },
-      });
-      await withStartupProbeEvidence(run, async () => {
-        const { events, phases, exitCode, finishedAt } = run.snapshot;
-        assert.equal(termination.exited, true, "the probing wrapper ignored SIGTERM");
-        assert.equal(exitCode, 0);
-        assert.equal(
-          phaseAt(phases, "model-probe"),
-          undefined,
-          "a terminated probe has no outcome",
-        );
-        assert.equal(events.filter(isModelTurn).length, 1, "termination starts no further attempt");
-        assert.ok(
-          events.some((event) => event.event === "turn-closed"),
-          "the probe's request was abandoned",
-        );
-        assert.equal(events.some(observedValue("ready", true)), false);
-        t.diagnostic(
-          `codex exited ${finishedAt - termination.signalledAt} ms after SIGTERM mid-probe`,
-        );
-      });
-    },
-  );
+async function assertWrapperTermination(t, kind) {
+  const label = kind === "codex" ? "Codex Harness" : "embedded Gateway";
+
+  // SIGTERM while the provider holds the probe's model turn: the wrapper is
+  // blocked in its synchronous probe child.
+  const probing = await runTerminationScenario(t, {
+    kind,
+    mode: "hang",
+    until: ({ events }) => events.some(isModelTurn),
+    description: `${label} during its model probe`,
+  });
+  await withStartupProbeEvidence(probing, async () => {
+    const { events, phases } = probing.snapshot;
+    assert.equal(phaseAt(phases, "model-probe"), undefined, "a terminated probe has no outcome");
+    assert.equal(events.filter(isModelTurn).length, 1, "termination starts no further attempt");
+    assert.equal(events.some(observedValue("ready", true)), false);
+  });
+
+  // SIGTERM while the wrapper holds a rejected credential for the controller.
+  const holding = await runTerminationScenario(t, {
+    kind,
+    mode: "reject",
+    until: heldFailure("AUTHENTICATION_FAILED"),
+    description: `${label} holding AUTHENTICATION_FAILED`,
+  });
+  await withStartupProbeEvidence(holding, async () => {
+    assert.equal(holding.snapshot.events.some(observedValue("ready", true)), false);
+  });
+
+  // SIGTERM once the native process serves: the wrapper forwards it and exits
+  // with the native process.
+  await runTerminationScenario(t, {
+    kind,
+    mode: "answer",
+    until: ({ events }) => events.some(observedValue("ready", true)),
+    description: `${label} while ready`,
+  });
 }
+
+test(
+  "runtime image Codex Harness exits promptly on SIGTERM in every startup phase",
+  { ...imageTestOptions, timeout: 900_000 },
+  async (t) => {
+    await assertWrapperTermination(t, "codex");
+  },
+);
+
+test(
+  "runtime image embedded Gateway exits promptly on SIGTERM in every startup phase",
+  { ...imageTestOptions, timeout: 900_000 },
+  async (t) => {
+    await assertWrapperTermination(t, "gateway");
+  },
+);
+
+test(
+  "runtime image dedicated Gateway exits promptly on SIGTERM while it waits for its Harness",
+  { ...imageTestOptions, timeout: 600_000 },
+  async (t) => {
+    const waiting = await runTerminationScenario(t, {
+      kind: "dedicated-gateway",
+      mode: "answer",
+      until: ({ output }) => /Waiting for Harness plugin runtime status/.test(output),
+      description: "dedicated Gateway waiting for its Harness",
+    });
+    await withStartupProbeEvidence(waiting, async () => {
+      assert.equal(waiting.snapshot.events.some(observedValue("native", true)), false);
+    });
+  },
+);

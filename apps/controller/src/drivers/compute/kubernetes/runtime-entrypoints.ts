@@ -5,6 +5,22 @@ import { nodeProgramArguments } from "../node-program.ts";
 // and 5s supervisor margin. Idle Gateways exit as soon as their work settles.
 export const GATEWAY_STOP_TIMEOUT_MS = 330_000;
 
+// Every runtime wrapper runs under tini. As PID 1, Node ignores SIGTERM until
+// a wrapper installs its handler, and cannot run one inside a blocking model
+// probe, so a Pod stop waited for SIGKILL. Under tini the wrapper exits on
+// SIGTERM in every phase, and container exit ends its children. -e 143 reports
+// that termination as exit 0, as a running wrapper does. -s keeps reaping
+// orphans when a Sandbox provider runs this below PID 1.
+export const RUNTIME_WRAPPER_COMMAND: readonly string[] = Object.freeze([
+  "/usr/bin/tini",
+  "-s",
+  "-e",
+  "143",
+  "--",
+  "node",
+  "-e",
+]);
+
 export const PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN = "openclaw-plugin-runtime/app-server-token/v1";
 
 const STARTUP_PHASE_EVENT = "runtime.startup_phase";
@@ -92,6 +108,7 @@ const RUNTIME_DIAGNOSTIC_CODES = new Set([
   "LOGIN_FAILED",
   "MODEL_PROBE_FAILED",
   "MODEL_PROBE_TIMEOUT",
+  "MODEL_PROBE_CPU_STARVED",
   "UNAVAILABLE",
   "NOT_CONFIGURED",
   "AUTHENTICATION_FAILED",
@@ -1705,21 +1722,50 @@ async function installCodexPlugins(runtime, failures = []) {
 }
 `;
 
+// Holds unready until an explicit restart; readiness polls never submit model calls.
 const AUTH_PROBE_FAILURE_HELPER = String.raw`
 function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
   publishRuntimeFailure(check, code);
   console.error("Harness model authentication probe failed.");
-  // Hold unready until an explicit restart; readiness polls never submit model calls.
   setInterval(() => {}, 3600000);
 }
 `;
 
 // The native probe disables tools and fallback and performs a bounded model turn.
 // Its JSON status, not its process exit status alone, establishes provider acceptance.
+//
+// The probe is a whole embedded agent run. Its local work (Node and OpenClaw
+// boot, SQLite session state, cleanup) took about 16 CPU-seconds on the runtime
+// image, on one core however many it may use; --probe-timeout bounds the model
+// turn itself. A fixed 30-second cap let the example 500m CPU limit starve that
+// local work into MODEL_PROBE_TIMEOUT before the turn finished. The cap is now
+// the 15-second turn, 5 seconds of slack, and 45 CPU-seconds of local work at
+// the container's CPU limit (cgroup cpu.max, at most one core), at most 600 s.
+// A probe that still reaches it after waiting for CPU for over a quarter of the
+// time reports MODEL_PROBE_CPU_STARVED: a restart would get the same CPU. The
+// wait is cgroup cpu.pressure (throttling and node contention) or, on kernels
+// without pressure accounting, cpu.stat throttled_usec (throttling only).
+// OpenClaw buckets provider 401/403 and invalid-key responses as "auth". Only
+// that deterministic rejection fails the deployment before its deadline.
+// The Gateway times its model-probe phase from wrapper start: it is the first step.
+// Generated code stays compact: the Gateway program is near the exec limit.
 const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
 ${AUTH_PROBE_FAILURE_HELPER}
 function probeOpenClawAuthenticationFailureCode() {
   const fs = require("node:fs");
+  const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
+  const [quota, period] = cgroup("cpu.max").split(" ");
+  const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
+  const waited = () => (/^some .*total=(\d+)/m.exec(cgroup("cpu.pressure")) ?? /throttled_usec (\d+)/.exec(cgroup("cpu.stat")))?.[1] / 1000;
+  const startedAt = Date.now(), before = waited();
+  let code = runOpenClawAuthenticationProbe(fs, capMs);
+  const elapsedMs = Date.now() - startedAt, cpuWaitMs = Math.round(waited() - before);
+  if (code === "CAP") code = cpuWaitMs > elapsedMs / 4 ? "MODEL_PROBE_CPU_STARVED" : "MODEL_PROBE_TIMEOUT";
+  console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY" }));
+  return code;
+}
+
+function runOpenClawAuthenticationProbe(fs, capMs) {
   const { spawnSync } = require("node:child_process");
   const temporary = (process.env.TMPDIR || "/tmp").replace(/\/+$/, "");
   const directory = fs.mkdtempSync(temporary + "/openclaw-auth-probe-");
@@ -1754,18 +1800,17 @@ function probeOpenClawAuthenticationFailureCode() {
         [credentialEnvironment]: process.env[credentialEnvironment],
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+      timeout: capMs, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.error?.code === "ETIMEDOUT") return "MODEL_PROBE_TIMEOUT";
+    if (result.error?.code === "ETIMEDOUT") return "CAP";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
     if (!Array.isArray(results) || results.length !== 1 ||
       results[0].provider !== provider || results[0].model !== model ||
       results[0].source !== "env") return "MODEL_PROBE_FAILED";
     if (results[0].status === "ok") return undefined;
-    // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
-    // Only that deterministic rejection fails the deployment before its deadline.
-    return results[0].status === "auth" ? "AUTHENTICATION_FAILED" : "MODEL_PROBE_FAILED";
+    if (results[0].status === "auth") return "AUTHENTICATION_FAILED";
+    return results[0].status === "timeout" ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_FAILED";
   } catch {
     return "MODEL_PROBE_FAILED";
   } finally {
@@ -2040,7 +2085,6 @@ const openClawAuthenticationFailureCode =
     ? undefined
     : probeOpenClawAuthenticationFailureCode();
 if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined) {
-  // The probe is the first startup step, so wrapper start marks its beginning.
   logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailureCode === undefined ? "ok" : "failed");
 }
 if (openClawAuthenticationFailureCode !== undefined) {
@@ -2691,7 +2735,8 @@ function probeCodexAuthentication(timeout) {
 }
 
 // A single startup budget includes both process attempts and the retry delay.
-// No signal handler is installed during backoff, so termination exits promptly.
+// No signal handler is installed before app-server starts, so under tini
+// SIGTERM ends the probe, its backoff or a held failure at once.
 function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 61000) {
   const startedAt = performance.now();
   const timeout = Math.min(30000, Math.floor(deadline - startedAt));

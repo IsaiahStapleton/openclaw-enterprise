@@ -138,9 +138,10 @@ the core does not inspect native runtime output. Evidence contains safe
 `component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
 provider errors. An unavailable or untrusted observation omits the evidence.
 
-The worker persists that observation at the convergence deadline. Code
-`AUTHENTICATION_FAILED` marks deterministic credential rejection and fails the
-deployment immediately with `RUNTIME_AUTHENTICATION_FAILED`. The
+The worker persists that observation at the convergence deadline. Codes
+`AUTHENTICATION_FAILED` (deterministic credential rejection) and
+`MODEL_PROBE_CPU_STARVED` fail the deployment immediately with
+`RUNTIME_AUTHENTICATION_FAILED` or `RUNTIME_CPU_STARVED`. The
 [deployment status API](../agents.md#deployment-status) returns saved evidence
 under exact-revision read permission without invoking Compute.
 
