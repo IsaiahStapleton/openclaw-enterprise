@@ -300,12 +300,12 @@ result. For unavailable gateways, follow the
 
 When [Agent native admin UI access](agent-native-admin.md) is enabled, the
 Agent detail tabs, including Configuration and Workspace files, include a
-**Native admin UI** panel for callers with exact Agent `administer` permission;
-otherwise, or when the Installation disables the feature, it is hidden.
+**Native admin UI** panel for callers with exact Agent `administer` permission.
+It is hidden otherwise, when the Installation disables the feature, and until
+the next sign-in or new tab after a denial.
 Installation administrators can [share an Agent](console/agent-sharing.md)
-with an existing person. An Agent that is stopped reports that it must be started,
-including before its first deployment or after stopping clears its active
-revision. If a desired-running Agent has no active revision yet, the panel asks
+with an existing person. A stopped Agent reports that it must be started,
+including before its first deployment. If a desired-running Agent has no active revision yet, the panel asks
 you to check the Agent's deployment and refresh access. It also reports when
 native admin is unsupported.
 

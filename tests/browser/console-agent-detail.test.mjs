@@ -2029,13 +2029,13 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     "Native admin Agent",
     nativeValues("unsupported-ui"),
   );
-  const { page } = await newPage(t, fixture, {
+  let { page } = await newPage(t, fixture, {
     args: [
       ...fixture.browserArgs,
       `--host-resolver-rules=MAP ${consoleHost} 127.0.0.1,MAP *.${nativeDomain} 127.0.0.1`,
     ],
   });
-  const requests = apiRequests(page, fixture.origin);
+  let requests = apiRequests(page, fixture.origin);
   const draftDetail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
 
   // A fresh shared-cookie login clears legacy host-only cookies from the Console.
@@ -2116,6 +2116,14 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await expectNativeAdminHidden(page);
   fixture.policy.restrictions.length = 0;
+  // The audited denial is settled for this tab; a new tab in the same session asks afresh.
+  const deniedTabWrites = nonAuthWriteRequests(requests);
+  const browserContext = page.context();
+  await page.close();
+  page = await browserContext.newPage();
+  requests = apiRequests(page, fixture.origin);
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
+  await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
 
   const stopped = await fixture.request(
     "POST",
@@ -2214,7 +2222,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   assert.match(nativeRequestCookie, /(?:__Secure-)?openclaw_occ_shared\.session_token=/);
   assert.doesNotMatch(nativeRequestCookie, /legacy-host-only/);
 
-  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  assert.deepEqual([...deniedTabWrites, ...nonAuthWriteRequests(requests)], []);
 });
 
 for (const [dmPolicy, groupPolicy, enterpriseOrgInstall] of [

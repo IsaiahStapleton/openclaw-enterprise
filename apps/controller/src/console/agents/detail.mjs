@@ -41,6 +41,13 @@ function errorPanel(error, context, retry) {
         : "Configuration unavailable",
     ),
     element("p", {}, message(error)),
+    error.remembered
+      ? element(
+          "p",
+          { className: "hint" },
+          "This tab remembers the earlier denial. Retry checks your access again.",
+        )
+      : null,
     error.requestId
       ? element("p", { className: "request-id" }, `Request ID: ${error.requestId}`)
       : null,
@@ -1134,16 +1141,34 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   }
   let refreshDeployControls = () => {};
 
+  const snapshotPath =
+    selected === "draft"
+      ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
+      : `${path}/revisions/${encodeURIComponent(selected)}`;
+
+  async function readSnapshot() {
+    // A denied read is audited, so reuse this tab's settled denial instead of asking per view.
+    if (context.deniedReads?.has(snapshotPath)) {
+      throw Object.assign(new Error("Access denied."), {
+        status: 403,
+        code: "FORBIDDEN",
+        remembered: true,
+      });
+    }
+    try {
+      return await request(snapshotPath);
+    } catch (error) {
+      if (error.status === 403) {
+        context.deniedReads?.remember(snapshotPath);
+      }
+      throw error;
+    }
+  }
+
   async function loadDetails() {
     const results = await Promise.allSettled([
       revisionsPromise,
-      selected === "draft" && agent.configurationReadError
-        ? Promise.resolve(null)
-        : request(
-            selected === "draft"
-              ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
-              : `${path}/revisions/${encodeURIComponent(selected)}`,
-          ),
+      selected === "draft" && agent.configurationReadError ? Promise.resolve(null) : readSnapshot(),
     ]);
     if (!context.isCurrent() || deleting) {
       return;
@@ -1631,9 +1656,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     if (data?.error) {
       state.reusable = false;
       content.append(
-        errorPanel(data.error, tabContext, () =>
-          context.navigate(target(selected, selectedTab), namespaceId, true),
-        ),
+        errorPanel(data.error, tabContext, () => {
+          context.deniedReads?.forget(snapshotPath);
+          context.navigate(target(selected, selectedTab), namespaceId, true);
+        }),
       );
     } else if (data) {
       renderConfigurationTab(tabContext, tab, data);
