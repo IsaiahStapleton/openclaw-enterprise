@@ -1305,7 +1305,11 @@ test("runtime log failures are fixed, content-free and never read after an audit
   const append = auditSink.append.bind(auditSink);
   let failViews = true;
   auditSink.append = async (event) => {
-    if (failViews && event.action === "openclaw.agents.runtime_logs.view") {
+    if (
+      failViews &&
+      (event.action === "openclaw.agents.runtime_logs.view" ||
+        event.action === "openclaw.agents.runtime_logs.download")
+    ) {
       throw new Error("audit store unavailable");
     }
     await append(event);
@@ -1318,6 +1322,13 @@ test("runtime log failures are fixed, content-free and never read after an audit
   assert.equal(unaudited.status, 503);
   assert.equal(unaudited.body.error.code, "RUNTIME_LOGS_AUDIT_UNAVAILABLE");
   assert.equal(unaudited.text.includes("must not be returned"), false);
+  const undownloaded = await fixture.request(
+    "GET",
+    target.logsPath("source=gateway&download=true"),
+  );
+  assert.equal(undownloaded.status, 503);
+  assert.equal(undownloaded.body.error.code, "RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+  assert.equal(undownloaded.text.includes("must not be returned"), false);
   assert.equal(driverReads(fixture).length, 0);
   failViews = false;
 
@@ -1415,4 +1426,88 @@ test("runtime routes answer 501 when the Driver, its logging owner or the operat
       assert.equal(fixture.computeDriver.calls.length, 0);
     }
   }
+});
+
+test("runtime log downloads use the administer tier and are audited once per download", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [
+    runtimeLogLine(1),
+    runtimeLogLine(2, '{"level":"warn","message":"slow start","subsystem":"gateway","status":503}'),
+  ];
+  const operator = await fixture.createPrincipal("download-operator", target, operateGrants);
+  const administrator = await fixture.createPrincipal(
+    "download-administrator",
+    target,
+    administerGrants,
+  );
+  const downloads = () =>
+    fixture.auditSink.events.filter(
+      ({ action }) => action === "openclaw.agents.runtime_logs.download",
+    );
+  const views = () =>
+    fixture.auditSink.events.filter(({ action }) => action === "openclaw.agents.runtime_logs.view");
+  fixture.computeDriver.calls.length = 0;
+
+  // Status access is not enough; the denial never reaches the Driver.
+  const denied = await fixture.request("GET", target.logsPath("source=gateway&download=true"), {
+    session: operator.session,
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(fixture.auditSink.events.at(-1).kind, "authorization_denial");
+  assert.equal(fixture.auditSink.events.at(-1).authorization.action, "administer");
+  // The denial names the download, not a view.
+  assert.equal(fixture.auditSink.events.at(-1).action, "openclaw.agents.runtime_logs.download");
+  assert.equal(driverReads(fixture).length, 0);
+  const deniedDownloads = downloads().length;
+
+  const path = target.logsPath("source=gateway&tailLines=5&download=true");
+  const first = await fixture.request("GET", path, { session: administrator.session });
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(first.headers.get("cache-control"), "no-store");
+  const pod = fixture.computeDriver.podName({ id: target.revisionId });
+  assert.equal(
+    first.headers.get("content-disposition"),
+    `attachment; filename="${target.agent.id}-${target.revisionId}-gateway-${pod}.log"`,
+  );
+  const lines = first.text.trimEnd().split("\n");
+  assert.match(lines[0], new RegExp(`^# agent=${target.agent.id} revision=${target.revisionId}`));
+  assert.deepEqual(lines.slice(1), [
+    `${runtimeLogLine(1).time} UNKNOWN text gateway output 1`,
+    `${runtimeLogLine(2).time} WARN openclaw [gateway] slow start status=503`,
+  ]);
+  // A download always reads the maximum tail, whatever the caller asked for.
+  assert.equal(driverReads(fixture).at(-1).tailLines, 1000);
+
+  await fixture.request("GET", path, { session: administrator.session });
+  const granted = () => downloads().filter(({ kind }) => kind === "mutation");
+  assert.equal(downloads().length, deniedDownloads + 2);
+  assert.equal(granted().length, 2, "every download is audited");
+  assert.equal(views().length, 0, "a download is not a view");
+  const [audit] = granted();
+  assert.equal(audit.kind, "mutation");
+  assert.equal(audit.actor.principalId, administrator.principal.id);
+  assert.equal(audit.details.runtimeLogs.tailLines, 1000);
+  assert.equal(audit.details.runtimeLogs.pod, pod);
+  assert.equal(JSON.stringify(audit).includes("slow start"), false);
+
+  // A download is a fresh snapshot and never continues a view.
+  const page = await fixture.request("GET", target.logsPath(), { session: administrator.session });
+  const readsBefore = driverReads(fixture).length;
+  const withCursor = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&download=true&cursor=${encodeURIComponent(page.data.cursor)}`),
+    { session: administrator.session },
+  );
+  assert.equal(withCursor.status, 400);
+  assert.equal(withCursor.body.error.code, "INVALID_REQUEST");
+  assert.equal(driverReads(fixture).length, readsBefore);
+  assert.equal(granted().length, 2);
+
+  // Failures stay JSON errors with fixed text.
+  fixture.computeDriver.state.readError = new RuntimeLogsForbiddenByClusterError();
+  const rbac = await fixture.request("GET", path, { session: administrator.session });
+  assert.equal(rbac.status, 503);
+  assert.equal(rbac.body.error.code, "RUNTIME_LOGS_CLUSTER_RBAC");
 });

@@ -228,6 +228,7 @@ function createDeploymentStatusPanel(
           state.status?.status ?? null,
           state.error !== null,
           state.status?.error?.code ?? null,
+          state.status,
         );
       }
     }
@@ -334,11 +335,13 @@ function createDeploymentStatusPanel(
   return section;
 }
 
-function createVersionDeploymentRecord(context, path, revisionId) {
+function createVersionDeploymentRecord(context, path, revisionId, onChange = () => {}) {
   const section = element("section", { className: "agent-card version-deployment-record" });
   let status = null;
   let error = null;
   let loading = false;
+  // Bumped whenever a newer record arrives from elsewhere so a slower read cannot overwrite it.
+  let generation = 0;
 
   async function load() {
     if (loading || !context.isCurrent()) {
@@ -346,9 +349,13 @@ function createVersionDeploymentRecord(context, path, revisionId) {
     }
     loading = true;
     error = null;
+    const started = generation;
     render();
     try {
-      status = await context.request(`${path}/deployments/${encodeURIComponent(revisionId)}`);
+      const next = await context.request(`${path}/deployments/${encodeURIComponent(revisionId)}`);
+      if (started === generation) {
+        status = next;
+      }
     } catch (cause) {
       if (!context.isCurrent()) {
         return;
@@ -357,14 +364,29 @@ function createVersionDeploymentRecord(context, path, revisionId) {
         context.onExpired();
         return;
       }
-      status = null;
-      error = cause;
+      if (started === generation) {
+        status = null;
+        error = cause;
+      }
     } finally {
       if (context.isCurrent()) {
         loading = false;
         render();
+        onChange(status);
       }
     }
+  }
+
+  // Deployment activity already read this version's record; show it instead of a stale one.
+  function show(next) {
+    if (!context.isCurrent() || !next) {
+      return;
+    }
+    generation += 1;
+    status = next;
+    error = null;
+    render();
+    onChange(status);
   }
 
   function render() {
@@ -399,10 +421,10 @@ function createVersionDeploymentRecord(context, path, revisionId) {
 
   render();
   void load();
-  return section;
+  return { section, show, current: () => status };
 }
 
-function createVersionDiagnosticsPanel(context, path, revisionId) {
+function createVersionDiagnosticsPanel(context, path, revisionId, recordedStatus = () => null) {
   const section = element("section", { className: "agent-card version-diagnostics" });
   let diagnostics = null;
   let error = null;
@@ -466,6 +488,28 @@ function createVersionDiagnosticsPanel(context, path, revisionId) {
       diagnostics.checks.length
         ? checks
         : element("p", { className: "muted" }, "No diagnostic checks were returned."),
+      unreachableExplanation(),
+    );
+  }
+
+  function unreachableExplanation() {
+    const unreachable =
+      diagnostics.checks.length > 0 &&
+      diagnostics.checks.every(
+        (check) => check.state === "unknown" && check.code === "UNAVAILABLE",
+      );
+    if (!unreachable) {
+      return null;
+    }
+    const recorded = recordedStatus();
+    const failure = recorded?.status === "failed" ? recorded.error : null;
+    return element(
+      "p",
+      { className: "hint", role: "status" },
+      "UNAVAILABLE means the runtime did not answer, so these checks could not run. The gateway is usually stopped, still starting, or failed to start. ",
+      failure?.code
+        ? `This version's recorded deployment failed with ${failure.code}; resolve that first. These checks do not test model credentials.`
+        : "Check this version's recorded outcome and its Logs tab for Pod status and container output.",
     );
   }
 
@@ -511,7 +555,7 @@ function createVersionDiagnosticsPanel(context, path, revisionId) {
   }
 
   render();
-  return section;
+  return { section, render };
 }
 
 export async function renderAgentDetail(context, { agent: preloadedAgent = null } = {}) {
@@ -701,7 +745,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     statusLine,
     deploymentStatus,
     renderNativeAdminAccess(context, path),
-    renderAgentAccess(context, agent),
+    // Sharing policy reads need Installation administration and a denial is audited, so
+    // skip the panel when the session probe already showed that access is missing.
+    ...(context.installationAdmin === false ? [] : [renderAgentAccess(context, agent)]),
     versionLayout,
   );
   let details;
@@ -715,6 +761,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   let latestDeploymentStatus = null;
   let latestDeploymentError = false;
   let latestDeploymentErrorCode = null;
+  let latestDeploymentRecord = null;
+  let versionRecord = null;
   const revisionsPromise = request(`${path}/revisions`);
 
   function versionNotice() {
@@ -971,6 +1019,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     const mostRecent = revisions[0];
     if (activityRevisionId !== (mostRecent?.id ?? null)) {
       latestDeploymentStatus = null;
+      latestDeploymentRecord = null;
       latestDeploymentError = false;
       latestDeploymentErrorCode = null;
       const nextPanel = mostRecent
@@ -980,13 +1029,19 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             mostRecent,
             (freshAgent, freshRevisions) =>
               updateCurrentAgent(freshAgent, freshRevisions, snapshot),
-            (status, unavailable, errorCode) => {
+            (status, unavailable, errorCode, record) => {
               if (activityRevisionId !== mostRecent.id) {
                 return;
               }
               latestDeploymentStatus = status;
               latestDeploymentError = unavailable;
               latestDeploymentErrorCode = errorCode;
+              latestDeploymentRecord = record
+                ? { revisionId: mostRecent.id, status: record }
+                : null;
+              if (record && mostRecent.id === selected) {
+                versionRecord?.show(record);
+              }
               renderLatestDeployment();
               refreshDeployControls();
             },
@@ -1064,10 +1119,17 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     let values = draft ? snapshot.values : snapshot.configuration;
     const executionMode = draft ? agent.executionMode : snapshot.harness.mode;
     if (!draft) {
-      versionEvidence.append(
-        createVersionDeploymentRecord(context, path, selected),
-        createVersionDiagnosticsPanel(context, path, selected),
+      let diagnosticsPanel = null;
+      versionRecord = createVersionDeploymentRecord(context, path, selected, () =>
+        diagnosticsPanel?.render(),
       );
+      diagnosticsPanel = createVersionDiagnosticsPanel(context, path, selected, () =>
+        versionRecord.current(),
+      );
+      versionEvidence.append(versionRecord.section, diagnosticsPanel.section);
+      if (latestDeploymentRecord?.revisionId === selected) {
+        versionRecord.show(latestDeploymentRecord.status);
+      }
       return { snapshot, values, draft, executionMode, credentials: null };
     }
     let deploy;

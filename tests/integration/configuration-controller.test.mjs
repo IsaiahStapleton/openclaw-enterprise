@@ -309,7 +309,21 @@ test("Configuration HTTP requires native supported requests and rejects immutabl
     });
     assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
     assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    // Clients that print only the message, such as occ, must still see which field to drop.
+    const field = Object.keys(body).find((key) => key !== "values");
+    assert.match(
+      rejected.body.error.message,
+      new RegExp(`: body /${field} is not an accepted field\\.$`),
+    );
+    assert.deepEqual(rejected.body.error.details, [{ path: `/${field}`, code: "UNKNOWN_FIELD" }]);
   }
+  // A long unknown field name still fits the 256-character error message contract.
+  const longField = await request(context.app, "PATCH", `${collection}/${created.body.data.id}`, {
+    body: { values: {}, ["x".repeat(400)]: true },
+  });
+  assert.equal(longField.status, 400, JSON.stringify(longField.body));
+  assert.ok(longField.body.error.message.length <= 256, longField.body.error.message);
+  assert.match(longField.body.error.message, /: body \/x+…$/);
 
   const unchanged = await request(context.app, "GET", `${collection}/${created.body.data.id}`);
   assert.deepEqual(unchanged.body.data, created.body.data);

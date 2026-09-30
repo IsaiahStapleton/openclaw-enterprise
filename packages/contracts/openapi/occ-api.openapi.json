@@ -3028,9 +3028,13 @@
                       "properties": {
                         "github": { "type": "boolean" },
                         "google": { "type": "boolean" },
+                        "password": {
+                          "description": "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+                          "type": "boolean"
+                        },
                         "sessionBinding": { "type": "boolean" }
                       },
-                      "required": ["github", "google", "sessionBinding"],
+                      "required": ["github", "google", "password", "sessionBinding"],
                       "type": "object"
                     },
                     "meta": {
@@ -11295,6 +11299,18 @@
             }
           },
           {
+            "description": "`true` returns the last 1000 lines as a text/plain attachment and is audited per download; it cannot be combined with `cursor`.",
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                { "const": "true", "type": "string" },
+                { "const": "false", "type": "string" }
+              ]
+            }
+          },
+          {
             "in": "path",
             "name": "namespaceId",
             "required": true,
@@ -11637,9 +11653,15 @@
                   "required": ["data", "meta"],
                   "type": "object"
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "description": "The same sanitized records as the JSON page, one per line, for `download=true`.",
+                  "type": "string"
+                }
               }
             },
-            "description": "Default Response"
+            "description": "One page of records, or a text/plain attachment when `download=true`"
           },
           "400": {
             "content": {

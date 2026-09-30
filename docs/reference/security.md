@@ -221,7 +221,10 @@ to the Collector, and responses carry `Cache-Control: no-store`.
   `read`, the audience that already reaches Gateway logs through the native admin
   UI. Every poll is authorized again; a denial is audited and reaches no Driver.
 - **Audit.** OCC writes `openclaw.agents.runtime_logs.view` before the first log
-  read of a view. If that write fails the request returns `503` with no content.
+  read of a view, and `openclaw.agents.runtime_logs.download` before every
+  download. If that write fails the request returns `503` with no content.
+  A download is the same sanitized page in a text serializer; it needs the
+  same grants and is not stored on the server.
 - **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
   Codex tracing and short plain-text lines. Other structured output, including
   Codex protocol traffic and payload keys such as `prompt` and `content`, is

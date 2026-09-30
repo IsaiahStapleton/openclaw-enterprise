@@ -113,7 +113,9 @@ Google needs no new activation, but still use one serving controller and stopped
 writers for the upgrade.
 
 `GET /api/auth/providers` then returns `google: true`, and the Console shows
-**Continue with Google**. Activation is one-way: keep at least one provider configured,
+**Continue with Google**. Once every ordinary account has an identity,
+[recovery-only password sign-in](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in)
+leaves passwords to the recovery account. Activation is one-way: keep at least one provider configured,
 or startup refuses. To return to password-only sign-in, follow
 [sign-in maintenance](auth-maintenance.md#deactivate-github-sign-in), then set
 `auth.google.enabled: false` as well; without Helm also remove the

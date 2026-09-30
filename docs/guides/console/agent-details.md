@@ -42,7 +42,8 @@ another version or the draft. Its milestones use the persisted record:
 A `failed` result shows the stored error. Startup evidence may identify the
 runtime component, failed check, code, and check time. Plugin warnings describe
 that attempt. An unavailable record has unknown status. **Refresh deployment**
-rereads it and the selected version without retrying work.
+rereads it, the selected version, and that version's deployment record without
+retrying work.
 
 Pending work shows its **Last recorded result** and **Last checked** time,
 including deferred readiness checks and a running worker's previous result.
@@ -69,13 +70,16 @@ support. Viewing neither deploys nor activates it.
 
 **Run diagnostics for this version** requests fresh, on-demand observations of
 the viewed version. Checks include a time and `succeeded`, `failed`, or
-`unknown` state; unavailable requests show retryable errors. Diagnostics do
+`unknown` state; unavailable requests show retryable errors. If every check is
+`unknown` with `UNAVAILABLE`, the runtime did not answer; the page points to the
+version's recorded failure, if any, and its Logs. Diagnostics do
 not change deployment history, activate a version, repeat the startup model
 probe, or prove message delivery. You need Agent `read` and `operate` plus
 read access to that version.
 
 **Logs** on a deployed version shows its Pods, restarts, recent warning Events
-and redacted container output, and can follow new lines. Status needs the same
+and redacted container output. It can follow new lines, filter the loaded
+lines by level or text, and download the last 1000 lines. Status needs the same
 grants as diagnostics; log text needs Agent `administer` instead of `operate`.
 See [Agent logs](../topics/agent-logs.md).
 
@@ -237,7 +241,8 @@ revision. See [Stop and resume](../../reference/agents/deployment.md#stop-and-re
 **Permanently delete Agent** irreversibly removes the Agent, revision history,
 and workspace data; Namespace Configurations and Secrets remain. Exact Agent
 `delete` permission is required. Accepted deletion starts asynchronous cleanup;
-**Refresh deletion status** checks it, and confirmed removal returns to Agents.
+the page checks it every few seconds and returns to Agents once the Agent is gone.
+**Refresh deletion status** checks it immediately.
 
 An API error may show a request ID for support. **Outcome unknown** does not
 prove failure: refresh before retrying any write. An expired session clears

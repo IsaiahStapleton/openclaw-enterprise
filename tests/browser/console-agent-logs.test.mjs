@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
@@ -94,6 +95,91 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   await page.goto(detailUrl(fixture, namespace.id, agent.id, "draft", "logs").href);
   await page.getByRole("button", { name: "Configuration", exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Logs", exact: true }).count(), 0);
+});
+
+test("level chips and the text filter narrow only the loaded window; download saves the sanitized tail", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  const secret = `ghp_${randomUUID().replaceAll("-", "")}`;
+  computeDriver.state.lines = [
+    line(
+      1,
+      '{"time":"2026-09-30T12:00:01Z","level":"error","message":"model call failed","subsystem":"agents"}',
+    ),
+    line(
+      2,
+      '{"time":"2026-09-30T12:00:02Z","level":"warn","message":"slow channel","subsystem":"slack"}',
+    ),
+    line(
+      3,
+      '{"time":"2026-09-30T12:00:03Z","level":"info","message":"Gateway ready","subsystem":"gateway"}',
+    ),
+    line(4, `plain output with ${secret}`),
+    line(5, '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"hi"}}'),
+  ];
+
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  await pane.getByText("Gateway ready").waitFor();
+  await page
+    .getByText("Filters search only the lines loaded in this view, not the whole container log.")
+    .waitFor();
+  const reads = logRequests(requests, revisionId).length;
+
+  // Level chips hide lines client-side; withheld rows stay visible.
+  const filters = page.getByRole("group", { name: "Log filters" });
+  await filters.getByRole("button", { name: "info", exact: true }).click();
+  await filters.getByRole("button", { name: "unknown", exact: true }).click();
+  assert.equal(
+    await filters.getByRole("button", { name: "info", exact: true }).getAttribute("aria-pressed"),
+    "false",
+  );
+  await pane.getByText("Gateway ready").waitFor({ state: "hidden" });
+  await pane.getByText(/plain output with/).waitFor({ state: "hidden" });
+  assert.equal(await pane.getByText("model call failed").isVisible(), true);
+  assert.equal(await pane.getByText("1 structured output withheld").isVisible(), true);
+  await page
+    .getByText(
+      "Showing 2 of 4 loaded lines. Filters search only the lines loaded in this view, not the whole container log.",
+    )
+    .waitFor();
+
+  // The text filter is case-insensitive over message, subsystem and fields.
+  await filters.getByRole("button", { name: "info", exact: true }).click();
+  await filters.getByRole("button", { name: "unknown", exact: true }).click();
+  await page.getByLabel("Filter", { exact: true }).fill("SLACK");
+  await pane.getByText("model call failed").waitFor({ state: "hidden" });
+  assert.equal(await pane.getByText("slow channel").isVisible(), true);
+  await page.getByText(/^Showing 1 of 4 loaded lines\./).waitFor();
+  // Filtering never asks the server again.
+  assert.equal(logRequests(requests, revisionId).length, reads);
+  await page.getByLabel("Filter", { exact: true }).fill("");
+  await pane.getByText("Gateway ready").waitFor();
+
+  // Download: one request through the console session, saved under a stable name.
+  const downloadRequest = page.waitForRequest((request) => request.url().includes("download=true"));
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download" }).click();
+  const request = await downloadRequest;
+  const saved = await downloadEvent;
+  const requested = new URL(request.url());
+  assert.equal(requested.pathname.endsWith(`/deployments/${revisionId}/runtime/logs`), true);
+  assert.deepEqual(Object.fromEntries(requested.searchParams), {
+    source: "gateway",
+    pod: computeDriver.podName({ id: revisionId }),
+    download: "true",
+  });
+  assert.equal(request.method(), "GET");
+  const pod = computeDriver.podName({ id: revisionId });
+  assert.equal(saved.suggestedFilename(), `${agent.id}-${revisionId}-gateway-${pod}.log`);
+  const body = await readFile(await saved.path(), "utf8");
+  assert.match(body, /ERROR openclaw \[agents\] model call failed/);
+  assert.match(body, /plain output with \[redacted:token\]/);
+  assert.match(body, /WITHHELD 1 unrecognised_structured/);
+  assert.equal(body.includes(secret), false);
+  assert.equal(body.includes("jsonrpc"), false);
 });
 
 test("an operator without administer sees status but no log text and is never re-polled", async (t) => {

@@ -225,7 +225,11 @@ export async function createRuntimeLogFixture(options = {}) {
       status: response.status,
       headers: response.headers,
       text,
-      body: text.length === 0 ? undefined : JSON.parse(text),
+      // Downloads are text/plain attachments; every other response is JSON.
+      body:
+        text.length === 0 || !response.headers.get("content-type")?.includes("json")
+          ? undefined
+          : JSON.parse(text),
       get data() {
         return this.body?.data;
       },

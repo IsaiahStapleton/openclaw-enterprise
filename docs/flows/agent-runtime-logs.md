@@ -1,7 +1,7 @@
 ---
 created: 2026-09-30
 updated: 2026-09-30
-last_updated_session: build-1/agent-logs-slice-1
+last_updated_session: build-2/agent-logs-slice-2
 ---
 
 # Agent runtime logs flow
@@ -11,12 +11,14 @@ last_updated_session: build-1/agent-logs-slice-1
 An authorized reader requests Pod status or one page of container output for an
 admitted Agent revision. OpenClaw Control Plane (OCC) authorizes the exact target,
 asks the selected Compute Driver for raw Kubernetes data, and returns only
-classified, redacted, bounded records. Nothing is stored or exported.
+classified, redacted, bounded records. Nothing is stored on the server; a
+download is a local file on the reader's device.
 
 ## Entry Points
 
 - Trigger: `GET /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime`
-  and `GET .../runtime/logs` from the console Logs tab or the API.
+  and `GET .../runtime/logs` (optionally `download=true`) from the console Logs
+  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API.
 - Source: `apps/controller/src/index.ts:createFastifyApp`,
   `packages/occ/src/index.ts:OpenClawController.describeAgentRuntime` and
   `readAgentRuntimeLogs`, `packages/occ/src/runtime-logs/`, and
@@ -42,12 +44,13 @@ graph TD
   I -->|status route| J["Return runtime description"]
   I -->|logs route| K["Validate cursor and listed Pod"]
   K -->|invalid| L["Return 400"]
-  K -->|new view| M["Write view audit event"]
+  K -->|new view or download| M["Write view or download audit event"]
   M -->|failed| N["Return 503, no content"]
   M -->|written| O["Driver reads bounded container log and re-reads Pod"]
   K -->|cursor poll| O
   O --> P["De-duplicate, label gaps, classify and redact"]
   P --> Q["Return sanitized page and signed cursor"]
+  P -->|download=true| R["Return the same records as a text/plain attachment"]
 ```
 
 ## Execution Trace
@@ -91,10 +94,19 @@ drops lines already delivered at the cursor time, emits `stream_replaced`,
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
 `SanitizedRuntimeLogRecord`.
 
+A download (`download=true`) forces `tailLines` to 1000, rejects a `cursor` with
+`400`, and always starts a new view; `apps/controller/src/index.ts:auditAction`
+names its audit event, and any denial, `openclaw.agents.runtime_logs.download`.
+
 ### 4. Return
 
 `apps/controller/src/http/runtime-logs.ts:runtimeLogPageBody` accepts only
-sanitized records and fails on the reserved `content` class. Driver errors map to
+sanitized records and fails on the reserved `content` class.
+`runtimeLogDownloadBody` serializes the same branded records as text lines with
+the same check, and `runtimeLogDownloadFileName` names the attachment
+`<agent>-<revision>-<source>-<pod>.log`. The console filters
+(`apps/controller/src/console/agents/logs.mjs`) run only over loaded rows; the
+CLI's `--follow` loop re-sends the cursor every 2 seconds. Driver errors map to
 fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 
 ## Debugging and Verification
@@ -121,3 +133,4 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 ## Changelog
 
 - 2026-09-30 08:30: Document runtime status and container log reads for Kubernetes Compute. (build-1/agent-logs-slice-1 - 0918be781)
+- 2026-09-30 11:40: Add downloads, console filters and the `occ agent runtime|logs` callers. (build-2/agent-logs-slice-2)

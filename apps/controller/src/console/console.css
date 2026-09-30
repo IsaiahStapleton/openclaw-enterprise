@@ -206,6 +206,16 @@ p {
   width: 100%;
   margin-top: 16px;
 }
+.auth .auth-recovery {
+  display: block;
+  margin: 20px auto 0;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: underline;
+}
 .error {
   color: var(--danger);
   margin-top: 18px;
@@ -2188,4 +2198,13 @@ summary:focus-visible {
 }
 .log-fields dd {
   margin: 0;
+}
+.log-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.log-chip[aria-pressed="false"] {
+  opacity: 0.55;
+  text-decoration: line-through;
 }

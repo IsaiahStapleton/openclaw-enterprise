@@ -17,6 +17,7 @@ import { createConsoleAppFixture, backendFixtures } from "../helpers/console-app
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import {
   apiRequests,
+  consoleStorage,
   detailUrl,
   login,
   slackSelectionValue,
@@ -1759,10 +1760,7 @@ test("method-only codex_pat Preset requires credential entry in the create form"
 
   await selectSecret(page, "Service account token Secret", modelSecret);
   assert.equal(await credential.inputValue(), secretOptionLabel(modelSecret));
-  assert.deepEqual(
-    await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })),
-    { local: {}, session: {} },
-  );
+  assert.deepEqual(await consoleStorage(page), { local: {}, session: {} });
   await page.getByLabel("Authentication method", { exact: true }).selectOption("api_key");
   assert.equal(await page.getByLabel("API key Secret", { exact: true }).inputValue(), "");
   await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
@@ -2111,10 +2109,7 @@ test("unsaved Preset drafts retain unfinished edits across navigation until expl
   });
   assert.equal(await credentialSecret.inputValue(), "");
   assert.equal(await credentialSecret.evaluate((select) => select.validity.valueMissing), true);
-  assert.deepEqual(
-    await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })),
-    { local: {}, session: {} },
-  );
+  assert.deepEqual(await consoleStorage(page), { local: {}, session: {} });
   assert.equal(new URL(page.url()).search, `?namespace=${namespace.id}`);
   assert.deepEqual(nonAuthWriteRequests(requests), []);
 
