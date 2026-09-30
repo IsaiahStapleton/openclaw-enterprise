@@ -478,6 +478,30 @@ export async function createConsoleAppFixture(t, options = {}) {
     return configuration.data;
   }
 
+  function grantAgentSecretOperate(agent, source) {
+    const roleId = `auth-${agent.id}`;
+    policy.identities.push({
+      id: agent.servicePrincipalId,
+      kind: "service_principal",
+      namespaceId: agent.namespaceId,
+      agentId: agent.id,
+    });
+    policy.roles.push({
+      id: roleId,
+      namespaceId: agent.namespaceId,
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    policy.bindings.push({
+      id: roleId,
+      namespaceId: agent.namespaceId,
+      subjectKind: "identity",
+      subjectId: agent.servicePrincipalId,
+      roleId,
+      resourceKind: "secret",
+      resourceId: source.id,
+    });
+  }
+
   async function createAgent(namespaceId, name, values = {}, options = {}) {
     const configuration = await createConfiguration(namespaceId, values, {
       secretBindings: options.secretBindings,
@@ -503,28 +527,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     });
     assert.equal(agent.status, 201);
     if (harnessAuth?.method === "api_key") {
-      const servicePrincipalId = `service-agent-${agent.data.id}`;
-      const roleId = `auth-${agent.data.id}`;
-      policy.identities.push({
-        id: servicePrincipalId,
-        kind: "service_principal",
-        namespaceId,
-        agentId: agent.data.id,
-      });
-      policy.roles.push({
-        id: roleId,
-        namespaceId,
-        permissions: [{ action: "operate", resourceKind: "secret" }],
-      });
-      policy.bindings.push({
-        id: roleId,
-        namespaceId,
-        subjectKind: "identity",
-        subjectId: servicePrincipalId,
-        roleId,
-        resourceKind: "secret",
-        resourceId: harnessAuth.source.id,
-      });
+      grantAgentSecretOperate(agent.data, harnessAuth.source);
     }
     return agent.data;
   }
@@ -596,6 +599,7 @@ export async function createConsoleAppFixture(t, options = {}) {
     createConfiguration,
     updateConfiguration,
     createAgent,
+    grantAgentSecretOperate,
     updateAgent,
     deployAgent,
     activateRevision,

@@ -1507,6 +1507,18 @@ export interface ComputePreflightResult {
   readonly warnings: readonly ComputePreflightWarning[];
 }
 
+export interface HarnessDeviceAuthorization {
+  readonly verificationUrl: string;
+  readonly userCode: string;
+  readonly expiresAt: string;
+  readonly intervalSeconds: number;
+  /** Provider authorization material; retain only in server-side Secret storage. */
+  readonly privateState: string;
+}
+
+export type HarnessDeviceAuthorizationResult =
+  { readonly status: "pending" } | { readonly status: "ready"; readonly credential: string };
+
 export interface ComputeDriver extends Driver {
   readonly supportsWorkspaceSetup?: true;
   readonly capability: "compute";
@@ -1529,19 +1541,11 @@ export interface ComputeDriver extends Driver {
   startHarnessDeviceAuthorization?(
     harnessId: string,
     signal?: AbortSignal,
-  ): Promise<{
-    readonly verificationUrl: string;
-    readonly userCode: string;
-    readonly expiresAt: string;
-    readonly intervalSeconds: number;
-    readonly privateState: string;
-  }>;
+  ): Promise<HarnessDeviceAuthorization>;
   pollHarnessDeviceAuthorization?(
     privateState: string,
     signal?: AbortSignal,
-  ): Promise<
-    { readonly status: "pending" } | { readonly status: "ready"; readonly credential: string }
-  >;
+  ): Promise<HarnessDeviceAuthorizationResult>;
   /** Read-only native model discovery; supplied credentials must never be persisted. */
   discoverHarnessModels?(input: {
     readonly authMethod: "api_key" | "codex_pat";

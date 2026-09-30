@@ -3,6 +3,7 @@ import {
   type JSONSchema,
   type PluginCatalogEntry,
   type PluginCatalogPage,
+  type PluginDiscoveryAuthentication,
   type PluginDriver,
   type PluginDesiredState,
   type PluginApprovers,
@@ -401,12 +402,7 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
   }
 
   async discoverCatalog(
-    input: {
-      readonly accessToken?: string;
-      readonly credential?: { readonly kind: "oauth"; readonly value: string };
-      readonly cursor?: string;
-      readonly q?: string;
-    },
+    input: PluginDiscoveryAuthentication & { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
     if (this.catalogSource === "openai-curated") {
@@ -428,11 +424,7 @@ export class CodexPluginDriver extends BundledPluginDriverBase implements Plugin
   }
 
   async getCatalogPlugin(
-    input: {
-      readonly accessToken?: string;
-      readonly credential?: { readonly kind: "oauth"; readonly value: string };
-      readonly pluginId: string;
-    },
+    input: PluginDiscoveryAuthentication & { readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry> {
     if (this.catalogSource === "openai-curated") {

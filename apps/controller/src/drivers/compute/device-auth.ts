@@ -1,19 +1,12 @@
+import type {
+  HarnessDeviceAuthorization,
+  HarnessDeviceAuthorizationResult,
+} from "@openclaw-enterprise/contracts";
+
 const ISSUER = "https://auth.openai.com";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEVICE_AUTH_DURATION_MS = 15 * 60 * 1000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-
-export interface HarnessDeviceAuthorization {
-  readonly verificationUrl: string;
-  readonly userCode: string;
-  readonly expiresAt: string;
-  readonly intervalSeconds: number;
-  /** Provider authorization material; retain only in server-side Secret storage. */
-  readonly privateState: string;
-}
-
-export type HarnessDeviceAuthorizationResult =
-  { readonly status: "pending" } | { readonly status: "ready"; readonly credential: string };
 
 function record(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

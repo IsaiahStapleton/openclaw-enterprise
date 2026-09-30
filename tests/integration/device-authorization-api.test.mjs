@@ -175,30 +175,6 @@ function assertDeviceAudit(fixture, operation, agentId) {
   });
 }
 
-function grantAgentSecret(fixture, agent, source) {
-  const roleId = `auth-${agent.id}`;
-  fixture.policy.identities.push({
-    id: agent.servicePrincipalId,
-    kind: "service_principal",
-    namespaceId: fixture.namespace.id,
-    agentId: agent.id,
-  });
-  fixture.policy.roles.push({
-    id: roleId,
-    namespaceId: fixture.namespace.id,
-    permissions: [{ action: "operate", resourceKind: "secret" }],
-  });
-  fixture.policy.bindings.push({
-    id: roleId,
-    namespaceId: fixture.namespace.id,
-    subjectKind: "identity",
-    subjectId: agent.servicePrincipalId,
-    roleId,
-    resourceKind: "secret",
-    resourceId: source.id,
-  });
-}
-
 test("device login configures plugins and admits its opaque Secret reference in an Agent revision", async (t) => {
   let approved = false;
   const fixture = await createFixture(t, { approve: async () => approved });
@@ -267,7 +243,7 @@ test("device login configures plugins and admits its opaque Secret reference in 
       harnessAuth: { method: "oauth", source: login.source },
     },
   );
-  grantAgentSecret(fixture, agent, login.source);
+  fixture.grantAgentSecretOperate(agent, login.source);
   const plugins = {
     [details.data.id]: { enabled: true, tools: { "fixture-app/search": { enabled: true } } },
   };

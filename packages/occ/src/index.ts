@@ -33,6 +33,8 @@ import type {
   Driver,
   DriverCapability,
   HarnessDescriptor,
+  HarnessDeviceAuthorization,
+  HarnessDeviceAuthorizationResult,
   HarnessExecutionMode,
   IAMDriver,
   Installation,
@@ -4126,7 +4128,7 @@ export class OpenClawController {
         "Device authorization is unavailable for the selected Drivers.",
       );
     }
-    let started: Awaited<ReturnType<NonNullable<ComputeDriver["startHarnessDeviceAuthorization"]>>>;
+    let started: HarnessDeviceAuthorization;
     try {
       started = await compute.startHarnessDeviceAuthorization(harnessId);
     } catch {
@@ -4246,7 +4248,7 @@ export class OpenClawController {
     if (!(await this.secretOperation(() => driver.compareAndSwap!(secret, value, claimed)))) {
       return response("pending");
     }
-    let result: Awaited<ReturnType<NonNullable<ComputeDriver["pollHarnessDeviceAuthorization"]>>>;
+    let result: HarnessDeviceAuthorizationResult;
     try {
       result = await compute.pollHarnessDeviceAuthorization(session.privateState!);
     } catch {

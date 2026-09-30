@@ -9789,39 +9789,7 @@ for (const dualCluster of [false, true]) {
       driver.apiClients = Promise.resolve(scoped(kubernetesGatewayNamespaceName(tenant.id)));
       driver.executionApiClients = Promise.resolve(scoped(namespace));
     }
-    revision.harnessAuth = { ...apiKeyAuth, method: "oauth" };
-    context.harnessAuth = authContext(revision).harnessAuth;
-    const sourceKey = `Secret:${context.harnessAuth.backendRef.namespaceName}:occ-model-key`;
-    const source = objects.get(sourceKey);
-    source.metadata.annotations = {
-      "openclaw.dev/namespace-id": tenant.id,
-      "openclaw.dev/secret-id": apiKeyAuth.source.id,
-      "openclaw.dev/secret-driver-id": apiKeyAuth.secretDriverId,
-    };
-    source.data.value = Buffer.from(
-      JSON.stringify({
-        kind: "harness_device_authorization",
-        version: 1,
-        actorId: "admin",
-        namespaceId: tenant.id,
-        harnessId: "codex",
-        phase: "ready",
-        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-        credential: JSON.stringify({
-          version: 1,
-          provider: "codex",
-          state: "ready",
-          auth: {
-            auth_mode: "chatgpt",
-            tokens: {
-              id_token: "test-id",
-              access_token: "test-access",
-              refresh_token: "test-refresh",
-            },
-          },
-        }),
-      }),
-    ).toString("base64");
+    const sourceKey = stageReadyOAuthSource(objects, revision, context);
 
     // Only the trusted seed writer may run while OCE still holds a usable bundle.
     assert.equal((await driver.prepareRevision(revision, context)).ready, false);

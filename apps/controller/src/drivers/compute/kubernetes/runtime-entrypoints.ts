@@ -2450,19 +2450,11 @@ const receiptPath = path.join(directory, ".oce-oauth.json");
 const validAuth = (auth) => auth?.auth_mode === "chatgpt" &&
   [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
     .every((value) => typeof value === "string" && value.trim().length > 0);
-const lstat = (target) => {
-  try {
-    return fs.lstatSync(target);
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-};
 const readRegularJson = (target) =>
-  lstat(target)?.isFile() ? JSON.parse(fs.readFileSync(target, "utf8")) : undefined;
-if (lstat(directory)?.isDirectory() === false) {
+  fs.lstatSync(target, { throwIfNoEntry: false })?.isFile()
+    ? JSON.parse(fs.readFileSync(target, "utf8"))
+    : undefined;
+if (fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory() === false) {
   fs.rmSync(directory, { force: true });
 }
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 });

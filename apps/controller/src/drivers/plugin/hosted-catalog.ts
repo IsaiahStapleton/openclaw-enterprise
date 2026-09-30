@@ -1,6 +1,7 @@
 import type {
   PluginCatalogEntry,
   PluginCatalogPage,
+  PluginDiscoveryAuthentication,
   PluginToolCatalogEntry,
 } from "@openclaw-enterprise/contracts";
 import { PluginDiscoveryError } from "@openclaw-enterprise/occ";
@@ -17,11 +18,6 @@ const PLUGIN_SETUP = {
   label: "OCE plugin setup",
   url: "https://github.com/openclaw/openclaw-enterprise/blob/main/docs/reference/drivers/plugin-bundled.md#selection-and-catalogs",
 };
-
-interface DiscoveryCredential {
-  readonly accessToken?: string;
-  readonly credential?: { readonly kind: "oauth"; readonly value: string };
-}
 
 function oauthIdentity(value: string): {
   accessToken: string;
@@ -136,7 +132,7 @@ async function readResponse(response: Response): Promise<Record<string, unknown>
 }
 
 async function withCredential<T>(
-  input: DiscoveryCredential,
+  input: PluginDiscoveryAuthentication,
   signal: AbortSignal | undefined,
   run: (request: (path: string, body?: unknown) => Promise<Record<string, unknown>>) => Promise<T>,
 ): Promise<T> {
@@ -286,7 +282,7 @@ function catalogEntry(value: unknown): PluginCatalogEntry {
 }
 
 export async function discoverHostedPlugins(
-  input: DiscoveryCredential & { readonly cursor?: string; readonly q?: string },
+  input: PluginDiscoveryAuthentication & { readonly cursor?: string; readonly q?: string },
   signal?: AbortSignal,
 ): Promise<PluginCatalogPage> {
   return withCredential(input, signal, async (request) => {
@@ -321,7 +317,7 @@ export async function discoverHostedPlugins(
 }
 
 export async function getHostedPlugin(
-  input: DiscoveryCredential & { readonly pluginId: string },
+  input: PluginDiscoveryAuthentication & { readonly pluginId: string },
   signal?: AbortSignal,
 ): Promise<PluginCatalogEntry> {
   return withCredential(input, signal, async (request) => {

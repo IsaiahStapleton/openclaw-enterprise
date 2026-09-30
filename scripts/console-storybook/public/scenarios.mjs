@@ -9,6 +9,8 @@ const candidateVersion =
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
+const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
+const startOAuthLogin = [...oauthForm, click("Sign in with ChatGPT")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
   { selector: "#create-provider-credential-secret-value", value },
@@ -2046,7 +2048,7 @@ export const scenarios = {
     path: create,
     pluginDiscovery,
     pluginCapabilities,
-    actions: [...form, { selector: "#agent-auth-method", value: "oauth" }],
+    actions: oauthForm,
     description:
       "Experimental first-deploy login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
   },
@@ -2055,11 +2057,7 @@ export const scenarios = {
     name: "ChatGPT device login pending (Experimental)",
     path: create,
     oauthPending: true,
-    actions: [
-      ...form,
-      { selector: "#agent-auth-method", value: "oauth" },
-      click("Sign in with ChatGPT"),
-    ],
+    actions: startOAuthLogin,
     description:
       "The user code and provider link are visible while authorization is pending. Cancel login removes this staged login locally.",
   },
@@ -2069,11 +2067,7 @@ export const scenarios = {
     path: create,
     pluginDiscovery,
     pluginCapabilities,
-    actions: [
-      ...form,
-      { selector: "#agent-auth-method", value: "oauth" },
-      click("Sign in with ChatGPT"),
-    ],
+    actions: startOAuthLogin,
     description:
       "The fixture completes login after one poll. Configure plugins uses the server-owned login reference. No access or refresh token appears in this preview.",
     steps: [
@@ -2086,11 +2080,7 @@ export const scenarios = {
     name: "ChatGPT login permission denied (Experimental)",
     path: create,
     rules: [{ suffix: "/device-authorizations", method: "POST", status: 403 }],
-    actions: [
-      ...form,
-      { selector: "#agent-auth-method", value: "oauth" },
-      click("Sign in with ChatGPT"),
-    ],
+    actions: startOAuthLogin,
     description:
       "A denied authorization request leaves the form usable and does not create a browser credential.",
   },
@@ -2099,11 +2089,7 @@ export const scenarios = {
     name: "ChatGPT login unavailable (Experimental)",
     path: create,
     rules: [{ suffix: "/device-authorizations", method: "POST", status: 501 }],
-    actions: [
-      ...form,
-      { selector: "#agent-auth-method", value: "oauth" },
-      click("Sign in with ChatGPT"),
-    ],
+    actions: startOAuthLogin,
     description:
       "An Installation whose selected Drivers do not support device login reports it as unavailable. Choose another authentication method; no device code or sign-in link appears.",
   },
@@ -2112,11 +2098,7 @@ export const scenarios = {
     name: "ChatGPT login exchange failed (Experimental)",
     path: create,
     rules: [{ suffix: "/poll", method: "POST", status: 503 }],
-    actions: [
-      ...form,
-      { selector: "#agent-auth-method", value: "oauth" },
-      click("Sign in with ChatGPT"),
-    ],
+    actions: startOAuthLogin,
     description:
       "A failed poll stops polling. Cancel the staged login and connect again; the console does not retry an uncertain exchange.",
   },
@@ -2125,11 +2107,7 @@ export const scenarios = {
     name: "ChatGPT device login expired (Experimental)",
     path: create,
     oauthExpired: true,
-    actions: [
-      ...form,
-      { selector: "#agent-auth-method", value: "oauth" },
-      click("Sign in with ChatGPT"),
-    ],
+    actions: startOAuthLogin,
     description:
       "An expired device code cannot be used to create the Agent. Cancel it and sign in again.",
   },
