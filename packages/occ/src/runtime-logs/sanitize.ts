@@ -34,6 +34,12 @@ const WRAPPER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freez
   "runtime.workspace_node": ["container", "outcome", "code"],
 });
 
+// Fixed plain-text failure lines the runtime wrapper prints next to its structured
+// events (`runtime-entrypoints.ts`). They are wrapper errors, not `unknown` text.
+const WRAPPER_ERROR_LINES: ReadonlySet<string> = new Set([
+  "Harness model authentication probe failed.",
+]);
+
 // Operational keys only. Anything else, and every free-text or payload key
 // (`args`, `payload`, `body`, `prompt`, `messages`, `content`, `text`, `transcript`,
 // `headers`, `env`), never leaves OCC.
@@ -226,13 +232,18 @@ function codexRecord(value: Readonly<Record<string, unknown>>, message: string):
   };
 }
 
+// A plain-text line tagged with a bracketed component name, such as
+// `[node-host] advertised commands: ...`. The tag starts with a letter and holds no
+// quotes, commas, braces or spaces, so no JSON array (or fragment of one) matches.
+const BRACKET_TAG = /^\[(?!(?:true|false|null)\])[A-Za-z][\w.:/@-]{0,63}\](?:\s|$)/;
+
 function classify(line: string): Classified {
   if (byteLength(line) > RUNTIME_LOG_MAX_INPUT_BYTES) {
     return { type: "withheld", reason: "oversized" };
   }
   const text = stripRuntimeLogControls(line);
   const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+  if (trimmed.startsWith("{") || (trimmed.startsWith("[") && !BRACKET_TAG.test(trimmed))) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
@@ -250,6 +261,9 @@ function classify(line: string): Classified {
   }
   if (byteLength(text) > RUNTIME_LOG_MAX_TEXT_BYTES) {
     return { type: "withheld", reason: "oversized" };
+  }
+  if (WRAPPER_ERROR_LINES.has(trimmed)) {
+    return { type: "line", kind: "wrapper", level: "error", message: trimmed };
   }
   return { type: "line", kind: "text", level: "unknown", message: text };
 }

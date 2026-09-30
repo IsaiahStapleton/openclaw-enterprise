@@ -73,7 +73,9 @@ and Agent `read`, then rejects a Driver without `describeAgentRuntime` or with
 lists Pods by the exact Agent, revision and workload-role labels: dedicated
 Gateways in the control-plane Gateway namespace, Harnesses and embedded Gateways
 in the tenant namespace on the execution plane. It lists Events by
-`involvedObject.uid`, keeps only that Pod's Events and caps them at 100. A log
+`involvedObject.uid`, keeps only that Pod's Events, caps them at 100 and takes each
+Event's `container` from `involvedObject.fieldPath` (`spec.containers{name}` or
+the init or ephemeral form; `null` for Pod-level Events such as `Scheduled`). A log
 read passes `{ source, events: false }`, so it lists only that source's Pods and
 no Events. Each
 Kubernetes call has a five-second deadline; a `403` becomes

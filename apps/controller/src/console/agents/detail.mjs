@@ -161,6 +161,9 @@ function deploymentProgress(status, progress) {
   );
 }
 
+export const DEPLOYMENT_POLL_MS = 5000;
+const PENDING_DEPLOYMENT_STATUSES = new Set(["queued", "running"]);
+
 function createDeploymentStatusPanel(
   context,
   path,
@@ -171,11 +174,31 @@ function createDeploymentStatusPanel(
 ) {
   const section = element("section", { className: "agent-card deployment-status" });
   const state = { loading: false, status: null, error: null, overviewError: false };
+  let pollTimer = null;
 
-  async function loadStatus(refreshAgent = false) {
+  // Queued and running records are reread until they record a result or a read fails.
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    if (state.error || !PENDING_DEPLOYMENT_STATUSES.has(state.status?.status)) {
+      return;
+    }
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      // A newer deployment replaces this panel; a detached panel stops following.
+      if (context.isCurrent() && section.isConnected) {
+        void loadStatus(false, true);
+      }
+    }, DEPLOYMENT_POLL_MS);
+  }
+
+  async function loadStatus(refreshAgent = false, poll = false) {
     if (state.loading || !context.isCurrent()) {
       return;
     }
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    const previousStatus = state.status?.status ?? null;
     state.loading = true;
     state.error = null;
     state.overviewError = false;
@@ -230,6 +253,17 @@ function createDeploymentStatusPanel(
           state.status?.error?.code ?? null,
           state.status,
         );
+        if (
+          poll &&
+          PENDING_DEPLOYMENT_STATUSES.has(previousStatus) &&
+          !state.error &&
+          !PENDING_DEPLOYMENT_STATUSES.has(state.status?.status)
+        ) {
+          // A recorded result can change the current version; reread it once.
+          void loadStatus(true);
+        } else {
+          schedulePoll();
+        }
       }
     }
   }

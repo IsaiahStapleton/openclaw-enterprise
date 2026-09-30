@@ -54,6 +54,9 @@ function runtimeErrorText(error, tier, source) {
   if (error.status === 504) {
     return "The read timed out. Try again.";
   }
+  if (error.code === "RUNTIME_LOGS_SOURCE_UNAVAILABLE") {
+    return `This version has no ${source ?? "such"} log source.`;
+  }
   if (error.code === "RUNTIME_LOGS_AUDIT_UNAVAILABLE") {
     return "The view could not be audited, so no output was read. Try again.";
   }
@@ -123,7 +126,7 @@ function podCard(pod) {
             element(
               "li",
               {},
-              `${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
+              `${event.container ? `${event.container} · ` : ""}${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
             ),
           ),
         )
@@ -184,6 +187,10 @@ function recordRow(record) {
     element("span", { className: "log-kind" }, record.kind),
     record.subsystem ? element("span", { className: "log-subsystem" }, record.subsystem) : null,
     element("span", { className: "log-message" }, record.message),
+    // A failure code is the point of the line; keep it visible without expanding.
+    record.fields?.code === undefined
+      ? null
+      : element("span", { className: "log-code" }, `code=${record.fields.code}`),
   );
   const provenance = record.kind === "sandbox" ? policyProvenance(record.fields) : null;
   if (provenance !== null) {
@@ -213,6 +220,25 @@ function recordRow(record) {
     .join(" ")
     .toLowerCase();
   return row;
+}
+
+/**
+ * Runtime status needs Agent `operate`; log text needs only `read_logs`. Without status
+ * the picker offers every source and names no Pod: OCC reads the source's current Pod
+ * and a view's cursor keeps following it.
+ */
+function unobservedDescription() {
+  return {
+    observedAt: null,
+    pods: [],
+    sources: ["gateway", "agent", "sandbox"].map((id) => ({
+      id,
+      kind: id === "sandbox" ? "sandbox" : "container",
+      pods: [],
+      available: true,
+      retention: "",
+    })),
+  };
 }
 
 function downloadFileName(agentId, revisionId, source, pod) {
@@ -299,6 +325,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   let restartPending = false;
   let rows = 0;
   let logsDenied = deniedLogViews.has(deniedKey);
+  // Set when runtime status is denied; the last page's stream stands in for the Pod list.
+  let statusDenied = false;
+  let lastStream = null;
 
   const current = () => context.isCurrent();
 
@@ -314,12 +343,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   // A sandbox source has no Pods: OCC derives the Sandbox from the revision.
   function readableSelection() {
     const source = selectedSource();
-    return Boolean(source) && (source.kind === "sandbox" || Boolean(selectedPod()));
+    return Boolean(source) && (source.kind === "sandbox" || statusDenied || Boolean(selectedPod()));
   }
 
   function logQuery(source, pod) {
     const query = new URLSearchParams({ source: source.id });
-    if (source.kind !== "sandbox") {
+    if (source.kind !== "sandbox" && pod) {
       query.set("pod", pod.name);
     }
     if (previous.checked) {
@@ -394,7 +423,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
         ? "The Agent (Harness) has no Pod yet. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: see Deployment activity for why it has not started."
         : "The Agent (Harness) Pod is not ready. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: read the Agent (Harness) source for the cause.";
     const pod = selectedPod();
-    previous.disabled = logsDenied || !pod || pod.restartCount === 0;
+    const restarts = pod
+      ? pod.restartCount
+      : statusDenied && lastStream?.source === source?.id
+        ? lastStream.restartCount
+        : 0;
+    previous.disabled = logsDenied || restarts === 0;
     if (previous.disabled) {
       previous.checked = false;
     }
@@ -435,6 +469,15 @@ export function renderAgentLogs(context, { agent, revisionId }) {
           return;
         }
         stripStatus.textContent = withRequestId(runtimeErrorText(error, "status"), error);
+        if (error.status === 403 && description === null) {
+          // Status is denied, but log text has its own grant: offer the log reads anyway.
+          statusDenied = true;
+          description = unobservedDescription();
+          renderPickers();
+          if (!logsDenied) {
+            void readLogs({ restart: true });
+          }
+        }
         // Authorization and support failures do not change on their own.
         if ([403, 404, 501].includes(error.status)) {
           if (error.status === 403) {
@@ -598,6 +641,10 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       showLogError(null);
       cursor = page.cursor;
       appendRecords(page.records);
+      if (statusDenied && page.stream) {
+        lastStream = page.stream;
+        renderPickers();
+      }
       const lines = page.records.filter(({ type }) => type === "line").length;
       if (restart) {
         logStatus.textContent =
@@ -609,7 +656,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
                 ? `No output in the last ${TAIL_LINES} lines.`
                 : source.kind === "sandbox"
                   ? `Showing policy decisions and supervisor output of sandbox ${page.stream.sandbox ?? ""}.`
-                  : `Showing ${previous.checked ? "the previous instance of " : ""}${pod.container} in ${pod.name}.`;
+                  : `Showing ${previous.checked ? "the previous instance of " : ""}${page.stream.container} in ${page.stream.pod}.`;
       }
     } catch (error) {
       if (!current() || (restartPending && error.status !== 401)) {

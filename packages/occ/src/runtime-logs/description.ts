@@ -113,6 +113,9 @@ function event(value: unknown): AgentRuntimeEvent {
   const observed = count(item.count);
   return Object.freeze({
     type: item.type,
+    // Drivers that cannot attribute an Event to a container omit it.
+    container:
+      item.container === null || item.container === undefined ? null : name(item.container),
     reason: text(item.reason, 128),
     // Event messages name nodes, images and Secrets; mask those before redaction.
     message: text(
