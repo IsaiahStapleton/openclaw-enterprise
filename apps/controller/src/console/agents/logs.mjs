@@ -51,6 +51,9 @@ function runtimeErrorText(error, tier, source) {
   if (error.status === 504) {
     return "The read timed out. Try again.";
   }
+  if (error.code === "RUNTIME_LOGS_SOURCE_UNAVAILABLE") {
+    return `This version has no ${source ?? "such"} log source.`;
+  }
   if (error.code === "RUNTIME_LOGS_AUDIT_UNAVAILABLE") {
     return "The view could not be audited, so no output was read. Try again.";
   }
@@ -212,6 +215,25 @@ function recordRow(record) {
   return row;
 }
 
+/**
+ * Runtime status needs Agent `operate`; log text needs only `read_logs`. Without status
+ * the picker offers every source and names no Pod: OCC reads the source's current Pod
+ * and a view's cursor keeps following it.
+ */
+function unobservedDescription() {
+  return {
+    observedAt: null,
+    pods: [],
+    sources: ["gateway", "agent", "sandbox"].map((id) => ({
+      id,
+      kind: id === "sandbox" ? "sandbox" : "container",
+      pods: [],
+      available: true,
+      retention: "",
+    })),
+  };
+}
+
 function downloadFileName(agentId, revisionId, source, pod) {
   return `${[agentId, revisionId, source, pod].join("-").replace(/[^A-Za-z0-9_.-]/g, "_")}.log`;
 }
@@ -288,6 +310,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   let restartPending = false;
   let rows = 0;
   let logsDenied = deniedLogViews.has(deniedKey);
+  // Set when runtime status is denied; the last page's stream stands in for the Pod list.
+  let statusDenied = false;
+  let lastStream = null;
 
   const current = () => context.isCurrent();
 
@@ -303,12 +328,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   // A sandbox source has no Pods: OCC derives the Sandbox from the revision.
   function readableSelection() {
     const source = selectedSource();
-    return Boolean(source) && (source.kind === "sandbox" || Boolean(selectedPod()));
+    return Boolean(source) && (source.kind === "sandbox" || statusDenied || Boolean(selectedPod()));
   }
 
   function logQuery(source, pod) {
     const query = new URLSearchParams({ source: source.id });
-    if (source.kind !== "sandbox") {
+    if (source.kind !== "sandbox" && pod) {
       query.set("pod", pod.name);
     }
     if (previous.checked) {
@@ -367,7 +392,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     }
     retention.textContent = source?.retention ?? "";
     const pod = selectedPod();
-    previous.disabled = logsDenied || !pod || pod.restartCount === 0;
+    const restarts = pod
+      ? pod.restartCount
+      : statusDenied && lastStream?.source === source?.id
+        ? lastStream.restartCount
+        : 0;
+    previous.disabled = logsDenied || restarts === 0;
     if (previous.disabled) {
       previous.checked = false;
     }
@@ -404,6 +434,15 @@ export function renderAgentLogs(context, { agent, revisionId }) {
           return;
         }
         stripStatus.textContent = withRequestId(runtimeErrorText(error, "status"), error);
+        if (error.status === 403 && description === null) {
+          // Status is denied, but log text has its own grant: offer the log reads anyway.
+          statusDenied = true;
+          description = unobservedDescription();
+          renderPickers();
+          if (!logsDenied) {
+            void readLogs({ restart: true });
+          }
+        }
         // Authorization and support failures do not change on their own.
         if ([403, 404, 501].includes(error.status)) {
           return;
@@ -564,6 +603,10 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       showLogError(null);
       cursor = page.cursor;
       appendRecords(page.records);
+      if (statusDenied && page.stream) {
+        lastStream = page.stream;
+        renderPickers();
+      }
       const lines = page.records.filter(({ type }) => type === "line").length;
       if (restart) {
         logStatus.textContent =
@@ -575,7 +618,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
                 ? `No output in the last ${TAIL_LINES} lines.`
                 : source.kind === "sandbox"
                   ? `Showing policy decisions and supervisor output of sandbox ${page.stream.sandbox ?? ""}.`
-                  : `Showing ${previous.checked ? "the previous instance of " : ""}${pod.container} in ${pod.name}.`;
+                  : `Showing ${previous.checked ? "the previous instance of " : ""}${page.stream.container} in ${page.stream.pod}.`;
       }
     } catch (error) {
       if (!current() || (restartPending && error.status !== 401)) {
