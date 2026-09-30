@@ -111,7 +111,8 @@ scope, and revocation, and the [deployment guide](../../guides/deploy/service-ke
 for the procedure. Normal issuance and verification require no additional
 settings; initial-key delivery uses the bootstrap settings below.
 Auth-secret rotation takes effect after
-replacing the mounted Secret and restarting the process.
+replacing the mounted Secret and restarting the process; it also invalidates
+[known-device cookies](../authentication.md#known-devices) until each browser's next sign-in.
 
 ### GitHub sign-in and trusted proxies
 
