@@ -483,6 +483,7 @@ test("a Gateway view points at an unready Harness Pod instead of reading as a ne
   computeDriver.state.lines = [
     line(1, "codex app-server remote WebSocket connection failed: connect ECONNREFUSED"),
   ];
+  computeDriver.state.harnessLines = [line(2, "Harness model authentication probe failed.")];
   const { page } = await newPage(t, fixture);
   const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
   await login(page, fixture, url.pathname + url.search);
@@ -497,6 +498,11 @@ test("a Gateway view points at an unready Harness Pod instead of reading as a ne
 
   await page.locator("#runtime-log-source").selectOption("agent");
   await hint.waitFor({ state: "hidden" });
+  await page
+    .getByRole("log", { name: "Runtime log output" })
+    .getByText("Harness model authentication probe failed.")
+    .waitFor();
+  assert.equal(await page.getByText(/ECONNREFUSED/).count(), 0);
 
   // A ready Harness adds no hint to the Gateway view.
   computeDriver.state.harnessPod = { ready: true };

@@ -41,6 +41,8 @@ export function createRuntimeLogComputeDriver(options = {}) {
      * also keeps an unready old Harness Pod, as during a rollout.
      */
     harnessPod: undefined,
+    /** Lines the Agent (Harness) source returns. */
+    harnessLines: [],
     ...options.state,
   };
   const podName = (revision) => `gateway-${revision.id.slice(4, 12)}-0`;
@@ -213,12 +215,17 @@ export function createRuntimeLogComputeDriver(options = {}) {
             if (state.readError !== undefined) {
               throw state.readError;
             }
-            const source = request.previous ? state.previousLines : state.lines;
+            const harness = request.source === "agent";
+            const source = harness
+              ? state.harnessLines
+              : request.previous
+                ? state.previousLines
+                : state.lines;
             return {
               stream: {
-                source: "gateway",
+                source: request.source ?? "gateway",
                 pod: request.pod,
-                podUid: state.readPodUid ?? state.podUid,
+                podUid: harness ? request.podUid : (state.readPodUid ?? state.podUid),
                 container: request.container,
                 restartCount: state.readRestartCount ?? state.restartCount,
               },
