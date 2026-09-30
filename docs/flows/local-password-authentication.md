@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-30
-last_updated_session: authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f
+last_updated_session: authoring-run/d58e793e-df0f-40de-8f08-5d0ee989927a
 ---
 
 # Bootstrap and human authentication flow
@@ -137,8 +137,31 @@ in its HttpOnly cookie and is omitted from session-inspection responses.
 under the auth secret (`apps/controller/src/auth/session-binding.ts`), alongside
 public user identity. Console compares it to invalidate retained views and drafts
 after a new session, including for the same user. Sign-out revokes the session,
-and public signup is disabled. Without an external provider,
-`auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins.
+and public signup is disabled. In both profiles
+`auth/admission.ts:passwordFailureAdmission` limits failed password sign-ins; a
+success within the budget clears the email's failures (a slowed-lane success
+does not), and its `onLimited` hook logs
+`authentication.sign-in-limited` once per lane per minute. `auth/known-device.ts`
+verifies the known-device cookie against the attempt's email and the account's
+password state (user, password method, and its `authentication_version`; with an
+external provider, only while the account is enabled), reading the account only
+for an entry issued for that email, and on success reissues it; a verified entry
+replaces the email lane with a device lane.
+In the password-only profile with PostgreSQL State, `passwordSignInAudit` appends
+`authentication.login` for each accepted password (actor: the account's Principal;
+details: `userId`) and a denied event with `INVALID_CREDENTIALS` and no account for
+each refused one. If the success audit fails, the controller attempts to delete
+the new session and returns `503` without issuing its cookie. A server-side
+session may persist if creation or cleanup cannot be confirmed.
+If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), and
+admission treats the wrong password as a credential failure for any tracked
+entries. The slow lane may instead return `429`; exhausted or untracked lanes
+are paced without necessarily adding a tracked failure entry.
+With an external sign-in provider, `/oce/password` writes the denial itself; if
+that write fails, it answers `503` with `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`, which
+the controller counts the same way.
+Better Auth logs only errors, so a wrong password writes no unstructured console
+warning.
 
 `requireSessionKey` applies the optional `x-occ-session-key` header after the
 cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API
@@ -196,7 +219,10 @@ Google's signing keys through the same bounded transport, verifies the RS256 ID 
 signature, issuer, audience, expiry, and nonce (plus `hd` and `email_verified` when
 allowed domains are set), and returns only `sub`. Tokens and email are discarded.
 
-Password and external-provider work have separate bounded process-local admission; GitHub and Google share one budget. Provider HTTP shares a deadline and
+Password sign-in is admitted by the controller route before `/oce/password` runs, with the
+recovery email reserved like an administrator's. Start, callback, and result each have
+bounded process-local admission (`keyedAdmission`), shared by GitHub and Google, keyed on
+the client address only behind a trusted proxy and otherwise on the browser's cookies. Provider HTTP shares a deadline and
 limits streamed response bytes; State bounds pending attempts and expired cleanup.
 State sets the five-minute attempt and eight-hour session deadlines. Cookie
 Max-Age subtracts monotonic elapsed work from that persisted lifetime; expired
@@ -224,6 +250,8 @@ that version and invalidate target sessions and proofs without changing IAM.
 A guarded read returns current account and method state, not a prior operation
 receipt. Unknown completion returns an explicit dependency failure without
 replay or compensation; operators must resolve uncertainty before a new action.
+Without GitHub or Google, the composition supplies no account operations; the routes
+still authorize the caller, then return `409 RESOURCE_CONFLICT`.
 Logout commits deletion and audit before clearing the cookie. The [authentication reference](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
 owns configuration, recovery limits, and operator-visible behavior.
 
@@ -296,7 +324,7 @@ Account creation issues no session and infers no grants.
 - [Platform startup flow](platform-startup.md)
 - [Docker Compose development](docker-compose-development.md) and [production startup](production-startup.md)
 - [Service API keys](service-api-keys.md)
-- [Bootstrap specification](../../specs/16-bootstrap-admin-service-account.md)
+- [Bootstrap specification](../../specs/plans/16-bootstrap-admin-service-account/index.md)
 - [Feature spec](../../specs/.archive/10-local-password-authentication.md)
 
 ## Manual Notes
@@ -304,6 +332,10 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 20:12: Qualify audit-failure session cleanup and tracked-budget accounting. (authoring-run/d58e793e-df0f-40de-8f08-5d0ee989927a - d7b2e4c0697ace45cf2d4b3ab630ce3976334a16)
+
+- 2026-09-30 12:00: Trace the password-only refusal of account and recovery routes. (fix/dogfood-2)
 
 - 2026-09-30 01:03: Receive the PostgreSQL binding and independent schema views. (authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f - f2c9f98b0b89762cc9edda189c102ed8c593c678)
 

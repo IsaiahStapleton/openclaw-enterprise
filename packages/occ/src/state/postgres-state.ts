@@ -48,6 +48,7 @@ import {
   normalizePluginApprovers,
   normalizeHarnessAuthBinding,
   normalizeSecretBindings,
+  PERMISSION_ACTIONS as PLATFORM_PERMISSION_ACTIONS,
   RESOURCE_KINDS as PLATFORM_RESOURCE_KINDS,
   validPluginRevisionState,
   validPluginApprovers,
@@ -159,15 +160,7 @@ interface TransactionContext {
   installationLoaded: boolean;
 }
 
-const PERMISSION_ACTIONS = new Set([
-  "create",
-  "read",
-  "update",
-  "delete",
-  "deploy",
-  "operate",
-  "administer",
-]);
+const PERMISSION_ACTIONS = new Set<string>(PLATFORM_PERMISSION_ACTIONS);
 const RESOURCE_KINDS = new Set<string>(PLATFORM_RESOURCE_KINDS);
 const AUDIT_METADATA_KEY = "__occAuditMetadata";
 const SECRET_IDENTIFIER =
@@ -783,7 +776,7 @@ function auditFromRow(row: PostgresRow, installationId: string): Readonly<AuditE
   if (
     !RESOURCE_KINDS.has(resourceKind) ||
     !["success", "denied", "failure"].includes(outcome) ||
-    !["bootstrap", "mutation", "authorization_denial"].includes(kind)
+    !["bootstrap", "mutation", "access", "authorization_denial"].includes(kind)
   ) {
     throw new DependencyUnavailableError("Persisted audit evidence contains an invalid event.");
   }
@@ -1286,6 +1279,55 @@ export class PostgresPlatformState implements PlatformStateStore {
 
   async transact<T>(work: (state: PlatformUnitOfWork) => Promise<T>): Promise<T> {
     return this.execute(false, async (state) => work(state));
+  }
+
+  /**
+   * Run one read-only statement on a pooled connection outside any transaction (one round
+   * trip, no BEGIN/COMMIT). Only for a single SELECT that needs no snapshot shared with
+   * other statements, locks nothing and writes nothing.
+   */
+  async readStatement(
+    statement: string,
+    parameters?: readonly unknown[],
+  ): Promise<readonly PostgresRow[]> {
+    let client: PostgresClient;
+    try {
+      client = await this.pool.connect();
+    } catch (error) {
+      throw error instanceof ScopeViolationError || error instanceof DependencyUnavailableError
+        ? error
+        : new DependencyUnavailableError("The platform persistence repository is unavailable.");
+    }
+    let transportError: Error | undefined;
+    const onTransportError = (error: Error) => {
+      transportError ??= error;
+    };
+    let discard = false;
+    try {
+      client.on?.("error", onTransportError);
+      const result = await client.query(statement, parameters);
+      if (transportError !== undefined) {
+        throw transportError;
+      }
+      return rows(result.rows);
+    } catch (error) {
+      discard = true;
+      if (transportError !== undefined) {
+        throw new DependencyUnavailableError("The platform persistence repository is unavailable.");
+      }
+      throw databaseError(error);
+    } finally {
+      try {
+        client.release(discard || transportError !== undefined);
+      } catch {
+        // The statement's outcome stands; a failed release only loses the connection.
+      }
+      try {
+        client.removeListener?.("error", onTransportError);
+      } catch {
+        // As above.
+      }
+    }
   }
 
   /**

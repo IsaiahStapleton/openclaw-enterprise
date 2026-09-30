@@ -18,6 +18,7 @@ not provide traces.
 | Signal              | Available path                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Operational logs    | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend.                                                                      |
+| One Agent's output  | The console **Logs** tab and `runtime/logs` API read a bounded, redacted page from Kubernetes on demand; nothing is exported. See [Agent logs](topics/agent-logs.md).    |
 | Collector metrics   | Prometheus endpoint on port `8888` for the collection pipeline itself.                                                                                                   |
 | Audit records       | Stored separately in PostgreSQL; the Collector does not export them. See [Audit Log](topics/audit-log.md).                                                               |
 | Application metrics | Private OCC Prometheus endpoints enabled by default in Helm; see [production scraping](observability/metrics.md) and the [development dashboard](../testing/metrics.md). |
@@ -151,7 +152,7 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 Replace the endpoint. For authenticated export, select your protected
 `--from-file=exporter.yaml=...` and add referenced credentials from protected
 files to the exporter Secret. Update existing Secrets through your normal
-Secret-management workflow.
+Secret-management workflow, and [refresh them on upgrade](#refresh-the-collector-configuration-on-upgrade).
 
 Set the exact approved exporter or proxy IPv4 address and port in the protected
 values copy; `203.0.113.10/32` below is a placeholder:
@@ -182,6 +183,29 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
   rollout restart daemonset/openclaw-enterprise-collector
 ```
 
+##### Refresh the Collector configuration on upgrade
+
+Helm never updates these Secrets, so an upgrade keeps the previous release's
+filtering until you refresh them. Before each upgrade, including image-only
+releases, reapply `collector.yaml` and `kubernetes.yaml` from the target
+revision's checkout and merge any reviewed local changes. Substitute your
+protected exporter file if you use one. Then restart the Collector as shown above:
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-otel-collector-config \
+  --from-file=collector.yaml=deploy/logging/collector.yaml \
+  --from-file=kubernetes.yaml=deploy/logging/kubernetes.yaml \
+  --from-file=exporter.yaml=deploy/logging/exporter.yaml \
+  --dry-run=client --output yaml |
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system apply -f -
+```
+
+Review the `deploy/logging/` diff between the two revisions first.
+`scripts/upgrade-production-images` compares both files with its checkout and
+stops before any change when they differ. Pass `--collector-config-reviewed`
+only to keep a reviewed custom configuration.
+
 ## Tests
 
 ### Check delivery to the backend
@@ -194,6 +218,10 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 3. For runtime coverage, deploy an Agent and exercise its gateway or Codex
    app-server. Check the corresponding `openclaw-gateway` or `codex-app-server`
    records and `openclaw.agent.id` / `openclaw.revision.id` resource attributes.
+
+Retained record bodies hold only the event name. Search for a request, Agent,
+or revision by its attribute, not by body text; in Loki these are structured
+metadata, for example `{service_name="occ-worker"} | occ_revision_id="<id>"`.
 
 A healthy Collector and local container output do not prove that the backend
 received the records. Only approved runtime events appear. Receiving API logs

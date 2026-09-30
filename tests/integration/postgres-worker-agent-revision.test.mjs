@@ -7,7 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { prepareFile } from "../../scripts/ci/prepare.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
-import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
+import {
+  PostgresMetricsSnapshot,
+  SandboxRevisionUnsupportedError,
+} from "../../packages/occ/src/index.ts";
 import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   authorizedPrincipal,
@@ -6391,6 +6394,142 @@ test(
     assert.deepEqual(status.error, {
       code: "RUNTIME_CPU_STARVED",
       message: "Deployment runtime did not get enough CPU to start.",
+    });
+  },
+);
+
+test(
+  "a replacement that fails after pointer publication stays the Agent's active revision",
+  requiresPostgres,
+  async (context) => {
+    // Kubernetes embedded replacement reports a new revision ready while its
+    // predecessor serves, publishes it, and only then replaces the shared
+    // gateway. When the replacement's startup model probe then rejects the
+    // credential, the predecessor no longer runs: the failed revision owns the
+    // only runtime, so it stays active for stop, deletion, and diagnostics
+    // until a later revision replaces it. OCC never rolls back automatically.
+    const fixture = await setup(context);
+    const owner = await fixture.agent("failed-published-replacement");
+    const healthy = await fixture.revision(owner, 1);
+    let rejectCredential = false;
+    const activations = [];
+    const retired = [];
+    const compute = {
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        const observation = await fixture.compute.prepareRevision(revision);
+        // The first observation of a replacement reflects the serving predecessor.
+        if (!rejectCredential || !activations.includes(revision.id)) {
+          return observation;
+        }
+        return {
+          ...observation,
+          ready: false,
+          runtimeFailure: {
+            component: "gateway",
+            check: "model-probe",
+            checkedAt: "2026-09-30T17:14:54.000Z",
+            code: "AUTHENTICATION_FAILED",
+          },
+        };
+      },
+      async activateRevision(revision) {
+        activations.push(revision.id);
+        if (rejectCredential) {
+          throw new Error("The exact AgentRevision gateway is not ready.");
+        }
+      },
+      async retireRevision(revision) {
+        retired.push(revision.id);
+        return fixture.compute.retireRevision(revision);
+      },
+    };
+    await fixture.start(compute);
+    await fixture.work(healthy, "succeeded");
+    const activeRevision = async () =>
+      (
+        await fixture.observerPool.query(
+          "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+          [fixture.namespace.id, owner.id],
+        )
+      ).rows[0].active_revision_id;
+    assert.equal(await activeRevision(), healthy.id);
+
+    rejectCredential = true;
+    const rejected = await fixture.revision(owner, 2);
+    await fixture.work(rejected, "failed_permanent");
+    const codes = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS reason FROM occ.audit_events
+       WHERE resource_id = $1 AND action = 'reconcile' ORDER BY occurred_at`,
+      [rejected.id],
+    );
+    assert.deepEqual(
+      [...new Set(codes.rows.map(({ reason }) => reason))],
+      ["REVISION_FINALIZATION_INCOMPLETE", "RUNTIME_AUTHENTICATION_FAILED"],
+    );
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      rejected.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.equal(status.error.code, "RUNTIME_AUTHENTICATION_FAILED");
+    assert.equal(await activeRevision(), rejected.id);
+    assert.deepEqual(retired, []);
+
+    // Recovery is a new, higher revision; it replaces the failed one.
+    rejectCredential = false;
+    const repaired = await fixture.revision(owner, 3);
+    await fixture.work(repaired, "succeeded");
+    assert.equal(await activeRevision(), repaired.id);
+    assert.deepEqual(retired.toSorted(), [healthy.id, rejected.id].toSorted());
+  },
+);
+
+test(
+  "a Sandbox Driver that cannot run the revision fails deployment without retrying",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("sandbox-unsupported");
+    const candidate = await fixture.revision(owner, 1);
+    let observations = 0;
+
+    // The OpenShell SandboxDriver cannot project secretKeyRef environment. The
+    // same revision fails the same way on every attempt, so it is terminal.
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision() {
+        observations += 1;
+        throw new SandboxRevisionUnsupportedError(
+          "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
+          "OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN.",
+        );
+      },
+    });
+
+    const failed = await fixture.work(candidate, "failed_permanent");
+    assert.equal(observations, 1);
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [
+      { reason_code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED", result_data: null },
+    ]);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
+      message:
+        "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.",
     });
   },
 );

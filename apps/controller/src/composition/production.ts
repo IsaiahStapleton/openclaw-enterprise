@@ -47,6 +47,8 @@ export interface ProductionConfig {
   readonly authBaseURL: string;
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
+  /** OCC_AUTH_PASSWORD_SIGN_IN=recovery-only; requires GitHub or Google sign-in. */
+  readonly passwordSignIn?: "recovery-only";
   readonly clientAddress?: ClientAddressConfiguration;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
@@ -57,6 +59,8 @@ export interface ProductionConfig {
   readonly channelDirectoryProxyUrl?: string;
   readonly channelDirectoryManagedProxyHost?: string;
   readonly nativeAdmin?: NativeAdminAccessConfig;
+  /** Default: enabled. `false` makes both runtime routes answer 501. */
+  readonly agentRuntimeLogsEnabled?: boolean;
 }
 
 export async function composeProduction(config: ProductionConfig) {
@@ -118,19 +122,19 @@ export async function composeProduction(config: ProductionConfig) {
       iamDriver,
       ...(config.github === undefined ? {} : { github: config.github }),
       ...(config.google === undefined ? {} : { google: config.google }),
+      ...(config.passwordSignIn === undefined ? {} : { passwordSignIn: config.passwordSignIn }),
       ...(config.logger === undefined
         ? {}
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
+      ...(config.logger === undefined
+        ? {}
+        : { onOperationalEvent: (event) => emitOccLogEvent(config.logger!, event) }),
     });
-    if (
-      config.github === undefined &&
-      config.google === undefined &&
-      config.clientAddress === undefined &&
-      config.logger !== undefined
-    ) {
-      // No trusted proxy: failed password sign-ins are limited per email only, because every
-      // browser behind the ingress shares its address. api.trustedProxy adds the address lane.
+    if (config.clientAddress === undefined && config.logger !== undefined) {
+      // No trusted proxy: every browser behind the ingress shares its address, so failed
+      // password sign-ins are limited per email only, and with GitHub or Google the external
+      // start step has no per-client limit (callback and result key on browser cookies).
       emitOccLogEvent(config.logger, {
         event: "authentication.sign-in-limit-warning",
         code: "TRUSTED_PROXY_NOT_CONFIGURED",
@@ -141,6 +145,15 @@ export async function composeProduction(config: ProductionConfig) {
         event: "authentication.activation-warning",
         reason: "Accounts without a Principal or exactly one password were not enrolled.",
         ...skippedUserLogFields(auth.activationSkipped),
+      });
+    }
+    if (auth.withoutExternalIdentity !== undefined && config.logger !== undefined) {
+      // Recovery-only password sign-in: these accounts cannot sign in until an
+      // administrator attaches a GitHub or Google identity.
+      emitOccLogEvent(config.logger, {
+        event: "authentication.password-sign-in-warning",
+        code: "EXTERNAL_IDENTITY_MISSING",
+        ...skippedUserLogFields(auth.withoutExternalIdentity),
       });
     }
     const humanAuthentication = new PostgresHumanAuthentication(
@@ -277,6 +290,10 @@ export async function composeProduction(config: ProductionConfig) {
       secretDriver,
       publicOrigin: config.authBaseURL,
       ...(config.nativeAdmin === undefined ? {} : { nativeAdmin: config.nativeAdmin }),
+      agentRuntimeLogs: {
+        enabled: config.agentRuntimeLogsEnabled !== false,
+        cursorSecret: config.authSecret,
+      },
       ...(config.nativeAdmin?.enabled === true && config.gatewayApiKeyPath !== undefined
         ? { nativeAdminGatewayApiKey: () => readWorkspaceFilesApiKey(config.gatewayApiKeyPath!) }
         : {}),

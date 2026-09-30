@@ -259,14 +259,22 @@ function readStatus(path) {
 }
 
 // The real readiness entrypoint, with the wrapper container's environment.
+// Its output is what kubelet shows after "Readiness probe failed:".
 function ready() {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ["-e", readinessProgram], {
       env: { ...process.env, ...readinessEnvironment },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "ignore"],
     });
-    child.once("exit", (code) => resolve(code === 0));
-    child.once("error", () => resolve(false));
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.once("close", (code) =>
+      resolve({ ready: code === 0, reason: output.trim() === "" ? null : output.trim() }),
+    );
+    child.once("error", () => resolve({ ready: false, reason: null }));
   });
 }
 
@@ -293,7 +301,8 @@ server.listen(443, "127.0.0.1", () => {
       observe("startup", runtime?.startup ?? null);
       observe("runtimeFailure", runtime?.runtimeFailure?.code ?? null);
       observe("plugin", plugin?.phase ?? null);
-      observe("ready", readiness);
+      observe("ready", readiness.ready);
+      observe("readinessReason", readiness.reason);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   })();

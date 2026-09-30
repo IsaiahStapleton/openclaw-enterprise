@@ -185,3 +185,147 @@ test("a failing administrator lookup surfaces as a dependency error", async () =
   const { error } = await outcome(limiter.admit({ email }, right));
   assert.equal(error, outage);
 });
+
+test("a success resets the email's failures but not the address's", async () => {
+  const limiter = admission();
+  const email = "typo@example.test";
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  assert.equal(await status(limiter, { email }, right), 200);
+  // The earlier typos no longer count: the email has its whole budget again, and no more.
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401, `failure ${index}`);
+  }
+  assert.equal(await status(limiter, { email }, right), 429);
+
+  // The address lane is shared by every account behind it, so one success clears nothing.
+  const clientAddress = "203.0.113.40";
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: "own@example.test" }), 401);
+  }
+  assert.equal(await status(limiter, { clientAddress, email: "own@example.test" }, right), 200);
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: "other@example.test" }), 401);
+  }
+  assert.equal(await status(limiter, { clientAddress, email: "third@example.test" }), 429);
+});
+
+test("entering the slow lane reports once per lane per window, with hashed keys", async () => {
+  const reports = [];
+  const limiter = admission({ onLimited: (limited) => reports.push(limited) });
+  const email = "victim@example.test";
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  assert.deepEqual(reports, []);
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 429);
+  }
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].lane, "email");
+  assert.match(reports[0].key, /^email:[a-f0-9]{64}$/);
+
+  const clientAddress = "203.0.113.77";
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: `a-${index}@example.test` }), 401);
+  }
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: `b-${index}@example.test` }), 429);
+  }
+  assert.equal(reports.length, 2);
+  assert.equal(reports[1].lane, "address");
+  assert.match(reports[1].key, /^ip:[a-f0-9]{64}$/);
+  const serialized = JSON.stringify(reports);
+  assert.equal(serialized.includes("victim"), false);
+  assert.equal(serialized.includes("203.0.113"), false);
+});
+
+test("a full table reports the untracked lane once, and a failing reporter changes nothing", async () => {
+  const reports = [];
+  const limiter = admission({
+    tableCapacity: 2,
+    onLimited: (limited) => {
+      reports.push(limited);
+      throw new Error("log sink unavailable");
+    },
+  });
+  assert.equal(await status(limiter, { clientAddress: "203.0.113.1", email: "x@x.test" }), 401);
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(
+      await status(limiter, { clientAddress: "198.51.100.9", email: `m-${index}@x.test` }, right),
+      200,
+    );
+  }
+  assert.deepEqual(reports, [{ lane: "untracked" }]);
+});
+
+test("a known device keeps its own budget when the email lane is exhausted", async () => {
+  const limiter = admission();
+  const email = "victim@example.test";
+  const device = { email, knownDevice: "device-1" };
+  // Strangers spend the victim's email lane (T1): ordinary attempts are now refused.
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  assert.equal(await status(limiter, { email }, right), 429);
+  // The victim's known browser still has its password checked at once, repeatedly.
+  for (let index = 0; index < 5; index += 1) {
+    const started = performance.now();
+    assert.equal(await status(limiter, device, right), 200);
+    assert.ok(performance.now() - started < slow.floorMs, "not paced");
+  }
+  // Every known device of the account has its own lane.
+  assert.equal(await status(limiter, { email, knownDevice: "device-2" }, right), 200);
+});
+
+test("a known device's failures spend the device lane, not the email lane", async () => {
+  const limiter = admission();
+  const email = "member@example.test";
+  const device = { email, knownDevice: "device-1" };
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, device), 401);
+  }
+  // The device's lane is spent: it is limited like an email, and a correct non-administrator
+  // password is refused there, so a stolen cookie buys only its own budget.
+  assert.equal(await status(limiter, device, right), 429);
+  // The email lane is untouched: other browsers are unaffected by that device's typos.
+  assert.equal(await status(limiter, { email }, right), 200);
+});
+
+test("strangers holding the email's slow-lane slots do not crowd out a known device", async () => {
+  const email = "admin@example.test";
+  const limiter = admission({ administrators: [email] });
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  // T2: enough concurrent slow attempts to fill the email's running and waiting slots.
+  const flood = Array.from({ length: slow.concurrentPerEmail + slow.waitingPerEmail }, () =>
+    status(limiter, { email }),
+  );
+  // Without the cookie, the administrator's own attempt finds the wait list full and is
+  // refused after the floor, however correct its password.
+  assert.equal(await status(limiter, { email }, right), 429);
+  // With it, the administrator signs in without waiting on the email's slots.
+  const started = performance.now();
+  assert.equal(await status(limiter, { email, knownDevice: "admin-browser" }, right), 200);
+  assert.ok(performance.now() - started < slow.floorMs, "not queued behind the flood");
+  assert.deepEqual(new Set(await Promise.all(flood)), new Set([429]));
+});
+
+test("a known device is still bound by the client address lane", async () => {
+  const limiter = admission();
+  const clientAddress = "203.0.113.90";
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: `junk-${index}@x.test` }), 401);
+  }
+  // The address lane is spent; a known device of a non-administrator behind it is refused.
+  assert.equal(
+    await status(
+      limiter,
+      { clientAddress, email: "member@example.test", knownDevice: "device-1" },
+      right,
+    ),
+    429,
+  );
+});

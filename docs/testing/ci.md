@@ -23,11 +23,11 @@ Hosted image builds use separate controller/runtime caches. Packaging alone expo
 
 Compare per-file `wallDurationMs`, preparation `[ci-timing]` phases and Actions timestamps for slow setup or tests; timings include image archive save and import. Imports copy the archive to each owned k3d node and use node-local `ctr image import`: k3d `tools-node` can hide per-node failures while exiting successfully. Imports are serialized per cluster, then preparation verifies digest and CRI references.
 
-`checks-baseline` runs `pnpm docs:check` and the [dependency policy](repository-boundaries.md). Pages above 1,500 visible words require review; above 2,500 fail except the approved [API reference](../reference/api.md) and `AGENTS.md` files. The generated API, site build, navigation, and links must pass. Run `pnpm docs:check-length` for word counts alone.
+`checks-baseline` runs `pnpm docs:check` and the [dependency policy](repository-boundaries.md). Pages above 1,500 visible words require review; above 2,500 fail except the approved [API reference](../reference/api.md) and `AGENTS.md` files. The generated API, site build, navigation, and links must pass. The [specification check](../contributing/specifications.md#status-and-review) also validates non-archived RFC metadata and spec link targets. Run `pnpm docs:check-length` for word counts alone.
 
 CI Impact and Suite Audit start independently. Full mode runs `checks-baseline`, the thirteen-lane matrix, and `runtime-image-fixture`; `CI Required` requires their outcomes and same-source artifacts. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` and `CI Required` also use it. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404` to build the delivered runtime image and platform fixture in one job; other lanes and the audit use `blacksmith-8vcpu-ubuntu-2404`.
 
-For a verified documentation-only PR merge tree, `docs-checks` verifies checkout identity and runs formatting, `docs:install`, `docs:check`, and `docs:build`. The check covers word limits, links and navigation. Docs mode runs no conformance, integration, browser, Go, or other product tests. `CI Required` verifies the mode and requires successful impact, audit and documentation jobs, with full test jobs skipped. Missing, failed, cancelled or unexpectedly skipped selected jobs fail. Docs mode does not run the test-result aggregator or require test artifacts.
+For a verified documentation-only PR merge tree, `docs-checks` verifies checkout identity and runs formatting, `docs:install`, `docs:check`, and `docs:build`. The check covers word limits, site links and navigation, but not outgoing links in root or `specs/` Markdown. Docs mode runs no conformance, integration, browser, Go, or other product tests. `CI Required` verifies the mode and requires successful impact, audit and documentation jobs, with full test jobs skipped. Missing, failed, cancelled or unexpectedly skipped selected jobs fail. Docs mode does not run the test-result aggregator or require test artifacts.
 
 API reference outputs and Markdown under `docs/reference/api/` select full for `openapi:check`. The selector loads policy from the verified PR base. Code, configuration, workflow, mixed or unknown changes and non-PR events select full; unavailable or unverifiable evidence selects full or fails closed. A base without the selector also selects full. Hosted validation is not yet established.
 
@@ -109,7 +109,7 @@ to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. It repla
 the preinstalled daemon and shares `/var/run/docker.sock` across the CLI, Compose,
 and Driver; other jobs keep the runner daemon. Full-suite acceptance requires
 main-only protected hosted execution of every selected lane. See the
-[delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
+[delivery status](../../specs/plans/19-github-actions-test-coverage/delivery-status.md#delivery-status)
 for proof boundaries and live gaps.
 
 Each lane runs whole test files. The runner validates Node case results and required names; skips, TODOs, missing results, zero cases, failures and cleanup errors fail the selected lane. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use the approved event commit and do not promote PR build artifacts.
@@ -129,7 +129,7 @@ Local failures can retain cleanup state while the host and state path exist. On
 Docker Desktop or similar VM-backed hosts, run one Kubernetes lane at a time when
 measured disk or network pressure has caused instability; the GitHub matrix remains
 parallel. Model/service tests require the approved credentials and spend policy in
-the [implementation specification](../../specs/19-github-actions-test-coverage.md).
+the [implementation specification](../../specs/plans/19-github-actions-test-coverage/index.md).
 
 See the [execution flow](../flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failures. Use the [suite-specific guides](README.md#integration-tests) to reproduce runs locally.
 
@@ -198,69 +198,15 @@ credential after external changes. Ordinary fixture CI does not run these tests.
 
 ### Integration tests outside automatic CI
 
-These integration files have no automatic workflow entrypoint.
-A green `CI Required` check does not establish their coverage. This inventory describes workflow selection, not
-local or hosted test results.
+Some integration files have no automatic workflow entrypoint, so a green `CI Required` check does not establish their coverage. [Integration tests outside automatic CI](ci-manual-integration.md) lists the manual Full Integration lanes and the CLI-only lanes.
 
 #### Manual Full Integration lanes
 
-These ten files run only when selected in
-[Full Integration](../../.github/workflows/full-integration.yml), using the listed
-lane or `all`. Model/service lanes require configured credentials and infrastructure.
-`helper-timeout` is separate because it spends five minutes testing the helper deadline.
-
-| Lane               | Integration test file                                                                                            | Coverage absent from automatic CI                                                                                        |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `docker-model`     | [docker-compute-real.test.mjs](../../tests/integration/docker-compute-real.test.mjs)                             | Docker Compose deployment and real embedded OpenClaw/dedicated Codex model turns.                                        |
-| `k3d-model`        | [harness-topology-k3d-real.test.mjs](../../tests/integration/harness-topology-k3d-real.test.mjs)                 | Dedicated Codex continuity across Pod replacement and embedded model turns with persisted credentials or the Secret API. |
-| `k3d-model`        | [local-first-agent-real.test.mjs](../../tests/integration/local-first-agent-real.test.mjs)                       | Fresh local Agent deployment and reuse with real model replies; external changes block credential replacement.           |
-| `gateway-routing`  | [harness-topology-k3d-routing-real.test.mjs](../../tests/integration/harness-topology-k3d-routing-real.test.mjs) | Dedicated Codex consumption of workspace files through the real Envoy/OCC route.                                         |
-| `production-tui`   | [production-tui-k3d-real.test.mjs](../../tests/integration/production-tui-k3d-real.test.mjs)                     | Helm-installed production control plane, interactive TUI, and revision cutover.                                          |
-| `slack`            | [harness-topology-k3d-slack-real.test.mjs](../../tests/integration/harness-topology-k3d-slack-real.test.mjs)     | Real Slack ingress and a gateway-authored reply through the approved proxy and Codex Agent.                              |
-| `provider-account` | [service-account-driver-real.test.mjs](../../tests/integration/service-account-driver-real.test.mjs)             | Actual ChatGPT service-account creation, credential delivery, and a dedicated Codex model turn.                          |
-| `openshell`        | [sandbox-driver-openshell-k3d-real.test.mjs](../../tests/integration/sandbox-driver-openshell-k3d-real.test.mjs) | Provider-owned dedicated Codex Harness and real OpenShell sandbox enforcement.                                           |
-| `helper-timeout`   | [dev-up-timeout.test.mjs](../../tests/integration/dev-up-timeout.test.mjs)                                       | Full 300-second readiness deadline for a running but unready worker.                                                     |
-| `k3d-otel`         | [harness-topology-k3d-otel-real.test.mjs](../../tests/integration/harness-topology-k3d-otel-real.test.mjs)       | Actual OTLP logs emitted during embedded and dedicated runtime model turns.                                              |
+See [manual Full Integration lanes](ci-manual-integration.md#manual-full-integration-lanes).
 
 #### No GitHub workflow entrypoint
 
-[dev-up-k3d-real.test.mjs](../../tests/integration/dev-up-k3d-real.test.mjs)
-belongs to the CLI-only `dev-up-k3d` lane, outside both workflow groups and
-Full Integration dispatch. See [run the local installation lane](README.md#run-the-local-installation-lane).
-
-[repository-credentials-k3d-real.test.mjs](../../tests/integration/repository-credentials-k3d-real.test.mjs)
-belongs to the explicitly selected `repository-credentials-installed` CLI lane,
-excluded from both workflow groups and Full Integration dispatch. Follow the
-[installed repository credential qualification](repository-credentials.md)
-for protected App inputs, authorized live writes, model execution, and cleanup.
-
-[repository-credentials-live.test.mjs](../../tests/integration/repository-credentials-live.test.mjs)
-belongs to the `repository-credentials-live` lane, excluded from both workflow
-groups and Full Integration dispatch. Follow the
-[repository credential qualification guide](repository-credentials.md) for the
-authorized disposable repository, protected service setup, and cleanup. The
-automatic container lane exercises controlled provider behavior and separate
-container credential isolation. A passing run establishes only selected checks
-at its recorded source and images, not installed platform or live-provider qualification.
-
-[postgres-azure-workload-identity.test.mjs](../../tests/integration/postgres-azure-workload-identity.test.mjs)
-belongs to the `postgres-azure-workload-identity` lane, excluded from the `ci`
-and `full` groups and Full Integration dispatch. Follow the
-[Azure PostgreSQL test procedure](postgresql.md#azure-workload-identity-connections)
-for private input setup and result handling. Ordinary constructor,
-security-rejection, and password cases in
-[postgres-connection-auth.test.mjs](../../tests/integration/postgres-connection-auth.test.mjs)
-run in the mandatory `postgres` lane.
-
-[ssh-compute-real.test.mjs](../../tests/integration/ssh-compute-real.test.mjs) belongs
-to the `ssh-host` lane, excluded from the `ci` and `full` groups and
-Full Integration dispatch. No workflow provisions its disposable Linux/systemd
-SSH host or invokes the lane. The readiness-only selector proves real-host
-readiness, revision cutover, state isolation/persistence, and deletion without
-a model call. The optional `OCC_TEST_SSH_MODEL=1` selector adds
-[real provider execution and runtime credential proof](ssh.md#runtime-credential-model-proof).
-Follow [SSH raw hosts](ssh.md#ssh-raw-hosts) for the disposable host, required
-environment settings, and direct test command.
+See [no GitHub workflow entrypoint](ci-manual-integration.md#no-github-workflow-entrypoint).
 
 ## Related
 

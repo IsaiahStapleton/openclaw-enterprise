@@ -220,10 +220,10 @@ have exact Namespace, Agent, service-principal and revision ownership.
 Preparation checks admitted source identities before writing runtime material.
 Repeated preparation repairs absent or changed projections. Activation validates
 Gateway sources and selects the prepared revision; it does not issue credentials.
-Retirement waits for the old workload to stop before deleting its projection by
-UID. Gateway and account canonical sources survive revision retirement; final
-Agent deletion removes its transport/password, while account and OCC Secret
-storage retain their separate lifecycles.
+Stop and retirement wait for the workload to stop, then delete its projection
+and revision ConfigMaps by UID. Gateway and account canonical sources survive
+revision retirement; final Agent deletion removes its transport/password, while
+account and OCC Secret storage retain their separate lifecycles.
 
 Source updates do not restart running processes. The supported model-key update
 sequence is: update the OCC Secret, redeploy each consuming Agent through OCE,
@@ -232,10 +232,10 @@ new credential. Preparation delivers current source values to the new revision's
 runtime Secret. Merely recreating a Harness Pod or restarting its Deployment
 reads the existing projection and does not refresh it from CP. See
 [update and redeploy](../kubernetes-secret.md#update-and-redeploy).
-Deleting a source or runtime Secret
-does not revoke bytes already loaded into a process or accepted by a provider.
+Deleting a source or runtime Secret does not revoke bytes a process loaded or a
+provider accepted.
 Transport rotation, finite token TTL and immediate revocation remain open; see
-[follow-up tracking](../../../../specs/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
+[follow-up tracking](../../../../specs/plans/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
 Embedded execution retains its combined workload and transport bundle; CP-backed
 model/configuration sources are delivered to that workload as needed. It is
 outside the dedicated trust-boundary acceptance scope.

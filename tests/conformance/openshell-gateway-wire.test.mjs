@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
@@ -184,6 +185,22 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
 
   try {
+    // Client initialization yields; cancel before it can dispatch the mutation.
+    const abort = new AbortController();
+    const pending = client.createProvider(
+      {
+        workspace: "tenant-workspace",
+        name: "cancelled-source",
+        type: "oce-openai",
+        labels: {},
+        credentials: { OPENAI_API_KEY: "wire-test-value" },
+      },
+      abort.signal,
+    );
+    abort.abort(new Error("cancelled during setup"));
+    await assert.rejects(pending, /cancelled during setup/);
+    assert.equal(requests.providers.length, 0);
+
     await client.importProviderProfile(
       "tenant-workspace",
       {
@@ -281,6 +298,253 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
       state: "PROVIDER_READINESS_STATE_READY",
       reason: "PROVIDER_READINESS_REASON_UNSPECIFIED",
     });
+  } finally {
+    client.close();
+    await new Promise((resolve) => server.tryShutdown(resolve));
+  }
+});
+
+test("OpenShell client cancels an in-flight provider request", async () => {
+  const proto = await loader.load(
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
+  );
+  const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
+  const received = Promise.withResolvers();
+  const cancelled = Promise.withResolvers();
+  const server = new grpc.Server();
+  server.addService(OpenShell.service, {
+    CreateProvider(call, callback) {
+      call.once("cancelled", () => {
+        cancelled.resolve();
+        callback({ code: grpc.status.CANCELLED, message: "cancelled by client" });
+      });
+      received.resolve(call.request);
+    },
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+  const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
+  const abort = new AbortController();
+  const reason = new Error("cancelled in flight");
+  const within = async (promise, description) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${description} timed out`)), 2_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  try {
+    const result = client
+      .createProvider(
+        {
+          workspace: "tenant-workspace",
+          name: "cancelled-source",
+          type: "oce-openai",
+          labels: {},
+          credentials: { OPENAI_API_KEY: "wire-test-value" },
+        },
+        abort.signal,
+      )
+      .then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+    const request = await within(received.promise, "provider receipt");
+    assert.equal(request.provider.metadata.name, "cancelled-source");
+    abort.abort(reason);
+    const [outcome] = await within(
+      Promise.all([result, cancelled.promise]),
+      "provider cancellation",
+    );
+    assert.equal(outcome.error, reason);
+  } finally {
+    abort.abort();
+    client.close();
+    server.forceShutdown();
+  }
+});
+
+test("OpenShell client closes cancellation races around provider dispatch", async (t) => {
+  const provider = {
+    workspace: "tenant-workspace",
+    name: "cancelled-source",
+    type: "oce-openai",
+    labels: {},
+    credentials: { OPENAI_API_KEY: "wire-test-value" },
+  };
+  const prepare = (onMetadata, onInvoke) => {
+    let calls = 0;
+    const grpc = {
+      Metadata: class {
+        constructor() {
+          onMetadata();
+        }
+      },
+      status: { ALREADY_EXISTS: 6 },
+    };
+    const transport = {
+      CreateProvider(_request, _headers, _options, callback) {
+        calls++;
+        onInvoke();
+        queueMicrotask(() =>
+          callback(null, {
+            provider: { metadata: { name: provider.name, labels: {} }, type: provider.type },
+          }),
+        );
+        return { cancel() {} };
+      },
+      close() {},
+    };
+    const client = new GrpcOpenShellGatewayClient({ endpoint: "http://127.0.0.1:1" });
+    return { client, grpc, transport, calls: () => calls };
+  };
+
+  await t.test("an abort during client initialization prevents metadata preparation", async () => {
+    const abort = new AbortController();
+    let metadataCalls = 0;
+    const fake = prepare(
+      () => metadataCalls++,
+      () => {},
+    );
+    let release;
+    fake.client.client = new Promise((resolve) => {
+      release = resolve;
+    });
+    const pending = fake.client.createProvider(provider, abort.signal);
+    abort.abort(new Error("cancelled during initialization"));
+    release({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(pending, /cancelled during initialization/);
+    assert.equal(metadataCalls, 0);
+    assert.equal(fake.calls(), 0);
+    fake.client.close();
+  });
+
+  await t.test("an abort during metadata preparation prevents dispatch", async () => {
+    const abort = new AbortController();
+    const fake = prepare(
+      () => abort.abort(new Error("cancelled during metadata")),
+      () => {},
+    );
+    fake.client.client = Promise.resolve({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(
+      fake.client.createProvider(provider, abort.signal),
+      /cancelled during metadata/,
+    );
+    assert.equal(fake.calls(), 0);
+    assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    fake.client.close();
+  });
+
+  await t.test("a synchronous transport failure removes its abort listener", async () => {
+    const abort = new AbortController();
+    const fake = prepare(
+      () => {},
+      () => {
+        throw new Error("transport failed");
+      },
+    );
+    fake.client.client = Promise.resolve({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(fake.client.createProvider(provider, abort.signal), /transport failed/);
+    assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    fake.client.close();
+  });
+});
+
+test("OpenShell client reads v0.1.0 sandbox logs with nanosecond times", async () => {
+  const proto = await loader.load(
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
+  );
+  const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
+  const requests = [];
+  const metadata = [];
+  const server = new grpc.Server();
+  server.addService(OpenShell.service, {
+    GetSandboxLogs(call, callback) {
+      requests.push(call.request);
+      metadata.push(call.metadata.get("authorization"));
+      callback(null, {
+        logs: [
+          {
+            sandbox_id: "sandbox-object-id",
+            event_time: { seconds: "1790000000", nanos: 123_456_789 },
+            level: "OCSF",
+            target: "ocsf",
+            message: "NET:OPEN [INFO] ALLOWED curl(7) -> api.example.com:443",
+            source: "sandbox",
+            fields: { dst_host: "api.example.com" },
+          },
+          { sandbox_id: "sandbox-object-id", level: "INFO", message: "no time" },
+        ],
+        buffer_total: 7,
+      });
+    },
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+  const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
+  try {
+    const response = await client.getSandboxLogs(
+      {
+        workspace: "tenant-workspace",
+        sandbox: "sb-0123",
+        lines: 200,
+        sinceTime: "2026-09-21T14:13:20.5Z",
+      },
+      AbortSignal.timeout(2_000),
+    );
+    assert.deepEqual(requests[0], {
+      sandbox: "sb-0123",
+      lines: 200,
+      since_time: {
+        seconds: String(Date.parse("2026-09-21T14:13:20Z") / 1000),
+        nanos: 500_000_000,
+      },
+      workspace_scope: { workspace: "tenant-workspace", selection: "workspace" },
+    });
+    assert.deepEqual(metadata[0], []);
+    assert.equal(response.bufferTotal, 7);
+    assert.deepEqual(response.lines[0], {
+      sandboxId: "sandbox-object-id",
+      time: "2026-09-21T14:13:20.123456789Z",
+      level: "OCSF",
+      target: "ocsf",
+      message: "NET:OPEN [INFO] ALLOWED curl(7) -> api.example.com:443",
+      source: "sandbox",
+      fields: { dst_host: "api.example.com" },
+    });
+    assert.equal(response.lines[1].time, null);
+    assert.equal(response.lines[1].source, "");
+
+    await assert.rejects(
+      client.getSandboxLogs(
+        { workspace: "tenant-workspace", sandbox: "sb-0123", lines: 0 },
+        AbortSignal.timeout(2_000),
+      ),
+      /line count must be 1 to 2000/,
+    );
+    await assert.rejects(
+      client.getSandboxLogs(
+        { workspace: "tenant-workspace", sandbox: "sb-0123", lines: 5, sinceTime: "yesterday" },
+        AbortSignal.timeout(2_000),
+      ),
+      /RFC 3339/,
+    );
+    assert.equal(requests.length, 1);
   } finally {
     client.close();
     await new Promise((resolve) => server.tryShutdown(resolve));

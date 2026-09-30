@@ -601,3 +601,59 @@ test("commit fault rejects an effective remote override and preserves TLS intent
     /non-TLS/,
   );
 });
+
+test("a single read statement runs outside any transaction on one pooled connection", async () => {
+  const destroyed = [];
+  const p = protocol({
+    query: () => ({ rows: [{ user_id: "u" }], rowCount: 1 }),
+    release: (destroy) => destroyed.push(destroy),
+  });
+  assert.deepEqual(await p.state.readStatement("SELECT 1", []), [{ user_id: "u" }]);
+  assert.deepEqual(p.calls, ["SELECT 1"]);
+  assert.deepEqual(destroyed, [false]);
+  assert.equal(p.hasTransportListener(), false);
+});
+
+test("a rejected read statement is classified and discards its connection", async () => {
+  const destroyed = [];
+  const p = protocol({
+    query: () => {
+      throw serverError("55P03");
+    },
+    release: (destroy) => destroyed.push(destroy),
+  });
+  await assert.rejects(p.state.readStatement("SELECT 1"), DependencyUnavailableError);
+  assert.deepEqual(p.calls, ["SELECT 1"]);
+  assert.deepEqual(destroyed, [true]);
+  assert.equal(p.hasTransportListener(), false);
+});
+
+test("a client error during a read statement is unavailable and discards the connection", async () => {
+  const destroyed = [];
+  let p;
+  p = protocol({
+    query: () => {
+      p.emitTransportError(serverError("23514"));
+      return { rows: [{ leaked: true }], rowCount: 1 };
+    },
+    release: (destroy) => destroyed.push(destroy),
+  });
+  await assert.rejects(
+    p.state.readStatement("SELECT 1"),
+    (error) =>
+      error instanceof DependencyUnavailableError &&
+      error.message === "The platform persistence repository is unavailable.",
+  );
+  assert.deepEqual(destroyed, [true]);
+  assert.equal(p.hasTransportListener(), false);
+});
+
+test("a failed checkout for a read statement is unavailable", async () => {
+  const state = new PostgresPlatformState({
+    async connect() {
+      throw new Error("connect ECONNREFUSED");
+    },
+    async end() {},
+  });
+  await assert.rejects(state.readStatement("SELECT 1"), DependencyUnavailableError);
+});

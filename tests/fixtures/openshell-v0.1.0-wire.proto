@@ -8,10 +8,13 @@ syntax = "proto3";
 
 package openshell.v1;
 
+import "google/protobuf/timestamp.proto";
+
 service OpenShell {
   rpc Health(HealthRequest) returns (HealthResponse);
   rpc CreateSandbox(CreateSandboxRequest) returns (SandboxResponse);
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+  rpc GetSandboxLogs(GetSandboxLogsRequest) returns (GetSandboxLogsResponse);
   rpc GetSandboxProviderStatus(GetSandboxProviderStatusRequest)
       returns (GetSandboxProviderStatusResponse);
   rpc CreateProvider(CreateProviderRequest) returns (ProviderResponse);
@@ -289,4 +292,46 @@ enum ProviderReadinessReason {
   PROVIDER_READINESS_REASON_WAITING_FOR_PROCESS = 4;
   PROVIDER_READINESS_REASON_UNSUPPORTED_SUPERVISOR = 5;
   PROVIDER_READINESS_REASON_CREDENTIALS_WITHHELD = 6;
+}
+
+// Get sandbox logs request (one-shot fetch).
+message GetSandboxLogsRequest {
+  // Workspace scope. Only a named workspace selection is accepted.
+  WorkspaceSelector workspace_scope = 6;
+  reserved 3;
+  reserved "since_ms";
+  // Canonical sandbox name.
+  string sandbox = 1;
+  // Maximum number of log lines to return. 0 means use default (2000).
+  uint32 lines = 2;
+  // Only include logs at or after this time. Absence means no filter.
+  google.protobuf.Timestamp since_time = 103;
+  // Filter by log source (e.g. "gateway", "sandbox"). Empty means all sources.
+  repeated string sources = 4;
+  // Minimum log level to include (e.g. "INFO", "WARN", "ERROR"). Empty means all levels.
+  string min_level = 5;
+}
+
+// Get sandbox logs response.
+message GetSandboxLogsResponse {
+  // Log lines in chronological order.
+  repeated SandboxLogLine logs = 1;
+  // Total number of lines in the server's buffer for this sandbox.
+  uint32 buffer_total = 2;
+}
+
+// Log line correlated to a sandbox.
+message SandboxLogLine {
+  reserved 2;
+  reserved "timestamp_ms";
+  string sandbox_id = 1;
+  google.protobuf.Timestamp event_time = 102;
+  string level = 3;
+  string target = 4;
+  string message = 5;
+  // Log source: "gateway" (server-side) or "sandbox" (supervisor).
+  // Empty is treated as "gateway" for backward compatibility.
+  string source = 6;
+  // Structured key-value fields from the tracing event (e.g. dst_host, action).
+  map<string, string> fields = 7;
 }

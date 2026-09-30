@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
 import {
   bootstrapProductionInstallation,
   composeProductionSignIn,
@@ -162,6 +163,39 @@ test(
       },
     );
 
+    await t.test("a successful sign-in resets that email's failures", async () => {
+      const typist = await createAccount("limit-typist@example.test", roles.reader.id);
+      for (let round = 0; round < 2; round += 1) {
+        for (let index = 0; index < 9; index += 1) {
+          const response = await plainSignIn({ ...typist, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `round ${round} typo ${index}: ${response.body}`);
+        }
+        const correct = await plainSignIn(typist);
+        assert.equal(correct.statusCode, 200, `round ${round}: ${correct.body}`);
+      }
+    });
+
+    await t.test(
+      "a limited email lane logs one warning with a keyed hash and no email or address",
+      () => {
+        const limited = plainLog.events.filter(
+          (event) => event.event === "authentication.sign-in-limited",
+        );
+        for (const event of limited) {
+          assert.equal(event.severity, "WARN");
+          assert.equal(event.lane, "email");
+          assert.match(event.keyHash, /^[a-f0-9]{16}$/);
+        }
+        // One report per lane per window: the slowed administrator and the spent target.
+        assert.equal(limited.length, 2, `reports: ${limited.length}`);
+        assert.equal(new Set(limited.map((event) => event.keyHash)).size, limited.length);
+        const serialized = JSON.stringify(plainLog.events);
+        for (const value of [plainAdmin.email, target.email, "example.test", ingress]) {
+          assert.equal(serialized.includes(value), false, value);
+        }
+      },
+    );
+
     await t.test("repeated successful sign-ins are not limited", async () => {
       for (let index = 0; index < 30; index += 1) {
         const response = await signIn("198.51.100.1", member);
@@ -269,6 +303,163 @@ test(
         );
         const correct = await signIn("203.0.113.200", secondAdmin);
         assert.equal(correct.statusCode, 200, correct.body);
+      },
+    );
+
+    await t.test("a limited client address is reported with the address lane", () => {
+      const lanes = proxiedLog.events
+        .filter((event) => event.event === "authentication.sign-in-limited")
+        .map((event) => event.lane);
+      assert.ok(lanes.includes("address"), `lanes: ${lanes.join(", ")}`);
+      const serialized = JSON.stringify(proxiedLog.events);
+      for (const value of [attacker, "example.test"]) {
+        assert.equal(serialized.includes(value), false, value);
+      }
+    });
+
+    // Known-device cookie: a browser that signed in to an account before keeps its own
+    // budget for that email, so strangers who know the email cannot keep it out (T1) or
+    // crowd an administrator's attempt out of the slow lane (T2).
+    const knownDeviceName = "__Host-occ_known_device";
+    const knownDeviceOf = (response) =>
+      [response.headers["set-cookie"] ?? []]
+        .flat()
+        .find((value) => value.startsWith(`${knownDeviceName}=`));
+    const plainSignInWith = (cookie, account) =>
+      plainApp.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress: ingress,
+        headers: { origin, cookie },
+        payload: account,
+      });
+    const knownMember = await createAccount("limit-known@example.test", roles.reader.id);
+    const knownOther = await createAccount("limit-known-other@example.test", roles.reader.id);
+    const knownAdmin = await createAccount("limit-known-admin@example.test", roles.admin.id);
+    const knownReset = await createAccount("limit-known-reset@example.test", roles.reader.id);
+    let memberDevice;
+
+    await t.test("the known-device cookie is set only after a successful sign-in", async () => {
+      const failed = await plainSignIn({ ...knownMember, password: wrongPassword });
+      assert.equal(failed.statusCode, 401);
+      assert.equal(knownDeviceOf(failed), undefined);
+      const signedIn = await plainSignIn(knownMember);
+      assert.equal(signedIn.statusCode, 200, signedIn.body);
+      const setCookie = knownDeviceOf(signedIn);
+      assert.ok(setCookie, "a successful sign-in marks the browser");
+      assert.match(
+        setCookie,
+        /^__Host-occ_known_device=v2\.[^;]+; Max-Age=7776000; Path=\/; HttpOnly; Secure; SameSite=Strict$/,
+      );
+      assert.equal(setCookie.includes("limit-known"), false, "the cookie does not carry the email");
+      memberDevice = setCookie.split(";", 1)[0];
+    });
+
+    await t.test(
+      "a browser that signed in before is not locked out by strangers' failures",
+      async () => {
+        // Strangers spend the member's email lane from anywhere.
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...knownMember, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        assert.equal((await plainSignIn(knownMember)).statusCode, 429, "a new browser is refused");
+        // The member's own browser still signs in, at once and repeatedly.
+        for (let index = 0; index < 3; index += 1) {
+          const started = performance.now();
+          const response = await plainSignInWith(memberDevice, knownMember);
+          assert.equal(response.statusCode, 200, `sign-in ${index}: ${response.body}`);
+          assert.ok(performance.now() - started < 1000, "not paced");
+          memberDevice = knownDeviceOf(response).split(";", 1)[0];
+        }
+        // The cookie is bound to its account: it does not open another account's spent lane.
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...knownOther, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        assert.equal((await plainSignInWith(memberDevice, knownOther)).statusCode, 429);
+      },
+    );
+
+    await t.test(
+      "a valid cookie with a wrong password is 401 and spends its own lane",
+      async () => {
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignInWith(memberDevice, {
+            ...knownMember,
+            password: wrongPassword,
+          });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+          assert.equal(knownDeviceOf(response), undefined);
+        }
+        // That device's lane is now spent too: a stolen cookie buys only its own budget.
+        assert.equal((await plainSignInWith(memberDevice, knownMember)).statusCode, 429);
+        // A cookie signed under another secret, or forged, is ignored: the shared lane applies.
+        const forged = `${knownDeviceName}=v2.AAAAAAAA.${Math.floor(Date.now() / 1000)}.${"A".repeat(16)}.${"A".repeat(43)}.${"A".repeat(43)}`;
+        assert.equal((await plainSignInWith(forged, knownMember)).statusCode, 429);
+      },
+    );
+
+    await t.test("a password reset revokes known-device exemptions issued before it", async () => {
+      const before = await plainSignIn(knownReset);
+      assert.equal(before.statusCode, 200, before.body);
+      const staleDevice = knownDeviceOf(before).split(";", 1)[0];
+      // An operator resets the password; the database bumps the method's authentication
+      // version, which the entry is bound to.
+      const newPassword = "limit-known-reset-new-password";
+      const { rows } = await pool.query(
+        `UPDATE occ.account m SET password = $1 FROM occ."user" u
+           WHERE m.user_id = u.id AND u.email = $2 AND m.provider_id = 'credential'
+           RETURNING m.authentication_version`,
+        [await hashLocalPassword(newPassword), knownReset.email],
+      );
+      assert.equal(rows.length, 1);
+      assert.ok(rows[0].authentication_version > 1);
+      const reset = { ...knownReset, password: newPassword };
+      const after = await plainSignIn(reset);
+      assert.equal(after.statusCode, 200, after.body);
+      const currentDevice = knownDeviceOf(after).split(";", 1)[0];
+      for (let index = 0; index < 10; index += 1) {
+        const response = await plainSignIn({ ...reset, password: wrongPassword });
+        assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+      }
+      // The stale entry is ignored and answered exactly like a new browser.
+      const stale = await plainSignInWith(staleDevice, reset);
+      const fresh = await plainSignIn(reset);
+      assert.equal(stale.statusCode, 429, stale.body);
+      assert.equal(fresh.statusCode, 429, fresh.body);
+      assert.equal(stale.headers["retry-after"] !== undefined, true);
+      assert.equal(knownDeviceOf(stale), undefined);
+      // The entry issued after the reset keeps its own lane.
+      const known = await plainSignInWith(currentDevice, reset);
+      assert.equal(known.statusCode, 200, known.body);
+    });
+
+    await t.test(
+      "an administrator's known browser does not queue behind strangers' slowed attempts",
+      async () => {
+        const signedIn = await plainSignIn(knownAdmin);
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const adminDevice = knownDeviceOf(signedIn).split(";", 1)[0];
+        for (let index = 0; index < 10; index += 1) {
+          const response = await plainSignIn({ ...knownAdmin, password: wrongPassword });
+          assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
+        }
+        // Strangers hold both of the email's slow-lane slots and queue behind them; each
+        // holds its slot for a floor of 1 s up to 8 s.
+        const flood = Array.from({ length: 4 }, () =>
+          plainSignIn({ ...knownAdmin, password: wrongPassword }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const started = performance.now();
+        const response = await plainSignInWith(adminDevice, knownAdmin);
+        const elapsed = performance.now() - started;
+        assert.equal(response.statusCode, 200, response.body);
+        assert.ok(elapsed < 1000, `the known browser waited ${elapsed} ms`);
+        assert.deepEqual(
+          (await Promise.all(flood)).map((refused) => refused.statusCode),
+          Array(4).fill(429),
+        );
       },
     );
 

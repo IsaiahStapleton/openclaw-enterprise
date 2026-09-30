@@ -1,7 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
@@ -91,7 +90,7 @@ const secretRef = (name, key) => ({ secretKeyRef: { name, key } });
 
 /**
  * The API Pod's sign-in environment rendered from deploy/examples/production/values.yaml:
- * no OCC_AUTH_GITHUB_*, no trusted proxy. password-default-chart.test.mjs asserts the
+ * no OCC_AUTH_GITHUB_*, no trusted proxy. sign-in-chart-parity.test.mjs asserts the
  * chart renders exactly these OCC_AUTH_* and OCC_AGENT_NATIVE_ADMIN_* entries.
  */
 export const defaultInstallSettings = Object.freeze({
@@ -536,83 +535,45 @@ export async function readAccount(app, headers, userId) {
   return response.json().data;
 }
 
-async function lockWaiters(pool) {
-  return (
-    await pool.query(
-      `SELECT count(*)::int AS count FROM pg_stat_activity
-       WHERE datname = current_database() AND wait_event_type = 'Lock'`,
-    )
-  ).rows[0].count;
-}
-
 /**
- * Proves which account holds the reserved password lane on one controller: four password
- * checks held on locked user rows fill the shared lane, so a fresh account and `former`
- * are refused with 429 while `holder` is still admitted and signs in once the rows unlock.
+ * Proves which accounts keep a checkable password once strangers spend their email's budget.
+ * Wrong passwords spend `holder`'s, `former`'s and a fresh email's budget until each is
+ * refused with 429 and Retry-After. Then the correct password of `holder` (the recovery
+ * account) still signs in, slowed; `former` does too only while it administers the
+ * Installation; and the fresh email is refused like any other spent email, account or not.
  */
-export async function assertReservedLane(app, pool, { origin, holder, former, label }) {
-  const fillers = (
-    await pool.query(
-      `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
-       SELECT 'lane-' || $1 || '-' || n, 'Lane filler', 'lane-' || $1 || '-' || n || '@example.test',
-              true, now(), now()
-       FROM generate_series(1, 2) AS n RETURNING id, email`,
-      [label],
-    )
-  ).rows;
+export async function assertReservedLane(app, { origin, holder, former, label }) {
   const address = clientAddresses("10.77");
-  const blocker = await pool.connect();
-  let open = false;
-  async function waitForLockWaiters(count, settled = () => false) {
-    const deadline = performance.now() + 10_000;
-    while (!settled() && (await lockWaiters(pool)) < count) {
-      if (performance.now() > deadline) {
-        throw new Error(`Expected ${count} password checks to be held.`);
+  const fresh = { email: `lane-${label}-fresh@example.test`, password: holder.password };
+  async function spend(account) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await passwordSignIn(
+        app,
+        origin,
+        { email: account.email, password: `${label}-lane-wrong-password` },
+        address(),
+      );
+      if (response.statusCode === 429) {
+        if (!(Number(response.headers["retry-after"]) >= 1)) {
+          throw new Error("A refused password sign-in must carry Retry-After.");
+        }
+        return;
       }
-      await delay(20);
+      if (response.statusCode !== 401) {
+        throw new Error(`Expected 401 or 429, got ${response.statusCode}: ${response.body}`);
+      }
     }
+    throw new Error(`The ${account.email} budget was never spent.`);
   }
-  try {
-    await blocker.query("BEGIN");
-    open = true;
-    await blocker.query('SELECT id FROM occ."user" WHERE id = ANY($1) FOR UPDATE', [
-      [...fillers.map((filler) => filler.id), holder.id],
-    ]);
-    // Two per filler email and one per address stay inside every per-key budget.
-    const held = fillers.flatMap((filler) => [
-      passwordSignIn(app, origin, { email: filler.email, password: holder.password }, address()),
-      passwordSignIn(app, origin, { email: filler.email, password: holder.password }, address()),
-    ]);
-    await waitForLockWaiters(4);
-    const fresh = await passwordSignIn(
-      app,
-      origin,
-      { email: `lane-${label}-fresh@example.test`, password: holder.password },
-      address(),
-    );
-    const refusedFormer = await passwordSignIn(app, origin, former, address());
-    let holderSettled = false;
-    const admitted = passwordSignIn(app, origin, holder, address()).finally(() => {
-      holderSettled = true;
-    });
-    // An admitted holder waits on its locked row; a refused one settles at once.
-    await waitForLockWaiters(5, () => holderSettled);
-    await blocker.query("COMMIT");
-    open = false;
-    const heldStatuses = (await Promise.all(held)).map(({ statusCode }) => statusCode);
-    return {
-      fresh: fresh.statusCode,
-      former: refusedFormer.statusCode,
-      holder: (await admitted).statusCode,
-      held: heldStatuses,
-    };
-  } finally {
-    if (open) {
-      await blocker.query("ROLLBACK");
-    }
-    blocker.release();
-    await pool.query('DELETE FROM occ."user" WHERE id = ANY($1)', [
-      fillers.map((filler) => filler.id),
-    ]);
+  for (const account of [holder, former, fresh]) {
+    await spend(account);
   }
+  const [holderResponse, formerResponse, freshResponse] = await Promise.all(
+    [holder, former, fresh].map((account) => passwordSignIn(app, origin, account, address())),
+  );
+  return {
+    fresh: freshResponse.statusCode,
+    former: formerResponse.statusCode,
+    holder: holderResponse.statusCode,
+  };
 }
