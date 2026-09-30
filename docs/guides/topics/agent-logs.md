@@ -136,8 +136,15 @@ and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `g
 `github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
 query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
 long base64 or hex runs with `[redacted:<pattern>]`. A PEM block printed over
-several lines is masked on every line from BEGIN through END; the block ends early
-at the first line that is not base64, a PEM header or blank. Redaction is best-effort
+several lines is masked from an observed BEGIN through END, including across
+follow polls in the same container view. With ordered, newer timestamps, the
+block also ends at the first line that is not base64, a PEM header or blank.
+Replayed lines and equal, missing or out-of-order timestamps cannot close a block
+known to be open: PEM-shaped lines may stay masked conservatively for the rest
+of that view, while ordinary operational text stays visible. A restart, Pod
+change, expired cursor or new view starts without the old masking context.
+An initial tail or older cursor may begin inside a block whose BEGIN was never
+seen; the reader cannot reconstruct that missing history. Redaction is best-effort
 pattern masking: an opaque token under 40 characters with no known prefix and no
 key name or `Bearer` next to it stays visible. Do not rely on redaction to make
 a runtime that prints secrets safe.

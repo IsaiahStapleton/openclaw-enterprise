@@ -297,9 +297,10 @@ function maskPemEnd(text: string): string {
  */
 export function maskPemBlockLines(
   lines: readonly (string | undefined)[],
+  context?: { open: boolean | undefined; readonly canClose?: readonly boolean[] },
 ): ReadonlyMap<number, string> {
   const masked = new Map<number, string>();
-  let open = false;
+  let open = context?.open;
   for (let index = 0; index < lines.length; index += 1) {
     const text = lines[index];
     if (text === undefined) {
@@ -308,14 +309,20 @@ export function maskPemBlockLines(
     if (open) {
       if (PEM_END.test(text)) {
         masked.set(index, maskPemEnd(text));
-        open = false;
+        // An older/equal/unknown-time END cannot erase a carried later BEGIN.
+        // A new BEGIN after END on this same line opens the next block.
+        if (context?.canClose?.[index] !== false) {
+          open = opensPemBlock(text);
+        }
         continue;
       }
       if (isPemBodyLine(text)) {
         masked.set(index, mark("pem"));
         continue;
       }
-      open = false;
+      if (context?.canClose?.[index] !== false) {
+        open = false;
+      }
     }
     if (opensPemBlock(text)) {
       open = true;
@@ -324,6 +331,9 @@ export function maskPemBlockLines(
     const end = PEM_END.exec(text);
     if (end !== null && !/-----BEGIN [A-Z0-9 ]{0,64}-----/.test(text.slice(0, end.index))) {
       masked.set(index, maskPemEnd(text));
+      if (context?.canClose?.[index] !== false) {
+        open = false;
+      }
       for (let above = index - 1; above >= 0 && !masked.has(above); above -= 1) {
         const previous = lines[above];
         if (previous === undefined) {
@@ -335,6 +345,9 @@ export function maskPemBlockLines(
         masked.set(above, mark("pem"));
       }
     }
+  }
+  if (context !== undefined) {
+    context.open = open;
   }
   return masked;
 }
