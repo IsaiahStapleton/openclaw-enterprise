@@ -30,11 +30,25 @@ Run the commands below from the repository root on Linux or macOS. You need:
 
 On some Linux hosts, especially Ubuntu with Docker 29, the k3d node cannot
 resolve container registries. Startup then waits on the cert-manager rollout
-while its pods stay in `ContainerCreating`, and a pod event reports that the
-registry DNS lookup failed. Follow
+while its pods stay in `ContainerCreating`. The launcher does not print those
+Pod events, and it prints the kubeconfig path only after startup succeeds. In
+a second terminal, while that wait is still running, read the events from the
+private kubeconfig. The context is `k3d-` plus the cluster name from the first
+startup line, `Creating Kubernetes-only k3d cluster ...`:
+
+```bash
+kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+  --context 'k3d-<cluster>' \
+  -n cert-manager describe pods
+```
+
+If you set `OCC_DEVELOPMENT_STATE_DIRECTORY`, use that directory instead of
+`/tmp/openclaw-development`. A registry DNS failure shows up as a lookup error
+in the Pod events. Follow
 [Resolve node DNS failures](deploy/local-kubernetes-development.md#resolve-node-dns-failures)
-and start again with a reachable resolver. That recovery changes only the
-owned node's resolver.
+and set a reachable resolver for a fresh start. That recovery changes only the
+owned node's resolver. If startup rolls the cluster back, wait until that
+command exits before starting again.
 
 You do not need a model credential to install the platform. Have an OpenAI API
 key available when you continue to [deploy your first Agent](first-agent.md).
