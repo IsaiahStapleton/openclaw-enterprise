@@ -6,7 +6,7 @@ database, controller, or account.
 
 ## Prepare the checkout
 
-You need access to the private repository, Git, Node.js 24 or newer, the pnpm
+You need Git, Node.js 24 or newer, the pnpm
 version pinned in [`package.json`](../../package.json), and the Go version in
 [`go.mod`](../../go.mod). In a clean checkout, install the pinned dependencies:
 
