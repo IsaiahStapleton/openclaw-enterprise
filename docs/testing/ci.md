@@ -92,25 +92,23 @@ Diagnostics explain setup failures without establishing coverage.
 
 The `k3d-model`, `gateway-routing`, `slack`, and `k3d-otel` lanes prepare the controller image and workspace routing for dedicated Harness node enrollment. Supply an immutable `NODE_BASE_IMAGE` for the build. Preparation supplies the imported controller digest and private routing CA paths; Slack still requires approved runtime images and credentials.
 
-Implementation status: routing, OpenShell, and logging have concrete CI
-preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4
-and Envoy Gateway v1.6.7 manifests, then generates a private test CA. OpenShell
-creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures and
-smoke-tests the selected RuntimeClass with the cluster's `runc` handler,
-installs CLI/chart and Agent Sandbox assets, and imports gateway and supervisor
-images. Only that disposable cluster exempts the selected RuntimeClass from Pod
-Security Admission; preparation proves an ordinary violating Pod is rejected and
-the same Pod is admitted with the selected class. The full OpenShell suite
-proves provider-owned supervisor filesystem, endpoint/L7 network, and process
-enforcement while the sidecar policy remains binary-unaware. Logging
-preparation owns a real OpenTelemetry Collector backend with JSONL evidence, so
+Routing, OpenShell, and logging have CI preparation contracts. Routing installs
+pinned Gateway API, cert-manager v1.18.4 and Envoy Gateway v1.6.7 manifests and
+generates a private test CA. OpenShell creates an owned K3s v1.36.4 cluster,
+installs a matched kubectl, configures and smoke-tests the selected RuntimeClass
+with the cluster's `runc` handler, installs CLI/chart and Agent Sandbox assets,
+and imports gateway and supervisor images. Only that disposable cluster exempts
+the selected RuntimeClass from Pod Security Admission; preparation proves an
+ordinary violating Pod is rejected and the same Pod is admitted with that class.
+The full OpenShell suite proves provider-owned supervisor filesystem, endpoint/L7
+network, and process enforcement while the sidecar policy remains binary-unaware.
+Logging preparation owns a real OpenTelemetry Collector backend with JSONL evidence;
 `OCC_TEST_OTEL_LOGS_URL` is no longer an external input. The Collector and
-Docker-model jobs use the shared [setup-test-docker action](../../.github/actions/setup-test-docker/action.yml)
-to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. The
-action replaces the preinstalled daemon and shares `/var/run/docker.sock` across
-the CLI, Compose, and Driver; other jobs keep the runner daemon. Full-suite
-acceptance still requires main-only
-protected hosted execution of every selected lane. See the
+Docker-model jobs use [setup-test-docker](../../.github/actions/setup-test-docker/action.yml)
+to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. It replaces
+the preinstalled daemon and shares `/var/run/docker.sock` across the CLI, Compose,
+and Driver; other jobs keep the runner daemon. Full-suite acceptance requires
+main-only protected hosted execution of every selected lane. See the
 [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
 for proof boundaries and live gaps.
 
@@ -177,13 +175,7 @@ manual dispatch, using the requested lane or `all`, not on pushes or merges. The
 `provider-account` remains manual because its configured admin credential cannot
 authenticate from the hosted runner.
 
-### Verify ClawSweeper dispatch
-
-The [checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml) is this repository's installation source of truth. It pins the admission workflow and allows dispatch despite optional target acknowledgement token failure. [Upstream synchronization](https://github.com/openclaw/clawsweeper/pull/1720) is merged; use its [App setup instructions](https://github.com/openclaw/clawsweeper/blob/main/docs/target-dispatcher.md#target-repository-dispatcher) without copying its template. Install `clawsweeper` on this repository and confirm its installation on `openclaw/clawsweeper`. Grant the [token permissions](../flows/clawsweeper-dispatch.md#entry-points) and add its private key as the `CLAWSWEEPER_APP_PRIVATE_KEY` Actions secret. Keep one dispatcher.
-
-After the first eligible issue, pull request, or command following merge, inspect **ClawSweeper Dispatch** for successful admission and dispatch. Check the matching ClawSweeper receiver run and final outcome; acknowledgement alone does not prove completion.
-
-Missing `CLAWSWEEPER_APP_PRIVATE_KEY` prevents dispatch. Restore it and verify both App installations and permissions. Rerun or trigger an eligible event, then check both runs. Use the [dispatch flow](../flows/clawsweeper-dispatch.md#debugging-and-verification) for admission warnings or token failures.
+[Authoritative checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml); [setup/verification/recovery](../flows/clawsweeper-dispatch.md#setup-and-first-run-verification).
 
 ### Run Kubernetes model tests before merge
 

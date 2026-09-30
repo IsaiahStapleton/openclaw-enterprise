@@ -1,7 +1,7 @@
 ---
 created: 2026-09-30
 updated: 2026-09-30
-last_updated_session: authoring-run/87dad345-a295-4885-a18f-5d6813b458ea
+last_updated_session: authoring-run/690d00a9-936c-427d-8467-7ad6552327de
 ---
 
 # ClawSweeper dispatch flow
@@ -69,10 +69,19 @@ only if one was created. Proof-nudge comments are ignored. ClawSweeper owns
 subsequent command interpretation and review; the dispatch response is not proof
 of either result.
 
+## Setup and first-run verification
+
+Use this repository's [checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml) as the installation source of truth. [Upstream synchronization](https://github.com/openclaw/clawsweeper/pull/1720) is merged; follow its [GitHub App setup instructions](https://github.com/openclaw/clawsweeper/blob/main/docs/target-dispatcher.md#target-repository-dispatcher), but do not copy the upstream workflow template. Keep one dispatcher.
+
+Install the `clawsweeper` App on this repository and confirm its installation on `openclaw/clawsweeper`. Grant the [token permissions](#entry-points), then add the App private key as this repository's `CLAWSWEEPER_APP_PRIVATE_KEY` Actions secret.
+
+After the first eligible issue, pull request, or command event following merge, inspect **ClawSweeper Dispatch** for admission, token creation, and successful dispatch. Check the matching ClawSweeper receiver run and final outcome. An acknowledgement alone does not prove delivery or completion.
+
 ## Debugging and Verification
 
-- Inspect the Actions run for admission notices, token-step failures, and the dispatch step result. A target acknowledgement failure can coexist with a successful dispatch.
-- Check the ClawSweeper side separately for the received event and its final outcome. Local workflow syntax or shell fixtures do not prove hosted admission, App installation permissions, delivery, or review.
+- If `CLAWSWEEPER_APP_PRIVATE_KEY` is missing, restore the secret and check both App installations and their permissions. Rerun or trigger an eligible event, then check the target dispatch and receiver outcome.
+- For admission warnings or token failures, inspect the target Actions run. A target acknowledgement failure can coexist with successful dispatch.
+- Local workflow syntax and shell fixtures do not prove hosted App installation, private-key availability, a live `repository_dispatch`, an allowed command's final effect, or rejection of a nonmember or revoked member before privileged I/O. These outcomes require redacted hosted target and receiver evidence.
 
 ## Related docs
 
@@ -85,4 +94,5 @@ of either result.
 
 ## Changelog
 
+- 2026-09-30 09:40: Move setup, first-run verification, and recovery details from the CI guide. (authoring-run/690d00a9-936c-427d-8467-7ad6552327de - 4e2fa1b7cc600752c415cf8537e3adcc35451253)
 - 2026-09-30 00:24: Document admission and best-effort acknowledgement in the accompanying workflow change. (authoring-run/87dad345-a295-4885-a18f-5d6813b458ea - 97f7c1ca923328adc530160fb9d73eadb74bc36f)
