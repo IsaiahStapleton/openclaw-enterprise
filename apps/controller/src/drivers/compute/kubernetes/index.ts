@@ -2027,6 +2027,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
       if (this.options.experimental?.codexDeviceLogin !== true) {
         throw new ConfigurationFailure("Codex device login is not enabled for this installation.");
       }
+      // Reject here, before a deployment stops predecessors, not only during preparation.
+      if (!codex || this.sandboxDriver !== undefined) {
+        throw new ConfigurationFailure("OAuth requires the Compute-owned dedicated Codex Harness.");
+      }
     }
     if (
       auth.method === "chatgpt_service_account" &&
@@ -2888,8 +2892,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new ConfigurationFailure("AgentRevision Harness execution topology is unsupported.");
     }
     const sandboxDriver = this.sandboxDriverForRevision(revision);
-    // TODO(oauth-admission): Reject this topology during admission, before predecessors
-    // stop. Deferred beyond the first-deploy MVP on Compute-owned dedicated Codex.
+    // Admission rejects this topology; keep the guard for revisions pinned to a Sandbox.
     if (revision.harnessAuth.method === "oauth" && sandboxDriver !== undefined) {
       throw new ConfigurationFailure("OAuth requires the Compute-owned dedicated Codex Harness.");
     }

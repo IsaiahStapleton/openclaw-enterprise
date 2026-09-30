@@ -3841,7 +3841,7 @@ test("direct service account token is confined to the model container and exact 
   );
 });
 
-test("OAuth Harness authentication requires the installation opt-in", () => {
+test("OAuth Harness authentication requires the installation opt-in and Compute-owned dedicated Codex", () => {
   const oauth = { ...apiKeyAuth, method: "oauth" };
   const codex = { id: "codex", version: "1.0.0", mode: "dedicated" };
   const configuration = { agents: { defaults: { model: "codex/gpt-5" } } };
@@ -3862,6 +3862,27 @@ test("OAuth Harness authentication requires the installation opt-in", () => {
   assert.equal(typeof driver.startHarnessDeviceAuthorization, "function");
   assert.equal(typeof driver.pollHarnessDeviceAuthorization, "function");
   driver.validateHarnessAuth(codex, oauth, configuration);
+  // Unsupported topologies fail at admission, before a deployment stops predecessors.
+  const sandboxDriver = {
+    id: "sandbox-openshell",
+    capability: "sandbox",
+    facets: ["networking", "filesystem", "process"],
+    provisionHarness() {},
+  };
+  const sandboxed = new KubernetesComputeDriver(enabled, { sandboxDriver });
+  for (const harness of [codex, { id: "openclaw", version: "1.0.0", mode: "dedicated" }]) {
+    assert.throws(
+      () =>
+        sandboxed.validateHarnessAuth(
+          harness,
+          oauth,
+          harness.id === "codex"
+            ? configuration
+            : createHarnessConfiguration("openclaw", "gpt-4o-mini"),
+        ),
+      /OAuth requires the Compute-owned dedicated Codex Harness/,
+    );
+  }
 });
 
 test("credential-source authentication renders no model Secret and requires the paired gateway", () => {
