@@ -14,6 +14,8 @@ assign existing issues to a two-week iteration in the project.
   and source-backed implementation guides.
 - The [RFC guide](rfcs.md) explains how to propose architectural changes and
   request feedback.
+- [RFCs and implementation plans](specifications.md) explains document choice,
+  numbering, delivery tracking, and the repository-local spec skill.
 - [Design philosophy](design-philosophy.md) guides interface, ownership, and
   lifecycle decisions; [Readable code](readable-code.md) works through the
   practical choices with one example.

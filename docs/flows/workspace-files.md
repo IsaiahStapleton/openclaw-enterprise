@@ -219,7 +219,7 @@ access to Envoy. Memory uses node duplex with existing native file workers;
 index and embedding configuration stay on Gateway. Skills uses remote discovery,
 reads and policy-checked dependency installation. Each host initializes its own
 image assets; Gateway-provided Skills stay local. See the
-[ownership table](../../specs/30-storage-split-integration.md#where-data-lives).
+[ownership table](../../specs/plans/tasks/30-storage-split-integration.md#where-data-lives).
 Remote channel menus remain deferred to [#241](https://github.com/openclaw/openclaw-enterprise/issues/241).
 
 Only Harness mounts dedicated workspace/generated-image storage. Gateway sessions
@@ -290,7 +290,7 @@ replays it. The native client closes in the operation's cleanup path.
 - The implementation gates initialization before execution. Structural checks,
   Driver fixtures, and runtime setup checks each prove different boundaries;
   the required first-use, retry, and redeploy scenarios need the real workflow
-  integration evidence described in the [feature spec](../../specs/34-agent-workspace-files-setup.md#verification).
+  integration evidence described in the [feature spec](../../specs/plans/tasks/34-agent-workspace-files-setup.md#verification).
 - For `503 DEPENDENCY_UNAVAILABLE`, check the Compute routing settings and key
   mount, then the Gateway, Certificate, SecurityPolicy, and HTTPRoute status.
   Check DNS/CA trust and exact NetworkPolicy peers before changing native auth.

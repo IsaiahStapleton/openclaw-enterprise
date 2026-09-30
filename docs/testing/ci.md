@@ -109,7 +109,7 @@ to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. It repla
 the preinstalled daemon and shares `/var/run/docker.sock` across the CLI, Compose,
 and Driver; other jobs keep the runner daemon. Full-suite acceptance requires
 main-only protected hosted execution of every selected lane. See the
-[delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
+[delivery status](../../specs/plans/tasks/19-github-actions-test-coverage/delivery-status.md#delivery-status)
 for proof boundaries and live gaps.
 
 Each lane runs whole test files. The runner validates Node case results and required names; skips, TODOs, missing results, zero cases, failures and cleanup errors fail the selected lane. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use the approved event commit and do not promote PR build artifacts.
@@ -129,7 +129,7 @@ Local failures can retain cleanup state while the host and state path exist. On
 Docker Desktop or similar VM-backed hosts, run one Kubernetes lane at a time when
 measured disk or network pressure has caused instability; the GitHub matrix remains
 parallel. Model/service tests require the approved credentials and spend policy in
-the [implementation specification](../../specs/19-github-actions-test-coverage.md).
+the [implementation specification](../../specs/plans/tasks/19-github-actions-test-coverage.md).
 
 See the [execution flow](../flows/github-actions-testing.md) for entrypoints, result accounting, cleanup and failures. Use the [suite-specific guides](README.md#integration-tests) to reproduce runs locally.
 

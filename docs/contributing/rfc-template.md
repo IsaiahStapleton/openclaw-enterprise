@@ -1,6 +1,8 @@
 # RFC template
 
-Copy this page into a new RFC and replace the prompts with the actual decision.
+Copy this page into `specs/rfcs/<number>-<topic>.md` and replace the prompts
+with the actual decision. Allocate the number using the
+[specification process](specifications.md#files-and-numbering).
 Adapt the headings to the change and remove sections that do not apply. See the
 [RFC process](rfcs.md) for review, length, and diagram guidance.
 
@@ -8,7 +10,8 @@ Adapt the headings to the change and remove sections that do not apply. See the
 
 # RFC: [Decision or capability]
 
-- **Status:** [Proposed / Implementing / Implemented]
+- **ID:** RFC-[number]
+- **Decision status:** Proposed
 - **Owner:** [Responsible person or team]
 - **Related:** [Relevant issue, implementation PR, and existing contracts]
 
@@ -92,6 +95,11 @@ sequenceDiagram
 ```
 
 ## Delivery and verification
+
+[For a bigger feature, link its implementation plan and keep only delivery
+boundaries and required outcomes here. Put detailed steps, progress, and results
+in the plan. A small change may keep delivery here with a separate delivery
+status. Planning or implementing the RFC does not change its decision status.]
 
 1. [Describe a small step and its real prerequisite.]
 2. [Connect the capability to its supported caller.]

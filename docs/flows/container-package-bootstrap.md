@@ -159,7 +159,7 @@ without deleting the original archives or rerunning their producer.
 ## Related docs
 
 - [Container publication procedure](../../.github/containers.md)
-- [First container release specification](../../specs/32-first-container-release.md)
+- [First container release specification](../../specs/plans/tasks/32-first-container-release.md)
 - [CI execution flow](github-actions-testing.md)
 
 ## Manual Notes

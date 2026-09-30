@@ -320,7 +320,7 @@ Account creation issues no session and infers no grants.
 - [Platform startup flow](platform-startup.md)
 - [Docker Compose development](docker-compose-development.md) and [production startup](production-startup.md)
 - [Service API keys](service-api-keys.md)
-- [Bootstrap specification](../../specs/16-bootstrap-admin-service-account.md)
+- [Bootstrap specification](../../specs/plans/tasks/16-bootstrap-admin-service-account.md)
 - [Feature spec](../../specs/.archive/10-local-password-authentication.md)
 
 ## Manual Notes

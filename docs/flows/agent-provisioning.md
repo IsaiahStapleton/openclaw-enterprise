@@ -98,7 +98,7 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 - [Configuration Driver flow](configuration-driver.md)
 - [Secret storage and delivery](secret-storage-and-delivery.md)
 - [Workspace files](workspace-files.md)
-- [Asynchronous Agent provisioning spec](../../specs/35-agent-provisioning.md)
+- [Asynchronous Agent provisioning spec](../../specs/plans/tasks/35-agent-provisioning.md)
 
 ## Manual Notes
 
