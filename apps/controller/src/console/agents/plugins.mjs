@@ -2,6 +2,7 @@ import { button, element } from "../dom.mjs";
 import { createPluginDiscovery } from "./plugin-discovery.mjs";
 import { createSlackApproverField } from "./slack-approvers.mjs";
 import { assertReadableConfiguration, message } from "./list.mjs";
+import { configuredHarnessId } from "./harness-auth.mjs";
 
 export function renderAgentPlugins(
   context,
@@ -69,6 +70,7 @@ export function renderAgentPlugins(
   let catalogCapabilityError = false;
   const hasBoundCredential =
     agent.harnessAuth?.method === "codex_pat" && agent.harnessAuth.source?.kind === "secret";
+  const codex = configuredHarnessId(snapshot.values) === "codex";
   const getSlackBotSecretId = () => {
     const source = snapshot.secretBindings?.SLACK_BOT_TOKEN?.source;
     return source?.kind === "secret" && source.namespaceId === context.namespaceId
@@ -81,13 +83,13 @@ export function renderAgentPlugins(
     catalogPath: `${path}/plugins`,
     requestBody: (body) => body,
     canDiscover: () =>
-      agent.executionMode === "dedicated" &&
+      codex &&
       (catalogCredential === "none" || (catalogCredential === "required" && hasBoundCredential)),
-    canPrefetch: () => hasBoundCredential,
+    canPrefetch: () => codex && hasBoundCredential,
     isPending: () => pending,
     unavailableMessage: () =>
-      agent.executionMode !== "dedicated"
-        ? "Plugin browsing requires a dedicated Agent. You can still edit existing plugin selections."
+      !codex
+        ? "Plugin browsing requires the Codex harness. You can still edit existing plugin selections."
         : !catalogCapabilityChecked
           ? "Checking plugin catalog availability…"
           : catalogCapabilityError

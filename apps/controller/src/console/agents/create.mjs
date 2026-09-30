@@ -1,6 +1,6 @@
 import { element, button } from "../dom.mjs";
 import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
-import { harnessAuthDescription } from "./harness-auth.mjs";
+import { configuredHarnessId, harnessAuthDescription } from "./harness-auth.mjs";
 import { createRepositoryFields } from "./repositories.mjs";
 import { ensureSecretOperateBinding } from "./secret-access.mjs";
 import { createSecretReferenceField } from "./secret-picker.mjs";
@@ -539,21 +539,21 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   );
   name.value = agent.name ?? "";
   mode.value = agent.executionMode ?? "dedicated";
+  // Partial Presets keep the form default until they select a model Harness.
+  harness.value =
+    configuredHarnessId(rendered.configuration?.values) ??
+    (mode.value === "dedicated" ? "codex" : "openclaw");
   if (authMethod.value === "codex_pat") {
     nativeProvider.value = "openai";
+    harness.value = "codex";
     mode.value = "dedicated";
   } else if (nativeProvider.value === "anthropic" || binding?.method === "runtime") {
+    harness.value = "openclaw";
     mode.value = "embedded";
   }
-  // A Preset or draft keeps its own harness; execution mode only chooses the default.
-  const configuredHarness =
-    rendered.configuration?.values?.agents?.defaults?.models?.[initialModel]?.agentRuntime?.id;
-  // Service account tokens authenticate Codex only.
-  harness.value =
-    mode.value === "dedicated" &&
-    (authMethod.value === "codex_pat" || configuredHarness !== "openclaw")
-      ? "codex"
-      : "openclaw";
+  if (harness.value === "codex") {
+    mode.value = "dedicated";
+  }
   const currentTemplate = () =>
     JSON.stringify(
       configurationTemplate(harness.value, nativeProvider.value, model.value.trim()),
@@ -669,16 +669,19 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     feedback.textContent = "";
     renderChannelEditor();
   }
+  function clearModelCredential() {
+    apiKey.value = "";
+    modelCredentialSource = null;
+    modelCredentialSecret = undefined;
+    modelCredentialPicker.refresh();
+  }
   nativeProvider.addEventListener("change", () => {
     // Operator-managed Presets retain the embedded harness required by their fixed binding.
     harness.value =
       nativeProvider.value === "anthropic" || binding?.method === "runtime" ? "openclaw" : "codex";
     mode.value = harness.value === "codex" ? "dedicated" : "embedded";
     // A provider change must not send the previous provider's key to a different service.
-    apiKey.value = "";
-    modelCredentialSource = null;
-    modelCredentialSecret = undefined;
-    modelCredentialPicker.refresh();
+    clearModelCredential();
     if (!binding) {
       authMethod.value = "api_key";
       resetModelChoices(true);
@@ -687,10 +690,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
   });
   authMethod.addEventListener("change", () => {
-    apiKey.value = "";
-    modelCredentialSource = null;
-    modelCredentialSecret = undefined;
-    modelCredentialPicker.refresh();
+    clearModelCredential();
     resetModelChoices();
   });
   model.addEventListener("change", () => updateModelConfiguration());
@@ -701,10 +701,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     // Service account tokens cannot authenticate OpenClaw; require a new API key.
     if (!binding && harness.value === "openclaw" && authMethod.value === "codex_pat") {
       authMethod.value = "api_key";
-      apiKey.value = "";
-      modelCredentialSource = null;
-      modelCredentialSecret = undefined;
-      modelCredentialPicker.refresh();
+      clearModelCredential();
       resetModelChoices(true);
     } else {
       updateModelConfiguration(true);
@@ -712,10 +709,16 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     updateControls();
   });
   mode.addEventListener("change", () => {
+    const previousHarness = harness.value;
     if (mode.value === "embedded") {
       harness.value = "openclaw";
     }
-    updateModelConfiguration(true);
+    // Topology alone does not change the model policy or provider transport.
+    if (harness.value !== previousHarness) {
+      updateModelConfiguration(true);
+    } else {
+      renderChannelEditor();
+    }
     updateControls();
   });
   configuration.addEventListener("input", () => {
@@ -726,15 +729,23 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     const values = parseObject(configuration);
     const selected = values?.agents?.defaults?.model;
     const ref = typeof selected === "string" ? selected : selected?.primary;
+    const selectedHarness = values && configuredHarnessId(values);
+    if (typeof ref === "string" && selectedHarness) {
+      harness.value = selectedHarness;
+      if (selectedHarness === "codex") {
+        mode.value = "dedicated";
+      }
+    }
     if (typeof ref === "string" && /^(openai|anthropic|codex)\//.test(ref)) {
       if (!savedSecret && !hasBoundModelCredential) {
         const selectedProvider = ref.startsWith("anthropic/") ? "anthropic" : "openai";
-        if (selectedProvider !== nativeProvider.value && !binding) {
-          apiKey.value = "";
+        if (
+          !binding &&
+          (selectedProvider !== nativeProvider.value ||
+            (harness.value === "openclaw" && authMethod.value === "codex_pat"))
+        ) {
           authMethod.value = "api_key";
-          modelCredentialSource = null;
-          modelCredentialSecret = undefined;
-          modelCredentialPicker.refresh();
+          clearModelCredential();
         }
         nativeProvider.value = selectedProvider;
         if (selectedProvider === "anthropic") {
@@ -988,7 +999,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       field(
         "Execution mode",
         mode,
-        "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Codex.",
+        "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Dedicated execution.",
       ),
     ),
     (repositories = createRepositoryFields(
@@ -1211,7 +1222,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         ? element(
             "p",
             { className: "error" },
-            "Channels require Dedicated execution. Select OpenAI with the Codex harness or disable configured channels before creating the Agent.",
+            "Channels require Dedicated execution. Select Dedicated under Runtime details or disable configured channels before creating the Agent.",
           )
         : null;
     channelEditor.replaceChildren(...[channels, modeWarning].filter(Boolean));
@@ -1266,7 +1277,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     if (modeHint) {
       modeHint.textContent = nativeRefused
         ? "Codex uses Dedicated execution. Dedicated OpenClaw is unavailable because this installation's OpenClaw runtime lacks native worker support, so OpenClaw uses Embedded execution. Slack requires Codex."
-        : "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Codex.";
+        : "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Dedicated execution.";
     }
     if (capabilityDiscoveryDone) {
       const nextStatus = shouldProvision()
@@ -1536,7 +1547,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     const primaryModel = typeof selected === "string" ? selected : selected?.primary;
     const fallbackPrefixes =
       harness.value === "codex" ? ["openai/", "codex/"] : [`${nativeProvider.value}/`];
-    // Bound credentials must keep their provider; dedicated Presets support both native prefixes.
+    // Bound Codex Presets may use either supported provider prefix; OpenClaw keeps its provider.
     const primaryPrefixes = hasBoundModelCredential
       ? fallbackPrefixes
       : [harness.value === "codex" ? "codex/" : `${nativeProvider.value}/`];
@@ -1563,10 +1574,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
     if (
       (binding?.method ?? authMethod.value) === "codex_pat" &&
-      (nativeProvider.value !== "openai" || mode.value !== "dedicated")
+      (nativeProvider.value !== "openai" || harness.value !== "codex" || mode.value !== "dedicated")
     ) {
       feedback.textContent =
-        "Service account tokens require OpenAI with Dedicated execution. Update the Configuration JSON or reset the template before saving.";
+        "Service account tokens require OpenAI with the Codex harness and Dedicated execution. Update the Configuration JSON or reset the template before saving.";
       return;
     }
     if (nativeProvider.value === "anthropic" && mode.value !== "embedded") {
@@ -1576,7 +1587,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
     if (mode.value === "embedded" && hasEnabledChannel(values)) {
       feedback.textContent =
-        "Channels require Dedicated execution. Select OpenAI with the Codex harness or disable configured channels before creating the Agent.";
+        "Channels require Dedicated execution. Select Dedicated under Runtime details or disable configured channels before creating the Agent.";
       return;
     }
     const repositoryBindings = repositories.bindings();
