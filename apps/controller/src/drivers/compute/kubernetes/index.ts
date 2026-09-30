@@ -3306,13 +3306,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
           gatewayNamespace,
           gatewayOwnership,
         );
-        if (
-          gateway === undefined ||
-          !this.deploymentReady(
-            gateway,
-            gateway.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id,
-          )
-        ) {
+        const current =
+          gateway?.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revision.id;
+        if (gateway !== undefined && !current && !this.deploymentReady(gateway, false)) {
+          // The predecessor never served (for example, it failed model auth) and is
+          // unready: repair it with this revision's template, as the dedicated path does.
+          await reconcileGatewayDeployment(gatewayEnvironment);
+          return incomplete();
+        }
+        if (gateway === undefined || !this.deploymentReady(gateway, current)) {
           return incomplete();
         }
       } else if (
@@ -4120,6 +4122,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     // its exact Harness is being shut down.
     await this.removeStoppedGateway(revision, namespace);
     await this.shutdownRevisionRuntime(revision, namespace);
+    // Its Pods are gone, so drop the revision's credential copies and snapshots.
+    // Preparing the revision again re-projects them from the canonical sources.
+    await this.deleteRetiredRevisionArtifacts(revision, namespace);
     if (revision.repositoryCredentials !== undefined) {
       await this.removeRepositoryMaterial(revision, namespace);
     }

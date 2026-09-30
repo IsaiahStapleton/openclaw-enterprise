@@ -124,6 +124,12 @@ account read shows present state, **not a receipt**: the original transaction ma
 still be running. Resolve uncertainty before choosing a new action and version.
 Password reset and deletion remain deferred.
 
+These account and recovery routes need GitHub or Google sign-in. In the
+password-only profile an authorized administrator receives
+`409 RESOURCE_CONFLICT` naming that requirement; the profile has no account
+version, disabled state, or session binding, so it cannot disable an account or
+revoke its sessions online. Enable an external provider to use these controls.
+
 Password sign-in allows 10 requests/minute, two active, per client address and
 per email; GitHub start/callback (even invalid) allows 30 and four per
 address. Global caps: four and eight active. The recovery email has a

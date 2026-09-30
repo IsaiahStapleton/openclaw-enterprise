@@ -34,6 +34,34 @@ export class AuthorizationDeniedError extends Error {
 }
 
 /**
+ * The Agent's own service principal, not the caller, lacks a grant that deployment needs.
+ * The caller is already authorized for the Agent, so naming the principal and the missing
+ * grant tells an operator exactly what to bind without disclosing anything new.
+ */
+export class AgentPrincipalAuthorizationError extends AuthorizationDeniedError {
+  readonly principalId: string;
+  declare readonly authorization: {
+    readonly action: AuthorizationRequest["action"];
+    readonly resource: ResourceRef;
+  };
+
+  constructor(
+    principalId: string,
+    action: AuthorizationRequest["action"],
+    resource: ResourceRef,
+    evidence?: AuthorizationEvidence,
+  ) {
+    super(
+      `The Agent service principal ${principalId} is not authorized to ${action} ${resource.kind} ${resource.id}. Grant that principal ${action} on the ${resource.kind}, then deploy again.`,
+      evidence,
+      { action, resource },
+    );
+    this.name = "AgentPrincipalAuthorizationError";
+    this.principalId = principalId;
+  }
+}
+
+/**
  * Authority and audit outages fail closed as authorization failures while
  * remaining distinguishable from explicit denials for HTTP and audit handling.
  */
@@ -92,6 +120,18 @@ export class ScopeViolationError extends Error {
   }
 }
 
+/**
+ * Admitted Configuration content cannot select a supported Harness runtime. The
+ * caller can already see the Configuration, so HTTP reports the static message as
+ * an invalid request instead of hiding it as a scope miss.
+ */
+export class ConfigurationHarnessError extends ScopeViolationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigurationHarnessError";
+  }
+}
+
 export class ResourceConflictError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
@@ -127,6 +167,21 @@ export class NativeWorkerSupportError extends Error {
       "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See docs/reference/harness-execution.md#native-worker-support.",
     );
     this.name = "NativeWorkerSupportError";
+  }
+}
+
+/**
+ * A Sandbox Driver cannot run this exact AgentRevision with the installed
+ * driver. Retrying cannot change the outcome, so the worker fails the deployment
+ * with `code`. The message stays in the controller; status shows a fixed text.
+ */
+export class SandboxRevisionUnsupportedError extends Error {
+  readonly code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED" | "SANDBOX_HARNESS_UNSUPPORTED";
+
+  constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
+    super(message);
+    this.name = "SandboxRevisionUnsupportedError";
+    this.code = code;
   }
 }
 

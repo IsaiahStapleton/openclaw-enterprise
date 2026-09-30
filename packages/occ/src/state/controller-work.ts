@@ -394,6 +394,10 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment runtime did not get enough CPU to start.";
     case "REVISION_SUPERSEDED":
       return "Deployment was superseded by a newer revision.";
+    case "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED":
+      return "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.";
+    case "SANDBOX_HARNESS_UNSUPPORTED":
+      return "The Sandbox Driver does not support this revision's Harness.";
     default:
       return "Deployment reconciliation failed.";
   }
