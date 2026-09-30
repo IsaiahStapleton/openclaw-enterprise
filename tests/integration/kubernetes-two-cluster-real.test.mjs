@@ -228,6 +228,63 @@ test(
       content,
     );
 
+    // Runtime status and logs read each Pod from its own cluster: the Harness from
+    // the execution cluster with the execution kubeconfig, the Gateway from control.
+    const runtimePath = `${agentPath}/deployments/${first.id}/runtime`;
+    const runtime = await api("GET", runtimePath);
+    assert.deepEqual(runtime.pods.map(({ role, cluster }) => `${role}:${cluster}`).sort(), [
+      "agent:execution",
+      "gateway:control",
+    ]);
+    const agentLogs = await api("GET", `${runtimePath}/logs?source=agent&tailLines=50`);
+    assert.equal(agentLogs.stream.pod, harness.metadata.name);
+    assert.ok(
+      agentLogs.records.every(
+        (record) => record.type !== "line" || record.contentClass === "operational",
+      ),
+    );
+    // Without the execution tenant API grant the read fails as cluster RBAC, never
+    // by falling back to control-cluster names.
+    await dp.kubectl(
+      "delete",
+      "rolebinding",
+      "execution-tenant-api-api",
+      "-n",
+      namespaces.execution,
+    );
+    const denied = await fetch(new URL(`${runtimePath}/logs?source=agent`, origin), {
+      headers: { "x-api-key": key },
+      signal: AbortSignal.timeout(20_000),
+    });
+    assert.equal(denied.status, 503);
+    assert.equal((await denied.json()).error.code, "RUNTIME_LOGS_CLUSTER_RBAC");
+    await dp.applyManifest(
+      JSON.stringify({
+        apiVersion: "rbac.authorization.k8s.io/v1",
+        kind: "RoleBinding",
+        metadata: { name: "execution-tenant-api-api", namespace: namespaces.execution },
+        subjects: [
+          {
+            kind: "ServiceAccount",
+            name: "openclaw-enterprise-api",
+            namespace: configuration.execution.systemNamespace,
+          },
+        ],
+        roleRef: {
+          apiGroup: "rbac.authorization.k8s.io",
+          kind: "ClusterRole",
+          name: `${configuration.execution.release}-execution-tenant-api`,
+        },
+      }),
+    );
+    await cp.waitFor("restored execution log grant", async () => {
+      const restored = await fetch(new URL(`${runtimePath}/logs?source=agent`, origin), {
+        headers: { "x-api-key": key },
+        signal: AbortSignal.timeout(20_000),
+      });
+      return restored.status === 200;
+    });
+
     // Inspect only delivery shape; assertion failures never expose credential bytes.
     const secrets = await dp.resources("secrets", namespaces.execution);
     const delivered = secrets.filter(

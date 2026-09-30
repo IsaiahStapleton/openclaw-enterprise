@@ -2253,9 +2253,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const sources: AgentRuntimeLogSource[] = [];
     for (const role of this.runtimeStatusContainers(revision)) {
       const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+      // Terminating Pods are being replaced; their output is not offered as a source.
       const observed = (
         await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))
-      ).slice(0, RUNTIME_LOG_MAX_PODS);
+      )
+        .filter((pod) => asRecord(pod.metadata)?.deletionTimestamp === undefined)
+        .slice(0, RUNTIME_LOG_MAX_PODS);
       const described = await Promise.all(
         observed.map(async (pod) => {
           const status = this.runtimePodStatus(pod, role, target);
