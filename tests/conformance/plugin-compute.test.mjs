@@ -3075,6 +3075,13 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                   const isLogin = args.includes("login");
                   if (isLogin) {
                     loginCalls++;
+                    const loginEnvironment = options.env ?? sandbox.process.env;
+                    assert.equal(Object.hasOwn(loginEnvironment, "APP_SERVER_TOKEN"), false);
+                    assert.equal(
+                      loginEnvironment.CODEX_LOGIN_MODE,
+                      sandbox.process.env.CODEX_LOGIN_MODE,
+                    );
+                    assert.equal(sandbox.process.env.APP_SERVER_TOKEN, "fixture-transport-token");
                   }
                   if (isLogin && scenario.pat) {
                     assert.equal(command, "codex");

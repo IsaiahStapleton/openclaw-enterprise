@@ -22,6 +22,7 @@ const args = process.argv.slice(2);
 const scenario = fs.readFileSync("/fixture/scenario", "utf8");
 fs.appendFileSync("/home/node/calls", JSON.stringify(args) + "\n");
 if (args.includes("login")) {
+  assert.equal(Object.hasOwn(process.env, "APP_SERVER_TOKEN"), false);
   process.stdin.resume();
 } else if (args.includes("exec")) {
   assert.equal(process.env.OPENAI_API_KEY, undefined);
