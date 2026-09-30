@@ -881,7 +881,6 @@
               "testing/plugins",
               "testing/openshell",
               "testing/openshell-pre5-local-experiment",
-              "driver-docs-inventory",
               "flows/agent-repository-credentials",
               "flows/repository-credentials",
               "flows/repository-credential-configuration",
