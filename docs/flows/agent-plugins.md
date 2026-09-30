@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
-updated: 2026-09-28
-last_updated_session: authoring-run/7c8bff1b-a2d1-48f6-a996-1be6a06719fa
+updated: 2026-09-30
+last_updated_session: authoring-run/bf3b8146-9d72-42a4-84e5-2293581c890c
 ---
 
 # Agent Plugin Deployment Flow
@@ -230,6 +230,9 @@ status and rendering exclusions. After restart, the old gateway cannot
 authenticate while its supervisor awaits the next status poll.
 When the peer result changes, the supervisor publishes non-ready status and
 restarts only the OpenClaw process, reporting ready once it serves.
+While peer status is unavailable, the supervisor keeps the gateway unready.
+If the still-running gateway exits during that wait, the wrapper exits too,
+allowing the container lifecycle to recover it.
 
 ### 5. Complete revision reconciliation
 
@@ -293,6 +296,8 @@ completed deployment attempt rather than ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 00:33: Propagate Gateway exits while awaiting peer recovery. (authoring-run/bf3b8146-9d72-42a4-84e5-2293581c890c - 0d72f6a4e4e3003d457c4498e81e7de414f85649)
 
 - 2026-09-28 21:26: Batch Codex metadata reads; preserve ordered writes and verification. (authoring-run/7c8bff1b-a2d1-48f6-a996-1be6a06719fa - 8352c0932bcbde43e88b44c6975496ca5431ff55)
 
