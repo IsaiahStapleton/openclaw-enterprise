@@ -10174,6 +10174,11 @@ for (const path of ${JSON.stringify(
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
 }`;
+      if (harnessAuth?.loginMode !== "oauth") {
+        // A revision without OAuth must not leave a personal login refreshing on the volume.
+        (initialization.args as string[])[0] += `
+require("node:fs").rmSync("/harness-workspace-state/codex-home", { recursive: true, force: true });`;
+      }
     }
     if (dedicated && role === "gateway") {
       // This is the logical workspace key; file access goes through the paired node.

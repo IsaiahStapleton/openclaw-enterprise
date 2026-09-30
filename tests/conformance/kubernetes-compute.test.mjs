@@ -9774,6 +9774,12 @@ for (const dualCluster of [false, true]) {
       "broad-egress-v1",
     );
     const pod = harness.spec.template.spec;
+    assert.equal(
+      pod.initContainers
+        .find(({ name }) => name === "prepare-private-state")
+        .args[0].includes("codex-home"),
+      false,
+    );
     const native = pod.containers[0];
     assert.equal(native.env.find(({ name }) => name === "CODEX_LOGIN_MODE").value, "oauth");
     assert.equal(
@@ -9865,6 +9871,9 @@ for (const embedded of [true, false]) {
         () => driver.harnessRequirementsFromDeployment(harness, "api_key"),
         /cannot deliver workspace initialization/,
       );
+      // Leaving OAuth removes the persisted personal login before the non-OAuth Harness starts.
+      const privateState = pod.initContainers.find(({ name }) => name === "prepare-private-state");
+      assert.match(privateState.args[0], /rmSync\("\/harness-workspace-state\/codex-home"/);
     }
     const initializer = pod.initContainers.find(({ name }) => name === "initialize-workspace");
     assert.equal(initializer.image, driver.options.images.gateway);
