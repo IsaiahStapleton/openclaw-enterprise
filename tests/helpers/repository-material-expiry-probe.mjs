@@ -2,7 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 // The probe is installed only for the expiry integration case. It forwards the
 // original Kubernetes response and Compute result without changing either.
-export async function installRepositoryMaterialExpiryProbe(driver, send) {
+export async function installRepositoryMaterialExpiryProbe(
+  driver,
+  send,
+  { holdTimeoutMs = 30_000 } = {},
+) {
   const clients = await driver.clients("execution");
   const core = clients.core;
   const listPods = core.listNamespacedPod;
@@ -66,14 +70,14 @@ export async function installRepositoryMaterialExpiryProbe(driver, send) {
       generation: material.generation,
       before,
       deadline,
-      after: Math.max(realNow(), deadline),
     };
-    // Restrict the simulated clock jump to the pending real readiness call.
-    // Timers and the separate PostgreSQL server retain their ordinary clocks.
+    // Date.now is process-wide. Restore it as soon as the readiness call settles;
+    // timers and the separate PostgreSQL server retain their ordinary clocks.
     scoped.restoreClock = () => {
       Date.now = realNow;
     };
     Date.now = () => Math.max(realNow(), deadline);
+    scoped.probe.hit.after = Date.now();
     return result;
   };
 
@@ -105,6 +109,12 @@ export async function installRepositoryMaterialExpiryProbe(driver, send) {
     if (current?.agentId === revision.agentId && current.cancelled) {
       throw new Error("Expiry probe cancelled further preparation.");
     }
+    if (current?.agentId === revision.agentId && current.reported) {
+      // The first result must reach the worker, but a later retry must not
+      // activate while the parent observes its durable incomplete outcome.
+      await current.retryFence;
+      throw new Error("Expiry probe fenced a subsequent preparation.");
+    }
     let result;
     try {
       result = await prepare.call(this, revision, context);
@@ -124,6 +134,7 @@ export async function installRepositoryMaterialExpiryProbe(driver, send) {
       return result;
     }
     current.reported = true;
+    current.state = "held";
     send({
       type: "material-expiry-observed",
       id: current.id,
@@ -140,13 +151,16 @@ export async function installRepositoryMaterialExpiryProbe(driver, send) {
         new Promise((_, reject) => {
           timer = setTimeout(() => {
             current.cancelled = true;
+            current.state = "timed-out";
             reject(new Error("Expiry probe release timed out."));
-          }, 10_000);
+          }, holdTimeoutMs);
         }),
       ]);
       if (!proceed) {
         throw new Error("Expiry probe cancelled the pending Compute result.");
       }
+      current.state = "resumed";
+      send({ type: "material-expiry-resumed", id: current.id });
       return result;
     } finally {
       clearTimeout(timer);
@@ -169,34 +183,55 @@ export async function installRepositoryMaterialExpiryProbe(driver, send) {
         throw new Error("Only one material expiry probe is supported.");
       }
       let release;
+      let releaseRetry;
       const pending = new Promise((resolve) => {
         release = resolve;
+      });
+      const retryFence = new Promise((resolve) => {
+        releaseRetry = resolve;
       });
       probe = {
         id,
         agentId,
         release: pending,
         resolve: release,
+        retryFence,
+        resolveRetry: releaseRetry,
         readyBeforeHit: false,
         activations: 0,
         reported: false,
         cancelled: false,
+        state: "armed",
       };
     },
     release(id, proceed) {
       if (probe?.id !== id) {
         throw new Error("Unknown material expiry probe.");
       }
+      if (proceed === true && probe.state !== "held") {
+        throw new Error("The material expiry observation is no longer held.");
+      }
       if (proceed !== true) {
         probe.cancelled = true;
+        probe.resolveRetry();
+      }
+      if (proceed === true) {
+        probe.state = "released";
       }
       probe.resolve(proceed === true);
+    },
+    finish(id) {
+      if (probe?.id !== id) {
+        throw new Error("Unknown material expiry probe.");
+      }
+      probe.cancelled = true;
+      probe.resolveRetry();
     },
     inspect(id) {
       if (probe?.id !== id) {
         throw new Error("Unknown material expiry probe.");
       }
-      return { activations: probe.activations };
+      return { activations: probe.activations, state: probe.state };
     },
   };
 }

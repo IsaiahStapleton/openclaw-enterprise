@@ -45,6 +45,8 @@ process.once("message", async ({ databaseUrl, configFile }) => {
           expiryProbe.arm(message.id, message.agentId);
         } else if (message.action === "release") {
           expiryProbe.release(message.id, message.proceed);
+        } else if (message.action === "finish") {
+          expiryProbe.finish(message.id);
         } else if (message.action !== "inspect") {
           throw new Error("Unknown probe command.");
         }
