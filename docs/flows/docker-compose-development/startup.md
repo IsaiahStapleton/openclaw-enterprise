@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-09-28
-last_updated_session: 01a0e441-02f9-70b2-ad45-0a1a5049954a
+updated: 2026-09-30
+last_updated_session: authoring-run/bbaa0733-5942-49d5-8bff-1b5354c10117
 ---
 
 # Compose development startup
@@ -297,33 +297,35 @@ owns both OpenShell control-plane sequences.
 `internal/occdev/kubernetes.go:writeInstallation`,
 `internal/occdev/openshell.go:prepareOpenShell`.
 
-Compose starts PostgreSQL, migration, and bootstrap. The lifecycle waits for
-successful migration and bootstrap exits before creating the dedicated k3d
-cluster on the Compose network. With the default Sandbox profile,
+Compose starts PostgreSQL, migration, and bootstrap; successful migration and
+bootstrap exits precede dedicated k3d cluster creation on the Compose network.
+With the default Sandbox profile,
 `OCC_DEVELOPMENT_K3S_IMAGE` selects the node image; its default `+v1.35`
 resolves the latest K3s 1.35 patch. An explicit image skips that lookup.
 OpenShell uses its pinned image in both control-plane modes.
 The cluster API binds host loopback; creation leaves the default kubeconfig and
 current context unchanged.
 
-The host kubeconfig remains owner-readable. The container kubeconfig uses the
-cluster's internal load-balancer hostname with TLS verification. The lifecycle
-imports the runtime and OpenShell images under their engine-recorded names,
-`localhost/`-qualified on Podman, resolves each in-cluster digest, and writes
-Installation configuration selecting Kubernetes Compute, Configuration, and
-Secret Drivers with native IAM. Its runtime section configures the transport
-Secret prefix and gateway storage class accepted by the Compute Driver schema. Generated Gateway and Harness resource limits allow 2 GiB of memory per
-workload; the runtime can exceed the former 1 GiB limit during startup.
-The container configuration and kubeconfig are individually readable by
-non-root containers, behind the private host directory, and mounted read-only
-into the API and Kubernetes worker. Neither service receives the engine socket.
+The host kubeconfig remains owner-readable; the container kubeconfig verifies
+TLS against the cluster's internal load-balancer hostname. Startup imports the
+runtime and OpenShell images under their engine-recorded names, including
+Podman's `localhost/` local tags. For an omitted tag,
+`internal/occdev/kubernetes.go:engineImageReference` matches `:latest`;
+it rejects missing or ambiguous matches. Startup resolves each in-cluster digest
+and writes Installation configuration selecting Kubernetes Compute, Configuration,
+and Secret Drivers with native IAM. Its runtime section configures the transport
+Secret prefix and gateway storage class accepted by the Compute Driver schema.
+Gateway and Harness limits allow 2 GiB per workload; runtime startup can exceed
+the former 1 GiB limit. The configuration and kubeconfig, behind the private host
+directory, are readable by non-root containers and mounted read-only into the
+API and Kubernetes worker. Neither service receives the engine socket.
 
 When Compose mode also selects OpenShell, startup installs the pinned Agent
 Sandbox controller and OpenShell Gateway in k3d before starting the API and
 worker. The Gateway uses `openshell-system` and a fixed NodePort reachable from
-the private Compose network. The generated Sandbox Driver configuration selects
-operator workspace mode and includes the rendered workspace-chart resources
-that `ensureNamespace` applies for each OCC Namespace.
+the private Compose network. Sandbox Driver configuration selects operator
+workspace mode and includes rendered workspace-chart resources that
+`ensureNamespace` applies for each OCC Namespace.
 
 ### 14. Prove readiness and clean up the owned Kubernetes profile
 
@@ -331,13 +333,12 @@ that `ensureNamespace` applies for each OCC Namespace.
 `internal/occdev/down.go:Down`, `internal/occdev/down.go:cleanup`,
 `internal/occdev/state.go:readState`.
 
-The lifecycle starts the API and Kubernetes worker, waits for API health and
-worker readiness, copies bootstrap output to a private temporary file, and
-uses `occclient` to read the Installation. Its ID must match the bootstrap
-response before the final key file is written exclusively. With OpenShell,
-startup also waits for the bootstrap Kubernetes Namespace and then for OCC to
-report that Namespace ready, which establishes that the Sandbox Driver created
-or adopted its operator-mode Workspace.
+Startup starts the API and Kubernetes worker, waits for API health and worker
+readiness, copies bootstrap output to a private temporary file, and reads the
+Installation with `occclient`. Its ID must match the bootstrap response before
+the final key file is written exclusively. With OpenShell, startup waits for the
+bootstrap Kubernetes Namespace and for OCC to report it ready, proving the
+Sandbox Driver created or adopted its operator-mode Workspace.
 
 On failure, startup attempts resource cleanup. Explicit Kubernetes shutdown
 validates the marker, state, and Compose snapshot before using the recorded
@@ -371,6 +372,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 00:00: Matched implicit image tags and rejected ambiguous names. (authoring-run/bbaa0733-5942-49d5-8bff-1b5354c10117 - 421e85b24aa3a29c5748dde951224082b2c39d71)
 
 - 2026-09-28 00:34: Restored Compose defaults and explicit Kubernetes-only startup. (01a0e441-02f9-70b2-ad45-0a1a5049954a - 201f31d511464133f06e0526bb5545ed1cb27e25)
 

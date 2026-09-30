@@ -142,17 +142,42 @@ func (r *runner) engineImageReference(ctx context.Context, image string) (string
 	if err := json.Unmarshal(data, &tags); err != nil {
 		return "", fmt.Errorf("invalid tag inventory for image %s: %w", image, err)
 	}
-	// One image can carry several tags, so match the requested one rather than
-	// taking the first and importing an unrelated name.
+	// Engines record the implicit tag even when the request omits it. A colon
+	// in a registry port is not a tag; only inspect the final path component.
+	requested := image
+	last := image[strings.LastIndex(image, "/")+1:]
+	if !strings.Contains(image, "@") && !strings.Contains(last, ":") {
+		requested += ":latest"
+	}
+	// Prefer the requested spelling when the image has several tags.
 	for _, tag := range tags {
 		if tag == image {
 			return tag, nil
 		}
 	}
 	for _, tag := range tags {
-		if _, unqualified, found := strings.Cut(tag, "/"); found && unqualified == image {
+		if tag == requested {
 			return tag, nil
 		}
+	}
+	first, _, hasSlash := strings.Cut(image, "/")
+	qualified := hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost")
+	match := ""
+	for _, tag := range tags {
+		registry, unqualified, found := strings.Cut(tag, "/")
+		if qualified || !found || (registry != "localhost" && !strings.ContainsAny(registry, ".:")) {
+			continue
+		}
+		if unqualified != image && unqualified != requested && !(registry == "docker.io" && !hasSlash && unqualified == "library/"+requested) {
+			continue
+		}
+		if match != "" && match != tag {
+			return "", fmt.Errorf("container engine records ambiguous tags matching image %s", image)
+		}
+		match = tag
+	}
+	if match != "" {
+		return match, nil
 	}
 	return "", fmt.Errorf("container engine records no tag matching image %s", image)
 }

@@ -104,3 +104,42 @@ func TestEngineImageReferenceRejectsAnImageWithNoMatchingTag(t *testing.T) {
 		t.Fatal("resolution accepted an image with no matching tag")
 	}
 }
+
+func TestEngineImageReferenceMatchesDefaultTagAndRegistry(t *testing.T) {
+	cases := []struct {
+		name   string
+		engine string
+		image  string
+		tags   string
+		want   string
+	}{
+		{"docker default tag", "docker", "runtime", `["runtime:other","runtime:latest"]`, "runtime:latest"},
+		{"podman local default tag", "podman", "team/runtime", `["localhost/team/runtime:other","localhost/team/runtime:latest"]`, "localhost/team/runtime:latest"},
+		{"podman pulled default tag", "podman", "runtime", `["docker.io/library/runtime:latest"]`, "docker.io/library/runtime:latest"},
+		{"registry port default tag", "docker", "registry.example:5000/team/runtime", `["registry.example:5000/team/runtime:other","registry.example:5000/team/runtime:latest"]`, "registry.example:5000/team/runtime:latest"},
+		{"registry port explicit tag", "podman", "registry.example:5000/team/runtime:v1", `["registry.example:5000/team/runtime:latest","registry.example:5000/team/runtime:v1"]`, "registry.example:5000/team/runtime:v1"},
+		{"exact preferred", "podman", "team/runtime", `["localhost/team/runtime:latest","team/runtime:latest"]`, "team/runtime:latest"},
+		{"different tag rejected", "docker", "runtime", `["runtime:other"]`, ""},
+		{"different qualified repository rejected", "podman", "registry.example:5000/team/runtime", `["other.example/registry.example:5000/team/runtime:latest"]`, ""},
+		{"qualified explicit repository rejected", "podman", "registry.example:5000/team/runtime:v1", `["other.example/registry.example:5000/team/runtime:v1"]`, ""},
+		{"ambiguous registry rejected", "podman", "team/runtime", `["localhost/team/runtime:latest","registry.example/team/runtime:latest"]`, ""},
+		{"ambiguous explicit tag rejected", "podman", "team/runtime:v1", `["localhost/team/runtime:v1","registry.example/team/runtime:v1"]`, ""},
+		{"digest is not a tag", "docker", "runtime@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", `["runtime:latest"]`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeEngine(t, tc.engine, `"image inspect --format {{json .RepoTags}} `+tc.image+`") echo '`+tc.tags+`' ;;`+"\n")
+			r := &runner{engine: tc.engine, env: map[string]string{}}
+			got, err := r.engineImageReference(context.Background(), tc.image)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("accepted unrelated or ambiguous tag %q", got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q, error %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
