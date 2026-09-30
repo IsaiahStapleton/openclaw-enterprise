@@ -110,7 +110,9 @@ returning it:
 
 Any other structured output, including Codex JSON-RPC protocol traffic, is
 **withheld**: the page shows a count, never the content. Oversized and malformed
-structured lines are withheld the same way.
+structured lines are withheld the same way, and so is a pretty-printed
+(multi-line) JSON value: its opening line, every member line and its closing
+line become one withheld row.
 
 Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,

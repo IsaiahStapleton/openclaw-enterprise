@@ -215,6 +215,72 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   assert.match(long.records[0].message, /…\[truncated\]$/);
 });
 
+test("pretty-printed JSON is withheld as one run, not shown line by line", () => {
+  const stream = { source: "agent", pod: "agent-0", container: "agent" };
+  const prompt = `prompt-canary-${randomUUID()}`;
+  const element = `element-canary-${randomUUID()}`;
+  const tail = `tail-canary-${randomUUID()}`;
+  const raw = [
+    "setup starting",
+    "{",
+    '  "event": "setup",',
+    `  "prompt": "${prompt} {not a brace",`,
+    '  "attempts": [',
+    `    "${element}",`,
+    "    42",
+    "  ],",
+    '  "ok": true',
+    "}",
+    '{"event":"runtime.startup_phase","container":"agent","phase":"node-setup","outcome":"ok","ms":5,"sinceStartMs":9}',
+    "node host connected",
+  ];
+  const result = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: raw.map((line, index) => ({ time: lineTime(index), raw: line })),
+  });
+  const body = JSON.stringify(result);
+  assert.equal(body.includes(prompt), false, "a pretty-printed prompt value leaked");
+  assert.equal(body.includes(element), false, "a pretty-printed array element leaked");
+  assert.deepEqual(
+    result.records.map((record) =>
+      record.type === "withheld" ? `withheld ${record.reason} ${record.count}` : record.message,
+    ),
+    ["setup starting", "withheld malformed 9", "runtime.startup_phase", "node host connected"],
+  );
+
+  // A page that starts inside a value has no `{` line; its members are still withheld.
+  const midValue = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [`    "prompt": "${tail}",`, '    "n": 1', "  }", "}", "after"].map((line, index) => ({
+      time: lineTime(index),
+      raw: line,
+    })),
+  });
+  assert.equal(JSON.stringify(midValue).includes(tail), false, "a mid-value member leaked");
+  assert.deepEqual(
+    midValue.records.map((record) =>
+      record.type === "withheld" ? `withheld ${record.count}` : record.message,
+    ),
+    ["withheld 3", "}", "after"],
+  );
+
+  // An unclosed `{` does not swallow the plain text that follows it.
+  const stray = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: ["{ unbalanced", "plain text resumes"].map((line, index) => ({
+      time: lineTime(index),
+      raw: line,
+    })),
+  });
+  assert.deepEqual(
+    stray.records.map((record) => (record.type === "withheld" ? record.type : record.message)),
+    ["withheld", "plain text resumes"],
+  );
+});
+
 // The redactor runs synchronously on workload-controlled lines of up to 32 KiB, before
 // the 8 KiB output cut. A pattern that backtracks quadratically on such a line would stall
 // the API replica's event loop for every caller, so each hostile shape has a budget.

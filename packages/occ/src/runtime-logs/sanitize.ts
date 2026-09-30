@@ -226,18 +226,69 @@ function codexRecord(value: Readonly<Record<string, unknown>>, message: string):
   };
 }
 
-function classify(line: string): Classified {
+/** Net bracket depth of one line, ignoring brackets inside JSON strings. */
+function bracketDelta(text: string): number {
+  let delta = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (character === "\\") {
+        index += 1;
+      } else if (character === '"') {
+        inString = false;
+      }
+    } else if (character === '"') {
+      inString = true;
+    } else if (character === "{" || character === "[") {
+      delta += 1;
+    } else if (character === "}" || character === "]") {
+      delta -= 1;
+    }
+  }
+  return delta;
+}
+
+// A pretty-printed member (`"prompt": "..."`) or string element (`"...",`). These lines
+// carry payload values even when the enclosing `{` is on another line or page.
+const JSON_MEMBER_LINE = /^"(?:[^"\\]|\\.){0,4096}"\s*(?::|,?$)/;
+// Any line that can continue a pretty-printed JSON value.
+const JSON_CONTINUATION_LINE = /^(?:["{}[\]\-\d]|true\b|false\b|null\b)/;
+
+/**
+ * Tracks one multi-line JSON value within a chunk. JSON.parse sees one line at a time,
+ * so the `{` line alone is malformed and every inner line would otherwise read as text.
+ */
+interface JsonBlock {
+  depth: number;
+}
+
+function classify(line: string, block: JsonBlock): Classified {
   if (byteLength(line) > RUNTIME_LOG_MAX_INPUT_BYTES) {
     return { type: "withheld", reason: "oversized" };
   }
   const text = stripRuntimeLogControls(line);
   const trimmed = text.trim();
+  if (block.depth > 0) {
+    if (JSON_CONTINUATION_LINE.test(trimmed) && !parsesAlone(trimmed)) {
+      block.depth += bracketDelta(trimmed);
+      return { type: "withheld", reason: "malformed" };
+    }
+    // Plain text, or a complete single-line record: the value ended or was interleaved.
+    block.depth = 0;
+  }
+  if (JSON_MEMBER_LINE.test(trimmed)) {
+    // The rest of a value whose opening line was on an earlier page, or was not seen.
+    block.depth = Math.max(0, 1 + bracketDelta(trimmed));
+    return { type: "withheld", reason: "malformed" };
+  }
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
     } catch {
       // JSON-shaped but unparseable output may be a structured payload; never show it.
+      block.depth = Math.max(0, bracketDelta(trimmed));
       return { type: "withheld", reason: "malformed" };
     }
     if (!withinDepth(parsed)) {
@@ -252,6 +303,18 @@ function classify(line: string): Classified {
     return { type: "withheld", reason: "oversized" };
   }
   return { type: "line", kind: "text", level: "unknown", message: text };
+}
+
+function parsesAlone(trimmed: string): boolean {
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface SanitizedRuntimeLogChunk {
@@ -276,8 +339,9 @@ export function sanitizeRuntimeLogChunk(
   const records: SanitizedRuntimeLogRecord[] = [];
   let withheld = 0;
   let run: Mutable<Extract<RuntimeLogRecord, { type: "withheld" }>> | undefined;
+  const block: JsonBlock = { depth: 0 };
   for (const line of lines) {
-    const classified = classify(line.raw);
+    const classified = classify(line.raw, block);
     const time = validTime(line.time);
     if (classified.type === "withheld") {
       withheld += 1;
