@@ -124,6 +124,7 @@ async function createFixture(
     request,
     namespace,
     secretDriver,
+    pluginDriver: driver,
     auditSink,
     requests,
     responses,
@@ -236,6 +237,15 @@ test("device login configures plugins and admits its opaque Secret reference in 
     account_id: "workspace-fixture",
   });
 
+  // The Plugin Driver receives the access token and identity, never the refresh token.
+  const discoveryInputs = [];
+  for (const method of ["discoverCatalog", "getCatalogPlugin"]) {
+    const original = fixture.pluginDriver[method].bind(fixture.pluginDriver);
+    t.mock.method(fixture.pluginDriver, method, (input, signal) => {
+      discoveryInputs.push(JSON.stringify(input));
+      return original(input, signal);
+    });
+  }
   const list = await fixture.request("POST", fixture.pluginsPath, {
     body: { oauthLogin: login.source, q: "knowledge" },
   });
@@ -246,6 +256,11 @@ test("device login configures plugins and admits its opaque Secret reference in 
   });
   assert.equal(details.status, 200, JSON.stringify(details.body));
   assert.equal(details.data.tools[0].id, "fixture-app/search");
+  assert.equal(discoveryInputs.length, 2);
+  for (const input of discoveryInputs) {
+    assert.equal(input.includes(accessToken), true);
+    assert.equal(input.includes(refreshToken), false);
+  }
 
   const agent = await fixture.createAgent(
     fixture.namespace.id,

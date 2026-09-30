@@ -1043,6 +1043,22 @@ function validChannelDirectoryResult(value: unknown): value is ChannelDirectoryR
   return true;
 }
 
+/** Discovery needs the access token and identity; refresh custody stays with the login. */
+function discoveryLoginCredential(value: string): string {
+  try {
+    const bundle = asRecord(JSON.parse(value));
+    const auth = asRecord(bundle?.auth);
+    const tokens = asRecord(auth?.tokens);
+    if (bundle === undefined || auth === undefined || tokens === undefined) {
+      return "{}";
+    }
+    const { refresh_token: _refreshToken, ...discoveryTokens } = tokens;
+    const { last_refresh: _lastRefresh, ...discoveryAuth } = auth;
+    return JSON.stringify({ ...bundle, auth: { ...discoveryAuth, tokens: discoveryTokens } });
+  } catch {
+    return "{}";
+  }
+}
 export class OpenClawController {
   readonly installation: Readonly<Installation>;
 
@@ -4144,7 +4160,7 @@ export class OpenClawController {
           "Connect again to configure plugins. This login is no longer available in OCE.",
         );
       }
-      outcome = await invoke(undefined, session.credential);
+      outcome = await invoke(undefined, discoveryLoginCredential(session.credential!));
     } else if (credential.accessToken !== undefined) {
       outcome = await invoke(credential.accessToken);
     } else if (credential.secretRef !== undefined) {
