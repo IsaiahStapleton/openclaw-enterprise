@@ -95,7 +95,7 @@ export async function routeInstallationProvisioning(page, fixture, executionMode
   });
 }
 
-export async function routeInstallationWithoutProvisioning(page, fixture) {
+export async function routeInstallationWithoutProvisioning(page, fixture, capabilities) {
   await page.route(`${fixture.origin}/installation`, async (route) => {
     await route.fulfill({
       status: 200,
@@ -105,6 +105,7 @@ export async function routeInstallationWithoutProvisioning(page, fixture) {
           id: "ins_00000000-0000-4000-8000-000000000001",
           name: "Console test installation",
           createdAt: new Date().toISOString(),
+          ...(capabilities === undefined ? {} : { capabilities }),
         },
         meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
       }),
@@ -172,7 +173,7 @@ export function nativeAdminComputeDriver(endpoint) {
   });
 }
 
-const repositoryProviderFixture = Object.freeze({
+export const repositoryBackendFixture = Object.freeze({
   id: "console-repositories",
   type: "github",
   configuration: Object.freeze({ registryPath: "/unused/console/repositories.json" }),
@@ -185,7 +186,7 @@ export async function createRepositoryLaunchFixture(
   { reloadablePolicy = false } = {},
 ) {
   const fixture = await createConsoleAppFixture(t, {
-    backends: [...backendFixtures, repositoryProviderFixture],
+    backends: [...backendFixtures, repositoryBackendFixture],
     repositoryCredentials: true,
   });
   await fixture.bootstrap();
@@ -219,26 +220,26 @@ export async function createRepositoryLaunchFixture(
 }
 
 function repositoryPolicyDriver(repositories) {
-  const provider = repositoryProviderFixture;
+  const backend = repositoryBackendFixture;
   const registry = validateGitHubRepositoryRegistry(
     {
       version: 1,
-      backendId: provider.id,
+      backendId: backend.id,
       providerInstanceId: "console-repository-provider",
       appId: "123",
       githubInstallationId: "456",
       maximumDurationSeconds: 3600,
       repositories,
     },
-    provider.id,
+    backend.id,
   );
   return new GitHubRepoDriver(
     {
-      id: provider.id,
+      id: backend.id,
       client: new UnixRepositoryCredentialControlClient({
         controlSocket: "/unused/console/repository-control.sock",
       }),
-      drivers: provider.drivers,
+      drivers: backend.drivers,
     },
     registry,
     { sessionDurationSeconds: 600 },

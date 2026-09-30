@@ -15,7 +15,8 @@ const callbackState = "s".repeat(43);
 
 // The actual Better Auth handler and provider transport run here. State is a
 // boundary fixture; these cases make no PostgreSQL or session-commit claims.
-function loginFixture(overrides = {}) {
+// `trustedClientAddress` says whether x-occ-client-ip came through a configured trusted proxy.
+function loginFixture(overrides = {}, { trustedClientAddress = true } = {}) {
   const subjects = [];
   const denialReasons = [];
   const errors = [];
@@ -37,19 +38,18 @@ function loginFixture(overrides = {}) {
   const login = createHumanLogin(
     state,
     {
-      clientId: "fixture-client",
-      clientSecret: "fixture-client-secret",
       recoveryUserId: "fixture-recovery",
+      github: { clientId: "fixture-client", clientSecret: "fixture-client-secret" },
     },
     origin,
+    { trustedClientAddress },
   );
   login.designateRecovery("Recovery@example.test");
+  const db = { user: [], session: [], account: [], verification: [] };
   const auth = betterAuth({
     baseURL: origin,
     secret: "test-only-authentication-secret-with-at-least-32-characters",
-    database: login.database(
-      memoryAdapter({ user: [], session: [], account: [], verification: [] }),
-    ),
+    database: login.database(memoryAdapter(db)),
     session: {
       expiresIn: 8 * 60 * 60,
       disableSessionRefresh: true,
@@ -71,6 +71,8 @@ function loginFixture(overrides = {}) {
     },
   });
   return {
+    auth,
+    db,
     subjects,
     denialReasons,
     errors,
@@ -78,10 +80,14 @@ function loginFixture(overrides = {}) {
       return denialReasons.length;
     },
     // The controller wrapper sets x-occ-client-ip from the socket peer or a trusted ingress.
-    callback: (query = `state=${callbackState}&code=fixture-code`, ip = "10.0.0.1") =>
+    callback: (
+      query = `state=${callbackState}&code=fixture-code`,
+      ip = "10.0.0.1",
+      cookie = `__Host-occ_login_attempt=${binding}`,
+    ) =>
       auth.handler(
         new Request(`${origin}/api/auth/oce/providers/github/callback?${query}`, {
-          headers: { cookie: `__Host-occ_login_attempt=${binding}`, "x-occ-client-ip": ip },
+          headers: { ...(cookie === null ? {} : { cookie }), "x-occ-client-ip": ip },
         }),
       ),
     start: (ip = "10.0.0.1") =>
@@ -213,6 +219,7 @@ test(
           await expectDenied(await login.callback());
           assert.equal(requests.slice(before).includes("/redirect-target"), false);
           assert.deepEqual(login.subjects, []);
+          assert.deepEqual(login.denialReasons, ["PROVIDER_UNAVAILABLE"]);
         },
       );
 
@@ -259,6 +266,7 @@ test(
       assert.ok(elapsed >= 9_000 && elapsed < 12_000, `Elapsed: ${elapsed}`);
       await until(() => closed);
       assert.deepEqual(login.subjects, []);
+      assert.deepEqual(login.denialReasons, ["PROVIDER_UNAVAILABLE"]);
     });
 
     await t.test("profile body reads use the remaining overall deadline", async () => {
@@ -281,6 +289,7 @@ test(
       assert.ok(elapsed >= 9_000 && elapsed < 12_000, `Elapsed: ${elapsed}`);
       await until(() => closed);
       assert.deepEqual(login.subjects, []);
+      assert.deepEqual(login.denialReasons, ["PROVIDER_UNAVAILABLE"]);
     });
 
     await t.test(
@@ -297,6 +306,69 @@ test(
         await expectDenied(await login.callback());
         assert.deepEqual(login.subjects, []);
         assert.deepEqual(login.denialReasons, ["EXTERNAL_IDENTITY_REJECTED"]);
+      },
+    );
+
+    await t.test(
+      "callback denials separate invalid attempts, provider outages and rejected identities",
+      async () => {
+        const profile = (status, body) => (request, response) => {
+          if (request.url === "/login/oauth/access_token") {
+            return token(response);
+          }
+          response.writeHead(status).end(body);
+        };
+        const unreachable = () => assert.fail("The provider must not be called");
+        const withState = (query) => `state=${callbackState}&${query}`;
+        // [case, expected reason, provider handler, callback query, State overrides]
+        const cases = [
+          ["malformed state", "INVALID_ATTEMPT", unreachable, "state=short&code=c"],
+          [
+            "unknown attempt",
+            "INVALID_ATTEMPT",
+            unreachable,
+            undefined,
+            {
+              consumeAttempt: async () => undefined,
+            },
+          ],
+          [
+            "access_denied",
+            "EXTERNAL_IDENTITY_REJECTED",
+            unreachable,
+            withState("error=access_denied"),
+          ],
+          [
+            "provider outage",
+            "PROVIDER_UNAVAILABLE",
+            unreachable,
+            withState("error=temporarily_unavailable"),
+          ],
+          [
+            "token 503",
+            "PROVIDER_UNAVAILABLE",
+            (_request, response) => response.writeHead(503).end(),
+          ],
+          [
+            "token 429",
+            "PROVIDER_UNAVAILABLE",
+            (_request, response) => response.writeHead(429).end(),
+          ],
+          [
+            "token not JSON",
+            "PROVIDER_UNAVAILABLE",
+            (_request, response) => response.end("<html>"),
+          ],
+          ["profile 500", "PROVIDER_UNAVAILABLE", profile(500, "")],
+          ["profile 401", "EXTERNAL_IDENTITY_REJECTED", profile(401, "{}")],
+          ["unenrolled subject", "EXTERNAL_IDENTITY_REJECTED", profile(200, '{"id":12345678}')],
+        ];
+        for (const [name, reason, handler, query, overrides] of cases) {
+          const login = loginFixture(overrides);
+          serve = handler;
+          await expectDenied(await login.callback(query));
+          assert.deepEqual(login.denialReasons, [reason], name);
+        }
       },
     );
 
@@ -356,95 +428,76 @@ test(
           await expectDenied(await login.callback("state=invalid", "10.0.0.1"));
         }
         assert.equal((await login.callback(undefined, "10.0.0.1")).status, 429);
-        assert.equal((await login.start("10.0.0.1")).status, 429);
+        // Each step keeps its own budget, so a callback flood does not spend start's.
+        assert.equal((await login.start("10.0.0.1")).status, 200);
         assert.equal((await login.start("10.0.0.2")).status, 200);
         await expectDenied(await login.callback("state=invalid", "10.0.0.2"));
         assert.equal(requests.length, before);
-        // Password admission is a separate lane.
+        // Password admission belongs to the controller route, not this endpoint.
         await expectDenied(await login.password(undefined, { ip: "10.0.0.1" }));
       },
     );
 
-    await t.test("password budgets are kept per email and per client address", async () => {
-      const login = loginFixture();
-      const email = "a@example.test";
-      for (let i = 0; i < 10; i += 1) {
-        await expectDenied(await login.password(undefined, { ip: `10.0.1.${i}`, email }));
-      }
-      assert.equal((await login.password(undefined, { ip: "10.0.1.99", email })).status, 429);
-      await expectDenied(
-        await login.password(undefined, { ip: "10.0.1.0", email: "b@example.test" }),
-      );
-      for (let i = 0; i < 9; i += 1) {
-        await expectDenied(
-          await login.password(undefined, { ip: "10.0.2.1", email: `ip-${i}@example.test` }),
-        );
-      }
-      // Case and surrounding space do not create a fresh email budget.
-      await expectDenied(
-        await login.password(undefined, { ip: "10.0.2.1", email: " B@example.test " }),
-      );
-      assert.equal(
-        (await login.password(undefined, { ip: "10.0.2.1", email: "c@example.test" })).status,
-        429,
-      );
-      await expectDenied(
-        await login.password(undefined, { ip: "10.0.2.2", email: "b@example.test" }),
-      );
-      assert.deepEqual(login.denialReasons, []);
-    });
-
     await t.test(
-      "the recovery email keeps a reserved password lane with its own budget",
+      "without a trusted proxy, external steps never share one Installation-wide budget",
       async () => {
-        const held = [];
-        const login = loginFixture({
-          snapshotPassword: () => new Promise((resolve) => held.push(resolve)),
-        });
-        const valid = "valid-length-fixture-password";
-        const pending = Array.from({ length: 4 }, (_, i) =>
-          login.password(valid, { ip: `10.0.3.${i}`, email: `held-${i}@example.test` }),
-        );
-        await until(() => held.length === 4);
-        assert.equal(
-          (await login.password(valid, { ip: "10.0.3.9", email: "fresh@example.test" })).status,
-          429,
-        );
-        pending.push(login.password(valid, { email: "recovery@example.test" }));
-        await until(() => held.length === 5);
-        // The one reserved slot is taken; recovery cannot exceed the global lane plus reserve.
-        assert.equal((await login.password(valid, { email: "recovery@example.test" })).status, 429);
-        for (const resolve of held) {
-          resolve(undefined);
+        // Every browser behind the ingress arrives from one address, so it is not a key.
+        const login = loginFixture({}, { trustedClientAddress: false });
+        const ingress = "10.0.7.1";
+        const before = requests.length;
+        // Start has no browser state; it is bounded by concurrency and State's attempt cap.
+        for (let i = 0; i < 40; i += 1) {
+          assert.equal((await login.start(ingress)).status, 200);
         }
-        await Promise.all((await Promise.all(pending)).map(expectDenied));
-        for (let i = 1; i < 20; i += 1) {
-          await expectDenied(await login.password(undefined, { email: "recovery@example.test" }));
+        // Junk callbacks without the attempt cookie spend only their own key.
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.callback("state=invalid", ingress, null));
         }
-        assert.equal(
-          (await login.password(undefined, { email: "RECOVERY@example.test" })).status,
-          429,
+        assert.equal((await login.callback("state=invalid", ingress, null)).status, 429);
+        // A forged attempt cookie spends that cookie's key, not a real browser's.
+        const forged = `__Host-occ_login_attempt=${"f".repeat(43)}`;
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.callback("state=invalid", ingress, forged));
+        }
+        assert.equal((await login.callback("state=invalid", ingress, forged)).status, 429);
+        await expectDenied(await login.callback("state=invalid", ingress));
+        // Result keys on the browser's receipt cookie the same way.
+        for (let i = 0; i < 30; i += 1) {
+          await expectDenied(await login.result("a".repeat(43), "", ingress));
+        }
+        assert.equal((await login.result("a".repeat(43), "", ingress)).status, 429);
+        await expectDenied(
+          await login.result("a".repeat(43), "__Host-occ_login_receipt=receipt", ingress),
         );
-        // Recovery attempts spent neither the address budget nor the global lane.
-        await expectDenied(await login.password(undefined, { email: "other@example.test" }));
+        assert.equal(requests.length, before);
       },
     );
 
+    await t.test("the password endpoint leaves admission to the controller route", async () => {
+      // Failure-counting admission runs before /oce/password (auth/index.ts); the endpoint
+      // itself refuses nothing with 429, so it cannot count successes or refuse recovery.
+      const login = loginFixture();
+      for (let i = 0; i < 25; i += 1) {
+        await expectDenied(
+          await login.password(undefined, {
+            email: i % 2 === 0 ? "recovery@example.test" : "a@example.test",
+          }),
+        );
+      }
+      assert.deepEqual(login.denialReasons, []);
+    });
+
     await t.test("the admission table stays bounded and evicts idle keys", async () => {
       const login = loginFixture();
-      const email = "c@example.test";
-      for (let i = 0; i < 10; i += 1) {
-        await expectDenied(await login.password(undefined, { ip: `10.0.4.${i}`, email }));
+      for (let i = 0; i < 30; i += 1) {
+        await expectDenied(await login.callback("state=invalid", "10.0.4.99"));
       }
-      assert.equal((await login.password(undefined, { ip: "10.0.4.99", email })).status, 429);
+      assert.equal((await login.callback("state=invalid", "10.0.4.99")).status, 429);
       for (let i = 0; i < 4096; i += 1) {
-        const response = await login.password(undefined, {
-          ip: `10.1.${i >> 8}.${i & 255}`,
-          email: `cycle-${i}@example.test`,
-        });
+        const response = await login.callback("state=invalid", `10.1.${i >> 8}.${i & 255}`);
         assert.equal(response.status, 401);
       }
-      await expectDenied(await login.password(undefined, { ip: "10.0.4.99", email }));
+      await expectDenied(await login.callback("state=invalid", "10.0.4.99"));
     });
 
     await t.test(
@@ -469,28 +522,6 @@ test(
         await expectDenied(await login.callback(undefined, "10.0.5.99"));
       },
     );
-
-    await t.test("four active password checks cap expensive work independently", async () => {
-      const held = [];
-      const login = loginFixture({
-        snapshotPassword: () => new Promise((resolve) => held.push(resolve)),
-      });
-      const valid = "valid-length-fixture-password";
-      const pending = Array.from({ length: 4 }, (_, i) =>
-        login.password(valid, { ip: `10.0.6.${i}`, email: `active-${i}@example.test` }),
-      );
-      await until(() => held.length === 4);
-      assert.equal(
-        (await login.password(valid, { ip: "10.0.6.99", email: "late@example.test" })).status,
-        429,
-      );
-      assert.equal(held.length, 4);
-      for (const resolve of held) {
-        resolve(undefined);
-      }
-      await Promise.all((await Promise.all(pending)).map(expectDenied));
-      await expectDenied(await login.password());
-    });
 
     for (const expired of [false, true]) {
       await t.test(
@@ -646,3 +677,39 @@ test(
     );
   },
 );
+
+test("guarded adapter never lists, counts or mutates raw session rows", async () => {
+  const login = loginFixture({
+    // State owns session reads; this row would be rejected by it (for example, revoked).
+    currentSession: async () => undefined,
+  });
+  const now = new Date();
+  login.db.user.push({
+    id: "stale-user",
+    email: "stale@example.test",
+    name: "Stale",
+    emailVerified: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  login.db.session.push({
+    id: "stale-session",
+    userId: "stale-user",
+    token: "stale-session-token",
+    expiresAt: new Date(now.getTime() + 3_600_000),
+    createdAt: now,
+    updatedAt: now,
+  });
+  const context = await login.auth.$context;
+  assert.deepEqual(await context.internalAdapter.listSessions("stale-user"), []);
+  assert.deepEqual(await context.adapter.findMany({ model: "session" }), []);
+  assert.equal(await context.adapter.count({ model: "session" }), 0);
+  const where = [{ field: "id", value: "stale-session" }];
+  await assert.rejects(context.adapter.consumeOne({ model: "session", where }));
+  await assert.rejects(
+    context.adapter.incrementOne({ model: "session", where, increment: { version: 1 } }),
+  );
+  assert.equal(login.db.session.length, 1, "the raw row is untouched");
+  // Other models still pass through to the underlying adapter.
+  assert.equal(await context.adapter.count({ model: "user" }), 1);
+});

@@ -2,6 +2,7 @@ package occclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json/jsontext"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,10 +23,13 @@ type Config struct {
 	ServiceKeyFile string
 	CABundle       string
 	Timeout        time.Duration
+	// Context cancels in-flight requests, for example on Ctrl-C. Nil means no cancellation.
+	Context context.Context
 }
 
 // Client exposes supported OpenClaw Control Plane resource operations.
 type Client struct {
+	ctx        context.Context
 	baseURL    *url.URL
 	serviceKey string
 	http       *http.Client
@@ -39,6 +44,34 @@ type serviceKeyEnvelope struct {
 type responseEnvelope struct {
 	Data jsontext.Value `json:"data"`
 	Meta jsontext.Value `json:"meta"`
+}
+
+// APIError is an OCC error response. RetryAfter is set when OCC sent Retry-After.
+type APIError struct {
+	Status     int
+	Code       string
+	Message    string
+	RetryAfter time.Duration
+}
+
+func (err *APIError) Error() string {
+	if err.Code == "" {
+		return fmt.Sprintf("OCC operation failed (HTTP %d)", err.Status)
+	}
+	return fmt.Sprintf("OCC operation failed (HTTP %d): %s: %s", err.Status, err.Code, err.Message)
+}
+
+// RuntimeLogPage is one page of sanitized runtime log records. Records keep the
+// server's JSON so callers can re-emit them unchanged.
+type RuntimeLogPage struct {
+	RevisionID string           `json:"revisionId"`
+	Source     string           `json:"source"`
+	Stream     jsontext.Value   `json:"stream"`
+	ObservedAt string           `json:"observedAt"`
+	Records    []jsontext.Value `json:"records"`
+	Withheld   int              `json:"withheld"`
+	Truncated  bool             `json:"truncated"`
+	Cursor     *string          `json:"cursor"`
 }
 
 type errorEnvelope struct {
@@ -67,7 +100,13 @@ func New(config Config) (*Client, error) {
 		return nil, err
 	}
 
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	return &Client{
+		ctx:        ctx,
 		baseURL:    baseURL,
 		serviceKey: serviceKey,
 		http: &http.Client{
@@ -197,6 +236,11 @@ func (client *Client) CreateSecret(namespaceID string, body jsontext.Value) (any
 	return client.send(http.MethodPost, []string{"namespaces", namespaceID, "secrets"}, body)
 }
 
+// ListSecrets lists Secret metadata in a Namespace without material.
+func (client *Client) ListSecrets(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "secrets")
+}
+
 // GetSecret fetches Secret metadata without material.
 func (client *Client) GetSecret(namespaceID, secretID string) (any, error) {
 	return client.get("namespaces", namespaceID, "secrets", secretID)
@@ -287,6 +331,11 @@ func (client *Client) DeployAgent(namespaceID, agentID string) (any, error) {
 	)
 }
 
+// ListAgentRevisions lists the readable immutable revisions of an Agent.
+func (client *Client) ListAgentRevisions(namespaceID, agentID string) (any, error) {
+	return client.get("namespaces", namespaceID, "agents", agentID, "revisions")
+}
+
 // GetAgentDeployment fetches durable deployment status for one Agent revision.
 func (client *Client) GetAgentDeployment(namespaceID, agentID, deploymentID string) (any, error) {
 	return client.get(
@@ -297,6 +346,47 @@ func (client *Client) GetAgentDeployment(namespaceID, agentID, deploymentID stri
 		"deployments",
 		deploymentID,
 	)
+}
+
+// GetAgentRuntime fetches Pod status, restarts, Events and log sources for one revision.
+func (client *Client) GetAgentRuntime(namespaceID, agentID, deploymentID string) (any, error) {
+	return client.get(
+		"namespaces",
+		namespaceID,
+		"agents",
+		agentID,
+		"deployments",
+		deploymentID,
+		"runtime",
+	)
+}
+
+// GetAgentRuntimeLogs fetches one bounded, redacted page of container output.
+func (client *Client) GetAgentRuntimeLogs(
+	namespaceID, agentID, deploymentID string,
+	query url.Values,
+) (*RuntimeLogPage, error) {
+	status, header, responseBody, err := client.executeQuery(
+		http.MethodGet,
+		[]string{"namespaces", namespaceID, "agents", agentID, "deployments", deploymentID, "runtime", "logs"},
+		query,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, apiErrorWithHeader(status, header, responseBody)
+	}
+	var envelope responseEnvelope
+	if err := json.Unmarshal(responseBody, &envelope); err != nil || len(envelope.Data) == 0 {
+		return nil, fmt.Errorf("OCC returned an invalid response (HTTP %d)", status)
+	}
+	var page RuntimeLogPage
+	if err := json.Unmarshal(envelope.Data, &page); err != nil {
+		return nil, fmt.Errorf("OCC returned an invalid response (HTTP %d)", status)
+	}
+	return &page, nil
 }
 
 // StopAgent stops an Agent while retaining its revision history and persistent state.
@@ -356,23 +446,36 @@ func (client *Client) sendEmpty(method string, segments []string) error {
 }
 
 func (client *Client) execute(method string, segments []string, body any) (int, []byte, error) {
+	status, _, responseBody, err := client.executeQuery(method, segments, nil, body)
+	return status, responseBody, err
+}
+
+func (client *Client) executeQuery(
+	method string,
+	segments []string,
+	query url.Values,
+	body any,
+) (int, http.Header, []byte, error) {
 	resourceURL, err := resourceURL(client.baseURL, segments)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
+	}
+	if len(query) > 0 {
+		resourceURL.RawQuery = query.Encode()
 	}
 
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return 0, nil, fmt.Errorf("failed to encode OCC request: %w", err)
+			return 0, nil, nil, fmt.Errorf("failed to encode OCC request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
 
-	request, err := http.NewRequest(method, resourceURL.String(), requestBody)
+	request, err := http.NewRequestWithContext(client.ctx, method, resourceURL.String(), requestBody)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to create OCC request: %w", err)
+		return 0, nil, nil, fmt.Errorf("failed to create OCC request: %w", err)
 	}
 	request.Header.Set("x-api-key", client.serviceKey)
 	if body != nil {
@@ -381,14 +484,14 @@ func (client *Client) execute(method string, segments []string, body any) (int, 
 
 	response, err := client.http.Do(request)
 	if err != nil {
-		return 0, nil, fmt.Errorf("OCC operation failed: %w", err)
+		return 0, nil, nil, fmt.Errorf("OCC operation failed: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to read the OCC response: %w", err)
+		return 0, nil, nil, fmt.Errorf("failed to read the OCC response: %w", err)
 	}
-	return response.StatusCode, responseBody, nil
+	return response.StatusCode, response.Header, responseBody, nil
 }
 
 func parseOrigin(value string) (*url.URL, error) {
@@ -421,16 +524,20 @@ func resourceURL(baseURL *url.URL, segments []string) (*url.URL, error) {
 }
 
 func apiError(status int, body []byte) error {
+	return apiErrorWithHeader(status, nil, body)
+}
+
+func apiErrorWithHeader(status int, header http.Header, body []byte) error {
+	result := &APIError{Status: status}
 	var envelope errorEnvelope
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Code != "" {
-		return fmt.Errorf(
-			"OCC operation failed (HTTP %d): %s: %s",
-			status,
-			envelope.Error.Code,
-			envelope.Error.Message,
-		)
+		result.Code = envelope.Error.Code
+		result.Message = envelope.Error.Message
 	}
-	return fmt.Errorf("OCC operation failed (HTTP %d)", status)
+	if seconds, err := strconv.Atoi(header.Get("retry-after")); err == nil && seconds > 0 && seconds <= 3600 {
+		result.RetryAfter = time.Duration(seconds) * time.Second
+	}
+	return result
 }
 
 func readServiceKey(path string) (string, error) {

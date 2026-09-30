@@ -713,7 +713,18 @@ test("session mutations reject sibling origins before changing Agent or audit st
       headers: { cookie, ...headers },
     });
     assert.equal(response.statusCode, 403, `${JSON.stringify(headers)}: ${response.body}`);
+    // The refusal says what is missing instead of a generic admission boundary.
+    assert.match(response.json().error.message, /^A trusted browser origin is required: /);
   }
+  // Reads need no Origin to be admitted; the account route then names the same requirement.
+  const accountRead = await injectJson(context.fixture, "GET", "/api/auth/accounts/any-account", {
+    headers: { cookie },
+  });
+  assert.equal(accountRead.statusCode, 403, accountRead.body);
+  assert.equal(
+    accountRead.json().error.message,
+    "A current human session and trusted browser origin are required.",
+  );
   for (const path of [
     `${agentPath}/deploy`,
     "/api/auth/accounts",

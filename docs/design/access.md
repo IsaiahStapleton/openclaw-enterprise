@@ -1,8 +1,19 @@
 # Access and authorization
 
-This page owns the access and authorization portion of the authoritative
-[platform target design](../design.md). Read it with the other design chapters;
-the [current architecture](../ARCHITECTURE.md) describes implementation status.
+This chapter defines requirements within the authoritative
+[platform architecture](../design.md). The implementation status below separates
+current behavior from remaining design work.
+
+## Implementation status
+
+OCC currently authenticates human sessions and non-Agent service API keys.
+The separate OAG admission path below is planned. Projected Kubernetes tokens do
+not yet authenticate Agent workloads to the OCC API, and same-cluster dedicated
+Codex transport uses capability-token `ws://`, not mutual TLS. Native IAM already
+supports exact-resource permissions and deny-only Restrictions; the design's
+cross-Driver policy guarantees are broader. See [authentication](../reference/authentication.md),
+[authorization](../reference/authorization.md), and
+[runtime isolation](../reference/security/runtime-isolation.md) for enforcement today.
 
 ## Access gateway
 
@@ -93,9 +104,10 @@ or exact resources within that Namespace.
 
 OCC creates and owns each Agent's `WorkloadIdentity`. Every admitted revision
 and Agent workload for that Agent uses the same identity, but only the Agent
-workload bound to its single active revision can act. An Agent workload cannot
-assume a human session, inherit a creator's Role, use the deploying user's
-credentials or provider sessions, or select another Agent's identity.
+workload bound to its single active revision can act. An Agent workload does not
+yet support inheriting its creator's identity or Role, assuming a human session,
+or using the deploying user's credentials or provider sessions. It cannot select
+another Agent's identity.
 
 Each Agent has one `WorkloadIdentity` backed by a dedicated Kubernetes
 `ServiceAccount`. Its workload authenticates to OCC using a short-lived,

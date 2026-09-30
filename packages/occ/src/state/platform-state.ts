@@ -10,6 +10,7 @@ import type {
 import { memoryRepositorySessions } from "./memory-repository-sessions.ts";
 import {
   normalizedRepositoryBindings,
+  normalizedRepositoryAccess,
   validRepositoryRevisionState,
 } from "./repository-credential-state.ts";
 import type {
@@ -34,6 +35,7 @@ import type {
   PluginApprovers,
   Preset,
   RepositoryBindingSelection,
+  RepositoryAccess,
   Secret,
   SecretBindings,
   ServiceAccount,
@@ -72,6 +74,12 @@ export interface InstallationReadRepository {
 
 export interface InstallationRepository extends InstallationReadRepository {
   createInstallation(installation: Installation): Promise<Readonly<Installation>>;
+  /**
+   * Holds a human Principal's account until COMMIT so a disable cannot commit first.
+   * False when the account is disabled; true when it is enabled or the Principal has
+   * no human account (its IAM bindings alone decide).
+   */
+  holdPrincipalAccount(principalId: string): Promise<boolean>;
 }
 
 export interface NamespaceReadRepository {
@@ -143,6 +151,7 @@ export interface AgentRepository extends AgentReadRepository {
     plugins?: PluginDesiredState,
     repositoryBindings?: readonly RepositoryBindingSelection[],
     pluginApprovers?: PluginApprovers | null,
+    repositoryAccess?: RepositoryAccess | null,
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -612,7 +621,27 @@ export interface PlatformOperationReadRepository {
 
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
   append(operation: PlatformOperation): Promise<void>;
-  retryFailedAgentDeletion(namespaceId: string, agentId: string, actorId: string): Promise<boolean>;
+  /**
+   * Requeue the exact deleting Agent's terminal teardown initiated by
+   * `initiatingActorId`, assigning it to `actorId` (the same actor for a plain
+   * retry, another for a takeover).
+   */
+  retryFailedAgentDeletion(
+    namespaceId: string,
+    agentId: string,
+    initiatingActorId: string,
+    actorId: string,
+  ): Promise<boolean>;
+  /**
+   * Requeue the exact deleting Namespace's terminal teardown initiated by
+   * `initiatingActorId`, assigning it to `actorId` (the same actor for a plain
+   * retry, another for a takeover).
+   */
+  retryFailedNamespaceDeletion(
+    namespaceId: string,
+    initiatingActorId: string,
+    actorId: string,
+  ): Promise<boolean>;
 }
 
 export type { AgentProvisioningRecord } from "./agent-provisioning.ts";
@@ -987,6 +1016,8 @@ function repositories(
       snapshot.installation = saved;
       return immutableCopy(saved);
     },
+    // In-memory State has no human accounts, and its units are serialized.
+    holdPrincipalAccount: async () => true,
   };
 
   const namespaces: NamespaceRepository = {
@@ -1131,6 +1162,20 @@ function repositories(
     },
   };
 
+  // Deleting a Namespace resource also removes the AccessBindings that grant
+  // on it (as Agent deletion does), so none outlive their target or keep
+  // blocking deletion of the Role they reference. Resource ids are unique.
+  const deleteResourceAccessBindings = (
+    resourceKind: "configuration" | "preset" | "secret" | "credential_source" | "service_account",
+    resourceId: string,
+  ): void => {
+    for (const [key, binding] of snapshot.bindings) {
+      if (binding.resourceKind === resourceKind && binding.resourceId === resourceId) {
+        snapshot.bindings.delete(key);
+      }
+    }
+  };
+
   const findPreset: PresetReadRepository["findPreset"] = async (namespaceId, presetId) => {
     if (snapshot.namespaces.get(namespaceId)?.deletedAt !== undefined) {
       return undefined;
@@ -1192,7 +1237,9 @@ function repositories(
       if ((await findPreset(namespaceId, presetId)) === undefined) {
         return false;
       }
-      return snapshot.presets.delete(agentKey(namespaceId, presetId));
+      snapshot.presets.delete(agentKey(namespaceId, presetId));
+      deleteResourceAccessBindings("preset", presetId);
+      return true;
     },
   };
 
@@ -1296,6 +1343,7 @@ function repositories(
         throw new ScopeViolationError("The Configuration is referenced by an Agent.");
       }
       snapshot.configurations.delete(agentKey(namespaceId, configurationId));
+      deleteResourceAccessBindings("configuration", configurationId);
       return true;
     },
   };
@@ -1404,6 +1452,7 @@ function repositories(
         throw new ScopeViolationError("The Secret is referenced by active platform state.");
       }
       snapshot.secrets.delete(agentKey(namespaceId, secretId));
+      deleteResourceAccessBindings("secret", secretId);
       return true;
     },
   };
@@ -1534,6 +1583,7 @@ function repositories(
         );
       }
       snapshot.credentialSources.delete(agentKey(namespaceId, credentialSourceId));
+      deleteResourceAccessBindings("credential_source", credentialSourceId);
       return true;
     },
   };
@@ -1651,6 +1701,7 @@ function repositories(
         throw new ScopeViolationError("The ServiceAccount is referenced by active platform state.");
       }
       snapshot.serviceAccounts.delete(agentKey(namespaceId, serviceAccountId));
+      deleteResourceAccessBindings("service_account", serviceAccountId);
       return true;
     },
   };
@@ -1744,6 +1795,10 @@ function repositories(
       const plugins = normalizedPlugins(agent.plugins);
       const pluginApprovers = normalizedPluginApprovers(agent.pluginApprovers);
       const repositoryBindings = normalizedRepositoryBindings(agent.repositoryBindings);
+      const repositoryAccess = normalizedRepositoryAccess(
+        agent.repositoryAccess,
+        repositoryBindings,
+      );
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
         namespace === undefined ||
@@ -1786,6 +1841,7 @@ function repositories(
         plugins: _providedPlugins,
         pluginApprovers: _providedPluginApprovers,
         repositoryBindings: _providedRepositoryBindings,
+        repositoryAccess: _providedRepositoryAccess,
         ...withoutPlugins
       } = agent;
       const saved = immutableCopy({
@@ -1793,6 +1849,7 @@ function repositories(
         ...(plugins === undefined ? {} : { plugins }),
         ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+        ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
         desiredRuntimeState: "stopped" as const,
         status: "active" as const,
       });
@@ -1848,6 +1905,7 @@ function repositories(
       nextPlugins,
       nextRepositoryBindings,
       nextPluginApprovers,
+      nextRepositoryAccess,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) {
@@ -1885,7 +1943,16 @@ function repositories(
         nextRepositoryBindings === undefined
           ? current.repositoryBindings
           : normalizedRepositoryBindings(nextRepositoryBindings);
+      const repositoryAccess = normalizedRepositoryAccess(
+        nextRepositoryAccess === undefined
+          ? nextRepositoryBindings === undefined
+            ? current.repositoryAccess
+            : undefined
+          : nextRepositoryAccess,
+        repositoryBindings,
+      );
       const {
+        repositoryAccess: _currentRepositoryAccess,
         plugins: _currentPlugins,
         pluginApprovers: _currentPluginApprovers,
         repositoryBindings: _currentRepositoryBindings,
@@ -1900,6 +1967,7 @@ function repositories(
         ...(plugins === undefined ? {} : { plugins }),
         ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+        ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
       return immutableCopy(updated);
@@ -2316,6 +2384,7 @@ function repositories(
         Object.freeze(snapshot.operations.map((operation) => immutableCopy(operation))),
       // The in-memory operation log has no executing or terminal work records.
       retryFailedAgentDeletion: async () => false,
+      retryFailedNamespaceDeletion: async () => false,
       findWorkAttempt: async () => undefined,
       findWork: async (idempotencyKey) => {
         const operation = snapshot.operations.find(

@@ -2,19 +2,24 @@ import type { FastifyError, FastifyReply } from "fastify";
 import { PresetValidationError } from "@openclaw-enterprise/contracts";
 import {
   AgentDeletingError,
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   ChannelDirectoryError,
   ChannelCredentialError,
+  ConfigurationHarnessError,
   DependencyUnavailableError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NotImplementedError,
+  NativeWorkerSupportError,
   PluginPolicyValidationError,
   PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
+  RuntimeLogsError,
   ScopeViolationError,
+  type RuntimeLogsErrorCode,
 } from "@openclaw-enterprise/occ";
 import {
   ConfigurationOwnershipError,
@@ -119,6 +124,38 @@ function validationDetails(error: FastifyError): readonly ErrorDetail[] {
   });
 }
 
+const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({
+  REQUIRED: "is required",
+  UNKNOWN_FIELD: "is not an accepted field",
+  INVALID_TYPE: "has the wrong type",
+  INVALID_FORMAT: "has an invalid format",
+  INVALID_VALUE: "has an unsupported value",
+  TOO_LONG: "is too long",
+  TOO_DEEP: "is nested too deeply",
+});
+
+// Names the first few offending fields so clients that print only the message, such as
+// occ, still show which field to fix. The full list stays in `details`.
+function contractMessage(error: FastifyError, details: readonly ErrorDetail[]): string {
+  if (details.length === 0) {
+    return "The request does not match the operation contract.";
+  }
+  const context =
+    typeof error.validationContext === "string" && error.validationContext.length > 0
+      ? `${error.validationContext} `
+      : "";
+  const problems = [
+    ...new Set(
+      details.map((detail) => `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}`),
+    ),
+  ];
+  const shown = problems.slice(0, 3).join("; ");
+  const more = problems.length > 3 ? `; and ${problems.length - 3} more` : "";
+  const message = `The request does not match the operation contract: ${shown}${more}.`;
+  // The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+  return message.length <= 256 ? message : `${message.slice(0, 255)}…`;
+}
+
 function errorName(error: unknown): string | undefined {
   return error instanceof Error ? error.name : undefined;
 }
@@ -135,9 +172,56 @@ export function isDependencyUnavailable(error: unknown): boolean {
   );
 }
 
+const RUNTIME_LOG_FAILURES: Readonly<
+  Record<RuntimeLogsErrorCode, { readonly status: number; readonly message: string }>
+> = Object.freeze({
+  RUNTIME_LOGS_CURSOR_INVALID: {
+    status: 400,
+    message: "The runtime log cursor is invalid for this caller and view. Start a new view.",
+  },
+  RUNTIME_LOGS_POD_INVALID: {
+    status: 400,
+    message: "The requested Pod is not a current Pod of this Agent version and source.",
+  },
+  RUNTIME_LOGS_SOURCE_UNAVAILABLE: {
+    status: 400,
+    message: "This Agent version has no such runtime log source.",
+  },
+  RUNTIME_LOGS_RATE_LIMITED: {
+    status: 429,
+    message: "Too many runtime log requests. Wait for Retry-After and try again.",
+  },
+  RUNTIME_LOGS_CLUSTER_RBAC: {
+    status: 503,
+    message:
+      "The cluster denied the runtime log read. Ask a platform operator to enable agentRuntimeLogs and the documented roles.",
+  },
+  RUNTIME_LOGS_SANDBOX_NOT_FOUND: {
+    status: 503,
+    message:
+      "OpenShell reports no such sandbox for OpenClaw Enterprise: it is not provisioned yet or was removed, or the gateway identity is not a member of its Workspace.",
+  },
+  RUNTIME_LOGS_UNAVAILABLE: {
+    status: 503,
+    message: "Runtime status or logs are unavailable. Retry later.",
+  },
+  RUNTIME_LOGS_AUDIT_UNAVAILABLE: {
+    status: 503,
+    message: "The runtime log view could not be audited, so no output was read.",
+  },
+  RUNTIME_LOGS_TIMEOUT: {
+    status: 504,
+    message: "The runtime status or log read timed out.",
+  },
+});
+
 export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof RequestFailure) {
     return error;
+  }
+  if (error instanceof RuntimeLogsError) {
+    const mapped = RUNTIME_LOG_FAILURES[error.code];
+    return failure(mapped.status, error.code, mapped.message);
   }
   if (error instanceof ChannelCredentialError) {
     const messages = {
@@ -245,6 +329,12 @@ export function requestFailure(error: unknown): RequestFailure {
         );
     }
   }
+  if (error instanceof ConfigurationHarnessError) {
+    return failure(400, "INVALID_REQUEST", error.message);
+  }
+  if (error instanceof NativeWorkerSupportError) {
+    return failure(400, "INVALID_REQUEST", error.message);
+  }
   if (error instanceof PluginPolicyValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
@@ -265,7 +355,9 @@ export function requestFailure(error: unknown): RequestFailure {
     );
   }
   if (error instanceof NamespaceNotEmptyError) {
-    return failure(409, "NAMESPACE_NOT_EMPTY", "The requested Namespace is not empty.");
+    const contents =
+      error.contents.length === 0 ? "" : ` It still contains: ${error.contents.join(", ")}.`;
+    return failure(409, "NAMESPACE_NOT_EMPTY", `The requested Namespace is not empty.${contents}`);
   }
   if (error instanceof AgentDeletingError) {
     return failure(409, "AGENT_DELETING", "The requested Agent is being deleted.");
@@ -288,6 +380,10 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof ScopeViolationError) {
     return failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+  }
+  if (error instanceof AgentPrincipalAuthorizationError) {
+    // Only the Agent's own principal is named; caller denials stay generic below.
+    return failure(403, "FORBIDDEN", error.message);
   }
   if (isAuthorizationDenied(error)) {
     return failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
@@ -335,7 +431,7 @@ export function requestFailure(error: unknown): RequestFailure {
       return failure(
         400,
         "INVALID_REQUEST",
-        "The request does not match the operation contract.",
+        contractMessage(candidate, details),
         details.length > 0 ? details : undefined,
       );
     }
@@ -344,11 +440,14 @@ export function requestFailure(error: unknown): RequestFailure {
         candidate.statusCode === 403 || (candidate as { status?: number }).status === 403
           ? 403
           : 401;
+      const reason = (candidate as { reason?: unknown }).reason;
       return failure(
         status,
         status === 403 ? "FORBIDDEN" : "UNAUTHENTICATED",
         status === 403
-          ? "The request did not satisfy the configured admission boundary."
+          ? reason === "untrusted_origin"
+            ? "A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header."
+            : "The request did not satisfy the configured admission boundary."
           : "The caller did not provide valid admission evidence.",
       );
     }

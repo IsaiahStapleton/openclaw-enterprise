@@ -88,8 +88,8 @@ Errors have fixed codes, messages, and allowlisted `error.data`.
 `CONVERGENCE_DEADLINE_EXCEEDED` data includes positive `timeoutMs` and optional
 `runtimeFailure` (`component`, `check`, `checkedAt`, `code`) captured by Compute
 from that revision. The primary error remains unchanged; missing evidence
-leaves the cause unspecified. `RUNTIME_AUTHENTICATION_FAILED` ends deployment
-early when the runtime reports a rejected credential (HTTP 401/403); fix it and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
+leaves the cause unspecified. `RUNTIME_AUTHENTICATION_FAILED` (rejected credential, HTTP 401/403) and
+`RUNTIME_CPU_STARVED` (too little CPU) end deployment early; fix and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
 with a closed code and admitted `pluginId`.
 
 Polling reads persisted state without runtime, provider, or model probes.
@@ -219,7 +219,7 @@ removed after activation or Agent deletion. Pending inputs have no read/update
 API; correction requires deleting and recreating the Agent.
 
 The optional `workspaceDefaultsId` is a SHA-256 defaults identity. Console sends
-all four rendered `2026.9.7` defaults with this identity. A stale identity rejects
+all four rendered `2026.9.6` defaults with this identity. A stale identity rejects
 creation with `409 RESOURCE_CONFLICT`; runtime mismatch blocks initial setup.
 See the [workspace guide](../guides/topics/workspace-files.md) and
 [setup flow](../flows/workspace-files.md) for recovery and runtime requirements.
@@ -333,9 +333,10 @@ and Secrets survive. Deletion releases its name;
 
 Teardown retries are bounded. After permanent failure or exhaustion, the Agent
 stays `deleting`. Once the cause is corrected, the initiating caller can repeat
-DELETE to replenish the attempt budget. OCC and the worker recheck permission;
-another actor cannot take over. Work identity and prior failure audits remain,
-and the retry adds an audit event. This recovery covers Agent deletion only.
+DELETE to replenish the attempt budget. OCC and the worker recheck permission.
+Another permitted actor takes over only once the initiator lost permission.
+Prior failure audits remain; the retry adds an audit event. Namespace deletion
+has the same [recovery](namespaces.md#failure-semantics-and-limitations), including takeover.
 
 ## Editable configuration
 
@@ -412,7 +413,7 @@ planning a deployment. Other sandbox execution combinations are rejected.
 - [Kubernetes Compute Driver](drivers/kubernetes-compute.md)
 - [IAM](authorization.md)
 - [Controller configuration](settings.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)
 - [Agent lifecycle implementation](../../packages/occ/src/index.ts)
 - [HTTP resource schemas](../../packages/contracts/src/api/resources.ts)
 - [Local testing](../testing/local.md)

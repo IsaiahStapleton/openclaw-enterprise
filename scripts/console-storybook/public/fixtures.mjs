@@ -67,9 +67,14 @@ function configurationValues(scenario) {
 export function installFixture(scenario, evidence) {
   const rules = structuredClone(scenario.rules ?? []);
   let signedIn = !scenario.signedOut;
+  let repositoryDescriptionRequests = 0;
   if (scenario.pendingGithubAttempt) {
     // Simulates returning from a GitHub callback started in this tab.
     sessionStorage.setItem("occ.console.githubAttempt", "a".repeat(43));
+  }
+  if (scenario.pendingGoogleAttempt) {
+    // Simulates returning from a Google callback started in this tab.
+    sessionStorage.setItem("occ.console.googleAttempt", "a".repeat(43));
   }
   let serial = 100;
   const nextId = (prefix) =>
@@ -191,6 +196,9 @@ export function installFixture(scenario, evidence) {
     servicePrincipalId: "identity_demo_agent",
     createdAt,
     activeRevisionId: selectedRevisionId,
+    ...(scenario.repositoryAccess
+      ? { repositoryAccess: structuredClone(scenario.repositoryAccess) }
+      : {}),
     ...(scenario.repositoryBindings
       ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
       : {}),
@@ -394,13 +402,13 @@ export function installFixture(scenario, evidence) {
       });
     }
   }
-  const response = (data, status = 200, errorCode) =>
+  const response = (data, status = 200, errorCode, meta = {}) =>
     new Response(
       JSON.stringify({
         ...(errorCode
           ? { error: { code: errorCode, message: "The selected preview simulates this failure." } }
           : { data }),
-        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001", ...meta },
       }),
       { status, headers: { "content-type": "application/json" } },
     );
@@ -463,14 +471,24 @@ export function installFixture(scenario, evidence) {
     if (path === "/api/auth/providers" && method === "GET") {
       return response({
         github: scenario.githubEnabled === true,
-        sessionBinding: scenario.githubEnabled === true,
+        google: scenario.googleEnabled === true,
+        password: scenario.passwordRecoveryOnly !== true,
+        sessionBinding: scenario.githubEnabled === true || scenario.googleEnabled === true,
       });
     }
-    if (path === "/api/auth/providers/github/start" && method === "POST") {
+    if (
+      (path === "/api/auth/providers/github/start" ||
+        path === "/api/auth/providers/google/start") &&
+      method === "POST"
+    ) {
       // Keep the preview local; provider navigation needs real backend verification.
       return error(503);
     }
-    if (path === "/api/auth/providers/github/result" && method === "POST") {
+    if (
+      (path === "/api/auth/providers/github/result" ||
+        path === "/api/auth/providers/google/result") &&
+      method === "POST"
+    ) {
       return response({ sessionKey: session.sessionKey });
     }
     if (path === "/api/auth/session") {
@@ -520,20 +538,41 @@ export function installFixture(scenario, evidence) {
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);
       }
-      if (resource === "agents/repository-options" && method === "GET") {
+      if (
+        (resource === "agents/repository-options" ||
+          /^agents\/[^/]+\/repository-options$/.test(resource)) &&
+        method === "GET"
+      ) {
+        const options = scenario.repositoryOptions ?? [
+          {
+            repositoryRef: "application",
+            displayName: "example/application",
+            description: "The application and services used by the team.",
+            allowedProfiles: ["git-read", "git-write", "git-full"],
+          },
+          {
+            repositoryRef: "handbook",
+            displayName: "example/handbook",
+            description: "Guides and operating practices for the team.",
+            allowedProfiles: ["git-read"],
+          },
+        ];
+        const requestedDescriptions = new Set(
+          url.searchParams.get("descriptionRefs")?.split(",") ?? [],
+        );
+        const descriptionsPending =
+          requestedDescriptions.size > 0 &&
+          scenario.repositoryDescriptionsPending &&
+          repositoryDescriptionRequests++ === 0;
         return response(
-          scenario.repositoryOptions ?? [
-            {
-              repositoryRef: "application",
-              displayName: "example/application",
-              allowedProfiles: ["git-read", "git-write", "git-full"],
-            },
-            {
-              repositoryRef: "handbook",
-              displayName: "example/handbook",
-              allowedProfiles: ["git-read"],
-            },
-          ],
+          options.map(({ description, ...option }) =>
+            requestedDescriptions.has(option.repositoryRef) && !descriptionsPending && description
+              ? { ...option, description }
+              : option,
+          ),
+          200,
+          undefined,
+          descriptionsPending ? { descriptionsPending: true } : {},
         );
       }
       if (resource === "presets" && method === "GET") {
@@ -898,6 +937,133 @@ export function installFixture(scenario, evidence) {
           return revisions.has(suffix.split("/")[2])
             ? response(revisions.get(suffix.split("/")[2]))
             : error(404);
+        }
+        if (suffix.startsWith("/deployments/") && suffix.endsWith("/runtime") && method === "GET") {
+          const revisionId = suffix.split("/")[2];
+          if (!revisions.has(revisionId)) {
+            return error(404);
+          }
+          const pod = {
+            role: "gateway",
+            cluster: "control",
+            name: "gateway-7d9f8c-x2k4q",
+            uid: "0f3b6c1e-7d52-4f4b-9a2e-5c6d7e8f9a01",
+            phase: "Running",
+            ready: true,
+            createdAt: "2026-09-27T10:00:00.000Z",
+            containers: [
+              {
+                name: "gateway",
+                state: "running",
+                reason: null,
+                ready: true,
+                restartCount: 1,
+                startedAt: "2026-09-27T11:40:00.000Z",
+                lastTermination: {
+                  reason: "OOMKilled",
+                  exitCode: 137,
+                  finishedAt: "2026-09-27T11:39:58.000Z",
+                },
+              },
+            ],
+            events: [
+              {
+                type: "Warning",
+                reason: "BackOff",
+                message: "Back-off restarting failed container gateway",
+                count: 2,
+                lastObservedAt: "2026-09-27T11:39:59.000Z",
+              },
+            ],
+          };
+          return response({
+            revisionId,
+            observedAt: "2026-09-27T12:00:00.000Z",
+            pods: [pod],
+            sources: [
+              {
+                id: "gateway",
+                kind: "container",
+                pods: [{ name: pod.name, uid: pod.uid, container: "gateway", restartCount: 1 }],
+                available: true,
+                retention:
+                  "Kubernetes keeps only the current and the previous instance of each container; older output and output from deleted Pods is gone.",
+              },
+            ],
+          });
+        }
+        if (
+          suffix.startsWith("/deployments/") &&
+          suffix.endsWith("/runtime/logs") &&
+          method === "GET"
+        ) {
+          const revisionId = suffix.split("/")[2];
+          if (url.searchParams.get("download") === "true") {
+            // Downloads are a text/plain attachment, not a JSON envelope.
+            return new Response(
+              [
+                "2026-09-27T11:40:01.120Z info wrapper runtime.startup_phase container=gateway phase=config outcome=ok ms=12",
+                "2026-09-27T11:40:03.400Z info openclaw [gateway] gateway listening",
+                "2026-09-27T11:41:10.000Z warn openclaw [channels/slack] slack socket reconnect with token=[redacted:key-value]",
+                "",
+              ].join("\n"),
+              {
+                status: 200,
+                headers: {
+                  "content-type": "text/plain; charset=utf-8",
+                  "content-disposition": `attachment; filename="${revisionId}-gateway.log"`,
+                },
+              },
+            );
+          }
+          const stream = {
+            source: "gateway",
+            pod: "gateway-7d9f8c-x2k4q",
+            podUid: "0f3b6c1e-7d52-4f4b-9a2e-5c6d7e8f9a01",
+            container: "gateway",
+            restartCount: 1,
+          };
+          const line = (time, kind, level, message, extra = {}) => ({
+            type: "line",
+            time,
+            stream,
+            contentClass: "operational",
+            kind,
+            level,
+            message,
+            ...extra,
+          });
+          return response({
+            revisionId,
+            source: "gateway",
+            stream,
+            observedAt: "2026-09-27T12:00:00.000Z",
+            records: [
+              line("2026-09-27T11:40:01.120Z", "wrapper", "info", "runtime.startup_phase", {
+                fields: { container: "gateway", phase: "config", outcome: "ok", ms: 12 },
+              }),
+              line("2026-09-27T11:40:03.400Z", "openclaw", "info", "gateway listening", {
+                subsystem: "gateway",
+              }),
+              {
+                type: "withheld",
+                time: "2026-09-27T11:40:04.000Z",
+                stream,
+                count: 3,
+                reason: "unrecognised_structured",
+              },
+              line(
+                "2026-09-27T11:41:10.000Z",
+                "openclaw",
+                "warn",
+                "slack socket reconnect with token=[redacted:key-value]",
+                { subsystem: "channels/slack" },
+              ),
+            ],
+            withheld: 3,
+            truncated: false,
+            cursor: `v1.${"a".repeat(40)}.${"b".repeat(43)}`,
+          });
         }
         if (
           suffix.startsWith("/deployments/") &&

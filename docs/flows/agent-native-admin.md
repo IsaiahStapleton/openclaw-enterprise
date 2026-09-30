@@ -1,7 +1,7 @@
 ---
 created: "2026-09-19"
-updated: "2026-09-28"
-last_updated_session: "01a0cf72-6985-7712-ba92-d8cc32470f24"
+updated: "2026-09-29"
+last_updated_session: "89a4ccd7-3974-43c6-b08a-be02269a8d01"
 ---
 
 # Agent Native Admin UI Flow
@@ -61,7 +61,7 @@ graph TD
 
 `apps/controller/src/console/agents/native-admin.mjs:renderNativeAdminAccess`
 
-The Agent detail page inserts the native admin panel on its tabs, including Configuration and Workspace files. The panel starts hidden while it requests `${path}/native-admin`. The UI hides disabled and denied states, reports stopped, unavailable, or unsupported states, and shows the **Open native admin UI** link only when the API returns `status: "available"` with an Agent URL. The link opens that URL in a new tab with `noopener noreferrer`; opening it makes no additional availability or launch request.
+The Agent detail page inserts the native admin panel on its tabs, including Configuration and Workspace files. The panel starts hidden while it requests `${path}/native-admin`. The UI hides disabled and denied states, reports stopped, unavailable, or unsupported states, and shows the **Open native admin UI** link only when the API returns `status: "available"` with an Agent URL. The link opens that URL in a new tab with `noopener noreferrer`; opening it makes no additional availability or launch request. A `403` is an audited denial, so the console remembers the denied status path in tab `sessionStorage` for the same session owner and hides the panel on later views of that Agent without asking again. Logout, another sign-in, or a new tab asks afresh.
 
 The warning text tells operators that native admin access can change gateway state outside OCE and that durable configuration should remain in OCE.
 
@@ -156,6 +156,13 @@ it to the runtime's isolated iframe. The sandbox listener serves public shell
 and registered renderer assets; runtime CSP and nested frame isolation remain
 responsible for executing generated content. See the [routing contract](../reference/gateway-routing.md#public-preview-routing).
 
+For opted-in Kubernetes gateways, `KubernetesComputeDriver.privateStateInitContainer`
+copies the admitted configuration from `/etc/openclaw-managed/openclaw.json` to
+`/runtime-state/home/.openclaw/openclaw.json` on the init container's writable
+volume. The gateway mounts that same home subdirectory at `/home/node`, so native
+edits remain Pod-local and the next Pod starts from the admitted configuration.
+The init container cannot write through the gateway's later mount path.
+
 ## Debugging and Verification
 
 - `AGENT_NATIVE_ADMIN_INVALID` at startup points to invalid native admin enablement, missing public origin, invalid Agent domain, invalid shared cookie parent domain, invalid Better Auth cookie scope, or insufficient auth secret material.
@@ -185,6 +192,10 @@ responsible for executing generated content. See the [routing contract](../refer
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 19:00: Remembered a denied availability read per tab and session owner so reloads do not add an audited denial per view.
+
+- 2026-09-29 21:35: Corrected native configuration initialization to write through the init volume mount. (89a4ccd7-3974-43c6-b08a-be02269a8d01 - cc96e34f33868555d4a89cb44bc022859d76c815)
 
 - 2026-09-28 16:20: Added the accompanying optional sandbox routing implementation and separate-origin preview flow. (01a0cf72-6985-7712-ba92-d8cc32470f24 - 33a2528163d5bbff311bb685345e60aadb24a70a)
 

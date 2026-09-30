@@ -22,7 +22,7 @@ func (app *application) printNamespace(value any, collection bool) error {
 		{title: "ID", key: "id"},
 		{title: "NAME", key: "name"},
 		{title: "STATUS", key: "status"},
-		{title: "KUBERNETES NAMESPACE", key: "existingNamespace"},
+		{title: "ADOPTED NAMESPACE", key: "existingNamespace"},
 	})
 }
 
@@ -35,8 +35,8 @@ func (app *application) printConfiguration(value any) error {
 	})
 }
 
-func (app *application) printSecret(value any) error {
-	return app.printItems(value, false, []column{
+func (app *application) printSecret(value any, collection bool) error {
+	return app.printItems(value, collection, []column{
 		{title: "ID", key: "id"},
 		{title: "NAME", key: "name"},
 	})
@@ -88,8 +88,19 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "CONFIGURATION", key: "configurationId"},
 		{title: "MODE", key: "executionMode"},
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},
-		{title: "STATUS", key: "status"},
+		// Lifecycle is active or deleting; deployment health comes from deployment-status.
+		{title: "LIFECYCLE", key: "status"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
+	})
+}
+
+func (app *application) printAgentRevision(value any, collection bool) error {
+	return app.printItems(value, collection, []column{
+		{title: "ID", key: "id"},
+		{title: "REVISION", key: "revision"},
+		{title: "AGENT", key: "agentId"},
+		{title: "CONFIGURATION", key: "configurationId"},
+		{title: "CREATED", key: "createdAt"},
 	})
 }
 

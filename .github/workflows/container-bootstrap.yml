@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   bootstrap:
-    name: Bootstrap private GHCR packages with harmless markers
+    name: Bootstrap GHCR packages with harmless markers
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: container-publish
@@ -44,7 +44,7 @@ jobs:
           echo '2114c9dea2844dce6d0ee2d792a9aae846be8cf53d5b19dc2988b5a0e8fec26e  '"$RUNNER_TEMP/helm.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C "$RUNNER_TEMP" linux-amd64/helm
           echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
-      - name: Validate source and bootstrap private packages
+      - name: Validate source and bootstrap GHCR packages
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ github.workflow_sha }}

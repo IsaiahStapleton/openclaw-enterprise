@@ -29,11 +29,11 @@ the images. Docker pulls the variant matching the host; run these checks on a
 native host for each target architecture. Run from the repository root with the
 [local test prerequisites](local.md).
 
-On each check host, authenticate Docker to the selected private registry with
-pull access to both repositories. The temporary Skopeo auth file used for
+Public GHCR images pull anonymously. On each check host, authenticate Docker only
+when the selected registry is private. The temporary Skopeo auth file used for
 [private image delivery](../guides/deploy/private-registry-images.md) does not
 authenticate Docker. For ECR, set `AWS_REGION` and `ECR_REGISTRY` to the target
-Region and registry. Run this block on its own and stop if it fails:
+Region and registry, then run this block on its own and stop if it fails:
 
 ```bash
 if [[ -n "${AWS_REGION:-}" && -n "${ECR_REGISTRY:-}" ]]; then
@@ -49,10 +49,10 @@ fi
 ```
 
 ECR credentials expire; authenticate again if needed. For GHCR, follow
-[Use published images](../guides/deploy/production-installation.md#use-published-images).
-For another private registry, follow its Docker login procedure. Protect Docker
-credentials according to your registry policy. This login does not grant nodes
-pull access.
+[Use published images](../guides/deploy/production-installation.md#use-published-images)
+without a login. For another private registry, follow its Docker login procedure.
+Protect Docker credentials according to your registry policy. This login does
+not grant nodes pull access.
 
 For a current release or custom pair selected for installation, set the check-only
 variables from the immutable `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` exports:
@@ -90,9 +90,9 @@ OCC_TEST_RUNTIME_IMAGE="$OCC_IMAGE_CHECK_RUNTIME" \
 Before installation, all three suites must pass without skips for the exact
 current pair selected in `CONTROLLER_IMAGE` and `RUNTIME_IMAGE`. Rebuilding or
 changing a digest requires new checks. The historical pair does not meet current
-installation requirements. If GHCR denies a pull, check package access and token
-scope; successful `git clone` alone does not establish `read:packages` access.
-These checks verify the selected images, not unbuilt changes in the working tree.
+installation requirements. If GHCR denies a pull, check package visibility and
+network access to GHCR. These checks verify the selected images, not unbuilt
+changes in the working tree.
 
 ### Build images from the checkout
 
@@ -166,6 +166,42 @@ Both startup suites accept `OCC_TEST_IMAGE_TIMEOUT_MULTIPLIER`, an integer from
 1. Release preparation sets it to 6 for ARM64 running under QEMU and 1 for native
    amd64. Expected errors, readiness, plugin discovery, and packaging assertions are
    unchanged; a timeout still fails the suite.
+
+## Repository image-pair qualification
+
+The qualification test invokes the actual staged controller and broker images
+with synthetic App and TLS material and a disposable receipt listener. On a
+Linux host running as UID 1000, stage immutable images for its native Docker
+daemon architecture and run:
+
+```sh
+OCC_PROBE_CONTROLLER_IMAGE='<controller>@sha256:<digest>' \
+OCC_PROBE_BROKER_IMAGE='<broker>@sha256:<digest>' \
+OCC_PROBE_OLD_CONTROLLER_IMAGE='<old-controller>@sha256:<digest>' \
+OCC_PROBE_OLD_BROKER_IMAGE='<old-broker>@sha256:<digest>' \
+node --test tests/integration/production-image-real-qualification.test.mjs
+```
+
+The old images exercise both incompatible version directions. Select an old
+controller without the admission probe and an old broker without durable-admission
+capability; an older image alone may still support the required protocol. Omitted
+image variables skip the corresponding real-image cases. To require both cases,
+export all four variables and run the optional local suite lane:
+
+```sh
+umask 077
+pair_state_dir=$(mktemp -d)
+node scripts/ci/run-tests.mjs run image-pair-qualification \
+  --state "$pair_state_dir/state.json" --results "$pair_state_dir/results.json"
+```
+
+The lane requires all four immutable references and fails if either case skips.
+It is not part of the automated CI groups. The test does not connect
+to a cluster or provider, and it proves protocol compatibility rather than
+database durability, session disposal, or a real Agent workflow.
+The images-packaging lane separately exercises node selection, deployed-identity
+validation, and upgrade recovery with simulated external command responses;
+those fixtures do not establish image-pair compatibility.
 
 ## Production image startup test environment
 

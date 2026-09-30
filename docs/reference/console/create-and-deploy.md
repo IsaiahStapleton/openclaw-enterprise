@@ -1,9 +1,9 @@
 # Create and deploy Agents in the console
 
-Use the [platform console](../console.md) to create an Agent and start first-time
-provisioning for supported Dedicated runtimes. On an existing Kubernetes Installation,
-start with [production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
-you need a ready Namespace and configured Secret storage. New tokens require
+Use the [platform console](../console.md) to create an Agent and provision supported
+Dedicated runtimes. On Kubernetes, check the
+[production Agent prerequisites](../../guides/deploy/production-agents.md#prepare-each-namespace):
+a ready Namespace and configured Secret storage. New tokens require
 Secret creation permission. First-time provisioning grants access to accepted
 Secret references; ordinary draft creation also requires permission to grant
 Agent key access. After deployment, [verify this same
@@ -25,13 +25,14 @@ Presets and edited Configuration JSON retain their settings.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
    **Use Preset**. Review defaults and choose an existing or new model Secret.
    Select **Start without Preset** for standard defaults.
-3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
-   **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
-   **Codex** and also offers **OpenClaw**; Anthropic currently offers only
-   **OpenClaw**. **Execution mode** is Dedicated for Codex, Embedded for
-   Anthropic OpenClaw, and either for OpenAI OpenClaw.
-   With OpenAI and Codex, choose **OpenAI API key** or **Service Accounts** under
-   **Authentication method**. OpenClaw uses the selected provider's API key.
+3. Enter a unique name within the Namespace. Choose **Provider**, then
+   **Harness**. OpenAI offers **Codex** by default and **OpenClaw**;
+   Anthropic offers only **OpenClaw**. **Execution mode** is Dedicated for Codex,
+   Embedded for Anthropic OpenClaw, and selectable for OpenAI OpenClaw. Dedicated
+   OpenClaw is experimental. Verify its runtime supports native worker inference;
+   released images may not.
+   For Codex, choose **OpenAI API key** or **Service Accounts**. OpenClaw uses
+   the provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.
@@ -44,11 +45,10 @@ Presets and edited Configuration JSON retain their settings.
    models must use the same supported provider and Harness. For custom settings,
    open **Advanced settings**. Selection changes preserve unrelated JSON edits;
    **Reset template** replaces them.
-5. Optional: under **Repository access**, select up to 16 repositories approved
-   for this Namespace. Select one authorization level shared by every chosen
-   repository. Kubernetes supports Codex (Dedicated) or OpenClaw (Embedded),
-   without a Sandbox Driver. Use Codex for Slack. Leave repositories unselected
-   for an Agent without repository access.
+5. Under **Repository access**, optionally select up to 16 approved repositories
+   and set their access levels. Kubernetes supports Codex (Dedicated) or OpenClaw
+   (Embedded), without a Sandbox Driver. Use Codex for Slack. Leave repositories
+   unselected to create an ordinary Agent without repository access.
 
 6. If you need Slack, use OpenAI with the **Codex** harness and its channel card.
    Each token menu selects a readable Namespace Secret or **Create new Secret...**.
@@ -152,23 +152,25 @@ failure remain available and are reused, never deleted automatically. A lost Sec
 save response requires checking existing Namespace Secrets before starting again.
 See the [provisioning flow](../../flows/agent-provisioning.md) for the API sequence.
 
-Repository discovery is independent of model authentication. The Console submits
-opaque references and never requests GitHub App or token configuration. Choose
-**Read-only** (`git-read`) or **Contributor** (`git-full`), which includes pushes,
-pull requests, and issue creation and management. **Customize access** lets you
-turn off issue management (`git-write`) when that profile is approved. Push and
-pull request permissions are bundled together. The control is disabled when the
-selected repositories do not share both writable profiles; its explanation states
-whether issue management is required or unavailable. Changing repositories never
-silently upgrades a customized grant; an unavailable selection must be chosen again.
-The pane also explains that token-bounded GraphQL permits merges and
-ref changes; native push allowlists do not constrain API writes. Repository
-administration and workflow permissions remain excluded. See
-[access levels](../repository-credentials/access-levels.md) for exact permissions.
-When several repositories are selected, the form offers only levels allowed by
-all of them and always submits the chosen level explicitly. The server rechecks
-current Namespace policy when it creates the Agent and again when it admits a
-deployment.
+Repository discovery is independent of model authentication. Select up to 16 approved
+repositories. Small catalogs offer **Add**; larger ones support search and paging.
+Suggestions favor repositories you recently saved in this browser and Namespace,
+then sort alphabetically.
+
+**Default repository access** starts at **Contributor** for code pushes, PRs,
+and issue management. Choose **Read-only**, or customize Contributor to turn off
+issue management. Added repositories inherit the default; expand a repository card
+to choose a custom level or **Use Agent default** to restore inheritance. Custom choices stay
+fixed when the default changes, even if they matched it. Invalid combinations stay
+visible and must be repaired or removed before saving. Overrides never widen silently.
+
+The server resolves selections against current Namespace policy on save and
+deployment. Push and PR permissions remain bundled; see
+[access levels](../repository-credentials/access-levels.md) for token permissions,
+merges, and the API contract. Edit saved drafts in **Create new version** >
+**Repositories**; admitted revisions stay unchanged. Save or cancel edits before
+navigating away; returning to the tab can refresh the session and discard them.
+An interrupted save may still complete; inspect the saved draft before retrying.
 
 Failed rediscovery and navigation retain unsaved repository choices.
 **Create Agent** stays blocked until discovery succeeds and filters choices against
@@ -187,12 +189,11 @@ retry reuses the saved Configuration and does not depend on repository choices
 or a Repo Driver.
 
 After a known rejection of a repository-scoped Agent, **Reload repository choices**
-clears selections and refreshes Namespace policy while retaining the saved
-Configuration. Retry requires at least one current repository and a shared
-explicit access level; empty results cannot turn this attempt into an ordinary
-Agent. Failed reloads keep creation disabled and the Configuration ID visible.
-Expiry returns to sign-in. **Start a new draft** opens a new form and leaves the
-Configuration saved. Neither action deletes saved resources.
+clears selections and search, resets pagination, reveals results, and refreshes
+Namespace policy while retaining the saved Configuration. Retry requires at least
+one approved repository; an empty catalog cannot turn this attempt into an ordinary
+Agent. Failed reloads disable creation and show the Configuration ID. Expiry returns
+to sign-in. **Start a new draft** opens a new form without deleting the Configuration.
 
 If the Agent response is lost or otherwise unknown, the save may have succeeded.
 The form disables further creation and does not expose the known-rejection

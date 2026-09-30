@@ -6,7 +6,7 @@ enrolled, sessions must be ended at once, or the Installation must return to
 password-only sign-in. The command ships in the controller image and connects
 with the migration credential, never the application credential.
 
-The [authentication reference](../../reference/authentication.md#session-and-recovery-controls)
+The [authentication reference](../../reference/authentication/external-sign-in.md#session-and-recovery-controls)
 owns the profile's rules; this page is the operator procedure.
 
 ## Choose the operation
@@ -29,7 +29,10 @@ startup, it keeps an existing designation, including one moved online through
 `enrol` applies the same rule as the online `POST /api/auth/accounts/:userId/enrol`.
 The tool never reads the controller auth secret. An ended session's console
 `sessionKey` and any pending GitHub login receipt stop working with it, and the
-browser signs in again. The command prints one JSON line and exits with:
+browser signs in again. Resetting a password revokes the account's
+[known-device cookies](../../reference/authentication.md#known-devices), and a
+disabled account's cookies exempt nothing while it stays disabled; purging
+sessions leaves them valid. They never grant a session. The command prints one JSON line and exits with:
 
 | Exit | Meaning                                                                                                                                  |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -103,11 +106,12 @@ accounts' passwords instead, so they still cannot sign in. Deactivation also
 removes the database fence on unbound sessions, so the older image and plain
 password sign-in work again.
 
-Then set `auth.github.enabled: false` and remove `auth.recoveryUserId` in the
+Then set `auth.github.enabled: false`, remove `auth.recoveryUserId`, and reset
+`auth.passwordSignIn` to `all` in the
 protected values, and run `helm upgrade`, which also restores the replicas.
 Without Helm, remove `OCC_AUTH_GITHUB_CLIENT_ID`, `OCC_AUTH_GITHUB_CLIENT_SECRET`,
-and `OCC_AUTH_GITHUB_RECOVERY_USER_ID` from the API environment before scaling
-it up. With them still set, startup activates the profile again.
+`OCC_AUTH_GITHUB_RECOVERY_USER_ID`, and `OCC_AUTH_PASSWORD_SIGN_IN` from the API
+environment before scaling it up. With them still set, startup activates the profile again.
 
 Activating again later, at startup or with `activate`, enrolls every account
 that has its Principal and exactly one password, as an enabled account; earlier

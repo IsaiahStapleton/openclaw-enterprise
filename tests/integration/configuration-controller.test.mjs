@@ -309,7 +309,21 @@ test("Configuration HTTP requires native supported requests and rejects immutabl
     });
     assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
     assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    // Clients that print only the message, such as occ, must still see which field to drop.
+    const field = Object.keys(body).find((key) => key !== "values");
+    assert.match(
+      rejected.body.error.message,
+      new RegExp(`: body /${field} is not an accepted field\\.$`),
+    );
+    assert.deepEqual(rejected.body.error.details, [{ path: `/${field}`, code: "UNKNOWN_FIELD" }]);
   }
+  // A long unknown field name still fits the 256-character error message contract.
+  const longField = await request(context.app, "PATCH", `${collection}/${created.body.data.id}`, {
+    body: { values: {}, ["x".repeat(400)]: true },
+  });
+  assert.equal(longField.status, 400, JSON.stringify(longField.body));
+  assert.ok(longField.body.error.message.length <= 256, longField.body.error.message);
+  assert.match(longField.body.error.message, /: body \/x+…$/);
 
   const unchanged = await request(context.app, "GET", `${collection}/${created.body.data.id}`);
   assert.deepEqual(unchanged.body.data, created.body.data);
@@ -496,6 +510,98 @@ for (const runtimeLogging of [undefined, "driver"]) {
     assert.deepEqual(historical.body.data.configuration, expectedHistorical);
   });
 }
+
+test("Deploy rejects Configuration content that selects no supported Harness runtime with a 400", async () => {
+  const computeDriver = {
+    id: "compute-configuration-integration",
+    capability: "compute",
+    implementation: "integration-compute-substrate",
+    validateHarnessAuth() {},
+    async ensureNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceReady: true };
+    },
+    async deleteNamespace(namespace) {
+      return { namespaceId: namespace.id, namespaceDeleted: true };
+    },
+    async prepareRevision(revision) {
+      return {
+        namespaceId: revision.namespaceId,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+        ready: true,
+      };
+    },
+    async retireRevision() {},
+  };
+  const context = await fixture({ computeDriver });
+  const namespace = await bootstrapAndCreateNamespace(context);
+  const collection = `/namespaces/${namespace.id}/configurations`;
+  // An OpenAI model with no agentRuntime policy is valid to store but cannot select a Harness.
+  const created = await request(context.app, "POST", collection, {
+    body: {
+      kind: "agent",
+      values: { agents: { defaults: { model: "openai/gpt-4.1" } } },
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const configurationId = created.body.data.id;
+  const agent = await request(context.app, "POST", `/namespaces/${namespace.id}/agents`, {
+    body: { name: "Runtime-less consumer", configurationId },
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  await context.controller.transact((state) =>
+    state.namespaces.transitionNamespaceStatus(namespace.id, "provisioning", "ready"),
+  );
+  const harnessSecret = await context.controller.createSecret(context.principal.id, {
+    namespaceId: namespace.id,
+    name: "runtime-less-model-key",
+    value: "synthetic-configuration-key",
+  });
+  const admittedAgent = await context.controller.updateAgent(context.principal.id, {
+    namespaceId: namespace.id,
+    agentId: agent.body.data.id,
+    configurationId,
+    harnessAuth: { method: "api_key", source: harnessSecret.ref },
+  });
+  context.identities.push({
+    kind: "service_principal",
+    id: admittedAgent.servicePrincipalId,
+    namespaceId: namespace.id,
+    agentId: admittedAgent.id,
+  });
+  context.roles.push({
+    id: "model-consumer",
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  });
+  context.bindings.push({
+    id: "model-consumer",
+    subjectKind: "identity",
+    subjectId: admittedAgent.servicePrincipalId,
+    roleId: "model-consumer",
+    namespaceId: namespace.id,
+    resourceKind: "secret",
+    resourceId: harnessSecret.id,
+  });
+
+  const deployed = await request(
+    context.app,
+    "POST",
+    `/namespaces/${namespace.id}/agents/${agent.body.data.id}/deploy`,
+  );
+  // The Agent exists and is visible, so a Configuration content problem is not a 404.
+  assert.equal(deployed.status, 400, JSON.stringify(deployed.body));
+  assert.equal(deployed.body.error.code, "INVALID_REQUEST");
+  assert.equal(
+    deployed.body.error.message,
+    "The configured Agent model requires an explicit supported Harness runtime.",
+  );
+  const unchanged = await request(
+    context.app,
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.body.data.id}`,
+  );
+  assert.equal(unchanged.status, 200);
+});
 
 test("Configuration operations fail closed when no ConfigurationDriver is selected", async () => {
   const context = await fixture({ configurationDriver: null });

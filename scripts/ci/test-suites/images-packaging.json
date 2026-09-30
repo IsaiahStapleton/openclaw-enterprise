@@ -15,6 +15,14 @@
   },
   "files": [
     {
+      "path": "tests/integration/container-publication-workflow.test.mjs",
+      "expectedTests": [
+        "publication workflow requires explicit chart opt-in and a successful image job",
+        "chart publication consumes the exact successful image receipt without archives",
+        "publication keeps its lock across jobs and reports image success after chart failure"
+      ]
+    },
+    {
       "path": "tests/integration/docker-compute-token-retry.test.mjs",
       "expectedTests": [
         "Docker driver keeps dedicated transport coherent and rejects foreign owners across retries"
@@ -29,7 +37,17 @@
         "runtime image discovers the bundled Codex plugin from a fresh gateway home",
         "runtime image keeps Codex auth writable with a nested generated images mount",
         "runtime image publishes dedicated assets with the Kubernetes gateway entrypoint",
-        "runtime image reconnects an ephemeral native worker from an expired replayed setup code"
+        "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
+        "runtime image Gateway hot-loads its workspace node binding without restarting OpenClaw",
+        "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
+        "runtime image validates the configuration dedicated native OpenClaw renders",
+        "runtime image Codex Harness stays unready until its model probe passes",
+        "runtime image Codex Harness fails fast when the provider rejects its credential",
+        "runtime image embedded Gateway probes its model before it starts OpenClaw",
+        "runtime image embedded Gateway fails fast when the provider rejects its credential",
+        "runtime image Codex Harness exits promptly on SIGTERM in every startup phase",
+        "runtime image embedded Gateway exits promptly on SIGTERM in every startup phase",
+        "runtime image dedicated Gateway exits promptly on SIGTERM while it waits for its Harness"
       ]
     },
     {
@@ -48,6 +66,12 @@
       ]
     },
     {
+      "path": "tests/integration/production-image-upgrade-recovery.test.mjs"
+    },
+    {
+      "path": "tests/integration/production-image-qualification.test.mjs"
+    },
+    {
       "path": "tests/integration/production-kubernetes-packaging.test.mjs",
       "expectedTests": [
         "two-cluster packaging separates remote API identities without optional services",
@@ -61,17 +85,14 @@
       ]
     },
     {
-      "path": "tests/integration/password-default-chart.test.mjs",
-      "expectedTests": [
-        "the example install renders password-only sign-in and GitHub only as an upgrade"
-      ]
-    },
-    {
       "path": "tests/integration/sign-in-chart-parity.test.mjs",
       "expectedTests": [
         "the API accepts exactly the sign-in settings the chart renders for every proxy preset, with and without GitHub",
+        "the API accepts exactly the Google sign-in settings the chart renders, alone and with GitHub",
         "values the chart refuses are settings the API also refuses",
-        "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API"
+        "proxy CIDRs without a preset are refused by the chart and default to ingress-nginx in the API",
+        "the chart refuses Google Secret and egress settings the API cannot observe",
+        "install notes warn when sign-in is exposed without a trusted proxy, and never fail"
       ]
     },
     {
@@ -101,19 +122,6 @@
       "path": "tests/integration/container-registry-real.test.mjs",
       "expectedTests": [
         "publication updates aliases using real Skopeo and a multi-platform registry"
-      ]
-    },
-    {
-      "path": "tests/integration/codex-model-probe.test.mjs",
-      "expectedTests": [
-        "generated Codex launcher bounds model-probe recovery",
-        "timeout then success",
-        "two timeouts",
-        "credential rejection",
-        "external SIGKILL",
-        "malformed output",
-        "tool event",
-        "termination during backoff exits without another probe"
       ]
     }
   ]

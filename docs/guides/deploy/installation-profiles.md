@@ -30,6 +30,20 @@ Both profiles enable:
   private metrics, digest-pinned images, DNS policy, trusted proxy CIDRs, and
   plugin-status proxy CIDRs.
 
+Both profiles give Gateway Pods (embedded or dedicated), Harness Pods, and the
+tenant namespace container default a `100m` CPU request and a four-core (`"4"`)
+CPU limit, with `128Mi` memory requests and `2Gi` memory limits. The limit only
+permits bursts: an embedded OpenClaw Gateway runs a full agent turn as its
+startup model probe, about 16 CPU-seconds of local work, and was ready 24 to 30
+seconds after start at one core against 51 to 72 seconds at `500m`. The probe
+uses about one core, so cores beyond the first serve later work, not startup. The request
+sets the scheduling reservation, so the higher limit reserves no node capacity.
+The trade-off is overcommit: several busy runtimes on one node can each take up
+to four cores from their neighbors, and a `limits.cpu` namespace quota counts
+the whole limit. Profile input cannot change these values; for others, write
+the Installation from the production example (see
+[Images and resources](../../reference/drivers/kubernetes-compute.md#images-and-resources)).
+
 Seeding both Presets does not change the profile's PluginDriver. An Agent
 created from the other profile's Preset still needs a compatible driver,
 runtime, harness mode, credentials, and channel support.
@@ -94,7 +108,7 @@ discovery egress into the base input:
 ```json
 {
   "runtime": {
-    "codexSeccompProfile": "openclaw/codex-0.156.0-<profile-sha256>.json"
+    "codexSeccompProfile": "openclaw/codex-0.158.0-<profile-sha256>.json"
   },
   "codex": {
     "modelDiscoveryCidrs": ["198.51.100.20/32"]
@@ -128,6 +142,40 @@ set `controlPlane.observabilityUrl`. The renderer writes it as
 [`observability.url`](../../reference/configuration.md#installation-startup-configuration)
 and rejects URLs the controller would reject at startup.
 
+### External sign-in and trusted proxies
+
+Activation of GitHub or Google sign-in is one-way, so keep these inputs in every
+later rerender. Adding `controlPlane.github` or `controlPlane.google` (`{}` uses
+the chart's Secret defaults) renders `auth.github` or `auth.google` with
+`enabled: true` and `agentNativeAdmin.enabled: false`; remove
+`agentNativeAdminDomain` and `sharedCookieDomain`. `recoveryUserId` and an HTTPS
+`authBaseUrl` are required. Optional `passwordSignIn: "recovery-only"` renders
+[`auth.passwordSignIn`](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in);
+preflight lists attaching every ordinary account's identity first. Follow
+[Enable GitHub browser sign-in](production-installation.md#enable-github-browser-sign-in).
+Behind a proxy that adds forwarded headers, such as ingress-nginx, set
+`trustedProxy` ([presets](../../reference/settings/production.md#github-sign-in-and-trusted-proxies));
+it works with or without external sign-in. Without it, preflight warns (it does
+not fail), because an Installation whose API sees each client's own address, such
+as behind a source-preserving NLB, needs none.
+
+```json
+{
+  "controlPlane": {
+    "recoveryUserId": "<administrator user ID>",
+    "github": {
+      "secretName": "occ-github-login",
+      "egressCidrs": ["140.82.112.0/20"]
+    },
+    "google": { "allowedDomains": ["example.com"] },
+    "trustedProxy": { "preset": "ingress-nginx", "cidrs": ["10.42.0.0/16"] }
+  }
+}
+```
+
+`github` and `google` also accept `clientIdKey` and `clientSecretKey`;
+`trustedProxy` accepts `clientAddressHeader`, required for the `generic` preset.
+
 If you opt in to repositories, add the broker inputs:
 
 ```json
@@ -146,6 +194,13 @@ If you opt in to repositories, add the broker inputs:
   }
 }
 ```
+
+`serviceName` is optional. When omitted, the renderer leaves it out of
+`values.yaml`: a new installation gets the chart's `git` Service, and a Helm
+upgrade fails until you set it. When upgrading an installation whose broker
+Service has another name, set `serviceName` to that current name so TLS and
+active repository sessions keep working, then switch it deliberately after
+sessions drain.
 
 ## Render files
 
@@ -196,8 +251,8 @@ the install as ready:
 
 - Kubernetes 1.35 or later, enforced NetworkPolicies, and exact API/database
   egress destinations.
-- Envoy Gateway, cert-manager, wildcard DNS and TLS for native admin, and the
-  shared cookie parent domain.
+- Envoy Gateway, cert-manager, and, unless external sign-in disables native
+  admin, wildcard DNS and TLS for native admin and the shared cookie parent domain.
 - A default ReadWriteOnce storage class for dedicated Codex workspace claims and
   `runtime.gatewayStorageClassName` for gateway state.
 - For Codex, the configured localhost seccomp profile installed and verified on

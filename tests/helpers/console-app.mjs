@@ -204,12 +204,16 @@ export async function createConsoleAppFixture(t, options = {}) {
       }),
     configurationDriver:
       options.configurationDriver ?? createTestConfigurationDriver({ id: "console-configuration" }),
+    ...(options.sandboxDriver === undefined ? {} : { sandboxDriver: options.sandboxDriver }),
     ...(secretDriver === undefined || secretDriver === null ? {} : { secretDriver }),
     ...(publicOrigin === undefined ? {} : { publicOrigin }),
     ...(options.observabilityUrl === undefined
       ? {}
       : { observabilityUrl: options.observabilityUrl }),
     ...(options.nativeAdmin === undefined ? {} : { nativeAdmin: options.nativeAdmin }),
+    ...(options.agentRuntimeLogs === undefined
+      ? {}
+      : { agentRuntimeLogs: options.agentRuntimeLogs }),
     ...(options.nativeAdminGatewayApiKey === undefined
       ? {}
       : { nativeAdminGatewayApiKey: options.nativeAdminGatewayApiKey }),
@@ -220,6 +224,9 @@ export async function createConsoleAppFixture(t, options = {}) {
         recordOperations: options.recordOperations ?? false,
         backends,
         defaultPresets: options.defaultPresets ?? [],
+        ...(options.nativeWorkerSupport === undefined
+          ? {}
+          : { nativeWorkerSupport: options.nativeWorkerSupport }),
       });
       const modelBackends = backends.filter((backend) => backend.type === "chatgpt");
       if (modelBackends.length > 0) {

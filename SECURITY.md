@@ -6,7 +6,7 @@ Email [security@openclaw.ai](mailto:security@openclaw.ai) and identify the affec
 project as **OpenClaw Enterprise**. This is the existing
 [OpenClaw security contact](https://github.com/openclaw/openclaw/security/policy#report-a-security-issue)
 for routing reports. Do not open an ordinary issue or PR with an unpatched
-vulnerability, exploit, tenant data, or credential, even in this private repository.
+vulnerability, exploit, tenant data, or credential.
 Coordinate reproduction material and any patch through the security team.
 
 Include:
@@ -25,9 +25,9 @@ hypothesis. Do not delay a report of suspected exposure to complete a patch.
 
 ## Enterprise security boundaries
 
-OpenClaw Enterprise is a control plane with explicit tenant and IAM boundaries.
-Do not apply the core gateway's single-operator trust assumptions to the
-Enterprise controller API.
+OpenClaw Enterprise (OCE) is a platform whose control plane, the OpenClaw
+Control Plane (OCC), enforces explicit tenant and IAM boundaries. Do not apply
+the core gateway's single-operator trust assumptions to the OCC controller API.
 
 - **Authentication and authorization:** A human session or service API key
   establishes an identity, not unrestricted access. The selected IAM Driver

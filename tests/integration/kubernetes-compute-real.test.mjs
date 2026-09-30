@@ -3111,6 +3111,86 @@ test(
     assert.equal(persistedAfter.status, 200, JSON.stringify(persistedAfter.error));
     assert.deepEqual(persistedAfter.data, persistedBefore);
 
+    // Runtime status and container logs for the same exact revision, read through the
+    // regular API with the Installation's Kubernetes credentials. Only Pods carrying
+    // this Agent's and revision's labels are listed and read.
+    const runtimePath = `${deploymentPath}/runtime`;
+    const runningGateway = (observed) => {
+      const source = observed.data?.sources.find(({ id }) => id === "gateway");
+      return source?.pods.find(({ uid }) =>
+        observed.data.pods.some(
+          (pod) =>
+            pod.uid === uid &&
+            pod.containers.some(({ name, state }) => name === "gateway" && state === "running"),
+        ),
+      );
+    };
+    const gatewayPod = await waitFor("a running Gateway container in runtime status", async () => {
+      const observed = await request("GET", runtimePath);
+      return observed.status === 200 ? runningGateway(observed) : undefined;
+    });
+    const runtimeStatus = await request("GET", runtimePath);
+    assert.equal(runtimeStatus.data.revisionId, admitted[0].id);
+    assert.ok(runtimeStatus.data.pods.every(({ name }) => name.length > 0));
+    const logsPath = `${runtimePath}/logs?source=gateway&tailLines=100`;
+    const firstPage = await request("GET", logsPath);
+    assert.equal(firstPage.status, 200, JSON.stringify(firstPage.error));
+    assert.equal(firstPage.data.stream.pod, gatewayPod.name);
+    assert.equal(typeof firstPage.data.cursor, "string");
+    assert.ok(
+      firstPage.data.records.every(
+        (record) => record.type !== "line" || record.contentClass === "operational",
+      ),
+    );
+    const followPage = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&cursor=${encodeURIComponent(firstPage.data.cursor)}`,
+    );
+    assert.equal(followPage.status, 200, JSON.stringify(followPage.error));
+    // One audited view for the first page; the cursor poll is not re-audited.
+    const views = await observerPool.query(
+      `SELECT count(*)::integer AS count FROM occ.audit_events
+       WHERE action = 'openclaw.agents.runtime_logs.view' AND resource_id = $1`,
+      [first.id],
+    );
+    assert.equal(views.rows[0].count, 1);
+    // Replacing the Pod ends the cursor's instance; the next poll labels it.
+    const gatewayNamespace = JSON.parse(
+      await kubectl(
+        "get",
+        "pods",
+        "--all-namespaces",
+        "-l",
+        `openclaw.dev/revision=${admitted[0].id},openclaw.dev/workload-role=gateway`,
+        "-o",
+        "json",
+      ),
+    ).items.find(({ metadata }) => metadata.uid === gatewayPod.uid).metadata.namespace;
+    await kubectl("delete", "pod", gatewayPod.name, "-n", gatewayNamespace, "--wait=false");
+    const replacementGateway = await waitFor(
+      "a replacement Gateway Pod in runtime status",
+      async () => {
+        const observed = await request("GET", runtimePath);
+        const pod = observed.status === 200 ? runningGateway(observed) : undefined;
+        return pod !== undefined && pod.uid !== gatewayPod.uid ? pod : undefined;
+      },
+      180_000,
+    );
+    const replaced = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&cursor=${encodeURIComponent(followPage.data.cursor)}`,
+    );
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.error));
+    assert.equal(replaced.data.records[0].type, "gap");
+    assert.equal(replaced.data.records[0].reason, "stream_replaced");
+    assert.equal(replaced.data.stream.pod, replacementGateway.name);
+    const previousInstance = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&pod=${replacementGateway.name}&previous=true`,
+    );
+    assert.equal(previousInstance.status, 200, JSON.stringify(previousInstance.error));
+    assert.equal((await request("GET", runtimePath, undefined, { session: false })).status, 401);
+
     if (runtimeImage !== undefined) {
       const gatewayTarget = kubernetesGatewayNamespaceName(namespaceIds[0]);
       const dataTarget = placements.get(namespaceIds[0]);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,6 +108,17 @@ export async function routeRuntimeCredentials(page, fixture, namespaceId, agentI
   );
 }
 
+// Browser storage the console wrote, except the tab-scoped Installation-access probe answer
+// (session owner key, admin flag and observability URL), which never holds drafts or
+// credentials.
+export async function consoleStorage(page) {
+  return page.evaluate(() => {
+    const session = { ...sessionStorage };
+    delete session["occ.console.installationAccess"];
+    return { local: { ...localStorage }, session };
+  });
+}
+
 export function nonAuthWriteRequests(requests) {
   return requests.filter(
     (request) => request.method !== "GET" && !request.path.startsWith("/api/auth/sign-"),
@@ -209,4 +221,22 @@ export async function slackSelectionValue(input) {
     .locator("..")
     .locator(".slack-directory-chip")
     .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("title")).join(", "));
+}
+
+export function repositoryCheckbox(page, name) {
+  return page
+    .locator("#repository-results .repository-result-row")
+    .filter({ has: page.getByText(name, { exact: true }) })
+    .getByRole("checkbox");
+}
+
+export async function unusedPort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
 }

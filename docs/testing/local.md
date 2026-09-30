@@ -196,7 +196,7 @@ controller image; it does not claim a live production deployment.
 
 ### Browser failure diagnostics
 
-When a browser test fails in the checks-baseline lane, CI uploads a
+When a browser test fails in the checks-browser lane, CI uploads a
 `browser-failures-*` artifact, kept for three days. Each failed test gets a
 directory with a screenshot of every open page and `failure.json`. That file
 holds the error, page URLs, requests still pending at failure time, and recent
@@ -269,7 +269,7 @@ OpenAPI contract, [HTTP API reference](../reference/api.md), and
 the checked-in OpenAPI contract without loading controller dependencies, run
 `node scripts/generate-occ-api-reference.mjs --check`.
 
-See the [architecture guide](../ARCHITECTURE.md) for ownership and runtime
+See the [architecture guide](../design.md) for ownership and runtime
 boundaries, the [quickstart](../guides/quickstart.md) for the default local
 startup helper, and the [deployment guide](../guides/deploy.md) for production
 example files and Helm installation.

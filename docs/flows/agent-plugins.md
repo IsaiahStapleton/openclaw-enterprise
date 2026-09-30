@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
-updated: 2026-09-28
-last_updated_session: authoring-run/7c8bff1b-a2d1-48f6-a996-1be6a06719fa
+updated: 2026-09-30
+last_updated_session: authoring-run/bf3b8146-9d72-42a4-84e5-2293581c890c
 ---
 
 # Agent Plugin Deployment Flow
@@ -85,11 +85,10 @@ hosted identity, searches `q`, and pages GLOBAL entries with opaque cursors.
 preloads page one for Create Agent PATs and bound PATs in editable Agent Plugins
 tabs. The picker reuses prefetch; credential changes clear discovery, preserving
 selections. Search marks loading and invalidates old responses before the
-[delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs).
-Enter/paging bypass the delay. Closing, configured view, credential changes, and
-view cancellation abort requests.
-Tools (`null`: unknown) show loading on demand; supported entries become selectable
-afterward. Unsupported releases remain unavailable.
+[delay](../reference/drivers/plugin-bundled.md#selection-and-catalogs);
+Enter/paging bypass it. Closing, configured view, credential changes, and view
+cancellation abort requests. Tools (`null`: unknown) load on demand; supported
+entries then become selectable. Unsupported releases remain unavailable.
 Curated catalogs filter bundled entries without verifying tools/account access.
 
 Bounded hosted reads forbid redirects. OCC returns `no-store` metadata, rejects
@@ -101,10 +100,9 @@ referrers and default to initials.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
-HTTP contracts validate input before
-[OpenClawController](../../packages/occ/src/index.ts) checks the exact Namespace
-and Agent. Reads require Agent `read`; create/PATCH stores the `plugins` map.
-Shared validators check the nested selection shape.
+HTTP contracts validate input before [OpenClawController](../../packages/occ/src/index.ts)
+checks the exact Namespace and Agent. Reads require Agent `read`; create/PATCH
+stores the `plugins` map. Shared validators check the nested selection shape.
 `OpenClawController.validatePluginPolicies` calls the selected Driver's
 `validatePolicies` before Agent create/update and provisioning writes. Unsupported
 controls, reviewer scopes, and combinations return `400 INVALID_REQUEST`;
@@ -121,8 +119,8 @@ Installation readers use `GET /installation`; Agent editors use
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
 
 Deployment revalidates selections and Configuration, records the Driver and
-policy-only plugin map in AgentRevision, and queues the revision. Native app
-mapping, release metadata, and configuration are resolved later.
+policy-only plugin map in AgentRevision, and queues it. Native app mapping,
+release metadata, and configuration resolve later.
 
 ### 3. Deliver requested state through Compute preparation
 
@@ -136,36 +134,35 @@ policies before host effects.
 
 Initial embedded Kubernetes gateway preparation applies exact-Agent HTTPS
 egress before installation. For existing gateways, `prepareRevision` avoids
-duplicate access to the Agent-owned database. `activateRevision` uses `Recreate`:
-the old gateway stops before installation. Revision files remain private and the
-native registry stays in the Agent-owned database. Docker keeps native state in
-the container's private temporary home.
+duplicate Agent database access. `activateRevision` uses `Recreate`, stopping
+the old gateway before installation. Revision files stay private and the native
+registry stays in the Agent-owned database. Docker keeps native state in the
+container's private temporary home.
 
 ### 4. Prepare native runtime state and hand off readiness
 
 `apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts:installOpenClawPlugins`
 
-Embedded OpenClaw validates selections against its bundled catalog and policy. Grants enter nonempty `tools.allow`,
-otherwise `tools.alsoAllow`, preserving denies and profiles. A tool's `enabled`
+Embedded OpenClaw validates selections against its bundled catalog and policy.
+Grants enter nonempty `tools.allow`, otherwise `tools.alsoAllow`, preserving denies and profiles. A tool's `enabled`
 override precedes `toolDefaults.enabled`; disabled tools emit native denies.
 Master disable and operator denies prevail; `provider_default` and `none` add no
 Diffs review step. Revision-private configuration uses `--pin --force --no-enable`,
-preserving enablement and allow/deny lists during installation. Preparation
-refreshes the registry and verifies admitted configuration. The runtime image
-must gain this flag; the pinned release lacks it.
+preserving enablement and allow/deny lists. Preparation refreshes the registry
+and verifies admitted configuration; the pinned runtime release lacks this flag.
 Native inspection verifies plugin ID, package name, runtime/install version,
 recorded integrity, and the runtime source's containment in the install path.
-Verification failure prevents gateway readiness. Confirmed install rejection
-disables the optional selection and removes its managed tool allowance before startup.
+Failure prevents gateway readiness. Confirmed install rejection disables the
+optional selection and removes its managed tool allowance before startup.
 
 Selected Codex plugins enable apps/plugins/remote_plugin in isolated `CODEX_HOME`
 and configure the bridge with
 `codexPlugins.enabled:true`, `allow_all_plugins:false`, and an entry per selection.
 `apps._default.enabled:false` applies; disabled selections cannot execute app tools.
 
-After `plugin/list`, `runtime-entrypoints.ts:readCodexPluginDetails` batches up to four
-concurrent reads, preserving selection order. Batches drain before retries.
-Installation/configuration writes stay sequential; post-install reads use the same
+After `plugin/list`, `runtime-entrypoints.ts:readCodexPluginDetails` reads up to
+four selections concurrently, preserving selection order; batches drain before retries. Install
+and configuration writes stay sequential; post-install reads use the same
 batching before final policy verification.
 `codexRuntimeArtifact` uses concrete `detail.apps`, excluding `appTemplates`.
 `codexInstallPlan` validates [component support](../reference/drivers/plugin-bundled.md)
@@ -195,29 +192,26 @@ cover later workspace/session/model changes or strict review. Codex 0.156 readba
 omits managed app/tool requirements applied during execution; native effective-policy
 introspection remains required. See [remaining proof](../testing/plugins.md#current-proof-notes).
 
-For Compute-owned Kubernetes workloads, a selected OpenClaw install command's
-normal nonzero exit, a matching Codex `plugin/install` error response, or a
-successful Codex install response with apps needing authentication contributes
-only an admitted `{pluginId, code}` warning. Transport loss, timeouts, signals,
-malformed responses, discovery failures, and policy failures retain their
-ordinary startup failure behavior. Provider-owned Harnesses retain their
-existing startup path.
+For Compute-owned Kubernetes workloads, only an admitted `{pluginId, code}`
+warning results from a selected OpenClaw install's normal nonzero exit, a
+matching Codex `plugin/install` error, or a successful Codex install needing app
+authentication. Transport loss, timeouts, signals, malformed responses,
+discovery failures, and policy failures retain ordinary startup failure
+behavior. Provider-owned Harnesses keep their existing startup path.
 
 After configuration verification, the runtime exposes private startup status.
-Kubernetes Compute validates workload, revision, startup instance, selection keys,
-and warning codes before returning readiness. Status is recomputed on restart.
+Kubernetes Compute validates workload, revision, startup instance, selection
+keys, and warning codes for readiness, recomputing status on restart.
 
-Dedicated Codex receives runtime-binary reads, including without plugins.
-
-Dedicated Codex runs separately. Startup symlinks
+Dedicated Codex runs separately and receives runtime-binary reads even without
+plugins. Startup symlinks
 `/home/node/.openclaw/plugin-skills` to
 `/home/node/openclaw-runtime-assets/plugin-skills`, preserving relative files
 without gateway state/credentials.
 
 Gateway blocks failed bridge selections before serving and prevents retry during
-turns. It refreshes effective configuration when Agent startup changes;
-untrusted status cannot establish readiness. Requested revision selections remain
-unchanged.
+turns. It refreshes effective configuration when Agent startup changes; untrusted
+status cannot establish readiness. Requested revision selections remain unchanged.
 
 Compute installs status NetworkPolicies before the first dedicated gateway and
 creates it only when the Agent and plugin status are ready and its Service selects
@@ -225,22 +219,23 @@ the revision. Existing gateways and full runtime policies retain their activatio
 boundary.
 
 The Agent and gateway derive an app-server credential from the transport Secret,
-revision ID, and Agent startup ID. The gateway receives it after reading matching
-status and rendering exclusions. After restart, the old gateway cannot
-authenticate while its supervisor awaits the next status poll. The supervisor
-publishes non-ready status before stopping a gateway whose peer result changed.
+revision ID, and Agent startup ID. The gateway receives it after matching status
+and rendering exclusions. After restart, the old gateway cannot authenticate
+while its supervisor awaits status. A changed peer makes the supervisor publish
+non-ready status and restart only OpenClaw, reporting ready once it serves.
+While peer status is unavailable, the gateway stays unready; if it exits during
+that wait, the wrapper exits so the container can recover.
 
 ### 5. Complete revision reconciliation
 
 `apps/controller/src/worker.ts:finalizeRevision`
 
-Preparation failure before the worker commits `activeRevisionId` leaves the
-prior pointer unchanged. After that commit, activation/finalization failure
-retains the candidate pointer and records `REVISION_FINALIZATION_INCOMPLETE` for
-retry. Existing embedded Kubernetes replacement runs in this after-commit phase;
-the old gateway may already be stopped. The previous revision record remains
-stored, but there is no pointer rollback or guarantee of availability during
-cutover. See the [controller worker flow](controller-worker.md).
+Before the worker commits `activeRevisionId`, preparation failure leaves the
+prior pointer unchanged. After commit, activation/finalization failure retains
+the candidate pointer and records `REVISION_FINALIZATION_INCOMPLETE` for retry.
+Embedded Kubernetes replacement runs after commit; the old gateway may already
+be stopped. The previous revision remains stored, without pointer rollback or
+an availability guarantee during cutover. See the [controller worker flow](controller-worker.md).
 
 Successful completion reports `REVISION_ACTIVATED` or `REVISION_ALREADY_ACTIVE`.
 A candidate pointer alone is not readiness evidence. Agent turns use native
@@ -293,76 +288,10 @@ completed deployment attempt rather than ongoing runtime health.
 
 ## Changelog
 
+- 2026-09-30 00:33: Propagate Gateway exits while awaiting peer recovery. (authoring-run/bf3b8146-9d72-42a4-84e5-2293581c890c - 0d72f6a4e4e3003d457c4498e81e7de414f85649)
+
 - 2026-09-28 21:26: Batch Codex metadata reads; preserve ordered writes and verification. (authoring-run/7c8bff1b-a2d1-48f6-a996-1be6a06719fa - 8352c0932bcbde43e88b44c6975496ca5431ff55)
 
 - 2026-09-28 10:46: Materialize inherited app policy; native proof pending. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - 44ed2405)
 
-- 2026-09-28 00:02: Reconciled Codex startup policy verification with approval scopes. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - b96eadc1)
-
-- 2026-09-27 23:40: Catalog prefetch and loading feedback. (01a0e53a-f2be-7bd1-a9c1-36e827b2ee47 - b38554ac)
-
-- 2026-09-27 22:17: Document native Codex bundled skill support and pending account-plugin activation restriction. (01a0d4f7-8085-70e0-9d0c-69a465a81fe3 - 19f72841c3aed621137bd438ae91fa016c39b292)
-
-- 2026-09-27 21:52: Debounced catalog searches and canceled obsolete requests. (01a0e4d2-4f51-7780-b0fc-2352cb99078f - a599db7e)
-
-- 2026-09-27 20:21: Documented approval mapping. (01a0e3cf-cfd3-7c02-91ac-19a0efbd7645 - 0663fa97ed5c0fcabc680241dbe7fbde9fde3562)
-
-- 2026-09-27 06:07: Expanded the curated catalog and marked unsupported releases unavailable. (01a0e176-b1ee-7641-85e8-c167f10c6a66 - eb3d6c4c0b8881e5f7efe17c03cc05357e7c7734)
-
-- 2026-09-27 05:49: Added selected token-free curated catalog discovery and preserved runtime credential checks. (01a0e164-ee0e-7c51-a28f-b1179d5917dd - 7812d81bce78a415b7a47b4e335812304caf98ea)
-
-- 2026-09-27 05:38: Resolve catalog IDs through owned runtime metadata. (01a0d4f7-8085-70e0-9d0c-69a465a81fe3 - 6f7534fa)
-
-- 2026-09-27 02:41: Authorize the selected Secret before reporting unsupported plugin discovery. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 36cb6d6a4a515ad7328eb596b3da174f262f6d18)
-
-- 2026-09-27 02:03: Link the Agent approval and channel directory flow. (01a0df20-f340-7810-bb59-b1df6c0bbbd3 - b2de165412191a4c9d124acf59fa1efb25cc29d6)
-
-- 2026-09-27 02:08: Added exact-Secret-authorized transient plugin discovery and current-value reads. (01a0e099-da9d-78f1-8e79-ea4a919edf7d - 41aae7750e33b8739efc5f7c6a0ebd160f42f711)
-
-- 2026-09-26 21:38: Added Agent skill paths. (c5a050f1-e44a-48c1-9c18-f7661d50623f - 41aae775)
-
-- 2026-09-26 19:16: Saved-Secret discovery. (authoring-run/828a8a37-a9f6-4bb5-9eed-912780152d5c - e5867bcd)
-
-- 2026-09-26 17:42: Document Console new-revision plugin editing and read-only revision snapshots in the accompanying change. (authoring-run/3aa63184-7716-4d27-90ed-33974110d0f5 - cdd6e3c8413f7cca4909f98d2d4c5f6bd17dbe54)
-
-- 2026-09-24 23:36: Normalize equivalent Codex category defaults during verification. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - 8ce00a84)
-
-- 2026-09-24 23:09: Clarified disabled-app verification and shortened startup readback prose. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - 27d44ac0)
-
-- 2026-09-24 19:44: Added Driver-owned setup and recovery links. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - ef89ded5)
-
-- 2026-09-24 08:00: Added transient PAT discovery through the selected PluginDriver before Agent creation. (01a0d1dd-aa36-7622-9f43-8376f6ff935e - f62e17c)
-- 2026-09-24 07:50: Verify nested tool and account/link policy before readiness; retain session and live-enforcement gates (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 073bb5c1)
-
-- 2026-09-24 07:02: Aligned the common reviewer contract and scoped capabilities with the accepted specification; runtime reviewer/session checks remain draft gates (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 3606f2e9)
-
-- 2026-09-24 06:19: Documented nested policy validation, capabilities, owned-tool discovery, and native configuration translation; compatible session/runtime enforcement and live proof remain required (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - d39727589)
-
-- 2026-09-21 21:23: Reconciled policy composition and installation without enablement changes with optional-plugin warnings and the bundled Driver reference; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 9405e20)
-
-- 2026-09-21 19:15: Ignore template metadata while retaining concrete app policy and startup mapping checks. (codex/01a0b632-4907-7362-9c51-28129db5a3b9 - aa6dd741)
-
-- 2026-09-18 17:38: Documented plugin policy conflict rejection, tool allowlist composition, and installation without enablement changes; runtime release and Kubernetes proof remain pending (codex/01a0b17c-68b6-7e11-bedc-f74de7d606ed - 724dcb5)
-
-- 2026-09-18 17:17: Linked plugin warning persistence to the generalized controller work result. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 6a582ce9)
-
-- 2026-09-17 20:28: Replaced terminal plugin receipts with verified optional-plugin exclusion, current startup status, and successful deployment warnings; runtime verification in progress. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 7771526d)
-- 2026-09-17: Verified native OpenClaw and Codex plugin turns, successful warning persistence, failed selection exclusion, and Agent-only restart recovery. Ordered initial dedicated gateway startup after its Agent status dependency. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - a5a11ad1)
-- 2026-09-17 20:28: Removed the first-failure receipt and acknowledgment lifecycle under the approved best-effort plugin decision. (NOT_IN_SPEC)
-
-- 2026-09-17 15:02: Added the Kubernetes receipt and terminal plugin-failure path for Compute-owned plugin startup without claiming native proof completion. (codex/01a0b0fc-4a24-76c0-8fb7-f3a3a434d464 - 58ead994)
-
-- 2026-09-08 16:05: Corrected Codex Linear support to the existing bridge path and kept live local-Kubernetes proof pending (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 79021fa)
-- 2026-09-08 17:02: Recorded current Codex Linear proof boundary: native install/readiness passed, bridge app batch request passed, force-refresh app state showed Linear enabled/callable, and a normal turn invoked Linear `list_teams` before timing out in native `waitingOnApproval` without a result (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 79021fa)
-- 2026-09-08 17:34: Recorded the native diagnostic blocker: direct Linear execution requires app reauthentication, the diagnostic native model turn emitted a Codex Apps URL elicitation that was declined, and normal OCC proof remains pending reconnection and rerun (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - b4fa273)
-- 2026-09-08 18:05: User substituted Google Calendar for the required Codex live proof; Calendar curated metadata and normal-turn `list_calendars(max_results:1)` proof remain pending, while Linear remains historical connector evidence (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - b4fa273)
-- 2026-09-08 18:12: Verified Google Calendar curated metadata from live Agent cache after native install: `google-calendar@openai-curated-remote` version `1.2.7`, app `connector_947e0d954944416db111db556030eea6`, `required:true`; Calendar normal-turn proof remains pending (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - b4fa273)
-- 2026-09-08 15:30: Added opt-in Kubernetes and test-only Docker plugin proof prerequisites without claiming live proof completion (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 1471b4c)
-- 2026-09-08 14:30: Documented plugin admission, the Codex 501 boundary, and serialized OpenClaw replacement (codex/01a082a0-aa05-7af0-af28-5568d12d623f - 1471b4c217e4879a6b430890ac216b2026e9bd46)
-
-- 2026-09-08 18:18: Google Calendar 1.2.7 normal-Agent acceptance passed with the designated service account, matching tool/result evidence, and zero skips (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - ef51e45).
-- 2026-09-09 13:39: Updated the flow for Agent-owned plugin maps, full-map replacement, startup catalog resolution, and revision snapshots that freeze requested state rather than native release artifacts (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 237dd0a).
-- 2026-09-09 14:50: Simplified bootstrap and catalog projection, kept native metadata/configuration readiness, and standardized both native plugin proofs on Kubernetes (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 44f80f2).
-- 2026-09-09 15:49: Aligned bootstrap/install ordering, replacement semantics, and pre-commit versus post-commit failure and worker completion with current implementation (codex/01a08228-c3ec-7ab2-b0c0-74f49a8ec8a7 - 08abf9c).
-
-- 2026-09-11: Removed the per-Agent plugin inventory GET and its inferred installation query. Read desired selections from Agent configuration and deployment outcomes from existing revision/status surfaces; native catalog discovery remains available to the PluginDriver. (NOT_IN_SPEC)
+[Agent plugin deployment documentation history](agent-plugins/history.md) preserves the older dated entries.

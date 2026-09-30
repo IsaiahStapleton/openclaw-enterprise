@@ -7,7 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { prepareFile } from "../../scripts/ci/prepare.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
-import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
+import {
+  PostgresMetricsSnapshot,
+  SandboxRevisionUnsupportedError,
+} from "../../packages/occ/src/index.ts";
 import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
   authorizedPrincipal,
@@ -415,8 +418,8 @@ function repositoryBoundary({ count = 1, deadlineWallMs = Date.now() + 120_000 }
     implementation: "repository-worker-boundary",
     capability: "repo",
     maintenanceIntervalMs: 3_600_000,
-    listOptions() {
-      return [];
+    async listOptions() {
+      return { options: [], descriptionsPending: false };
     },
     resolve() {
       return { bindings, sessionDurationSeconds: 60 };
@@ -1429,6 +1432,197 @@ test(
       ["recover", "open"],
     );
     await fixture.stop();
+  },
+);
+
+test(
+  "exhausted repository maintenance during a dependency outage keeps the active runtime",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary();
+    // One attempt makes the first unavailable dependency exhaust the claim, as
+    // a longer outage exhausts the default retries.
+    const fixture = await setup(context, { repoDriver: repository.driver, maxAttempts: 1 });
+    const owner = await fixture.agent("repository-maintenance-outage");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    const stopped = [];
+    let iamUnavailable = false;
+    const compute = {
+      ...fixture.compute,
+      async stopRevision(revision) {
+        stopped.push(revision.id);
+        return fixture.compute.stopRevision(revision);
+      },
+    };
+    const withUnavailableIAM = (drivers) => {
+      const createIAMDriver = drivers.createIAMDriver;
+      return {
+        ...drivers,
+        createIAMDriver(state) {
+          const iam = createIAMDriver(state);
+          return {
+            id: iam.id,
+            implementation: iam.implementation,
+            capability: iam.capability,
+            lookupIdentity: iam.lookupIdentity.bind(iam),
+            async authorize(request) {
+              if (iamUnavailable) {
+                throw new Error("IAM is temporarily unavailable");
+              }
+              return iam.authorize(request);
+            },
+          };
+        },
+      };
+    };
+    const startWorker = () =>
+      fixture.start(
+        compute,
+        () => {},
+        undefined,
+        undefined,
+        fixture.createWorkerPool(),
+        withUnavailableIAM,
+      );
+    await startWorker();
+    await fixture.work(candidate, "succeeded");
+    await fixture.stop();
+
+    iamUnavailable = true;
+    const maintenance = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(maintenance.rowCount, 1);
+    const outage = { id: candidate.id, idempotencyKey: maintenance.rows[0].idempotency_key };
+    await startWorker();
+    await fixture.work(outage, "failed_permanent");
+    await fixture.stop();
+    const failed = await fixture.observerPool.query(
+      "SELECT reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+      [outage.idempotencyKey],
+    );
+    assert.equal(failed.rows[0].reason_code, "DEPENDENCY_UNAVAILABLE");
+    const retirement = await fixture.observerPool.query(
+      `SELECT idempotency_key FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+    );
+    assert.equal(retirement.rowCount, 0, "an outage must not retire the authorized runtime");
+    assert.deepEqual(stopped, []);
+    const agent = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(agent.activeRevisionId, candidate.id);
+    assert.equal(agent.desiredRuntimeState, "running");
+
+    // The maintenance chain continues, so the runtime is kept current once
+    // the dependency recovers.
+    iamUnavailable = false;
+    const next = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(next.rowCount, 1);
+    assert.notEqual(next.rows[0].idempotency_key, outage.idempotencyKey);
+    await startWorker();
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: next.rows[0].idempotency_key },
+      "succeeded",
+    );
+    await fixture.stop();
+    assert.deepEqual(stopped, []);
+  },
+);
+
+test(
+  "an expired exhausted repository maintenance claim keeps the active runtime",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary();
+    const fixture = await setup(context, { repoDriver: repository.driver, maxAttempts: 1 });
+    const owner = await fixture.agent("repository-maintenance-lease-expiry");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    const stopped = [];
+    const compute = {
+      ...fixture.compute,
+      async stopRevision(revision) {
+        stopped.push(revision.id);
+        return fixture.compute.stopRevision(revision);
+      },
+    };
+    await fixture.start(compute);
+    await fixture.work(candidate, "succeeded");
+    await fixture.stop();
+
+    // A worker claims the maintenance item on its last attempt and crashes
+    // before it finishes, so only lease expiry can release the claim.
+    const maintenance = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(maintenance.rowCount, 1);
+    const crashedKey = maintenance.rows[0].idempotency_key;
+    const queue = new fixture.PostgresWorkQueue(fixture.observerPool, {
+      leaseDurationMs: 30_000,
+      maxAttempts: 1,
+      random: () => 0,
+    });
+    const crashed = await queue.claim();
+    assert.equal(crashed?.idempotencyKey, crashedKey);
+    await fixture.observerPool.query(
+      `UPDATE occ.controller_work
+       SET lease_expires_at = clock_timestamp() - interval '1 second'
+       WHERE idempotency_key = $1 AND claim_token = $2::uuid`,
+      [crashedKey, crashed.claimToken],
+    );
+    const recovery = await queue.recoverStale();
+    assert.equal(recovery.recovered, 1);
+
+    const failed = await fixture.observerPool.query(
+      "SELECT state, reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+      [crashedKey],
+    );
+    assert.deepEqual(failed.rows[0], { state: "failed_permanent", reason_code: "LEASE_EXPIRED" });
+    const retirement = await fixture.observerPool.query(
+      `SELECT idempotency_key FROM occ.controller_work
+       WHERE revision_id = $1 AND idempotency_key LIKE $2`,
+      [candidate.id, `agent_revision:${candidate.id}:repository_cleanup:retire:%`],
+    );
+    assert.equal(retirement.rowCount, 0, "a crashed worker must not retire the active runtime");
+    const agent = await fixture.state.read((view) =>
+      view.agents.findAgent(fixture.namespace.id, owner.id),
+    );
+    assert.equal(agent.activeRevisionId, candidate.id);
+    assert.equal(agent.desiredRuntimeState, "running");
+
+    // The maintenance chain continues with the next bucket.
+    const next = await fixture.observerPool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2
+       RETURNING idempotency_key, attempt_count, actor_id`,
+      [candidate.id, `agent_revision:${candidate.id}:maintenance:%`],
+    );
+    assert.equal(next.rowCount, 1);
+    const bucket = BigInt(crashedKey.slice(crashedKey.lastIndexOf(":") + 1));
+    assert.deepEqual(next.rows[0], {
+      idempotency_key: `agent_revision:${candidate.id}:maintenance:${bucket + 1n}`,
+      attempt_count: 0,
+      actor_id: crashed.actorId,
+    });
+    await fixture.start(compute);
+    await fixture.work(
+      { id: candidate.id, idempotencyKey: next.rows[0].idempotency_key },
+      "succeeded",
+    );
+    await fixture.stop();
+    assert.deepEqual(stopped, []);
   },
 );
 
@@ -3529,6 +3723,313 @@ test(
 );
 
 test(
+  "another authorized actor takes over failed Agent deletion once the initiator loses permission",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context, { maxAttempts: 1 });
+    const owner = await fixture.agent("delete-takeover");
+    const revision = await fixture.revision(owner, 1);
+    let unavailable = true;
+    let retirementAttempts = 0;
+    await fixture.start({
+      ...fixture.compute,
+      async retireRevision(target) {
+        assert.equal(target.id, revision.id);
+        retirementAttempts += 1;
+        if (unavailable) {
+          throw new Error("Compute temporarily unavailable during teardown");
+        }
+      },
+    });
+    await fixture.work(revision, "succeeded");
+    const deletion = await fixture.requestDeletion(owner);
+    await fixture.work(deletion, "failed_permanent");
+    const observe = () =>
+      fixture.state.read((view) => view.operations.findWork(deletion.idempotencyKey));
+    const exhausted = await observe();
+    assert.equal(exhausted.actorId, fixture.actor.id);
+
+    const otherActor = `delete-successor-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_identities (id, kind, issuer, subject)
+       SELECT $1, kind, issuer, $1 FROM occ.iam_identities WHERE id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       SELECT 'binding-' || gen_random_uuid(), namespace_id, $1, role_id,
+              resource_kind, resource_id
+       FROM occ.iam_access_bindings WHERE identity_subject_id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    // The initiator is offboarded: it no longer holds any access.
+    await fixture.observerPool.query(
+      `DELETE FROM occ.iam_access_bindings WHERE identity_subject_id = $1`,
+      [fixture.actor.id],
+    );
+    // A caller without delete permission still cannot take over.
+    await assert.rejects(
+      fixture.controller.deleteAgent(
+        `unprivileged-${randomUUID()}`,
+        fixture.namespace.id,
+        owner.id,
+      ),
+    );
+    assert.deepEqual(await observe(), exhausted);
+
+    unavailable = false;
+    await fixture.controller.deleteAgent(otherActor, fixture.namespace.id, owner.id);
+    const retried = await observe();
+    assert.ok(
+      retried === undefined || ["queued", "claimed"].includes(retried.state),
+      "an authorized takeover must requeue the exhausted teardown",
+    );
+    if (retried !== undefined) {
+      assert.equal(retried.actorId, otherActor);
+      assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
+    }
+    await waitFor("taken-over deletion to remove its Agent", async () =>
+      (await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      )) === undefined
+        ? true
+        : undefined,
+    );
+    assert.equal(retirementAttempts, 2);
+    const { rows: retryAudit } = await fixture.observerPool.query(
+      `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND resource_id = $2 AND action = 'openclaw.agents.delete.retry'`,
+      [fixture.namespace.id, owner.id],
+    );
+    assert.deepEqual(
+      retryAudit.map((event) => ({
+        actorId: event.actorId,
+        outcome: event.outcome,
+        takeover: event.details.takeover,
+        previousActorId: event.details.previousActorId,
+      })),
+      [
+        {
+          actorId: otherActor,
+          outcome: "success",
+          takeover: true,
+          previousActorId: fixture.actor.id,
+        },
+      ],
+    );
+  },
+);
+
+test(
+  "repeating Namespace deletion recovers a teardown that exceeded its convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-exhausted-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    // A stuck finalizer keeps the Namespace terminating past the deadline.
+    let terminating = true;
+    let deleteAttempts = 0;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async deleteNamespace(target) {
+          assert.equal(target.id, namespace.id);
+          deleteAttempts += 1;
+          return { namespaceId: target.id, namespaceDeleted: !terminating };
+        },
+      },
+      () => {},
+      1,
+    );
+    const deletion = {
+      id: namespace.id,
+      idempotencyKey: `namespace:${namespace.id}:reconcile:deleted`,
+    };
+    const observe = () =>
+      fixture.state.read((view) => view.operations.findWork(deletion.idempotencyKey));
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "failed_permanent");
+    const exhausted = await observe();
+    assert.equal(exhausted.reasonCode, "CONVERGENCE_DEADLINE_EXCEEDED");
+    assert.equal(deleteAttempts, 1);
+    const stranded = await fixture.state.read((view) =>
+      view.namespaces.findNamespace(namespace.id),
+    );
+    assert.equal(stranded.status, "deleting");
+
+    // A rejected caller cannot replenish the worker's attempt budget.
+    await assert.rejects(
+      fixture.controller.deleteNamespace(`unprivileged-${randomUUID()}`, namespace.id),
+    );
+    assert.deepEqual(await observe(), exhausted);
+
+    // Retrying before the teardown is repaired keeps the original deadline and
+    // fails again after one pass instead of looping.
+    const repeated = await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    assert.equal(repeated.status, "deleting");
+    const retried = await observe();
+    assert.ok(
+      ["queued", "claimed"].includes(retried.state),
+      "authorized repeated DELETE must requeue the failed Namespace teardown",
+    );
+    assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
+    assert.equal(retried.actorId, exhausted.actorId);
+    assert.equal(retried.reasonCode, undefined);
+    await waitFor("unrepaired retry to fail again", async () => {
+      const work = await observe();
+      return deleteAttempts === 2 && work.state === "failed_permanent" ? work : undefined;
+    });
+
+    terminating = false;
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "succeeded");
+    assert.equal(deleteAttempts, 3);
+    assert.equal(
+      await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id)),
+      undefined,
+    );
+    const { rows: retryAudit } = await fixture.observerPool.query(
+      `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.delete.retry'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      retryAudit.map(({ actorId, outcome, details }) => ({
+        actorId,
+        outcome,
+        workId: details.workId,
+        previousReasonCode: details.previousReasonCode,
+      })),
+      Array.from({ length: 2 }, () => ({
+        actorId: fixture.actor.id,
+        outcome: "success",
+        workId: deletion.idempotencyKey,
+        previousReasonCode: "CONVERGENCE_DEADLINE_EXCEEDED",
+      })),
+    );
+  },
+);
+
+test(
+  "another authorized actor takes over failed Namespace deletion once the initiator loses permission",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-takeover-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    // A stuck finalizer keeps the Namespace terminating past the deadline.
+    let terminating = true;
+    let deleteAttempts = 0;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async deleteNamespace(target) {
+          assert.equal(target.id, namespace.id);
+          deleteAttempts += 1;
+          return { namespaceId: target.id, namespaceDeleted: !terminating };
+        },
+      },
+      () => {},
+      1,
+    );
+    const deletion = {
+      id: namespace.id,
+      idempotencyKey: `namespace:${namespace.id}:reconcile:deleted`,
+    };
+    const observe = () =>
+      fixture.state.read((view) => view.operations.findWork(deletion.idempotencyKey));
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "failed_permanent");
+    const exhausted = await observe();
+    assert.equal(exhausted.actorId, fixture.actor.id);
+
+    const otherActor = `delete-successor-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_identities (id, kind, issuer, subject)
+       SELECT $1, kind, issuer, $1 FROM occ.iam_identities WHERE id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       SELECT 'binding-' || gen_random_uuid(), namespace_id, $1, role_id,
+              resource_kind, resource_id
+       FROM occ.iam_access_bindings WHERE identity_subject_id = $2`,
+      [otherActor, fixture.actor.id],
+    );
+    // While the initiator still holds delete permission, it keeps ownership.
+    await assert.rejects(fixture.controller.deleteNamespace(otherActor, namespace.id), {
+      message: "Only the initiating actor can retry deletion.",
+    });
+    assert.deepEqual(await observe(), exhausted);
+
+    // The initiator is offboarded: it no longer holds any access.
+    await fixture.observerPool.query(
+      `DELETE FROM occ.iam_access_bindings WHERE identity_subject_id = $1`,
+      [fixture.actor.id],
+    );
+    // A caller without delete permission still cannot take over.
+    await assert.rejects(
+      fixture.controller.deleteNamespace(`unprivileged-${randomUUID()}`, namespace.id),
+    );
+    assert.deepEqual(await observe(), exhausted);
+
+    terminating = false;
+    const repeated = await fixture.controller.deleteNamespace(otherActor, namespace.id);
+    assert.equal(repeated.status, "deleting");
+    const retried = await observe();
+    assert.ok(
+      retried === undefined || ["queued", "claimed", "succeeded"].includes(retried.state),
+      "an authorized takeover must requeue the exhausted teardown",
+    );
+    if (retried !== undefined) {
+      assert.equal(retried.actorId, otherActor);
+      assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
+    }
+    await fixture.work(deletion, "succeeded");
+    assert.equal(deleteAttempts, 2);
+    assert.equal(
+      await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id)),
+      undefined,
+    );
+    const { rows: retryAudit } = await fixture.observerPool.query(
+      `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.delete.retry'`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      retryAudit.map(({ actorId, outcome, details }) => ({
+        actorId,
+        outcome,
+        takeover: details.takeover,
+        previousActorId: details.previousActorId,
+      })),
+      [
+        {
+          actorId: otherActor,
+          outcome: "success",
+          takeover: true,
+          previousActorId: fixture.actor.id,
+        },
+      ],
+    );
+  },
+);
+
+test(
   "Agent deletion fails closed when a credential-provisioning Driver cannot delete credentials",
   requiresPostgres,
   async (context) => {
@@ -5214,6 +5715,197 @@ test(
     assert.deepEqual(status.error, {
       code: "RUNTIME_AUTHENTICATION_FAILED",
       message: "Deployment runtime credentials were rejected.",
+    });
+  },
+);
+
+test(
+  "a CPU-starved startup model probe fails deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("cpu-starved-runtime");
+    const candidate = await fixture.revision(owner, 1);
+    let observations = 0;
+
+    // Under the default 900-second deadline a plain probe timeout stays pending;
+    // a probe that ran out of CPU at the container's limit ends the deployment.
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        observations += 1;
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: {
+            component: "gateway",
+            check: "model-probe",
+            checkedAt: "2026-09-30T08:00:00.000Z",
+            code: observations === 1 ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_CPU_STARVED",
+          },
+        };
+      },
+    });
+
+    const failed = await fixture.work(candidate, "failed_permanent");
+    assert.equal(observations, 2);
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [{ reason_code: "RUNTIME_CPU_STARVED", result_data: null }]);
+    const active = await fixture.observerPool.query(
+      "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+      [fixture.namespace.id, owner.id],
+    );
+    assert.equal(active.rows[0].active_revision_id, null);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "RUNTIME_CPU_STARVED",
+      message: "Deployment runtime did not get enough CPU to start.",
+    });
+  },
+);
+
+test(
+  "a replacement that fails after pointer publication stays the Agent's active revision",
+  requiresPostgres,
+  async (context) => {
+    // Kubernetes embedded replacement reports a new revision ready while its
+    // predecessor serves, publishes it, and only then replaces the shared
+    // gateway. When the replacement's startup model probe then rejects the
+    // credential, the predecessor no longer runs: the failed revision owns the
+    // only runtime, so it stays active for stop, deletion, and diagnostics
+    // until a later revision replaces it. OCC never rolls back automatically.
+    const fixture = await setup(context);
+    const owner = await fixture.agent("failed-published-replacement");
+    const healthy = await fixture.revision(owner, 1);
+    let rejectCredential = false;
+    const activations = [];
+    const retired = [];
+    const compute = {
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        const observation = await fixture.compute.prepareRevision(revision);
+        // The first observation of a replacement reflects the serving predecessor.
+        if (!rejectCredential || !activations.includes(revision.id)) {
+          return observation;
+        }
+        return {
+          ...observation,
+          ready: false,
+          runtimeFailure: {
+            component: "gateway",
+            check: "model-probe",
+            checkedAt: "2026-09-30T17:14:54.000Z",
+            code: "AUTHENTICATION_FAILED",
+          },
+        };
+      },
+      async activateRevision(revision) {
+        activations.push(revision.id);
+        if (rejectCredential) {
+          throw new Error("The exact AgentRevision gateway is not ready.");
+        }
+      },
+      async retireRevision(revision) {
+        retired.push(revision.id);
+        return fixture.compute.retireRevision(revision);
+      },
+    };
+    await fixture.start(compute);
+    await fixture.work(healthy, "succeeded");
+    const activeRevision = async () =>
+      (
+        await fixture.observerPool.query(
+          "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+          [fixture.namespace.id, owner.id],
+        )
+      ).rows[0].active_revision_id;
+    assert.equal(await activeRevision(), healthy.id);
+
+    rejectCredential = true;
+    const rejected = await fixture.revision(owner, 2);
+    await fixture.work(rejected, "failed_permanent");
+    const codes = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS reason FROM occ.audit_events
+       WHERE resource_id = $1 AND action = 'reconcile' ORDER BY occurred_at`,
+      [rejected.id],
+    );
+    assert.deepEqual(
+      [...new Set(codes.rows.map(({ reason }) => reason))],
+      ["REVISION_FINALIZATION_INCOMPLETE", "RUNTIME_AUTHENTICATION_FAILED"],
+    );
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      rejected.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.equal(status.error.code, "RUNTIME_AUTHENTICATION_FAILED");
+    assert.equal(await activeRevision(), rejected.id);
+    assert.deepEqual(retired, []);
+
+    // Recovery is a new, higher revision; it replaces the failed one.
+    rejectCredential = false;
+    const repaired = await fixture.revision(owner, 3);
+    await fixture.work(repaired, "succeeded");
+    assert.equal(await activeRevision(), repaired.id);
+    assert.deepEqual(retired.toSorted(), [healthy.id, rejected.id].toSorted());
+  },
+);
+
+test(
+  "a Sandbox Driver that cannot run the revision fails deployment without retrying",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("sandbox-unsupported");
+    const candidate = await fixture.revision(owner, 1);
+    let observations = 0;
+
+    // The OpenShell SandboxDriver cannot project secretKeyRef environment. The
+    // same revision fails the same way on every attempt, so it is terminal.
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision() {
+        observations += 1;
+        throw new SandboxRevisionUnsupportedError(
+          "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
+          "OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN.",
+        );
+      },
+    });
+
+    const failed = await fixture.work(candidate, "failed_permanent");
+    assert.equal(observations, 1);
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [
+      { reason_code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED", result_data: null },
+    ]);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
+      message:
+        "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.",
     });
   },
 );

@@ -9,6 +9,7 @@ import { createPlatformReadView } from "../ports/platform-read-view.ts";
 import { postgresRepositorySessions } from "./postgres-repository-sessions.ts";
 import {
   validRepositoryBindingSelections,
+  normalizedRepositoryAccess,
   validRepositoryRevisionState,
 } from "./repository-credential-state.ts";
 import type {
@@ -46,6 +47,7 @@ import {
   normalizePluginApprovers,
   normalizeHarnessAuthBinding,
   normalizeSecretBindings,
+  PERMISSION_ACTIONS as PLATFORM_PERMISSION_ACTIONS,
   RESOURCE_KINDS as PLATFORM_RESOURCE_KINDS,
   validPluginRevisionState,
   validPluginApprovers,
@@ -151,15 +153,7 @@ interface TransactionContext {
   installationLoaded: boolean;
 }
 
-const PERMISSION_ACTIONS = new Set([
-  "create",
-  "read",
-  "update",
-  "delete",
-  "deploy",
-  "operate",
-  "administer",
-]);
+const PERMISSION_ACTIONS = new Set<string>(PLATFORM_PERMISSION_ACTIONS);
 const RESOURCE_KINDS = new Set<string>(PLATFORM_RESOURCE_KINDS);
 const AUDIT_METADATA_KEY = "__occAuditMetadata";
 const SECRET_IDENTIFIER =
@@ -338,6 +332,7 @@ function presetFromRow(row: PostgresRow): Readonly<Preset> {
 
 function agentMetadataFromRow(row: PostgresRow): Readonly<AgentMetadata> {
   const activeRevisionId = optionalText(row, "active_revision_id");
+
   const desiredRuntimeState = text(row, "desired_runtime_state");
   if (desiredRuntimeState !== "running" && desiredRuntimeState !== "stopped") {
     throw new DependencyUnavailableError("Persisted Agent desired runtime state is invalid.");
@@ -349,6 +344,7 @@ function agentMetadataFromRow(row: PostgresRow): Readonly<AgentMetadata> {
     configurationId: text(row, "configuration_id"),
     backendId: row.backend_id === null ? null : text(row, "backend_id"),
     executionMode: text(row, "execution_mode") as Agent["executionMode"],
+
     servicePrincipalId: text(row, "service_principal_id"),
     ...(activeRevisionId === undefined ? {} : { activeRevisionId }),
     desiredRuntimeState,
@@ -374,11 +370,24 @@ function agentFromRow(row: PostgresRow, metadata = agentMetadataFromRow(row)): R
     );
   }
   const plugins = configurationRead("plugins", () => pluginStateFromJson(row.plugins));
+  let repositoryAccess: Agent["repositoryAccess"];
+  try {
+    repositoryAccess = normalizedRepositoryAccess(
+      row.repository_access == null ? undefined : jsonObject(row.repository_access),
+      repositoryBindings,
+    );
+  } catch {
+    throw new SavedConfigurationReadError(
+      "repositoryAccess",
+      "Persisted Agent repository access is invalid.",
+    );
+  }
   return immutableCopy({
     ...metadata,
     ...(plugins === undefined ? {} : { plugins }),
     ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
     ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+    ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
     harnessAuth,
   });
 }
@@ -663,6 +672,13 @@ function databaseError(error: unknown): Error {
     // A lock timeout is transient contention, retryable like a statement timeout (57014).
     return new DependencyUnavailableError("The platform persistence lock timeout expired.");
   }
+  if (code === "40001" || code === "40P01") {
+    // A serialization failure or deadlock aborts the whole transaction before
+    // COMMIT (see commitOutcomeUnknown), so the caller can safely retry it.
+    return new DependencyUnavailableError(
+      "The platform persistence transaction conflicted with a concurrent transaction.",
+    );
+  }
   if (
     code?.startsWith("08") ||
     code?.startsWith("53") ||
@@ -727,7 +743,7 @@ function auditFromRow(row: PostgresRow, installationId: string): Readonly<AuditE
   if (
     !RESOURCE_KINDS.has(resourceKind) ||
     !["success", "denied", "failure"].includes(outcome) ||
-    !["bootstrap", "mutation", "authorization_denial"].includes(kind)
+    !["bootstrap", "mutation", "access", "authorization_denial"].includes(kind)
   ) {
     throw new DependencyUnavailableError("Persisted audit evidence contains an invalid event.");
   }
@@ -1233,6 +1249,55 @@ export class PostgresPlatformState implements PlatformStateStore {
   }
 
   /**
+   * Run one read-only statement on a pooled connection outside any transaction (one round
+   * trip, no BEGIN/COMMIT). Only for a single SELECT that needs no snapshot shared with
+   * other statements, locks nothing and writes nothing.
+   */
+  async readStatement(
+    statement: string,
+    parameters?: readonly unknown[],
+  ): Promise<readonly PostgresRow[]> {
+    let client: PostgresClient;
+    try {
+      client = await this.pool.connect();
+    } catch (error) {
+      throw error instanceof ScopeViolationError || error instanceof DependencyUnavailableError
+        ? error
+        : new DependencyUnavailableError("The platform persistence repository is unavailable.");
+    }
+    let transportError: Error | undefined;
+    const onTransportError = (error: Error) => {
+      transportError ??= error;
+    };
+    let discard = false;
+    try {
+      client.on?.("error", onTransportError);
+      const result = await client.query(statement, parameters);
+      if (transportError !== undefined) {
+        throw transportError;
+      }
+      return rows(result.rows);
+    } catch (error) {
+      discard = true;
+      if (transportError !== undefined) {
+        throw new DependencyUnavailableError("The platform persistence repository is unavailable.");
+      }
+      throw databaseError(error);
+    } finally {
+      try {
+        client.release(discard || transportError !== undefined);
+      } catch {
+        // The statement's outcome stands; a failed release only loses the connection.
+      }
+      try {
+        client.removeListener?.("error", onTransportError);
+      } catch {
+        // As above.
+      }
+    }
+  }
+
+  /**
    * Hold Installation authority for the original transaction. Participants
    * must await the complete protected operation and take write intent before
    * acquiring account, policy, or resource locks.
@@ -1385,7 +1450,11 @@ export class PostgresPlatformState implements PlatformStateStore {
     try {
       client = await this.pool.connect();
     } catch (error) {
-      throw databaseError(error);
+      // No statement has run yet, so any checkout failure (DNS, routing, TLS,
+      // credentials or a password callback) is unavailability, not a server verdict.
+      throw error instanceof ScopeViolationError || error instanceof DependencyUnavailableError
+        ? error
+        : new DependencyUnavailableError("The platform persistence repository is unavailable.");
     }
 
     // Checked-out pg clients emit transport errors independently of query rejection.
@@ -1600,6 +1669,25 @@ export class PostgresPlatformState implements PlatformStateStore {
         }
         return immutableCopy(installation);
       },
+      holdPrincipalAccount: async (principalId) => {
+        const installation = await this.currentInstallation(context);
+        if (installation === undefined) {
+          throw new DependencyUnavailableError(
+            "The platform Installation has not been initialized.",
+          );
+        }
+        // FOR SHARE conflicts with the account UPDATE that disables it.
+        const [account] = rows(
+          (
+            await client.query(
+              `SELECT disabled FROM occ.human_authentication_accounts
+               WHERE principal_id = $1 AND installation_id = $2 FOR SHARE`,
+              [principalId, installation.id],
+            )
+          ).rows,
+        );
+        return account === undefined || account.disabled === false;
+      },
     };
 
     const namespaces: NamespaceRepository = {
@@ -1764,6 +1852,19 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
     };
 
+    // Deleting a Namespace resource also removes the AccessBindings that grant
+    // on it (as Agent deletion does), so none outlive their target or keep
+    // blocking deletion of the Role they reference. Resource ids are unique.
+    const deleteResourceAccessBindings = async (
+      resourceKind: "configuration" | "preset" | "secret" | "credential_source" | "service_account",
+      resourceId: string,
+    ): Promise<void> => {
+      await client.query(
+        "DELETE FROM occ.iam_access_bindings WHERE resource_kind = $1 AND resource_id = $2",
+        [resourceKind, resourceId],
+      );
+    };
+
     const findPreset = async (
       namespaceId: string,
       presetId: string,
@@ -1846,7 +1947,11 @@ export class PostgresPlatformState implements PlatformStateStore {
            WHERE p.namespace_id = $1 AND p.id = $2 AND n.id = p.namespace_id AND n.deleted_at IS NULL`,
           [namespaceId, presetId],
         );
-        return deleted.rowCount === 1;
+        if (deleted.rowCount !== 1) {
+          return false;
+        }
+        await deleteResourceAccessBindings("preset", presetId);
+        return true;
       },
     };
 
@@ -2016,7 +2121,11 @@ export class PostgresPlatformState implements PlatformStateStore {
              AND n.id = c.namespace_id AND n.deleted_at IS NULL`,
           [namespaceId, configurationId],
         );
-        return deleted.rowCount === 1;
+        if (deleted.rowCount !== 1) {
+          return false;
+        }
+        await deleteResourceAccessBindings("configuration", configurationId);
+        return true;
       },
     };
 
@@ -2134,7 +2243,11 @@ export class PostgresPlatformState implements PlatformStateStore {
              AND n.id = s.namespace_id AND n.deleted_at IS NULL`,
           [namespaceId, secretId],
         );
-        return deleted.rowCount === 1;
+        if (deleted.rowCount !== 1) {
+          return false;
+        }
+        await deleteResourceAccessBindings("secret", secretId);
+        return true;
       },
     };
 
@@ -2319,7 +2432,11 @@ export class PostgresPlatformState implements PlatformStateStore {
              AND n.id = cs.namespace_id AND n.deleted_at IS NULL`,
           [namespaceId, credentialSourceId],
         );
-        return deleted.rowCount === 1;
+        if (deleted.rowCount !== 1) {
+          return false;
+        }
+        await deleteResourceAccessBindings("credential_source", credentialSourceId);
+        return true;
       },
     };
 
@@ -2449,7 +2566,11 @@ export class PostgresPlatformState implements PlatformStateStore {
              AND n.id = s.namespace_id AND n.deleted_at IS NULL`,
           [namespaceId, serviceAccountId],
         );
-        return deleted.rowCount === 1;
+        if (deleted.rowCount !== 1) {
+          return false;
+        }
+        await deleteResourceAccessBindings("service_account", serviceAccountId);
+        return true;
       },
     };
 
@@ -2462,7 +2583,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         (
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                    a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                    a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                     a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
              FROM occ.agents AS a
              JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -2542,7 +2663,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         (
           await client.query(
             `SELECT a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                      a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                      a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                       a.active_revision_id, a.desired_runtime_state, a.status, a.created_at
                FROM occ.agents AS a
                JOIN occ.namespaces AS n ON n.id = a.namespace_id AND n.deleted_at IS NULL
@@ -2597,7 +2718,12 @@ export class PostgresPlatformState implements PlatformStateStore {
         const pluginApprovers = normalizedPluginApprovers(agent.pluginApprovers);
         const repositoryBindings =
           agent.repositoryBindings?.length === 0 ? undefined : agent.repositoryBindings;
+        const repositoryAccess = normalizedRepositoryAccess(
+          agent.repositoryAccess,
+          repositoryBindings,
+        );
         const {
+          repositoryAccess: _providedRepositoryAccess,
           plugins: _providedPlugins,
           pluginApprovers: _providedPluginApprovers,
           repositoryBindings: _providedRepositoryBindings,
@@ -2608,6 +2734,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           ...(plugins === undefined ? {} : { plugins }),
           ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
           ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+          ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
           desiredRuntimeState: "stopped" as const,
           status: "active" as const,
         });
@@ -2615,8 +2742,9 @@ export class PostgresPlatformState implements PlatformStateStore {
           `INSERT INTO occ.agents
            (id, namespace_id, name, configuration_id, backend_id, execution_mode,
              service_principal_id, harness_auth, active_revision_id, created_at, plugins,
-             plugin_approvers, repository_bindings)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb)`,
+             plugin_approvers, repository_bindings, repository_access)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb,
+                    $14::jsonb)`,
           [
             saved.id,
             saved.namespaceId,
@@ -2631,6 +2759,7 @@ export class PostgresPlatformState implements PlatformStateStore {
             plugins === undefined ? null : JSON.stringify(plugins),
             pluginApprovers === undefined ? null : JSON.stringify(pluginApprovers),
             repositoryBindings === undefined ? null : JSON.stringify(repositoryBindings),
+            repositoryAccess === undefined ? null : JSON.stringify(repositoryAccess),
           ],
         );
         await client.query(
@@ -2650,6 +2779,7 @@ export class PostgresPlatformState implements PlatformStateStore {
         plugins,
         repositoryBindings,
         pluginApprovers,
+        repositoryAccess,
       ) => {
         if (harnessAuth !== undefined) {
           await assertHarnessAuthAvailable(
@@ -2677,12 +2807,13 @@ export class PostgresPlatformState implements PlatformStateStore {
                    backend_id = CASE WHEN $7::boolean THEN $8::text ELSE a.backend_id END,
                    plugins = CASE WHEN $9::boolean THEN $10::jsonb ELSE a.plugins END,
                    plugin_approvers = CASE WHEN $11::boolean THEN $12::jsonb ELSE a.plugin_approvers END,
-                   repository_bindings = CASE WHEN $13::boolean THEN $14::jsonb ELSE a.repository_bindings END
+                   repository_bindings = CASE WHEN $13::boolean THEN $14::jsonb ELSE a.repository_bindings END,
+                   repository_access = CASE WHEN $15::boolean THEN $16::jsonb ELSE a.repository_access END
                FROM occ.namespaces AS n
                WHERE a.namespace_id = $1 AND a.id = $2
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                  RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                          a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [
                 namespaceId,
@@ -2701,6 +2832,12 @@ export class PostgresPlatformState implements PlatformStateStore {
                 nextRepositoryBindings === undefined
                   ? null
                   : JSON.stringify(nextRepositoryBindings),
+                repositoryAccess !== undefined || repositoryBindings !== undefined,
+                repositoryAccess == null
+                  ? null
+                  : JSON.stringify(
+                      normalizedRepositoryAccess(repositoryAccess, nextRepositoryBindings),
+                    ),
               ],
             )
           ).rows,
@@ -2722,7 +2859,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 AND a.active_revision_id IS NOT DISTINCT FROM $3::text
                   AND n.id = a.namespace_id AND n.deleted_at IS NULL
                   RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                          a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                          a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                           a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId ?? null, candidateRevisionId],
             )
@@ -2739,7 +2876,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                WHERE a.namespace_id = $1 AND a.id = $2 AND a.active_revision_id = $3
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedRevisionId],
             )
@@ -2758,7 +2895,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.desired_runtime_state = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                 RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedStates, next],
             )
@@ -2780,7 +2917,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                  AND a.status = ANY($3::text[])
                  AND n.id = a.namespace_id AND n.deleted_at IS NULL
                RETURNING a.id, a.namespace_id, a.name, a.configuration_id, a.execution_mode,
-                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.service_principal_id, a.harness_auth,
+                         a.backend_id, a.plugins, a.plugin_approvers, a.repository_bindings, a.repository_access, a.service_principal_id, a.harness_auth,
                          a.active_revision_id, a.desired_runtime_state, a.status, a.created_at`,
               [namespaceId, agentId, expectedStatuses, next],
             )
@@ -3947,26 +4084,29 @@ export class PostgresPlatformState implements PlatformStateStore {
             }),
           );
         },
-        retryFailedAgentDeletion: async (namespaceId, agentId, actorId) => {
+        retryFailedAgentDeletion: async (namespaceId, agentId, initiatingActorId, actorId) => {
           await this.requireInitialized(context);
+          // Work actor identity is frozen for the application role; this
+          // definer function is the one path that may hand terminal teardown
+          // to another caller after OCC has verified the takeover.
           const retried = await client.query(
-            `UPDATE occ.controller_work AS work
-             SET state = 'queued', attempt_count = 0,
-                 available_at = clock_timestamp(), claim_token = NULL,
-                 lease_expires_at = NULL, completed_at = NULL,
-                 reason_code = NULL, result_data = NULL, updated_at = clock_timestamp()
-             FROM occ.agents AS agent
-             WHERE work.idempotency_key = $1
-               AND work.work_kind = 'lifecycle'
-               AND work.namespace_id = $2 AND work.agent_id = $3 AND work.actor_id = $4
-               AND work.revision_id IS NULL AND work.namespace_target IS NULL
-               AND work.agent_target = 'deleted' AND work.state = 'failed_permanent'
-               AND agent.namespace_id = work.namespace_id AND agent.id = work.agent_id
-               AND agent.status = 'deleting' AND agent.desired_runtime_state = 'stopped'
-             RETURNING work.idempotency_key`,
-            [`agent:${agentId}:reconcile:deleted`, namespaceId, agentId, actorId],
+            "SELECT occ.retry_failed_agent_deletion($1::text, $2::text, $3::text, $4::text) AS retried",
+            [namespaceId, agentId, initiatingActorId, actorId],
           );
-          return retried.rowCount === 1;
+          return (retried.rows[0] as { retried?: unknown } | undefined)?.retried === true;
+        },
+        retryFailedNamespaceDeletion: async (namespaceId, initiatingActorId, actorId) => {
+          await this.requireInitialized(context);
+          // created_at is immutable, so a retry keeps the original convergence
+          // deadline: the retried pass succeeds only once teardown has finished.
+          // Work actor identity is frozen for the application role; this
+          // definer function is the one path that may hand terminal teardown
+          // to another caller after OCC has verified the takeover.
+          const retried = await client.query(
+            "SELECT occ.retry_failed_namespace_deletion($1::text, $2::text, $3::text) AS retried",
+            [namespaceId, initiatingActorId, actorId],
+          );
+          return (retried.rows[0] as { retried?: unknown } | undefined)?.retried === true;
         },
         findWork: async (idempotencyKey) => {
           await this.requireInitialized(context);

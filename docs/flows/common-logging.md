@@ -131,7 +131,10 @@ for isolation limits.
 
 `k8sattributes` maps identity before `transform/kubernetes-resource` removes
 internal Pod labels; removing shared labels per record would lose identity for
-later records in the batch.
+later records in the batch. It also blocks pipeline start until its Pod cache
+syncs: `filelog` reads existing CRI files immediately, and a record processed
+without Pod identity is filtered out while its offset is still committed, so
+startup events such as `worker.started` would otherwise be lost for good.
 
 The chart validates one exporter destination: an IPv4 `/32` or paired namespace/Pod
 selectors, with a bounded TCP port. It renders exporter egress alongside DNS/API
@@ -145,11 +148,19 @@ Driver-owned pipelines also have separate guarantees.
 `deploy/logging/collector.yaml:transform/operational`
 
 The bundled Collector keeps transport-derived identity before parsing untrusted
-JSON. It classifies fixed OCC event names, `gateway` subsystem records, and Codex
-stderr records from `codex_app_server`. For retained records it keeps allowlisted
+JSON. It classifies fixed OCC event names, `gateway` subsystem records, Codex
+stderr records from `codex_app_server`, and the Gateway and Harness wrappers'
+stderr diagnostics: `runtime.startup_phase` keeps `occ.startup.phase`, and
+`runtime.workspace_node` and the model probes keep `occ.code`. A failed phase or
+non-`READY` probe is WARN, so a startup failure's cause reaches the backend.
+Kubernetes resources drop the `latest` image tag that metadata extraction reports
+for a digest-only image. For retained records it keeps allowlisted
 attributes and replaces the body with the event name, stripping arbitrary content.
 OCC `compute.preflight-warning` records retain WARN severity and bounded `occ.code`;
-the local diagnostic message is excluded from remote export. It drops malformed,
+the local diagnostic message is excluded from remote export.
+`authentication.sign-in-limit-warning` keeps `occ.code`, and
+`authentication.sign-in-limited` keeps only `occ.sign_in.lane`; its local key
+hash is not exported. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex protocol stdout records.
 Collector-only configuration holds exporter credentials and TLS settings. Finite
 queues and retries make logs best-effort; outage or overflow cannot block API
@@ -184,7 +195,7 @@ for panels, correlation, and authorization limits.
 - [Security controls](../reference/security.md)
 - [Observability guide](../guides/observability.md)
 - [Deployment guide](../guides/deploy.md)
-- [Common OpenTelemetry logging spec](../../specs/20-common-otel-logging.md)
+- [Common OpenTelemetry logging spec](../../specs/plans/20-common-otel-logging/index.md)
 
 ## Manual Notes
 

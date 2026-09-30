@@ -127,20 +127,23 @@ test(
           expectedVersion: version,
         };
         assert.equal((await replace({ cookie: secondHeaders.cookie }, body)).statusCode, 403);
+        const taken = await replace(secondHeaders, body);
+        assert.equal(taken.statusCode, 403, "a narrower administrator cannot take it");
+        assert.equal(taken.json().error.code, "FORBIDDEN");
         assert.equal(
           (await replace(secondHeaders, { ...body, expectedCurrentUserId: second.id })).statusCode,
           409,
           "a stale expected holder is refused",
         );
         assert.equal(
-          (await replace(secondHeaders, { ...body, expectedVersion: version + 1 })).statusCode,
+          (await replace(adminHeaders, { ...body, expectedVersion: version + 1 })).statusCode,
           409,
           "a stale target version is refused",
         );
         const readerVersion = (await readAccount(app, adminHeaders, member.id)).version;
         assert.equal(
           (
-            await replace(secondHeaders, {
+            await replace(adminHeaders, {
               userId: member.id,
               expectedCurrentUserId: admin.id,
               expectedVersion: readerVersion,
@@ -155,7 +158,7 @@ test(
 
     await t.test("of two concurrent replacements exactly one commits", async () => {
       const [toSecond, toThird] = await Promise.all([
-        replace(secondHeaders, {
+        replace(adminHeaders, {
           userId: second.id,
           expectedCurrentUserId: admin.id,
           expectedVersion: (await readAccount(app, adminHeaders, second.id)).version,
@@ -178,21 +181,29 @@ test(
       assert.equal(audits.length, 1);
     });
 
+    await t.test("a created administrator moves it between accounts it covers", async () => {
+      const next = holder === second ? third : second;
+      const moved = await replace(secondHeaders, {
+        userId: next.id,
+        expectedCurrentUserId: holder.id,
+        expectedVersion: (await readAccount(app, adminHeaders, next.id)).version,
+      });
+      assert.equal(moved.statusCode, 200, moved.body);
+      holder = next;
+      assert.deepEqual(await designations(), [holder.id]);
+    });
+
     await t.test(
-      "the new holder has the reserved lane and the former holder does not",
+      "the new holder keeps a checkable password when strangers spend its email",
       async () => {
-        const lane = await assertReservedLane(app, pool, {
+        const lane = await assertReservedLane(app, {
           origin,
           holder,
           former: admin,
           label: "online",
         });
-        assert.deepEqual(lane, {
-          fresh: 429,
-          former: 429,
-          holder: 200,
-          held: [401, 401, 401, 401],
-        });
+        // The former holder still administers the Installation, so it stays reserved too.
+        assert.deepEqual(lane, { fresh: 429, former: 200, holder: 200 });
         assert.equal(
           (
             await app.inject({
@@ -226,23 +237,19 @@ test(
           log.events
             .filter(({ event }) => event.startsWith("authentication."))
             .map(({ event }) => event),
-          ["authentication.recovery-seed-warning"],
+          // The fixture sets no trusted proxy, so startup also warns about the shared address.
+          ["authentication.recovery-seed-warning", "authentication.sign-in-limit-warning"],
         );
         assert.deepEqual(await designations(), [holder.id]);
         adminHeaders = await signedInHeaders(app, origin, admin, address());
         assert.equal((await readRecovery(adminHeaders)).userId, holder.id);
-        const lane = await assertReservedLane(app, pool, {
+        const lane = await assertReservedLane(app, {
           origin,
           holder,
           former: admin,
           label: "restarted",
         });
-        assert.deepEqual(lane, {
-          fresh: 429,
-          former: 429,
-          holder: 200,
-          held: [401, 401, 401, 401],
-        });
+        assert.deepEqual(lane, { fresh: 429, former: 200, holder: 200 });
       },
     );
   },

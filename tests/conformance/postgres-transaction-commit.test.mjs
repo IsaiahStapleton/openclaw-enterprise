@@ -7,6 +7,7 @@ import {
   PostgresCommitOutcomeUnknownError,
 } from "../../packages/occ/src/state/postgres-state.ts";
 import { DependencyUnavailableError, ScopeViolationError } from "../../packages/occ/src/errors.ts";
+import { requestFailure } from "../../apps/controller/src/http/errors.ts";
 
 // A transport protocol fixture for the actual outer owner, not a SQL database
 // emulator. No repository reads/writes, authentication, custody or PG evidence.
@@ -102,11 +103,65 @@ test("serialization failure at COMMIT rolls back as a definite failure", async (
   });
   await assert.rejects(
     p.state.transact(async () => 1),
-    (error) => error === failure,
+    (error) => error instanceof DependencyUnavailableError && /conflict/.test(error.message),
   );
   assert.deepEqual(p.calls, ["BEGIN", "COMMIT", "ROLLBACK"]);
   assert.equal(discarded, false);
 });
+
+for (const code of ["40P01", "40001"]) {
+  test(`transaction conflict ${code} in a statement is retryable unavailability`, async () => {
+    const p = protocol({
+      query: () => {
+        throw serverError(code);
+      },
+    });
+    const rejection = await p.state
+      .transact(async (unit) => unit.audit.list())
+      .then(
+        () => assert.fail("expected the statement rejection"),
+        (error) => error,
+      );
+    assert.ok(rejection instanceof DependencyUnavailableError);
+    assert.match(rejection.message, /conflict/);
+    assert.deepEqual(p.calls.at(-1), "ROLLBACK");
+    const response = requestFailure(rejection);
+    assert.equal(response.status, 503);
+    assert.equal(response.code, "DEPENDENCY_UNAVAILABLE");
+  });
+}
+
+for (const [name, failure] of [
+  ["DNS ENOTFOUND", Object.assign(new Error("getaddrinfo ENOTFOUND db"), { code: "ENOTFOUND" })],
+  ["DNS EAI_AGAIN", Object.assign(new Error("getaddrinfo EAI_AGAIN db"), { code: "EAI_AGAIN" })],
+  ["EHOSTUNREACH", Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" })],
+  ["a password callback failure", new Error("workload identity token request failed")],
+  ["a rejected credential", serverError("28P01")],
+]) {
+  test(`a connection checkout failure from ${name} is unavailable`, async () => {
+    const state = new PostgresPlatformState({
+      options: { connectionTimeoutMillis: 100 },
+      async connect() {
+        throw failure;
+      },
+      async end() {},
+    });
+    let ran = false;
+    const rejection = await state
+      .transact(async () => {
+        ran = true;
+      })
+      .then(
+        () => assert.fail("expected the checkout failure"),
+        (error) => error,
+      );
+    assert.equal(ran, false);
+    assert.ok(rejection instanceof DependencyUnavailableError);
+    const response = requestFailure(rejection);
+    assert.equal(response.status, 503);
+    assert.equal(response.code, "DEPENDENCY_UNAVAILABLE");
+  });
+}
 
 test("a client error with a server-looking code leaves COMMIT unknown", async () => {
   let discarded;
@@ -545,4 +600,60 @@ test("commit fault rejects an effective remote override and preserves TLS intent
     commitAckProxy("postgresql://fixture:fixture@127.0.0.1/example?ssl=true"),
     /non-TLS/,
   );
+});
+
+test("a single read statement runs outside any transaction on one pooled connection", async () => {
+  const destroyed = [];
+  const p = protocol({
+    query: () => ({ rows: [{ user_id: "u" }], rowCount: 1 }),
+    release: (destroy) => destroyed.push(destroy),
+  });
+  assert.deepEqual(await p.state.readStatement("SELECT 1", []), [{ user_id: "u" }]);
+  assert.deepEqual(p.calls, ["SELECT 1"]);
+  assert.deepEqual(destroyed, [false]);
+  assert.equal(p.hasTransportListener(), false);
+});
+
+test("a rejected read statement is classified and discards its connection", async () => {
+  const destroyed = [];
+  const p = protocol({
+    query: () => {
+      throw serverError("55P03");
+    },
+    release: (destroy) => destroyed.push(destroy),
+  });
+  await assert.rejects(p.state.readStatement("SELECT 1"), DependencyUnavailableError);
+  assert.deepEqual(p.calls, ["SELECT 1"]);
+  assert.deepEqual(destroyed, [true]);
+  assert.equal(p.hasTransportListener(), false);
+});
+
+test("a client error during a read statement is unavailable and discards the connection", async () => {
+  const destroyed = [];
+  let p;
+  p = protocol({
+    query: () => {
+      p.emitTransportError(serverError("23514"));
+      return { rows: [{ leaked: true }], rowCount: 1 };
+    },
+    release: (destroy) => destroyed.push(destroy),
+  });
+  await assert.rejects(
+    p.state.readStatement("SELECT 1"),
+    (error) =>
+      error instanceof DependencyUnavailableError &&
+      error.message === "The platform persistence repository is unavailable.",
+  );
+  assert.deepEqual(destroyed, [true]);
+  assert.equal(p.hasTransportListener(), false);
+});
+
+test("a failed checkout for a read statement is unavailable", async () => {
+  const state = new PostgresPlatformState({
+    async connect() {
+      throw new Error("connect ECONNREFUSED");
+    },
+    async end() {},
+  });
+  await assert.rejects(state.readStatement("SELECT 1"), DependencyUnavailableError);
 });

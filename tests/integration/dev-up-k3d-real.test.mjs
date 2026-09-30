@@ -3,11 +3,16 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
+import { createRequire } from "node:module";
 import https from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+
+const { loadYaml } = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
+  "@kubernetes/client-node",
+);
 
 const execute = promisify(execFile);
 const repository = resolve(import.meta.dirname, "../..");
@@ -548,7 +553,7 @@ test(
         )
       ).stdout,
     );
-    assert.ok(pods.items.some(({ metadata }) => metadata.name === "postgres"));
+    assert.ok(pods.items.some(({ metadata }) => metadata.labels?.app === "postgres"));
     assert.ok(pods.items.some(({ metadata }) => metadata.name.startsWith("openclaw-enterprise")));
     if (environment.OCC_DEVELOPMENT_REPOSITORY_INPUT_DIRECTORY) {
       const worker = pods.items.find(
@@ -564,6 +569,164 @@ test(
     assert.equal(
       pods.items.some(({ metadata }) => metadata.name.includes("openshell")),
       false,
+    );
+  },
+);
+
+test(
+  "dev-up prepares the real Codex sandbox with a Compose control plane",
+  {
+    skip: selected ? false : "Set OCC_TEST_DEV_UP_K3D_REAL=1 to run the real development profile.",
+    timeout: 1_200_000,
+  },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "oce-dev-compose-sandbox-"));
+    const stateDirectory = join(root, "state");
+    const cluster = `occ-dev-compose-${randomUUID().slice(0, 8)}`;
+    const apiPort = await unusedPort();
+    let kubernetesPort = await unusedPort();
+    while (kubernetesPort === apiPort) {
+      kubernetesPort = await unusedPort();
+    }
+    let postgresPort = await unusedPort();
+    while (postgresPort === apiPort || postgresPort === kubernetesPort) {
+      postgresPort = await unusedPort();
+    }
+    const environment = {
+      ...process.env,
+      OPENCLAW_DEV_PORT: String(apiPort),
+      OCC_POSTGRES_PORT: String(postgresPort),
+      OCC_DEVELOPMENT_COMPUTE_DRIVER: "kubernetes",
+      OCC_DEVELOPMENT_CONTROL_PLANE: "compose",
+      OCC_DEVELOPMENT_SANDBOX_DRIVER: "none",
+      OCC_DEVELOPMENT_CONTAINER_ENGINE: "docker",
+      OCC_DEVELOPMENT_COMPOSE_PROJECT: cluster,
+      OCC_DEVELOPMENT_STATE_DIRECTORY: stateDirectory,
+      OCC_DEVELOPMENT_KUBERNETES_CLUSTER: cluster,
+      OCC_DEVELOPMENT_KUBERNETES_API_PORT: String(kubernetesPort),
+      OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT:
+        process.env.OCC_DEVELOPMENT_KUBERNETES_DISK_THRESHOLD_PERCENT ?? "1",
+      OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS: "600",
+    };
+    // This proof needs no provider or repository credentials. Keep ambient
+    // credentials out of the disposable control plane and probe Pod.
+    for (const key of [
+      "OCC_DEVELOPMENT_REPOSITORY_INPUT_DIRECTORY",
+      "OPENAI_API_KEY",
+      "OPENAI_API_KEY_FILE",
+      "CODEX_API_KEY",
+      "CODEX_API_KEY_FILE",
+    ]) {
+      delete environment[key];
+    }
+    t.after(async () => {
+      if (await exists(stateDirectory)) {
+        await execute(join(repository, "scripts", "dev-down"), [], {
+          cwd: repository,
+          env: environment,
+          timeout: 300_000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+      }
+      await rm(root, { recursive: true, force: true });
+    });
+
+    // Invoke the regular launcher, including the unmodified seccomp helper,
+    // real Docker/Compose, k3d, runtime probe, and profile installation.
+    const started = await execute(join(repository, "scripts", "dev-up"), [], {
+      cwd: repository,
+      env: environment,
+      timeout: 1_100_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    assert.match(started.stdout, /Control plane: Compose/);
+    const state = JSON.parse(await readFile(join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(state.deploymentMode, undefined);
+    assert.equal(state.sandboxDriver, "none");
+    assert.equal(state.cluster, cluster);
+    const installation = loadYaml(
+      await readFile(join(stateDirectory, "installation.yaml"), "utf8"),
+    );
+    const compute = installation.drivers.compute.configuration;
+    const profileName = compute.runtime.codexSeccompProfile;
+    if (profileName) {
+      const provenance = JSON.parse(
+        await readFile(join(stateDirectory, "codex-seccomp-provenance.json"), "utf8"),
+      );
+      assert.equal(profileName, provenance.profileName);
+    }
+
+    // Independently consume the generated image/profile on the owned node.
+    // A writable outside marker distinguishes sandbox denial from filesystem
+    // permissions. This verifies startup sandbox preparation, not Agent routing
+    // or model execution, which require their separate runtime workflows.
+    const manifest = {
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { name: "compose-sandbox-proof", namespace: "default" },
+      spec: {
+        automountServiceAccountToken: false,
+        enableServiceLinks: false,
+        restartPolicy: "Never",
+        securityContext: {
+          runAsNonRoot: true,
+          runAsUser: 1000,
+          runAsGroup: 1000,
+          fsGroup: 1000,
+          seccompProfile: { type: "RuntimeDefault" },
+        },
+        containers: [
+          {
+            name: "probe",
+            image: compute.images.agent,
+            imagePullPolicy: "Never",
+            command: [
+              "sh",
+              "-c",
+              'set -eu; mkdir -p /home/node/.codex /home/node/workspace; cd /home/node/workspace; echo outside > /home/node/outside; codex sandbox -c sandbox_mode="workspace-write" -c sandbox_workspace_write.network_access=false -- sh -c "set -eu; echo inside > inside; if echo escaped > /home/node/outside; then exit 70; fi"; test "$(cat inside)" = inside; test "$(cat /home/node/outside)" = outside',
+            ],
+            env: [{ name: "CODEX_HOME", value: "/home/node/.codex" }],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: true,
+              capabilities: { drop: ["ALL"] },
+              ...(profileName
+                ? { seccompProfile: { type: "Localhost", localhostProfile: profileName } }
+                : {}),
+            },
+            volumeMounts: [
+              { name: "home", mountPath: "/home/node" },
+              { name: "tmp", mountPath: "/tmp" },
+            ],
+          },
+        ],
+        volumes: [
+          { name: "home", emptyDir: {} },
+          { name: "tmp", emptyDir: {} },
+        ],
+      },
+    };
+    const manifestPath = join(root, "sandbox-proof.json");
+    await writeFile(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+    const kubeArgs = [
+      "--kubeconfig",
+      join(stateDirectory, "kubeconfig"),
+      "--context",
+      `k3d-${cluster}`,
+      "--namespace",
+      "default",
+    ];
+    await execute("kubectl", [...kubeArgs, "apply", "-f", manifestPath], { env: environment });
+    await execute(
+      "kubectl",
+      [
+        ...kubeArgs,
+        "wait",
+        "--for=jsonpath={.status.phase}=Succeeded",
+        "pod/compose-sandbox-proof",
+        "--timeout=180s",
+      ],
+      { env: environment, timeout: 200_000 },
     );
   },
 );

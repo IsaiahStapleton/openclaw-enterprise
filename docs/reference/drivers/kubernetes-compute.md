@@ -38,8 +38,7 @@ For detailed operator contracts, see:
 - Kubernetes 1.35 or later. On an older API server, API and worker startup each
   emit `compute.preflight-warning`; its message includes the observed and
   minimum versions. Startup continues, but versions below 1.35 are outside the
-  supported and CI-verified boundary even though this advisory does not block
-  startup.
+  supported and CI-verified boundary.
 - A Kubernetes cluster dedicated to one OpenClaw Enterprise Installation.
 - Enforced Kubernetes NetworkPolicies, verified Kubernetes API TLS, and
   restricted Pod security.
@@ -132,15 +131,15 @@ drivers:
       resources:
         gateway:
           requests: { cpu: 100m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          limits: { cpu: "4", memory: 256Mi }
         agent:
           requests: { cpu: 100m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          limits: { cpu: "4", memory: 256Mi }
         namespace:
           quota: { pods: "10" }
           containerDefaults:
             requests: { cpu: 100m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 256Mi }
+            limits: { cpu: "4", memory: 256Mi }
       network:
         dns:
           namespace: kube-system
@@ -194,7 +193,8 @@ selects Harness and embedded Pods; dedicated real Gateways require
 `runtime.gatewayNodeSelector`, including their private-state initializer. Use
 disjoint trusted and tenant node pools in production. Quotas and defaults apply
 separately to each physical namespace. Production requires
-`images.requireImmutableDigest: true` and SHA-256 image digests.
+`images.requireImmutableDigest: true` and SHA-256 image digests. Quote
+whole-core quantities, such as `cpu: "4"`.
 
 See [network configuration](kubernetes-compute/networking-and-isolation.md#networking)
 for DNS, gateway clients, proxy trust, and egress requirements.
@@ -273,10 +273,11 @@ configuration before serving and refreshes that configuration after a changed
 restart result. Failed-only Codex app bindings are disabled; successful selections
 retain their admitted policy, including shared app bindings they require.
 
-The Codex app-server credential is derived from the Agent's transport Secret,
+The Codex app-server credential derives from the Agent's transport Secret,
 revision, and startup identity. A gateway configured for the previous startup
 cannot authenticate to a restarted Agent. Its supervisor obtains the new status,
-applies the matching exclusions, and starts the gateway with the new credential.
+applies the matching exclusions, and respawns the gateway process with the new
+credential.
 This closes the interval before the supervisor's next status poll.
 
 The worker records warnings with successful deployment completion under its live

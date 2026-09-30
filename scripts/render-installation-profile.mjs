@@ -122,9 +122,15 @@ function yamlScalar(value) {
     if (value.length === 0) {
       return '""';
     }
+    // Helm reads values with YAML 1.1 rules, where words such as no/on/y are
+    // booleans and forms such as 1e3, 0x1f, 1:20, .inf and dates are numbers
+    // or timestamps. Emit a plain scalar only when it cannot resolve to one of
+    // those or start with an indicator (@, -, ., :); quote everything else.
     if (
       /^[A-Za-z0-9_./:@-]+$/.test(value) &&
-      !/^(?:true|false|null|~|-?\d+(?:\.\d+)?)$/i.test(value)
+      /^[A-Za-z_/]|^[0-9].*\//.test(value) &&
+      !value.endsWith(":") &&
+      !/^(?:y|n|yes|no|true|false|on|off|null)$/i.test(value)
     ) {
       return value;
     }
@@ -163,9 +169,9 @@ function toYaml(value, indent = 0) {
       .map(([key, entry]) => {
         if (typeof entry === "object" && entry !== null) {
           const rendered = toYaml(entry, indent + 2);
-          return `${pad}${key}:${rendered === "{}" || rendered === "[]" ? ` ${rendered}` : `\n${rendered}`}`;
+          return `${pad}${yamlScalar(key)}:${rendered === "{}" || rendered === "[]" ? ` ${rendered}` : `\n${rendered}`}`;
         }
-        return `${pad}${key}: ${yamlScalar(entry)}`;
+        return `${pad}${yamlScalar(key)}: ${yamlScalar(entry)}`;
       })
       .join("\n");
   }
@@ -361,6 +367,131 @@ function clientSelectors(source, diagnostics) {
   });
 }
 
+const recoveryUserIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const trustedProxyPresets = ["ingress-nginx", "aws", "generic"];
+const passwordSignInPolicies = ["all", "recovery-only"];
+
+function isCidr(value) {
+  const [address, rawPrefix, extra] = value.split("/");
+  const family = isIP(address ?? "");
+  if (extra !== undefined || family === 0 || !/^[0-9]+$/.test(rawPrefix ?? "")) {
+    return false;
+  }
+  const prefix = Number(rawPrefix);
+  return prefix >= 1 && prefix <= (family === 4 ? 32 : 128);
+}
+
+function signInProvider(source, name, diagnostics) {
+  const path = ["controlPlane", name];
+  const rendered = { enabled: true };
+  for (const key of ["secretName", "clientIdKey", "clientSecretKey"]) {
+    const value = optionalString(source, [...path, key], diagnostics);
+    if (value !== undefined) {
+      rendered[key] = value;
+    }
+  }
+  if (source.allowedDomains !== undefined) {
+    rendered.allowedDomains = stringArray(source, [...path, "allowedDomains"], diagnostics, {
+      validate: (value) => dnsHostname.test(value),
+      description: "a lowercase DNS domain name such as example.com",
+      nonempty: false,
+    });
+  }
+  if (source.egressCidrs !== undefined) {
+    rendered.egressCidrs = stringArray(source, [...path, "egressCidrs"], diagnostics, {
+      validate: isIpv4Cidr,
+      description: "an IPv4 CIDR with a prefix from 1 through 32",
+      nonempty: false,
+    });
+  }
+  return rendered;
+}
+
+// Mirrors the chart's auth.github/auth.google checks. Activation is one-way, so every
+// profile rerender after activation must keep rendering these values.
+function renderExternalSignIn(controlPlane, github, google, authBaseUrl, diagnostics) {
+  if (!authBaseUrl.startsWith("https://")) {
+    diagnostics.errors.push("controlPlane.authBaseUrl must use HTTPS with external sign-in.");
+  }
+  for (const key of ["agentNativeAdminDomain", "sharedCookieDomain"]) {
+    if (controlPlane[key] !== undefined) {
+      diagnostics.errors.push(
+        `controlPlane.${key} is not consumed with external sign-in: GitHub and Google sign-in disable native admin.`,
+      );
+    }
+  }
+  let recoveryUserId;
+  if (controlPlane.recoveryUserId === undefined) {
+    diagnostics.errors.push(
+      "controlPlane.recoveryUserId is required with controlPlane.github or controlPlane.google.",
+    );
+  } else {
+    recoveryUserId = asString(controlPlane, ["controlPlane", "recoveryUserId"], diagnostics, {
+      pattern: recoveryUserIdPattern,
+      description: "the existing local password administrator's user ID",
+    });
+  }
+  const passwordSignIn = optionalString(
+    controlPlane,
+    ["controlPlane", "passwordSignIn"],
+    diagnostics,
+    {
+      validate: (value) => passwordSignInPolicies.includes(value),
+      description: passwordSignInPolicies.join(" or "),
+    },
+  );
+  return {
+    recoveryUserId,
+    ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
+    ...(controlPlane.github === undefined
+      ? {}
+      : { github: signInProvider(github, "github", diagnostics) }),
+    ...(controlPlane.google === undefined
+      ? {}
+      : { google: signInProvider(google, "google", diagnostics) }),
+  };
+}
+
+function renderTrustedProxy(source, diagnostics) {
+  const path = ["controlPlane", "trustedProxy"];
+  const preset = asString(source, [...path, "preset"], diagnostics, {
+    validate: (value) => trustedProxyPresets.includes(value),
+    description: trustedProxyPresets.join(", or "),
+  });
+  const cidrs = stringArray(source, [...path, "cidrs"], diagnostics, {
+    validate: isCidr,
+    description: "an IPv4 or IPv6 CIDR with a nonzero prefix",
+  });
+  const clientAddressHeader = optionalString(
+    source,
+    [...path, "clientAddressHeader"],
+    diagnostics,
+    {
+      pattern: /^[a-z0-9][a-z0-9-]{0,63}$/,
+      description: "a single lowercase HTTP header name of at most 64 characters",
+    },
+  );
+  if (preset === "generic" && clientAddressHeader === undefined) {
+    diagnostics.errors.push(
+      "controlPlane.trustedProxy.clientAddressHeader is required for the generic preset.",
+    );
+  }
+  if (
+    preset !== "generic" &&
+    clientAddressHeader !== undefined &&
+    clientAddressHeader !== "x-forwarded-for"
+  ) {
+    diagnostics.errors.push(
+      `controlPlane.trustedProxy preset ${preset} reads x-forwarded-for; use the generic preset for ${clientAddressHeader}.`,
+    );
+  }
+  return {
+    preset,
+    cidrs,
+    ...(clientAddressHeader === undefined ? {} : { clientAddressHeader }),
+  };
+}
+
 function section(source, key, diagnostics, required = true) {
   const value = source[key];
   if (value === undefined) {
@@ -414,6 +545,11 @@ function buildInput(rawInput, diagnostics) {
       "databaseCa",
       "loggingCollector",
       "observabilityUrl",
+      "recoveryUserId",
+      "passwordSignIn",
+      "github",
+      "google",
+      "trustedProxy",
     ],
     diagnostics,
   );
@@ -468,6 +604,27 @@ function buildInput(rawInput, diagnostics) {
   closed(databaseCa, "controlPlane.databaseCa", ["secretName", "key", "mountPath"], diagnostics);
   const loggingCollector = section(controlPlane, "loggingCollector", diagnostics, false);
   closed(loggingCollector, "controlPlane.loggingCollector", ["enabled"], diagnostics);
+  const github = section(controlPlane, "github", diagnostics, false);
+  closed(
+    github,
+    "controlPlane.github",
+    ["secretName", "clientIdKey", "clientSecretKey", "egressCidrs"],
+    diagnostics,
+  );
+  const google = section(controlPlane, "google", diagnostics, false);
+  closed(
+    google,
+    "controlPlane.google",
+    ["secretName", "clientIdKey", "clientSecretKey", "allowedDomains", "egressCidrs"],
+    diagnostics,
+  );
+  const trustedProxy = section(controlPlane, "trustedProxy", diagnostics, false);
+  closed(
+    trustedProxy,
+    "controlPlane.trustedProxy",
+    ["preset", "cidrs", "clientAddressHeader"],
+    diagnostics,
+  );
   const managedServiceAccounts = section(codex, "managedServiceAccounts", diagnostics, false);
   closed(
     managedServiceAccounts,
@@ -488,6 +645,9 @@ function buildInput(rawInput, diagnostics) {
     loggingCollector,
     managedServiceAccounts,
     presets,
+    github,
+    google,
+    trustedProxy,
   };
 }
 
@@ -504,6 +664,9 @@ function buildRendered(profile, parsed, diagnostics) {
     loggingCollector,
     managedServiceAccounts,
     presets,
+    github,
+    google,
+    trustedProxy,
   } = parsed;
   const releaseName = asString(controlPlane, ["controlPlane", "releaseName"], diagnostics);
   const namespace = asString(controlPlane, ["controlPlane", "namespace"], diagnostics);
@@ -516,17 +679,46 @@ function buildRendered(profile, parsed, diagnostics) {
     pattern: digestImage,
     description: "an immutable image reference with a SHA-256 digest",
   });
-  const agentNativeAdminDomain = asString(
-    controlPlane,
-    ["controlPlane", "agentNativeAdminDomain"],
-    diagnostics,
-  );
-  const sharedCookieDomain = asString(
-    controlPlane,
-    ["controlPlane", "sharedCookieDomain"],
-    diagnostics,
-  );
-  validateNativeAdminDomains(agentNativeAdminDomain, sharedCookieDomain, diagnostics);
+  const authBaseUrl = asString(controlPlane, ["controlPlane", "authBaseUrl"], diagnostics);
+  const externalSignIn = controlPlane.github !== undefined || controlPlane.google !== undefined;
+  const signIn = externalSignIn
+    ? renderExternalSignIn(controlPlane, github, google, authBaseUrl, diagnostics)
+    : {};
+  // Without a trusted proxy the API sees the ingress as every browser's address. Existing
+  // source-preserving setups (such as an NLB) stay valid, so this warns rather than fails.
+  if (controlPlane.trustedProxy === undefined) {
+    diagnostics.warnings.push(
+      externalSignIn
+        ? "controlPlane.trustedProxy is not set: failed password sign-ins are limited per email only, and GitHub or Google sign-in starts have no per-client limit, because every browser behind a proxy shares its address. Set it unless the API sees each client's own address."
+        : "controlPlane.trustedProxy is not set: failed password sign-ins are limited per email only, with no per-client-address limit. Set it when a proxy fronts the API.",
+    );
+  }
+  if (!externalSignIn && controlPlane.recoveryUserId !== undefined) {
+    diagnostics.errors.push(
+      "controlPlane.recoveryUserId requires controlPlane.github or controlPlane.google.",
+    );
+  }
+  if (!externalSignIn && controlPlane.passwordSignIn !== undefined) {
+    diagnostics.errors.push(
+      "controlPlane.passwordSignIn requires controlPlane.github or controlPlane.google.",
+    );
+  }
+  // Helm refuses native admin with GitHub or Google sign-in (host-only cookies only).
+  let agentNativeAdmin = { enabled: false };
+  if (!externalSignIn) {
+    const agentNativeAdminDomain = asString(
+      controlPlane,
+      ["controlPlane", "agentNativeAdminDomain"],
+      diagnostics,
+    );
+    const sharedCookieDomain = asString(
+      controlPlane,
+      ["controlPlane", "sharedCookieDomain"],
+      diagnostics,
+    );
+    validateNativeAdminDomains(agentNativeAdminDomain, sharedCookieDomain, diagnostics);
+    agentNativeAdmin = { enabled: true, domain: agentNativeAdminDomain, sharedCookieDomain };
+  }
   const envoyNamespace =
     optionalString(controlPlane, ["controlPlane", "envoyNamespace"], diagnostics) ??
     "envoy-gateway-system";
@@ -591,13 +783,10 @@ function buildRendered(profile, parsed, diagnostics) {
       name: clusterName,
     },
     auth: {
-      baseUrl: asString(controlPlane, ["controlPlane", "authBaseUrl"], diagnostics),
+      baseUrl: authBaseUrl,
+      ...signIn,
     },
-    agentNativeAdmin: {
-      enabled: true,
-      domain: agentNativeAdminDomain,
-      sharedCookieDomain,
-    },
+    agentNativeAdmin,
     bootstrap: {
       adminEmail: asString(controlPlane, ["controlPlane", "adminEmail"], diagnostics),
       password: {
@@ -655,6 +844,9 @@ function buildRendered(profile, parsed, diagnostics) {
               nonempty: false,
             })
           : [],
+      ...(controlPlane.trustedProxy === undefined
+        ? {}
+        : { trustedProxy: renderTrustedProxy(trustedProxy, diagnostics) }),
     },
     cluster: {
       cidrs: stringArray(controlPlane, ["controlPlane", "clusterCidrs"], diagnostics, {
@@ -758,19 +950,21 @@ function buildRendered(profile, parsed, diagnostics) {
             requireImmutableDigest: true,
           },
           resources: {
+            // Tenant runtimes may burst to four cores; 100m requests keep the
+            // scheduling reservation unchanged.
             gateway: {
               requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "500m", memory: "2Gi" },
+              limits: { cpu: "4", memory: "2Gi" },
             },
             agent: {
               requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "500m", memory: "2Gi" },
+              limits: { cpu: "4", memory: "2Gi" },
             },
             namespace: {
               quota: { pods: "10" },
               containerDefaults: {
                 requests: { cpu: "100m", memory: "128Mi" },
-                limits: { cpu: "500m", memory: "2Gi" },
+                limits: { cpu: "4", memory: "2Gi" },
               },
             },
           },
@@ -938,7 +1132,7 @@ function buildRendered(profile, parsed, diagnostics) {
       appKeySecretName: asString(repository, ["repository", "appKeySecretName"], diagnostics),
       tlsSecretName: asString(repository, ["repository", "tlsSecretName"], diagnostics),
       publicCaSecretName: asString(repository, ["repository", "publicCaSecretName"], diagnostics),
-      serviceName: optionalString(repository, ["repository", "serviceName"], diagnostics) ?? "git",
+      serviceName: optionalString(repository, ["repository", "serviceName"], diagnostics),
       upstreamCidrs: stringArray(repository, ["repository", "upstreamCidrs"], diagnostics, {
         validate: isIpv4Cidr,
         description: "an IPv4 CIDR",
@@ -976,8 +1170,21 @@ function buildRendered(profile, parsed, diagnostics) {
   diagnostics.prerequisites.push(
     "Default ReadWriteOnce storage class available for dedicated Codex workspace claims.",
     "Envoy Gateway and cert-manager installed before applying gatewayRouting values.",
-    "Wildcard DNS and TLS configured for the native admin domain and shared cookie parent.",
   );
+  if (agentNativeAdmin.enabled) {
+    diagnostics.prerequisites.push(
+      "Wildcard DNS and TLS configured for the native admin domain and shared cookie parent.",
+    );
+  } else {
+    diagnostics.prerequisites.push(
+      "External sign-in Secrets created, and controlPlane.recoveryUserId read from a verified password administrator's session, before the first helm upgrade that renders them.",
+    );
+    if (signIn.passwordSignIn === "recovery-only") {
+      diagnostics.prerequisites.push(
+        "A GitHub or Google identity attached to every ordinary account before the helm upgrade that renders passwordSignIn: recovery-only; accounts without one cannot sign in until an administrator attaches it.",
+      );
+    }
+  }
   if (profile.name === "codex") {
     diagnostics.prerequisites.push(
       "Configured Codex seccomp profile installed and verified on every node selected by runtime.nodeSelector.",

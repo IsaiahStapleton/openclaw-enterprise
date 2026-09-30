@@ -21,6 +21,15 @@ receivers:
 processors:
   k8sattributes:
     auth_type: serviceAccount
+    # filelog reads existing CRI files as soon as the pipeline starts. A record
+    # processed before the Pod cache syncs gets no service identity, is dropped
+    # as unclassified, and its offset is still committed, so it is lost for good.
+    # Block pipeline start until the Pod cache syncs; the reflector retries while
+    # the API server is unreachable. The timeout is deliberately very long:
+    # Collector 0.159 hangs rather than exits when this wait times out, so a
+    # short bound would turn a slow API into a stuck Collector.
+    wait_for_metadata: true
+    wait_for_metadata_timeout: 8760h
     filter:
       node_from_env_var: K8S_NODE_NAME
     pod_association:
@@ -68,6 +77,9 @@ processors:
     log_statements:
       - context: resource
         statements:
+          # k8sattributes reports "latest" for a digest-only Pod image. The repo
+          # digest is the identity, and a real "latest" tag is mutable, so drop it.
+          - delete_key(attributes, "container.image.tag") where attributes["container.image.tag"] == "latest" and attributes["container.image.repo_digests"] != nil
           - keep_keys(attributes, ["k8s.pod.name", "k8s.pod.uid", "k8s.namespace.name", "k8s.node.name", "container.image.name", "container.image.tag", "container.image.repo_digests"])
 
 service:

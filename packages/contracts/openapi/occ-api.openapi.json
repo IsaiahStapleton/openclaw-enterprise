@@ -32,6 +32,372 @@
           "data": {
             "additionalProperties": false,
             "properties": {
+              "cursor": { "anyOf": [{ "maxLength": 2048, "type": "string" }, { "type": "null" }] },
+              "observedAt": {
+                "format": "date-time",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                "type": "string"
+              },
+              "records": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "contentClass": {
+                          "anyOf": [
+                            { "const": "operational", "type": "string" },
+                            { "const": "activity", "type": "string" },
+                            { "const": "content", "type": "string" }
+                          ]
+                        },
+                        "fields": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              { "maxLength": 1024, "type": "string" },
+                              { "type": "number" },
+                              { "type": "boolean" }
+                            ]
+                          },
+                          "type": "object"
+                        },
+                        "kind": {
+                          "anyOf": [
+                            { "const": "wrapper", "type": "string" },
+                            { "const": "openclaw", "type": "string" },
+                            { "const": "codex", "type": "string" },
+                            { "const": "sandbox", "type": "string" },
+                            { "const": "text", "type": "string" }
+                          ]
+                        },
+                        "level": {
+                          "anyOf": [
+                            { "const": "error", "type": "string" },
+                            { "const": "warn", "type": "string" },
+                            { "const": "info", "type": "string" },
+                            { "const": "debug", "type": "string" },
+                            { "const": "unknown", "type": "string" }
+                          ]
+                        },
+                        "message": { "maxLength": 8192, "type": "string" },
+                        "stream": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "container": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "pod": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "podUid": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9-]+$",
+                              "type": "string"
+                            },
+                            "restartCount": { "minimum": 0, "type": "integer" },
+                            "sandbox": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                { "const": "gateway", "type": "string" },
+                                { "const": "agent", "type": "string" },
+                                { "const": "sandbox", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": ["source"],
+                          "type": "object"
+                        },
+                        "subsystem": { "maxLength": 512, "type": "string" },
+                        "time": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "truncated": { "const": true, "type": "boolean" },
+                        "type": { "const": "line", "type": "string" }
+                      },
+                      "required": [
+                        "type",
+                        "time",
+                        "stream",
+                        "contentClass",
+                        "kind",
+                        "level",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "reason": {
+                          "anyOf": [
+                            { "const": "stream_replaced", "type": "string" },
+                            { "const": "window_exceeded", "type": "string" },
+                            { "const": "cursor_expired", "type": "string" },
+                            { "const": "truncated", "type": "string" },
+                            { "const": "buffer_lost", "type": "string" }
+                          ]
+                        },
+                        "remedy": { "maxLength": 512, "type": "string" },
+                        "stream": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "container": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "pod": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "podUid": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9-]+$",
+                              "type": "string"
+                            },
+                            "restartCount": { "minimum": 0, "type": "integer" },
+                            "sandbox": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                { "const": "gateway", "type": "string" },
+                                { "const": "agent", "type": "string" },
+                                { "const": "sandbox", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": ["source"],
+                          "type": "object"
+                        },
+                        "time": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "type": { "const": "gap", "type": "string" }
+                      },
+                      "required": ["type", "time", "stream", "reason", "remedy"],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "count": { "minimum": 1, "type": "integer" },
+                        "reason": {
+                          "anyOf": [
+                            { "const": "unrecognised_structured", "type": "string" },
+                            { "const": "oversized", "type": "string" },
+                            { "const": "malformed", "type": "string" }
+                          ]
+                        },
+                        "stream": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "container": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "pod": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "podUid": {
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9-]+$",
+                              "type": "string"
+                            },
+                            "restartCount": { "minimum": 0, "type": "integer" },
+                            "sandbox": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                { "const": "gateway", "type": "string" },
+                                { "const": "agent", "type": "string" },
+                                { "const": "sandbox", "type": "string" }
+                              ]
+                            }
+                          },
+                          "required": ["source"],
+                          "type": "object"
+                        },
+                        "time": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                              "type": "string"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "type": { "const": "withheld", "type": "string" }
+                      },
+                      "required": ["type", "time", "stream", "count", "reason"],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 1100,
+                "type": "array"
+              },
+              "revisionId": {
+                "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "source": {
+                "anyOf": [
+                  { "const": "gateway", "type": "string" },
+                  { "const": "agent", "type": "string" },
+                  { "const": "sandbox", "type": "string" }
+                ]
+              },
+              "stream": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "container": {
+                        "maxLength": 253,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "pod": {
+                        "maxLength": 253,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "podUid": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9-]+$",
+                        "type": "string"
+                      },
+                      "restartCount": { "minimum": 0, "type": "integer" },
+                      "sandbox": {
+                        "maxLength": 253,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "source": {
+                        "anyOf": [
+                          { "const": "gateway", "type": "string" },
+                          { "const": "agent", "type": "string" },
+                          { "const": "sandbox", "type": "string" }
+                        ]
+                      }
+                    },
+                    "required": ["source"],
+                    "type": "object"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "truncated": { "type": "boolean" },
+              "withheld": { "minimum": 0, "type": "integer" }
+            },
+            "required": [
+              "revisionId",
+              "source",
+              "stream",
+              "observedAt",
+              "records",
+              "withheld",
+              "truncated",
+              "cursor"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "additionalProperties": false,
+            "properties": {
+              "requestId": {
+                "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["requestId"],
+            "type": "object"
+          }
+        },
+        "required": ["data", "meta"],
+        "title": "AgentRuntimeLogsResponse",
+        "type": "object"
+      },
+      "def-11": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": { "transportConfigured": { "type": "boolean" } },
+            "required": ["transportConfigured"],
+            "type": "object"
+          },
+          "meta": {
+            "additionalProperties": false,
+            "properties": {
+              "requestId": {
+                "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["requestId"],
+            "type": "object"
+          }
+        },
+        "required": ["data", "meta"],
+        "title": "AgentRuntimeCredentialResponse",
+        "type": "object"
+      },
+      "def-12": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
               "id": {
                 "pattern": "^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                 "type": "string"
@@ -83,7 +449,7 @@
         "title": "SecretResponse",
         "type": "object"
       },
-      "def-11": {
+      "def-13": {
         "additionalProperties": false,
         "properties": {
           "data": {
@@ -341,7 +707,16 @@
                   { "const": "CHANNEL_CREDENTIAL_ROLE_MISMATCH", "type": "string" },
                   { "const": "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED", "type": "string" },
                   { "const": "CHANNEL_CREDENTIAL_UNAVAILABLE", "type": "string" },
-                  { "const": "CHANNEL_CREDENTIAL_BINDING_REQUIRED", "type": "string" }
+                  { "const": "CHANNEL_CREDENTIAL_BINDING_REQUIRED", "type": "string" },
+                  { "const": "RUNTIME_LOGS_CURSOR_INVALID", "type": "string" },
+                  { "const": "RUNTIME_LOGS_POD_INVALID", "type": "string" },
+                  { "const": "RUNTIME_LOGS_SOURCE_UNAVAILABLE", "type": "string" },
+                  { "const": "RUNTIME_LOGS_RATE_LIMITED", "type": "string" },
+                  { "const": "RUNTIME_LOGS_CLUSTER_RBAC", "type": "string" },
+                  { "const": "RUNTIME_LOGS_SANDBOX_NOT_FOUND", "type": "string" },
+                  { "const": "RUNTIME_LOGS_UNAVAILABLE", "type": "string" },
+                  { "const": "RUNTIME_LOGS_AUDIT_UNAVAILABLE", "type": "string" },
+                  { "const": "RUNTIME_LOGS_TIMEOUT", "type": "string" }
                 ]
               },
               "details": {
@@ -478,8 +853,259 @@
         "properties": {
           "data": {
             "additionalProperties": false,
-            "properties": { "transportConfigured": { "type": "boolean" } },
-            "required": ["transportConfigured"],
+            "properties": {
+              "observedAt": {
+                "format": "date-time",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                "type": "string"
+              },
+              "pods": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cluster": {
+                      "anyOf": [
+                        { "const": "control", "type": "string" },
+                        { "const": "execution", "type": "string" }
+                      ]
+                    },
+                    "containers": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "lastTermination": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "exitCode": {
+                                    "anyOf": [{ "type": "integer" }, { "type": "null" }]
+                                  },
+                                  "finishedAt": {
+                                    "anyOf": [
+                                      {
+                                        "format": "date-time",
+                                        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                        "type": "string"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "reason": {
+                                    "anyOf": [
+                                      { "maxLength": 128, "type": "string" },
+                                      { "type": "null" }
+                                    ]
+                                  }
+                                },
+                                "required": ["reason", "exitCode", "finishedAt"],
+                                "type": "object"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "name": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          },
+                          "ready": { "type": "boolean" },
+                          "reason": {
+                            "anyOf": [{ "maxLength": 128, "type": "string" }, { "type": "null" }]
+                          },
+                          "restartCount": { "minimum": 0, "type": "integer" },
+                          "startedAt": {
+                            "anyOf": [
+                              {
+                                "format": "date-time",
+                                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "state": {
+                            "anyOf": [
+                              { "const": "waiting", "type": "string" },
+                              { "const": "running", "type": "string" },
+                              { "const": "terminated", "type": "string" },
+                              { "const": "unknown", "type": "string" }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "state",
+                          "reason",
+                          "ready",
+                          "restartCount",
+                          "startedAt",
+                          "lastTermination"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 16,
+                      "type": "array"
+                    },
+                    "createdAt": {
+                      "anyOf": [
+                        {
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                          "type": "string"
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "events": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "container": {
+                            "anyOf": [
+                              {
+                                "maxLength": 253,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "count": { "minimum": 1, "type": "integer" },
+                          "lastObservedAt": {
+                            "anyOf": [
+                              {
+                                "format": "date-time",
+                                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "message": { "maxLength": 2048, "type": "string" },
+                          "reason": { "maxLength": 128, "type": "string" },
+                          "type": {
+                            "anyOf": [
+                              { "const": "Normal", "type": "string" },
+                              { "const": "Warning", "type": "string" }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "container",
+                          "reason",
+                          "message",
+                          "count",
+                          "lastObservedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    },
+                    "phase": { "maxLength": 64, "type": "string" },
+                    "ready": { "type": "boolean" },
+                    "role": {
+                      "anyOf": [
+                        { "const": "gateway", "type": "string" },
+                        { "const": "agent", "type": "string" }
+                      ]
+                    },
+                    "uid": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9-]+$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "cluster",
+                    "name",
+                    "uid",
+                    "phase",
+                    "ready",
+                    "createdAt",
+                    "containers",
+                    "events"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "revisionId": {
+                "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "sources": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "available": { "type": "boolean" },
+                    "id": {
+                      "anyOf": [
+                        { "const": "gateway", "type": "string" },
+                        { "const": "agent", "type": "string" },
+                        { "const": "sandbox", "type": "string" }
+                      ]
+                    },
+                    "kind": {
+                      "anyOf": [
+                        { "const": "container", "type": "string" },
+                        { "const": "sandbox", "type": "string" }
+                      ]
+                    },
+                    "pods": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "container": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          },
+                          "restartCount": { "minimum": 0, "type": "integer" },
+                          "uid": {
+                            "maxLength": 64,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "uid", "container", "restartCount"],
+                        "type": "object"
+                      },
+                      "maxItems": 16,
+                      "type": "array"
+                    },
+                    "retention": { "maxLength": 512, "type": "string" },
+                    "unavailableCode": { "const": "NO_POD", "type": "string" }
+                  },
+                  "required": ["id", "kind", "pods", "available", "retention"],
+                  "type": "object"
+                },
+                "maxItems": 4,
+                "type": "array"
+              }
+            },
+            "required": ["revisionId", "observedAt", "pods", "sources"],
             "type": "object"
           },
           "meta": {
@@ -495,7 +1121,7 @@
           }
         },
         "required": ["data", "meta"],
-        "title": "AgentRuntimeCredentialResponse",
+        "title": "AgentRuntimeResponse",
         "type": "object"
       }
     },
@@ -877,6 +1503,36 @@
             },
             "description": "Not Found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Conflict",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -918,7 +1574,7 @@
     },
     "/api/auth/accounts/{userId}/disable": {
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+        "description": "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
         "operationId": "disableAuthAccount",
         "parameters": [
           {
@@ -1132,7 +1788,7 @@
     },
     "/api/auth/accounts/{userId}/enable": {
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+        "description": "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
         "operationId": "enableAuthAccount",
         "parameters": [
           {
@@ -1550,7 +2206,7 @@
     },
     "/api/auth/accounts/{userId}/methods/{methodId}/detach": {
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+        "description": "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
         "operationId": "detachAuthMethod",
         "parameters": [
           {
@@ -1770,7 +2426,7 @@
     },
     "/api/auth/accounts/{userId}/providers/github": {
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+        "description": "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
         "operationId": "attachGitHubIdentity",
         "parameters": [
           {
@@ -1983,9 +2639,224 @@
         ]
       }
     },
+    "/api/auth/accounts/{userId}/providers/google": {
+      "post": {
+        "description": "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+        "operationId": "attachGoogleIdentity",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": { "maxLength": 200, "minLength": 1, "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedVersion": { "maximum": 2147483647, "minimum": 1, "type": "integer" },
+                  "subject": { "pattern": "^[\\x21-\\x7E]{1,255}$", "type": "string" }
+                },
+                "required": ["subject", "expectedVersion"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": { "userId": { "type": "string" } },
+                      "required": ["userId"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Unauthorized",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Forbidden",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Not Found",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Conflict",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Service Unavailable",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [{ "sessionCookie": [] }],
+        "summary": "Attach an exact Google identity to an existing account",
+        "tags": ["Authentication"],
+        "x-openclaw-permissions": [
+          { "action": "administer", "resourceKind": "installation", "scope": "requested" }
+        ]
+      }
+    },
     "/api/auth/accounts/{userId}/revoke": {
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
+        "description": "Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.",
         "operationId": "revokeAuthAccountSessions",
         "parameters": [
           {
@@ -2212,9 +3083,14 @@
                       "additionalProperties": false,
                       "properties": {
                         "github": { "type": "boolean" },
+                        "google": { "type": "boolean" },
+                        "password": {
+                          "description": "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+                          "type": "boolean"
+                        },
                         "sessionBinding": { "type": "boolean" }
                       },
-                      "required": ["github", "sessionBinding"],
+                      "required": ["github", "google", "password", "sessionBinding"],
                       "type": "object"
                     },
                     "meta": {
@@ -2452,7 +3328,7 @@
     },
     "/api/auth/providers/github/start": {
       "post": {
-        "description": "Requires the configured browser Origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+        "description": "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
         "operationId": "startGitHubSignIn",
         "responses": {
           "200": {
@@ -2578,6 +3454,290 @@
         },
         "security": [],
         "summary": "Start GitHub sign-in for an enrolled account",
+        "tags": ["Authentication"]
+      }
+    },
+    "/api/auth/providers/google/callback": {
+      "get": {
+        "description": "Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.",
+        "operationId": "completeGoogleSignIn",
+        "responses": { "302": { "description": "Redirect to Console" } },
+        "security": [],
+        "summary": "Complete an enrolled Google sign-in",
+        "tags": ["Authentication"]
+      }
+    },
+    "/api/auth/providers/google/result": {
+      "post": {
+        "description": "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
+        "operationId": "confirmGoogleSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "attemptId": { "pattern": "^[A-Za-z0-9_-]{43}$", "type": "string" }
+                },
+                "required": ["attemptId"],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": { "sessionKey": { "type": "string" } },
+                      "required": ["sessionKey"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Unauthorized",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Forbidden",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Service Unavailable",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [{ "sessionCookie": [] }],
+        "summary": "Confirm which session a Google sign-in created",
+        "tags": ["Authentication"]
+      }
+    },
+    "/api/auth/providers/google/start": {
+      "post": {
+        "description": "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+        "operationId": "startGoogleSignIn",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "OK",
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attemptId": { "pattern": "^[A-Za-z0-9_-]{43}$", "type": "string" },
+                        "url": { "format": "uri", "type": "string" }
+                      },
+                      "required": ["url", "attemptId"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Unauthorized",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Forbidden",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Service Unavailable",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [],
+        "summary": "Start Google sign-in for an enrolled account",
         "tags": ["Authentication"]
       }
     },
@@ -2707,6 +3867,36 @@
             },
             "description": "Not Found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Conflict",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -2746,7 +3936,7 @@
         ]
       },
       "post": {
-        "description": "Requires a current human Native IAM Installation administrator and trusted Origin. The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
+        "description": "Requires a current human Native IAM Installation administrator and trusted Origin who holds every IAM grant of the current holder's Principal (else 403). The target must be an enrolled, enabled account with one password whose Principal administers the Installation. expectedCurrentUserId comes from the recovery read and expectedVersion from the target's account read. Commits state and audit together; an unknown outcome must be inspected without automatic retry.",
         "operationId": "replaceAuthRecovery",
         "requestBody": {
           "content": {
@@ -2959,7 +4149,7 @@
     },
     "/api/auth/service-keys": {
       "post": {
-        "description": "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope; creates no identity or IAM grant. The plaintext key is returned only here.",
+        "description": "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope when the caller already holds every IAM grant of that ServicePrincipal at the same or a broader scope; creates no identity or IAM grant. The plaintext key is returned only here.",
         "operationId": "createServiceKey",
         "requestBody": {
           "content": {
@@ -3531,7 +4721,7 @@
     },
     "/api/auth/sign-in/email": {
       "post": {
-        "description": "Authenticates a local account and issues a user session cookie.",
+        "description": "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub or Google sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.",
         "operationId": "signInEmail",
         "requestBody": {
           "content": {
@@ -3609,6 +4799,36 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Too Many Requests",
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": { "type": "string" },
+                        "message": { "type": "string" }
+                      },
+                      "required": ["code", "message"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": { "requestId": { "type": "string" } },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["error", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Too Many Requests"
           },
           "503": {
             "content": {
@@ -3871,6 +5091,20 @@
                               "required": ["executionModes"],
                               "type": "object"
                             },
+                            "nativeWorkers": {
+                              "additionalProperties": false,
+                              "description": "Present only when dedicated native OpenClaw can be admitted, and says where its native worker support comes from.",
+                              "properties": {
+                                "support": {
+                                  "anyOf": [
+                                    { "const": "pinned-runtime", "type": "string" },
+                                    { "const": "custom-image", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["support"],
+                              "type": "object"
+                            },
                             "pluginDiscovery": {
                               "additionalProperties": false,
                               "properties": {
@@ -4100,6 +5334,20 @@
                                 }
                               },
                               "required": ["executionModes"],
+                              "type": "object"
+                            },
+                            "nativeWorkers": {
+                              "additionalProperties": false,
+                              "description": "Present only when dedicated native OpenClaw can be admitted, and says where its native worker support comes from.",
+                              "properties": {
+                                "support": {
+                                  "anyOf": [
+                                    { "const": "pinned-runtime", "type": "string" },
+                                    { "const": "custom-image", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["support"],
                               "type": "object"
                             },
                             "pluginDiscovery": {
@@ -4832,7 +6080,7 @@
             "description": "Default Response"
           }
         },
-        "summary": "Begin deletion of an empty Installation-owned Namespace",
+        "summary": "Begin or retry deletion of an empty Installation-owned Namespace",
         "tags": ["Namespaces"],
         "x-openclaw-permissions": [
           { "action": "delete", "resourceKind": "namespace", "scope": "requested" }
@@ -4981,7 +6229,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "data": {
-                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth.",
+                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth.",
                       "items": {
                         "anyOf": [
                           {
@@ -5136,6 +6384,43 @@
                               },
                               "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                               "plugins": { "$ref": "#/components/schemas/def-6" },
+                              "repositoryAccess": {
+                                "additionalProperties": false,
+                                "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                                "properties": {
+                                  "defaultProfile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositories": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "profile": {
+                                          "maxLength": 128,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "repositoryRef": {
+                                          "maxLength": 128,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["repositoryRef"],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 16,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": ["defaultProfile", "repositories"],
+                                "type": "object"
+                              },
                               "repositoryBindings": {
                                 "items": {
                                   "additionalProperties": false,
@@ -5221,6 +6506,7 @@
                                       { "const": "plugins", "type": "string" },
                                       { "const": "pluginApprovers", "type": "string" },
                                       { "const": "repositoryBindings", "type": "string" },
+                                      { "const": "repositoryAccess", "type": "string" },
                                       { "const": "harnessAuth", "type": "string" },
                                       { "const": "secretBindings", "type": "string" },
                                       { "const": "repositoryCredentials", "type": "string" },
@@ -5290,7 +6576,7 @@
                             "type": "object"
                           }
                         ],
-                        "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth."
+                        "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth."
                       },
                       "type": "array"
                     },
@@ -5521,6 +6807,43 @@
                   },
                   "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                   "plugins": { "$ref": "#/components/schemas/def-6" },
+                  "repositoryAccess": {
+                    "additionalProperties": false,
+                    "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                    "properties": {
+                      "defaultProfile": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                        "type": "string"
+                      },
+                      "repositories": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "profile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositoryRef": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["repositoryRef"],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["defaultProfile", "repositories"],
+                    "type": "object"
+                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -5710,6 +7033,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -6717,6 +8077,43 @@
                   },
                   "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                   "plugins": { "$ref": "#/components/schemas/def-6" },
+                  "repositoryAccess": {
+                    "additionalProperties": false,
+                    "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                    "properties": {
+                      "defaultProfile": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                        "type": "string"
+                      },
+                      "repositories": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "profile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositoryRef": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["repositoryRef"],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["defaultProfile", "repositories"],
+                    "type": "object"
+                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -7239,6 +8636,17 @@
         "operationId": "listRepositoryOptions",
         "parameters": [
           {
+            "description": "Up to 20 visible repository references to enrich with provider descriptions.",
+            "in": "query",
+            "name": "descriptionRefs",
+            "required": false,
+            "schema": {
+              "maxLength": 2579,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "namespaceId",
             "required": true,
@@ -7271,6 +8679,7 @@
                             "type": "array",
                             "uniqueItems": true
                           },
+                          "description": { "maxLength": 512, "minLength": 1, "type": "string" },
                           "displayName": {
                             "maxLength": 200,
                             "minLength": 1,
@@ -7287,18 +8696,19 @@
                         "required": ["repositoryRef", "displayName", "allowedProfiles"],
                         "type": "object"
                       },
-                      "maxItems": 128,
+                      "maxItems": 1000,
                       "type": "array"
                     },
                     "meta": {
                       "additionalProperties": false,
                       "properties": {
+                        "descriptionsPending": { "type": "boolean" },
                         "requestId": {
                           "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         }
                       },
-                      "required": ["requestId"],
+                      "required": ["requestId", "descriptionsPending"],
                       "type": "object"
                     }
                   },
@@ -7539,6 +8949,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -7842,6 +9289,43 @@
                             },
                             "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                             "plugins": { "$ref": "#/components/schemas/def-6" },
+                            "repositoryAccess": {
+                              "additionalProperties": false,
+                              "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                              "properties": {
+                                "defaultProfile": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "repositories": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "profile": {
+                                        "maxLength": 128,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "repositoryRef": {
+                                        "maxLength": 128,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["repositoryRef"],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 16,
+                                  "type": "array"
+                                }
+                              },
+                              "required": ["defaultProfile", "repositories"],
+                              "type": "object"
+                            },
                             "repositoryBindings": {
                               "items": {
                                 "additionalProperties": false,
@@ -7927,6 +9411,7 @@
                                     { "const": "plugins", "type": "string" },
                                     { "const": "pluginApprovers", "type": "string" },
                                     { "const": "repositoryBindings", "type": "string" },
+                                    { "const": "repositoryAccess", "type": "string" },
                                     { "const": "harnessAuth", "type": "string" },
                                     { "const": "secretBindings", "type": "string" },
                                     { "const": "repositoryCredentials", "type": "string" },
@@ -7996,7 +9481,7 @@
                           "type": "object"
                         }
                       ],
-                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth."
+                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth."
                     },
                     "meta": {
                       "additionalProperties": false,
@@ -8203,6 +9688,43 @@
                     "anyOf": [{ "$ref": "#/components/schemas/def-2" }, { "type": "null" }]
                   },
                   "plugins": { "$ref": "#/components/schemas/def-6" },
+                  "repositoryAccess": {
+                    "additionalProperties": false,
+                    "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                    "properties": {
+                      "defaultProfile": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                        "type": "string"
+                      },
+                      "repositories": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "profile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositoryRef": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["repositoryRef"],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["defaultProfile", "repositories"],
+                    "type": "object"
+                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -8391,6 +9913,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -9364,6 +10923,921 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime": {
+      "get": {
+        "description": "Requires operate permission on the requested Agent. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.",
+        "operationId": "getAgentDeploymentRuntime",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "observedAt": {
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                          "type": "string"
+                        },
+                        "pods": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "cluster": {
+                                "anyOf": [
+                                  { "const": "control", "type": "string" },
+                                  { "const": "execution", "type": "string" }
+                                ]
+                              },
+                              "containers": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "lastTermination": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "exitCode": {
+                                              "anyOf": [{ "type": "integer" }, { "type": "null" }]
+                                            },
+                                            "finishedAt": {
+                                              "anyOf": [
+                                                {
+                                                  "format": "date-time",
+                                                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                                  "type": "string"
+                                                },
+                                                { "type": "null" }
+                                              ]
+                                            },
+                                            "reason": {
+                                              "anyOf": [
+                                                { "maxLength": 128, "type": "string" },
+                                                { "type": "null" }
+                                              ]
+                                            }
+                                          },
+                                          "required": ["reason", "exitCode", "finishedAt"],
+                                          "type": "object"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "name": {
+                                      "maxLength": 253,
+                                      "minLength": 1,
+                                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "ready": { "type": "boolean" },
+                                    "reason": {
+                                      "anyOf": [
+                                        { "maxLength": 128, "type": "string" },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "restartCount": { "minimum": 0, "type": "integer" },
+                                    "startedAt": {
+                                      "anyOf": [
+                                        {
+                                          "format": "date-time",
+                                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                          "type": "string"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "state": {
+                                      "anyOf": [
+                                        { "const": "waiting", "type": "string" },
+                                        { "const": "running", "type": "string" },
+                                        { "const": "terminated", "type": "string" },
+                                        { "const": "unknown", "type": "string" }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "state",
+                                    "reason",
+                                    "ready",
+                                    "restartCount",
+                                    "startedAt",
+                                    "lastTermination"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 16,
+                                "type": "array"
+                              },
+                              "createdAt": {
+                                "anyOf": [
+                                  {
+                                    "format": "date-time",
+                                    "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                    "type": "string"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "events": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "container": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 253,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "count": { "minimum": 1, "type": "integer" },
+                                    "lastObservedAt": {
+                                      "anyOf": [
+                                        {
+                                          "format": "date-time",
+                                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                          "type": "string"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
+                                    "message": { "maxLength": 2048, "type": "string" },
+                                    "reason": { "maxLength": 128, "type": "string" },
+                                    "type": {
+                                      "anyOf": [
+                                        { "const": "Normal", "type": "string" },
+                                        { "const": "Warning", "type": "string" }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "container",
+                                    "reason",
+                                    "message",
+                                    "count",
+                                    "lastObservedAt"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 100,
+                                "type": "array"
+                              },
+                              "name": {
+                                "maxLength": 253,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                "type": "string"
+                              },
+                              "phase": { "maxLength": 64, "type": "string" },
+                              "ready": { "type": "boolean" },
+                              "role": {
+                                "anyOf": [
+                                  { "const": "gateway", "type": "string" },
+                                  { "const": "agent", "type": "string" }
+                                ]
+                              },
+                              "uid": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9-]+$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "role",
+                              "cluster",
+                              "name",
+                              "uid",
+                              "phase",
+                              "ready",
+                              "createdAt",
+                              "containers",
+                              "events"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 16,
+                          "type": "array"
+                        },
+                        "revisionId": {
+                          "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "sources": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "available": { "type": "boolean" },
+                              "id": {
+                                "anyOf": [
+                                  { "const": "gateway", "type": "string" },
+                                  { "const": "agent", "type": "string" },
+                                  { "const": "sandbox", "type": "string" }
+                                ]
+                              },
+                              "kind": {
+                                "anyOf": [
+                                  { "const": "container", "type": "string" },
+                                  { "const": "sandbox", "type": "string" }
+                                ]
+                              },
+                              "pods": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "container": {
+                                      "maxLength": 253,
+                                      "minLength": 1,
+                                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "maxLength": 253,
+                                      "minLength": 1,
+                                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "restartCount": { "minimum": 0, "type": "integer" },
+                                    "uid": {
+                                      "maxLength": 64,
+                                      "minLength": 1,
+                                      "pattern": "^[A-Za-z0-9-]+$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "uid", "container", "restartCount"],
+                                  "type": "object"
+                                },
+                                "maxItems": 16,
+                                "type": "array"
+                              },
+                              "retention": { "maxLength": 512, "type": "string" },
+                              "unavailableCode": { "const": "NO_POD", "type": "string" }
+                            },
+                            "required": ["id", "kind", "pods", "available", "retention"],
+                            "type": "object"
+                          },
+                          "maxItems": 4,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["revisionId", "observedAt", "pods", "sources"],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "504": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read Pod status, restarts, Events and log sources for one exact Agent revision",
+        "tags": ["Agent deployments"],
+        "x-openclaw-permissions": [
+          { "action": "operate", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" },
+          { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+        ]
+      }
+    },
+    "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime/logs": {
+      "get": {
+        "description": "Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent.",
+        "operationId": "getAgentDeploymentRuntimeLogs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                { "const": "gateway", "type": "string" },
+                { "const": "agent", "type": "string" },
+                { "const": "sandbox", "type": "string" }
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "pod",
+            "required": false,
+            "schema": {
+              "maxLength": 253,
+              "minLength": 1,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "previous",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                { "const": "true", "type": "string" },
+                { "const": "false", "type": "string" }
+              ]
+            }
+          },
+          {
+            "description": "Lines from the end of the stream, 1 to 1000; default 200.",
+            "in": "query",
+            "name": "tailLines",
+            "required": false,
+            "schema": { "pattern": "^(?:[1-9][0-9]{0,2}|1000)$", "type": "string" }
+          },
+          {
+            "description": "Only lines newer than this many seconds, 1 to 86400.",
+            "in": "query",
+            "name": "sinceSeconds",
+            "required": false,
+            "schema": {
+              "pattern": "^(?:[1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque cursor returned by the previous page of the same view.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 2048,
+              "pattern": "^v1\\.[A-Za-z0-9_-]{1,1900}\\.[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "`true` returns the last 1000 lines as a text/plain attachment and is audited per download; it cannot be combined with `cursor`.",
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                { "const": "true", "type": "string" },
+                { "const": "false", "type": "string" }
+              ]
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "cursor": {
+                          "anyOf": [{ "maxLength": 2048, "type": "string" }, { "type": "null" }]
+                        },
+                        "observedAt": {
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
+                          "type": "string"
+                        },
+                        "records": {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "contentClass": {
+                                    "anyOf": [
+                                      { "const": "operational", "type": "string" },
+                                      { "const": "activity", "type": "string" },
+                                      { "const": "content", "type": "string" }
+                                    ]
+                                  },
+                                  "fields": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        { "maxLength": 1024, "type": "string" },
+                                        { "type": "number" },
+                                        { "type": "boolean" }
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  "kind": {
+                                    "anyOf": [
+                                      { "const": "wrapper", "type": "string" },
+                                      { "const": "openclaw", "type": "string" },
+                                      { "const": "codex", "type": "string" },
+                                      { "const": "sandbox", "type": "string" },
+                                      { "const": "text", "type": "string" }
+                                    ]
+                                  },
+                                  "level": {
+                                    "anyOf": [
+                                      { "const": "error", "type": "string" },
+                                      { "const": "warn", "type": "string" },
+                                      { "const": "info", "type": "string" },
+                                      { "const": "debug", "type": "string" },
+                                      { "const": "unknown", "type": "string" }
+                                    ]
+                                  },
+                                  "message": { "maxLength": 8192, "type": "string" },
+                                  "stream": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "container": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "pod": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "podUid": {
+                                        "maxLength": 64,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9-]+$",
+                                        "type": "string"
+                                      },
+                                      "restartCount": { "minimum": 0, "type": "integer" },
+                                      "sandbox": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "anyOf": [
+                                          { "const": "gateway", "type": "string" },
+                                          { "const": "agent", "type": "string" },
+                                          { "const": "sandbox", "type": "string" }
+                                        ]
+                                      }
+                                    },
+                                    "required": ["source"],
+                                    "type": "object"
+                                  },
+                                  "subsystem": { "maxLength": 512, "type": "string" },
+                                  "time": {
+                                    "anyOf": [
+                                      {
+                                        "format": "date-time",
+                                        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                        "type": "string"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "truncated": { "const": true, "type": "boolean" },
+                                  "type": { "const": "line", "type": "string" }
+                                },
+                                "required": [
+                                  "type",
+                                  "time",
+                                  "stream",
+                                  "contentClass",
+                                  "kind",
+                                  "level",
+                                  "message"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "reason": {
+                                    "anyOf": [
+                                      { "const": "stream_replaced", "type": "string" },
+                                      { "const": "window_exceeded", "type": "string" },
+                                      { "const": "cursor_expired", "type": "string" },
+                                      { "const": "truncated", "type": "string" },
+                                      { "const": "buffer_lost", "type": "string" }
+                                    ]
+                                  },
+                                  "remedy": { "maxLength": 512, "type": "string" },
+                                  "stream": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "container": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "pod": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "podUid": {
+                                        "maxLength": 64,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9-]+$",
+                                        "type": "string"
+                                      },
+                                      "restartCount": { "minimum": 0, "type": "integer" },
+                                      "sandbox": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "anyOf": [
+                                          { "const": "gateway", "type": "string" },
+                                          { "const": "agent", "type": "string" },
+                                          { "const": "sandbox", "type": "string" }
+                                        ]
+                                      }
+                                    },
+                                    "required": ["source"],
+                                    "type": "object"
+                                  },
+                                  "time": {
+                                    "anyOf": [
+                                      {
+                                        "format": "date-time",
+                                        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                        "type": "string"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "type": { "const": "gap", "type": "string" }
+                                },
+                                "required": ["type", "time", "stream", "reason", "remedy"],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "count": { "minimum": 1, "type": "integer" },
+                                  "reason": {
+                                    "anyOf": [
+                                      { "const": "unrecognised_structured", "type": "string" },
+                                      { "const": "oversized", "type": "string" },
+                                      { "const": "malformed", "type": "string" }
+                                    ]
+                                  },
+                                  "stream": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "container": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "pod": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "podUid": {
+                                        "maxLength": 64,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9-]+$",
+                                        "type": "string"
+                                      },
+                                      "restartCount": { "minimum": 0, "type": "integer" },
+                                      "sandbox": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "anyOf": [
+                                          { "const": "gateway", "type": "string" },
+                                          { "const": "agent", "type": "string" },
+                                          { "const": "sandbox", "type": "string" }
+                                        ]
+                                      }
+                                    },
+                                    "required": ["source"],
+                                    "type": "object"
+                                  },
+                                  "time": {
+                                    "anyOf": [
+                                      {
+                                        "format": "date-time",
+                                        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+                                        "type": "string"
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "type": { "const": "withheld", "type": "string" }
+                                },
+                                "required": ["type", "time", "stream", "count", "reason"],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxItems": 1100,
+                          "type": "array"
+                        },
+                        "revisionId": {
+                          "pattern": "^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            { "const": "gateway", "type": "string" },
+                            { "const": "agent", "type": "string" },
+                            { "const": "sandbox", "type": "string" }
+                          ]
+                        },
+                        "stream": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "container": {
+                                  "maxLength": 253,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "pod": {
+                                  "maxLength": 253,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "podUid": {
+                                  "maxLength": 64,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9-]+$",
+                                  "type": "string"
+                                },
+                                "restartCount": { "minimum": 0, "type": "integer" },
+                                "sandbox": {
+                                  "maxLength": 253,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "source": {
+                                  "anyOf": [
+                                    { "const": "gateway", "type": "string" },
+                                    { "const": "agent", "type": "string" },
+                                    { "const": "sandbox", "type": "string" }
+                                  ]
+                                }
+                              },
+                              "required": ["source"],
+                              "type": "object"
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "truncated": { "type": "boolean" },
+                        "withheld": { "minimum": 0, "type": "integer" }
+                      },
+                      "required": [
+                        "revisionId",
+                        "source",
+                        "stream",
+                        "observedAt",
+                        "records",
+                        "withheld",
+                        "truncated",
+                        "cursor"
+                      ],
+                      "type": "object"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "description": "The same sanitized records as the JSON page, one per line, for `download=true`.",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "One page of records, or a text/plain attachment when `download=true`"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "501": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "504": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Read one bounded, redacted page of container output for one exact Agent revision",
+        "tags": ["Agent deployments"],
+        "x-openclaw-permissions": [
+          { "action": "read_logs", "resourceKind": "agent", "scope": "requested" },
+          {
+            "action": "administer",
+            "condition": "read_logs_alternative",
+            "resourceKind": "agent",
+            "scope": "requested"
+          },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/{agentId}/native-admin": {
       "get": {
         "description": "Requires a human session with administer permission on the exact Agent. Service API keys cannot launch or inspect native admin UI access.",
@@ -10087,6 +12561,154 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/{agentId}/repository-options": {
+      "get": {
+        "description": "Requires update permission on the requested Agent.",
+        "operationId": "listAgentRepositoryOptions",
+        "parameters": [
+          {
+            "description": "Up to 20 visible repository references to enrich with provider descriptions.",
+            "in": "query",
+            "name": "descriptionRefs",
+            "required": false,
+            "schema": {
+              "maxLength": 2579,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "allowedProfiles": {
+                            "items": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "maxItems": 16,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "description": { "maxLength": 512, "minLength": 1, "type": "string" },
+                          "displayName": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "repositoryRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["repositoryRef", "displayName", "allowedProfiles"],
+                        "type": "object"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "descriptionsPending": { "type": "boolean" },
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId", "descriptionsPending"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List approved repository choices for updating one Agent",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "update", "resourceKind": "agent", "scope": "requested" }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/{agentId}/revisions": {
       "get": {
         "description": "Requires read permission on the requested Agent. Only AgentRevision resources with individual read permission are returned.",
@@ -10426,6 +13048,7 @@
                                       { "const": "plugins", "type": "string" },
                                       { "const": "pluginApprovers", "type": "string" },
                                       { "const": "repositoryBindings", "type": "string" },
+                                      { "const": "repositoryAccess", "type": "string" },
                                       { "const": "harnessAuth", "type": "string" },
                                       { "const": "secretBindings", "type": "string" },
                                       { "const": "repositoryCredentials", "type": "string" },
@@ -10875,6 +13498,7 @@
                                     { "const": "plugins", "type": "string" },
                                     { "const": "pluginApprovers", "type": "string" },
                                     { "const": "repositoryBindings", "type": "string" },
+                                    { "const": "repositoryAccess", "type": "string" },
                                     { "const": "harnessAuth", "type": "string" },
                                     { "const": "secretBindings", "type": "string" },
                                     { "const": "repositoryCredentials", "type": "string" },
@@ -11523,6 +14147,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -12988,7 +15649,7 @@
     },
     "/namespaces/{namespaceId}/credential-sources": {
       "get": {
-        "description": "Requires read permission for CredentialSource resources in the requested Namespace.",
+        "description": "Requires read permission on the requested Namespace. Only CredentialSource resources with individual read permission are returned.",
         "operationId": "listCredentialSources",
         "parameters": [
           {
@@ -13180,7 +15841,8 @@
         "summary": "List readable credential sources without revealing credential values",
         "tags": ["Credential sources"],
         "x-openclaw-permissions": [
-          { "action": "read", "resourceKind": "credential_source", "scope": "namespace" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "credential_source", "scope": "each_returned" }
         ]
       },
       "post": {
@@ -13255,7 +15917,7 @@
         "responses": {
           "201": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-11" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-13" } }
             },
             "description": "Default Response"
           },
@@ -13422,7 +16084,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-11" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-13" } }
             },
             "description": "Default Response"
           },
@@ -14138,7 +16800,8 @@
                                     { "const": "delete", "type": "string" },
                                     { "const": "deploy", "type": "string" },
                                     { "const": "operate", "type": "string" },
-                                    { "const": "administer", "type": "string" }
+                                    { "const": "administer", "type": "string" },
+                                    { "const": "read_logs", "type": "string" }
                                   ]
                                 },
                                 "resourceKind": {
@@ -14269,7 +16932,8 @@
                             { "const": "delete", "type": "string" },
                             { "const": "deploy", "type": "string" },
                             { "const": "operate", "type": "string" },
-                            { "const": "administer", "type": "string" }
+                            { "const": "administer", "type": "string" },
+                            { "const": "read_logs", "type": "string" }
                           ]
                         },
                         "resourceKind": {
@@ -14333,7 +16997,8 @@
                                   { "const": "delete", "type": "string" },
                                   { "const": "deploy", "type": "string" },
                                   { "const": "operate", "type": "string" },
-                                  { "const": "administer", "type": "string" }
+                                  { "const": "administer", "type": "string" },
+                                  { "const": "read_logs", "type": "string" }
                                 ]
                               },
                               "resourceKind": {
@@ -14569,7 +17234,8 @@
                                   { "const": "delete", "type": "string" },
                                   { "const": "deploy", "type": "string" },
                                   { "const": "operate", "type": "string" },
-                                  { "const": "administer", "type": "string" }
+                                  { "const": "administer", "type": "string" },
+                                  { "const": "read_logs", "type": "string" }
                                 ]
                               },
                               "resourceKind": {
@@ -14744,7 +17410,9 @@
                                   },
                                   "name": { "$ref": "#/components/schemas/def-0" },
                                   "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                  "plugins": { "$ref": "#/components/schemas/def-0" }
+                                  "plugins": { "$ref": "#/components/schemas/def-0" },
+                                  "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                  "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                                 },
                                 "type": "object"
                               },
@@ -14951,7 +17619,9 @@
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
                           "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                          "plugins": { "$ref": "#/components/schemas/def-0" }
+                          "plugins": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
                       },
@@ -15097,7 +17767,9 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -15418,7 +18090,9 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -15629,7 +18303,9 @@
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
                           "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                          "plugins": { "$ref": "#/components/schemas/def-0" }
+                          "plugins": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
                       },
@@ -15774,7 +18450,9 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -15932,7 +18610,7 @@
     },
     "/namespaces/{namespaceId}/secrets": {
       "get": {
-        "description": "Requires read permission for Secret resources in the requested Namespace.",
+        "description": "Requires read permission on the requested Namespace. Only Secret resources with individual read permission are returned.",
         "operationId": "listSecrets",
         "parameters": [
           {
@@ -16052,7 +18730,8 @@
         "summary": "List readable Namespace-owned Secret metadata without revealing material",
         "tags": ["Secrets"],
         "x-openclaw-permissions": [
-          { "action": "read", "resourceKind": "secret", "scope": "namespace" }
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
+          { "action": "read", "resourceKind": "secret", "scope": "each_returned" }
         ]
       },
       "post": {
@@ -16099,7 +18778,7 @@
         "responses": {
           "201": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-10" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-12" } }
             },
             "description": "Default Response"
           },
@@ -16266,7 +18945,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-10" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-12" } }
             },
             "description": "Default Response"
           },
@@ -16360,7 +19039,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/def-10" } }
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-12" } }
             },
             "description": "Default Response"
           },

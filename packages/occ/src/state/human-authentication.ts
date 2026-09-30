@@ -151,6 +151,23 @@ function sessionFromRow(row: Row): HumanAuthenticationSession {
   };
 }
 
+/**
+ * The guarded profile's known-device account state: the user, its password method and that
+ * method's authentication version, which the database bumps on every password change. A
+ * known-device entry issued under one state stops verifying under any other. A disabled
+ * account has no state (see `knownDeviceState`). The account version is deliberately left
+ * out: attaching or detaching an external identity must not strand a browser's password
+ * fallback.
+ */
+export function knownDeviceAccountState(
+  proof: Pick<HumanAuthenticationProof, "userId" | "methodId" | "methodVersion">,
+): string {
+  return `guarded\0${proof.userId}\0${proof.methodId}\0${proof.methodVersion}`;
+}
+
+// Pending external sign-in attempts per Installation. A full table evicts its oldest attempts.
+const pendingAttemptCapacity = 1000;
+
 const userColumns = `u.id AS user_id, u.email, u.name, u.email_verified, u.image,
   u.created_at AS user_created_at, u.updated_at AS user_updated_at`;
 
@@ -295,6 +312,58 @@ export class PostgresHumanAuthentication {
             principalId: row.principal_id as string,
             email: row.email as string,
           };
+    });
+  }
+
+  /**
+   * Enabled, enrolled accounts other than the recovery account that have no identity for any
+   * of `providerIds`. With recovery-only password sign-in they cannot sign in until an
+   * administrator attaches one. Ordered by user ID.
+   */
+  async accountsWithoutExternalIdentity(providerIds: readonly string[]): Promise<string[]> {
+    return this.state.transact(async (unit) => {
+      const rows = await this.query(
+        unit,
+        `SELECT h.user_id FROM occ.human_authentication_accounts h
+         WHERE h.installation_id = $1 AND h.disabled = false
+         AND NOT EXISTS (SELECT 1 FROM occ.human_authentication_recovery r
+                         WHERE r.installation_id = $1 AND r.user_id = h.user_id)
+         AND NOT EXISTS (SELECT 1 FROM occ.account m
+                         WHERE m.user_id = h.user_id AND m.identity_only
+                         AND m.provider_id = ANY($2::text[]))
+         ORDER BY h.user_id`,
+        [this.installationId, [...providerIds]],
+      );
+      return rows.map((row) => row.user_id as string);
+    });
+  }
+
+  /**
+   * The known-device account state (see `knownDeviceAccountState`) for an enrolled, enabled
+   * account of this Installation with a password, by normalized email; undefined otherwise,
+   * so a disabled account's entries verify nothing while it stays disabled. A plain read
+   * outside any transaction (it runs before password admission, once per attempt): one
+   * statement that locks nothing and writes no audit.
+   */
+  async knownDeviceState(email: string): Promise<string | undefined> {
+    const rows = await this.state.readStatement(
+      `SELECT u.id AS user_id, m.id AS method_id, m.authentication_version
+       FROM occ."user" u
+       JOIN occ.human_authentication_accounts h
+         ON h.user_id = u.id AND h.installation_id = $2 AND NOT h.disabled
+       JOIN occ.account m ON m.user_id = u.id AND m.provider_id = 'credential'
+         AND m.password IS NOT NULL AND m.password <> ''
+       WHERE u.email = $1`,
+      [email, this.installationId],
+    );
+    const [row] = rows;
+    if (rows.length !== 1 || row === undefined) {
+      return undefined;
+    }
+    return knownDeviceAccountState({
+      userId: row.user_id as string,
+      methodId: row.method_id as string,
+      methodVersion: row.authentication_version as number,
     });
   }
 
@@ -1004,8 +1073,17 @@ export class PostgresHumanAuthentication {
         `SELECT count(*)::integer AS count FROM occ.human_authentication_attempts WHERE installation_id = $1`,
         [this.installationId],
       );
-      if ((capacity!.count as number) >= 1000) {
-        throw new ResourceConflictError("Authentication attempt capacity is unavailable.");
+      // Any client can start an attempt, so a full table must not refuse new starts: that would
+      // let one client block provider sign-in for everyone. Evict the oldest pending attempts.
+      const excess = (capacity!.count as number) - (pendingAttemptCapacity - 1);
+      if (excess > 0) {
+        await this.query(
+          unit,
+          `DELETE FROM occ.human_authentication_attempts WHERE state_hash IN
+           (SELECT state_hash FROM occ.human_authentication_attempts WHERE installation_id = $1
+            ORDER BY expires_at, state_hash LIMIT $2)`,
+          [this.installationId, excess],
+        );
       }
       const [row] = await this.query(
         unit,
@@ -1044,6 +1122,29 @@ export class PostgresHumanAuthentication {
             expiresAt: row.expires_at as Date,
             createdAt: row.created_at as Date,
           };
+    });
+  }
+
+  /**
+   * Password-only profile: audits a password sign-in that Better Auth already accepted. The
+   * guarded profile audits in the session's own transaction (issueSession); this profile's
+   * sessions are written by Better Auth, so the caller revokes the session if this fails.
+   */
+  async recordPasswordLogin(userId: string): Promise<void> {
+    await this.state.transact(async (unit) => {
+      const principalId = await this.findPrincipal(unit, userId);
+      await unit.audit.append({
+        id: `aud_${randomUUID()}`,
+        installationId: this.installationId,
+        occurredAt: new Date().toISOString(),
+        kind: "mutation",
+        actorId: principalId ?? "unresolved",
+        actor: principalId === undefined ? { unresolved: true } : { principalId },
+        action: "authentication.login",
+        resource: { kind: "installation", id: this.installationId },
+        outcome: "success",
+        details: { userId },
+      });
     });
   }
 

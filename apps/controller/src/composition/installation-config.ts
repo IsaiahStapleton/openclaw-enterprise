@@ -25,10 +25,11 @@ import type {
 import { NativeIAMDriver, type NativeIAMStateStore } from "@openclaw-enterprise/iam";
 import {
   validateBackendDefinitions,
+  type NativeWorkerSupport,
   type OpenClawController,
   type PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { Check } from "typebox/value";
+import { Check, Errors } from "typebox/value";
 import { validatePresetTemplate } from "@openclaw-enterprise/contracts";
 import {
   KubernetesComputeDriver,
@@ -77,6 +78,8 @@ export interface InstallationStartupConfiguration {
   readonly logging: LoggingConfiguration;
   readonly presets?: { readonly includeDefaults: boolean; readonly files?: readonly string[] };
   readonly observability?: { readonly url: string };
+  /** Declares a runtime image built with native worker support; see configuration reference. */
+  readonly runtime?: { readonly nativeWorkerSupport: NativeWorkerSupport };
   readonly backend: readonly BackendDefinition[];
   readonly drivers: {
     readonly configuration: SelectedDriverConfiguration;
@@ -193,7 +196,7 @@ async function startupConfiguration(
   }
   closed(
     configuration,
-    ["occ", "drivers", "backend", "logging", "presets", "observability"],
+    ["occ", "drivers", "backend", "logging", "presets", "observability", "runtime"],
     "Installation startup configuration",
   );
   return { configuration, path };
@@ -268,6 +271,20 @@ function nonempty(value: unknown, path: string): string {
     throw new Error(`${path} must be a nonempty string.`);
   }
   return value;
+}
+
+function runtimeConfiguration(
+  value: unknown,
+): { readonly nativeWorkerSupport: NativeWorkerSupport } | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const configuration = object(value, "runtime");
+  closed(configuration, ["nativeWorkerSupport"], "runtime");
+  if (configuration.nativeWorkerSupport !== "custom-image") {
+    throw new Error('runtime.nativeWorkerSupport must be "custom-image" when set.');
+  }
+  return Object.freeze({ nativeWorkerSupport: "custom-image" });
 }
 
 function observabilityConfiguration(value: unknown): { readonly url: string } | undefined {
@@ -599,7 +616,9 @@ function selected(
     // An unsupported schema must fail closed instead of skipping validation.
   }
   if (!validSchema) {
-    throw new Error(`${path}.configuration does not match its Driver configuration schema.`);
+    throw new Error(
+      `${path}.configuration does not match its Driver configuration schema${schemaMismatch(schema, configuration)}.`,
+    );
   }
   driver.validateConfiguration(configuration);
   return Object.freeze({
@@ -610,6 +629,19 @@ function selected(
       : {}),
     configuration,
   });
+}
+
+// Names the first mismatched field and the expected shape, never the value,
+// which may be a credential reference.
+function schemaMismatch(schema: Record<string, unknown>, configuration: unknown): string {
+  try {
+    for (const error of Errors(schema, configuration)) {
+      return ` at ${error.instancePath || "/"}: ${error.message}`;
+    }
+  } catch {
+    // The generic message still fails closed.
+  }
+  return "";
 }
 
 export async function loadInstallationConfiguration(options: {
@@ -706,6 +738,7 @@ export async function loadInstallationConfiguration(options: {
   closed(occ, ["cluster"], "occ");
   const cluster = nonempty(occ.cluster, "occ.cluster");
   const observability = observabilityConfiguration(configuration.observability);
+  const runtime = runtimeConfiguration(configuration.runtime);
   const drivers = object(configuration.drivers, "drivers");
   closed(
     drivers,
@@ -935,6 +968,7 @@ export async function loadInstallationConfiguration(options: {
     presets: Object.freeze({ includeDefaults }),
     logging,
     ...(observability === undefined ? {} : { observability }),
+    ...(runtime === undefined ? {} : { runtime }),
     backend: backends,
     drivers: Object.freeze({
       configuration: configured,

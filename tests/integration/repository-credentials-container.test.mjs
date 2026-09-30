@@ -18,7 +18,8 @@ test("emitted service and client artifacts qualify the same-session thirteen-hou
   ) {
     return;
   }
-  await qualifyLongSession(t);
+  await t.test("git-full", (scenario) => qualifyLongSession(scenario, { profile: "git-full" }));
+  await t.test("git-write", (scenario) => qualifyLongSession(scenario, { profile: "git-write" }));
 });
 
 // Each host case launches its own selected artifact workflow or inspects host mounts.

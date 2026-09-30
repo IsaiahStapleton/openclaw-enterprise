@@ -66,7 +66,11 @@ jobs:
       matrix:
         include:
           - lane: checks-baseline
-            title: Checks, Conformance, Browser
+            title: Checks and Conformance
+            profile: baseline
+            timeout: 25
+          - lane: checks-browser
+            title: Console Browser
             profile: baseline
             timeout: 25
           - lane: postgres
@@ -77,10 +81,18 @@ jobs:
             title: PostgreSQL Application
             profile: postgres
             timeout: 25
+          - lane: postgres-auth
+            title: PostgreSQL Authentication
+            profile: postgres
+            timeout: 25
           - lane: images-packaging
             title: Images and Packaging
             profile: full
             timeout: 45
+          - lane: images-model-probes
+            title: Image Model Probes
+            profile: images
+            timeout: 25
           - lane: k3d-fixture-configuration
             title: k3d Fixture and Configuration
             profile: k3d
@@ -448,7 +460,7 @@ jobs:
           const out = { preflight: needs.preflight };
           if (lane === "all") {
             out["runtime-image-fixture"] = needs["runtime-image-fixture"] ?? { result: "missing" };
-            for (const name of ["checks-baseline", "postgres", "postgres-application", "images-packaging", "k3d-fixture-configuration", "k3d-fixture-state", "k3d-fixture-plugins", "k3d-observability", "k3d-observability-demo", "logging-collector", "repository-credentials-container", "repository-credentials-platform"]) {
+            for (const name of ["checks-baseline", "checks-browser", "postgres", "postgres-application", "postgres-auth", "images-packaging", "images-model-probes", "k3d-fixture-configuration", "k3d-fixture-state", "k3d-fixture-plugins", "k3d-observability", "k3d-observability-demo", "logging-collector", "repository-credentials-container", "repository-credentials-platform"]) {
               out[name] = { result: needs["pr-safe-same-sha"]?.result ?? "missing" };
             }
           } else if (lane === "logging-collector") {

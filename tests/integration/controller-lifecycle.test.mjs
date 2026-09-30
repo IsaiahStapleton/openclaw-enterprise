@@ -8,16 +8,19 @@ import {
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
+  NativeWorkerSupportError,
   OpenClawController,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { requestFailure } from "../../apps/controller/src/http/errors.ts";
 
 const installation = {
   id: "installation-a",
@@ -163,9 +166,10 @@ function createSandboxDriver(options = {}) {
   };
 }
 
-function createController(iam = createIAMDriver()) {
+function createController(iam = createIAMDriver(), options = {}) {
   let nextIdentifier = 0;
   const controller = new OpenClawController(installation, {
+    ...options,
     now: () => new Date("2026-08-15T00:00:00.000Z"),
     createId: (kind) =>
       kind === "configuration"
@@ -906,13 +910,22 @@ for (const facets of [["networking"], ["filesystem"], ["process"], ["networking"
   });
 }
 
-test("dedicated native OpenClaw requires a full-facet provisioning Sandbox", async () => {
-  for (const [name, sandbox, admitted] of [
-    ["missing", undefined, false],
-    ["partial", createSandboxDriver({ facets: ["networking", "filesystem"] }), false],
-    ["complete", createSandboxDriver(), true],
+test("dedicated native OpenClaw requires native worker support and a full-facet provisioning Sandbox", async () => {
+  for (const [name, sandbox, nativeWorkerSupport, refusal] of [
+    ["pinned runtime", createSandboxDriver(), undefined, NativeWorkerSupportError],
+    ["missing", undefined, "custom-image", DependencyUnavailableError],
+    [
+      "partial",
+      createSandboxDriver({ facets: ["networking", "filesystem"] }),
+      "custom-image",
+      DependencyUnavailableError,
+    ],
+    ["complete", createSandboxDriver(), "custom-image", undefined],
   ]) {
-    const { controller } = createController();
+    const { controller } = createController(
+      undefined,
+      nativeWorkerSupport === undefined ? {} : { nativeWorkerSupport },
+    );
     if (sandbox !== undefined) {
       controller.registerDriver(sandbox);
       controller.selectDriver("sandbox", sandbox.id);
@@ -942,18 +955,121 @@ test("dedicated native OpenClaw requires a full-facet provisioning Sandbox", asy
       { namespaceId: namespace.id, agentId: agent.id },
       resolveApprovedDevelopmentHarness,
     );
-    if (admitted) {
+    if (refusal === undefined) {
       const revision = await deployment;
       assert.equal(revision.harness.id, "openclaw");
       assert.equal(revision.sandboxDriverId, sandbox.id);
     } else {
-      await assert.rejects(deployment, DependencyUnavailableError);
+      await assert.rejects(deployment, refusal, name);
       assert.deepEqual(
         await controller.transact((state) => state.revisions.listRevisions(namespace.id, agent.id)),
         [],
       );
     }
   }
+});
+
+async function createDedicatedNativeAgentWithUngrantedSecret(controller, name) {
+  const namespace = await controller.createNamespace("principal-admin", { name });
+  await controller.handleNamespaceLifecycle("principal-admin", namespace.id, "ready");
+  const configuration = await createConfiguration(controller, namespace.id, {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5",
+        models: { "openai/gpt-5": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+  });
+  const agent = await controller.createAgent("principal-admin", {
+    namespaceId: namespace.id,
+    name,
+    configurationId: configuration.id,
+    executionMode: "dedicated",
+  });
+  // Bind a Harness Secret without granting the Agent service principal operate on it.
+  const secret = await controller.createSecret("principal-admin", {
+    namespaceId: namespace.id,
+    name: `harness-key-${agent.id}`,
+    value: "synthetic-lifecycle-key",
+  });
+  await controller.updateAgent("principal-admin", {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: agent.configurationId,
+    harnessAuth: { method: "api_key", source: secret.ref },
+  });
+  return { namespace, agent, secret };
+}
+
+test("dedicated native OpenClaw reports missing native worker support before Agent principal grants", async () => {
+  const { controller } = createController();
+  const sandbox = createSandboxDriver();
+  controller.registerDriver(sandbox);
+  controller.selectDriver("sandbox", sandbox.id);
+  const { namespace, agent } = await createDedicatedNativeAgentWithUngrantedSecret(
+    controller,
+    "Unsupported native before grants",
+  );
+
+  // Granting the Agent principal would not make this deployable, so the capability refusal wins.
+  await assert.rejects(
+    controller.deployAgent(
+      "principal-admin",
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    NativeWorkerSupportError,
+  );
+  assert.deepEqual(
+    await controller.transact((state) => state.revisions.listRevisions(namespace.id, agent.id)),
+    [],
+  );
+});
+
+test("deploy names the Agent service principal and the permission it lacks", async () => {
+  const { controller } = createController(undefined, { nativeWorkerSupport: "custom-image" });
+  const sandbox = createSandboxDriver();
+  controller.registerDriver(sandbox);
+  controller.selectDriver("sandbox", sandbox.id);
+  const { namespace, agent, secret } = await createDedicatedNativeAgentWithUngrantedSecret(
+    controller,
+    "Ungranted Agent principal",
+  );
+
+  let refusal;
+  await assert.rejects(
+    controller.deployAgent(
+      "principal-admin",
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    (error) => {
+      refusal = error;
+      return error instanceof AgentPrincipalAuthorizationError;
+    },
+  );
+  assert.ok(refusal instanceof AuthorizationDeniedError);
+  assert.equal(refusal.principalId, agent.servicePrincipalId);
+  assert.deepEqual(refusal.authorization, {
+    action: "operate",
+    resource: { kind: "secret", id: secret.id, namespaceId: namespace.id },
+  });
+  const failure = requestFailure(refusal);
+  assert.equal(failure.status, 403);
+  assert.equal(failure.code, "FORBIDDEN");
+  assert.match(failure.message, new RegExp(agent.servicePrincipalId));
+  assert.match(failure.message, /operate/);
+  assert.match(failure.message, new RegExp(`secret ${secret.id}`));
+
+  // Caller denials keep the generic message so they do not disclose resource details.
+  assert.equal(
+    requestFailure(new AuthorizationDeniedError("denied")).message,
+    "The exact platform operation was not authorized.",
+  );
+  assert.deepEqual(
+    await controller.transact((state) => state.revisions.listRevisions(namespace.id, agent.id)),
+    [],
+  );
 });
 
 test("selected Sandbox Drivers fail closed for embedded Agents regardless of declared facets", async () => {

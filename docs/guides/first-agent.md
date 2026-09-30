@@ -15,10 +15,12 @@ after the command exits.
 - Have an OpenAI API key that can use [`gpt-6-astra`](https://developers.openai.com/api/docs/models/gpt-6-astra), the default model. To use a
   different model available to your project, set `OPENCLAW_FIRST_AGENT_MODEL`
   to its plain ID, without `openai/`.
-- Keep the key out of commands, Configuration JSON, and chat. The interactive
-  command prompts for it without echoing it. For automation, set
-  `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
-  `OPENAI_API_KEY` through your environment's secret manager.
+- Keep the key out of commands, Configuration JSON, and chat. For automation,
+  set `OPENAI_API_KEY_FILE` to a private file containing the key, or supply
+  `OPENAI_API_KEY` through your environment's secret manager; setting both
+  fails. The command prompts for the key without echoing it only when neither
+  is set. An exported key is used as is, so clear a stale one with
+  `env -u OPENAI_API_KEY` to be prompted instead.
 
 The walkthrough runs from the repository root on your own development
 installation. If you followed [Kubernetes Setup](kubernetes-setup.md) on an
@@ -69,8 +71,8 @@ separate console-managed Agent; see [Agent Configuration](../reference/configura
 Keep the command running until it prints `Model response verified:` followed by
 the phrase it asked the model to repeat. Under `Agent response:`, it then prints
 the model's answer to your question. It also prints the Agent ID, active
-revision, and console URL. A deployment being accepted or a revision showing
-as active does not establish that the model responded; the returned answer does.
+revision, and console URL. These returned responses complete the model check; see
+[what each check establishes](operate/model-verification.md#what-each-check-establishes).
 
 <span id="4-check-what-actually-deployed"></span>
 <span id="4.-check-what-actually-deployed"></span>
@@ -80,10 +82,9 @@ as active does not establish that the model responded; the returned answer does.
 Open the console link from the command and sign in with the local credentials
 from [Local setup](quickstart.md#open-the-platform-console). **Current version**
 shows the revision selected by OCC; **Deployment activity** shows persisted
-deployment progress. The console has no browser chat or live health view; use the
-model response printed by the command as verification. Local setup configures private routing; follow the
-[workspace routing guide](deploy/workspace-routing.md) to verify browser access
-to the Agent’s files separately.
+deployment progress. Use the terminal command for further model prompts. For
+browser access to the Agent's files, follow
+[workspace verification](deploy/workspace-routing.md#verify-routing-and-file-access).
 
 The Agent remains available after the command exits. Run the same command with
 the same Agent name and a different `--prompt` to ask another question; you do

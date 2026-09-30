@@ -356,6 +356,17 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     element("option", { value: "openclaw" }, "OpenClaw"),
   );
   const harnessHint = element("p", { id: "agent-harness-hint", className: "hint" });
+  const nativeHarnessWarning = element(
+    "p",
+    { className: "notice", role: "status", hidden: true },
+    "Experimental: Dedicated OpenClaw requires a runtime build with native worker-inference support. Released OpenClaw images may not include it yet.",
+  );
+  // Admission refuses dedicated OpenClaw unless the Installation reports native worker support.
+  const nativeWorkersUnavailable = element(
+    "p",
+    { className: "error", role: "alert", hidden: true },
+    "Dedicated OpenClaw is unavailable: this installation's OpenClaw runtime lacks native worker support. Choose Embedded execution or the Codex harness.",
+  );
   const configuration = element("textarea", {
     id: "configuration-json",
     name: "configuration",
@@ -504,6 +515,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     field("Provider", nativeProvider),
     field("Harness", harness),
     harnessHint,
+    nativeHarnessWarning,
+    nativeWorkersUnavailable,
     binding
       ? element("p", {}, `Preset authentication: ${harnessAuthDescription(binding)}`)
       : authMethodField,
@@ -532,7 +545,15 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   } else if (nativeProvider.value === "anthropic" || binding?.method === "runtime") {
     mode.value = "embedded";
   }
-  harness.value = mode.value === "dedicated" ? "codex" : "openclaw";
+  // A Preset or draft keeps its own harness; execution mode only chooses the default.
+  const configuredHarness =
+    rendered.configuration?.values?.agents?.defaults?.models?.[initialModel]?.agentRuntime?.id;
+  // Service account tokens authenticate Codex only.
+  harness.value =
+    mode.value === "dedicated" &&
+    (authMethod.value === "codex_pat" || configuredHarness !== "openclaw")
+      ? "codex"
+      : "openclaw";
   const currentTemplate = () =>
     JSON.stringify(
       configurationTemplate(harness.value, nativeProvider.value, model.value.trim()),
@@ -835,6 +856,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   let capabilityDiscoveryDone = false;
   let capabilityDiscoveryFailed = false;
   const provisionableExecutionModes = new Set();
+  let nativeWorkersAvailable = false;
   const provisioningRequestId = createClientRequestId();
   let provisioningAttempt = null;
   const capabilityStatus = element(
@@ -949,6 +971,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     submit,
   );
   const channelEditor = element("div", { className: "create-channels" });
+  // The collapsed Runtime details still name the selected execution mode.
+  const runtimeModeSummary = element("span", { className: "muted" });
   let repositories;
   const form = element(
     "form",
@@ -960,7 +984,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     element(
       "details",
       { className: "launch-runtime" },
-      element("summary", {}, "Runtime details"),
+      element("summary", {}, "Runtime details", runtimeModeSummary),
       field(
         "Execution mode",
         mode,
@@ -976,7 +1000,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         feedback.textContent = "";
         updateControls();
       },
-      draft.repositoryBindings,
+      { ...agent, ...(draft.repositoryAccess ? { repositoryAccess: draft.repositoryAccess } : {}) },
     )).section,
     pluginFields.section,
     element(
@@ -1057,7 +1081,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     stagedChannelSecrets,
     modelCredentialSource,
     modelCredentialSecret,
-    repositoryBindings: repositories.draftBindings(),
+    repositoryAccess: repositories.access(),
   }));
   function parseObject(input, reportInvalid = false) {
     try {
@@ -1198,6 +1222,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   const updateControls = () => {
     const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     for (const node of form.querySelectorAll("button, input, select, textarea")) {
+      if (repositories?.section.contains(node)) {
+        continue;
+      }
       node.disabled =
         pending || Boolean(savedAgent) || Boolean(provisioningAttempt) || outcomeUnknown;
     }
@@ -1230,13 +1257,38 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       binding?.method === "runtime";
     harness.disabled ||=
       binding?.method === "runtime" || (usesPat && Boolean(binding || savedSecret));
+    const nativeRefused =
+      capabilityDiscoveryDone && !nativeWorkersAvailable && harness.value === "openclaw";
+    mode.querySelector('[value="dedicated"]').disabled = nativeRefused;
+    nativeWorkersUnavailable.hidden = !nativeRefused || mode.value !== "dedicated";
+    runtimeModeSummary.textContent = ` · ${mode.value === "dedicated" ? "Dedicated" : "Embedded"}`;
+    const modeHint = form.querySelector("#execution-mode-hint");
+    if (modeHint) {
+      modeHint.textContent = nativeRefused
+        ? "Codex uses Dedicated execution. Dedicated OpenClaw is unavailable because this installation's OpenClaw runtime lacks native worker support, so OpenClaw uses Embedded execution. Slack requires Codex."
+        : "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Codex.";
+    }
+    if (capabilityDiscoveryDone) {
+      const nextStatus = shouldProvision()
+        ? "Dedicated Agents are provisioned and deployed when created."
+        : mode.value === "embedded"
+          ? "Embedded Agents are saved as drafts. Deploy them from the Agent page after creation."
+          : "This installation creates draft Agents for later deployment.";
+      if (capabilityStatus.textContent !== nextStatus) {
+        capabilityStatus.textContent = nextStatus;
+      }
+    }
+    nativeHarnessWarning.hidden =
+      harness.value !== "openclaw" || mode.value !== "dedicated" || nativeRefused;
     const codexOption = harness.querySelector('[value="codex"]');
     codexOption.hidden = nativeProvider.value === "anthropic";
     codexOption.disabled = nativeProvider.value === "anthropic";
     harnessHint.textContent =
       harness.disabled && usesPat
         ? "This saved service account token requires Codex. Create a new draft without a Preset to use OpenClaw with an API key."
-        : "OpenClaw is available for both providers. With OpenAI it supports Dedicated or Embedded execution; Anthropic uses Embedded OpenClaw.";
+        : nativeRefused
+          ? "OpenClaw is available for both providers. This installation runs OpenClaw with Embedded execution only; choose Codex for Dedicated execution."
+          : "OpenClaw is available for both providers. With OpenAI it supports Dedicated or Embedded execution; Anthropic uses Embedded OpenClaw.";
     if (binding?.method === "runtime") {
       harnessHint.textContent =
         "This Preset's operator-managed credentials require the OpenClaw harness.";
@@ -1329,6 +1381,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       pending ||
       outcomeUnknown ||
       !capabilityDiscoveryDone ||
+      !nativeWorkersUnavailable.hidden ||
       Boolean(provisioningAttempt);
     retryProvisioning.hidden = !provisioningAttempt;
     retryProvisioning.disabled = pending || !provisioningAttempt;
@@ -1371,15 +1424,13 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       if (!defaultApprovers.hidden) {
         defaultApprovers.refreshNames();
       }
+      nativeWorkersAvailable = installation.capabilities?.nativeWorkers !== undefined;
       provisionableExecutionModes.clear();
       for (const executionMode of installation.capabilities?.agentProvisioning?.executionModes ??
         []) {
         provisionableExecutionModes.add(executionMode);
       }
       capabilityDiscoveryDone = true;
-      capabilityStatus.textContent = provisionableExecutionModes.has("dedicated")
-        ? "Dedicated Agents are provisioned and deployed when created."
-        : "This installation creates draft Agents for later deployment.";
     } catch (error) {
       if (!context.isCurrent()) {
         return;
@@ -1415,6 +1466,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         return;
       }
       provisioningAttempt = null;
+      repositories.recordSuccessfulSave();
       context.navigate(`agents/${agentId}?revision=${revisionId}&tab=configuration`);
     } catch (error) {
       if (!context.isCurrent()) {
@@ -1535,7 +1587,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         workspaceInputs.map(([filename, input]) => [filename, input.value]),
       ),
       workspaceDefaultsId: WORKSPACE_DEFAULTS_ID,
-      ...(repositoryBindings.length ? { repositoryBindings } : {}),
+      repositoryAccess: repositories.access(),
       ...(Object.keys(desiredPlugins).length ? { plugins: desiredPlugins } : {}),
       ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
       ...(agent.backendId ? { backendId: agent.backendId } : {}),
@@ -1603,6 +1655,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
           method: "POST",
           body: { ...body, configurationId: savedConfiguration.id },
         });
+        repositories.recordSuccessfulSave();
         if (!context.isCurrent()) {
           return;
         }

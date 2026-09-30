@@ -429,6 +429,12 @@ process.exit(86);
 async function prepareLifecycleCommands(fixture, scenario = "success", options = {}) {
   const engine = options.engine ?? "docker";
   const bin = join(fixture.directory, "bin");
+  // Isolate the launcher contract; real sandbox enforcement is covered by the
+  // real-cluster lifecycle suite, not this external-command fixture.
+  await writeFile(
+    join(fixture.fixtureRepository, "scripts", "prepare-development-codex-seccomp.mjs"),
+    'process.stdout.write(JSON.stringify({ mode: "RuntimeDefault", profileName: "" }));\n',
+  );
   await rename(join(bin, engine), join(bin, `${engine}-config`));
   fixture.env.SAFETY_LOG = join(fixture.directory, "lifecycle.log");
   fixture.env.DEV_UP_RESOURCE_STATE = join(fixture.directory, "resources.json");
@@ -495,6 +501,9 @@ if (command === engine) {
   else if (args[0] === "context" && args[1] === "inspect") output(JSON.stringify([{ Endpoints: { docker: { Host: "unix:///fixture/owned-docker.sock" } } }]));
   else if (args[0] === "info" && args.includes("{{.Host.RemoteSocket.Path}}")) output("/fixture/owned-podman.sock");
   else if (args[0] === "info") output("/var/lib/docker");
+  else if (args[0] === "network" && args[1] === "inspect" && args[2] === "k3d-occ-dev-owned") {
+    output(JSON.stringify([{ Name: "k3d-occ-dev-owned", IPAM: { Config: [{ Subnet: "fd00:42::/64" }, { Subnet: "172.30.42.0/24", Gateway: "172.30.42.1" }] } }]));
+  }
   else if (args[0] === "network" && args[1] === "inspect") {
     if (!state.compose) process.exit(1);
     output(JSON.stringify([{ IPAM: { Config: [{ Subnet: "172.30.41.0/24" }] } }]));
@@ -555,9 +564,9 @@ if (command === engine) {
   else if (args[0] === "-n" && args.includes("delete")) {}
   else if (args[0] === "-n" && args.includes("exec")) output(JSON.stringify({ data: { id: "key_fixture", key: ${JSON.stringify(serviceKey)} }, meta: { installationId: ${JSON.stringify(matchingInstallationId)} } }));
   else if (args[0] === "-n" && args.includes("pod") && args.includes("bootstrap-password-prepare")) output("Succeeded");
-  else if (args[0] === "-n" && args.includes("pod") && args.includes("postgres")) output("10.42.0.20");
+  else if (args[0] === "-n" && args.includes("pod") && args.includes("postgres-0")) output("10.42.0.20");
   else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes") && args.includes("jsonpath={.subsets[0].ports[0].port}")) output("6443");
-  else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes")) output("10.43.0.1");
+  else if (args[0] === "-n" && args.includes("endpoints") && args.includes("kubernetes")) output("172.30.42.3");
   else if (args[0] === "get" && args[1] === "service" && args[2] === "kubernetes") output(JSON.stringify({ spec: { clusterIP: "10.43.0.1" } }));
   else if (args[0] === "get" && args[1] === "endpoints" && args[2] === "kubernetes") output(JSON.stringify({ subsets: [{ addresses: [{ ip: "172.30.41.4" }] }] }));
   else if (args[0] === "get" && args[1] === "namespaces") output(JSON.stringify({ items: [{ metadata: { name: "oce-123456789012345", labels: { "openclaw.dev/namespace": "namespace_fixture" }, annotations: { "openclaw.dev/namespace-id": "namespace_fixture" } } }] }));

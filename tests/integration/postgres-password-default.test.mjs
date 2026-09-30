@@ -45,7 +45,12 @@ test(
 
     const providers = await app.inject({ url: "/api/auth/providers" });
     assert.equal(providers.statusCode, 200);
-    assert.deepEqual(providers.json().data, { github: false, sessionBinding: false });
+    assert.deepEqual(providers.json().data, {
+      github: false,
+      google: false,
+      password: true,
+      sessionBinding: false,
+    });
 
     const signIn = (email, password, remoteAddress) =>
       passwordSignIn(app, origin, { email, password }, remoteAddress);
@@ -128,7 +133,100 @@ test(
       assert.equal(await sessionOf(cookie), null);
     });
 
-    await t.test("GitHub routes refuse without contacting a provider", async () => {
+    await t.test("password sign-ins are audited, and a failure names no account", async (t) => {
+      // The audit record replaces the library's unstructured console warning.
+      const warn = t.mock.method(console, "warn", () => {});
+      const state = new PostgresPlatformState(pool);
+      const logins = async () =>
+        (await state.transact((unit) => unit.audit.list())).filter(
+          ({ action }) => action === "authentication.login",
+        );
+      const before = (await logins()).length;
+      const accepted = await signIn(memberEmail, memberPassword);
+      assert.equal(accepted.statusCode, 200, accepted.body);
+      const refused = await signIn(memberEmail, "wrong-member-password");
+      assert.equal(refused.statusCode, 401, refused.body);
+      const unknown = await signIn("nobody@example.test", "wrong-member-password");
+      assert.equal(unknown.statusCode, 401, unknown.body);
+      const recorded = (await logins()).slice(before);
+      const installation = await state.loadInstallation();
+      const principal = (await state.loadNativeIAMState(installation.id)).identities.find(
+        (identity) => identity.kind === "principal" && identity.subject === member.id,
+      );
+      assert.ok(principal);
+      assert.deepEqual(
+        recorded.map(({ kind, actorId, outcome, reasonCode, details }) => ({
+          kind,
+          actorId,
+          outcome,
+          reasonCode,
+          details,
+        })),
+        [
+          {
+            kind: "mutation",
+            actorId: principal.id,
+            outcome: "success",
+            reasonCode: undefined,
+            details: { userId: member.id },
+          },
+          ...Array(2).fill({
+            kind: "authorization_denial",
+            actorId: "unresolved",
+            outcome: "denied",
+            reasonCode: "INVALID_CREDENTIALS",
+            details: undefined,
+          }),
+        ],
+      );
+      // Neither the attempted email nor the password reaches the audit record.
+      const stored = JSON.stringify(recorded);
+      assert.ok(!stored.includes("nobody@example.test"));
+      assert.ok(!stored.includes("wrong-member-password"));
+      assert.deepEqual(
+        warn.mock.calls.filter(({ arguments: [message] }) =>
+          String(message).includes("[Better Auth]"),
+        ),
+        [],
+      );
+    });
+
+    await t.test(
+      "account controls refuse with a specific conflict, not a dependency failure",
+      async () => {
+        const admin = await signIn(adminEmail, adminPassword);
+        const headers = { cookie: cookieHeaderFromSetCookie(admin.headers["set-cookie"]), origin };
+        const memberSession = cookieHeaderFromSetCookie(
+          (await signIn(memberEmail, memberPassword)).headers["set-cookie"],
+        );
+        const requests = [
+          { method: "GET", url: `/api/auth/accounts/${member.id}` },
+          ...["disable", "enable", "revoke"].map((operation) => ({
+            method: "POST",
+            url: `/api/auth/accounts/${member.id}/${operation}`,
+            payload: { expectedVersion: 1 },
+          })),
+          { method: "POST", url: `/api/auth/accounts/${member.id}/enrol` },
+          { method: "GET", url: "/api/auth/recovery" },
+          {
+            method: "POST",
+            url: "/api/auth/recovery",
+            payload: { userId: member.id, expectedCurrentUserId: member.id, expectedVersion: 1 },
+          },
+        ];
+        for (const request of requests) {
+          const response = await app.inject({ ...request, headers });
+          assert.equal(response.statusCode, 409, `${request.url}: ${response.body}`);
+          assert.equal(response.json().error.code, "RESOURCE_CONFLICT");
+          assert.match(response.json().error.message, /password-only/);
+          const untrusted = await app.inject({ ...request, headers: { cookie: headers.cookie } });
+          assert.equal(untrusted.statusCode, 403, "the Origin check still precedes the profile");
+        }
+        assert.equal((await sessionOf(memberSession)).user.id, member.id, "nothing was revoked");
+      },
+    );
+
+    await t.test("GitHub and Google routes refuse without contacting a provider", async () => {
       let providerCalls = 0;
       const originalFetch = globalThis.fetch;
       t.mock.method(globalThis, "fetch", (input, init) => {
@@ -137,26 +235,28 @@ test(
       });
       const admin = await signIn(adminEmail, adminPassword);
       const cookie = cookieHeaderFromSetCookie(admin.headers["set-cookie"]);
-      const start = await app.inject({
-        method: "POST",
-        url: "/api/auth/providers/github/start",
-        headers: { origin },
-      });
-      assert.equal(start.statusCode, 403, start.body);
-      assert.equal(start.headers["set-cookie"], undefined);
-      const callback = await app.inject({
-        url: "/api/auth/providers/github/callback?state=unconfigured&code=unconfigured",
-      });
-      assert.equal(callback.statusCode, 302);
-      assert.equal(callback.headers.location, "/console/?authError=github");
-      assert.equal(callback.headers["set-cookie"], undefined);
-      const result = await app.inject({
-        method: "POST",
-        url: "/api/auth/providers/github/result",
-        headers: { cookie, origin },
-        payload: { attemptId: "A".repeat(43) },
-      });
-      assert.equal(result.statusCode, 403, result.body);
+      for (const provider of ["github", "google"]) {
+        const start = await app.inject({
+          method: "POST",
+          url: `/api/auth/providers/${provider}/start`,
+          headers: { origin },
+        });
+        assert.equal(start.statusCode, 403, start.body);
+        assert.equal(start.headers["set-cookie"], undefined);
+        const callback = await app.inject({
+          url: `/api/auth/providers/${provider}/callback?state=unconfigured&code=unconfigured`,
+        });
+        assert.equal(callback.statusCode, 302);
+        assert.equal(callback.headers.location, `/console/?authError=${provider}`);
+        assert.equal(callback.headers["set-cookie"], undefined);
+        const result = await app.inject({
+          method: "POST",
+          url: `/api/auth/providers/${provider}/result`,
+          headers: { cookie, origin },
+          payload: { attemptId: "A".repeat(43) },
+        });
+        assert.equal(result.statusCode, 403, result.body);
+      }
       assert.equal(providerCalls, 0);
       assert.equal(
         (await pool.query("SELECT count(*)::int AS count FROM occ.human_authentication_recovery"))
@@ -180,8 +280,9 @@ test(
         401,
         "a wrong administrator password is refused",
       );
-      // The password-only profile has no sign-in rate limit (a known gap tracked for after
-      // launch); what it must never do is lock the only administrator out.
+      // These failures stay under the password-only profile's limits
+      // (postgres-password-sign-in-limit.test.mjs); what it must never do is lock the only
+      // administrator out.
       const admin = await signIn(adminEmail, adminPassword, guesser);
       assert.equal(admin.statusCode, 200, admin.body);
       const other = await signIn(adminEmail, adminPassword, "203.0.113.20");

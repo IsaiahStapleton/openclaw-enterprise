@@ -15,6 +15,15 @@ var clusterName = regexp.MustCompile(`^occ-dev-[a-z0-9][a-z0-9-]*$`)
 var projectName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 var namespaceName = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`)
 
+// validateClusterName names the rejected OCC_DEVELOPMENT_KUBERNETES_CLUSTER
+// value and the rule it broke, so an operator can pick a valid name.
+func validateClusterName(name string) error {
+	if clusterName.MatchString(name) && len(name) <= 63 {
+		return nil
+	}
+	return fmt.Errorf("invalid OCC_DEVELOPMENT_KUBERNETES_CLUSTER %q: the name must start with occ-dev-, use only lowercase letters, digits, and hyphens (%s), and be at most 63 characters", name, clusterName)
+}
+
 type developmentState struct {
 	Version           int    `json:"version"`
 	Repository        string `json:"repository"`

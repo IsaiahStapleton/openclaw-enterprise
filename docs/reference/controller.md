@@ -172,6 +172,10 @@ worker does not expose an HTTP health endpoint.
   the same absolute, readable file for API and worker. Remove unknown Driver
   fields and plaintext credentials; verify all selected Driver
   implementations and exact Kubernetes access.
+- **`KUBERNETES_API_UNAVAILABLE` at startup:** The Compute preflight got no
+  answer from the Kubernetes API server in the event's `host` and `port`.
+  Confirm the API and worker egress policy still allows that address (Helm
+  `cluster.cidrs`) and that the server is running.
 - **Configuration operations fail:** Verify exact Namespace or Configuration
   authorization, tenant-local ConfigMap CRUD, and a native JSON configuration
   document;
@@ -199,4 +203,4 @@ worker does not expose an HTTP health endpoint.
 - [Namespace Configuration and Kubernetes ConfigMaps](configuration.md)
 - [Kubernetes Compute Driver and local-cluster verification](drivers/kubernetes-compute.md)
 - [Identity and access management](authorization.md)
-- [Implementation architecture](../ARCHITECTURE.md)
+- [Platform architecture](../design.md)

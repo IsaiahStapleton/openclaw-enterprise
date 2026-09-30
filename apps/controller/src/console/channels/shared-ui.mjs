@@ -216,9 +216,10 @@ function renderCard(section, state, provider) {
     );
   } else if (disabledByMode) {
     card.append(
+      // Informational: Embedded Agents simply do not offer channels; nothing is wrong yet.
       element(
         "p",
-        { className: "error" },
+        { className: "hint" },
         "Channels require Dedicated execution. Embedded Agents can only keep channels disabled.",
       ),
     );
@@ -248,6 +249,7 @@ async function save(state, values, dialog, targetError, secretBindingUpdate) {
     return;
   }
   state.pending = true;
+  state.onStateChange({ pending: true, outcomeUnknown: false });
   const controlsRoot = dialog ?? state.section;
   const errorNode = targetError ?? state.error;
   errorNode.replaceChildren();
@@ -281,6 +283,7 @@ async function save(state, values, dialog, targetError, secretBindingUpdate) {
     }
   } finally {
     state.pending = false;
+    state.onStateChange({ pending: false, outcomeUnknown: state.outcomeUnknown });
     if (succeeded || !dialog || state.outcomeUnknown) {
       state.rerender();
     } else {
@@ -445,7 +448,16 @@ function openDrawer(section, state, provider, retained) {
 }
 
 export function renderChannelSection(
-  { values, executionMode, readOnly, onSave, copy = {}, drawerContext = {} },
+  {
+    values,
+    executionMode,
+    readOnly,
+    onSave,
+    onStateChange = () => {},
+    onReload,
+    copy = {},
+    drawerContext = {},
+  },
   providers,
 ) {
   const section = element("section", { className: "channels-section" });
@@ -454,6 +466,8 @@ export function renderChannelSection(
     executionMode,
     readOnly,
     onSave,
+    onStateChange,
+    onReload,
     section,
     copy,
     drawerContext,
@@ -483,6 +497,9 @@ export function renderChannelSection(
         ),
       ),
       state.error,
+      ...(state.outcomeUnknown && state.onReload
+        ? [element("div", { className: "form-actions" }, button("Reload draft", state.onReload))]
+        : []),
       ...providers.map((provider) => renderCard(section, state, provider)),
     );
   }

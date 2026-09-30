@@ -1,6 +1,7 @@
-import type { GitHubProfile } from "./types.ts";
+import type { GitHubTokenProfile } from "./types.ts";
 
 const profiles = Object.freeze({
+  "metadata-read": Object.freeze({ metadata: "read" }),
   "git-read": Object.freeze({
     metadata: "read",
     contents: "read",
@@ -31,7 +32,9 @@ const profiles = Object.freeze({
 // Both registry and standalone grants bind this policy, including token-bounded GraphQL.
 export const githubCapabilityPolicy = "permission-aligned-rest-token-bounded-graphql-v1";
 
-export function permissionsForProfile(profile: GitHubProfile): Readonly<Record<string, string>> {
+export function permissionsForProfile(
+  profile: GitHubTokenProfile,
+): Readonly<Record<string, string>> {
   if (typeof profile !== "string" || !Object.hasOwn(profiles, profile)) {
     throw new Error("unsupported-profile");
   }

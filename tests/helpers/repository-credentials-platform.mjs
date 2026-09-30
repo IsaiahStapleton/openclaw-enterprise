@@ -945,7 +945,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   const attempts = async (revision) =>
     (
       await pool.query(
-        "SELECT namespace_id, agent_id, revision_id, repository_ref, admission_id, session_id, phase, deadline_wall_ms, live_revision_id, cleanup_context FROM occ.repository_session_attempts WHERE revision_id=$1 ORDER BY created_at, admission_id",
+        "SELECT namespace_id, agent_id, revision_id, repository_ref, admission_id, session_id, phase, duration_seconds, deadline_wall_ms, live_revision_id, cleanup_context FROM occ.repository_session_attempts WHERE revision_id=$1 ORDER BY created_at, admission_id",
         [revision.id],
       )
     ).rows;
@@ -983,6 +983,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
       return endpoint;
     },
     startWorker,
+    armMaterialExpiry: (agentId) => worker.armMaterialExpiry(agentId),
     killWorker: async () => {
       const receipt = await worker.kill();
       worker = undefined;

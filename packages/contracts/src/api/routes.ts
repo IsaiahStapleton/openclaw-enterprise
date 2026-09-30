@@ -25,6 +25,7 @@ import {
   CredentialSourceParams,
   CreateServiceAccountBody,
   CreateServiceAccountCredentialBody,
+  AgentRuntimeLogsQuery,
   DeploymentParams,
   EmptyQuery,
   IAMAccessBindingParams,
@@ -52,6 +53,8 @@ import {
   PresetListResponse,
   AgentDeploymentStatusResponse,
   AgentDeploymentDiagnosticsResponse,
+  AgentRuntimeResponse,
+  AgentRuntimeLogsResponse,
   AgentProvisioningResponse,
   AgentProvisioningStatusResponse,
   AgentRuntimeCredentialResponse,
@@ -83,6 +86,18 @@ import {
 
 const ErrorResponseRef = Type.Ref("ErrorResponse");
 const SecretResponseRef = Type.Ref("SecretResponse");
+const RepositoryOptionsQuery = Type.Object(
+  {
+    descriptionRefs: Type.Optional(
+      Type.String({
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+        maxLength: 2579,
+        description: "Up to 20 visible repository references to enrich with provider descriptions.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 const CredentialSourceResponseRef = Type.Ref("CredentialSourceResponse");
 
 const readErrors = {
@@ -104,6 +119,13 @@ const createErrors = {
 const mutationErrors = {
   ...readErrors,
   409: ErrorResponseRef,
+} as const;
+
+const runtimeReadErrors = {
+  ...readErrors,
+  429: ErrorResponseRef,
+  501: ErrorResponseRef,
+  504: ErrorResponseRef,
 } as const;
 
 export const occApiRoutes = [
@@ -331,7 +353,7 @@ export const occApiRoutes = [
     iamAction: "delete",
     resourceKind: "namespace",
     authorizationTarget: "namespace",
-    summary: "Begin deletion of an empty Installation-owned Namespace",
+    summary: "Begin or retry deletion of an empty Installation-owned Namespace",
     tags: ["Namespaces"],
     schema: {
       querystring: EmptyQuery,
@@ -559,7 +581,7 @@ export const occApiRoutes = [
     action: "openclaw.secrets.read",
     iamAction: "read",
     resourceKind: "secret",
-    authorizationTarget: "namespace_collection",
+    authorizationTarget: "namespace_and_secret_candidates",
     summary: "List readable Namespace-owned Secret metadata without revealing material",
     tags: ["Secrets"],
     schema: {
@@ -641,7 +663,7 @@ export const occApiRoutes = [
     action: "openclaw.credential_sources.read",
     iamAction: "read",
     resourceKind: "credential_source",
-    authorizationTarget: "namespace_collection",
+    authorizationTarget: "namespace_and_credential_source_candidates",
     summary: "List readable credential sources without revealing credential values",
     tags: ["Credential sources"],
     schema: {
@@ -964,7 +986,7 @@ export const occApiRoutes = [
     summary: "List approved repository choices for Agent creation in one Namespace",
     tags: ["Agents"],
     schema: {
-      querystring: EmptyQuery,
+      querystring: RepositoryOptionsQuery,
       params: NamespaceParams,
       response: {
         200: RepositoryOptionListResponse,
@@ -974,6 +996,27 @@ export const occApiRoutes = [
           description:
             "Check `error.code`: `REPOSITORY_OPTIONS_UNAVAILABLE` means optional repository discovery is unavailable after Namespace lifecycle and Agent create authorization checks. Creation without repository bindings remains available subject to fresh authorization. `DEPENDENCY_UNAVAILABLE` includes IAM and other required dependency failures and does not permit proceeding. Successful discovery returns a data array, including an empty array when no repositories are approved.",
         }),
+      },
+    },
+  },
+  {
+    operationId: "listAgentRepositoryOptions",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/repository-options",
+    action: "openclaw.agents.repository_options.list",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "List approved repository choices for updating one Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: RepositoryOptionsQuery,
+      params: AgentParams,
+      response: {
+        200: RepositoryOptionListResponse,
+        ...readErrors,
+        409: ErrorResponseRef,
+        503: ErrorResponseRef,
       },
     },
   },
@@ -1274,6 +1317,52 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: DeploymentParams,
       response: { 200: AgentDeploymentDiagnosticsResponse, ...mutationErrors },
+    },
+  },
+  {
+    operationId: "getAgentDeploymentRuntime",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime",
+    action: "openclaw.agent_deployments.runtime.read",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_runtime",
+    summary: "Read Pod status, restarts, Events and log sources for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: EmptyQuery,
+      params: DeploymentParams,
+      response: { 200: AgentRuntimeResponse, ...runtimeReadErrors },
+    },
+  },
+  {
+    operationId: "getAgentDeploymentRuntimeLogs",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime/logs",
+    action: "openclaw.agents.runtime_logs.view",
+    iamAction: "read_logs",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_runtime_logs",
+    summary: "Read one bounded, redacted page of container output for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: AgentRuntimeLogsQuery,
+      params: DeploymentParams,
+      response: {
+        200: {
+          description: "One page of records, or a text/plain attachment when `download=true`",
+          content: {
+            "application/json": { schema: AgentRuntimeLogsResponse },
+            "text/plain": {
+              schema: Type.String({
+                description:
+                  "The same sanitized records as the JSON page, one per line, for `download=true`.",
+              }),
+            },
+          },
+        },
+        ...runtimeReadErrors,
+      },
     },
   },
 ] as const;

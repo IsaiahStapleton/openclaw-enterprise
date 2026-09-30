@@ -792,7 +792,10 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   );
   // A newly bootstrapped local installation must pass the real Compute startup
   // contract while trusting only Pod loopback, never an assumed cluster CIDR.
-  const compute = loadYaml(config).drivers.compute.configuration;
+  const installation = loadYaml(config);
+  assert.equal(installation.presets.includeDefaults, true);
+  assert.equal(installation.drivers.plugin.id, "codex-plugin");
+  const compute = installation.drivers.compute.configuration;
   KubernetesComputeDriver.validateConfiguration(compute);
   assert.deepEqual(compute.network.gatewayTrustedProxyCidrs, ["127.0.0.1/32"]);
   assert.match(config, /transportSecretPrefix: openclaw-agent-transport/);
@@ -803,6 +806,11 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   );
   assert.ok(clusterCreate, "Kubernetes development must create its owned k3d cluster");
   assert.equal(clusterCreate.args[clusterCreate.args.indexOf("--image") + 1], "+v1.35");
+  // Match the Kubernetes-only profile so nested nftables restore limits cannot leave stale policies.
+  assert.equal(
+    clusterCreate.args[clusterCreate.args.indexOf("--env") + 1],
+    "IPTABLES_MODE=legacy@server:0",
+  );
 
   const duplicate = fixture.start();
   assert.notEqual(duplicate.status, 0);
@@ -852,8 +860,33 @@ test("Kubernetes Compute defaults to the Compose control plane", async (t) => {
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
-test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
+test("Compose Kubernetes startup rejects missing Node before creating resources", async (t) => {
+  const fixture = await createFixture(t);
+  await prepareLifecycleCommands(fixture);
+  // Invoke the compiled CLI directly: a host may have the CLI and container
+  // tools installed without the Node runtime required by sandbox preparation.
+  const result = spawnSync(fixture.cli, ["dev", "up"], {
+    cwd: fixture.fixtureRepository,
+    env: {
+      ...fixture.env,
+      PATH: join(fixture.directory, "bin"),
+      OCC_DEVELOPMENT_COMPUTE_DRIVER: "kubernetes",
+      OCC_DEVELOPMENT_CONTROL_PLANE: "compose",
+      OCC_DEVELOPMENT_SANDBOX_DRIVER: "none",
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /node is required on PATH/);
+  assert.deepEqual(await readJsonLines(fixture.env.SAFETY_LOG), []);
+  await assert.rejects(stat(fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY), { code: "ENOENT" });
+});
+
+test("Kubernetes dev-up forwards an explicit K3s image and startup timeout to k3d", async (t) => {
   const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS = "37";
+  fixture.env.OCC_DEVELOPMENT_K3D_DNS_RESOLVER = "192.0.2.53";
   fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
   const result = fixture.start();
   assert.equal(result.status, 0, result.stderr);
@@ -866,12 +899,18 @@ test("Kubernetes dev-up forwards an explicit K3s image to k3d", async (t) => {
     clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
     "rancher/k3s:v1.35.8-k3s1",
   );
+  // A failed node must not leave cluster creation waiting without a deadline.
+  assert.equal(clusterCreate.args[clusterCreate.args.indexOf("--timeout") + 1], "37s");
+  assert.ok(
+    clusterCreate.args.some((argument) => argument.includes(":/etc/resolv.conf:ro@server:0")),
+  );
   const cleaned = runDevDown(fixture.env);
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
 test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before reporting readiness", async (t) => {
   const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS = "41";
   fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
   fixture.env.OCC_DEVELOPMENT_K3S_IMAGE = "rancher/k3s:v1.35.8-k3s1";
@@ -994,6 +1033,7 @@ test("Kubernetes dev-up prepares the selected OpenShell Sandbox Driver before re
     clusterCreate.args[clusterCreate.args.indexOf("--image") + 1],
     /rancher\/k3s:v1\.36\.4-k3s1@sha256:/,
   );
+  assert.equal(clusterCreate.args[clusterCreate.args.indexOf("--timeout") + 1], "41s");
   assert.ok(clusterCreate.args.includes("--volume"));
   assert.ok(clusterCreate.args.includes("--port"));
   assert.equal(clusterCreate.args.includes("--network"), false);
@@ -1124,6 +1164,87 @@ test("Kubernetes dev-up imports images by the name Podman recorded", async (t) =
     ).length,
     3,
     "each staged OpenShell digest is registered inside k3s under its recorded name",
+  );
+
+  const cleaned = runDevDown(fixture.env);
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("Kubernetes-only dev-up keeps PostgreSQL and its egress policy valid across a cluster restart", async (t) => {
+  const fixture = await kubernetesFixture(t);
+  fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
+  fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "openshell";
+  fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
+  fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
+
+  const result = runDevUp([], fixture.env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const directory = fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY;
+  // `k3d cluster stop` and `start` (or a host reboot) delete bare Pods, so a
+  // controller must own PostgreSQL for it to come back with its claim.
+  const postgres = JSON.parse(await readFile(join(directory, "postgres.json"), "utf8"));
+  assert.equal(postgres.kind, "StatefulSet");
+  assert.equal(postgres.spec.replicas, 1);
+  assert.deepEqual(postgres.spec.selector.matchLabels, { app: "postgres" });
+  assert.equal(postgres.spec.template.metadata.labels.app, "postgres");
+  assert.deepEqual(postgres.spec.template.spec.volumes[0], {
+    name: "data",
+    persistentVolumeClaim: { claimName: "postgres-data" },
+  });
+  // The chart admits PostgreSQL and the Kubernetes API only as /32 hosts, and
+  // both addresses change on restart. The launcher adds egress that does not.
+  const values = JSON.parse(await readFile(join(directory, "helm-values.json"), "utf8"));
+  assert.deepEqual(values.database.cidrs, ["10.42.0.20/32"]);
+  assert.deepEqual(values.cluster.cidrs, ["172.30.42.3/32"]);
+  assert.equal(values.cluster.port, 6443);
+  const restartEgress = JSON.parse(await readFile(join(directory, "restart-egress.json"), "utf8"));
+  const policy = (name) => restartEgress.items.find(({ metadata }) => metadata.name === name).spec;
+  const database = policy("openclaw-development-postgres-egress");
+  assert.deepEqual(database.podSelector.matchExpressions[0].values, [
+    "api",
+    "worker",
+    "initialization",
+  ]);
+  assert.deepEqual(database.egress, [
+    {
+      to: [{ podSelector: { matchLabels: { app: "postgres" } } }],
+      ports: [{ protocol: "TCP", port: 5432 }],
+    },
+  ]);
+  const cluster = policy("openclaw-development-kubernetes-egress");
+  assert.deepEqual(cluster.podSelector.matchExpressions[0].values, [
+    "api",
+    "worker",
+    "initialization",
+    "collector",
+  ]);
+  assert.deepEqual(cluster.egress, [
+    { to: [{ ipBlock: { cidr: "172.30.42.0/24" } }], ports: [{ protocol: "TCP", port: 6443 }] },
+  ]);
+  // The generated values must still satisfy the chart's own validation.
+  const rendered = spawnSync(
+    process.env.OCC_HELM_BIN ?? "helm",
+    [
+      "template",
+      "openclaw-enterprise",
+      "deploy/helm/openclaw-enterprise",
+      "--namespace",
+      "oce-system",
+      "-f",
+      join(directory, "helm-values.json"),
+    ],
+    { cwd: new URL("../..", import.meta.url), encoding: "utf8" },
+  );
+  if (rendered.error?.code !== "ENOENT") {
+    assert.equal(rendered.status, 0, rendered.stderr);
+  }
+  const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+  assert.ok(
+    commands.some(
+      ({ command, args }) =>
+        command === "kubectl" && args.includes("rollout") && args.includes("statefulset/postgres"),
+    ),
   );
 
   const cleaned = runDevDown(fixture.env);

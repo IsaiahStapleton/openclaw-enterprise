@@ -956,6 +956,44 @@ test("Namespace IAM routes manage exact Role and AccessBinding policy through th
   );
   assert.equal(missingRole.status, 404);
   assert.equal(missingRole.body.error.code, "NOT_FOUND");
+
+  // Each policy mutation records what changed, and its authorization names the
+  // Installation administer check the controller actually makes.
+  const policyEvents = new Map(
+    fixture.auditSink.events
+      .filter((event) => event.kind === "mutation" && event.action.startsWith("openclaw.iam."))
+      .map((event) => [event.action, event]),
+  );
+  const installationAuthorization = {
+    principalId: fixture.principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: fixture.installationId },
+  };
+  const namespaceResource = { kind: "namespace", id: namespace.id, namespaceId: namespace.id };
+  const secretResource = { kind: "secret", id: secret.data.id, namespaceId: namespace.id };
+  const roleDetails = {
+    roleId: role.data.id,
+    permissions: [{ action: "operate", resourceKind: "secret" }],
+  };
+  const bindingDetails = {
+    bindingId: binding.data.id,
+    subjectKind: "identity",
+    subjectId: agent.servicePrincipalId,
+    roleId: role.data.id,
+  };
+  for (const [action, resource, details] of [
+    ["openclaw.iam.roles.create", namespaceResource, roleDetails],
+    ["openclaw.iam.access_bindings.create", secretResource, bindingDetails],
+    ["openclaw.iam.access_bindings.delete", secretResource, bindingDetails],
+    ["openclaw.iam.roles.delete", namespaceResource, roleDetails],
+  ]) {
+    const recorded = policyEvents.get(action);
+    assert.ok(recorded, action);
+    assert.equal(recorded.outcome, "success", action);
+    assert.deepEqual(recorded.resource, resource, action);
+    assert.deepEqual(recorded.authorization, installationAuthorization, action);
+    assert.deepEqual(recorded.details, details, action);
+  }
 });
 
 test("Namespace IAM routes bind existing humans to the exact Namespace and Agent", async () => {
@@ -1104,7 +1142,15 @@ test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespac
     controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
       body: { permissions },
     });
-  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+  for (const action of [
+    "create",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ]) {
     const rejected = await createRole([
       { action: "read", resourceKind: "namespace" },
       { action, resourceKind: "namespace" },
@@ -1191,7 +1237,15 @@ test("OCC rejects Namespace lifecycle Role Permissions before any IAM Driver or 
       body: { permissions },
     });
 
-  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+  for (const action of [
+    "create",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ]) {
     const rejected = await createRole([{ action, resourceKind: "namespace" }]);
     assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
     assert.equal(rejected.body.error.code, "NOT_FOUND");

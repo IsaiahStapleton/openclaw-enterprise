@@ -377,6 +377,14 @@ function execFile(command, args, options = {}) {
       error.stdout = stdout;
       error.stderr = stderr;
       Object.assign(error, properties);
+      return preparationError(error, timedOut ? "timeout" : properties.signal ? "signal" : "exit");
+    }
+    function preparationError(error, failure) {
+      if (["database-create", "database-schema", "database-migrate"].includes(options.stage)) {
+        error.code = "CI_PREPARATION_COMMAND_FAILED";
+        error.stage = options.stage;
+        error.failure = failure;
+      }
       return error;
     }
     function finish(callback) {
@@ -398,7 +406,7 @@ function execFile(command, args, options = {}) {
         error.args = args;
         error.stdout = stdout;
         error.stderr = stderr;
-        reject(error);
+        reject(preparationError(error, "spawn"));
       }),
     );
     // Exit can precede pipe drain; callers need complete diagnostics to classify failures.
@@ -505,12 +513,13 @@ async function ensurePostgresServer(statePath, state) {
   return resource;
 }
 
-async function postgresExec(resource, args) {
+async function postgresExec(resource, args, stage) {
   await execFile(
     process.env.OCC_DOCKER_BIN ?? "docker",
     dockerArgsForPostgres(resource, "exec", "-T", "postgres", ...args),
     {
       env: { OCC_POSTGRES_PORT: String(resource.port) },
+      stage,
     },
   );
 }
@@ -535,31 +544,40 @@ async function createAndMigrateDatabase(
   });
   await writeState(statePath, state);
 
-  await postgresExec(server, [
-    "psql",
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-U",
-    "postgres",
-    "-d",
-    "postgres",
-    "-c",
-    `CREATE DATABASE ${quoteIdentifier(name)}`,
-  ]);
-  await postgresExec(server, [
-    "psql",
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-U",
-    "postgres",
-    "-d",
-    name,
-    "-c",
-    `GRANT CREATE ON DATABASE ${quoteIdentifier(name)} TO occ_migrator; CREATE SCHEMA occ AUTHORIZATION occ_migrator; CREATE SCHEMA drizzle AUTHORIZATION occ_migrator; REVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
-  ]);
+  await postgresExec(
+    server,
+    [
+      "psql",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "-c",
+      `CREATE DATABASE ${quoteIdentifier(name)}`,
+    ],
+    "database-create",
+  );
+  await postgresExec(
+    server,
+    [
+      "psql",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      name,
+      "-c",
+      `GRANT CREATE ON DATABASE ${quoteIdentifier(name)} TO occ_migrator; CREATE SCHEMA occ AUTHORIZATION occ_migrator; CREATE SCHEMA drizzle AUTHORIZATION occ_migrator; REVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
+    ],
+    "database-schema",
+  );
   const migrationUrl = postgresUrl("occ_migrator", "occ-migrator-local", server.port, name);
   await execFile(process.env.OPENCLAW_CI_COREPACK_BIN ?? "corepack", ["pnpm", "db:migrate"], {
     env: { OCC_MIGRATION_DATABASE_URL: migrationUrl },
+    stage: "database-migrate",
   });
   await markResourceReady(statePath, state, resource);
   return {
@@ -715,6 +733,38 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   }
 }
 
+function imageBuildArgs(state, role, localStore) {
+  if (process.env.OCC_CI_IMAGE_CACHE === "1") {
+    if (
+      process.env.GITHUB_ACTIONS !== "true" ||
+      !["images-packaging", "images-model-probes"].includes(state.lane) ||
+      !process.env.ACTIONS_RUNTIME_TOKEN ||
+      !process.env.ACTIONS_RESULTS_URL ||
+      localStore
+    ) {
+      throw new Error("Image caching requires the hosted image lane and its cache credentials.");
+    }
+    const cache = `type=gha,version=2,scope=oce-ci-${role}-${process.platform}-${process.arch}-v1`;
+    return [
+      "buildx",
+      "build",
+      "--load",
+      "--cache-from",
+      `${cache},timeout=60s`,
+      // One writer per image avoids competing exports from the parallel probe lane.
+      ...(state.lane === "images-packaging"
+        ? ["--cache-to", `${cache},mode=max,ignore-error=true,timeout=60s`]
+        : []),
+    ];
+  }
+  return [
+    "build",
+    ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+      ? ["--builder", "default", "--load"]
+      : []),
+  ];
+}
+
 async function buildRuntimeImages(
   statePath,
   state,
@@ -747,10 +797,7 @@ async function buildRuntimeImages(
     resources.push(resource);
     await writeState(statePath, state);
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      "build",
-      ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-        ? ["--builder", "default", "--load"]
-        : []),
+      ...imageBuildArgs(state, "controller", localStore),
       "--pull=false",
       "--target",
       "runtime",
@@ -785,10 +832,7 @@ async function buildRuntimeImages(
       process.env.OCC_DOCKER_BIN ?? "docker",
       openclawSource === undefined
         ? [
-            "build",
-            ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-              ? ["--builder", "default", "--load"]
-              : []),
+            ...imageBuildArgs(state, "runtime", localStore),
             "--pull=false",
             "-f",
             runtimeDockerfile,
@@ -1814,6 +1858,7 @@ async function prepareLane({ lane, statePath }) {
   switch (name) {
     case "postgres":
     case "postgres-application":
+    case "postgres-auth":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "runtime-image-fixture":
@@ -1822,6 +1867,21 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_RUNTIME_IMAGE_RECEIPT = join(
         dirname(resolvedStatePath),
         "runtime-image-fixture-receipt.json",
+      );
+      break;
+    case "images-model-probes":
+      Object.assign(
+        env,
+        (
+          await timedPreparation(name, "runtime-image-build", () =>
+            buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
+          )
+        ).env,
+      );
+      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
+        state,
+        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
+        "NODE_BASE_IMAGE",
       );
       break;
     case "images-packaging":

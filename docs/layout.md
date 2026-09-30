@@ -50,8 +50,8 @@ with its own manifest and lockfile. See [Console Storybook](contributing/console
 Start from the existing primitive that owns a capability. Keep platform core
 behavior dependent on contracts; put implementation-specific behavior in the
 owning Driver or Backend and wire it through composition. See
-[current architecture](ARCHITECTURE.md) for component interactions and the
-[platform design](design.md) for the approved target and implementation status.
+[platform architecture](design.md) for component interactions, implementation
+status, and remaining design requirements.
 
 The [repository capability](reference/repository-credentials.md#repo-driver-contract)
 uses `RepoDriver` in `packages/contracts/src/repo.ts` and the bundled
@@ -126,25 +126,33 @@ Do not install dependencies as a verification side effect.
 
 ## Documentation placement
 
-| Location                              | Use it for                                                                      |
-| ------------------------------------- | ------------------------------------------------------------------------------- |
-| Root `README.md` and `docs/README.md` | Project orientation and the documentation map.                                  |
-| `docs/layout.md`                      | Repository organization and file-placement conventions.                         |
-| `docs/design.md` and `docs/design/`   | Authoritative target architecture.                                              |
-| `docs/ARCHITECTURE.md`                | Current system structure and ownership boundaries.                              |
-| `docs/reference/`                     | Living supported-feature specifications and Driver contracts.                   |
-| `docs/guides/`                        | Product user and operator procedures, including console, CLI, and API tasks.    |
-| `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.       |
-| `docs/flows/`                         | Source-backed runtime execution traces.                                         |
-| `docs/testing/`                       | Contributor test setup, environments, fixtures, and proof limits.               |
-| `specs/`                              | Numbered implementation proposals, milestones, and historical delivery records. |
-| `docs/assets/`                        | Documentation images and other shared assets.                                   |
+| Location                              | Use it for                                                                                         |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Root `README.md` and `docs/README.md` | Project orientation and the documentation map.                                                     |
+| `docs/layout.md`                      | Repository organization and file-placement conventions.                                            |
+| `docs/design.md` and `docs/design/`   | Authoritative architecture, design requirements, and implementation status.                        |
+| `docs/reference/`                     | Living supported-feature specifications and Driver contracts.                                      |
+| `docs/guides/`                        | Product user and operator procedures, including console, CLI, and API tasks.                       |
+| `docs/contributing/`                  | Onboarding and workflows for people changing the platform source or docs.                          |
+| `docs/flows/`                         | Source-backed runtime execution traces.                                                            |
+| `docs/testing/`                       | Contributor test setup, environments, fixtures, and proof limits.                                  |
+| `specs/README.md`                     | Shared index of RFCs, plans, and historical records.                                               |
+| `specs/rfcs/`                         | Architectural proposals and decisions.                                                             |
+| `specs/plans/`                        | All implementation plans and historical delivery records; relevant RFCs are linked in frontmatter. |
+| `docs/assets/`                        | Documentation images and other shared assets.                                                      |
 
-Use stable feature names for living references and preserve existing numbered
-specification paths. Update affected current references, guides, and flows with
-behavior changes; shipped specifications remain historical records. Keep Manual
-Notes unchanged. Put detailed contracts in their owning reference rather than
-expanding architecture pages for every feature.
+Use stable feature names for living references. Follow
+[RFCs and implementation plans](contributing/specifications.md) for numbering,
+document ownership, and lifecycle. Prefer one Markdown file per RFC or plan;
+documents with supporting material use `<number>-<topic>/index.md`, with
+companions in the same directory. Keep completed and superseded documents in
+place. Preserve historical names and content when grouping companions. This
+first phase does not reorganize `specs/.archive/`; removed image assets remain
+accessible through links to a preserved Git revision.
+Update affected current references, guides, and flows with behavior changes;
+shipped specifications remain historical records. Keep Manual Notes unchanged.
+Put detailed contracts in their owning reference rather than expanding
+architecture pages for every feature.
 
 Put contributor workflows for documentation in `docs/contributing/`, starting
 with the [writing guide](contributing/documentation.md). Existing site-tooling

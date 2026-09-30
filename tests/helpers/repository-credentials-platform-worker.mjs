@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 async function within(promise, message, timeoutMs = 30_000) {
   let timer;
@@ -37,6 +38,9 @@ export async function startRepositoryPlatformWorker({ databaseUrl, configFile, e
     });
   });
   let ready;
+  const probeRequests = new Map();
+  let probeObserved;
+  let probeResumed;
   const started = new Promise((resolve) => {
     ready = resolve;
   });
@@ -45,8 +49,40 @@ export async function startRepositoryPlatformWorker({ databaseUrl, configFile, e
       events.push(message.event);
     } else if (message.type === "ready") {
       ready();
+    } else if (message.type === "material-expiry-response") {
+      probeRequests.get(message.requestId)?.(message);
+    } else if (message.type === "material-expiry-observed") {
+      probeObserved?.(message);
+    } else if (message.type === "material-expiry-resumed") {
+      probeResumed?.(message);
     }
   });
+  async function probeCommand(action, id, extra = {}) {
+    const requestId = randomUUID();
+    const response = new Promise((resolve) => {
+      probeRequests.set(requestId, resolve);
+    });
+    try {
+      child.send({ type: "material-expiry-command", action, id, requestId, ...extra }, (error) => {
+        if (error) {
+          probeRequests.get(requestId)?.({ failed: true });
+        }
+      });
+      const message = await within(
+        Promise.race([
+          response,
+          closed.then(() => {
+            throw new Error("The platform worker exited during the material expiry probe.");
+          }),
+        ]),
+        `material expiry probe ${action} timed out`,
+      );
+      assert.notEqual(message.failed, true, `material expiry probe ${action} failed`);
+      return message.result;
+    } finally {
+      probeRequests.delete(requestId);
+    }
+  }
   async function terminate(signal) {
     if (!receipt) {
       assert.equal(child.kill(signal), true, "termination must reach the owned worker");
@@ -81,6 +117,32 @@ export async function startRepositoryPlatformWorker({ databaseUrl, configFile, e
   }
   return {
     pid: child.pid,
+    async armMaterialExpiry(agentId) {
+      assert.equal(probeObserved, undefined, "only one expiry probe may be armed");
+      const id = randomUUID();
+      const observed = new Promise((resolve) => {
+        probeObserved = (message) => {
+          if (message.id === id) {
+            resolve(message);
+          }
+        };
+      });
+      const resumed = new Promise((resolve) => {
+        probeResumed = (message) => {
+          if (message.id === id) {
+            resolve(message);
+          }
+        };
+      });
+      await probeCommand("arm", id, { agentId });
+      return {
+        observed: () => within(observed, "material expiry observation timed out", 180_000),
+        resumed: () => within(resumed, "material expiry result was not resumed"),
+        release: (proceed) => probeCommand("release", id, { proceed }),
+        finish: () => probeCommand("finish", id),
+        inspect: () => probeCommand("inspect", id),
+      };
+    },
     async stop() {
       const result = await terminate("SIGTERM");
       assert.equal(result.code, 0, "platform worker must stop cleanly");

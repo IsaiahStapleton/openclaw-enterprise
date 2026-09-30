@@ -112,9 +112,30 @@ from the default StorageClass, mounted only by its Harness:
 | `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
-Container restarts replay the node Secret's setup code, which expires ten minutes
-after preparation mints it. A node with a saved device token for the same Gateway
-reconnects with that token; one without saved credentials rejects the expired code.
+The node Secret's setup code expires ten minutes after preparation mints it. A
+node with a saved device token for the same Gateway reconnects with that token;
+one without saved credentials rejects an expired code.
+
+A Deployment-backed Codex Harness renders this wiring from its first start. It
+mounts the node Secret as an optional volume at `/run/openclaw-node-setup` that
+projects only `setupCode`, so the Harness starts before the Secret exists.
+Codex starts at once; the node starts when the file holds a complete code.
+After writing the Secret, preparation annotates the running Harness Pod. That
+Pod update makes the kubelet refresh the volume within about two seconds
+instead of on its periodic resync of about a minute, so enrollment restarts
+neither the Harness nor its Gateway. The worker needs `patch` on Pods in tenant
+namespaces; without it the pass fails.
+
+The file mode is `0440`. Secret volume files are root-owned and the kubelet
+grants the Pod `fsGroup` read access, so `0400` would behave the same. Codex
+runs as the same user and group and can read the code, as it can already read
+the node's command line. Once readiness records the device ID, the controller
+removes `setupCode` from the Secret and annotates the Pod again, so the kubelet
+removes the file within seconds. The node then reconnects with its saved device
+token, and preparation does not mint a new code for it. If the Gateway loses that
+pairing, delete the Agent's node Secret: the next pass mints a code, which the
+node uses when it restarts. Native workers and SandboxDriver Harnesses receive the code in
+their environment, keep it for restarts, and are replaced to attach the node.
 Installations that enrolled one node per revision enroll a new Agent device once,
 at the first replacement; retiring each earlier revision deletes its node Secret.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return
@@ -199,10 +220,10 @@ have exact Namespace, Agent, service-principal and revision ownership.
 Preparation checks admitted source identities before writing runtime material.
 Repeated preparation repairs absent or changed projections. Activation validates
 Gateway sources and selects the prepared revision; it does not issue credentials.
-Retirement waits for the old workload to stop before deleting its projection by
-UID. Gateway and account canonical sources survive revision retirement; final
-Agent deletion removes its transport/password, while account and OCC Secret
-storage retain their separate lifecycles.
+Stop and retirement wait for the workload to stop, then delete its projection
+and revision ConfigMaps by UID. Gateway and account canonical sources survive
+revision retirement; final Agent deletion removes its transport/password, while
+account and OCC Secret storage retain their separate lifecycles.
 
 Source updates do not restart running processes. The supported model-key update
 sequence is: update the OCC Secret, redeploy each consuming Agent through OCE,
@@ -211,10 +232,10 @@ new credential. Preparation delivers current source values to the new revision's
 runtime Secret. Merely recreating a Harness Pod or restarting its Deployment
 reads the existing projection and does not refresh it from CP. See
 [update and redeploy](../kubernetes-secret.md#update-and-redeploy).
-Deleting a source or runtime Secret
-does not revoke bytes already loaded into a process or accepted by a provider.
+Deleting a source or runtime Secret does not revoke bytes a process loaded or a
+provider accepted.
 Transport rotation, finite token TTL and immediate revocation remain open; see
-[follow-up tracking](../../../../specs/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
+[follow-up tracking](../../../../specs/plans/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
 Embedded execution retains its combined workload and transport bundle; CP-backed
 model/configuration sources are delivered to that workload as needed. It is
 outside the dedicated trust-boundary acceptance scope.

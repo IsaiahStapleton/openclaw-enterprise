@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -352,7 +353,7 @@ func writeInstallation(s *developmentState, reference string, openShell *openShe
 		compute := config["drivers"].(map[string]any)["compute"].(map[string]any)["configuration"].(map[string]any)
 		compute["runtime"].(map[string]any)["codexSeccompProfile"] = codexSeccompProfile
 	}
-	if s.DeploymentMode == "k3d" && s.SandboxDriver == "none" {
+	if s.SandboxDriver == "none" {
 		config["presets"] = map[string]any{"includeDefaults": true}
 		config["drivers"].(map[string]any)["plugin"] = map[string]any{
 			"id": "codex-plugin", "configuration": map[string]any{"catalogSource": "openai-curated"},
@@ -452,4 +453,27 @@ func openShellInstallationConfiguration(s *developmentState, workspaceResources 
 			"sandboxNamePrefix": "os",
 		},
 	}
+}
+
+// prepareDevelopmentCodexSandbox verifies the owned node before either local
+// control-plane profile selects a dedicated Codex runtime.
+func (r *runner) prepareDevelopmentCodexSandbox(ctx context.Context, state *developmentState, runtimeImage string, timeoutSeconds int) (string, error) {
+	fmt.Fprintln(r.opts.Out, "Verifying the dedicated Codex sandbox on the owned k3d node...")
+	command := r.command(ctx, "node", "scripts/prepare-development-codex-seccomp.mjs", state.directory, runtimeImage, strconv.Itoa(timeoutSeconds))
+	command.Stderr = r.opts.Err
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("dedicated Codex sandbox preparation failed: %w", err)
+	}
+	var result struct {
+		Mode        string `json:"mode"`
+		ProfileName string `json:"profileName"`
+	}
+	if err := json.Unmarshal(output, &result, json.RejectUnknownMembers(true)); err != nil {
+		return "", fmt.Errorf("invalid dedicated Codex sandbox preparation result: %w", err)
+	}
+	if !validDevelopmentCodexSeccompResult(result.Mode, result.ProfileName) {
+		return "", fmt.Errorf("invalid dedicated Codex sandbox preparation result")
+	}
+	return result.ProfileName, nil
 }

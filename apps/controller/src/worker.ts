@@ -41,6 +41,7 @@ import {
   PostgresPlatformState,
   PostgresWorkQueue,
   OpenClawController,
+  SandboxRevisionUnsupportedError,
   WorkClaimLostError,
   isRepositoryCleanupWork,
   repositoryCleanupRevisionId,
@@ -48,6 +49,8 @@ import {
   provisioningEffectReceipt as provisioningEffectReceiptForRecord,
   provisioningPendingEffect,
   type ClaimedWork,
+  type NativeWorkerSupport,
+  type ProvisioningEffectReceipt,
   type PlatformUnitOfWork,
   type PostgresPool,
   type PostgresQueryClient,
@@ -119,6 +122,11 @@ interface AgentDeletionDispatchResult extends DispatchResult {
   readonly namespace?: Readonly<Namespace>;
   readonly agent?: Readonly<Agent>;
   readonly revisions?: readonly Readonly<AgentRevision>[];
+  readonly delayMs?: number;
+  readonly abandonedProvisioningEffect?: {
+    readonly workId: string;
+    readonly receipt: ProvisioningEffectReceipt;
+  };
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -388,6 +396,7 @@ export class ControllerWorker {
   private readonly iam: IAMDriver;
   private readonly secretDriverId: string | undefined;
   private readonly configuredServiceAccountDriverId: string | undefined;
+  private readonly nativeWorkerSupport: NativeWorkerSupport | undefined;
   private readonly secretDriver: SecretDriver | undefined;
   private provisioningController: OpenClawController | undefined;
   private readonly sandbox: SandboxDriver | undefined;
@@ -443,6 +452,7 @@ export class ControllerWorker {
     );
     const drivers = options.drivers;
     this.configuredServiceAccountDriverId = drivers?.installation.drivers.service_account?.id;
+    this.nativeWorkerSupport = drivers?.installation.runtime?.nativeWorkerSupport;
     if (this.mode === "production" && drivers === undefined) {
       throw new Error("Production controller workers require Installation startup configuration.");
     }
@@ -578,6 +588,9 @@ export class ControllerWorker {
       ...(this.configuredServiceAccountDriverId === undefined
         ? {}
         : { configuredServiceAccountDriverId: this.configuredServiceAccountDriverId }),
+      ...(this.nativeWorkerSupport === undefined
+        ? {}
+        : { nativeWorkerSupport: this.nativeWorkerSupport }),
     });
     for (const driver of [
       this.configuration,
@@ -1499,6 +1512,7 @@ export class ControllerWorker {
         pendingProvisioningEffect === undefined
           ? undefined
           : provisioningEffectReceiptForRecord(provisioning!);
+      let abandonedProvisioningEffect: AgentDeletionDispatchResult["abandonedProvisioningEffect"];
       if (
         provisioning?.progress.pendingEffect !== undefined &&
         (pendingProvisioningEffect === undefined ||
@@ -1508,14 +1522,35 @@ export class ControllerWorker {
           settledProvisioningEffect.owner !== pendingProvisioningEffect.owner ||
           settledProvisioningEffect.targetId !== pendingProvisioningEffect.targetId)
       ) {
-        await this.finalizeAgentDeletion(claim, {
-          outcome: "pending",
-          code: "PROVISIONING_EFFECT_PENDING",
-          namespace,
-          agent,
-          revisions,
-        });
-        return;
+        // A cancelled provisioning never runs again, so nothing else will settle
+        // its effect. After a former claim's lease has run out, this teardown
+        // removes what the effect could have written and settles it itself.
+        // Malformed or conflicting evidence stays fail-closed.
+        const abandonAfterMs = provisioning.updatedAt.getTime() + this.leaseDurationMs - Date.now();
+        if (
+          provisioning.status !== "cancelled" ||
+          pendingProvisioningEffect?.ownerPresent !== true ||
+          settledProvisioningEffect !== undefined ||
+          abandonAfterMs > 0
+        ) {
+          await this.finalizeAgentDeletion(claim, {
+            outcome: "pending",
+            code: "PROVISIONING_EFFECT_PENDING",
+            namespace,
+            agent,
+            revisions,
+            ...(abandonAfterMs > 0 ? { delayMs: Math.ceil(abandonAfterMs) } : {}),
+          });
+          return;
+        }
+        abandonedProvisioningEffect = {
+          workId: provisioning.workId,
+          receipt: {
+            kind: pendingProvisioningEffect.kind,
+            owner: pendingProvisioningEffect.owner!,
+            targetId: pendingProvisioningEffect.targetId,
+          },
+        };
       }
       if (revisions.length > 0 && this.compute.bindAgent !== undefined) {
         await this.withClaimHeartbeat(claim, async () => {
@@ -1537,6 +1572,7 @@ export class ControllerWorker {
         namespace,
         agent,
         revisions,
+        ...(abandonedProvisioningEffect === undefined ? {} : { abandonedProvisioningEffect }),
       };
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
@@ -1582,7 +1618,12 @@ export class ControllerWorker {
       if (claim.agentId === undefined) {
         throw new Error("The worker Agent deletion context is unavailable.");
       }
-      const completed = await this.state.transactWithQueue(async (_unit, queue) => {
+      const abandoned = result.abandonedProvisioningEffect;
+      const completed = await this.state.transactWithQueue(async (unit, queue) => {
+        if (abandoned !== undefined) {
+          // Committed only with the finalizer's claim check in this transaction.
+          await unit.provisioning.settleEffect(abandoned.workId, abandoned.receipt);
+        }
         const completed = await queue.completeAgentDeletion(
           claim,
           claim.namespaceId,
@@ -1620,6 +1661,13 @@ export class ControllerWorker {
         }
         if (terminalFailure) {
           await queue.fail(claim, { code: result.code });
+        } else if (result.outcome === "pending") {
+          // Convergence waits do not consume the bounded failure budget.
+          await queue.defer(
+            claim,
+            { code: result.code },
+            result.delayMs === undefined ? {} : { delayMs: result.delayMs },
+          );
         } else {
           await queue.retry(claim, { code: result.code });
         }
@@ -2130,7 +2178,8 @@ export class ControllerWorker {
         throw error;
       }
       result =
-        error instanceof RepositoryCredentialAuthorityError
+        error instanceof RepositoryCredentialAuthorityError ||
+        error instanceof SandboxRevisionUnsupportedError
           ? { outcome: "permanent", code: error.code }
           : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
     }
@@ -2621,19 +2670,24 @@ export class ControllerWorker {
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
     // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
-    // or invalid-key rejections and then hold unready until restart, so waiting
-    // for the deadline cannot change the result. Other failures may recover.
+    // or invalid-key rejections, and MODEL_PROBE_CPU_STARVED only when the model
+    // probe ran out of a CPU budget sized for the container's CPU limit while it
+    // waited for CPU. Both hold unready until restart, and a restart gets the same
+    // credential and CPU, so waiting for the deadline cannot change the result.
+    // Other failures may recover.
     let resolved: RevisionDispatchResult =
       runtimeFailure?.code === "AUTHENTICATION_FAILED"
         ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
-        : expired
-          ? {
-              ...result,
-              outcome: "permanent",
-              code: "CONVERGENCE_DEADLINE_EXCEEDED",
-              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
-            }
-          : result;
+        : runtimeFailure?.code === "MODEL_PROBE_CPU_STARVED"
+          ? { outcome: "permanent", code: "RUNTIME_CPU_STARVED" }
+          : expired
+            ? {
+                ...result,
+                outcome: "permanent",
+                code: "CONVERGENCE_DEADLINE_EXCEEDED",
+                data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+              }
+            : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -2647,6 +2701,13 @@ export class ControllerWorker {
             ? { outcome: "permanent", code: error.code }
             : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
       }
+    }
+    if (
+      resolved.outcome === "retry" &&
+      claim.attemptCount >= this.maxAttempts &&
+      (await this.continueExhaustedMaintenance(claim, resolved.code))
+    ) {
+      return;
     }
     let activated: Readonly<AgentRevision> | undefined;
     let stoppedCandidate: Readonly<AgentRevision> | undefined;
@@ -2963,6 +3024,70 @@ export class ControllerWorker {
       outcome: "pending",
       code,
     });
+  }
+
+  // A dependency outage that outlasts one maintenance claim's retries must not
+  // retire the authorized active runtime. Fail only this bounded claim and keep
+  // the maintenance chain, as finalizeActiveRevision does for failed
+  // observations. The queue still refuses continuation past the credential
+  // deadline, and the next pass re-checks authority before any new material.
+  private async continueExhaustedMaintenance(claim: ClaimedWork, code: string): Promise<boolean> {
+    const revisionId = claim.revisionId;
+    if (
+      claim.agentId === undefined ||
+      revisionId === undefined ||
+      claim.namespaceTarget !== undefined ||
+      !new RegExp(`^agent_revision:${revisionId}:maintenance:(0|[1-9][0-9]*)$`).test(
+        claim.idempotencyKey,
+      )
+    ) {
+      return false;
+    }
+    let continued = false;
+    await this.state.transactWithQueue(async (unit, queue) => {
+      if ((await queue.heartbeat(claim)) === undefined) {
+        throw new WorkClaimLostError();
+      }
+      const agent = await unit.agents.lockAgent(claim.namespaceId, claim.agentId!);
+      if (agent?.activeRevisionId !== revisionId || agent.desiredRuntimeState !== "running") {
+        return;
+      }
+      const namespace = await unit.namespaces.findNamespace(claim.namespaceId);
+      const revision = await unit.revisions.findRevision(
+        claim.namespaceId,
+        claim.agentId!,
+        revisionId,
+      );
+      if (
+        namespace?.status !== "ready" ||
+        revision === undefined ||
+        revision.servicePrincipalId !== agent.servicePrincipalId ||
+        this.revisionMaintenanceInterval(revision) === undefined ||
+        (revision.repositoryCredentials !== undefined &&
+          Date.now() >= revision.repositoryCredentials.deadlineWallMs)
+      ) {
+        return;
+      }
+      await queue.fail(claim, { code }, { continuingRevision: true });
+      await this.enqueueMaintenance(queue, claim, revision);
+      continued = true;
+    }, this.queueOptions);
+    if (!continued) {
+      return false;
+    }
+    this.passOutcome = "permanent";
+    this.emit({
+      event: "worker.completed",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      revisionId,
+      result: "retry",
+      outcome: "retry",
+      code,
+      ...this.deployTimingFields(claim),
+    });
+    return true;
   }
 
   private async enqueueMaintenance(

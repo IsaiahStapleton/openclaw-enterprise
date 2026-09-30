@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
+import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { WORKSPACE_DEFAULTS } from "../../packages/contracts/src/workspace-defaults.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
@@ -28,6 +29,7 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  waitForCondition,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 import {
@@ -144,7 +146,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
   await versionRecord.getByText("Recorded outcome: succeeded").waitFor();
   const observations = page.locator(".version-diagnostics");
   await observations
-    .getByText(/For Kubernetes Compute, Gateway checks currently cover Slack configuration/)
+    .getByText(/For Kubernetes Compute, Gateway checks cover only the Slack channel/)
     .waitFor();
   await observations
     .getByText("No current observation has been requested for this version.")
@@ -457,6 +459,22 @@ test("Gateway password access saves the generated reference without changing adm
   await page.getByLabel("Available versions").selectOption(first.revision.id);
   await page.getByRole("button", { name: "Edit current Configuration", exact: true }).waitFor();
   assert.equal(await enable.count(), 0);
+
+  // A fresh Agent whose v1 was admitted from this exact Configuration generation needs no redeploy.
+  const fresh = await fixture.createAgent(namespace.id, "Gateway password fresh Agent", expected);
+  const freshV1 = await fixture.seedActiveAgentRevision(namespace.id, fresh.id);
+  assert.deepEqual(
+    freshV1.revision.configuration.gateway.auth.password,
+    expected.gateway.auth.password,
+  );
+  const freshUrl = detailUrl(fixture, namespace.id, fresh.id, "draft", "configuration");
+  await page.goto(`${fixture.origin}${freshUrl.pathname}${freshUrl.search}`);
+  await page
+    .getByText(
+      `Gateway password access is enabled in the saved Configuration and included in v${freshV1.revision.revision}.`,
+    )
+    .waitFor();
+  assert.equal(await page.getByText(/Deploy a new version to apply it/).count(), 0);
 });
 
 test("Agent detail preserves admitted revision history while draft edits change current configuration", async (t) => {
@@ -2011,13 +2029,13 @@ test("Agent detail opens native admin UI only after real API access checks pass"
     "Native admin Agent",
     nativeValues("unsupported-ui"),
   );
-  const { page } = await newPage(t, fixture, {
+  let { page } = await newPage(t, fixture, {
     args: [
       ...fixture.browserArgs,
       `--host-resolver-rules=MAP ${consoleHost} 127.0.0.1,MAP *.${nativeDomain} 127.0.0.1`,
     ],
   });
-  const requests = apiRequests(page, fixture.origin);
+  let requests = apiRequests(page, fixture.origin);
   const draftDetail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
 
   // A fresh shared-cookie login clears legacy host-only cookies from the Console.
@@ -2098,6 +2116,14 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await expectNativeAdminHidden(page);
   fixture.policy.restrictions.length = 0;
+  // The audited denial is settled for this tab; a new tab in the same session asks afresh.
+  const deniedTabWrites = nonAuthWriteRequests(requests);
+  const browserContext = page.context();
+  await page.close();
+  page = await browserContext.newPage();
+  requests = apiRequests(page, fixture.origin);
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
+  await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
 
   const stopped = await fixture.request(
     "POST",
@@ -2196,7 +2222,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   assert.match(nativeRequestCookie, /(?:__Secure-)?openclaw_occ_shared\.session_token=/);
   assert.doesNotMatch(nativeRequestCookie, /legacy-host-only/);
 
-  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  assert.deepEqual([...deniedTabWrites, ...nonAuthWriteRequests(requests)], []);
 });
 
 for (const [dmPolicy, groupPolicy, enterpriseOrgInstall] of [
@@ -2476,6 +2502,42 @@ test("Agent detail refocus clears a revision after session expiry", async (t) =>
   await page.getByRole("button", { name: "Login", exact: true }).waitFor();
   await expectNoText(page, /Configuration draft|Create new version|Expired revision Agent/);
 });
+
+// Agent detail rechecks in place, so a mounted form must not suppress the refocus check.
+for (const variant of ["credentials", "workspace", "sharing"]) {
+  test(`Agent detail refocus clears the ${variant} view after session expiry`, async (t) => {
+    const fixture = await createConsoleAppFixture(t);
+    await fixture.bootstrap();
+    const namespace = await fixture.createNamespace(`Refocus ${variant}`, { ready: true });
+    const agent = await fixture.createAgent(
+      namespace.id,
+      `Refocus ${variant} Agent`,
+      nativeValues(variant),
+    );
+    let revision = "draft";
+    if (variant === "workspace") {
+      revision = (await fixture.seedActiveAgentRevision(namespace.id, agent.id)).revision.id;
+    }
+    const tab = variant === "sharing" ? "configuration" : variant;
+    const { page } = await newPage(t, fixture);
+    const url = detailUrl(fixture, namespace.id, agent.id, revision, tab);
+    await login(page, fixture, url.pathname + url.search);
+    await page.getByRole("heading", { name: `Refocus ${variant} Agent` }).waitFor();
+    if (variant === "sharing") {
+      const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+      await panel.getByLabel("Existing person’s Principal ID").fill("typed-principal");
+    } else {
+      await page.locator(".content form:not(.agent-access-form)").first().waitFor();
+    }
+    for (const session of fixture.memoryDatabase.session) {
+      session.expiresAt = new Date(Date.now() - 1000);
+    }
+
+    await page.evaluate(() => globalThis.dispatchEvent(new Event("focus")));
+    await page.getByText("Your session has expired").waitFor();
+    await expectNoText(page, new RegExp(`Refocus ${variant} Agent`));
+  });
+}
 
 test("Agent detail history navigation rechecks session during refocus", async (t) => {
   const fixture = await createConsoleAppFixture(t);
@@ -2774,12 +2836,27 @@ test("Agent sharing grants existing people exact discovery and native access, th
   );
 
   const recipient = (await newPage(t, fixture, browserOptions)).page;
+  const recipientRequests = apiRequests(recipient, fixture.origin);
   await login(recipient, fixture, `${detail.pathname}${detail.search}`, person.credentials);
-  await recipient
-    .getByText("Sharing policy requires Installation administration.", { exact: false })
-    .waitFor();
   await recipient.getByRole("heading", { name: "Configuration unavailable" }).waitFor();
+  // The policy reads are denied, so the sharing card is hidden instead of showing an error.
+  await recipient.locator(".agent-access").waitFor({ state: "hidden" });
+  assert.equal(
+    await recipient
+      .getByText("Sharing policy requires Installation administration.", { exact: false })
+      .count(),
+    0,
+  );
   await recipient.getByRole("link", { name: "Open native admin UI" }).waitFor();
+  // A non-administrator never reads sharing policy: each denial would be audited.
+  assert.equal(
+    await recipient.getByRole("region", { name: "Share Agent", exact: true }).count(),
+    0,
+  );
+  assert.deepEqual(
+    recipientRequests.filter((request) => request.path.includes("/iam/")),
+    [],
+  );
   await recipient.screenshot({
     path: join(artifacts, "agent-sharing-recipient.png"),
     fullPage: true,
@@ -2910,6 +2987,96 @@ test("Agent sharing reconciles a truncated committed response without replaying 
   await page.getByText("Your session has expired").waitFor();
   await page.getByRole("button", { name: "Login", exact: true }).waitFor();
   assert.equal(await panel.count(), 0);
+});
+
+test("a read-only viewer is denied saved settings and native admin once per tab, not per view", async (t) => {
+  const auditSink = new InMemoryAuditSink();
+  const fixture = await createConsoleAppFixture(t, { auditSink });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Read-only detail");
+  const agent = await fixture.createAgent(namespace.id, "Viewed Agent", nativeValues("viewed"));
+  const viewer = await fixture.createAccountWithPolicy("agent-viewer", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-agent-viewer",
+      namespaceId: namespace.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+      ],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-agent-viewer",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-agent-viewer",
+    });
+  });
+  const denials = (action) =>
+    auditSink
+      .list()
+      .filter((event) => event.kind === "authorization_denial" && event.action === action).length;
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`, viewer.credentials);
+  const unavailable = page.getByRole("heading", { name: "Configuration unavailable" });
+  await unavailable.waitFor();
+  const configurationPath = `/namespaces/${namespace.id}/configurations/${agent.configurationId}`;
+  const nativeAdminPath = `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`;
+  const reads = (path) => requests.filter((request) => request.path === path).length;
+  await waitForCondition(() => reads(nativeAdminPath) === 1, "native admin status read");
+  assert.equal(reads(configurationPath), 1);
+
+  // Each denied read is an audited authorization denial; reloading the view does not repeat it.
+  for (let view = 0; view < 2; view += 1) {
+    await page.reload();
+    await unavailable.waitFor();
+  }
+  await page.waitForTimeout(300);
+  assert.equal(reads(configurationPath), 1);
+  assert.equal(reads(nativeAdminPath), 1);
+  assert.equal(denials("openclaw.configurations.read"), 1);
+  assert.equal(denials("openclaw.agents.native_admin.read"), 1);
+  await page.getByText("Retry checks your access again", { exact: false }).waitFor();
+  assert.equal(await page.locator(".native-admin-access:not([hidden])").count(), 0);
+
+  // Retry asks again, so a real denial after a grant change is never hidden.
+  await page.getByRole("button", { name: "Retry" }).click();
+  await unavailable.waitFor();
+  await waitForCondition(() => reads(configurationPath) === 2, "saved settings reread");
+  assert.equal(denials("openclaw.configurations.read"), 2);
+});
+
+test("Agent sharing rejects emails locally and names an unknown Principal ID", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Sharing subject checks");
+  const agent = await fixture.createAgent(namespace.id, "Subject Agent", nativeValues("subject"));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+  const principal = panel.getByLabel("Existing person’s Principal ID");
+  const writes = () =>
+    nonAuthWriteRequests(requests).filter((request) => request.path.includes("/iam/"));
+  await principal.fill("carol@example.invalid");
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("not an email address", { exact: false }).waitFor();
+  assert.equal(writes().length, 0);
+
+  await principal.fill("prn_00000000-0000-4000-8000-000000000000");
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel
+    .getByText("No existing person with that Principal ID can be granted access here", {
+      exact: false,
+    })
+    .waitFor();
+  assert.equal(await panel.getByText("Resource unavailable", { exact: false }).count(), 0);
+  const bindings = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.deepEqual(bindings.data, []);
 });
 
 test("Agent sharing creates exact Roles instead of reusing strict superset Roles", async (t) => {

@@ -24,6 +24,7 @@ import {
   BackendId,
   RepositoryBindingSelectionSchema,
   RepositoryBindingSelectionsSchema,
+  RepositoryAccessSchema,
   RevisionId,
   ResourceKindSchema,
   SecretBindings,
@@ -213,6 +214,16 @@ const InstallationCapabilitiesSchema = Type.Object(
       Type.Object({ credential: PluginDiscoveryCredentialSchema }, { additionalProperties: false }),
     ),
     pluginPolicies: Type.Optional(PluginPolicyCapabilitiesSchema),
+    nativeWorkers: Type.Optional(
+      Type.Object(
+        { support: Type.Union([Type.Literal("pinned-runtime"), Type.Literal("custom-image")]) },
+        {
+          additionalProperties: false,
+          description:
+            "Present only when dedicated native OpenClaw can be admitted, and says where its native worker support comes from.",
+        },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -256,6 +267,7 @@ export const AgentSchema = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingSelectionsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
     status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
@@ -271,6 +283,7 @@ const ConfigurationReadErrorSchema = Type.Object(
       Type.Literal("plugins"),
       Type.Literal("pluginApprovers"),
       Type.Literal("repositoryBindings"),
+      Type.Literal("repositoryAccess"),
       Type.Literal("harnessAuth"),
       Type.Literal("secretBindings"),
       Type.Literal("repositoryCredentials"),
@@ -281,7 +294,7 @@ const ConfigurationReadErrorSchema = Type.Object(
 );
 
 const agentReadDescription =
-  "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth.";
+  "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth.";
 
 export const AgentReadSchema = Type.Union(
   [
@@ -292,6 +305,7 @@ export const AgentReadSchema = Type.Union(
           "plugins",
           "pluginApprovers",
           "repositoryBindings",
+          "repositoryAccess",
           "harnessAuth",
         ]).properties,
         configurationReadError: ConfigurationReadErrorSchema,
@@ -556,6 +570,7 @@ export const RepositoryOptionSchema = Type.Object(
   {
     repositoryRef: RepositoryBindingSelectionSchema.properties.repositoryRef,
     displayName: Name,
+    description: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
     allowedProfiles: Type.Array(RepositoryBindingSelectionSchema.properties.profile, {
       minItems: 1,
       maxItems: 16,
@@ -719,7 +734,13 @@ export const BackendListResponse = Type.Object(
 );
 
 export const RepositoryOptionListResponse = Type.Object(
-  { data: Type.Array(RepositoryOptionSchema, { maxItems: 128 }), meta: Meta },
+  {
+    data: Type.Array(RepositoryOptionSchema, { maxItems: 1000 }),
+    meta: Type.Object(
+      { ...Meta.properties, descriptionsPending: Type.Boolean() },
+      { additionalProperties: false },
+    ),
+  },
   { additionalProperties: false },
 );
 
@@ -977,6 +998,229 @@ export const AgentDeploymentDiagnosticsResponse = Type.Object(
   { $id: "AgentDeploymentDiagnosticsResponse", additionalProperties: false },
 );
 
+const RuntimeLogContainerSourceIdSchema = Type.Union([
+  Type.Literal("gateway"),
+  Type.Literal("agent"),
+]);
+const RuntimeLogSourceIdSchema = Type.Union([
+  Type.Literal("gateway"),
+  Type.Literal("agent"),
+  Type.Literal("sandbox"),
+]);
+const KubernetesObjectName = Type.String({
+  minLength: 1,
+  maxLength: 253,
+  pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+});
+const KubernetesUid = Type.String({ minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9-]+$" });
+const RuntimeReason = Type.String({ maxLength: 128 });
+const RuntimeMessage = Type.String({ maxLength: 8192 });
+// Kubelet timestamps carry up to nanosecond precision.
+const RuntimeTimestamp = Type.Union([
+  Type.String({
+    format: "date-time",
+    pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,9})?Z$",
+  }),
+  Type.Null(),
+]);
+
+export const RuntimeLogStreamSchema = Type.Object(
+  {
+    source: RuntimeLogSourceIdSchema,
+    pod: Type.Optional(KubernetesObjectName),
+    podUid: Type.Optional(KubernetesUid),
+    container: Type.Optional(KubernetesObjectName),
+    restartCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    sandbox: Type.Optional(KubernetesObjectName),
+  },
+  { additionalProperties: false },
+);
+
+export const RuntimeLogRecordSchema = Type.Union([
+  Type.Object(
+    {
+      type: Type.Literal("line"),
+      time: RuntimeTimestamp,
+      stream: RuntimeLogStreamSchema,
+      contentClass: Type.Union([
+        Type.Literal("operational"),
+        Type.Literal("activity"),
+        Type.Literal("content"),
+      ]),
+      kind: Type.Union([
+        Type.Literal("wrapper"),
+        Type.Literal("openclaw"),
+        Type.Literal("codex"),
+        Type.Literal("sandbox"),
+        Type.Literal("text"),
+      ]),
+      level: Type.Union([
+        Type.Literal("error"),
+        Type.Literal("warn"),
+        Type.Literal("info"),
+        Type.Literal("debug"),
+        Type.Literal("unknown"),
+      ]),
+      message: RuntimeMessage,
+      subsystem: Type.Optional(Type.String({ maxLength: 512 })),
+      fields: Type.Optional(
+        Type.Record(
+          Type.String({ maxLength: 64 }),
+          Type.Union([Type.String({ maxLength: 1024 }), Type.Number(), Type.Boolean()]),
+        ),
+      ),
+      truncated: Type.Optional(Type.Literal(true)),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal("gap"),
+      time: RuntimeTimestamp,
+      stream: RuntimeLogStreamSchema,
+      reason: Type.Union([
+        Type.Literal("stream_replaced"),
+        Type.Literal("window_exceeded"),
+        Type.Literal("cursor_expired"),
+        Type.Literal("truncated"),
+        Type.Literal("buffer_lost"),
+      ]),
+      remedy: Type.String({ maxLength: 512 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal("withheld"),
+      time: RuntimeTimestamp,
+      stream: RuntimeLogStreamSchema,
+      count: Type.Integer({ minimum: 1 }),
+      reason: Type.Union([
+        Type.Literal("unrecognised_structured"),
+        Type.Literal("oversized"),
+        Type.Literal("malformed"),
+      ]),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+export const AgentRuntimeDescriptionSchema = Type.Object(
+  {
+    revisionId: RevisionId,
+    observedAt: Timestamp,
+    pods: Type.Array(
+      Type.Object(
+        {
+          role: RuntimeLogContainerSourceIdSchema,
+          cluster: Type.Union([Type.Literal("control"), Type.Literal("execution")]),
+          name: KubernetesObjectName,
+          uid: KubernetesUid,
+          phase: Type.String({ maxLength: 64 }),
+          ready: Type.Boolean(),
+          createdAt: RuntimeTimestamp,
+          containers: Type.Array(
+            Type.Object(
+              {
+                name: KubernetesObjectName,
+                state: Type.Union([
+                  Type.Literal("waiting"),
+                  Type.Literal("running"),
+                  Type.Literal("terminated"),
+                  Type.Literal("unknown"),
+                ]),
+                reason: Type.Union([RuntimeReason, Type.Null()]),
+                ready: Type.Boolean(),
+                restartCount: Type.Integer({ minimum: 0 }),
+                startedAt: RuntimeTimestamp,
+                lastTermination: Type.Union([
+                  Type.Object(
+                    {
+                      reason: Type.Union([RuntimeReason, Type.Null()]),
+                      exitCode: Type.Union([Type.Integer(), Type.Null()]),
+                      finishedAt: RuntimeTimestamp,
+                    },
+                    { additionalProperties: false },
+                  ),
+                  Type.Null(),
+                ]),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 16 },
+          ),
+          events: Type.Array(
+            Type.Object(
+              {
+                type: Type.Union([Type.Literal("Normal"), Type.Literal("Warning")]),
+                container: Type.Union([KubernetesObjectName, Type.Null()]),
+                reason: RuntimeReason,
+                message: Type.String({ maxLength: 2048 }),
+                count: Type.Integer({ minimum: 1 }),
+                lastObservedAt: RuntimeTimestamp,
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 100 },
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 16 },
+    ),
+    sources: Type.Array(
+      Type.Object(
+        {
+          id: RuntimeLogSourceIdSchema,
+          kind: Type.Union([Type.Literal("container"), Type.Literal("sandbox")]),
+          pods: Type.Array(
+            Type.Object(
+              {
+                name: KubernetesObjectName,
+                uid: KubernetesUid,
+                container: KubernetesObjectName,
+                restartCount: Type.Integer({ minimum: 0 }),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 16 },
+          ),
+          available: Type.Boolean(),
+          unavailableCode: Type.Optional(Type.Literal("NO_POD")),
+          retention: Type.String({ maxLength: 512 }),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 4 },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentRuntimeResponse = Type.Object(
+  { data: AgentRuntimeDescriptionSchema, meta: Meta },
+  { $id: "AgentRuntimeResponse", additionalProperties: false },
+);
+
+export const AgentRuntimeLogPageSchema = Type.Object(
+  {
+    revisionId: RevisionId,
+    source: RuntimeLogSourceIdSchema,
+    stream: Type.Union([RuntimeLogStreamSchema, Type.Null()]),
+    observedAt: Timestamp,
+    records: Type.Array(RuntimeLogRecordSchema, { maxItems: 1100 }),
+    withheld: Type.Integer({ minimum: 0 }),
+    truncated: Type.Boolean(),
+    cursor: Type.Union([Type.String({ maxLength: 2048 }), Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentRuntimeLogsResponse = Type.Object(
+  { data: AgentRuntimeLogPageSchema, meta: Meta },
+  { $id: "AgentRuntimeLogsResponse", additionalProperties: false },
+);
+
 export const WorkspaceFileResponse = Type.Object(
   {
     data: Type.Object(
@@ -1060,6 +1304,9 @@ export type AgentDeploymentStatusResponse = Type.Static<typeof AgentDeploymentSt
 export type AgentDeploymentDiagnosticsResponse = Type.Static<
   typeof AgentDeploymentDiagnosticsResponse
 >;
+export type AgentRuntimeResponse = Type.Static<typeof AgentRuntimeResponse>;
+export type AgentRuntimeLogsResponse = Type.Static<typeof AgentRuntimeLogsResponse>;
+export type AgentRuntimeLogPageWire = Type.Static<typeof AgentRuntimeLogPageSchema>;
 export type WorkspaceFileResponse = Type.Static<typeof WorkspaceFileResponse>;
 export type WorkspaceFileUpdateResponse = Type.Static<typeof WorkspaceFileUpdateResponse>;
 

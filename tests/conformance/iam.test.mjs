@@ -370,7 +370,15 @@ test("managed Namespace Roles grant only Namespace read so a Namespace binding c
     });
   });
   const role = (id, permissions) => ({ id, namespaceId: "namespace-a", permissions });
-  for (const action of ["create", "update", "delete", "deploy", "operate", "administer"]) {
+  for (const action of [
+    "create",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ]) {
     const permissions = [
       { action: "read", resourceKind: "namespace" },
       { action, resourceKind: "namespace" },
@@ -689,7 +697,16 @@ test("ordinary service principals keep explicitly scoped platform grants", async
 });
 
 test("Agent-owned service principals can use every explicitly granted platform action", async () => {
-  const actions = ["create", "read", "update", "delete", "deploy", "operate", "administer"];
+  const actions = [
+    "create",
+    "read",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ];
   const driver = createDriver({
     roles: [
       ...roles,
@@ -1156,6 +1173,99 @@ test("every applicable deny-only Restriction overrides direct and Group grants",
   );
 });
 
+test("read_logs is a delegable Agent action that neither implies nor follows from administer", async () => {
+  const exactAgentRole = (id, action) => ({
+    id,
+    namespaceId: "namespace-a",
+    permissions: [
+      { action: "read", resourceKind: "agent" },
+      { action, resourceKind: "agent" },
+    ],
+  });
+  const exactAgentBinding = (roleId, subjectId) => ({
+    id: `binding-${roleId}`,
+    namespaceId: "namespace-a",
+    subjectKind: "identity",
+    subjectId,
+    roleId,
+    resourceKind: "agent",
+    resourceId: "agent-a",
+  });
+  const policy = (restrictions = []) =>
+    createDriver({
+      roles: [
+        exactAgentRole("role-log-reader", "read_logs"),
+        exactAgentRole("role-agent-administrator", "administer"),
+      ],
+      bindings: [
+        exactAgentBinding("role-log-reader", "principal-reader-a"),
+        exactAgentBinding("role-agent-administrator", "principal-reader-b"),
+      ],
+      restrictions,
+    });
+  const decide = async (driver, principalId, action, agentId = "agent-a") =>
+    driver.authorize({ principalId, action, resource: agentResource(agentId) });
+
+  const driver = policy();
+  const delegated = await decide(driver, "principal-reader-a", "read_logs");
+  assert.equal(delegated.allowed, true);
+  assert.deepEqual(delegated.evidence.roleIds, ["role-log-reader"]);
+  // The delegated reader holds no administer, and the grant stays on its exact Agent.
+  assert.equal((await decide(driver, "principal-reader-a", "administer")).allowed, false);
+  assert.equal((await decide(driver, "principal-reader-a", "read_logs", "agent-b")).allowed, false);
+  // Existing administer grants are unchanged and do not imply read_logs.
+  assert.equal((await decide(driver, "principal-reader-b", "administer")).allowed, true);
+  assert.equal((await decide(driver, "principal-reader-b", "read_logs")).allowed, false);
+
+  // A deny-only Restriction on read_logs overrides the delegated grant and nothing else.
+  const restricted = policy([
+    {
+      id: "restriction-read-logs",
+      namespaceId: "namespace-a",
+      action: "read_logs",
+      resourceKind: "agent",
+      resourceId: "agent-a",
+      effect: "deny",
+    },
+  ]);
+  const denied = await decide(restricted, "principal-reader-a", "read_logs");
+  assert.equal(denied.allowed, false);
+  assert.deepEqual(denied.evidence.restrictionIds, ["restriction-read-logs"]);
+  assert.equal((await decide(restricted, "principal-reader-a", "read")).allowed, true);
+
+  // The managed Role path behind the Namespace policy API accepts the action, and State
+  // persists it unchanged.
+  const platform = new InMemoryPlatformState({ iamIdentities: identities });
+  await platform.transact(async (unit) => {
+    await unit.installations.createInstallation({
+      id: "installation",
+      name: "Test",
+      createdAt: new Date().toISOString(),
+    });
+    await unit.namespaces.createNamespace({
+      id: "namespace-a",
+      name: "local",
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    });
+    await driver.createNamespaceRole(
+      { policy: unit.iamPolicy },
+      exactAgentRole("role-managed-log-reader", "read_logs"),
+    );
+  });
+  assert.deepEqual(
+    (await platform.read((unit) => unit.iamPolicy.listRoles("namespace-a"))).map(
+      (role) => role.permissions,
+    ),
+    [
+      [
+        { action: "read", resourceKind: "agent" },
+        { action: "read_logs", resourceKind: "agent" },
+      ],
+    ],
+  );
+});
+
 test("invalid loaded IAM state fails closed", async () => {
   const invalidStates = [
     { ...state, groups: undefined },
@@ -1373,4 +1483,69 @@ test("platform state failures surface as dependency failures", async () => {
       }),
     /state unavailable/,
   );
+});
+
+test("identity access coverage requires every target grant at the same or a broader scope", async () => {
+  const principal = (id) => ({ kind: "principal", id, issuer: "https://idp.example", subject: id });
+  const service = (id, namespaceId) => ({
+    kind: "service_principal",
+    id,
+    ...(namespaceId === undefined ? {} : { namespaceId }),
+  });
+  const bind = (id, subjectId, roleId, scope = {}, subjectKind = "identity") => ({
+    id,
+    subjectKind,
+    subjectId,
+    roleId,
+    ...scope,
+  });
+  const readNamespace = { action: "read", resourceKind: "namespace" };
+  const administer = { action: "administer", resourceKind: "installation" };
+  const policy = {
+    identities: [
+      principal("exact-admin"),
+      principal("broad-admin"),
+      principal("tenant-a-member"),
+      service("unscoped-service"),
+      service("tenant-a-service", "tenant-a"),
+      service("tenant-b-service", "tenant-b"),
+      service("exact-service"),
+    ],
+    groups: [{ id: "tenant-a-readers", namespaceId: "tenant-a", name: "Readers" }],
+    memberships: [
+      { groupId: "tenant-a-readers", principalId: "tenant-a-member", namespaceId: "tenant-a" },
+    ],
+    roles: [
+      { id: "admin", permissions: [administer, readNamespace] },
+      { id: "reader", permissions: [readNamespace] },
+    ],
+    bindings: [
+      bind("b1", "exact-admin", "admin", { resourceKind: "installation", resourceId: "ins" }),
+      bind("b2", "broad-admin", "admin"),
+      bind("b3", "tenant-a-readers", "reader", { namespaceId: "tenant-a" }, "group"),
+      bind("b4", "unscoped-service", "admin"),
+      bind("b5", "tenant-a-service", "reader", { namespaceId: "tenant-a" }),
+      bind("b6", "tenant-b-service", "reader", { namespaceId: "tenant-b" }),
+      bind("b7", "exact-service", "admin", { resourceKind: "installation", resourceId: "ins" }),
+    ],
+    restrictions: [],
+  };
+  const driver = new NativeIAMDriver({ loadNativeIAMState: async () => policy });
+  const covers = (principalId, targetIdentityId) =>
+    driver.coversIdentityAccess({ principalId, targetIdentityId });
+
+  assert.equal(await covers("exact-admin", "unscoped-service"), false);
+  assert.equal(await covers("exact-admin", "tenant-a-service"), false);
+  assert.equal(await covers("exact-admin", "exact-service"), true);
+  assert.equal(await covers("broad-admin", "unscoped-service"), true);
+  assert.equal(await covers("broad-admin", "tenant-a-service"), true);
+  // Group grants count only inside the membership's Namespace.
+  assert.equal(await covers("tenant-a-member", "tenant-a-service"), true);
+  assert.equal(await covers("tenant-a-member", "tenant-b-service"), false);
+  // A Namespace identity cannot cover an unscoped one, even with the same Role.
+  assert.equal(await covers("tenant-a-service", "tenant-a-member"), true);
+  assert.equal(await covers("tenant-a-service", "exact-service"), false);
+  assert.equal(await covers("unknown", "exact-service"), false);
+  assert.equal(await covers("broad-admin", "unknown"), false);
+  assert.equal(await covers("broad-admin", undefined), false);
 });

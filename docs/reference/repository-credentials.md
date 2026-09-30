@@ -34,8 +34,8 @@ The optional `repo` capability uses `RepoDriver extends Driver`, with the bundle
 `drivers.repo` select the same configured Driver ID. The
 [shared contract](../../packages/contracts/src/repo.ts) exposes these operations:
 
-- `listOptions` returns Namespace-approved opaque references, display names and
-  profiles.
+- `listOptions` returns Namespace-approved opaque references, names, profiles
+  and optional descriptions.
 - `resolve` checks Namespace policy and returns admitted bindings and duration.
 - `checkAdmissionReady`, when provided, verifies that fresh admissions can be
   attempted; unavailable dependencies block new attempts and worker readiness.
@@ -100,11 +100,11 @@ repositories:
 }
 ```
 
-Use actual platform Namespace IDs. App, installation and repository IDs are
-positive decimal safe integers represented as strings. Repository names are
-canonicalized to lowercase. The registry admits at most 128 repositories, 128
-Namespace policies per repository and 4,096 policies overall. References, numeric
-repository IDs and canonical names must be unique.
+Use platform Namespace IDs. App, installation and repository IDs are positive
+decimal safe integers as strings. Repository names are canonicalized to lowercase.
+The registry admits at most 1,000 repositories, 128 Namespace policies per
+repository and 4,096 overall. References, numeric IDs and canonical names must be
+unique.
 
 The grant fingerprint covers provider, App, installation, repository, maximum
 duration, Namespace, allowed profiles, optional push-ref policy, selected profile
@@ -116,28 +116,35 @@ Each Namespace policy may set an optional
 accidental native Git pushes outside selected branches. This is not server-side
 branch authorization.
 
-The selected Driver configuration supplies `controlSocket`,
-`sessionDurationSeconds` and `publicCaPath`; it contains no App key. See
-[Backend configuration](backends.md) and the
-[installation procedure](../guides/deploy/production-installation.md) for wiring.
+Driver configuration supplies `controlSocket`, `sessionDurationSeconds` and
+`publicCaPath`, never the App key. See [Backend configuration](backends.md) and
+the [installation procedure](../guides/deploy/production-installation.md).
 
-### Agent-create repository options
+### Repository options
 
-`GET /namespaces/:namespaceId/agents/repository-options` requires Agent `create`
-and returns only `repositoryRef`, `displayName` and `allowedProfiles`. Authorized
-optional discovery failure yields `503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals
-yields `[]`; a closed Namespace yields 409. Only successful discovery or that
-explicit outage permits a fresh ordinary draft. Other failures block creation.
-Writes reauthorize and re-resolve choices.
+`GET /namespaces/:namespaceId/agents/repository-options` requires Agent `create`;
+the exact-Agent editing route requires `update`. Both return approved
+`repositoryRef`, `displayName`, `allowedProfiles` and optional `description`.
+`descriptionRefs` accepts up to 20 unique, comma-separated refs;
+`meta.descriptionsPending` signals background work, and missing descriptions never
+block selection. Authorized discovery failure yields
+`503 REPOSITORY_OPTIONS_UNAVAILABLE`; no approvals yields `[]`; a closed Namespace
+yields 409. Only success or that outage permits a fresh ordinary draft; editing
+requires success. Writes reauthorize and resolve.
+
+The service rechecks approved refs and fetches metadata with a private,
+repository-scoped Metadata-read token, validating GitHub's numeric repository ID;
+the Driver checks provider, App, installation and repository IDs. Lookups share
+provider capacity and token cleanup with sessions and are cached for five minutes.
+Descriptions never grant access.
 
 ### Profiles
 
 The Console offers **Read-only** (`git-read`) and **Contributor** (`git-full`).
-Contributor includes pushes, PR work, and issue management by default. Open
-**Customize access** to turn off issue management (`git-write`) when approved for
-all selected repositories. Push and PR access remain bundled; this UI does not
-create new permission profiles. The API default remains `git-write`.
-All three enforced profiles include GitHub API access.
+Contributor includes pushes, PRs and issue management; **Customize access** can
+disable issue management (`git-write`). Push and PR access stay bundled. Direct
+bindings default to `git-write`; `repositoryAccess` records inheritance. All
+profiles include GitHub API access.
 
 The [access-level reference](repository-credentials/access-levels.md) defines the
 exact permissions, supported commands and GraphQL boundary. Every session selects
@@ -194,15 +201,14 @@ Kubernetes composition copies selected projection generations into service-owned
 private files before protected-path validation. API and worker receive
 registry/public CA inputs; only the service receives App and TLS private keys.
 
-The privileged GitHub transport captures the installation, repository and exact
-permission profile when the backend is constructed. Its only operations are
-issuance for that captured scope and revocation of an owned token; callers cannot
-supply an HTTP URL, method, path, request body or extra headers. Extending those
-operations changes a credential boundary and requires security review.
+The privileged GitHub transport captures installation, repository and permission
+profile at construction. Its operations issue scoped tokens and revoke owned
+tokens; callers cannot supply HTTP requests. Extending those operations changes
+a credential boundary and requires security review.
 
-The service image must trust GitHub's HTTPS certificate chain. For an approved
-private CA, supply an image with a readable CA bundle and `NODE_EXTRA_CA_CERTS`;
-keep certificate and hostname verification enabled.
+The service image must trust GitHub's HTTPS certificate chain. For a private CA,
+supply a readable bundle and `NODE_EXTRA_CA_CERTS`; keep certificate and hostname
+verification enabled.
 
 Git discovery, upload-pack and receive-pack accept case differences in the
 admitted owner/repository and an optional `.git` suffix. The backend constructs
@@ -230,7 +236,7 @@ no admission or close endpoint.
 lowercase UUIDv4. The CLI prints this nonsecret ID before dispatch. HTTP 201
 returns the bearer once; matching ID/duration/profile returns HTTP 200 with
 status only. Conflicts fail. Follow
-[lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
+[lost-response recovery](../guides/repository-credentials/standalone-service.md#recover-an-admission)
 before explicitly requesting replacement material.
 
 Registry-backed brokers advertise `durableAdmissionVersion: 1` privately. The
@@ -308,11 +314,10 @@ workflows are outside supported acceptance.
 
 The generated defaults scope helper reset, `credential.useHttpPath=true`, verified
 TLS, optional CA trust and disabled redirects to the exact gateway HTTPS origin.
-The helper checks the effective protocol, host/port, username and repository path;
+The helper checks effective protocol, host/port, username and repository path;
 escaped paths, dot segments, extra components and unmatched names receive no
-bearer. A literal repository name ending in `.git` can overlap another admitted
-identity, so the helper compares both spellings and refuses ambiguous selection.
-It never chooses a first, stronger or unexpired alternate grant.
+bearer. A literal name ending in `.git` can overlap another admitted identity;
+the helper compares both spellings and refuses ambiguity or alternate grants.
 
 Duplicate repository bindings remain valid. Select one with `OCE_REPOSITORY_REF`;
 gh also propagates `OCE_REPOSITORY_SELECTION` containing generation, repository

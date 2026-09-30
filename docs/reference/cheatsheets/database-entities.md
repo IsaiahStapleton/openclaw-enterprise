@@ -47,6 +47,7 @@ Stores Agent drafts, their desired runtime state, and the active revision refere
 - `plugins`
 - `plugin_approvers`
 - `repository_bindings`
+- `repository_access` (default and explicit per-repository overrides)
 - `service_principal_id`
 - `harness_auth`
 - `harness_auth_secret_id`
@@ -322,7 +323,7 @@ Stores expiring browser sessions for signed-in users.
 
 Links a user to their sign-in method. Password methods store a password hash;
 identity-only external methods reject password and provider-token storage.
-See [GitHub sign-in](../authentication.md#github-sign-in-for-existing-accounts).
+See [GitHub sign-in](../authentication/external-sign-in.md#github-sign-in-for-existing-accounts).
 
 - `id`
 - `account_id`

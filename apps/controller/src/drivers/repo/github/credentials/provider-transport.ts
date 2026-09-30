@@ -1,5 +1,5 @@
 import type { AttemptContext, Clock } from "../../credentials/backend-contracts.ts";
-import type { GitHubProfile } from "./types.ts";
+import type { GitHubTokenProfile } from "./types.ts";
 import { sendProviderRequest } from "./provider-transport/request.ts";
 import { prepareProviderScope } from "./provider-transport/request-options.ts";
 
@@ -27,7 +27,7 @@ export function createProviderTransport(
   origin: string,
   ca: Uint8Array | undefined,
   clock: Clock,
-  scope: Readonly<{ installationId: string; repositoryId: string; profile: GitHubProfile }>,
+  scope: Readonly<{ installationId: string; repositoryId: string; profile: GitHubTokenProfile }>,
 ): ProviderTransport {
   const prepared = prepareProviderScope(origin, scope);
   const trustedCa = ca === undefined ? undefined : Buffer.from(ca);

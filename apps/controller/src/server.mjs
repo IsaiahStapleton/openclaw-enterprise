@@ -1,4 +1,4 @@
-import { clientAddressConfiguration, githubLoginConfiguration } from "./auth/index.ts";
+import { clientAddressConfiguration, humanLoginConfiguration } from "./auth/index.ts";
 import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
@@ -10,6 +10,7 @@ import { composeProduction } from "./composition/production.ts";
 import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
 import { createOccLogger, emitOccLogEvent } from "./logging.ts";
 import { createOccMetrics } from "./metrics/index.ts";
+import { startupDependencyFailure } from "./startup-failure.ts";
 import { metricsConfiguration, startMetricsListener } from "./metrics/listener.ts";
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
@@ -54,7 +55,10 @@ function startupFailureCode(error) {
 }
 
 function startupFailure(logger, error) {
-  emitOccLogEvent(logger, { event: "startup-error", code: startupFailureCode(error) });
+  emitOccLogEvent(logger, {
+    event: "startup-error",
+    ...(startupDependencyFailure(error) ?? { code: startupFailureCode(error) }),
+  });
   process.exitCode = 1;
 }
 
@@ -176,6 +180,12 @@ function configuration() {
   }
 
   const nativeAdminEnabled = optionalBooleanEnvironment("OCC_AGENT_NATIVE_ADMIN_ENABLED");
+  // Default on: the routes are IAM-gated and audited; the chart value turns them off.
+  const agentRuntimeLogsEnabled =
+    process.env.OCC_AGENT_RUNTIME_LOGS_ENABLED === undefined ||
+    process.env.OCC_AGENT_RUNTIME_LOGS_ENABLED.trim().length === 0
+      ? true
+      : optionalBooleanEnvironment("OCC_AGENT_RUNTIME_LOGS_ENABLED");
   const nativeAdminDomain = process.env.OCC_AGENT_NATIVE_ADMIN_DOMAIN;
   const authCookieDomain = process.env.OCC_AUTH_COOKIE_DOMAIN;
   const nativeAdmin =
@@ -201,14 +211,15 @@ function configuration() {
     throw new Error("Development OCC_AUTH_BASE_URL must identify a loopback host.");
   }
 
-  const github = githubLoginConfiguration(process.env);
+  // { github?, google? }: each configured provider carries the recovery user ID.
+  const humanLogin = humanLoginConfiguration(process.env);
   const clientAddress = clientAddressConfiguration(process.env);
   if (mode === "production") {
     return Object.freeze({
       ...settings,
       authSecret: requiredEnvironment("OCC_AUTH_SECRET"),
       authBaseURL,
-      ...(github === undefined ? {} : { github }),
+      ...humanLogin,
       ...(clientAddress === undefined ? {} : { clientAddress }),
       ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
       ...(channelDirectoryProxyUrl === undefined ? {} : { channelDirectoryProxyUrl }),
@@ -216,6 +227,7 @@ function configuration() {
         ? {}
         : { channelDirectoryManagedProxyHost }),
       ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
+      agentRuntimeLogsEnabled,
     });
   }
 
@@ -233,9 +245,10 @@ function configuration() {
     ...settings,
     authSecret,
     authBaseURL,
-    ...(github === undefined ? {} : { github }),
+    ...humanLogin,
     ...(gatewayApiKeyPath === undefined ? {} : { gatewayApiKeyPath }),
     ...(nativeAdmin === undefined ? {} : { nativeAdmin }),
+    agentRuntimeLogsEnabled,
     ...(trustedDevelopmentBridgeCidr === undefined ? {} : { trustedDevelopmentBridgeCidr }),
     ...(trustedDevelopmentForwarderCidr === undefined || trustedDevelopmentForwarderCidr === ""
       ? {}

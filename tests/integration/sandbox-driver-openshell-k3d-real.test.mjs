@@ -1,4 +1,6 @@
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
+import { RUNTIME_WRAPPER_COMMAND } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -974,24 +976,19 @@ function credentialBridgeResource(context, claimName, subPath) {
 }
 
 function inlineNodeProgramIndex(command) {
-  if (command[0] === "node" && command[1] === "-e" && command.length === 3) {
-    return 2;
-  }
   assert.deepEqual(
-    command.slice(0, 5),
-    ["/usr/bin/tini", "-s", "--", "node", "-e"],
-    "the OpenShell bridge expects the native Node entrypoint with its optional tini wrapper.",
+    command.slice(0, RUNTIME_WRAPPER_COMMAND.length),
+    [...RUNTIME_WRAPPER_COMMAND],
+    "the OpenShell bridge expects the Compute runtime wrapper command.",
   );
-  assert.equal(command.length, 6, "the OpenShell bridge expects one inline Node program.");
-  return 5;
+  return RUNTIME_WRAPPER_COMMAND.length;
 }
 
-function portableRuntimeCommand(command) {
-  const programIndex = inlineNodeProgramIndex(command);
+function portableProgramPieces(program) {
   const chunks = [];
   let chunk = "";
   let bytes = 0;
-  for (const character of command[programIndex]) {
+  for (const character of program) {
     const characterBytes = Buffer.byteLength(character);
     if (bytes + characterBytes > portableCommandArgumentBytes && chunk.length > 0) {
       chunks.push(chunk);
@@ -1010,7 +1007,34 @@ function portableRuntimeCommand(command) {
     true,
     "every OpenShell runtime command chunk must remain below the upstream argument limit.",
   );
-  return [...command.slice(0, programIndex), 'eval(process.argv.slice(1).join(""))', ...chunks];
+  return chunks;
+}
+
+function portableRuntimeCommand(command) {
+  const programIndex = inlineNodeProgramIndex(command);
+  const runtimeArguments = command.slice(programIndex);
+  const nodeProgramLoader = nodeProgramArguments("")[0];
+  if (runtimeArguments[0].endsWith(nodeProgramLoader)) {
+    // Compute already compressed the program behind this fixed loader. Preserve that contract
+    // and the bridge's credential bootstrap while splitting the concatenated payload below
+    // OpenShell's smaller argument limit.
+    const payload = runtimeArguments.slice(1).join("");
+    return [
+      ...command.slice(0, programIndex),
+      runtimeArguments[0],
+      ...portableProgramPieces(payload),
+    ];
+  }
+  assert.equal(
+    runtimeArguments.length,
+    1,
+    "the OpenShell bridge expects one inline Node program or the bounded program loader.",
+  );
+  return [
+    ...command.slice(0, programIndex),
+    'eval(process.argv.slice(1).join(""))',
+    ...portableProgramPieces(runtimeArguments[0]),
+  ];
 }
 
 function bridgeRequirements(context, claimName, subPath) {
@@ -1952,6 +1976,8 @@ async function prepareProductionInstallation(
     cluster: "k3d-openshell-sandboxdriver",
   });
   if (harnessId === "openclaw") {
+    // scripts/k3d builds this runtime from an OpenClaw source with native worker support.
+    configuration.runtime = { nativeWorkerSupport: "custom-image" };
     configuration.drivers.compute.configuration.runtime.nativeOpenClawSessionCapacity = 2;
     configuration.drivers.credential_gateway.configuration.binaries = ["/usr/local/bin/node"];
   }

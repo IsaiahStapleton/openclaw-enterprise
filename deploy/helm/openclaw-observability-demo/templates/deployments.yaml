@@ -93,7 +93,14 @@ spec:
       volumes:
         - name: data
           emptyDir:
+            {{- if eq $component "grafana" }}
+            # First start runs ~700 SQLite migrations that each wait on fsync on
+            # node disk, which can take minutes. The database is small and disposable.
+            medium: Memory
+            sizeLimit: {{ $.Values.grafana.dataSizeLimit }}
+            {{- else }}
             sizeLimit: {{ $.Values.storage.sizeLimit }}
+            {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi

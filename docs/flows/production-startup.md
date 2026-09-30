@@ -71,7 +71,11 @@ graph TD
 The migration, shared bootstrap, API, and worker entrypoints use
 [`createPostgresPool`](../../packages/occ/src/state/postgres-pool.ts).
 See [connection authentication settings](../reference/settings/operations.md#postgresql-connection-authentication)
-for password and Azure workload-identity configuration.
+for password and Azure workload-identity configuration. When PostgreSQL ends
+an idle pooled connection (failover, maintenance restart, `idle_session_timeout`
+or a proxy reset), the pool discards that client and writes one
+`database.idle-client-error` warning with only the error code to stderr; the
+process keeps running and the next query opens a new connection.
 
 ### 1. Prepare native production inputs
 
@@ -266,6 +270,10 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   identifies a server below the supported Kubernetes 1.35 baseline; startup
   continues, but operators should upgrade before treating the deployment as
   supported.
+- `startup-error` or `worker.startup-error` with code
+  `KUBERNETES_API_UNAVAILABLE` means the Compute preflight got no answer from
+  the Kubernetes API server named by `host` and `port`. Check that
+  `cluster.cidrs` still lists that address; a restarted cluster can move it.
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
   first check for unsafe output storage, existing output files, database-role
   failures, auth origin errors, and administrator/IAM mismatch.

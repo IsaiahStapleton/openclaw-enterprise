@@ -1,9 +1,10 @@
 # Platform design
 
-Start with [current architecture](../ARCHITECTURE.md) to understand how the
-OpenClaw Control Plane works today. The [platform design](../design.md) defines
-the approved target; check its [implementation status](../design.md#implementation-status)
-before treating a planned capability as available.
+Start with [platform architecture](../design.md) to understand the OpenClaw
+Control Plane's components, ownership, and trust boundaries. Its
+[implementation status](../design.md#implementation-status) and
+[remaining design work](../design.md#remaining-design-work) distinguish current
+behavior from approved requirements that are not yet supported.
 
 ## Find the right source
 
@@ -22,9 +23,9 @@ before treating a planned capability as available.
   requests, deploys Agents, and runs background work.
 - [Repository layout](../layout.md) maps packages and source directories to
   their owners.
-- [Implementation specifications](../../specs/README.md) record individual
-  proposals and delivery history. They are not proof that a capability exists in
-  the current product.
+- [RFCs and implementation plans](specifications.md) explains how to record
+  decisions and delivery. The [specification index](../../specs/README.md) links
+  individual workstreams; their recorded status is not proof of availability.
 
 Keep architecture pages about components, ownership, trust boundaries, and major
 interactions. Put a feature's detailed behavior in its current reference and

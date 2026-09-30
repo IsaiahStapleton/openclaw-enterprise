@@ -10,8 +10,8 @@ separates core operations from optional additions. IAM describes authorization,
 identity scope, and credential boundaries. Lifecycle distinguishes the Driver
 instance from the resources it manages.
 
-Start with the [Driver documentation inventory](driver-docs-inventory.md) to find
-the existing owner. Base contracts belong in
+Start with [Driver development](contributing/driver-development.md) to find
+the existing base contract. Base contracts belong in
 `docs/reference/drivers/<capability>.md`; backend configuration, setup commands,
 and backend-specific troubleshooting remain in implementation references.
 See the [ComputeDriver contract](reference/drivers/compute.md) for an applied
