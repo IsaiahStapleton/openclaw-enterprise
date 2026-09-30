@@ -61,6 +61,9 @@
       "path": "tests/conformance/runtime-logs-sandbox.test.mjs"
     },
     {
+      "path": "tests/conformance/runtime-logs-replay.test.mjs"
+    },
+    {
       "path": "tests/conformance/occ-read.test.mjs"
     },
     {
@@ -471,6 +474,9 @@
     },
     {
       "path": "tests/integration/password-sign-in-admission.test.mjs"
+    },
+    {
+      "path": "tests/integration/password-sign-in-audit.test.mjs"
     },
     {
       "path": "tests/integration/known-device-cookie.test.mjs"

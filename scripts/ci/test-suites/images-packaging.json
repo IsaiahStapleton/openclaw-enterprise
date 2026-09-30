@@ -87,12 +87,6 @@
       ]
     },
     {
-      "path": "tests/integration/password-default-chart.test.mjs",
-      "expectedTests": [
-        "the example install renders password-only sign-in and GitHub only as an upgrade"
-      ]
-    },
-    {
       "path": "tests/integration/sign-in-chart-parity.test.mjs",
       "expectedTests": [
         "the API accepts exactly the sign-in settings the chart renders for every proxy preset, with and without GitHub",

@@ -133,6 +133,64 @@ test(
       assert.equal(await sessionOf(cookie), null);
     });
 
+    await t.test("password sign-ins are audited, and a failure names no account", async (t) => {
+      // The audit record replaces the library's unstructured console warning.
+      const warn = t.mock.method(console, "warn", () => {});
+      const state = new PostgresPlatformState(pool);
+      const logins = async () =>
+        (await state.transact((unit) => unit.audit.list())).filter(
+          ({ action }) => action === "authentication.login",
+        );
+      const before = (await logins()).length;
+      const accepted = await signIn(memberEmail, memberPassword);
+      assert.equal(accepted.statusCode, 200, accepted.body);
+      const refused = await signIn(memberEmail, "wrong-member-password");
+      assert.equal(refused.statusCode, 401, refused.body);
+      const unknown = await signIn("nobody@example.test", "wrong-member-password");
+      assert.equal(unknown.statusCode, 401, unknown.body);
+      const recorded = (await logins()).slice(before);
+      const installation = await state.loadInstallation();
+      const principal = (await state.loadNativeIAMState(installation.id)).identities.find(
+        (identity) => identity.kind === "principal" && identity.subject === member.id,
+      );
+      assert.ok(principal);
+      assert.deepEqual(
+        recorded.map(({ kind, actorId, outcome, reasonCode, details }) => ({
+          kind,
+          actorId,
+          outcome,
+          reasonCode,
+          details,
+        })),
+        [
+          {
+            kind: "mutation",
+            actorId: principal.id,
+            outcome: "success",
+            reasonCode: undefined,
+            details: { userId: member.id },
+          },
+          ...Array(2).fill({
+            kind: "authorization_denial",
+            actorId: "unresolved",
+            outcome: "denied",
+            reasonCode: "INVALID_CREDENTIALS",
+            details: undefined,
+          }),
+        ],
+      );
+      // Neither the attempted email nor the password reaches the audit record.
+      const stored = JSON.stringify(recorded);
+      assert.ok(!stored.includes("nobody@example.test"));
+      assert.ok(!stored.includes("wrong-member-password"));
+      assert.deepEqual(
+        warn.mock.calls.filter(({ arguments: [message] }) =>
+          String(message).includes("[Better Auth]"),
+        ),
+        [],
+      );
+    });
+
     await t.test(
       "account controls refuse with a specific conflict, not a dependency failure",
       async () => {

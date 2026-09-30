@@ -128,6 +128,29 @@ function podCard(pod) {
   );
 }
 
+/**
+ * Which rule decided a sandbox policy decision (AL3). OpenShell names the rule and its
+ * engine on every decision; the policy generation is missing on most paths, so a missing
+ * value reads "unknown", never blank. `-` is OpenShell's name for "no rule matched".
+ */
+function policyProvenance(fields = {}) {
+  const decision =
+    fields.action !== undefined || fields.rule_name !== undefined || fields.rule_type !== undefined;
+  if (!decision) {
+    return null;
+  }
+  const value = (name) =>
+    fields[name] === undefined || String(fields[name]) === "" ? "unknown" : String(fields[name]);
+  const rule = fields.rule_name === "-" ? "no matching rule" : value("rule_name");
+  return `rule ${rule} · engine ${value("rule_type")} · policy generation ${value("policy_generation")}`;
+}
+
+// OpenShell records no Agent turn, request or session id, so a sandbox decision can only
+// be related to Gateway or Harness lines by time. Never present that as exact (AL6).
+const INFERRED_JOIN_LABEL = "Gateway lines: inferred (time window)";
+const INFERRED_JOIN_TITLE =
+  "OpenShell does not record which Agent turn made this request. Gateway or Harness lines near this time may be related; clocks on different nodes can differ.";
+
 function recordRow(record) {
   if (record.type === "gap") {
     return element(
@@ -159,6 +182,13 @@ function recordRow(record) {
     record.subsystem ? element("span", { className: "log-subsystem" }, record.subsystem) : null,
     element("span", { className: "log-message" }, record.message),
   );
+  const provenance = record.kind === "sandbox" ? policyProvenance(record.fields) : null;
+  if (provenance !== null) {
+    summary.append(
+      element("span", { className: "log-provenance" }, provenance),
+      element("span", { className: "log-join", title: INFERRED_JOIN_TITLE }, INFERRED_JOIN_LABEL),
+    );
+  }
   let row;
   if (!record.fields || Object.keys(record.fields).length === 0) {
     row = element("div", { className: "log-row" }, summary);
