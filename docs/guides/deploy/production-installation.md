@@ -470,7 +470,7 @@ during stopped maintenance. Install without GitHub as above, then enable it with
 
 Activation is one-way: the database refuses older images' sessions and
 `auth.github` must stay set. Never `helm rollback` past activation
-([rollback](production-upgrade.md#roll-back-across-human-sign-in));
+([rollback](production-upgrade-recovery.md#roll-back-across-human-sign-in));
 [stopped maintenance](auth-maintenance.md) deactivates it.
 
 1. Verify password recovery ([replaceable](../../reference/authentication/external-sign-in.md#session-and-recovery-controls)
