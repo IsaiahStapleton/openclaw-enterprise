@@ -9,8 +9,9 @@ Separate Agents receive separate service principals, even when they share a
 Namespace. The service principal is immutable, belongs to its exact Agent and
 Namespace, and remains the same across every revision of that Agent.
 
-An Agent service principal does not inherit your permissions, session cookie,
-provider credentials, or another Agent's identity. It has the same
+Inheriting the creator's identity, permissions, session cookie, or provider
+credentials is not yet supported. An Agent service principal cannot assume
+another Agent's identity. It has the same
 role-granted capabilities as a human Principal: an appropriately scoped Role
 and AccessBinding can grant any platform action, including administrative
 actions and access to another Agent in the same Namespace. Its Namespace scope,
