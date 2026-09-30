@@ -11322,3 +11322,43 @@ for (const embedded of [true, false]) {
     assert.equal(await prepareUntilReady(driver, next, { ...context, ...authContext(next) }), 1);
   });
 }
+
+// A first embedded deploy that never became ready (for example rejected model
+// auth) leaves an unready Gateway behind an inactive Service while workspace
+// setup is still pending. The next deploy must repair it with its own template
+// rather than wait on the failed predecessor until the convergence deadline.
+test("embedded redeploy repairs a never-served unready Gateway while workspace setup is pending", async () => {
+  const { driver, revision, namespace, objects, state, context } = workspaceSetupFixture(true);
+  const gatewayName = `gateway-${digest(revision.agentId)}`;
+  const gatewayKey = `Deployment:${namespace}:${gatewayName}`;
+  const serviceKey = `Service:${namespace}:${gatewayName}`;
+  assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+  assert.equal(
+    objects.get(gatewayKey).metadata.annotations["openclaw.dev/agent-revision-id"],
+    revision.id,
+  );
+  assert.equal(
+    objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
+    `${gatewayName}-inactive`,
+  );
+
+  const successor = { ...revision, id: "redeploy-successor", revision: revision.revision + 1 };
+  const successorContext = { ...context, ...authContext(successor) };
+  assert.equal(successorContext.workspaceSetup.completed, false);
+  assert.equal((await driver.prepareRevision(successor, successorContext)).ready, false);
+  const repaired = objects.get(gatewayKey);
+  assert.equal(repaired.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
+  assert.equal(
+    objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
+    `${gatewayName}-inactive`,
+    "the repaired Gateway stays unserved until activation",
+  );
+
+  state.ready = true;
+  assert.equal(await prepareUntilReady(driver, successor, successorContext), 1);
+  await driver.activateRevision(successor, successorContext);
+  assert.equal(
+    objects.get(gatewayKey).metadata.annotations["openclaw.dev/agent-revision-id"],
+    successor.id,
+  );
+});
