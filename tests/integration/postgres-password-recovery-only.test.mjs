@@ -240,7 +240,8 @@ test(
         logger: googleLog.logger,
       });
       const [warning] = warnings(googleLog);
-      assert.deepEqual(warning.skippedUserIds, [member.id, stranded.id].sort());
+      // State orders ids by database collation, which need not match JavaScript's sort.
+      assert.deepEqual([...warning.skippedUserIds].sort(), [member.id, stranded.id].sort());
       assert.deepEqual(await providers(app), {
         github: false,
         google: true,
