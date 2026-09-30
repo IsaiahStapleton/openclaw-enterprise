@@ -50,6 +50,10 @@ upgrade or preserve a demo. See the [demo lifecycle](../../testing/kubernetes.md
   operator host or container with protected access to the existing cluster and
   Docker daemon. Do not bypass the probe. Repository-disabled installations do
   not have this host requirement.
+- If the bundled Collector is enabled, including the [observability demo](../observability/demo.md)'s
+  `occ-demo-collector-config`, [refresh the Secret named by `logging.collector.configSecretName`](../observability.md#refresh-the-collector-configuration-on-upgrade)
+  from the `RELEASE_SOURCE_SHA` checkout and restart the Collector. Helm does not
+  update it, and the script stops while it differs from that checkout.
 
 From a secure operator shell, replace placeholders with the existing paths and
 names. The evidence parent must exist; the final directory must be new.
