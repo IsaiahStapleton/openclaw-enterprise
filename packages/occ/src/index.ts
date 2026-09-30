@@ -320,7 +320,7 @@ export type {
   CoreSchemaRootV1,
   CoreResourceSchemaV1,
   AuthTableSchemaV1,
-} from "./schema/core-schema-boundary-v1.ts";
+} from "./auth-persistence/core-schema-boundary-v1.ts";
 export type {
   SchemaAuthAdapterOptionsV1,
   SchemaAuthBindingFactoryV1,
