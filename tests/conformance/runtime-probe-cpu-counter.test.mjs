@@ -21,15 +21,21 @@ function probe(pressure, throttling, options = {}) {
   const events = [];
   const fs = {
     readFileSync(path) {
-      if (path.endsWith("/cpu.max")) return options.quota ?? "100000 100000\n";
+      if (path.endsWith("/cpu.max")) {
+        return options.quota ?? "100000 100000\n";
+      }
       if (path.endsWith("/cpu.pressure")) {
         const value = pressure[phase];
-        if (value === null) throw new Error("pressure unavailable");
+        if (value === null) {
+          throw new Error("pressure unavailable");
+        }
         return `some avg10=0.00 total=${value}\n`;
       }
       if (path.endsWith("/cpu.stat")) {
         const value = throttling[phase];
-        if (value === null) throw new Error("throttling unavailable");
+        if (value === null) {
+          throw new Error("throttling unavailable");
+        }
         return `usage_usec 1\nthrottled_usec ${value}\n`;
       }
       throw new Error(`unexpected cgroup path ${path}`);
