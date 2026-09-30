@@ -2217,18 +2217,25 @@ async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
   // The running app server keeps its placeholder, but the proxy no longer resolves it.
   const after = `OCC-OPENSHELL-AFTER-${randomUUID()}`;
   let observation;
+  let result;
+  let rejected = false;
   try {
-    const result = await turn(`Reply with exactly ${after}.`);
-    observation = result.assistant ?? "";
-    assert.doesNotMatch(observation, new RegExp(after));
+    result = await turn(`Reply with exactly ${after}.`);
   } catch (error) {
+    rejected = true;
     observation = error instanceof Error ? error.message : String(error);
+  }
+  if (!rejected) {
+    observation = result.assistant ?? "";
   }
   assert.equal(
     String(observation).includes(process.env.OPENAI_API_KEY),
     false,
     "a revoked turn must not expose the model key",
   );
+  if (!rejected) {
+    assert.equal(observation.includes(after), false, "a revoked turn must not return the nonce");
+  }
 
   // The active revision still references the source, so it cannot be deleted yet.
   const deletion = await request(
