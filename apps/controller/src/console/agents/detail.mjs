@@ -77,7 +77,7 @@ const DEPLOYMENT_FAILURE_GUIDANCE = {
     "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
 };
 
-function deploymentFailure(error, credentialsHref = null) {
+function deploymentFailure(error, credentialsHref = null, logs = null) {
   if (!error) {
     return element("p", { className: "muted" }, "No persisted startup failure.");
   }
@@ -96,6 +96,14 @@ function deploymentFailure(error, credentialsHref = null) {
           guidance,
           credentialsHref ? " " : null,
           credentialsHref ? element("a", { href: credentialsHref }, "Open Credentials") : null,
+        )
+      : null,
+    // A failed version may never become current, so link its output directly.
+    logs
+      ? element(
+          "p",
+          { className: "hint" },
+          element("a", { href: logs.href }, `Open v${logs.revision} Logs`),
         )
       : null,
     runtimeFailure && typeof runtimeFailure === "object"
@@ -168,6 +176,7 @@ function createDeploymentStatusPanel(
   onAgentChange,
   onStatusChange,
   credentialsHref = null,
+  logsHref = null,
 ) {
   const section = element("section", { className: "agent-card deployment-status" });
   const state = { loading: false, status: null, error: null, overviewError: false };
@@ -271,7 +280,11 @@ function createDeploymentStatusPanel(
           )
         : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
-      deploymentFailure(state.status.error, credentialsHref),
+      deploymentFailure(
+        state.status.error,
+        credentialsHref,
+        logsHref ? { href: logsHref, revision: revision.revision } : null,
+      ),
       state.status.warnings?.length
         ? element(
             "div",
@@ -1048,6 +1061,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             agent.harnessAuth?.method === "runtime"
               ? null
               : context.pageUrl(`agents/${agent.id}?revision=draft&tab=credentials`, namespaceId),
+            context.pageUrl(
+              `agents/${agent.id}?revision=${encodeURIComponent(mostRecent.id)}&tab=logs`,
+              namespaceId,
+            ),
           )
         : element(
             "section",

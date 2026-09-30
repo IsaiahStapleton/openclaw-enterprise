@@ -39,8 +39,10 @@ another version or the draft. Its milestones use the persisted record:
 | **Deployment work**     | `queued` awaits an initial or subsequent claim; `running` records a worker claim. |
 | **Completion recorded** | `succeeded` means the original work completed activation or was already active.   |
 
-A `failed` result shows the stored error. Startup evidence may identify the
-runtime component, failed check, code, and check time. Plugin warnings describe
+A `failed` result shows the stored error and an **Open vN Logs** link to that
+version's [Logs tab](../topics/agent-logs.md), which the draft does not have.
+Startup evidence may identify the runtime component, failed check, code, and
+check time. Plugin warnings describe
 that attempt. An unavailable record has unknown status. **Refresh deployment**
 rereads it, the selected version, and that version's deployment record without
 retrying work.
