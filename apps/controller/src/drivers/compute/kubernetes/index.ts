@@ -9035,6 +9035,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     workloadName?: string,
   ): Record<string, string> {
     return {
+      [NETWORK_PROFILE_LABEL]: this.harnessNetworkProfile(revision),
       "openclaw.dev/namespace": revision.namespaceId,
       "openclaw.dev/agent": revision.agentId,
       "openclaw.dev/revision": revision.id,
