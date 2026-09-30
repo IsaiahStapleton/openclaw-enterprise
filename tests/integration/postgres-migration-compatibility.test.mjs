@@ -1024,6 +1024,15 @@ async function assertCompletedHistory(db, previous = []) {
   );
   assert.equal(catalogDigest(await migrationCatalog(db.migrator)), manifest.catalogs.completed);
   assert.equal(
+    (
+      await db.app.query(
+        "SELECT count(*)::integer AS count FROM occ.agents WHERE repository_access IS NOT NULL",
+      )
+    ).rows[0].count,
+    0,
+    "migration must not invent inheritance intent for existing Agent bindings",
+  );
+  assert.equal(
     catalogDigest(await migrationCatalog(db.migrator, "drizzle")),
     manifest.ledgerCatalogs.completed,
   );
@@ -1403,7 +1412,12 @@ async function canonicalData(db) {
       table === "account"
         ? ["authentication_version", "identity_only"]
         : table === "agents"
-          ? ["repository_bindings", "harness_auth_credential_source_id", "plugin_approvers"]
+          ? [
+              "repository_bindings",
+              "repository_access",
+              "harness_auth_credential_source_id",
+              "plugin_approvers",
+            ]
           : table === "controller_work"
             ? ["work_kind"]
             : [];
@@ -1470,7 +1484,8 @@ test(
       [37, "preHumanAuthentication"],
       [38, "preAgentDeletionTakeover"],
       [39, "preNamespaceDeletionTakeover"],
-      [40, "preCredentialWithdrawals"],
+      [40, "preRepositoryAccess"],
+      [41, "preCredentialWithdrawals"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1718,7 +1733,8 @@ test(
       [37, "preHumanAuthentication"],
       [38, "preAgentDeletionTakeover"],
       [39, "preNamespaceDeletionTakeover"],
-      [40, "preCredentialWithdrawals"],
+      [40, "preRepositoryAccess"],
+      [41, "preCredentialWithdrawals"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1787,7 +1803,8 @@ test(
       [37, "preHumanAuthentication"],
       [38, "preAgentDeletionTakeover"],
       [39, "preNamespaceDeletionTakeover"],
-      [40, "preCredentialWithdrawals"],
+      [40, "preRepositoryAccess"],
+      [41, "preCredentialWithdrawals"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

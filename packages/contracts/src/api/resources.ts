@@ -24,6 +24,7 @@ import {
   BackendId,
   RepositoryBindingSelectionSchema,
   RepositoryBindingSelectionsSchema,
+  RepositoryAccessSchema,
   RevisionId,
   ResourceKindSchema,
   SecretBindings,
@@ -266,6 +267,7 @@ export const AgentSchema = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingSelectionsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
     desiredRuntimeState: Type.Union([Type.Literal("running"), Type.Literal("stopped")]),
     activeRevisionId: Type.Optional(RevisionId),
     status: Type.Union([Type.Literal("active"), Type.Literal("deleting")]),
@@ -281,6 +283,7 @@ const ConfigurationReadErrorSchema = Type.Object(
       Type.Literal("plugins"),
       Type.Literal("pluginApprovers"),
       Type.Literal("repositoryBindings"),
+      Type.Literal("repositoryAccess"),
       Type.Literal("harnessAuth"),
       Type.Literal("secretBindings"),
       Type.Literal("repositoryCredentials"),
@@ -291,7 +294,7 @@ const ConfigurationReadErrorSchema = Type.Object(
 );
 
 const agentReadDescription =
-  "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth.";
+  "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth.";
 
 export const AgentReadSchema = Type.Union(
   [
@@ -302,6 +305,7 @@ export const AgentReadSchema = Type.Union(
           "plugins",
           "pluginApprovers",
           "repositoryBindings",
+          "repositoryAccess",
           "harnessAuth",
         ]).properties,
         configurationReadError: ConfigurationReadErrorSchema,
@@ -566,6 +570,7 @@ export const RepositoryOptionSchema = Type.Object(
   {
     repositoryRef: RepositoryBindingSelectionSchema.properties.repositoryRef,
     displayName: Name,
+    description: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
     allowedProfiles: Type.Array(RepositoryBindingSelectionSchema.properties.profile, {
       minItems: 1,
       maxItems: 16,
@@ -764,7 +769,13 @@ export const BackendListResponse = Type.Object(
 );
 
 export const RepositoryOptionListResponse = Type.Object(
-  { data: Type.Array(RepositoryOptionSchema, { maxItems: 128 }), meta: Meta },
+  {
+    data: Type.Array(RepositoryOptionSchema, { maxItems: 1000 }),
+    meta: Type.Object(
+      { ...Meta.properties, descriptionsPending: Type.Boolean() },
+      { additionalProperties: false },
+    ),
+  },
   { additionalProperties: false },
 );
 

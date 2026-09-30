@@ -8,7 +8,7 @@ import { permissionsForProfile } from "./profiles.ts";
 import { createRoutePolicy } from "./routes.ts";
 import { createGatewayAuthentication } from "./gateway-authentication.ts";
 import { createGrantResolver } from "./grants.ts";
-import type { GitHubDriverFactory, GitHubFactoryOptions, GitHubProfile } from "./types.ts";
+import type { GitHubDriverFactory, GitHubFactoryOptions, GitHubTokenProfile } from "./types.ts";
 
 function endpoint(value: string): string {
   const url = new URL(value);
@@ -40,8 +40,13 @@ export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHub
   const apiOrigin = endpoint(options.trustedEndpoints?.apiOrigin ?? "https://api.github.com");
   const gitOrigin = endpoint(options.trustedEndpoints?.gitOrigin ?? "https://github.com");
   const gatewayOrigin = endpoint(options.gatewayOrigin);
-  const grants = createGrantResolver({ config, gatewayOrigin, selectedBinding });
-  const policy = (profile: GitHubProfile) =>
+  const grants = createGrantResolver({
+    config,
+    gatewayOrigin,
+    selectedBinding,
+    ...(options.metadataOnly ? { metadataOnly: true } : {}),
+  });
+  const policy = (profile: GitHubTokenProfile) =>
     createRoutePolicy({
       repository: config.repository,
       repositoryId: config.repositoryId,

@@ -193,18 +193,17 @@ entry.
 Compute supplies gateway authentication; Presets replace the starter unchanged.
 [Native admin access](agent-native-admin.md) owns HTTPS isolation.
 
-`GET /namespaces/:namespaceId/agents/repository-options` discovers approved choices.
-Console submits opaque references and an explicit common profile. Only
-`503 REPOSITORY_OPTIONS_UNAVAILABLE` permits creation without repository bindings
-when no selections are retained. Other failures block submission. `draftBindings()`
-preserves choices; failed rediscovery blocks creation. Successful reads filter
-choices against current policy.
+`createRepositoryFields` loads `GET /namespaces/:namespaceId/agents/repository-options`,
+then requests optional descriptions for visible refs. [Repository admission](agent-repository-credentials.md) resolves the
+submitted `repositoryAccess`. Retained drafts keep selections through failed
+discovery; retries recheck current policy. Only `503 REPOSITORY_OPTIONS_UNAVAILABLE`
+permits creation without bindings, and only without retained selections; other
+failures block submission.
 
 Supported Dedicated runtimes submit inline Configuration, optional repository
-bindings, and Secret references to [provisioning](agent-provisioning.md), including
-when optional discovery is unavailable without retained selections. The worker
-reauthorizes, creates resources and exact Secret grants, and deploys. Console polls
-the job, then opens its revision.
+access, and Secret references to [provisioning](agent-provisioning.md), even after
+that outage. The worker reauthorizes, creates resources and exact Secret grants,
+and deploys; Console polls, then opens the revision.
 
 Ordinary drafts post `{kind: "agent", values, secretBindings}` to
 `POST /namespaces/:namespaceId/configurations`, then submit its ID, plugins,
@@ -323,6 +322,8 @@ refresh and inspection.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-29 20:00: Trace repository descriptions and inherited access. (public-pr/374)
 
 - 2026-09-29 07:19: Guard recovery until session and Namespace reads finish. (authoring-run/1ca6a40a-a247-465f-9a83-182dbcb6ff4e - 90326e6fab11f84fc11b8990b6c8e197a2752c60)
 

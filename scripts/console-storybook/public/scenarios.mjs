@@ -292,7 +292,7 @@ const pluginDiscoveryGap =
 const repositoryOptionsPath =
   "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/repository-options";
 const account = [{ selector: ".account-toggle", click: true }];
-const devdayRepositorySelector = 'input[value="openclaw/openclaw-enterprise"]';
+const devdayRepositorySelector = 'input[data-repository-ref="openclaw/openclaw-enterprise"]';
 const createSlackBotSecret = [
   { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
   { selector: "#create-slack-secret-slack-bot-token-value", value: "simulated-bot-token" },
@@ -1563,17 +1563,69 @@ export const scenarios = {
   },
   createRepositoriesSelected: {
     group: "Pages/Create Agent",
-    name: "Approved repositories and shared access",
+    name: "Repositories using the Agent default",
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-handbook", click: true },
-      { selector: "#repository-profile-git-read", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+      { selector: "#repository-default-git-read", click: true },
     ],
     description:
-      "Two approved repositories share Read-only access to code, issues, pull requests, and checks. The real form offers only their common levels and requires an explicit choice.",
+      "Two approved repositories inherit Read-only access. Expand a repository header to customize its access; an explicit override stays fixed when the Agent default changes.",
     gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
+  },
+  createRepositoriesDetails: {
+    group: "Pages/Create Agent",
+    name: "Repository descriptions and selection",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: 'input[data-repository-ref="design-system"]', click: true },
+    ],
+    repositoryOptions: [
+      {
+        repositoryRef: "application",
+        displayName: "example/application",
+        description: "The application and services used by the team.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "design-system",
+        displayName: "example/design-system",
+        description: "Shared components and styles for product interfaces.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "handbook",
+        displayName: "example/handbook",
+        description: "Guides and operating practices for the team.",
+        allowedProfiles: ["git-read"],
+      },
+      {
+        repositoryRef: "prod-infra",
+        displayName: "example/infrastructure",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "web",
+        displayName: "example/web",
+        description: "The public website and documentation.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+    ],
+    description:
+      "Adjacent selected repositories share a highlighted surface. Descriptions are optional; select or clear a repository with its checkbox or row.",
+  },
+  createRepositoriesDescriptionsPending: {
+    group: "Pages/Create Agent",
+    name: "Repository descriptions loading",
+    path: create,
+    actions: repositoryForm,
+    repositoryDescriptionsPending: true,
+    description:
+      "Repository choices are usable while descriptions load. Descriptions appear without changing selections or moving focus.",
   },
   createRepositoriesContributor: {
     group: "Pages/Create Agent",
@@ -1581,13 +1633,13 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
-      { selector: "#repository-issue-access", click: true },
+      { selector: "#repository-default-issues", click: true },
     ],
     description:
-      "Customize Contributor access to turn off issue management while keeping push and pull request access. The collapsed summary retains that restriction.",
+      "Customize Contributor access to turn off issue management while keeping push and pull request access. The Contributor description and collapsed summary retain that restriction.",
   },
   createRepositoriesCollaborator: {
     group: "Pages/Create Agent",
@@ -1595,11 +1647,78 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: "#repository-default-git-full", click: true },
     ],
     description:
       "Contributor also creates and manages issues. GraphQL can permit merges and branch changes within the installation token grant; the Git push allowlist does not constrain GraphQL.",
+  },
+  ...Object.fromEntries(
+    [1, 5, 25, 140].map((count) => [
+      `createRepositories${count}`,
+      {
+        group: "Pages/Create Agent",
+        name: `${count} approved repositories`,
+        path: create,
+        actions: repositoryForm,
+        repositoryOptions: Array.from({ length: count }, (_, index) => ({
+          repositoryRef: `repository-${String(index + 1).padStart(3, "0")}`,
+          displayName: `example/${index === count - 1 && count > 1 ? "a-long-repository-name-for-mobile-review" : `repository-${String(index + 1).padStart(3, "0")}`}`,
+          allowedProfiles: ["git-read", "git-write", "git-full"],
+        })),
+        description:
+          count <= 5
+            ? "A small catalog shows selectable approved repositories and their references. Access inherits the Agent default."
+            : "Search and six initial repository choices keep a large catalog bounded. Browse all uses pages of twenty; selected repositories have their own access settings.",
+      },
+    ]),
+  ),
+  createRepositoriesExactSearch: {
+    group: "Pages/Create Agent",
+    name: "Exact repository names before prefix matches",
+    path: create,
+    actions: [...repositoryForm, { selector: "#repository-search", value: "application" }],
+    repositoryOptions: [
+      "alpha/application-api",
+      "beta/my-application",
+      "omega/application",
+      "zeta/application",
+      "tools/cli",
+      "docs/handbook",
+      "ops/infrastructure",
+    ].map((displayName, index) => ({
+      repositoryRef: `catalog-${index}`,
+      displayName,
+      allowedProfiles: ["git-read", "git-write", "git-full"],
+    })),
+    description:
+      "Search a short repository name. Exact names appear first with their owners visible, followed by prefixes and substrings. Press Enter to add the first match; the query stays available for another addition.",
+  },
+  createRepositoriesCustom: {
+    group: "Pages/Create Agent",
+    name: "Custom access survives default changes",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: '[aria-label="Access for example/application"]', click: true },
+      { selector: "#repository-inherit-application", click: true },
+      { selector: "#repository-default-git-read", click: true },
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+    ],
+    description:
+      "The application keeps custom Contributor access while the handbook inherits Read-only. The broader exception remains explicit beside the default.",
+  },
+  createRepositoriesPolicyConflict: {
+    group: "Pages/Create Agent",
+    name: "Repair a restricted repository",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+    ],
+    description:
+      "A repository restricted to Read-only remains expanded. The operator must explicitly repair the selection before saving.",
   },
   createRepositoriesEmpty: {
     group: "Pages/Create Agent",
@@ -1696,10 +1815,10 @@ export const scenarios = {
     ],
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
-      { selector: "#repository-issue-access", click: true },
+      { selector: "#repository-default-issues", click: true },
       click("Create Agent"),
       click("Reload repository choices"),
     ],
@@ -2327,6 +2446,24 @@ export const scenarios = {
     ],
     description:
       "The new version draft names Contributor and Read-only access and shows write limits.",
+  },
+  repositoryEditor: {
+    group: "Pages/Agent detail",
+    name: "Edit inherited and custom repository access",
+    path: `${draft}&tab=repositories`,
+    repositoryAccess: {
+      defaultProfile: "git-full",
+      repositories: [
+        { repositoryRef: "application" },
+        { repositoryRef: "handbook", profile: "git-read" },
+      ],
+    },
+    repositoryBindings: [
+      { repositoryRef: "application", profile: "git-full" },
+      { repositoryRef: "handbook", profile: "git-read" },
+    ],
+    description:
+      "Reopening the desired configuration keeps the Agent default and each explicit override. Saving changes updates the draft; admitted revisions retain their prior access.",
   },
   repositoryAdmitted: {
     group: "Pages/Agent detail",
@@ -3047,6 +3184,40 @@ export const scenarios = {
     actions: [click("Edit Slack"), click("Save configuration")],
     description: "A rejected Configuration write keeps the drawer and feedback visible.",
   },
+  channelSavePending: {
+    group: "Components/Channels",
+    name: "Channel save pending",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    auth: "runtime",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        method: "PATCH",
+        hold: true,
+      },
+    ],
+    actions: [click("Disable Slack")],
+    description:
+      "A pending channel save disables deployment and revision navigation. The real client times out after 15 seconds; reset the story to replay it.",
+  },
+  channelSaveUnknown: {
+    group: "Components/Channels",
+    name: "Channel save outcome unknown",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    auth: "runtime",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        method: "PATCH",
+        status: 503,
+        once: true,
+      },
+    ],
+    description:
+      "Disable Slack to simulate an uncertain save. Deployment and navigation stay blocked until Reload draft; inspect the saved state before retrying.",
+  },
   credentials: {
     group: "Components/Credentials",
     name: "Model authentication",
@@ -3113,6 +3284,42 @@ export const scenarios = {
     ],
     description:
       "A saved Secret reference remains visible when the follow-up exact Secret access grant is denied.",
+  },
+  credentialsSavePending: {
+    group: "Components/Credentials",
+    name: "Channel Secret save pending",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets/sec_demo_slack_app_token",
+        method: "PATCH",
+        hold: true,
+      },
+    ],
+    actions: [
+      { selector: "#runtime-slack-app-token", value: "simulated-token" },
+      click("Save channel Secrets"),
+    ],
+    description:
+      "A pending Secret save disables deployment. The real client times out after 15 seconds; reset the story to replay it.",
+  },
+  credentialsSaveUnknown: {
+    group: "Components/Credentials",
+    name: "Channel Secret save outcome unknown",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets/sec_demo_slack_app_token",
+        method: "PATCH",
+        status: 503,
+        once: true,
+      },
+    ],
+    actions: [{ selector: "#runtime-slack-app-token", value: "simulated-token" }],
+    description:
+      "Save the simulated replacement to see an uncertain Secret save. Reload the draft and inspect saved state before deploying or retrying.",
   },
   credentialsSlackPartial: {
     group: "Components/Credentials",

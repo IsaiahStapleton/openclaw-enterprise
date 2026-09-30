@@ -80,13 +80,15 @@ export async function startServiceListeners(
     tls,
     upstreamOrigins,
     trustedUpstreamOrigins = new Set(upstreamOrigins),
+    providerQueue,
+    repositoryDescriptions,
   },
 ) {
   const [{ createCredentialService }, { startListeners }] = await Promise.all([
     appModule("drivers/repo/credentials/service"),
     appModule("drivers/repo/credentials/server"),
   ]);
-  const service = createCredentialService({ config, factory, clock });
+  const service = createCredentialService({ config, factory, clock, providerQueue });
   let listeners;
   // Separate hooks retain every cleanup failure and keep upstreams alive for revocation.
   resources.after(() => listeners?.close());
@@ -100,6 +102,7 @@ export async function startServiceListeners(
     trustedUpstreamOrigins,
     clock,
     upstreamCa: tls.ca,
+    ...(repositoryDescriptions === undefined ? {} : { repositoryDescriptions }),
   });
   return { service, listeners };
 }

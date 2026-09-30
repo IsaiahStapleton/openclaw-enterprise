@@ -47,6 +47,7 @@ Stores Agent drafts, their desired runtime state, and the active revision refere
 - `plugins`
 - `plugin_approvers`
 - `repository_bindings`
+- `repository_access` (default and explicit per-repository overrides)
 - `service_principal_id`
 - `harness_auth`
 - `harness_auth_secret_id`

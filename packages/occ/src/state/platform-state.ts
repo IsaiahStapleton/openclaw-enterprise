@@ -10,6 +10,7 @@ import type {
 import { memoryRepositorySessions } from "./memory-repository-sessions.ts";
 import {
   normalizedRepositoryBindings,
+  normalizedRepositoryAccess,
   validRepositoryRevisionState,
 } from "./repository-credential-state.ts";
 import type {
@@ -36,6 +37,7 @@ import type {
   PluginApprovers,
   Preset,
   RepositoryBindingSelection,
+  RepositoryAccess,
   Secret,
   SecretBindings,
   ServiceAccount,
@@ -156,6 +158,7 @@ export interface AgentRepository extends AgentReadRepository {
     plugins?: PluginDesiredState,
     repositoryBindings?: readonly RepositoryBindingSelection[],
     pluginApprovers?: PluginApprovers | null,
+    repositoryAccess?: RepositoryAccess | null,
   ): Promise<Readonly<Agent> | undefined>;
   compareAndSetActiveRevision(
     namespaceId: string,
@@ -1994,6 +1997,10 @@ function repositories(
       const plugins = normalizedPlugins(agent.plugins);
       const pluginApprovers = normalizedPluginApprovers(agent.pluginApprovers);
       const repositoryBindings = normalizedRepositoryBindings(agent.repositoryBindings);
+      const repositoryAccess = normalizedRepositoryAccess(
+        agent.repositoryAccess,
+        repositoryBindings,
+      );
       const namespace = await namespaces.lockNamespace(agent.namespaceId);
       if (
         namespace === undefined ||
@@ -2036,6 +2043,7 @@ function repositories(
         plugins: _providedPlugins,
         pluginApprovers: _providedPluginApprovers,
         repositoryBindings: _providedRepositoryBindings,
+        repositoryAccess: _providedRepositoryAccess,
         ...withoutPlugins
       } = agent;
       const saved = immutableCopy({
@@ -2043,6 +2051,7 @@ function repositories(
         ...(plugins === undefined ? {} : { plugins }),
         ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+        ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
         desiredRuntimeState: "stopped" as const,
         status: "active" as const,
       });
@@ -2098,6 +2107,7 @@ function repositories(
       nextPlugins,
       nextRepositoryBindings,
       nextPluginApprovers,
+      nextRepositoryAccess,
     ) => {
       const current = await agents.findAgent(namespaceId, agentId);
       if (!current) {
@@ -2135,7 +2145,16 @@ function repositories(
         nextRepositoryBindings === undefined
           ? current.repositoryBindings
           : normalizedRepositoryBindings(nextRepositoryBindings);
+      const repositoryAccess = normalizedRepositoryAccess(
+        nextRepositoryAccess === undefined
+          ? nextRepositoryBindings === undefined
+            ? current.repositoryAccess
+            : undefined
+          : nextRepositoryAccess,
+        repositoryBindings,
+      );
       const {
+        repositoryAccess: _currentRepositoryAccess,
         plugins: _currentPlugins,
         pluginApprovers: _currentPluginApprovers,
         repositoryBindings: _currentRepositoryBindings,
@@ -2150,6 +2169,7 @@ function repositories(
         ...(plugins === undefined ? {} : { plugins }),
         ...(pluginApprovers === undefined ? {} : { pluginApprovers }),
         ...(repositoryBindings === undefined ? {} : { repositoryBindings }),
+        ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
       });
       snapshot.agents.set(agentKey(namespaceId, agentId), updated);
       return immutableCopy(updated);
