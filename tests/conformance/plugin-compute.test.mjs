@@ -3558,6 +3558,7 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
     children: [],
     exits: [],
     intervals: [],
+    signalHandlers: {},
     statusHandler: undefined,
     files: new Map([
       [
@@ -3582,8 +3583,12 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
     t.after(() => new Promise((resolve) => server.close(resolve)));
     return server.address().port;
   };
-  const peerPort = await listen((request, response) => {
+  const peerPort = await listen(async (request, response) => {
     assert.equal(request.url, "/openclaw/plugin-runtime/status");
+    if (fixture.peerGate !== undefined) {
+      fixture.peerRequestPending = true;
+      await fixture.peerGate;
+    }
     if (!fixture.peerAvailable) {
       response.writeHead(503).end();
       return;
@@ -3633,7 +3638,9 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
               OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
             }),
       },
-      on() {},
+      on(signal, handler) {
+        fixture.signalHandlers[signal] = handler;
+      },
       exit(code) {
         fixture.exits.push(code);
       },
@@ -3794,6 +3801,38 @@ test("Codex gateway supervisor keeps OpenClaw when the same Harness returns afte
   assert.deepEqual(gateway.exits, []);
 });
 
+test("Codex gateway supervisor exits when OpenClaw crashes during a peer status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+
+  // A status outage must not hide the running Gateway's own failure.
+  first.exit(1, null);
+  const exitsAfterCrash = [...gateway.exits];
+  // process.exit is captured by this fixture, so release the pending peer wait.
+  gateway.peerAvailable = true;
+  await poll;
+  assert.deepEqual(exitsAfterCrash, [1]);
+});
+
+test("Codex gateway supervisor forwards container termination during a peer status outage", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const [first] = gateway.children;
+  gateway.peerAvailable = false;
+  const poll = gateway.pollPeer();
+  await waitForCondition("readiness to drop", () => gateway.status().phase === "starting");
+
+  gateway.signalHandlers.SIGTERM();
+  assert.deepEqual(first.killed, ["SIGTERM"]);
+  first.exit(null, "SIGTERM");
+  assert.deepEqual(gateway.exits, [0]);
+  gateway.peerAvailable = true;
+  await poll;
+  assert.equal(gateway.children.length, 1);
+});
+
 test("Codex gateway supervisor re-applies the workspace node binding on respawn", async (t) => {
   const deviceId = "a".repeat(64);
   const gateway = await startCodexGatewaySupervisor(t, { bindingDeviceId: deviceId });
@@ -3818,6 +3857,85 @@ test("Codex gateway supervisor re-applies the workspace node binding on respawn"
   assert.equal(gateway.status().phase, "ready");
   assert.deepEqual(gateway.exits, []);
 });
+
+for (const [changedField, change] of [
+  ["startup", { startupId: "agent-startup-3" }],
+  ["pod", { podUid: "agent-pod-3" }],
+  ["plugin failure set", { failures: [] }],
+]) {
+  test(`Codex gateway supervisor rejects a changed ${changedField} while its replacement starts`, async (t) => {
+    const gateway = await startCodexGatewaySupervisor(t);
+    const first = gateway.children[0];
+    gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+    gateway.serving = false;
+    const respawn = gateway.pollPeer();
+    await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+    first.exit(null, "SIGTERM");
+    await waitForCondition("the replacement Gateway", () => gateway.children.length === 2);
+    gateway.peerStatus = { ...gateway.peerStatus, ...change };
+    gateway.serving = true;
+    await respawn;
+
+    const replacement = gateway.children[1];
+    assert.equal(gateway.status().phase, "starting");
+    assert.deepEqual(replacement.killed, ["SIGTERM"]);
+    replacement.exit(null, "SIGTERM");
+    assert.deepEqual(gateway.exits, [1]);
+  });
+}
+
+test("Codex gateway supervisor fails closed if peer status disappears during replacement startup", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const first = gateway.children[0];
+  gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+  gateway.serving = false;
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+  first.exit(null, "SIGTERM");
+  await waitForCondition("the replacement Gateway", () => gateway.children.length === 2);
+  gateway.peerAvailable = false;
+  gateway.serving = true;
+  await respawn;
+
+  const replacement = gateway.children[1];
+  assert.equal(gateway.status().phase, "starting");
+  assert.deepEqual(replacement.killed, ["SIGTERM"]);
+  replacement.exit(null, "SIGTERM");
+  assert.deepEqual(gateway.exits, [1]);
+});
+
+for (const termination of ["crash", "SIGTERM", "SIGINT"]) {
+  test(`Codex gateway supervisor handles ${termination} while verifying the replacement peer`, async (t) => {
+    const gateway = await startCodexGatewaySupervisor(t);
+    const first = gateway.children[0];
+    gateway.peerStatus = { ...gateway.peerStatus, startupId: "agent-startup-2" };
+    gateway.serving = false;
+    const respawn = gateway.pollPeer();
+    await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+    first.exit(null, "SIGTERM");
+    await waitForCondition("the replacement Gateway", () => gateway.children.length === 2);
+    let releasePeer;
+    gateway.peerGate = new Promise((resolve) => {
+      releasePeer = resolve;
+    });
+    gateway.serving = true;
+    await waitForCondition("the peer verification request", () => gateway.peerRequestPending);
+
+    const replacement = gateway.children[1];
+    if (termination !== "crash") {
+      gateway.signalHandlers[termination]();
+      assert.deepEqual(replacement.killed, [termination]);
+      replacement.exit(null, termination);
+    } else {
+      replacement.exit(1, null);
+    }
+    releasePeer();
+    await respawn;
+    assert.equal(gateway.status().phase, "starting");
+    assert.deepEqual(gateway.exits, [termination === "SIGTERM" ? 0 : 1]);
+    assert.equal(gateway.children.length, 2);
+  });
+}
 
 test("Codex gateway supervisor bounds respawn retries and falls back to a container restart", async (t) => {
   const gateway = await startCodexGatewaySupervisor(t);

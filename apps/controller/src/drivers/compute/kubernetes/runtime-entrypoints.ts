@@ -2117,6 +2117,7 @@ let child;
 let childRunning = false;
 let childExited;
 let respawning = false;
+let watchRunningChild = false;
 let stoppingContainer = false;
 let gatewayGeneration = 0;
 
@@ -2137,7 +2138,7 @@ function startGatewayProcess() {
         process.exit(1);
         return;
       }
-      if (gatewayTerminating || (!respawning && spawned === child)) {
+      if (gatewayTerminating || ((!respawning || watchRunningChild) && spawned === child)) {
         process.exit(code ?? (signal === "SIGTERM" ? 0 : 1));
       }
     });
@@ -2302,7 +2303,10 @@ if (followsPeerStatus) {
           "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
           { signal: AbortSignal.timeout(2_000), redirect: "error" },
         );
-        if (response.status === 200 && childRunning) return true;
+        if (response.status === 200 && childRunning) {
+          watchRunningChild = true;
+          return true;
+        }
       } catch {}
       await pluginRuntimeDelay(GATEWAY_RESPAWN_READY_POLL_MS);
     }
@@ -2322,8 +2326,11 @@ if (followsPeerStatus) {
       if (current === undefined) {
         // Unreadable status need not mean a new Harness: the same Harness
         // process coming back leaves this Gateway's credential valid.
+        watchRunningChild = true;
         const returned = await waitForPeerPluginRuntimeStatus();
-        if (!peerChanged(returned) && childRunning) {
+        watchRunningChild = false;
+        if (gatewayTerminating || !childRunning) return;
+        if (!peerChanged(returned)) {
           publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
           logStartupPhase("peer-status-restored", respawnStartedAt);
           return;
@@ -2345,12 +2352,28 @@ if (followsPeerStatus) {
         if (gatewayTerminating) return;
         const spawnedAt = startGatewayProcess();
         resetWorkspaceNodeTracking(configured.workspaceNodeId, spawnedAt);
-        if (await waitForGatewayServing()) break;
+        const serving = await waitForGatewayServing();
+        if (gatewayTerminating) return;
+        if (serving) break;
         if (attempt >= GATEWAY_RESPAWN_ATTEMPTS) {
           throw new Error("The respawned native Gateway did not become ready.");
         }
         await stopGatewayProcess();
         await pluginRuntimeDelay(1_000 * 2 ** (attempt - 1));
+      }
+      // The peer may have changed while the replacement was starting. A
+      // single bounded read fails closed rather than publishing stale readiness.
+      let verifiedPeer;
+      try {
+        verifiedPeer = await readPeerPluginRuntimeStatus();
+      } catch {
+        verifiedPeer = undefined;
+      } finally {
+        watchRunningChild = false;
+      }
+      if (gatewayTerminating || !childRunning) return;
+      if (verifiedPeer === undefined || peerChanged(verifiedPeer)) {
+        throw new Error("The Harness peer changed or became unavailable during Gateway startup.");
       }
       publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
       logStartupPhase("gateway-respawn", respawnStartedAt);
@@ -2358,6 +2381,7 @@ if (followsPeerStatus) {
       logStartupPhase("gateway-respawn", respawnStartedAt, "failed");
       stopContainer();
     } finally {
+      watchRunningChild = false;
       respawning = false;
     }
   };
