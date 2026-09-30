@@ -2204,15 +2204,18 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           agentId,
         );
       }
-      await options.auditSink.append(
-        event(
-          operation,
-          request,
-          { kind: "agent", id: agentId ?? namespaceId, namespaceId },
-          "mutation",
-          context,
-        ),
-      );
+      // Clients poll on the provider interval; audit the transition, not every pending poll.
+      if (result?.status !== "pending" || operation.operationId.startsWith("start")) {
+        await options.auditSink.append(
+          event(
+            operation,
+            request,
+            { kind: "agent", id: agentId ?? namespaceId, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      }
       reply.header("cache-control", "no-store");
       if (result === undefined) {
         reply.status(204).send();

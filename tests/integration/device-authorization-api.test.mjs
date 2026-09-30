@@ -209,6 +209,7 @@ test("device login configures plugins and admits its opaque Secret reference in 
   assertDeviceAudit(fixture, "start");
   assert.equal(login.verificationUrl, "https://auth.openai.com/codex/device");
   assert.equal(login.intervalSeconds, 5);
+  const audited = fixture.auditSink.events.length;
   assert.equal((await fixture.poll(login)).data.status, "pending");
   assert.equal(
     fixture.requests.length,
@@ -217,6 +218,8 @@ test("device login configures plugins and admits its opaque Secret reference in 
   );
   await fixture.clock.advance(5000);
   assert.equal((await fixture.poll(login)).data.status, "pending");
+  // Pending polls are not state transitions; only the start and the ready result are audited.
+  assert.equal(fixture.auditSink.events.length, audited);
   approved = true;
   await fixture.clock.advance(5000);
   const ready = await fixture.poll(login);
