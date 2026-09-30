@@ -4,6 +4,7 @@ import type {
   CredentialGatewayContext,
   CredentialGatewayDriver,
   CredentialRevisionContext,
+  CredentialWithdrawalContext,
   CredentialSourceAttachment,
   CredentialSourceContext,
   CredentialSourceInput,
@@ -341,19 +342,12 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
    * Detaches the source's provider from the revision's Sandbox. Only a REVOKED receipt reports
    * `revoked`: the Sandbox's placeholders then stop resolving, even in running processes.
    */
-  async withdraw(
-    context: CredentialRevisionContext & { readonly sourceId: string },
-  ): Promise<CredentialAttachmentStatus> {
-    if (context.sandbox === undefined) {
-      throw new OpenShellCredentialGatewayFailure(
-        "OpenShell withdrawal requires the provisioned Sandbox.",
-      );
-    }
+  async withdraw(context: CredentialWithdrawalContext): Promise<CredentialAttachmentStatus> {
     const workspace = openShellWorkspaceName(context.namespace);
     const client = this.client(context);
     const provider = openShellProviderName(context.sourceId);
     const sandbox = context.sandbox.resourceName;
-    // Detach is idempotent; a replay after an uncertain detach reports detached: false.
+    // Detach is idempotent; a replay after an uncertain detach still returns a receipt.
     const detached = await client.detachSandboxProvider(
       workspace,
       sandbox,

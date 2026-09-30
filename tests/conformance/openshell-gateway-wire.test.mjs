@@ -358,7 +358,7 @@ test("OpenShell client serializes v0.1.0 provider updates and detach receipts", 
     assert.equal(requests.detaches[0].workspace_scope.workspace, "tenant-workspace");
     assert.equal(requests.detaches[0].sandbox, "sandbox-wire");
     assert.equal(requests.detaches[0].provider, "oce-cs-000000000000000000000000");
-    assert.deepEqual(detached, { detached: true, receiptId: "receipt-detach" });
+    assert.deepEqual(detached, { receiptId: "receipt-detach" });
     assert.equal(requests.statuses[0].receipt_id, "receipt-detach");
     assert.equal(status.state, "PROVIDER_READINESS_STATE_REVOKED");
     // An empty value would leave the old credential in place, so the client refuses it.

@@ -3917,7 +3917,7 @@ test("credential withdrawal revokes through the revision's exact Sandbox", async
     revisionId: revision.id,
   });
   assert.equal(withdrawals[0].sourceId, source.id);
-  assert.deepEqual(withdrawals[0].sources, [source]);
+  assert.equal(withdrawals[0].revision, revision);
 
   // A gateway answer about another source is not evidence for this withdrawal.
   reportedSource = "cs_00000000-0000-4000-8000-000000000003";

@@ -4083,7 +4083,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const status = await this.requireCredentialGateway().withdraw({
       namespace: sandboxNamespace,
       revision,
-      sources: [source],
       sandbox,
       sourceId: source.id,
       signal,

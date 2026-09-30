@@ -103,9 +103,8 @@ export interface OpenShellSandboxProviderStatus {
   readonly reason?: string;
 }
 
+/** Readiness for a detach, including a replay of one, is read through its receipt. */
 export interface OpenShellProviderDetachResult {
-  /** False when the provider was not attached to the Sandbox. */
-  readonly detached: boolean;
   readonly receiptId?: string;
 }
 
@@ -893,10 +892,7 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       throw error;
     }
     const receiptId = asRecord(response.receipt)?.receipt_id;
-    return Object.freeze({
-      detached: response.detached === true,
-      ...(isNonEmptyString(receiptId) ? { receiptId } : {}),
-    });
+    return Object.freeze(isNonEmptyString(receiptId) ? { receiptId } : {});
   }
 
   async getSandboxProviderStatus(

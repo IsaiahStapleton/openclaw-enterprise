@@ -1082,6 +1082,16 @@ export interface CredentialRevisionContext extends CredentialGatewayContext {
   readonly sandbox?: SandboxResourceRef;
 }
 
+/** Names the one source to revoke from one provisioned revision Sandbox. */
+export interface CredentialWithdrawalContext extends CredentialGatewayContext {
+  /** Resolved by Compute: `name` is the runtime placement shared with the paired Sandbox. */
+  readonly namespace: Readonly<Namespace>;
+  readonly revision: Readonly<AgentRevision>;
+  /** The Sandbox provisioning created for `revision`. */
+  readonly sandbox: SandboxResourceRef;
+  readonly sourceId: string;
+}
+
 /** Opaque grant that only the paired SandboxDriver can consume. */
 export interface CredentialSourceAttachment {
   readonly sourceId: string;
@@ -1117,9 +1127,11 @@ export interface CredentialGatewayDriver extends Driver {
   attachmentStatus(
     context: CredentialRevisionContext,
   ): Promise<readonly CredentialAttachmentStatus[]>;
-  withdraw(
-    context: CredentialRevisionContext & { readonly sourceId: string },
-  ): Promise<CredentialAttachmentStatus>;
+  /**
+   * Returns `revoked` only on gateway evidence that the revision's placeholders no longer
+   * resolve, `absent` when the Sandbox no longer exists, and `pending` otherwise.
+   */
+  withdraw(context: CredentialWithdrawalContext): Promise<CredentialAttachmentStatus>;
 }
 
 export interface SandboxDriver extends Driver {
