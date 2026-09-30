@@ -983,6 +983,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
       return endpoint;
     },
     startWorker,
+    armMaterialExpiry: (agentId) => worker.armMaterialExpiry(agentId),
     killWorker: async () => {
       const receipt = await worker.kill();
       worker = undefined;

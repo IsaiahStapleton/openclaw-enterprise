@@ -420,6 +420,9 @@
       "path": "tests/conformance/repository-client-environment.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-material-expiry-probe.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-material-store.test.mjs",
       "expectedTests": [
         "expiry during Secret read refuses to create material",
