@@ -232,6 +232,70 @@ test("an operator without administer sees status but no log text and is never re
   assert.equal(logRequests(requests, revisionId).length, denied);
 });
 
+test("a log reader without operate reads log text in the Logs tab without runtime status", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  computeDriver.state.restartCount = 1;
+  computeDriver.state.lines = [line(1, "log reader can see this")];
+  computeDriver.state.previousLines = [line(0, "output before the restart")];
+  const reader = await fixture.createAccountWithPolicy("runtime-log-reader", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-console-runtime-log-reader",
+      namespaceId: namespace.id,
+      permissions: [
+        { action: "read", resourceKind: "namespace" },
+        { action: "read", resourceKind: "agent" },
+        { action: "read_logs", resourceKind: "agent" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "read", resourceKind: "agent_revision" },
+      ],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-console-runtime-log-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-console-runtime-log-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search, reader.credentials);
+
+  // Runtime status needs operate; log text needs only read_logs, so the tab still reads it.
+  await page
+    .getByText(
+      "Runtime status requires Agent operate and read access plus read access to this version.",
+    )
+    .waitFor();
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  await pane.getByText("log reader can see this").waitFor();
+  const pod = computeDriver.podName({ id: revisionId });
+  await page.getByText(`Showing gateway in ${pod}.`).waitFor();
+  assert.equal(await page.locator(".runtime-pod").count(), 0);
+  assert.equal(await page.locator("#runtime-log-source").isDisabled(), false);
+  // Without status the console names no Pod; OCC reads the source's current Pod.
+  const [first] = logRequests(requests, revisionId);
+  assert.equal(new URL(first.path, fixture.origin).searchParams.has("pod"), false);
+
+  // The page's stream reports the restart, so the previous instance is readable.
+  await page.getByLabel("Previous instance").check();
+  await pane.getByText("output before the restart").waitFor();
+  await page.getByLabel("Previous instance").uncheck();
+  await pane.getByText("log reader can see this").waitFor();
+
+  // Follow continues the view with its cursor.
+  computeDriver.state.lines = [line(1, "log reader can see this"), line(2, "a later line")];
+  await page.getByRole("button", { name: "Follow" }).click();
+  await pane.getByText("a later line").waitFor();
+  assert.ok(logRequests(requests, revisionId).some(({ path }) => path.includes("cursor=v1.")));
+  await page.getByRole("button", { name: "Following" }).click();
+
+  // A source this version does not have is explained, not a generic failure.
+  await page.locator("#runtime-log-source").selectOption("sandbox");
+  await page.getByText(/This version has no sandbox log source/).waitFor();
+});
+
 test("the Logs tab explains cluster RBAC, unsupported Drivers and unavailable reads", async (t) => {
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
   const { RuntimeLogsForbiddenByClusterError } = await import("../../packages/occ/src/index.ts");
