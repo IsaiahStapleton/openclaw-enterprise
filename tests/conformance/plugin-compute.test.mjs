@@ -134,16 +134,6 @@ const agent = Object.freeze({
   createdAt: tenant.createdAt,
 });
 
-function context(mode) {
-  return {
-    namespace: tenant,
-    agent: { ...agent, executionMode: mode },
-    harness: { id: mode === "embedded" ? "openclaw" : "codex", version: "2026.9.0", mode },
-    configuration: {},
-    signal: AbortSignal.timeout(1_000),
-  };
-}
-
 function revision(overrides = {}) {
   const native = createHarnessConfiguration(overrides.harness?.id ?? "codex", "gpt-4.1");
   delete native.gateway.auth;
