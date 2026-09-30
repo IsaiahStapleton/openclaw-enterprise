@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
 import { GATEWAY_RUNTIME_ENTRYPOINT as DOCKER_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/docker/index.ts";
 import {
+  AGENT_READINESS_ENTRYPOINT,
   AGENT_WITH_NODE_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
@@ -18,7 +19,9 @@ import {
   GATEWAY_STOP_TIMEOUT_MS,
   NATIVE_WORKER_ENTRYPOINT,
   PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN,
+  RUNTIME_WRAPPER_COMMAND,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
+import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import {
   REPOSITORY_MATERIAL_INIT_ENTRYPOINT,
   REPOSITORY_NATIVE_GIT_INIT_ENTRYPOINT,
@@ -2549,5 +2552,450 @@ process.stdout.write("shared-codex-0.158.0-ready\n");
       script,
     ]);
     assert.match(stdout, /shared-codex-0.158.0-ready/);
+  },
+);
+
+// Runtime wrapper termination. A Pod stop sends SIGTERM to the container's
+// PID 1, waits terminationGracePeriodSeconds (the Gateway's is 330 seconds),
+// then sends SIGKILL; an embedded Gateway redeploy uses Recreate, so the new
+// Pod waits for the old one. These tests start the real wrappers with the
+// container command the Compute driver renders, in the runtime image, and send
+// SIGTERM in each startup phase. Only the model provider is substituted: a
+// sidecar in the runtime image owns the network namespace, answers the
+// Responses API as api.openai.com (mapped to loopback, trusted through a
+// private CA) and observes the wrapper's status and readiness from outside.
+const terminationProbeApiKey = "sk-openclaw-runtime-termination-synthetic";
+// Well below the 30-second default grace a Harness Pod gets, and far below the
+// Gateway's 330 seconds: a wrapper that ignores SIGTERM never meets it.
+const promptTerminationMs = 15_000;
+
+async function createModelProbeEndpointMaterial(t, readinessProgram) {
+  const directory = await mkdtemp(join(tmpdir(), "oce-runtime-termination-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = (name) => join(directory, name);
+  // Codex rejects a self-signed end-entity certificate, so sign a leaf.
+  await execute("openssl", [
+    "req",
+    "-x509",
+    "-newkey",
+    "rsa:2048",
+    "-nodes",
+    "-days",
+    "2",
+    "-subj",
+    "/CN=oce-runtime-termination-ca",
+    "-addext",
+    "basicConstraints=critical,CA:TRUE",
+    "-addext",
+    "keyUsage=critical,keyCertSign",
+    "-keyout",
+    file("ca-key.pem"),
+    "-out",
+    file("ca.pem"),
+  ]);
+  await execute("openssl", [
+    "req",
+    "-newkey",
+    "rsa:2048",
+    "-nodes",
+    "-subj",
+    "/CN=api.openai.com",
+    "-keyout",
+    file("key.pem"),
+    "-out",
+    file("leaf.csr"),
+  ]);
+  await writeFile(
+    file("leaf.ext"),
+    [
+      "subjectAltName=DNS:api.openai.com",
+      "basicConstraints=critical,CA:FALSE",
+      "extendedKeyUsage=serverAuth",
+      "keyUsage=critical,digitalSignature,keyEncipherment",
+      "",
+    ].join("\n"),
+  );
+  await execute("openssl", [
+    "x509",
+    "-req",
+    "-in",
+    file("leaf.csr"),
+    "-CA",
+    file("ca.pem"),
+    "-CAkey",
+    file("ca-key.pem"),
+    "-CAcreateserial",
+    "-days",
+    "2",
+    "-extfile",
+    file("leaf.ext"),
+    "-out",
+    file("cert.pem"),
+  ]);
+  await rm(file("ca-key.pem"));
+  // Only the provider host resolves, to the sidecar; every other name fails at once.
+  await writeFile(file("hosts"), "127.0.0.1 localhost\n127.0.0.1 api.openai.com\n");
+  await writeFile(file("resolv.conf"), "nameserver 127.0.0.1\noptions timeout:1 attempts:1\n");
+  await writeFile(
+    file("endpoint.mjs"),
+    await readFile(new URL("../fixtures/runtime-model-probe-endpoint.mjs", import.meta.url)),
+  );
+  await writeFile(file("readiness.cjs"), readinessProgram);
+  await chmod(directory, 0o755);
+  for (const name of [
+    "ca.pem",
+    "cert.pem",
+    "key.pem",
+    "hosts",
+    "resolv.conf",
+    "endpoint.mjs",
+    "readiness.cjs",
+  ]) {
+    await chmod(file(name), 0o644);
+  }
+  return directory;
+}
+
+// Each wrapper with the environment its Compute workload renders, less
+// credentials and cluster endpoints the scenario does not reach.
+function terminationWrapper(kind) {
+  const status = [
+    "OPENCLAW_PLUGIN_STATUS_PORT=18791",
+    `OPENCLAW_PLUGIN_STATUS_CONTAINER=${kind === "codex" ? "agent" : "gateway"}`,
+    "OPENCLAW_RUNTIME_STATUS_PORT=18791",
+    `OPENCLAW_RUNTIME_STATUS_CONTAINER=${kind === "codex" ? "agent" : "gateway"}`,
+    "OPENCLAW_AGENT_REVISION_ID=revision-termination",
+    "OPENCLAW_POD_UID=pod-termination",
+  ];
+  if (kind === "codex") {
+    return {
+      entrypoint: AGENT_RUNTIME_ENTRYPOINT,
+      readiness: AGENT_READINESS_ENTRYPOINT,
+      nativePort: 4500,
+      cpus: "0.5",
+      environment: [
+        "HOME=/home/node",
+        "CODEX_HOME=/home/node/.codex",
+        "CODEX_LOGIN_MODE=api_key",
+        `OPENAI_API_KEY=${terminationProbeApiKey}`,
+        `OPENCLAW_HARNESS_MODEL=codex/${runtimeImageModel}`,
+        "APP_SERVER_TOKEN=openclaw-runtime-termination-app-server-token",
+        "APP_SERVER_PORT=4500",
+        "SSL_CERT_FILE=/fixture/ca.pem",
+        ...status,
+      ],
+    };
+  }
+  if (kind === "dedicated-gateway") {
+    // A Codex peer with an enabled plugin: the Gateway waits for the Harness's
+    // plugin status before it starts OpenClaw. The peer never answers here.
+    const configuration = createAdmittedRuntimeImageConfiguration("codex");
+    const manifest = {
+      kind: "codex",
+      selections: {
+        "codex-plugin:linear@openai-curated-remote": {
+          enabled: true,
+          toolDefaults: { approval: "provider_default" },
+        },
+      },
+    };
+    return {
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      readiness: GATEWAY_READINESS_ENTRYPOINT,
+      nativePort: 8080,
+      cpus: "0.5",
+      configuration,
+      environment: [
+        "HOME=/home/node",
+        "OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json",
+        "OPENCLAW_GATEWAY_PORT=8080",
+        "OPENCLAW_GATEWAY_PASSWORD=openclaw-runtime-termination-password",
+        "OPENCLAW_STATE_DIR=/home/node/.openclaw",
+        "APP_SERVER_URL=ws://127.0.0.1:4500",
+        `OPENCLAW_PLUGIN_RUNTIME_JSON=${JSON.stringify({ manifest })}`,
+        ...status,
+      ],
+    };
+  }
+  const configuration = createAdmittedRuntimeImageConfiguration("openclaw");
+  const model = configuration.agents.defaults.model;
+  const provider = model.split("/", 1)[0];
+  // The controller's probe configuration: the selected model and its provider
+  // transport. Only allowPrivateNetwork is added, because the stand-in
+  // provider listens on loopback.
+  const probeConfiguration = {
+    agents: {
+      defaults: {
+        model,
+        models: {
+          [model]: {
+            ...configuration.agents.defaults.models?.[model],
+            agentRuntime: { id: "openclaw" },
+          },
+        },
+      },
+    },
+    models: {
+      providers: {
+        [provider]: {
+          ...configuration.models.providers[provider],
+          request: { allowPrivateNetwork: true },
+        },
+      },
+    },
+  };
+  return {
+    entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+    readiness: GATEWAY_READINESS_ENTRYPOINT,
+    nativePort: 8080,
+    // At 500m the embedded probe can overrun its 30-second attempt cap before
+    // the provider sees a turn; this test is about termination, not that cap.
+    cpus: "1",
+    configuration,
+    environment: [
+      "HOME=/home/node",
+      "OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json",
+      "OPENCLAW_GATEWAY_PORT=8080",
+      "OPENCLAW_GATEWAY_PASSWORD=openclaw-runtime-termination-password",
+      "OPENCLAW_STATE_DIR=/home/node/.openclaw",
+      `OPENCLAW_HARNESS_MODEL=${model}`,
+      `OPENCLAW_HARNESS_PROVIDER=${provider}`,
+      "OPENCLAW_HARNESS_CREDENTIAL_ENV=OPENAI_API_KEY",
+      `OPENCLAW_HARNESS_PROBE_CONFIG=${JSON.stringify(probeConfiguration)}`,
+      `OPENAI_API_KEY=${terminationProbeApiKey}`,
+      "NODE_EXTRA_CA_CERTS=/fixture/ca.pem",
+      ...status,
+    ],
+  };
+}
+
+// Starts one wrapper beside the stand-in provider. `mode` is the provider's
+// behaviour: "answer" at once, "reject" with HTTP 401, or "hang".
+async function startTerminationScenario(t, kind, mode) {
+  const wrapper = terminationWrapper(kind);
+  const material = await createModelProbeEndpointMaterial(t, wrapper.readiness);
+  if (wrapper.configuration !== undefined) {
+    await writeFile(join(material, "openclaw.json"), JSON.stringify(wrapper.configuration));
+    await chmod(join(material, "openclaw.json"), 0o644);
+  }
+  const suffix = randomBytes(6).toString("hex");
+  const sidecar = `oce-runtime-termination-endpoint-${suffix}`;
+  const containerName = `oce-runtime-termination-${kind}-${suffix}`;
+  t.after(async () => {
+    for (const name of [containerName, sidecar]) {
+      await runDocker(["kill", "--signal", "KILL", name]).catch(() => {});
+      await runDocker(["rm", "-f", name]).catch(() => {});
+    }
+  });
+  const readinessEnvironment = Object.fromEntries(
+    wrapper.environment.map((entry) => [
+      entry.slice(0, entry.indexOf("=")),
+      entry.slice(entry.indexOf("=") + 1),
+    ]),
+  );
+  await runDocker([
+    "run",
+    "--name",
+    sidecar,
+    "--detach",
+    "--network",
+    "none",
+    "--sysctl",
+    "net.ipv4.ip_unprivileged_port_start=0",
+    "--user",
+    "1000:1000",
+    "--read-only",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--tmpfs",
+    "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+    "--volume",
+    `${material}:/fixture:ro`,
+    "-e",
+    `PROBE_ENDPOINT_MODE=${mode}`,
+    "-e",
+    `PROBE_OBSERVE_NATIVE_PORT=${wrapper.nativePort}`,
+    "-e",
+    "PROBE_OBSERVE_STATUS_PORT=18791",
+    "-e",
+    `PROBE_OBSERVE_READINESS_ENV=${JSON.stringify(readinessEnvironment)}`,
+    "--entrypoint",
+    "node",
+    image,
+    "/fixture/endpoint.mjs",
+  ]);
+  await waitForDockerLog(sidecar, /"event":"listening"/);
+  // The container command the Compute driver renders, with the wrapper program
+  // in the same bounded pieces: PID 1 is whatever that command starts.
+  const [command, ...commandArguments] = RUNTIME_WRAPPER_COMMAND;
+  await runDocker([
+    "run",
+    "--name",
+    containerName,
+    "--detach",
+    "--network",
+    `container:${sidecar}`,
+    "--cpus",
+    wrapper.cpus,
+    "--memory",
+    "2g",
+    "--user",
+    "1000:1000",
+    "--read-only",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--tmpfs",
+    "/home/node:size=1024m,uid=1000,gid=1000,mode=700",
+    "--tmpfs",
+    "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+    "--volume",
+    `${material}:/fixture:ro`,
+    "--volume",
+    `${join(material, "hosts")}:/etc/hosts:ro`,
+    "--volume",
+    `${join(material, "resolv.conf")}:/etc/resolv.conf:ro`,
+    ...(wrapper.configuration === undefined
+      ? []
+      : ["--volume", `${join(material, "openclaw.json")}:/etc/openclaw/openclaw.json:ro`]),
+    ...wrapper.environment.flatMap((value) => ["-e", value]),
+    "--entrypoint",
+    command,
+    image,
+    ...commandArguments,
+    ...nodeProgramArguments(wrapper.entrypoint),
+  ]);
+  const collect = async () => {
+    const [endpoint, native] = await Promise.all([
+      runDocker(["logs", sidecar]),
+      runDocker(["logs", containerName]),
+    ]);
+    const output = `${native.stdout}\n${native.stderr}`;
+    return {
+      events: jsonLogEntries(endpoint.stdout),
+      output,
+      phases: jsonLogEntries(output).filter(({ event }) => event === "runtime.startup_phase"),
+    };
+  };
+  return { containerName, collect };
+}
+
+async function containerState(containerName) {
+  const { stdout } = await runDocker([
+    "inspect",
+    containerName,
+    "--format",
+    "{{.State.Running}} {{.State.ExitCode}}",
+  ]);
+  const [running, exitCode] = stdout.trim().split(/\s+/);
+  return { running: running === "true", exitCode: Number(exitCode) };
+}
+
+async function waitForTerminationPhase(scenario, description, reached) {
+  const deadline = Date.now() + 240_000 * imageSmokeTimeoutMultiplier;
+  for (;;) {
+    const snapshot = await scenario.collect();
+    if (reached(snapshot)) {
+      return snapshot;
+    }
+    const state = await containerState(scenario.containerName);
+    if (!state.running || Date.now() > deadline) {
+      assert.fail(
+        `${description} was not reached (running ${state.running}, exit ${state.exitCode}).\n` +
+          `${snapshot.output}\n${snapshot.events.map((event) => JSON.stringify(event)).join("\n")}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+// Sends SIGTERM as the kubelet does and measures how long the container
+// takes to stop. Container exit ends its PID namespace, so no child outlives it.
+async function assertPromptTermination(t, scenario, description) {
+  const signalledAt = Date.now();
+  await runDocker(["kill", "--signal", "TERM", scenario.containerName]);
+  const deadline = signalledAt + promptTerminationMs * imageSmokeTimeoutMultiplier;
+  let state = await containerState(scenario.containerName);
+  while (state.running && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    state = await containerState(scenario.containerName);
+  }
+  const elapsedMs = Date.now() - signalledAt;
+  t.diagnostic(
+    `${description}: ${state.running ? "still running" : `exit ${state.exitCode}`} ` +
+      `${elapsedMs} ms after SIGTERM`,
+  );
+  if (state.running) {
+    const { output } = await scenario.collect();
+    assert.fail(`${description}: SIGTERM did not stop the wrapper in ${elapsedMs} ms.\n${output}`);
+  }
+  // A terminated wrapper exits cleanly in every phase, as it does once running.
+  assert.equal(state.exitCode, 0, `${description}: exit code`);
+}
+
+const terminationObserved = (key, value) => (event) =>
+  event.event === "observe" && event.key === key && event.value === value;
+
+// Each scenario's runtime status keeps the evidence the controller reads:
+// a held failure is still published until the Pod is stopped.
+async function assertWrapperTermination(t, kind) {
+  const label = kind === "codex" ? "Codex Harness" : "embedded Gateway";
+
+  // SIGTERM while the provider holds the probe's model turn: the wrapper is
+  // blocked in its synchronous probe child.
+  const probing = await startTerminationScenario(t, kind, "hang");
+  await waitForTerminationPhase(probing, `${label} model probe`, ({ events }) =>
+    events.some((event) => event.event === "request" && event.turn === true),
+  );
+  await assertPromptTermination(t, probing, `${label} during its model probe`);
+
+  // SIGTERM while the wrapper holds a rejected credential for the controller.
+  const holding = await startTerminationScenario(t, kind, "reject");
+  const held = await waitForTerminationPhase(holding, `${label} held failure`, ({ events }) =>
+    events.some(terminationObserved("runtimeFailure", "AUTHENTICATION_FAILED")),
+  );
+  assert.equal(held.events.some(terminationObserved("ready", true)), false);
+  await assertPromptTermination(t, holding, `${label} holding AUTHENTICATION_FAILED`);
+
+  // SIGTERM once the native process serves: the wrapper forwards it and exits
+  // with the native process.
+  const running = await startTerminationScenario(t, kind, "answer");
+  await waitForTerminationPhase(running, `${label} readiness`, ({ events }) =>
+    events.some(terminationObserved("ready", true)),
+  );
+  await assertPromptTermination(t, running, `${label} while ready`);
+}
+
+test(
+  "runtime image Codex Harness exits promptly on SIGTERM in every startup phase",
+  { ...imageTestOptions, timeout: 900_000 },
+  async (t) => {
+    await assertWrapperTermination(t, "codex");
+  },
+);
+
+test(
+  "runtime image embedded Gateway exits promptly on SIGTERM in every startup phase",
+  { ...imageTestOptions, timeout: 900_000 },
+  async (t) => {
+    await assertWrapperTermination(t, "gateway");
+  },
+);
+
+test(
+  "runtime image dedicated Gateway exits promptly on SIGTERM while it waits for its Harness",
+  { ...imageTestOptions, timeout: 600_000 },
+  async (t) => {
+    const waiting = await startTerminationScenario(t, "dedicated-gateway", "answer");
+    const snapshot = await waitForTerminationPhase(
+      waiting,
+      "dedicated Gateway peer wait",
+      ({ output }) => /Waiting for Harness plugin runtime status/.test(output),
+    );
+    assert.equal(snapshot.events.some(terminationObserved("native", true)), false);
+    await assertPromptTermination(t, waiting, "dedicated Gateway waiting for its Harness");
   },
 );

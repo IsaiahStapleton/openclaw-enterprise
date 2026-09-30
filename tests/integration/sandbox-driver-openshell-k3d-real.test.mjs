@@ -1,4 +1,5 @@
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
+import { RUNTIME_WRAPPER_COMMAND } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -975,15 +976,12 @@ function credentialBridgeResource(context, claimName, subPath) {
 }
 
 function inlineNodeProgramIndex(command) {
-  if (command[0] === "node" && command[1] === "-e") {
-    return 2;
-  }
   assert.deepEqual(
-    command.slice(0, 5),
-    ["/usr/bin/tini", "-s", "--", "node", "-e"],
-    "the OpenShell bridge expects the native Node entrypoint with its optional tini wrapper.",
+    command.slice(0, RUNTIME_WRAPPER_COMMAND.length),
+    [...RUNTIME_WRAPPER_COMMAND],
+    "the OpenShell bridge expects the Compute runtime wrapper command.",
   );
-  return 5;
+  return RUNTIME_WRAPPER_COMMAND.length;
 }
 
 function portableProgramPieces(program) {

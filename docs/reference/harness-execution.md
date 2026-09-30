@@ -158,9 +158,10 @@ native output without logging its contents. Dedicated Codex retries a confirmed
 subprocess timeout once after one second. Each attempt has a 30-second cap within
 one 61-second budget, including the delay. Authentication rejection, malformed
 output, tool events, and external signals without timeout evidence do not retry.
-Termination during the delay exits without starting another probe. Exhausted or
-nonretryable failure holds the process unready until restart; readiness polling
-never starts another model call. Embedded OpenClaw continues to probe once.
+Wrappers run under `tini`, so termination during a probe, its delay, or a held
+failure exits at once without another probe. Exhausted or nonretryable failure
+holds the process unready until restart or Pod stop; readiness polling never
+starts another model call. Embedded OpenClaw continues to probe once.
 
 Codex emits a structured `codex.model_probe` log for each attempt with its number,
 elapsed milliseconds, exit code, recognized termination signal, and final code
