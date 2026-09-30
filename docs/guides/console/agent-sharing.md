@@ -29,8 +29,9 @@ happened to an earlier unanswered request.
 To withdraw one explicit Agent grant, find it under **Direct Agent grants** and
 select **Remove binding**. Namespace discovery remains, and other grants, groups
 or Installation administration may still provide access. The console does not
-delete the person, Agent or Roles. If sharing policy is denied, other Agent
-controls remain governed by their own permissions.
+delete the person, Agent or Roles. People without Installation administration
+do not see **Share Agent**; their other Agent controls remain governed by their
+own permissions.
 
 ## Related
 
