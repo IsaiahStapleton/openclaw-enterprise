@@ -104,6 +104,7 @@ import {
   GATEWAY_STOP_TIMEOUT_MS,
   NATIVE_WORKER_ENTRYPOINT,
   NATIVE_WORKER_READINESS_ENTRYPOINT,
+  RUNTIME_WRAPPER_COMMAND,
 } from "./runtime-entrypoints.ts";
 
 import {
@@ -6694,7 +6695,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     });
     // Independent restarts can orphan descendants of a failed wrapper. Tini
     // reaps them, including when a Sandbox provider runs this below PID 1.
-    container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
+    container.command = [...RUNTIME_WRAPPER_COMMAND];
     // Keep the workspace setup completion guard the plain Harness program runs:
     // container restarts do not rerun the initializing initContainer.
     container.args = nodeProgramArguments(
@@ -6731,7 +6732,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         ),
       },
     );
-    container.command = ["/usr/bin/tini", "-s", "--", "node", "-e"];
+    container.command = [...RUNTIME_WRAPPER_COMMAND];
     container.args = nodeProgramArguments(NATIVE_WORKER_ENTRYPOINT);
   }
 
@@ -10088,7 +10089,8 @@ for (const path of ${JSON.stringify(
                 ...(runtime === undefined
                   ? {}
                   : {
-                      command: ["node", "-e"],
+                      // Under tini, SIGTERM stops the wrapper in every startup phase.
+                      command: [...RUNTIME_WRAPPER_COMMAND],
                       args: nodeProgramArguments(
                         (workspaceSetup === undefined || (!embedded && role === "gateway")
                           ? ""

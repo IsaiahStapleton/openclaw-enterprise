@@ -208,7 +208,8 @@ and foreign/stale workloads fail closed.
 When stopping a revision, the Driver stops its Gateway while leaving the Harness
 available for active work. Gateway supervision and Pod termination allow the
 pinned runtime's 330-second service stop budget; the controller waits for Pod
-disappearance before stopping the Harness. Idle shutdown should complete promptly.
+disappearance before stopping the Harness. Idle shutdown, or one before OpenClaw
+starts (wrappers run under `tini`), completes promptly.
 Forced termination can delay the successor until the persistent owner lease expires.
 
 Kubernetes gateways in both modes mount their own persistent SQLite and media
