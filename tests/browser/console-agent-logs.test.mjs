@@ -126,7 +126,9 @@ test("an operator without administer sees status but no log text and is never re
 
   await page.locator(".runtime-pod").getByRole("heading", { name: "Gateway" }).waitFor();
   await page
-    .getByText("Log text requires Agent administer and read access plus read access to this version.")
+    .getByText(
+      "Log text requires Agent administer and read access plus read access to this version.",
+    )
     .waitFor();
   assert.equal(await page.getByText("operator must not see this").count(), 0);
   assert.equal(await page.getByRole("button", { name: "Follow" }).isDisabled(), true);
@@ -146,9 +148,7 @@ test("an operator without administer sees status but no log text and is never re
 
 test("the Logs tab explains cluster RBAC, unsupported Drivers and unavailable reads", async (t) => {
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
-  const { RuntimeLogsForbiddenByClusterError } = await import(
-    "../../packages/occ/src/index.ts"
-  );
+  const { RuntimeLogsForbiddenByClusterError } = await import("../../packages/occ/src/index.ts");
   computeDriver.state.readError = new RuntimeLogsForbiddenByClusterError();
   const { page } = await newPage(t, fixture);
   const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");

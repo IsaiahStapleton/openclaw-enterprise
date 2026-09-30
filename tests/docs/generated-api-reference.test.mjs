@@ -193,7 +193,10 @@ test("runtime status and log operations publish their permission tiers and close
   assert.deepEqual(status["x-openclaw-permissions"], tier("operate"));
   assert.deepEqual(logs["x-openclaw-permissions"], tier("administer"));
   assert.deepEqual(
-    logs.parameters.filter(({ in: location }) => location === "query").map(({ name }) => name).sort(),
+    logs.parameters
+      .filter(({ in: location }) => location === "query")
+      .map(({ name }) => name)
+      .sort(),
     ["cursor", "pod", "previous", "sinceSeconds", "source", "tailLines"],
   );
   for (const code of ["429", "501", "504"]) {

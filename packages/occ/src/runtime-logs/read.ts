@@ -56,10 +56,7 @@ export interface RuntimeLogPage {
 }
 
 export type RuntimeLogReadFailure =
-  | "cursor_invalid"
-  | "source_unavailable"
-  | "pod_invalid"
-  | "invalid_chunk";
+  "cursor_invalid" | "source_unavailable" | "pod_invalid" | "invalid_chunk";
 
 export class RuntimeLogReadError extends Error {
   readonly reason: RuntimeLogReadFailure;
@@ -126,7 +123,8 @@ export interface ReadRuntimeLogPageInput {
 export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promise<RuntimeLogPage> {
   const now = input.now ?? Date.now;
   const { description, query, codec, binding } = input;
-  const decoded = query.cursor === undefined ? undefined : codec.decode(query.cursor, binding, now());
+  const decoded =
+    query.cursor === undefined ? undefined : codec.decode(query.cursor, binding, now());
   if (decoded?.status === "invalid") {
     throw new RuntimeLogReadError("cursor_invalid");
   }
@@ -231,7 +229,10 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   // lines may span two containers.
   const replacedDuringRead =
     observedStream.podUid !== pod.uid || observedStream.restartCount !== pod.restartCount;
-  if (replacedDuringRead && !leading.some((record) => record.type === "gap" && record.reason === "stream_replaced")) {
+  if (
+    replacedDuringRead &&
+    !leading.some((record) => record.type === "gap" && record.reason === "stream_replaced")
+  ) {
     leading.push(runtimeLogGap("stream_replaced", observedStream));
   }
   // The byte limit cuts the final line; a partial line may end inside a token.
@@ -277,7 +278,9 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   const records = [
     ...leading,
     ...sanitized.records,
-    ...(truncated ? [runtimeLogGap("truncated", observedStream, delivered.at(-1)?.time ?? null)] : []),
+    ...(truncated
+      ? [runtimeLogGap("truncated", observedStream, delivered.at(-1)?.time ?? null)]
+      : []),
   ];
   const last = [...delivered].reverse().find((line) => line.time !== null);
   let lastTime = resume !== undefined && !replacedDuringRead ? resume.lastTime : null;

@@ -148,12 +148,7 @@ function recordRow(record) {
   for (const [name, value] of Object.entries(record.fields)) {
     fields.append(element("dt", {}, name), element("dd", {}, String(value)));
   }
-  return element(
-    "details",
-    { className: "log-row" },
-    element("summary", {}, summary),
-    fields,
-  );
+  return element("details", { className: "log-row" }, element("summary", {}, summary), fields);
 }
 
 /** Logs tab: runtime status strip, source picker, bounded log pane and follow. */
@@ -162,11 +157,19 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   const deniedKey = `${context.namespaceId}/${agent.id}`;
   const section = element("section", { className: "agent-logs" });
   const strip = element("div", { className: "runtime-strip", "aria-live": "polite" });
-  const stripStatus = element("p", { className: "muted", role: "status" }, "Loading runtime status…");
+  const stripStatus = element(
+    "p",
+    { className: "muted", role: "status" },
+    "Loading runtime status…",
+  );
   const sourceSelect = element("select", { id: "runtime-log-source", disabled: true });
   const podSelect = element("select", { id: "runtime-log-pod", hidden: true });
   const podLabel = element("label", { for: "runtime-log-pod", hidden: true }, "Pod");
-  const previous = element("input", { type: "checkbox", id: "runtime-log-previous", disabled: true });
+  const previous = element("input", {
+    type: "checkbox",
+    id: "runtime-log-previous",
+    disabled: true,
+  });
   const followButton = button("Follow", () => setFollow(!following), {
     "aria-pressed": "false",
     disabled: true,

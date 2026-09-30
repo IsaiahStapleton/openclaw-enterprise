@@ -11384,7 +11384,9 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
         };
       },
       async listNamespacedPod({ namespace, labelSelector }) {
-        const role = labelSelector.includes("openclaw.dev/workload-role=agent") ? "agent" : "gateway";
+        const role = labelSelector.includes("openclaw.dev/workload-role=agent")
+          ? "agent"
+          : "gateway";
         calls.push({ plane, call: "listNamespacedPod", namespace, role });
         const items = [pod(role)];
         if (state.foreignPod) {
@@ -11485,11 +11487,25 @@ test("Kubernetes runtime description reads each plane's Pods and only their own 
     [
       {
         id: "agent",
-        pods: [{ name: "agent-runtime-logs-pod", uid: "agent-runtime-logs-uid", container: "agent", restartCount: 0 }],
+        pods: [
+          {
+            name: "agent-runtime-logs-pod",
+            uid: "agent-runtime-logs-uid",
+            container: "agent",
+            restartCount: 0,
+          },
+        ],
       },
       {
         id: "gateway",
-        pods: [{ name: "gateway-runtime-logs-pod", uid: "gateway-runtime-logs-uid", container: "gateway", restartCount: 2 }],
+        pods: [
+          {
+            name: "gateway-runtime-logs-pod",
+            uid: "gateway-runtime-logs-uid",
+            container: "gateway",
+            restartCount: 2,
+          },
+        ],
       },
     ],
   );
@@ -11507,7 +11523,9 @@ test("Kubernetes runtime description reads each plane's Pods and only their own 
       { plane: "control", call: "listNamespacedEvent", namespace: fixture.gatewayNamespaceName },
     ],
   );
-  assert.ok(reads.filter(({ call }) => call === "listNamespacedEvent").every(({ limit }) => limit === 100));
+  assert.ok(
+    reads.filter(({ call }) => call === "listNamespacedEvent").every(({ limit }) => limit === 100),
+  );
 
   // A Pod of another Agent in the same namespace fails the whole description.
   fixture.state.foreignPod = true;
@@ -11564,7 +11582,10 @@ test("Kubernetes runtime log reads are bounded, timestamped and re-check the Pod
   );
   // The Pod is listed before and after the read, so a restart during the read is visible.
   fixture.state.restartDuringRead = true;
-  const restarted = await fixture.driver.readAgentRuntimeLogs(fixture.binding, fixture.request("gateway"));
+  const restarted = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway"),
+  );
   assert.equal(restarted.stream.restartCount, 3);
   fixture.state.restartDuringRead = false;
 
@@ -11586,7 +11607,10 @@ test("Kubernetes runtime log reads are bounded, timestamped and re-check the Pod
     /no longer available/,
   );
   await assert.rejects(
-    fixture.driver.readAgentRuntimeLogs(fixture.binding, fixture.request("gateway", { container: "agent" })),
+    fixture.driver.readAgentRuntimeLogs(
+      fixture.binding,
+      fixture.request("gateway", { container: "agent" }),
+    ),
     /does not match/,
   );
   assert.equal(fixture.calls.filter(({ call }) => call === "readNamespacedPodLog").length, before);
@@ -11594,7 +11618,8 @@ test("Kubernetes runtime log reads are bounded, timestamped and re-check the Pod
 
 test("Kubernetes runtime log and Event 403s become the typed cluster RBAC error", async () => {
   const { RuntimeLogsForbiddenByClusterError } = await import("../../packages/occ/src/index.ts");
-  const forbidden = () => Object.assign(new Error("pods/log is forbidden: secret detail"), { statusCode: 403 });
+  const forbidden = () =>
+    Object.assign(new Error("pods/log is forbidden: secret detail"), { statusCode: 403 });
   const fixture = runtimeLogDriverFixture();
   fixture.state.logError = forbidden();
   await assert.rejects(

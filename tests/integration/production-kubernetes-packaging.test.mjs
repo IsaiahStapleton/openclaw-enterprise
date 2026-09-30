@@ -651,7 +651,9 @@ test(
   tooling,
   async () => {
     const role = (objects, suffix) =>
-      objects.find(({ kind, metadata }) => kind === "ClusterRole" && metadata.name.endsWith(suffix));
+      objects.find(
+        ({ kind, metadata }) => kind === "ClusterRole" && metadata.name.endsWith(suffix),
+      );
     const apiEnvironment = (objects) =>
       objects.find(
         ({ kind, metadata }) =>

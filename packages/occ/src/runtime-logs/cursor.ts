@@ -46,9 +46,7 @@ export function newRuntimeLogViewId(): string {
 
 function bindingHash(binding: RuntimeLogCursorBinding): string {
   return createHash("sha256")
-    .update(
-      [binding.principalId, binding.agentId, binding.revisionId, binding.source].join("\0"),
-    )
+    .update([binding.principalId, binding.agentId, binding.revisionId, binding.source].join("\0"))
     .digest("base64url")
     .slice(0, 22);
 }

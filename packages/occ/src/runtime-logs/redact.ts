@@ -1,3 +1,5 @@
+import { stripVTControlCharacters } from "node:util";
+
 /**
  * Best-effort credential masking for runtime log text. Every retained string passes
  * through `redactRuntimeLogText`. A match is replaced whole by `[redacted:<pattern>]`:
@@ -64,10 +66,7 @@ const RULES: readonly Rule[] = [
   {
     // Header values, including inside `-H '...'` and `--header "..."` arguments and JSON.
     name: "header",
-    pattern: new RegExp(
-      `\\b(${HEADER_NAMES})("?\\s*[:=]\\s*"?)${notRedacted}[^"'\\r\\n]+`,
-      "gi",
-    ),
+    pattern: new RegExp(`\\b(${HEADER_NAMES})("?\\s*[:=]\\s*"?)${notRedacted}[^"'\\r\\n]+`, "gi"),
     replace: (_match, name, separator) => `${name}${separator}${mark("header")}`,
   },
   {
@@ -158,16 +157,24 @@ const RULES: readonly Rule[] = [
 export function redactRuntimeLogText(value: string): string {
   let text = value;
   for (const rule of RULES) {
-    text = text.replace(rule.pattern, rule.replace as (substring: string, ...args: string[]) => string);
+    text = text.replace(
+      rule.pattern,
+      rule.replace as (substring: string, ...args: string[]) => string,
+    );
   }
   return text;
 }
 
 /** Removes ANSI escape sequences and C0/C1 control characters; tabs become spaces. */
 export function stripRuntimeLogControls(value: string): string {
-  return value
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
-    .replace(/\t/g, " ")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  let text = "";
+  for (const character of stripVTControlCharacters(value)) {
+    const code = character.codePointAt(0)!;
+    if (code === 0x09) {
+      text += " ";
+    } else if (code >= 0x20 && (code < 0x7f || code > 0x9f)) {
+      text += character;
+    }
+  }
+  return text;
 }

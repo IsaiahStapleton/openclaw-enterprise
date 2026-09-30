@@ -247,11 +247,9 @@ export async function createRuntimeLogFixture(options = {}) {
       body: { name: "Model API key", value: `model-key-${randomUUID()}` },
     });
     assert.equal(secret.status, 201, secret.text);
-    const configuration = await request(
-      "POST",
-      `/namespaces/${namespace.data.id}/configurations`,
-      { body: { kind: "agent", values: createHarnessConfiguration("openclaw", "gpt-4.1") } },
-    );
+    const configuration = await request("POST", `/namespaces/${namespace.data.id}/configurations`, {
+      body: { kind: "agent", values: createHarnessConfiguration("openclaw", "gpt-4.1") },
+    });
     assert.equal(configuration.status, 201, configuration.text);
     const agent = await request("POST", `/namespaces/${namespace.data.id}/agents`, {
       body: {

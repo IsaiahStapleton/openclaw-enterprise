@@ -1278,10 +1278,7 @@ export type RuntimeLogSourceId = "gateway" | "agent";
 export type RuntimeLogLevel = "error" | "warn" | "info" | "debug" | "unknown";
 export type RuntimeLogKind = "wrapper" | "openclaw" | "codex" | "text";
 export type RuntimeLogGapReason =
-  | "stream_replaced"
-  | "window_exceeded"
-  | "cursor_expired"
-  | "truncated";
+  "stream_replaced" | "window_exceeded" | "cursor_expired" | "truncated";
 export type RuntimeLogWithheldReason = "unrecognised_structured" | "oversized" | "malformed";
 
 /** One container instance, keyed on server-observed identity only. */

@@ -2301,8 +2301,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const namespace = await this.runtimeLogNamespace(revision, signal);
     const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
     // Ownership re-check: the named Pod must still carry this revision's labels and UID.
-    const owned = (await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))).find(
-      (pod) => asRecord(pod.metadata)?.name === request.pod && asRecord(pod.metadata)?.uid === request.podUid,
+    const owned = (
+      await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))
+    ).find(
+      (pod) =>
+        asRecord(pod.metadata)?.name === request.pod &&
+        asRecord(pod.metadata)?.uid === request.podUid,
     );
     if (owned === undefined) {
       throw new DependencyUnavailableError("The runtime log Pod is no longer available.");
@@ -2340,7 +2344,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const latest = (
       await this.runtimeLogStep(signal, () => this.revisionPods(revision, target, role))
     ).find((pod) => asRecord(pod.metadata)?.name === request.pod);
-    const latestStatus = latest === undefined ? undefined : this.runtimePodStatus(latest, role, target);
+    const latestStatus =
+      latest === undefined ? undefined : this.runtimePodStatus(latest, role, target);
     const truncated = Buffer.byteLength(raw, "utf8") >= request.limitBytes;
     const lines = raw.split("\n");
     if (lines.at(-1) === "") {
@@ -2522,9 +2527,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
             kubernetesTime(event.firstTimestamp),
         };
       })
-      .sort((left, right) =>
-        (right.lastObservedAt ?? "").localeCompare(left.lastObservedAt ?? ""),
-      )
+      .sort((left, right) => (right.lastObservedAt ?? "").localeCompare(left.lastObservedAt ?? ""))
       .slice(0, RUNTIME_LOG_MAX_EVENTS);
   }
 

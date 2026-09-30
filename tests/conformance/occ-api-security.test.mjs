@@ -1005,7 +1005,10 @@ test("runtime status and log reads enforce their permission tiers before any Dri
   // Operate is the status audience: it sees Pods and Events but never log text.
   const status = await fixture.request("GET", target.runtimePath, { session: operator.session });
   assert.equal(status.status, 200, status.text);
-  assert.equal(status.data.sources[0].pods[0].name, fixture.computeDriver.podName({ id: target.revisionId }));
+  assert.equal(
+    status.data.sources[0].pods[0].name,
+    fixture.computeDriver.podName({ id: target.revisionId }),
+  );
   const operatorLogs = await fixture.request("GET", target.logsPath(), {
     session: operator.session,
   });
@@ -1105,7 +1108,7 @@ test("runtime log cursors bind one principal and view and are re-authorized on e
   );
   assert.equal(replaced.status, 200, replaced.text);
   assert.deepEqual(
-    replaced.data.records.map(({ type, reason, message }) => type === "gap" ? reason : message),
+    replaced.data.records.map(({ type, reason, message }) => (type === "gap" ? reason : message)),
     ["stream_replaced", "after restart"],
   );
   state.previousLines = [runtimeLogLine(0, "before restart")];
@@ -1113,7 +1116,10 @@ test("runtime log cursors bind one principal and view and are re-authorized on e
     session: viewer.session,
   });
   assert.equal(previous.status, 200, previous.text);
-  assert.deepEqual(previous.data.records.map(({ message }) => message), ["before restart"]);
+  assert.deepEqual(
+    previous.data.records.map(({ message }) => message),
+    ["before restart"],
+  );
   assert.equal(driverReads(fixture).at(-1).previous, true);
 
   // Cursors are bound to the principal, target and signature.
@@ -1134,9 +1140,13 @@ test("runtime log cursors bind one principal and view and are re-authorized on e
   assert.equal(driverReads(fixture).length, readsBefore);
 
   // Only Pods the Driver listed for this revision reach it.
-  const unknownPod = await fixture.request("GET", target.logsPath("source=gateway&pod=kube-apiserver-0"), {
-    session: viewer.session,
-  });
+  const unknownPod = await fixture.request(
+    "GET",
+    target.logsPath("source=gateway&pod=kube-apiserver-0"),
+    {
+      session: viewer.session,
+    },
+  );
   assert.equal(unknownPod.status, 400);
   assert.equal(unknownPod.body.error.code, "RUNTIME_LOGS_POD_INVALID");
   const unsupported = await fixture.request("GET", target.logsPath("source=gateway&follow=true"), {
@@ -1186,7 +1196,7 @@ test("an expired runtime log cursor starts a new audited view with a labelled ga
   );
   assert.equal(resumed.status, 200, resumed.text);
   assert.deepEqual(
-    resumed.data.records.map(({ type, reason }) => type === "gap" ? reason : type),
+    resumed.data.records.map(({ type, reason }) => (type === "gap" ? reason : type)),
     ["cursor_expired", "line"],
   );
   assert.equal(
@@ -1263,8 +1273,14 @@ test("runtime log reads are rate limited per principal and Agent with Retry-Afte
 
 test("runtime routes answer 501 when the Driver, its logging owner or the operator switch opts out", async () => {
   for (const [label, options] of [
-    ["driver-owned logging", { computeDriver: createRuntimeLogComputeDriver({ runtimeLogging: "driver" }) }],
-    ["no Driver method", { computeDriver: createRuntimeLogComputeDriver({ withoutDescribe: true }) }],
+    [
+      "driver-owned logging",
+      { computeDriver: createRuntimeLogComputeDriver({ runtimeLogging: "driver" }) },
+    ],
+    [
+      "no Driver method",
+      { computeDriver: createRuntimeLogComputeDriver({ withoutDescribe: true }) },
+    ],
     ["feature disabled", { agentRuntimeLogs: { enabled: false, cursorSecret: "x".repeat(32) } }],
   ]) {
     const fixture = await createRuntimeLogFixture(options);

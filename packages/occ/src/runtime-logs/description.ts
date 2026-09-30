@@ -163,7 +163,12 @@ function source(value: unknown, pods: readonly AgentRuntimePodStatus[]): AgentRu
       restartCount: count(described.restartCount),
     });
     // Every readable Pod must be one of this revision's described Pods with the same role.
-    if (!pods.some((candidate) => candidate.name === result.name && candidate.uid === result.uid && candidate.role === id)) {
+    if (
+      !pods.some(
+        (candidate) =>
+          candidate.name === result.name && candidate.uid === result.uid && candidate.role === id,
+      )
+    ) {
       invalid();
     }
     return result;
