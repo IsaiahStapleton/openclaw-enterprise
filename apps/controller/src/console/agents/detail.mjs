@@ -71,15 +71,33 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function deploymentFailure(error) {
+// Next steps for failure codes whose cause the operator can act on directly.
+const DEPLOYMENT_FAILURE_GUIDANCE = {
+  RUNTIME_AUTHENTICATION_FAILED:
+    "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
+};
+
+function deploymentFailure(error, credentialsHref = null) {
   if (!error) {
     return element("p", { className: "muted" }, "No persisted startup failure.");
   }
   const runtimeFailure = error.data?.runtimeFailure;
+  const guidance = Object.hasOwn(DEPLOYMENT_FAILURE_GUIDANCE, error.code)
+    ? DEPLOYMENT_FAILURE_GUIDANCE[error.code]
+    : null;
   return element(
     "div",
     {},
     element("p", { className: "error", role: "alert" }, `${error.code}: ${error.message}`),
+    guidance
+      ? element(
+          "p",
+          { className: "hint deployment-failure-guidance" },
+          guidance,
+          credentialsHref ? " " : null,
+          credentialsHref ? element("a", { href: credentialsHref }, "Open Credentials") : null,
+        )
+      : null,
     runtimeFailure && typeof runtimeFailure === "object"
       ? element(
           "dl",
@@ -143,7 +161,14 @@ function deploymentProgress(status, progress) {
   );
 }
 
-function createDeploymentStatusPanel(context, path, revision, onAgentChange, onStatusChange) {
+function createDeploymentStatusPanel(
+  context,
+  path,
+  revision,
+  onAgentChange,
+  onStatusChange,
+  credentialsHref = null,
+) {
   const section = element("section", { className: "agent-card deployment-status" });
   const state = { loading: false, status: null, error: null, overviewError: false };
 
@@ -199,7 +224,11 @@ function createDeploymentStatusPanel(context, path, revision, onAgentChange, onS
       if (context.isCurrent()) {
         state.loading = false;
         render();
-        onStatusChange(state.status?.status ?? null, state.error !== null);
+        onStatusChange(
+          state.status?.status ?? null,
+          state.error !== null,
+          state.status?.error?.code ?? null,
+        );
       }
     }
   }
@@ -241,7 +270,7 @@ function createDeploymentStatusPanel(context, path, revision, onAgentChange, onS
           )
         : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
-      deploymentFailure(state.status.error),
+      deploymentFailure(state.status.error, credentialsHref),
       state.status.warnings?.length
         ? element(
             "div",
@@ -685,6 +714,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   let latestRevisionResult = null;
   let latestDeploymentStatus = null;
   let latestDeploymentError = false;
+  let latestDeploymentErrorCode = null;
   const revisionsPromise = request(`${path}/revisions`);
 
   function versionNotice() {
@@ -942,6 +972,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     if (activityRevisionId !== (mostRecent?.id ?? null)) {
       latestDeploymentStatus = null;
       latestDeploymentError = false;
+      latestDeploymentErrorCode = null;
       const nextPanel = mostRecent
         ? createDeploymentStatusPanel(
             context,
@@ -949,14 +980,19 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             mostRecent,
             (freshAgent, freshRevisions) =>
               updateCurrentAgent(freshAgent, freshRevisions, snapshot),
-            (status, unavailable) => {
+            (status, unavailable, errorCode) => {
               if (activityRevisionId !== mostRecent.id) {
                 return;
               }
               latestDeploymentStatus = status;
               latestDeploymentError = unavailable;
+              latestDeploymentErrorCode = errorCode;
               renderLatestDeployment();
+              refreshDeployControls();
             },
+            agent.harnessAuth?.method === "runtime"
+              ? null
+              : context.pageUrl(`agents/${agent.id}?revision=draft&tab=credentials`, namespaceId),
           )
         : element(
             "section",
@@ -1044,6 +1080,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     let authenticationPending = Boolean(
       retainedAuthentication?.outcomeUnknown || retainedAuthentication?.savedAuthentication,
     );
+    // Authentication edits staged in Credentials but not yet saved.
+    let authenticationUnsaved = false;
     const retainedEditor = context.drafts.get("configuration");
     const draftEditorState = {
       dirty: Boolean(retainedEditor && retainedEditor.text !== retainedEditor.initialText),
@@ -1106,6 +1144,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         authenticationSaveState !== "idle" ||
         Boolean(deployReloadMessage) ||
         authenticationPending ||
+        authenticationUnsaved ||
         retainedConfiguration.dirty ||
         retainedConfiguration.reloadRequired ||
         draftEditorState.dirty ||
@@ -1148,6 +1187,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         } else if (authenticationPending) {
           deployStatus.textContent =
             "Confirm authentication and Secret access in Credentials before deploying.";
+        } else if (authenticationUnsaved) {
+          deployStatus.textContent =
+            "Save or reload the authentication source in Credentials before deploying.";
         } else if (retainedConfiguration.reloadRequired) {
           deployStatus.textContent = "Reload the Configuration draft before deploying.";
         } else if (retainedConfiguration.dirty) {
@@ -1182,7 +1224,13 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           deployStatus.textContent =
             "Configured on the runtime host; not validated by OCC. Gateway readiness does not confirm model access.";
         } else {
-          deployStatus.textContent = credentials.deployGateMessage();
+          const gate = credentials.deployGateMessage();
+          // Secret values can be updated in place, so a rejected credential warns instead of blocking.
+          deployStatus.textContent =
+            latestDeploymentErrorCode === "RUNTIME_AUTHENTICATION_FAILED" &&
+            JSON.stringify(visibleRevisions[0]?.harnessAuth) === JSON.stringify(agent.harnessAuth)
+              ? `${gate} The last deployment's model credential was rejected; update or replace it in Credentials before deploying again.`
+              : gate;
         }
       }
     }
@@ -1333,6 +1381,12 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       setAuthenticationPending(pending) {
         authenticationPending = pending;
         updateDeployControls();
+      },
+      setAuthenticationUnsaved(unsaved) {
+        if (authenticationUnsaved !== unsaved) {
+          authenticationUnsaved = unsaved;
+          updateDeployControls();
+        }
       },
       setDraftEditorState(nextState) {
         Object.assign(draftEditorState, nextState);
@@ -1619,9 +1673,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         configurationId: agent.configurationId,
         harnessAuth: agent.harnessAuth,
       };
+      let syncUnsavedAuthentication = () => {};
       const auth = createHarnessAuthFields(context, agent.harnessAuth, agent.executionMode, {
         agentName: agent.name,
         draft: retained?.fields,
+        onChange: () => syncUnsavedAuthentication(),
       });
       const feedback = element("p", { role: "status", className: "hint" });
       const save = element(
@@ -1648,6 +1704,20 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       let pending = false;
       let savedAuthentication = retained?.savedAuthentication ?? null;
       const originalFields = retained?.originalFields ?? auth.capture();
+      const bindingFields = ({ method, secretSource, account }) =>
+        JSON.stringify({ method, secretSource, account });
+      syncUnsavedAuthentication = () => {
+        // Pending and saved states already gate deployment with their own messages.
+        data.setAuthenticationUnsaved(
+          !pending &&
+            !outcomeUnknown &&
+            !savedAuthentication &&
+            bindingFields(auth.capture()) !== bindingFields(originalFields),
+        );
+      };
+      form.addEventListener("input", () => syncUnsavedAuthentication());
+      form.addEventListener("change", () => syncUnsavedAuthentication());
+      syncUnsavedAuthentication();
       context.drafts.track("authentication", () => {
         const fields = auth.capture();
         return pending ||
@@ -1751,6 +1821,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             reload.disabled = false;
             save.disabled = outcomeUnknown;
             auth.setDisabled(outcomeUnknown || savedAuthentication !== null);
+            syncUnsavedAuthentication();
           }
         }
       });
@@ -1969,6 +2040,12 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       password?.source === "env" &&
       (password.provider === undefined || password.provider === "default") &&
       password.id === "OPENCLAW_GATEWAY_PASSWORD";
+    // A version admitted from this exact Configuration generation already carries the reference.
+    const gatewayPasswordRevision = visibleRevisions.find(
+      (revision) =>
+        revision.configurationId === snapshot.id &&
+        revision.configurationGeneration === snapshot.generation,
+    );
     const enableGatewayPassword = button("Enable Gateway password access", () => {
       // Stage the native reference through the same draft and save checks as JSON edits.
       // The Compute Driver delivers the generated value only after deployment.
@@ -2160,7 +2237,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             "p",
             { className: "hint" },
             usesGeneratedGatewayPassword
-              ? "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
+              ? gatewayPasswordRevision
+                ? `Gateway password access is enabled in the saved Configuration and included in v${gatewayPasswordRevision.revision}.`
+                : "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
               : "Use generated credentials for direct Gateway password access. Enable access, save Configuration, then deploy a new version.",
           ),
           element(
