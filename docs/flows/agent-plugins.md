@@ -227,8 +227,9 @@ boundary.
 The Agent and gateway derive an app-server credential from the transport Secret,
 revision ID, and Agent startup ID. The gateway receives it after reading matching
 status and rendering exclusions. After restart, the old gateway cannot
-authenticate while its supervisor awaits the next status poll. The supervisor
-publishes non-ready status before stopping a gateway whose peer result changed.
+authenticate while its supervisor awaits the next status poll.
+When the peer result changes, the supervisor publishes non-ready status and
+restarts only the OpenClaw process, reporting ready once it serves.
 
 ### 5. Complete revision reconciliation
 

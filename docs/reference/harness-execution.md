@@ -180,7 +180,8 @@ Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
 per startup phase, such as login, model probe, peer plugin status, plugin
 install, workspace setup, and native process spawn, with its container, phase name, `ok` or `failed` outcome,
 duration, and time since the wrapper started. A Gateway also logs
-`peer-status-changed` before it exits to restart for a replaced Harness. These
+`peer-status-changed` when its Harness is replaced, then `gateway-respawn` once
+the OpenClaw process it restarts in place serves again. These
 logs carry no provider, model, credential, or path values.
 
 On a first dedicated Codex deploy the controller creates the Gateway alongside
