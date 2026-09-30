@@ -11,7 +11,7 @@ Current behavior is maintained in the [console reference](../../../docs/referenc
 The console lists Agents but cannot create or inspect them. Extend the existing
 same-origin console with a creation form, Agent detail, readable Slack and
 Microsoft Teams configuration, and immutable revision browsing. Present
-[interactive wireframes](assets/19-console-agents/index.html) before implementing
+interactive wireframes before implementing
 the screens. The archived console screenshots guide layout and interactions;
 current [Agent](../../../docs/reference/agents.md) and
 [Configuration](../../../docs/reference/configuration.md) contracts own behavior.

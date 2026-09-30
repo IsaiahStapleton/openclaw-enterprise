@@ -21,8 +21,7 @@ The dependency task `01a088a1-94f8-7860-9b77-be2f9d6af52b` proposes specs 23–2
 bundled catalog, list API, best-effort plugin installation, and deployment status.
 Those are unimplemented proposals, not current support. This spec adds the two
 consumer contracts below for joint approval; it does not silently amend them.
-Use the [current console wireframes](assets/19-console-agents/index.html) and
-[console reference](../../../docs/reference/console.md) for layout and behavior.
+Use the [console reference](../../../docs/reference/console.md) for layout and behavior.
 The private launch-claw-ent gallery `reports/legacy-console-screenshots-2026-09-01/index.md`,
 especially `30-claw-create-tools-permissions.png`, supplies historical search/section
 prior art only; its demo tools and policy controls are not implementation contracts.
