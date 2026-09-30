@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
-updated: "2026-09-28"
-last_updated_session: "authoring-run/5da74b2e-b249-44da-87e4-ca85f018c832"
+updated: "2026-09-30"
+last_updated_session: "pr-553-alignment"
 ---
 
 # Credential source lifecycle Flow
@@ -11,8 +11,8 @@ last_updated_session: "authoring-run/5da74b2e-b249-44da-87e4-ca85f018c832"
 An authorized caller registers a Namespace Secret with the selected Credential
 Gateway, binds the resulting credential source to an Agent, deploys it, can
 update its value or withdraw it from one running Agent, and later deletes the
-source. The API copies the Secret value into the gateway once,
-at registration; OCC stores only metadata and Secret references. Admission
+source. The API copies the Secret value into the gateway at registration and
+again on each update; OCC stores only metadata and Secret references. Admission
 freezes the source identity in the AgentRevision, and the worker hands the live
 source record to Kubernetes Compute. This flow stops when Compute receives the
 resolved source; the
@@ -183,9 +183,13 @@ replacement references against the catalog's Secret fields, authorizes
 `withValue`. It calls `updateSource` with Compute's placement while holding the
 source lock; the OpenShell Driver requires the OCC-owned provider and calls
 `UpdateProvider`. It then replaces the Secret references, and the handler
-appends the audit event in the same transaction. A gateway failure rolls back
-the references. OpenShell gives the new value only to processes started after the
-update.
+appends the audit event in the same transaction. The gateway is updated before
+that transaction commits: a gateway failure rolls back the references, and a
+failure after the gateway accepted the values leaves the gateway newer than OCC,
+which repeating the same request converges. An `absent` or `failed` gateway
+status returns `503`. The OpenShell Driver rejects empty values because
+`UpdateProvider` merges them into the existing provider. OpenShell gives the new
+value only to processes started after the update.
 
 ### 9. Withdraw a source from an Agent
 
@@ -196,18 +200,32 @@ update.
 
 The API authorizes `agent:operate` and requires the active revision to
 authenticate with the source. It inserts a `pending` `credential_withdrawals`
-row keyed by revision and source, or returns the existing one, and queues
-revision-scoped work with target `credentials_withdrawn`. That work has its own
-idempotency key, never deploys the revision, and owns no repository cleanup.
+row keyed by revision and source, or returns the existing one. Unless
+withdrawal work for the revision is already queued or claimed, it queues
+revision-scoped work with target `credentials_withdrawn`
+(`packages/occ/src/state/controller-work.ts:credentialWithdrawalWorkKey`). That
+work has its own idempotency key, never deploys the revision, and owns no
+repository cleanup.
 
-The worker rechecks `agent:operate`, loads the revision's pending withdrawals,
-and calls Compute's `withdrawCredentialSource`. Compute derives the Sandbox with
-the Sandbox Driver's `harnessResource`, and the OpenShell Driver calls
-`DetachSandboxProvider` and reads the receipt's status. `revoked` or `absent`
-marks the row `revoked` in the same transaction that completes the work and
-appends `openclaw.agents.lifecycle.credentials_withdraw`; any other state
-retries with backoff. If the revision's Sandbox is later provisioned again,
-dispatch finds the withdrawal and fails with `CREDENTIAL_WITHDRAWN`.
+The worker loads the revision's own source and its withdrawal, rechecks
+`agent:operate` for the requester, and calls Compute's
+`withdrawCredentialSource`. Compute derives the Sandbox with the Sandbox Driver's
+`harnessResource` and passes it to the gateway's `withdraw`; the OpenShell
+Driver calls `DetachSandboxProvider` and reads the receipt's status. Each
+attempt records its reason code in `last_reason` and `last_attempt_at`, in the
+transaction that completes, retries, or fails the claim. `revoked` or `absent`
+also marks the row `revoked` and appends
+`openclaw.agents.lifecycle.credentials_withdraw`. Any other state retries with
+backoff until attempts run out; the row then stays `pending`.
+
+Maintenance of the active revision checks for a withdrawal before it resolves
+the revision's credentials
+(`apps/controller/src/worker.ts:completeWithdrawnRevisionMaintenance`). While
+the withdrawal is `pending`, the pass queues withdrawal work as the requester if
+none is outstanding, completes, and keeps the maintenance chain. Once it is
+`revoked`, the pass completes without scheduling more maintenance. Deploy and
+repair work that reaches the revision fails with `CREDENTIAL_WITHDRAWN` rather
+than re-attach the source.
 
 ## Debugging and Verification
 
@@ -220,9 +238,11 @@ dispatch finds the withdrawal and fails with `CREDENTIAL_WITHDRAWN`.
 - `node --test tests/conformance/openshell-gateway-wire.test.mjs` checks the
   provider, profile, update, and detach RPC encoding against the pinned `v0.1.0`
   wire fixture.
-- The `credential withdrawal work revokes from the active revision without
-redeploying it` case in `tests/integration/postgres-worker-agent-revision.test.mjs`
-  runs the real queue and worker against PostgreSQL with a Compute double.
+- The credential withdrawal cases in
+  `tests/integration/postgres-worker-agent-revision.test.mjs` run the real queue
+  and worker against PostgreSQL with a Compute double: revocation after a
+  pending retry, exhaustion followed by a replay, and maintenance of a
+  withdrawn revision.
 - The real OpenShell test updates the source through the API, withdraws it from
   the running Agent, and checks that a model turn in the same Codex process
   then fails.
@@ -235,7 +255,10 @@ redeploying it` case in `tests/integration/postgres-worker-agent-revision.test.m
   `HARNESS_AUTH_SOURCE_UNAVAILABLE` identify a changed selection or an
   unavailable source; `CREDENTIAL_WITHDRAWN` means the revision's source was
   withdrawn, and `CREDENTIAL_WITHDRAWAL_PENDING` means the gateway has not yet
-  confirmed revocation.
+  confirmed revocation. A withdrawal's `reason` on `GET` is its latest code;
+  `CREDENTIALS_WITHDRAWN` and `WITHDRAWAL_REVISION_RETIRED` complete the work,
+  and `CREDENTIAL_WITHDRAWAL_UNSUPPORTED`, `COMPUTE_DRIVER_MISMATCH`, and
+  `AUTHORIZATION_DENIED` fail it at once.
 
 ## Related docs
 
@@ -251,6 +274,7 @@ redeploying it` case in `tests/integration/postgres-worker-agent-revision.test.m
 
 ## Changelog
 
+- 2026-09-30 04:00: Recorded withdrawal attempt reasons, replay deduplication, and maintenance of a withdrawn revision; corrected the update ordering. (pr-553-alignment - 3a5e48035)
 - 2026-09-28 18:00: Added source update and per-Agent withdrawal through worker-executed revocation. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 7cd4a210)
 - 2026-09-28 05:13: Documented the controller transaction boundary for credential source writes. (authoring-run/5da74b2e-b249-44da-87e4-ca85f018c832 - 646b067220f6b7f8f3059eaa0710db2654b61499)
 - 2026-09-27 22:51: Extended credential-source Harness delivery to dedicated native OpenClaw without projecting the model Secret. (authoring-run/88764ea7-c6bb-4ac8-919f-c21071946c37 - 859c0b11e5f1c350acda231c89ad3573504324eb)

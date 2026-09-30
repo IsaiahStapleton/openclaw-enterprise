@@ -95,9 +95,11 @@ Workspace:
 missing, and `failed` when a provider with that name is not owned by the source.
 
 `updateSource` requires the existing provider to be OCC-owned for the exact
-source, then calls `UpdateProvider` with the new credential values. OpenShell
-gives the new value only to processes started after the update, so a running
-Harness keeps the previous value until it restarts.
+source, then calls `UpdateProvider` with the new credential values.
+`UpdateProvider` merges non-empty values into the provider, so the driver
+rejects an empty value rather than silently keep the old one. OpenShell gives
+the new value only to processes started after the update, so a running Harness
+keeps the previous value until it restarts.
 
 `removeSource` deletes the owned provider and confirms that it is gone. When no
 provider of the profile's type remains, it also deletes the profile, because
@@ -109,8 +111,11 @@ OpenShell SandboxDriver appends those names to `SandboxSpec.providers`.
 OpenShell readiness states to `ready`, `withheld`, `revoked`, `failed`, or
 `pending`. `withdraw` calls `DetachSandboxProvider` for the revision's Sandbox,
 then reads the status of that detach receipt. Only `REVOKED` reports `revoked`:
-the Sandbox's placeholders then stop resolving, even in running processes. A
-missing Sandbox reports `absent`.
+the Sandbox's placeholders then stop resolving, even in running processes.
+OpenShell reports `REVOKED` only after the Sandbox supervisor reports a running
+process with the provider removed. A Sandbox with no running process, for
+example one still provisioning or crash-looping, reports `WaitingForProcess`,
+which stays `pending`. A missing Sandbox reports `absent`.
 
 In the running Sandbox, the Harness environment holds only an
 `openshell:resolve:env:` placeholder for `OPENAI_API_KEY`. `codex login
