@@ -108,9 +108,9 @@ an account's selected credential reference affect only future deployments. A
 snapshot freezes a Secret reference, not the value stored at that reference.
 
 The separate PostgreSQL controller worker prepares the exact Agent gateway and
-revision, activates its route, retires its predecessor, and sets
-`activeRevisionId`. Each Agent owns its gateway; sibling Agents never share
-one. Kubernetes Compute supports managed authentication; SSH Compute supports
+revision, sets `activeRevisionId`, activates its route, and retires its
+predecessor; see [activation order](#the-active-revision-after-a-failed-deployment).
+Each Agent owns its gateway; sibling Agents never share one. Kubernetes Compute supports managed authentication; SSH Compute supports
 embedded OpenClaw with [operator-managed runtime credentials](../drivers/ssh-compute.md#credentials-and-supported-boundaries).
 Docker rejects authentication bindings. Each Driver rejects unsupported bindings
 and topologies before deployment. Kubernetes Compute starts either an Agent-owned gateway plus a dedicated
@@ -143,6 +143,27 @@ grant. When only the Agent principal's grant is missing, the `403` names that
 `servicePrincipalId`, the action, and the exact Secret or credential source,
 for example `The Agent service principal <id> is not authorized to operate
 secret <id>`. Denials of your own permissions stay generic.
+
+### The active revision after a failed deployment
+
+`activeRevisionId` names the revision the worker last committed to run. Stop
+shuts it down first, coordinated runtime upgrades require it, and runtime
+inspection reads its containers. It is not a health result; each revision's [deployment status](../agents.md#deployment-status)
+is. Unless Compute activates before commit, the worker sets the pointer before
+activation finishes.
+
+If a revision fails before the worker sets the pointer, the pointer is
+unchanged. After a failed first deployment, the Agent has no active revision.
+With [exclusive replacement](../drivers/compute.md#production-revision-stages),
+the unchanged pointer names a predecessor that was already stopped.
+Kubernetes embedded replacement reports ready while the predecessor still
+serves, so the worker sets the pointer first. Activation then replaces the
+shared gateway, and the new gateway runs the startup model probe. If that
+probe rejects the credential, the deployment fails with
+`RUNTIME_AUTHENTICATION_FAILED`. The failed revision stays active because its
+workload is the only one left; the predecessor has already been replaced. OCC
+never rolls back to an earlier revision. To recover, correct the cause and
+deploy a new revision, or stop the Agent.
 
 Revision list and read operations are scoped beneath the exact Namespace and
 Agent. Each returned revision requires its own authorized read; substituting a
