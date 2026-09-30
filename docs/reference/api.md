@@ -30,7 +30,7 @@ Each operation lists its supported status codes.
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `error` | `object` | Yes | — |
-| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE" or "CHANNEL_CREDENTIAL_ROLE_MISMATCH" or "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED" or "CHANNEL_CREDENTIAL_UNAVAILABLE" or "CHANNEL_CREDENTIAL_BINDING_REQUIRED"` | Yes | — |
+| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE" or "CHANNEL_CREDENTIAL_ROLE_MISMATCH" or "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED" or "CHANNEL_CREDENTIAL_UNAVAILABLE" or "CHANNEL_CREDENTIAL_BINDING_REQUIRED" or "RUNTIME_LOGS_CURSOR_INVALID" or "RUNTIME_LOGS_POD_INVALID" or "RUNTIME_LOGS_SOURCE_UNAVAILABLE" or "RUNTIME_LOGS_RATE_LIMITED" or "RUNTIME_LOGS_CLUSTER_RBAC" or "RUNTIME_LOGS_UNAVAILABLE" or "RUNTIME_LOGS_AUDIT_UNAVAILABLE" or "RUNTIME_LOGS_TIMEOUT"` | Yes | — |
 | `error.details` | `array<object>` | No | max items: 32 |
 | `error.details[].code` | `"REQUIRED" or "UNKNOWN_FIELD" or "INVALID_TYPE" or "INVALID_FORMAT" or "INVALID_VALUE" or "TOO_LONG" or "TOO_DEEP"` | Yes | — |
 | `error.details[].path` | `string` | Yes | max length: 512; pattern: `^(?:/(?:[^~/]\|~0\|~1)*)*$` |
@@ -47,7 +47,7 @@ Each operation lists its supported status codes.
 | [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
 | [Agents](#agents) | 25 operations |
-| [Agent deployments](#agent-deployments) | 2 operations |
+| [Agent deployments](#agent-deployments) | 4 operations |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
 | [Credential sources](#credential-sources) | 4 operations |
@@ -3066,6 +3066,8 @@ Schema: `object or object or object or object or object or object`.
 | --- | --- |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}`](#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentid) | Get the durable deployment status for one admitted Agent revision |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/diagnostics`](#post-namespacesnamespaceidagentsagentiddeploymentsdeploymentiddiagnostics) | Run explicit current-runtime diagnostics for one exact Agent revision |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime`](#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntime) | Read Pod status, restarts, Events and log sources for one exact Agent revision |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime/logs`](#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntimelogs) | Read one bounded, redacted page of container output for one exact Agent revision |
 
 #### `GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}`
 
@@ -3168,6 +3170,149 @@ Run explicit current-runtime diagnostics for one exact Agent revision
 | `data.checks[].state` | `"succeeded" or "failed" or "unknown"` | Yes | — |
 | `data.observedAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime`
+
+<span id="get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntime"></span>
+
+Read Pod status, restarts, Events and log sources for one exact Agent revision
+
+**Operation ID:** `getAgentDeploymentRuntime`
+
+**Permissions:** Requires operate permission on the requested Agent. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `operate` | `agent` | `requested` |
+| `read` | `agent` | `requested` |
+| `read` | `agent_revision` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `deploymentId` | path | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `429` | Too Many Requests |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+| `504` | Gateway Timeout |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.observedAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.pods` | `array<object>` | Yes | max items: 16 |
+| `data.pods[].cluster` | `"control" or "execution"` | Yes | — |
+| `data.pods[].containers` | `array<object>` | Yes | max items: 16 |
+| `data.pods[].containers[].lastTermination` | `object or null` | Yes | — |
+| `data.pods[].containers[].name` | `string` | Yes | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
+| `data.pods[].containers[].ready` | `boolean` | Yes | — |
+| `data.pods[].containers[].reason` | `string or null` | Yes | — |
+| `data.pods[].containers[].restartCount` | `integer` | Yes | minimum: 0 |
+| `data.pods[].containers[].startedAt` | `string (date-time) or null` | Yes | — |
+| `data.pods[].containers[].state` | `"waiting" or "running" or "terminated" or "unknown"` | Yes | — |
+| `data.pods[].createdAt` | `string (date-time) or null` | Yes | — |
+| `data.pods[].events` | `array<object>` | Yes | max items: 100 |
+| `data.pods[].events[].count` | `integer` | Yes | minimum: 1 |
+| `data.pods[].events[].lastObservedAt` | `string (date-time) or null` | Yes | — |
+| `data.pods[].events[].message` | `string` | Yes | max length: 2048 |
+| `data.pods[].events[].reason` | `string` | Yes | max length: 128 |
+| `data.pods[].events[].type` | `"Normal" or "Warning"` | Yes | — |
+| `data.pods[].name` | `string` | Yes | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
+| `data.pods[].phase` | `string` | Yes | max length: 64 |
+| `data.pods[].ready` | `boolean` | Yes | — |
+| `data.pods[].role` | `"gateway" or "agent"` | Yes | — |
+| `data.pods[].uid` | `string` | Yes | min length: 1; max length: 64; pattern: `^[A-Za-z0-9-]+$` |
+| `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.sources` | `array<object>` | Yes | max items: 4 |
+| `data.sources[].available` | `boolean` | Yes | — |
+| `data.sources[].id` | `"gateway" or "agent"` | Yes | — |
+| `data.sources[].kind` | `"container"` | Yes | — |
+| `data.sources[].pods` | `array<object>` | Yes | max items: 16 |
+| `data.sources[].pods[].container` | `string` | Yes | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
+| `data.sources[].pods[].name` | `string` | Yes | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
+| `data.sources[].pods[].restartCount` | `integer` | Yes | minimum: 0 |
+| `data.sources[].pods[].uid` | `string` | Yes | min length: 1; max length: 64; pattern: `^[A-Za-z0-9-]+$` |
+| `data.sources[].retention` | `string` | Yes | max length: 512 |
+| `data.sources[].unavailableCode` | `"NO_POD"` | No | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime/logs`
+
+<span id="get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntimelogs"></span>
+
+Read one bounded, redacted page of container output for one exact Agent revision
+
+**Operation ID:** `getAgentDeploymentRuntimeLogs`
+
+**Permissions:** Requires administer permission on the requested Agent. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `agent` | `requested` |
+| `read` | `agent` | `requested` |
+| `read` | `agent_revision` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `source` | query | `"gateway" or "agent"` | Yes | — |
+| `pod` | query | `string` | No | min length: 1; max length: 253; pattern: `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` |
+| `previous` | query | `"true" or "false"` | No | — |
+| `tailLines` | query | `string` | No | pattern: `^(?:[1-9][0-9]{0,2}\|1000)$` |
+| `sinceSeconds` | query | `string` | No | pattern: `^(?:[1-9][0-9]{0,3}\|[1-7][0-9]{4}\|8[0-5][0-9]{3}\|86[0-3][0-9]{2}\|86400)$` |
+| `cursor` | query | `string` | No | max length: 2048; pattern: `^v1\.[A-Za-z0-9_-]{1,1900}\.[A-Za-z0-9_-]{43}$` |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `deploymentId` | path | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `429` | Too Many Requests |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+| `504` | Gateway Timeout |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.cursor` | `string or null` | Yes | — |
+| `data.observedAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.records` | `array<object or object or object>` | Yes | max items: 1100 |
+| `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.source` | `"gateway" or "agent"` | Yes | — |
+| `data.stream` | `object or null` | Yes | — |
+| `data.truncated` | `boolean` | Yes | — |
+| `data.withheld` | `integer` | Yes | minimum: 0 |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5050,6 +5195,8 @@ Reusable schema names are referenced by operation request and response tables.
 | --- | --- |
 | `SafeJsonValue` | `string or boolean or number or null or array<SafeJsonValue> or object<string, SafeJsonValue>` |
 | `PluginDriverIdentity` | `object` |
+| `AgentRuntimeLogsResponse` | `object` |
+| `AgentRuntimeCredentialResponse` | `object` |
 | `SecretResponse` | `object` |
 | `CredentialSourceResponse` | `object` |
 | `PluginApprovers` | `array<object>` |
@@ -5059,4 +5206,4 @@ Reusable schema names are referenced by operation request and response tables.
 | `PluginDesiredState` | `object<string, PluginDesiredSelection>` |
 | `ErrorResponse` | `object` |
 | `AgentDeploymentDiagnosticsResponse` | `object` |
-| `AgentRuntimeCredentialResponse` | `object` |
+| `AgentRuntimeResponse` | `object` |
