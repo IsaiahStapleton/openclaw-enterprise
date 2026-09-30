@@ -10,7 +10,7 @@
 
 These cases are required by [main](./main.md). Use its Console-only provisioning,
 credential handling, ownership, and evidence rules. Each selected supported
-Helm topology must report each applicable case; a quota or authentication failure
+topology must report each applicable case; a quota or authentication failure
 blocks the affected runtime, not the rest of the run. Never count preset visibility
 as runtime execution. Historical QA results do not establish a new run's result.
 
@@ -123,13 +123,17 @@ positive controls so broken connectivity or credentials cannot masquerade as den
   only in the selected Harness/embedded runtime, never a separate gateway or OCC.
   Record references and destinations, never values. Prove cross-Agent and
   cross-tenant Kubernetes Secret access is denied with the tested caller identity.
-- Verify native UI permits the authorized human and rejects anonymous access,
+- For shared-session native administration, verify native UI permits the authorized human and rejects anonymous access,
   spoofed identity headers, and an OCC service key used as browser authentication.
 - Prove permitted status/gateway traffic succeeds while an otherwise egress-enabled
   untrusted probe cannot reach protected Agent/gateway ingress. Distinguish an
   enforced destination policy from DNS failure or the probe's own egress denial.
 - Retain attributable audit evidence for successful mutations and denials. Classify
   unexpected reconciliation failures even if a later deployment succeeds.
+
+For Compose/Kubernetes, follow its setup reference's native-access boundary.
+Password-authenticated local access is distinct from shared-session browser
+administration; report unsupported shared-session checks explicitly, not passed.
 
 ## Completion
 

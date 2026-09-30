@@ -1,6 +1,6 @@
 # Main acceptance test
 
-Run `oceinteg main` to prove a fresh supported Helm installation through the
+Run `oceinteg main` to prove a fresh supported installation through the
 Console and a real Slack-connected Agent. Run repository commands from the
 repository root. Use current supported procedures from the
 [testing index](../../../../docs/testing/README.md),
@@ -47,14 +47,14 @@ and the supported binding steps.
 
 ## Installation acceptance
 
-Record a separate result for each selected topology: EKS with Helm OCC, local
-k3d with Helm OCC, or a requested Docker-OCC/k3d combination. Never transfer a
-pass across topologies. The current Docker/Podman control-plane preview cannot
-deploy Agents; mark that requested combination unsupported rather than silently
-substituting Helm. Follow the current [local deployment guide](../../../../docs/guides/deploy/local-kubernetes-development.md)
-and [EKS guide](../../../../docs/guides/deploy/eks.md) for supported paths.
+Record a separate result for each selected topology and follow its setup:
+[EKS with Helm OCC](./setup-eks.md), [k3d with Helm OCC](./setup-k3d.md),
+or [k3d with Compose OCC](./setup-compose-k3d.md). Never transfer a pass across
+topologies. The default Compose-only preview cannot deploy Agents; the explicit
+Compose/Kubernetes profile is distinct and requires additional setup. Record
+its documented capability differences without counting substitutes as passes.
 
-Use standard Helm installation with the following profile:
+Use the selected installation procedure with the following acceptance profile:
 
 - Enable standard presets and the DevDay preset set, including **Community
   Agent**. Verify the expected preset names in the Console of each selected OCE
