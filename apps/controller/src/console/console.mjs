@@ -472,14 +472,16 @@ function showLogin(message = "", returnPath = null) {
         // Only an explicit false hides the form: failed or older discovery keeps it.
         if (available?.password === false && (available.github || available.google)) {
           recoveryOnly = true;
-          const shown = feedback.textContent;
-          if (shown === describe(true)) {
+          if (feedback.textContent === describe(true)) {
             feedback.textContent = describe(false);
           }
-          form.hidden = true;
-          providers.after(feedback);
           usernameHint.textContent = "Use the recovery account's email";
-          recovery.hidden = false;
+          // Never pull the form away from someone already using it.
+          if (!pending && username.value === "" && password.value === "") {
+            form.hidden = true;
+            providers.after(feedback);
+            recovery.hidden = false;
+          }
         }
       }
     })
