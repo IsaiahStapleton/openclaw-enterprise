@@ -2346,6 +2346,7 @@ test("a delayed restored Preset list cannot read a selection after starting with
   const namespace = await fixture.createNamespace("Delayed Preset list", { ready: true });
   const presets = await fixture.request("GET", `/namespaces/${namespace.id}/presets`);
   const starter = presets.data.find((preset) => preset.name === "default-codex");
+  assert.ok(starter);
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
@@ -2357,31 +2358,61 @@ test("a delayed restored Preset list cannot read a selection after starting with
   await page.getByLabel("Preset template").selectOption(starter.id);
   assert.equal((await selectedPresetResponse).status(), 200);
   await page.getByRole("button", { name: "Use Preset", exact: true }).click({ trial: true });
+  assert.equal(await page.getByLabel("Preset template").inputValue(), starter.id);
   await page.getByRole("link", { name: "← Agents" }).click();
+
+  // A real catalog change makes the admitted return construct a fresh chooser
+  // with the retained selection. Do not hold its outer access revalidation.
+  const added = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
+    body: { name: "Another Preset", template: starter.template },
+  });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
 
   let releaseList;
   const heldList = new Promise((resolve) => {
     releaseList = resolve;
   });
-  let listRequested;
-  const listStarted = new Promise((resolve) => {
-    listRequested = resolve;
+  let finishList;
+  const listHandled = new Promise((resolve) => {
+    finishList = resolve;
   });
+  const listUrl = `${fixture.origin}/namespaces/${namespace.id}/presets`;
   const listPath = `**/namespaces/${namespace.id}/presets`;
+  let routedLists = 0;
+  let heldRequest;
   await page.route(listPath, async (route) => {
-    listRequested();
-    await heldList;
-    await route.continue();
+    if (route.request().method() !== "GET" || ++routedLists !== 2) {
+      await route.continue();
+      return;
+    }
+    heldRequest = route.request();
+    try {
+      await heldList;
+      await route.continue();
+    } finally {
+      finishList();
+    }
   });
-  const listResponse = page.waitForResponse((response) =>
-    response.url().endsWith(`/namespaces/${namespace.id}/presets`),
+  let requestedLists = 0;
+  const listStarted = page.waitForRequest(
+    (request) => request.method() === "GET" && request.url() === listUrl && ++requestedLists === 2,
+    { timeout: 10_000 },
   );
+  const listResponse = page.waitForResponse(
+    (response) => response.request() === heldRequest && response.url() === listUrl,
+    { timeout: 10_000 },
+  );
+  // Observe timeout rejections while an earlier UI action is still pending.
+  void listStarted.catch(() => {});
+  void listResponse.catch(() => {});
   let exactReadsBeforeRelease;
+  let pendingList;
   try {
     await page.getByRole("button", { name: "Create Agent", exact: true }).click();
-    await listStarted;
+    pendingList = await listStarted;
     await page.getByRole("button", { name: "Start without Preset" }).click();
     await page.getByLabel("Agent name", { exact: true }).fill("Independent Agent");
+    assert.equal(heldRequest, pendingList);
     exactReadsBeforeRelease = requests.filter(
       (request) =>
         request.method === "GET" &&
@@ -2389,9 +2420,29 @@ test("a delayed restored Preset list cannot read a selection after starting with
     ).length;
   } finally {
     releaseList();
+    if (heldRequest) {
+      let timer;
+      try {
+        await Promise.race([
+          listHandled,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("Held Preset route did not finish")), 10_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    await page.unroute(listPath);
   }
-  await (await listResponse).finished();
-  await page.unroute(listPath);
+  const response = await listResponse;
+  assert.equal(response.request(), pendingList);
+  assert.equal(response.request().method(), "GET");
+  assert.equal(response.status(), 200);
+  const releasedPresets = (await response.json()).data;
+  assert.ok(releasedPresets.some((preset) => preset.id === starter.id));
+  assert.ok(releasedPresets.some((preset) => preset.id === added.data.id));
+  await response.finished();
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
   assert.equal(
     requests.filter(
