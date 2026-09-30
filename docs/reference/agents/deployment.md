@@ -129,6 +129,16 @@ has passed. After activation, OCC clears staged contents and retains setup
 identity and completion metadata. Later revisions check completion without
 reapplying the original text, preserving edits made in the live workspace.
 
+Deployment admission checks what the Installation supports before it checks
+the Agent service principal's grants. An unsupported topology, such as
+dedicated native OpenClaw without
+[native worker support](../harness-execution.md#native-worker-support), is
+refused with its capability error even when the Agent principal also lacks a
+grant. When only the Agent principal's grant is missing, the `403` names that
+`servicePrincipalId`, the action, and the exact Secret or credential source,
+for example `The Agent service principal <id> is not authorized to operate
+secret <id>`. Denials of your own permissions stay generic.
+
 Revision list and read operations are scoped beneath the exact Namespace and
 Agent. Each returned revision requires its own authorized read; substituting a
 parent does not grant access to another Agent's history. Public response shapes

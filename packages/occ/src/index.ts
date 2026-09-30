@@ -97,6 +97,7 @@ import {
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
   AgentDeletingError,
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
@@ -172,6 +173,7 @@ import type {
 
 export {
   AgentDeletingError,
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
@@ -4421,8 +4423,6 @@ export class OpenClawController {
         );
       }
       this.assertCredentialGatewayDelivery(lockedAgent.harnessAuth);
-      const harnessAuth = await this.admitHarnessAuth(state, principalId, lockedAgent);
-      const credentialSourceType = await this.admittedCredentialSourceType(harnessAuth, sandbox);
       await this.authorize(principalId, "read", {
         kind: "configuration",
         id: lockedAgent.configurationId,
@@ -4436,32 +4436,6 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The Agent Configuration must belong to the exact Namespace and configure an Agent.",
         );
-      }
-      const secretBindings = this.bindings(metadata.secretBindings);
-      const sources = await this.authorizeBindings(
-        state,
-        principalId,
-        namespace.id,
-        secretBindings,
-      );
-      const secretDriver =
-        Object.keys(secretBindings).length === 0 ? undefined : this.secretDriver();
-      for (const secret of sources) {
-        await this.authorize(lockedAgent.servicePrincipalId, "operate", {
-          kind: "secret",
-          id: secret.id,
-          namespaceId: namespace.id,
-        });
-        const resolved = await this.secretOperation(() => secretDriver!.resolve(secret));
-        if (
-          Object.keys(secret.backendRef).some(
-            (key) =>
-              resolved[key as keyof typeof resolved] !==
-              secret.backendRef[key as keyof typeof secret.backendRef],
-          )
-        ) {
-          throw new DependencyUnavailableError("The Secret backend identity changed.");
-        }
       }
       const configurationDriver = this.configurationDriver();
       const configuration = this.exactConfiguration(
@@ -4489,7 +4463,37 @@ export class OpenClawController {
         ...approvedHarness,
         mode: lockedAgent.executionMode,
       });
+      // Capability refusals precede Agent principal grants: a grant cannot make an unsupported
+      // topology deployable, so the refusal the operator can act on must surface first.
       requireDedicatedNativeSupport(revisionHarness, sandbox, this.nativeWorkers);
+      const harnessAuth = await this.admitHarnessAuth(state, principalId, lockedAgent);
+      const credentialSourceType = await this.admittedCredentialSourceType(harnessAuth, sandbox);
+      const secretBindings = this.bindings(metadata.secretBindings);
+      const sources = await this.authorizeBindings(
+        state,
+        principalId,
+        namespace.id,
+        secretBindings,
+      );
+      const secretDriver =
+        Object.keys(secretBindings).length === 0 ? undefined : this.secretDriver();
+      for (const secret of sources) {
+        await this.authorizeAgentPrincipal(lockedAgent.servicePrincipalId, "operate", {
+          kind: "secret",
+          id: secret.id,
+          namespaceId: namespace.id,
+        });
+        const resolved = await this.secretOperation(() => secretDriver!.resolve(secret));
+        if (
+          Object.keys(secret.backendRef).some(
+            (key) =>
+              resolved[key as keyof typeof resolved] !==
+              secret.backendRef[key as keyof typeof secret.backendRef],
+          )
+        ) {
+          throw new DependencyUnavailableError("The Secret backend identity changed.");
+        }
+      }
       const sandboxConfiguration =
         sandbox?.configureAgent !== undefined
           ? frozenValues(
@@ -5138,6 +5142,25 @@ export class OpenClawController {
       );
     }
     return authorization;
+  }
+
+  /** Authorizes an Agent's own service principal and names it and the grant when denied. */
+  private async authorizeAgentPrincipal(
+    principalId: string,
+    action: AuthorizationRequest["action"],
+    resource: ResourceRef,
+  ): Promise<void> {
+    try {
+      await this.authorize(principalId, action, resource);
+    } catch (error) {
+      if (
+        error instanceof AuthorizationDeniedError &&
+        !(error instanceof DependencyUnavailableError)
+      ) {
+        throw new AgentPrincipalAuthorizationError(principalId, action, resource, error.evidence);
+      }
+      throw error;
+    }
   }
 
   private async canRead(principalId: string, resource: ResourceRef): Promise<boolean> {
@@ -6166,7 +6189,7 @@ export class OpenClawController {
       return immutableCopy(binding);
     }
     if (binding.method === "api_key" || binding.method === "codex_pat") {
-      await this.authorize(agent.servicePrincipalId, "operate", binding.source);
+      await this.authorizeAgentPrincipal(agent.servicePrincipalId, "operate", binding.source);
       const source = await state.secrets.lockSecret(agent.namespaceId, binding.source.id);
       if (source === undefined) {
         throw new ScopeViolationError("The Harness Secret is unavailable.");
@@ -6185,7 +6208,7 @@ export class OpenClawController {
       return immutableCopy({ ...binding, secretDriverId: driver.id });
     }
     if (binding.method === "credential_source") {
-      await this.authorize(agent.servicePrincipalId, "operate", {
+      await this.authorizeAgentPrincipal(agent.servicePrincipalId, "operate", {
         kind: "credential_source",
         namespaceId: agent.namespaceId,
         id: binding.sourceId,
