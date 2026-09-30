@@ -180,7 +180,7 @@ test(
     assert.equal(first.statusCode, 200, first.body);
     const rows = await viewRows();
     assert.equal(rows.rowCount, 1);
-    assert.equal(rows.rows[0].kind, "mutation");
+    assert.equal(rows.rows[0].kind, "access");
     assert.equal(rows.rows[0].actor_id, principal.id);
     assert.equal(rows.rows[0].outcome, "success");
     const details = rows.rows[0].details.runtimeLogs;
@@ -223,8 +223,8 @@ test(
     assert.deepEqual(
       downloaded.map(({ kind, actor_id: actorId, outcome }) => ({ kind, actorId, outcome })),
       [
-        { kind: "mutation", actorId: principal.id, outcome: "success" },
-        { kind: "mutation", actorId: principal.id, outcome: "success" },
+        { kind: "access", actorId: principal.id, outcome: "success" },
+        { kind: "access", actorId: principal.id, outcome: "success" },
       ],
     );
     assert.equal(downloaded[0].details.runtimeLogs.tailLines, 1000);
@@ -234,5 +234,40 @@ test(
     );
     assert.equal(JSON.stringify(downloaded).includes("first line"), false);
     assert.equal((await viewRows()).rowCount, 1, "downloads are not views");
+
+    // The access kind reads back through the State audit reader, naming the grant that
+    // admitted the administrator (administer: the fresh bootstrap Role has no read_logs).
+    const persisted = (await state.transact((unit) => unit.audit.list())).filter(
+      (event) =>
+        event.resource.id === agent.id && event.action.startsWith("openclaw.agents.runtime_logs."),
+    );
+    assert.deepEqual(
+      persisted.map((event) => [event.kind, event.action, event.authorization?.action]),
+      [
+        ["access", "openclaw.agents.runtime_logs.view", "administer"],
+        ["access", "openclaw.agents.runtime_logs.download", "administer"],
+        ["access", "openclaw.agents.runtime_logs.download", "administer"],
+      ],
+    );
+
+    // A persisted read_logs Restriction denies log text outright; administer cannot bypass it.
+    await pool.query(
+      `INSERT INTO occ.iam_restrictions
+         (id, namespace_id, action, resource_kind, resource_id, effect)
+       VALUES ($1, $2, 'read_logs', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, namespace.id, agent.id],
+    );
+    const reads = computeDriver.calls.filter(({ operation }) => operation === "read").length;
+    const restricted = await inject("GET", logs, session);
+    assert.equal(restricted.statusCode, 403, restricted.body);
+    assert.equal(restricted.body.includes("first line"), false);
+    assert.equal(computeDriver.calls.filter(({ operation }) => operation === "read").length, reads);
+    assert.deepEqual(
+      (await viewRows()).rows.map(({ kind, outcome }) => [kind, outcome]),
+      [
+        ["access", "success"],
+        ["authorization_denial", "denied"],
+      ],
+    );
   },
 );

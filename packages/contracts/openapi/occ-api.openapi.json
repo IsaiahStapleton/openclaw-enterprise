@@ -962,6 +962,17 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "container": {
+                            "anyOf": [
+                              {
+                                "maxLength": 253,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "count": { "minimum": 1, "type": "integer" },
                           "lastObservedAt": {
                             "anyOf": [
@@ -982,7 +993,14 @@
                             ]
                           }
                         },
-                        "required": ["type", "reason", "message", "count", "lastObservedAt"],
+                        "required": [
+                          "type",
+                          "container",
+                          "reason",
+                          "message",
+                          "count",
+                          "lastObservedAt"
+                        ],
                         "type": "object"
                       },
                       "maxItems": 100,
@@ -11059,6 +11077,17 @@
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
+                                    "container": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 253,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
                                     "count": { "minimum": 1, "type": "integer" },
                                     "lastObservedAt": {
                                       "anyOf": [
@@ -11081,6 +11110,7 @@
                                   },
                                   "required": [
                                     "type",
+                                    "container",
                                     "reason",
                                     "message",
                                     "count",
@@ -11278,7 +11308,7 @@
     },
     "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime/logs": {
       "get": {
-        "description": "Requires administer permission on the requested Agent. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.",
+        "description": "Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent.",
         "operationId": "getAgentDeploymentRuntimeLogs",
         "parameters": [
           {
@@ -11797,9 +11827,14 @@
         "summary": "Read one bounded, redacted page of container output for one exact Agent revision",
         "tags": ["Agent deployments"],
         "x-openclaw-permissions": [
-          { "action": "administer", "resourceKind": "agent", "scope": "requested" },
-          { "action": "read", "resourceKind": "agent", "scope": "requested" },
-          { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+          { "action": "read_logs", "resourceKind": "agent", "scope": "requested" },
+          {
+            "action": "administer",
+            "condition": "read_logs_alternative",
+            "resourceKind": "agent",
+            "scope": "requested"
+          },
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
         ]
       }
     },
@@ -16765,7 +16800,8 @@
                                     { "const": "delete", "type": "string" },
                                     { "const": "deploy", "type": "string" },
                                     { "const": "operate", "type": "string" },
-                                    { "const": "administer", "type": "string" }
+                                    { "const": "administer", "type": "string" },
+                                    { "const": "read_logs", "type": "string" }
                                   ]
                                 },
                                 "resourceKind": {
@@ -16896,7 +16932,8 @@
                             { "const": "delete", "type": "string" },
                             { "const": "deploy", "type": "string" },
                             { "const": "operate", "type": "string" },
-                            { "const": "administer", "type": "string" }
+                            { "const": "administer", "type": "string" },
+                            { "const": "read_logs", "type": "string" }
                           ]
                         },
                         "resourceKind": {
@@ -16960,7 +16997,8 @@
                                   { "const": "delete", "type": "string" },
                                   { "const": "deploy", "type": "string" },
                                   { "const": "operate", "type": "string" },
-                                  { "const": "administer", "type": "string" }
+                                  { "const": "administer", "type": "string" },
+                                  { "const": "read_logs", "type": "string" }
                                 ]
                               },
                               "resourceKind": {
@@ -17196,7 +17234,8 @@
                                   { "const": "delete", "type": "string" },
                                   { "const": "deploy", "type": "string" },
                                   { "const": "operate", "type": "string" },
-                                  { "const": "administer", "type": "string" }
+                                  { "const": "administer", "type": "string" },
+                                  { "const": "read_logs", "type": "string" }
                                 ]
                               },
                               "resourceKind": {

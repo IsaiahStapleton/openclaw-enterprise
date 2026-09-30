@@ -2175,6 +2175,13 @@ summary:focus-visible {
 .log-subsystem {
   color: var(--muted);
 }
+.log-provenance,
+.log-join {
+  color: var(--muted);
+}
+.log-join {
+  font-style: italic;
+}
 .log-level-error {
   color: var(--danger);
 }

@@ -39,11 +39,14 @@ another version or the draft. Its milestones use the persisted record:
 | **Deployment work**     | `queued` awaits an initial or subsequent claim; `running` records a worker claim. |
 | **Completion recorded** | `succeeded` means the original work completed activation or was already active.   |
 
-A `failed` result shows the stored error. Startup evidence may identify the
-runtime component, failed check, code, and check time. Plugin warnings describe
-that attempt. An unavailable record has unknown status. **Refresh deployment**
-rereads it, the selected version, and that version's deployment record without
-retrying work.
+A `failed` result shows the stored error and an **Open vN Logs** link to that
+version's [Logs tab](../topics/agent-logs.md), which the draft does not have.
+Startup evidence may identify the runtime component, failed check, code, and
+check time. Plugin warnings describe that attempt. An unavailable record has
+unknown status. While the record is `queued` or `running`, the panel rereads it
+every few seconds and stops at `succeeded`, `failed`, or a read error.
+**Refresh deployment** rereads it, the selected version, and that version's
+deployment record without retrying work.
 
 Pending work shows its **Last recorded result** and **Last checked** time,
 including deferred readiness checks and a running worker's previous result.
@@ -70,11 +73,15 @@ support. Viewing neither deploys nor activates it.
 
 **Run diagnostics for this version** requests fresh, on-demand observations of
 the viewed version. Checks include a time and `succeeded`, `failed`, or
-`unknown` state; unavailable requests show retryable errors. If every check is
-`unknown` with `UNAVAILABLE`, the runtime did not answer; the page points to the
-version's recorded failure, if any, and its Logs. Diagnostics do
-not change deployment history, activate a version, repeat the startup model
-probe, or prove message delivery. You need Agent `read` and `operate` plus
+`unknown` state; unavailable requests show retryable errors. On Kubernetes
+Compute the gateway checks cover only the Slack channel. A version without
+Slack reports configuration `failed` with `NOT_CONFIGURED` and leaves
+authentication and connectivity `unknown`; the page says this is expected. If
+every check is `unknown` with `UNAVAILABLE`, the runtime did not answer. Either
+way, a recorded deployment failure such as `RUNTIME_AUTHENTICATION_FAILED`
+stays in view: diagnostics do not test model credentials, so they cannot
+confirm or clear it. Diagnostics do not change deployment history, activate a
+version, repeat the startup model probe, or prove message delivery. You need Agent `read` and `operate` plus
 read access to that version.
 
 **Logs** on a deployed version shows its Pods, restarts, recent warning Events

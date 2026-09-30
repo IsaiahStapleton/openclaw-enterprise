@@ -162,6 +162,23 @@ test(
           },
           label,
         );
+        // Reuse these renders to cover the example install's egress and Secret
+        // placement: only the API receives sign-in and trusted-proxy settings.
+        assert.deepEqual(
+          objects
+            .filter(({ kind }) => kind === "NetworkPolicy")
+            .map(({ metadata }) => /-api-(github|google)-login-egress$/.exec(metadata.name)?.[1])
+            .filter(Boolean)
+            .sort(),
+          githubEnabled ? ["github"] : [],
+          label,
+        );
+        assert.ok(
+          !deploymentEnv(objects, "worker").some(({ name }) =>
+            /^OCC_AUTH_(GITHUB_|GOOGLE_|TRUSTED_PROXY_|CLIENT_IP_HEADER)/.test(name),
+          ),
+          label,
+        );
         const environment = resolveSecrets(rendered);
         const github = githubLoginConfiguration(environment);
         assert.deepEqual(

@@ -5775,6 +5775,95 @@ test(
 );
 
 test(
+  "a replacement that fails after pointer publication stays the Agent's active revision",
+  requiresPostgres,
+  async (context) => {
+    // Kubernetes embedded replacement reports a new revision ready while its
+    // predecessor serves, publishes it, and only then replaces the shared
+    // gateway. When the replacement's startup model probe then rejects the
+    // credential, the predecessor no longer runs: the failed revision owns the
+    // only runtime, so it stays active for stop, deletion, and diagnostics
+    // until a later revision replaces it. OCC never rolls back automatically.
+    const fixture = await setup(context);
+    const owner = await fixture.agent("failed-published-replacement");
+    const healthy = await fixture.revision(owner, 1);
+    let rejectCredential = false;
+    const activations = [];
+    const retired = [];
+    const compute = {
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        const observation = await fixture.compute.prepareRevision(revision);
+        // The first observation of a replacement reflects the serving predecessor.
+        if (!rejectCredential || !activations.includes(revision.id)) {
+          return observation;
+        }
+        return {
+          ...observation,
+          ready: false,
+          runtimeFailure: {
+            component: "gateway",
+            check: "model-probe",
+            checkedAt: "2026-09-30T17:14:54.000Z",
+            code: "AUTHENTICATION_FAILED",
+          },
+        };
+      },
+      async activateRevision(revision) {
+        activations.push(revision.id);
+        if (rejectCredential) {
+          throw new Error("The exact AgentRevision gateway is not ready.");
+        }
+      },
+      async retireRevision(revision) {
+        retired.push(revision.id);
+        return fixture.compute.retireRevision(revision);
+      },
+    };
+    await fixture.start(compute);
+    await fixture.work(healthy, "succeeded");
+    const activeRevision = async () =>
+      (
+        await fixture.observerPool.query(
+          "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
+          [fixture.namespace.id, owner.id],
+        )
+      ).rows[0].active_revision_id;
+    assert.equal(await activeRevision(), healthy.id);
+
+    rejectCredential = true;
+    const rejected = await fixture.revision(owner, 2);
+    await fixture.work(rejected, "failed_permanent");
+    const codes = await fixture.observerPool.query(
+      `SELECT details->>'reasonCode' AS reason FROM occ.audit_events
+       WHERE resource_id = $1 AND action = 'reconcile' ORDER BY occurred_at`,
+      [rejected.id],
+    );
+    assert.deepEqual(
+      [...new Set(codes.rows.map(({ reason }) => reason))],
+      ["REVISION_FINALIZATION_INCOMPLETE", "RUNTIME_AUTHENTICATION_FAILED"],
+    );
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      rejected.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.equal(status.error.code, "RUNTIME_AUTHENTICATION_FAILED");
+    assert.equal(await activeRevision(), rejected.id);
+    assert.deepEqual(retired, []);
+
+    // Recovery is a new, higher revision; it replaces the failed one.
+    rejectCredential = false;
+    const repaired = await fixture.revision(owner, 3);
+    await fixture.work(repaired, "succeeded");
+    assert.equal(await activeRevision(), repaired.id);
+    assert.deepEqual(retired.toSorted(), [healthy.id, rejected.id].toSorted());
+  },
+);
+
+test(
   "a Sandbox Driver that cannot run the revision fails deployment without retrying",
   requiresPostgres,
   async (context) => {

@@ -1235,6 +1235,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     "the first Gateway starts alongside the Harness",
   );
   assert.deepEqual(read("Service", `agent-${digest(revision.agentId)}`).spec.selector, {
+    "openclaw.dev/network-profile": "broad-egress-v1",
     "openclaw.dev/namespace": revision.namespaceId,
     "openclaw.dev/agent": revision.agentId,
     "openclaw.dev/revision": revision.id,
@@ -4153,10 +4154,6 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   );
   assert.equal(workerProgram.includes("chmodSync(temporary, 0o700)"), true);
   assert.equal(workerProgram.includes("initializeRuntimeAssets();"), true);
-  assert.equal(
-    workerProgram.includes("const { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync }"),
-    true,
-  );
   assert.equal(workerProgram.includes("OPENCLAW_BUNDLED_SKILLS_DIR"), true);
   assert.equal(workerProgram.includes('publishImageTree("/app/custodian-skills"'), true);
   assert.equal(
@@ -5630,6 +5627,28 @@ test("Anthropic API-key admission binds every embedded model to the canonical cr
 
 test("embedded startup probes its selected provider and allows graceful Gateway shutdown", async (t) => {
   const nodeRequire = createRequire(import.meta.url);
+  function assertProbeStageDiagnostics(lines, expectedOtherLines, elapsedMs) {
+    const stageLines = lines.filter((line) => line.includes('"openclaw.model_probe_stage"'));
+    const stages = stageLines.map((line) => JSON.parse(line));
+    assert.deepEqual(
+      stages.map(({ stage }) => stage),
+      ["prepare", "spawn", "returned", "cleanup", "complete"],
+    );
+    let previousElapsedMs = 0;
+    for (const stage of stages) {
+      // Only this closed, nonsecret schema may leave the unexpected-stderr set.
+      assert.deepEqual(Object.keys(stage).sort(), ["capMs", "elapsedMs", "event", "stage"]);
+      assert.equal(stage.event, "openclaw.model_probe_stage");
+      assert.equal(stage.capMs, 110_000);
+      assert.ok(Number.isSafeInteger(stage.elapsedMs));
+      assert.ok(stage.elapsedMs >= previousElapsedMs && stage.elapsedMs <= elapsedMs);
+      previousElapsedMs = stage.elapsedMs;
+    }
+    assert.deepEqual(
+      lines.filter((line) => !stageLines.includes(line)),
+      expectedOtherLines,
+    );
+  }
   for (const [provider, model, credentialName] of [
     ["openai", "gpt-5", "OPENAI_API_KEY"],
     ["anthropic", "claude-sonnet-4-5", "ANTHROPIC_API_KEY"],
@@ -5829,12 +5848,53 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
         assert.equal(held, !accepted);
         const phaseLines = errors.filter((line) => line.includes('"runtime.startup_phase"'));
         const probeLines = errors.filter((line) => line.includes('"openclaw.model_probe"'));
-        assert.deepEqual(
-          errors.filter((line) => !phaseLines.includes(line) && !probeLines.includes(line)),
-          accepted ? [] : ["Harness model authentication probe failed."],
-        );
         assert.equal(probeLines.length, 1);
         const probeLog = JSON.parse(probeLines[0]);
+        const otherLines = errors.filter(
+          (line) => !phaseLines.includes(line) && !probeLines.includes(line),
+        );
+        assertProbeStageDiagnostics(
+          otherLines,
+          accepted ? [] : ["Harness model authentication probe failed."],
+          probeLog.elapsedMs,
+        );
+        if (provider === "openai" && accepted) {
+          // Mutate actual generated diagnostics: a permissive filter must not
+          // conceal malformed fields, secret-bearing records or unexpected logs.
+          const firstStage = JSON.parse(otherLines[0]);
+          for (const [name, line] of [
+            ["malformed JSON", '{"event":"openclaw.model_probe_stage"'],
+            ["unknown event", JSON.stringify({ ...firstStage, event: "unexpected.event" })],
+            ["unknown stage", JSON.stringify({ ...firstStage, stage: "unexpected" })],
+            ["secret field", JSON.stringify({ ...firstStage, credential: "fixture-model-key" })],
+            ["secret stage", JSON.stringify({ ...firstStage, stage: "fixture-model-key" })],
+            ["string time", JSON.stringify({ ...firstStage, elapsedMs: "fixture-model-key" })],
+            ["missing time", JSON.stringify({ ...firstStage, elapsedMs: undefined })],
+            ["null time", JSON.stringify({ ...firstStage, elapsedMs: null })],
+            ["negative time", JSON.stringify({ ...firstStage, elapsedMs: -1 })],
+            ["fractional time", JSON.stringify({ ...firstStage, elapsedMs: 0.5 })],
+            ["unsafe time", JSON.stringify({ ...firstStage, elapsedMs: Number.MAX_VALUE })],
+            ["late time", JSON.stringify({ ...firstStage, elapsedMs: probeLog.elapsedMs + 1 })],
+            ["wrong cap", JSON.stringify({ ...firstStage, capMs: 600_000 })],
+          ]) {
+            assert.throws(
+              () =>
+                assertProbeStageDiagnostics([line, ...otherLines.slice(1)], [], probeLog.elapsedMs),
+              { name: name === "malformed JSON" ? "SyntaxError" : "AssertionError" },
+              name,
+            );
+          }
+          for (const lines of [
+            otherLines.slice(1),
+            [...otherLines, otherLines[0]],
+            [otherLines[1], otherLines[0], ...otherLines.slice(2)],
+            [...otherLines, "unexpected fixture-model-key"],
+          ]) {
+            assert.throws(() => assertProbeStageDiagnostics(lines, [], probeLog.elapsedMs), {
+              name: "AssertionError",
+            });
+          }
+        }
         assert.deepEqual([probeLog.code, probeLog.capMs], [failureCode ?? "READY", 110_000]);
         assert.equal(
           probeLog.cpuWaitMs,
@@ -7051,6 +7111,7 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
   fixture.setObservation({ items: [fixture.pod("ready")] });
   await driver.activateRevision(revision, authContext(revision));
   assert.deepEqual(objects.get(key("Service", agentServiceName)).spec.selector, {
+    "openclaw.dev/network-profile": "provider-fenced-v1",
     "openclaw.dev/namespace": revision.namespaceId,
     "openclaw.dev/agent": revision.agentId,
     "openclaw.dev/revision": revision.id,
@@ -10150,12 +10211,10 @@ test("dedicated Harness Service selector satisfies the gateway policy during cut
     assert.deepEqual(gatewayTargetNamespace(selectedRevision), {
       "kubernetes.io/metadata.name": namespace,
     });
-    // Service selectors intentionally stay profile-free; the policy peer carries it.
+    // EKS resolves policy peers before destination translation, so the Service
+    // must include every peer label, including the Harness network profile.
     assert.equal(target["openclaw.dev/network-profile"], "broad-egress-v1");
     for (const [name, value] of Object.entries(target)) {
-      if (name === "openclaw.dev/network-profile") {
-        continue;
-      }
       assert.equal(selector[name], value, `${name} must match the gateway egress selector`);
     }
     assert.equal(
@@ -11518,6 +11577,31 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
               message: "Back-off restarting failed container",
               count: 4,
               lastTimestamp: new Date("2026-09-30T11:01:00Z"),
+              involvedObject: {
+                kind: "Pod",
+                uid,
+                namespace,
+                fieldPath: "spec.containers{gateway}",
+              },
+            },
+            {
+              type: "Normal",
+              reason: "Pulled",
+              message: "Container image already present on machine",
+              count: 1,
+              lastTimestamp: new Date("2026-09-30T11:00:30Z"),
+              involvedObject: {
+                kind: "Pod",
+                uid,
+                namespace,
+                fieldPath: "spec.initContainers{prepare-private-state}",
+              },
+            },
+            {
+              type: "Normal",
+              reason: "Scheduled",
+              message: "Successfully assigned",
+              lastTimestamp: new Date("2026-09-30T11:00:00Z"),
               involvedObject: { kind: "Pod", uid, namespace },
             },
             // A field selector the server ignored must not leak another object's Events.
@@ -11585,8 +11669,12 @@ test("Kubernetes runtime description reads each plane's Pods and only their own 
     lastTermination: { reason: "OOMKilled", exitCode: 137, finishedAt: "2026-09-30T10:59:00.000Z" },
   });
   assert.deepEqual(
-    gateway.events.map(({ reason, count }) => ({ reason, count })),
-    [{ reason: "BackOff", count: 4 }],
+    gateway.events.map(({ reason, count, container }) => ({ reason, count, container })),
+    [
+      { reason: "BackOff", count: 4, container: "gateway" },
+      { reason: "Pulled", count: 1, container: "prepare-private-state" },
+      { reason: "Scheduled", count: 1, container: null },
+    ],
   );
   assert.deepEqual(
     description.sources.map(({ id, pods }) => ({ id, pods })),
@@ -11789,6 +11877,13 @@ test("embedded redeploy repairs a never-served unready Gateway while workspace s
     objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
     `${gatewayName}-inactive`,
   );
+  const revisionArtifacts = (target) => [
+    `Secret:${namespace}:harness-secrets-${digest(target.agentId)}-${digest(target.id)}`,
+    `ConfigMap:${namespace}:${gatewayName}-rev-${digest(target.id)}`,
+  ];
+  for (const artifact of revisionArtifacts(revision)) {
+    assert.ok(objects.has(artifact), `${artifact} is projected for the first deploy`);
+  }
 
   const successor = { ...revision, id: "redeploy-successor", revision: revision.revision + 1 };
   const successorContext = { ...context, ...authContext(successor) };
@@ -11796,6 +11891,14 @@ test("embedded redeploy repairs a never-served unready Gateway while workspace s
   assert.equal((await driver.prepareRevision(successor, successorContext)).ready, false);
   const repaired = objects.get(gatewayKey);
   assert.equal(repaired.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
+  // The repaired Gateway no longer runs the failed predecessor, so its credential
+  // and configuration copies go now rather than on stop or delete.
+  for (const artifact of revisionArtifacts(revision)) {
+    assert.equal(objects.has(artifact), false, `${artifact} is removed once superseded`);
+  }
+  for (const artifact of revisionArtifacts(successor)) {
+    assert.ok(objects.has(artifact), `${artifact} is kept for the repairing successor`);
+  }
   assert.equal(
     objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
     `${gatewayName}-inactive`,

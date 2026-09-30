@@ -90,7 +90,7 @@ const secretRef = (name, key) => ({ secretKeyRef: { name, key } });
 
 /**
  * The API Pod's sign-in environment rendered from deploy/examples/production/values.yaml:
- * no OCC_AUTH_GITHUB_*, no trusted proxy. password-default-chart.test.mjs asserts the
+ * no OCC_AUTH_GITHUB_*, no trusted proxy. sign-in-chart-parity.test.mjs asserts the
  * chart renders exactly these OCC_AUTH_* and OCC_AGENT_NATIVE_ADMIN_* entries.
  */
 export const defaultInstallSettings = Object.freeze({

@@ -127,13 +127,33 @@ the auth secret; `untracked` events have no key and no hash. The email and
 address are never logged. The bundled Collector
 exports the event and lane, not the hash.
 
+Every password sign-in whose password is checked attempts an
+`authentication.login` audit: success names the account's Principal and `userId`;
+a wrong password or unknown email is `denied` with `INVALID_CREDENTIALS` and no
+account. Audit writes fail closed: a success whose audit cannot be written
+returns `503` without issuing a session cookie. A server-side session may
+persist if its creation or cleanup cannot be confirmed. In both profiles, a wrong
+password whose denial cannot be written counts as a credential failure against
+any tracked sign-in budgets. The ordinary response is `503`; the slow lane may
+instead return `429`. An untracked or already-exhausted lane is paced without
+necessarily adding a new tracked failure entry. If the audit write cannot be
+confirmed, its persistence outcome may be unknown. A `429` is also unaudited when admission
+refuses the attempt before the password is checked;
+`authentication.sign-in-limited` reports the limited lane.
+An administrator's attempt in the slow lane is still checked, so a wrong password
+there returns `429` and is audited as `denied` when the write succeeds.
+
 ### Known devices
 
 Every successful sign-in, password or external, sets `__Host-occ_known_device`
 (`occ_known_device` over plain HTTP): HttpOnly, `SameSite=Strict`, `Path=/`, no
 `Domain`, 90 days. It holds up to three entries, one per recent account, each an
 HMAC under the auth secret over a hash of the account's email, the issue time and
-a random nonce, so every sign-in gets its own entry; it never carries the email. A later password attempt for an email with a valid
+a random nonce, so every sign-in gets its own entry; it never carries the email.
+Each entry is also bound to the account's password: its user, password method and
+that method's authentication version, which the database bumps on every password
+change. An external sign-in marks the browser only when the account has a password.
+A later password attempt for an email with a valid
 entry spends that browser's own budget, the size of the email's, instead of the
 email's, and does not wait for the email's slowed slots. Strangers who spend an
 email's budget therefore cannot refuse or crowd out a browser that signed in to
@@ -141,11 +161,18 @@ that account before, including an administrator's or the recovery account's.
 
 The cookie never authenticates: a wrong password with it is `401` and spends the
 browser's lane, and the address lane and global caps still apply. Tampered,
-expired, foreign-account, or duplicated cookies are ignored, returning the
-attempt to the shared lane. Rotating the auth secret invalidates every entry; the
-next successful sign-in issues a new one. Disabling an account or resetting its
-password does not, so after a suspected compromise rotate the secret as well. A
-new browser gets no exemption.
+expired, foreign-account, stale, or duplicated cookies are ignored, returning the
+attempt to the shared lane with the same answer a new browser gets. Resetting an
+account's password, or deleting and recreating the account, revokes every entry
+issued before, including a reset that commits while a sign-in with the old password
+is in flight: that sign-in's entry is bound to the state read before its password
+check. With GitHub or Google sign-in, a disabled account's entries verify
+nothing until it is enabled again; reset the password as well to revoke them for
+good. The controller reads the account only for an entry issued for the attempted
+email, so forged or foreign cookies add no timing signal about which emails exist,
+and a failed read just means no exemption. Rotating the auth secret invalidates
+every entry; the next successful sign-in issues a new one. A new browser gets no
+exemption.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are

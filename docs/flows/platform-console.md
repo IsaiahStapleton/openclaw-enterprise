@@ -242,7 +242,10 @@ navigation with `console.mjs:loadPage`. For the same Agent, Namespace, and
 revision, tab clicks/history replace only tab content; shell, native-admin panel,
 and revision controls stay mounted. Configuration and revision reads are shared;
 direct Workspace URLs start neither. Refresh, revision changes, and successful
-channel/authentication edits reload fully.
+channel/authentication edits reload fully. A `403` on the configuration or revision
+read is an audited denial, so `console.mjs:deniedReadsFor` remembers that path in tab
+`sessionStorage` for the session owner; later views show **Configuration unavailable**
+without asking again, and **Retry** forgets the path and rereads. Logout clears it.
 
 Completed tabs retain their DOM and draft capture callbacks within the detail view.
 Returning restores loaded controls and expanded disclosures. Pending or failed
@@ -325,6 +328,7 @@ refresh and inspection.
 
 ## Changelog
 
+- 2026-09-30 19:00: Remember denied Agent detail snapshot reads per tab so reloads do not add an audited denial per view.
 - 2026-09-29 20:00: Trace repository descriptions and inherited access. (public-pr/374)
 
 - 2026-09-29 07:19: Guard recovery until session and Namespace reads finish. (authoring-run/1ca6a40a-a247-465f-9a83-182dbcb6ff4e - 90326e6fab11f84fc11b8990b6c8e197a2752c60)

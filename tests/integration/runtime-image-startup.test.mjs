@@ -333,7 +333,7 @@ async function scenario(entrypoint, channel, label) {
     OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest }), OPENCLAW_GATEWAY_PORT: "18789",
     OPENCLAW_RUNTIME_STATUS_PORT: "18888", OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
     OPENCLAW_AGENT_REVISION_ID: "rev_approver-startup", OPENCLAW_POD_UID: "pod_approver-startup" };
-  const child = cp.spawn("node", ["-e", entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+  const child = cp.spawn("node", ["-e", ...entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", value => { output += value; });
   child.stderr.on("data", value => { output += value; });
@@ -404,8 +404,8 @@ async function scenario(entrypoint, channel, label) {
       ],
       { timeout: 180_000 * imageSmokeTimeoutMultiplier },
       JSON.stringify({
-        docker: DOCKER_GATEWAY_RUNTIME_ENTRYPOINT,
-        kubernetes: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        docker: nodeProgramArguments(DOCKER_GATEWAY_RUNTIME_ENTRYPOINT),
+        kubernetes: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
       }),
     );
     assert.match(stdout, /PLUGIN_APPROVER_STARTUP_PASSED/);
@@ -1061,7 +1061,7 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
     "node",
     image,
     "-e",
-    entrypoint,
+    ...nodeProgramArguments(entrypoint),
   ]);
   if (!waitUntilReady) {
     return { containerName };
@@ -1506,7 +1506,7 @@ test(
     const launch = String.raw`
 const fs = require("node:fs");
 const cp = require("node:child_process");
-const { gateway, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { gatewayArgs, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
 const model = "openai/runtime-image-schema";
 function validate(path) {
   const home = fs.mkdtempSync("/tmp/oce-config-validate-");
@@ -1533,7 +1533,7 @@ function run(args, env) {
 (async () => {
   fs.mkdirSync("/tmp/gateway", { recursive: true });
   fs.copyFileSync("/etc/openclaw/openclaw.json", "/tmp/gateway/base.json");
-  const gatewayRun = await run(["-e", gateway], {
+  const gatewayRun = await run(["-e", ...gatewayArgs], {
     OPENCLAW_CONFIG_PATH: "/tmp/gateway/base.json",
     OPENCLAW_STATE_DIR: "/home/node/.openclaw",
     OPENCLAW_GATEWAY_PORT: "18789",
@@ -1599,7 +1599,7 @@ function run(args, env) {
       ],
       { timeout: 300_000 * imageSmokeTimeoutMultiplier },
       JSON.stringify({
-        gateway: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        gatewayArgs: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
         harness: NATIVE_WORKER_ENTRYPOINT,
         workspaceNodeId: randomBytes(32).toString("hex"),
       }),

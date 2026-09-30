@@ -51,7 +51,7 @@ test("publication aliases and recovery preserve producer bytes and identity", as
     GH_TOKEN: "test-token",
   };
   let tag = `sha-${sourceSha}`;
-  const repo = { full_name: repository, private: true, default_branch: "main" };
+  const repo = { full_name: repository, private: false, default_branch: "main" };
   const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const images = ["controller", "runtime"];
   const prepared = [];
@@ -140,7 +140,7 @@ if (args[0] === "inspect") {
     workflow_run: { id: 123, head_sha: sourceSha },
     digest: `sha256:${"c".repeat(64)}`,
   }));
-  let packageVisibility = "private";
+  let packageVisibility = "public";
   let interruptRuntime = false;
   let sourceCiConclusion = "success";
   let metadataMissing = false;
@@ -326,10 +326,10 @@ globalThis.setTimeout = (resolve) => queueMicrotask(resolve);
     ],
     [
       () => {
-        packageVisibility = "public";
+        packageVisibility = "private";
       },
       () => {
-        packageVisibility = "private";
+        packageVisibility = "public";
       },
     ],
     [

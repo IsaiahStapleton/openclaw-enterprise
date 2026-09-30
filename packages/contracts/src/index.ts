@@ -723,8 +723,22 @@ export interface ServicePrincipal extends Scope {
 
 export type Identity = Principal | ServicePrincipal;
 
-export type PermissionAction =
-  "create" | "read" | "update" | "delete" | "deploy" | "operate" | "administer";
+/**
+ * `read_logs` delegates reading an Agent's runtime log text without `administer`.
+ * No action implies another.
+ */
+export const PERMISSION_ACTIONS = Object.freeze([
+  "create",
+  "read",
+  "update",
+  "delete",
+  "deploy",
+  "operate",
+  "administer",
+  "read_logs",
+] as const);
+
+export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
 
 export interface Permission {
   readonly action: PermissionAction;
@@ -805,7 +819,8 @@ export type IdentityLookup = Scope &
     | { readonly servicePrincipalId: string; readonly issuer?: never; readonly subject?: never }
   );
 
-export type AuditEventKind = "bootstrap" | "mutation" | "authorization_denial";
+/** `access` records an audited read, such as viewing or downloading runtime log text. */
+export type AuditEventKind = "bootstrap" | "mutation" | "access" | "authorization_denial";
 
 export type AuditOutcome = "success" | "denied" | "failure";
 
@@ -1347,6 +1362,8 @@ export interface AgentRuntimeContainerStatus {
 
 export interface AgentRuntimeEvent {
   readonly type: "Normal" | "Warning";
+  /** Container the Event concerns (from `involvedObject.fieldPath`), or null for the Pod. */
+  readonly container: string | null;
   readonly reason: string;
   readonly message: string;
   readonly count: number;
