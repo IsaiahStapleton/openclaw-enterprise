@@ -137,11 +137,14 @@ and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `g
 query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
 long base64 or hex runs with `[redacted:<pattern>]`. A PEM block printed over
 several lines is masked from an observed BEGIN through END, including across
-follow polls in the same container view. With ordered, newer timestamps, the
-block also ends at the first line that is not base64, a PEM header or blank.
-Replayed lines and equal, missing or out-of-order timestamps cannot close a block
-known to be open: PEM-shaped lines may stay masked conservatively for the rest
-of that view, while ordinary operational text stays visible. A restart, Pod
+follow polls in the same container view. Ordered lines newer than the prior cursor
+frontier can close a carried block at END or the first line that is not base64,
+a PEM header or blank. BEGIN and END on one ordered page can therefore close at
+the same timestamp if it is newer than that prior frontier. Replayed overlap and
+timestamps at or before the prior frontier do not establish forward progress.
+Missing, invalid or out-of-order times cannot close a block known to be open.
+PEM-shaped lines may stay masked conservatively for the rest of that view, while
+ordinary operational text stays visible. A restart, Pod
 change, expired cursor or new view starts without the old masking context.
 An initial tail or older cursor may begin inside a block whose BEGIN was never
 seen; the reader cannot reconstruct that missing history. Redaction is best-effort

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-30
 updated: 2026-09-30
-last_updated_session: authoring-run/e2da7c2d-8080-4dd4-9ce9-d494b890234c
+last_updated_session: authoring-run/2c8a089c-ec67-402d-8cfd-ec8b29c5e3fe
 ---
 
 # Agent runtime logs flow
@@ -110,9 +110,12 @@ For container follow polls, the signed cursor also carries optional `pemOpen`
 and `pemAfterTime` state. It describes the delivered boundary, not the start of
 the fetched overlap. The reader validates timestamp order in the consumed prefix
 through the last delivered line, without replaying older content through that
-state. Only delivered lines strictly newer than a reliable frontier can close a
-carried open block. Equal timestamps and evicted line hashes do not establish
-forward progress; a replayed END cannot erase a later BEGIN. Ordinary non-PEM
+state. Each delivered line is compared with the reliable `pemAfterTime` from the
+prior cursor, not with an earlier line on the same page. Only a line strictly
+newer than that prior frontier can close a carried open block. Thus an ordered
+same-page BEGIN and END at the same newer timestamp can close it. Times at or
+before the prior frontier and evicted line hashes do not establish forward
+progress; replayed overlap cannot erase a carried later BEGIN. Ordinary non-PEM
 text remains visible while ambiguous context stays open.
 
 Missing, invalid or reordered times make the frontier uncertain (`null`); later
@@ -193,6 +196,8 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 23:44: Clarify the prior cursor frontier and ordered same-page PEM boundaries without changing masking behavior. (authoring-run/2c8a089c-ec67-402d-8cfd-ec8b29c5e3fe - a4cddf26bc462744bfff912b1e1cdb9f1ee60cd2)
 
 - 2026-09-30 20:37: Receive cursor-context masking with current runtime-log guidance and preserve the current view behavior. (authoring-run/e2da7c2d-8080-4dd4-9ce9-d494b890234c - fb22aa07c1613218280cff25d6b62bfb4cff6b5d)
 
