@@ -17,9 +17,9 @@ import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
 
 // The embedded Gateway's startup model probe on the real runtime image, under
-// the production example's Gateway memory limit and a 500m CPU limit, half the
-// example's one core (deploy/examples/production/installation.yaml), which
-// operators may still choose. Only the model provider is
+// the production example's Gateway memory limit and a 500m CPU limit, an eighth
+// of the example's four cores (deploy/examples/production/installation.yaml),
+// which operators may still choose. Only the model provider is
 // substituted: a sidecar in the runtime image owns the network namespace,
 // answers the Responses API as api.openai.com (mapped to loopback, trusted
 // through a private CA), and observes the wrapper from outside. Like the
