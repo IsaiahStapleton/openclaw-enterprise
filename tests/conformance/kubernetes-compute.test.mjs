@@ -9897,6 +9897,160 @@ for (const dualCluster of [false, true]) {
   });
 }
 
+function stageReadyOAuthSource(objects, revision, context) {
+  revision.harnessAuth = { ...apiKeyAuth, method: "oauth" };
+  context.harnessAuth = authContext(revision).harnessAuth;
+  const sourceKey = `Secret:${context.harnessAuth.backendRef.namespaceName}:occ-model-key`;
+  const source = objects.get(sourceKey);
+  source.metadata.annotations = {
+    "openclaw.dev/namespace-id": tenant.id,
+    "openclaw.dev/secret-id": apiKeyAuth.source.id,
+    "openclaw.dev/secret-driver-id": apiKeyAuth.secretDriverId,
+  };
+  source.data.value = Buffer.from(
+    JSON.stringify({
+      kind: "harness_device_authorization",
+      version: 1,
+      actorId: "admin",
+      namespaceId: tenant.id,
+      harnessId: "codex",
+      phase: "ready",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      credential: JSON.stringify({
+        version: 1,
+        provider: "codex",
+        state: "ready",
+        auth: {
+          auth_mode: "chatgpt",
+          tokens: {
+            id_token: "test-id",
+            access_token: "test-access",
+            refresh_token: "test-refresh",
+          },
+        },
+      }),
+    }),
+  ).toString("base64");
+  return sourceKey;
+}
+
+test("Kubernetes OAuth Agents fail closed without writes after the installation opt-in is removed, and still stop", async () => {
+  const { driver, revision, namespace, objects, records, state, context } = workspaceSetupFixture(
+    false,
+    true,
+    undefined,
+    { experimental: { codexDeviceLogin: true } },
+  );
+  const sourceKey = stageReadyOAuthSource(objects, revision, context);
+  const phase = () => objects.get(sourceKey).metadata.annotations["openclaw.dev/oauth-phase"];
+  const envelope = () => JSON.parse(Buffer.from(objects.get(sourceKey).data.value, "base64"));
+  const present = (kind, prefix) =>
+    [...objects.values()].some(
+      (object) => object.kind === kind && object.metadata.name.startsWith(prefix),
+    );
+
+  // Mid-handoff: the source is sealed and the token-holding seed writer is running.
+  assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+  assert.equal(phase(), "claimed");
+  assert.ok(present("Deployment", "oauth-bootstrap-"));
+  assert.ok(present("Secret", "oauth-bootstrap-"));
+
+  // The operator restarts the controller without experimental.codexDeviceLogin.
+  const disabledDriver = () => {
+    const disabled = new KubernetesComputeDriver(
+      { ...driver.options, experimental: { codexDeviceLogin: false } },
+      { nodeEnrollment: driver.nodeEnrollment },
+    );
+    disabled.apiClients = driver.apiClients;
+    disabled.executionApiClients = driver.executionApiClients;
+    return disabled;
+  };
+  let disabled = disabledDriver();
+  assert.equal(disabled.startHarnessDeviceAuthorization, undefined);
+  let writes = records.length;
+  for (const operation of ["prepareRevision", "activateRevision"]) {
+    await assert.rejects(
+      disabled[operation](revision, context),
+      /device login is not enabled/,
+      operation,
+    );
+  }
+  // Rejection happens before any cluster mutation: the sealed source keeps its bundle.
+  assert.equal(records.length, writes);
+  assert.equal(phase(), "claimed");
+  assert.equal(typeof envelope().credential, "string");
+
+  // Stop needs no opt-in and removes the seed writer and its token-holding Secret.
+  await disabled.stopRevision(revision);
+  assert.equal(present("Deployment", "oauth-bootstrap-"), false);
+  assert.equal(present("Secret", "oauth-bootstrap-"), false);
+  assert.equal(phase(), "claimed");
+
+  // Re-enabling resumes the same sealed handoff; no new sign-in is needed.
+  assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+  assert.ok(present("Deployment", "oauth-bootstrap-"));
+  state.ready = true;
+  assert.equal((await driver.prepareRevision(revision, context)).ready, true);
+  assert.equal(envelope().phase, "consumed");
+  assert.ok(present("Deployment", "agent-"));
+
+  // After handoff, a disabled installation still refuses redeploys without touching the
+  // running Harness, and stop removes it.
+  disabled = disabledDriver();
+  const later = { ...revision, id: `${revision.id}-next`, revision: revision.revision + 1 };
+  writes = records.length;
+  await assert.rejects(disabled.prepareRevision(later, context), /device login is not enabled/);
+  await assert.rejects(disabled.activateRevision(revision, context), /device login is not enabled/);
+  assert.equal(records.length, writes);
+  assert.equal(envelope().phase, "consumed");
+  assert.ok(present("Deployment", "agent-"));
+  await disabled.stopRevision(revision);
+  assert.equal(
+    [...objects.values()].some(
+      ({ kind, metadata }) =>
+        kind === "Deployment" &&
+        metadata.namespace === namespace &&
+        metadata.name.startsWith("agent-"),
+    ),
+    false,
+  );
+});
+
+test("Kubernetes OAuth source consumed by one Agent cannot start a second Agent", async () => {
+  const { driver, revision, objects, records, state, context } = workspaceSetupFixture(
+    false,
+    true,
+    undefined,
+    { experimental: { codexDeviceLogin: true } },
+  );
+  const sourceKey = stageReadyOAuthSource(objects, revision, context);
+  state.ready = true;
+  assert.equal((await driver.prepareRevision(revision, context)).ready, true);
+  const consumed = structuredClone(objects.get(sourceKey));
+  assert.equal(consumed.metadata.annotations["openclaw.dev/oauth-phase"], "consumed");
+
+  // Admission does not enforce one Agent per login; preparation is the fence.
+  const otherAgentId = `${revision.agentId}-other`;
+  const other = { ...revision, agentId: otherAgentId, id: `${revision.id}-other` };
+  const writes = records.length;
+  await assert.rejects(
+    driver.prepareRevision(other, { harnessAuth: context.harnessAuth }),
+    /OAuth credentials belong to another Agent/,
+  );
+  // No Harness, seed writer, or seed Secret is created for the second Agent.
+  assert.deepEqual(
+    records
+      .slice(writes)
+      .filter(({ kind }) => kind === "Deployment" || kind === "Secret")
+      .map(({ kind, metadata }) => `${kind}/${metadata.name}`),
+    [],
+  );
+  assert.deepEqual(objects.get(sourceKey), consumed);
+  // The owning Agent keeps its generation.
+  const later = { ...revision, id: `${revision.id}-next`, revision: revision.revision + 1 };
+  assert.equal((await driver.prepareRevision(later, context)).ready, true);
+});
+
 for (const embedded of [true, false]) {
   test(`Kubernetes ${embedded ? "embedded" : "dedicated"} setup stays private and retains only its completion guard`, async () => {
     const { driver, revision, objects, records, state, setup, context } =

@@ -17,8 +17,12 @@ experimental:
 
 Without the option, the six device-authorization operations return `501`, and
 admission rejects any Agent revision whose `harnessAuth.method` is `oauth`.
-Removing the option later also blocks new revisions of existing OAuth Agents.
-The Console still lists the method and reports the `501` when a user signs in.
+Removing the option later makes deployments and maintenance of existing OAuth
+Agents fail before any cluster change. Their running Harnesses are left in
+place, and stopping or deleting them still works. Restoring the option resumes
+an unfinished handoff without a new sign-in. Stop or rebind OAuth Agents before
+removing the option. The Console still lists the method and reports that it is
+not enabled when a user signs in.
 
 ## Private credential directory
 
