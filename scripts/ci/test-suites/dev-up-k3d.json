@@ -9,7 +9,8 @@
       "expectedTests": [
         "dev-up refuses mismatched image selections before creating a cluster",
         "dev-up refuses gateway trust when Kubernetes does not enforce NetworkPolicy",
-        "dev-up installs the selected Kubernetes control plane and cleans up its owned cluster"
+        "dev-up installs the selected Kubernetes control plane and cleans up its owned cluster",
+        "dev-up prepares the real Codex sandbox with a Compose control plane"
       ]
     }
   ]

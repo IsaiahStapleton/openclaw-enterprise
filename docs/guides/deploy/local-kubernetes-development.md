@@ -383,8 +383,8 @@ discovering or deleting an unrelated cluster.
 
 ## Limits
 
-Both local k3d profiles use K3s legacy iptables mode. Without OpenShell,
-startup checks policy traffic before configuring gateway proxy trust and again
+Both local k3d profiles use K3s legacy iptables mode. Kubernetes-only startup
+without OpenShell checks policy traffic before configuring gateway proxy trust and again
 against the initial Gateway Namespace. These checks establish only the tested
 single-node traffic at startup; they do not monitor later policy failures.
 
