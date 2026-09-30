@@ -167,8 +167,12 @@ RUNTIME_LOGS_POD_INVALID`).
   `activity`, `action`, `disposition`, `dst_host`, `dst_port`, `method`, `path`,
   `binary`, `pid`, `rule_name`, `rule_type`, `policy_generation`, `reason`,
   `source`, `cmd_line` and `url`. Command lines and URLs often carry tokens:
-  they are redacted like every string and cut to 1 KiB. A message that holds
-  structured data is withheld.
+  they are redacted like every string and cut to 1 KiB. In command lines the
+  value after a credential flag is masked too (`-p`, `-pass`, `--pass`,
+  `--token`, `--with-token`, `--username`, `-u` or `--user` with `user:password`,
+  and the token of `vault login`). Masking is best effort: a secret passed
+  under another flag name can still show. A message that holds structured data
+  is withheld.
 - OpenShell keeps the last 2000 lines per sandbox in memory and loses them when
   its gateway restarts. A follow poll that finds its last line gone reports
   **Sandbox buffer lost** or **Lines skipped**. Lines the sandbox drops under

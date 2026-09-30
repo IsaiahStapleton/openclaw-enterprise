@@ -135,6 +135,8 @@ function canaries() {
     PASSWORD: `Pw${token()}`,
     PROMPT: `prompt-canary-${token()}`,
     GITHUB_PAT: `ghp_${token()}${token()}`,
+    CURL_USER_PASSWORD: `Cu${token()}`,
+    SSHPASS_PASSWORD: `Sp${token()}`,
   };
 }
 
@@ -172,6 +174,14 @@ test("sandbox log pages never contain planted credentials from command lines or 
     }),
     sandboxLine(6, JSON.stringify({ prompt: values.PROMPT }), { level: "INFO", target: "t" }),
     sandboxLine(7, `PROC:LAUNCH [INFO] node(9) [cmd:node run.js --flag ${longArgument}]`),
+    sandboxLine(
+      8,
+      `PROC:LAUNCH [INFO] curl(52) [cmd:curl -u alice:${values.CURL_USER_PASSWORD} https://a.example.com]`,
+    ),
+    sandboxLine(
+      9,
+      `PROC:LAUNCH [INFO] sshpass(53) [cmd:sshpass -p ${values.SSHPASS_PASSWORD} ssh build@host]`,
+    ),
   ];
 
   const runtime = await request("GET", target.runtimePath);
@@ -215,11 +225,13 @@ test("sandbox log pages never contain planted credentials from command lines or 
   assert.equal(views[0].details.runtimeLogs.revisionId, target.revisionId);
 
   const lines = logs.data.records.filter((record) => record.type === "line");
-  assert.equal(lines.length, 6);
+  assert.equal(lines.length, 8);
   assert.ok(
     lines.every((record) => record.kind === "sandbox" && record.contentClass === "activity"),
   );
-  const [clone, curl, http, denied, tracing, long] = lines;
+  const [clone, curl, http, denied, tracing, long, curlUser, sshpass] = lines;
+  assert.equal(curlUser.fields.cmd_line, "curl -u [redacted:argv] https://a.example.com");
+  assert.equal(sshpass.fields.cmd_line, "sshpass -p [redacted:argv] ssh build@host");
   assert.equal(
     clone.fields.cmd_line,
     "git clone https://[redacted:userinfo]@github.com/acme/repo.git",
@@ -456,6 +468,47 @@ test("the OpenShell Sandbox Driver reads logs only for its own revisions", async
   assert.deepEqual([...new Set(gateway.touched)], ["getSandboxLogs"]);
 });
 
+test("sandbox sanitization masks credentials passed as command-line arguments", async () => {
+  const { sanitizeSandboxLogLines } = await import("../../packages/occ/src/runtime-logs/index.ts");
+  const secret = `Zx9${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const cases = [
+    [`curl -u alice:${secret} https://a`, "curl -u [redacted:argv] https://a"],
+    [`curl --user alice:${secret} https://a`, "curl --user [redacted:argv] https://a"],
+    [`curl --user=alice:${secret} https://a`, "curl --user=[redacted:argv] https://a"],
+    [`curl -ualice:${secret} https://a`, "curl -u[redacted:argv] https://a"],
+    [`mysql -u root -p${secret}`, "mysql -u root -p[redacted:argv]"],
+    [`mysql -u root -pab=${secret}`, "mysql -u root -p[redacted:argv]"],
+    [`docker login -u bob -p ${secret}`, "docker login -u bob -p [redacted:argv]"],
+    [`docker login -p '${secret} two' reg`, "docker login -p [redacted:argv] reg"],
+    [`sshpass -p ${secret} ssh h`, "sshpass -p [redacted:argv] ssh h"],
+    [`openssl enc -pass pass:${secret}`, "openssl enc -pass [redacted:argv]"],
+    [`vault login -method=token ${secret}`, "vault login -method=token [redacted:argv]"],
+    [`gh auth login --with-token ${secret}`, "gh auth login --with-token [redacted:argv]"],
+    [
+      `tool --username bob --pass ${secret}`,
+      "tool --username [redacted:argv] --pass [redacted:argv]",
+    ],
+    // Ordinary flags that share a letter stay readable.
+    ["mkdir -p /workspace/out", "mkdir -p /workspace/out"],
+    ["find . -path ./x -print", "find . -path ./x -print"],
+    ["pip install --user requests", "pip install --user requests"],
+    ["sort -u names.txt", "sort -u names.txt"],
+    ["gcc -pthread main.c", "gcc -pthread main.c"],
+  ];
+  for (const [command, expected] of cases) {
+    // Extracted `[cmd:` field, and the fallback where the command stays in the message.
+    const { records } = sanitizeSandboxLogLines({ source: "sandbox", sandbox: "sb-1" }, [
+      sandboxLine(1, `PROC:LAUNCH [INFO] x(1) [cmd:${command}]`),
+      sandboxLine(2, `PROC:LAUNCH [INFO] x(1) ${command}`),
+      sandboxLine(3, "exec", { level: "INFO", target: "t", fields: { cmd_line: command } }),
+    ]);
+    assert.equal(records[0].fields.cmd_line, expected, command);
+    assert.equal(records[1].message, `PROC:LAUNCH [INFO] x(1) ${expected}`, command);
+    assert.equal(records[2].fields.cmd_line, expected, command);
+    assert.equal(JSON.stringify(records).includes(secret), false, command);
+  }
+});
+
 test("sandbox sanitization stays linear on hostile 32 KiB OCSF lines", async () => {
   const { sanitizeSandboxLogLines } = await import("../../packages/occ/src/runtime-logs/index.ts");
   const size = 32 * 1024 - 64;
@@ -466,6 +519,9 @@ test("sandbox sanitization stays linear on hostile 32 KiB OCSF lines", async () 
     `NET:OPEN [INFO] ALLOWED ${"a(".repeat(size / 2)}`,
     `NET:OPEN [INFO] DENIED ${" [reason:".repeat(size / 9)}`,
     `HTTP:POST [HIGH] DENIED ${"[policy:x ".repeat(size / 10)}`,
+    `PROC:LAUNCH [INFO] a(1) [cmd:${"-p '".repeat(size / 5)}]`,
+    `PROC:LAUNCH [INFO] a(1) [cmd:vault login ${"a ".repeat(size / 2)}]`,
+    `PROC:LAUNCH [INFO] a(1) ${"-u -p ".repeat(size / 6)}`,
   ];
   for (const message of hostile) {
     const started = performance.now();
