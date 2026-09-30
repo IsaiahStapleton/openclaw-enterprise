@@ -35,6 +35,7 @@ import {
   createHumanLogin,
   githubLoginConfiguration,
   type GitHubLoginConfiguration,
+  PASSWORD_DENIAL_AUDIT_UNAVAILABLE,
 } from "./github.ts";
 import { googleLoginConfiguration, type GoogleSignInConfiguration } from "./google.ts";
 import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
@@ -501,6 +502,15 @@ class DenialAuditUnavailable extends Error {
   constructor(cause: unknown) {
     super("The sign-in denial could not be audited.", { cause });
     this.name = "DenialAuditUnavailable";
+  }
+}
+
+async function deniedWithoutAudit(response: Response): Promise<boolean> {
+  try {
+    const body = (await response.json()) as { readonly code?: unknown } | null;
+    return body?.code === PASSWORD_DENIAL_AUDIT_UNAVAILABLE;
+  } catch {
+    return false;
   }
 }
 
@@ -1175,7 +1185,13 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         });
       }
       if (response.status >= 500) {
-        throw new Error("Authentication dependency unavailable.");
+        const failure = new Error("Authentication dependency unavailable.");
+        // The curated password endpoint marks a rejection whose denial audit failed; the
+        // response stays 503, but the guess spends budget as in the password-only profile.
+        if (path === "/oce/password" && (await deniedWithoutAudit(response))) {
+          throw new DenialAuditUnavailable(failure);
+        }
+        throw failure;
       }
       throw new AdmissionFailure(401, "UNAUTHENTICATED", "Authentication was not accepted.");
     }
