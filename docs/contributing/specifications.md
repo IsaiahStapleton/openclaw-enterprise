@@ -186,5 +186,5 @@ rewrite historical content to match the new template.
 This first phase moves non-archived specifications and supporting evidence.
 `specs/.archive/` retains its content and placement and is linked from the index.
 The console spec's image links point to a preserved Git revision after removal
-of `specs/assets/`. The egress forwarding page remains so archived links still
-resolve. A future archive reorganization requires a separate change.
+of `specs/assets/`. Archived links may point to removed files; forwarding pages
+are not required. A future archive reorganization requires a separate change.
