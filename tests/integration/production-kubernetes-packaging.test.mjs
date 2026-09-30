@@ -347,8 +347,15 @@ function tenantApiRules() {
       resources: ["pods/proxy"],
       verbs: ["get"],
     },
+    ...runtimeLogRules,
   ];
 }
+
+// Runtime log reads: added by agentRuntimeLogs.enabled (default true), never cluster-bound.
+const runtimeLogRules = [
+  { apiGroups: [""], resources: ["pods/log"], verbs: ["get"] },
+  { apiGroups: [""], resources: ["events"], verbs: ["get", "list"] },
+];
 
 test("production native examples satisfy the current Helm, Installation, and PVC schemas", async (t) => {
   const { loadInstallationConfiguration } =
@@ -636,6 +643,93 @@ test(
       [{ name: "OCC_AGENT_NATIVE_ADMIN_ENABLED", value: "false" }],
     );
     assert.ok(!disabledApiEnvironment.some(({ name }) => name === "OCC_AUTH_COOKIE_DOMAIN"));
+  },
+);
+
+test(
+  "Agent runtime log reads add read-only log and Event grants only when enabled",
+  tooling,
+  async () => {
+    const role = (objects, suffix) =>
+      objects.find(({ kind, metadata }) => kind === "ClusterRole" && metadata.name.endsWith(suffix));
+    const apiEnvironment = (objects) =>
+      objects.find(
+        ({ kind, metadata }) =>
+          kind === "Deployment" && metadata.labels["app.kubernetes.io/component"] === "api",
+      ).spec.template.spec.containers[0].env;
+    const hasLogRules = (rules) =>
+      rules.some(({ resources = [] }) => resources.includes("pods/log")) ||
+      rules.some(({ resources = [] }) => resources.includes("events"));
+
+    const enabled = await resources((await render()).stdout);
+    assert.deepEqual(
+      apiEnvironment(enabled).filter(({ name }) => name === "OCC_AGENT_RUNTIME_LOGS_ENABLED"),
+      [{ name: "OCC_AGENT_RUNTIME_LOGS_ENABLED", value: "true" }],
+    );
+    for (const suffix of ["-openclaw-tenant-api", "-openclaw-gateway-observer"]) {
+      assert.deepEqual(
+        role(enabled, suffix).rules.filter(({ resources = [] }) =>
+          resources.some((resource) => ["pods/log", "events"].includes(resource)),
+        ),
+        runtimeLogRules,
+        suffix,
+      );
+    }
+    // Worker and Collector identities never gain log or Event reads.
+    for (const object of enabled.filter(
+      ({ kind, metadata }) =>
+        ["ClusterRole", "Role"].includes(kind) &&
+        !metadata.name.endsWith("-openclaw-tenant-api") &&
+        !metadata.name.endsWith("-openclaw-gateway-observer"),
+    )) {
+      assert.equal(hasLogRules(object.rules ?? []), false, object.metadata.name);
+    }
+
+    const disabled = await resources(
+      (await render({ "agentRuntimeLogs.enabled": "false" })).stdout,
+    );
+    assert.deepEqual(
+      apiEnvironment(disabled).filter(({ name }) => name === "OCC_AGENT_RUNTIME_LOGS_ENABLED"),
+      [{ name: "OCC_AGENT_RUNTIME_LOGS_ENABLED", value: "false" }],
+    );
+    for (const suffix of ["-openclaw-tenant-api", "-openclaw-gateway-observer"]) {
+      assert.equal(hasLogRules(role(disabled, suffix).rules), false, suffix);
+    }
+
+    // The execution chart grants the same reads, plus Pod reads, to its tenant API role.
+    const executionArgs = [
+      "template",
+      "oce",
+      "deploy/helm/openclaw-execution",
+      "--set",
+      "routing.hostname=agents.example.invalid",
+      "--set",
+      "routing.gatewayClassName=private-envoy-gateway",
+      "--set",
+      "routing.tlsSecretName=agents-tls",
+      "--set",
+      "routing.controlPlaneCidrs[0]=198.51.100.0/24",
+    ];
+    const execution = await resources(
+      (await execute(helm, executionArgs, { cwd: repository, maxBuffer: 2_000_000 })).stdout,
+    );
+    assert.deepEqual(role(execution, "-execution-tenant-api").rules, [
+      { apiGroups: ["apps"], resources: ["deployments"], verbs: ["list"] },
+      { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
+      ...runtimeLogRules,
+    ]);
+    assert.equal(hasLogRules(role(execution, "-execution-tenant-worker").rules), false);
+    const executionDisabled = await resources(
+      (
+        await execute(helm, [...executionArgs, "--set", "agentRuntimeLogs.enabled=false"], {
+          cwd: repository,
+          maxBuffer: 2_000_000,
+        })
+      ).stdout,
+    );
+    assert.deepEqual(role(executionDisabled, "-execution-tenant-api").rules, [
+      { apiGroups: ["apps"], resources: ["deployments"], verbs: ["list"] },
+    ]);
   },
 );
 
@@ -1421,6 +1515,7 @@ test(
       { apiGroups: ["apps"], resources: ["deployments"], verbs: ["list"] },
       { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
       { apiGroups: [""], resources: ["pods/proxy"], verbs: ["get"] },
+      ...runtimeLogRules,
     ]);
     assert.equal(
       objects.some(
