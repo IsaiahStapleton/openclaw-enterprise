@@ -54,6 +54,12 @@ primary plan per RFC, with milestones inside it. Link additional relevant RFCs
 as dependencies. All plans share `specs/plans/`; use the document's ID to
 identify its numbering sequence, not its directory or the presence of an RFC link.
 
+Update an active plan for work within its scope. For materially different
+follow-up work under the same RFC, allocate a fresh `TASK` ID and link the RFC
+in frontmatter. Keep the completed primary plan intact. If an existing task
+becomes the primary plan for an RFC, retain its `TASK` ID and path instead of
+creating an RFC-numbered duplicate.
+
 When a plan relates to an RFC, set `rfc` in its YAML frontmatter to a path
 relative to the plan file. For example, in `specs/plans/0042-runtime-trust.md`:
 
@@ -153,6 +159,13 @@ flows. An unmet required outcome keeps its milestone incomplete unless an
 authorized scope change is recorded. Acceptance of an RFC is not evidence of
 availability. Use [documentation checks](documentation.md#preview-and-check)
 for document-only changes, without running product tests.
+
+`pnpm docs:check` also checks non-archived specs for required RFC statuses,
+relative `rfc` references to RFC entry points, and local Markdown link targets.
+Run `node scripts/check-specs.mjs` for that check alone. It does not check remote
+URLs, heading fragments, or the meaning of a recorded decision. Three preserved
+local artifact links in the historical architecture audit are reported as
+unverified; archived documents are not scanned.
 
 ## Historical records and first-phase organization
 

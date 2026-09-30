@@ -9,8 +9,12 @@ selects its architectural owner.
 Read `AGENTS.md`, `docs/contributing/specifications.md`, and `specs/README.md`.
 Follow the specification process for numbering and historical exceptions:
 
-- With an owning RFC, reuse its number and topic under `specs/plans/`.
-  Update its existing primary plan instead of allocating a second one.
+- For the first plan of an owning RFC, reuse its number and topic under
+  `specs/plans/`, unless an existing task already owns that work. Keep that
+  task’s ID and path when making it the primary plan.
+- Update an active plan within its scope. For materially different follow-up
+  work under the same RFC, allocate a fresh `TASK` ID and link the RFC in
+  frontmatter. Preserve the completed primary plan.
 - Without an RFC, allocate an independent task ID under `specs/plans/`.
   An implementation plan does not require an artificial RFC.
 - Search for the existing owner first. Resolve an explicit ID exactly; if a
@@ -90,7 +94,8 @@ session identifier when available; never fabricate provenance.
 
 Review for duplicate requirements, unnecessary phases, unsupported interfaces,
 and missing caller or failure proof. Run documentation length, link, and scoped
-formatting checks using the installed toolchain. Do not install dependencies or
-run product tests merely to validate a plan. Follow requested independent review.
+formatting checks using the installed toolchain. Run `node scripts/check-specs.mjs`
+(or `pnpm docs:check`, which includes it) to check spec metadata and link targets.
+Do not install dependencies or run product tests merely to validate a plan. Follow requested independent review.
 Report the ID/path, RFC relationship or independent scope, open blockers, and
 checks performed. Stop at planning unless implementation was also authorized.
