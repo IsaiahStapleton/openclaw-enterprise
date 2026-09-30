@@ -5521,7 +5521,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
           throw ownerSignal.reason;
         }
         if (deadline.aborted) {
-          throw new KubernetesRequestTimeout("Kubernetes API request timed out.");
+          throw new KubernetesRequestTimeout("Kubernetes API request timed out.", {
+            cause: error,
+          });
         }
         const status = numericErrorStatus(error);
         const retryable =
