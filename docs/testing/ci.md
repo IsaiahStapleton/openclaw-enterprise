@@ -94,9 +94,11 @@ The `k3d-model`, `gateway-routing`, `slack`, and `k3d-otel` lanes prepare the co
 
 Routing, OpenShell, and logging have concrete CI preparation contracts. The
 [preparation flow](../flows/github-actions-testing/preparation.md) records their
-pinned infrastructure, admission checks, Docker setup, and proof limits. See the
+pinned infrastructure, admission checks, Docker setup, and proof limits. Full-suite
+acceptance still requires main-only protected hosted execution of every selected
+lane. See the
 [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
-for remaining protected hosted coverage.
+for proof boundaries and live gaps.
 
 Each lane runs whole test files. The runner validates Node case results and required names; skips, TODOs, missing results, zero cases, failures and cleanup errors fail the selected lane. The aggregate checks required job and lane results at the same source commit without repeating case validation. Ordinary `pull_request` jobs may save pnpm-store caches within the PR merge-ref scope; protected jobs use the approved event commit and do not promote PR build artifacts.
 
@@ -163,11 +165,11 @@ authenticate from the hosted runner.
 
 ### Verify ClawSweeper dispatch
 
-Follow the [upstream installation instructions](https://github.com/openclaw/clawsweeper/blob/main/docs/target-dispatcher.md#target-repository-dispatcher) to install the `clawsweeper` GitHub App on this repository and confirm its installation on `openclaw/clawsweeper`. Grant the [workflow token permissions](../flows/clawsweeper-dispatch.md#entry-points) and add its private key as this repository's Actions secret `CLAWSWEEPER_APP_PRIVATE_KEY`. Keep one dispatcher for these events.
+The [checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml) is this repository's installation source of truth. It pins the admission workflow and allows dispatch despite optional target acknowledgement token failure. [Upstream synchronization](https://github.com/openclaw/clawsweeper/pull/1720) is merged; use its [App setup instructions](https://github.com/openclaw/clawsweeper/blob/main/docs/target-dispatcher.md#target-repository-dispatcher) without copying its template. Install `clawsweeper` on this repository and confirm its installation on `openclaw/clawsweeper`. Grant the [token permissions](../flows/clawsweeper-dispatch.md#entry-points) and add its private key as the `CLAWSWEEPER_APP_PRIVATE_KEY` Actions secret. Keep one dispatcher.
 
-After the first eligible issue, pull request, or command event following merge, inspect the **ClawSweeper Dispatch** Actions run. Admission and dispatch must succeed. Check the matching ClawSweeper receiver run and final review or command outcome for the same item; an acknowledgement alone does not prove completion.
+After the first eligible issue, pull request, or command following merge, inspect **ClawSweeper Dispatch** for successful admission and dispatch. Check the matching ClawSweeper receiver run and final outcome; acknowledgement alone does not prove completion.
 
-If admission warns or token creation fails, check the Actions secret and both App installations and permissions. Restore the missing setup and rerun or trigger a fresh eligible event, then repeat both checks. The [dispatch flow](../flows/clawsweeper-dispatch.md#debugging-and-verification) explains step behavior.
+Missing `CLAWSWEEPER_APP_PRIVATE_KEY` prevents dispatch. Restore it and verify both App installations and permissions. Rerun or trigger an eligible event, then check both runs. Use the [dispatch flow](../flows/clawsweeper-dispatch.md#debugging-and-verification) for admission warnings or token failures.
 
 ### Run Kubernetes model tests before merge
 
