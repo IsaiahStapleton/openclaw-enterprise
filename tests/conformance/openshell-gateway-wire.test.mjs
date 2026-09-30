@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
@@ -184,6 +185,22 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
 
   try {
+    // Client initialization yields; cancel before it can dispatch the mutation.
+    const abort = new AbortController();
+    const pending = client.createProvider(
+      {
+        workspace: "tenant-workspace",
+        name: "cancelled-source",
+        type: "oce-openai",
+        labels: {},
+        credentials: { OPENAI_API_KEY: "wire-test-value" },
+      },
+      abort.signal,
+    );
+    abort.abort(new Error("cancelled during setup"));
+    await assert.rejects(pending, /cancelled during setup/);
+    assert.equal(requests.providers.length, 0);
+
     await client.importProviderProfile(
       "tenant-workspace",
       {
@@ -285,4 +302,108 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
     client.close();
     await new Promise((resolve) => server.tryShutdown(resolve));
   }
+});
+
+test("OpenShell client closes cancellation races around provider dispatch", async (t) => {
+  const provider = {
+    workspace: "tenant-workspace",
+    name: "cancelled-source",
+    type: "oce-openai",
+    labels: {},
+    credentials: { OPENAI_API_KEY: "wire-test-value" },
+  };
+  const prepare = (onMetadata, onInvoke) => {
+    let calls = 0;
+    let cancellations = 0;
+    const grpc = {
+      Metadata: class {
+        constructor() {
+          onMetadata();
+        }
+      },
+      status: { ALREADY_EXISTS: 6 },
+    };
+    const transport = {
+      CreateProvider(_request, _headers, _options, callback) {
+        calls++;
+        onInvoke();
+        queueMicrotask(() =>
+          callback(null, {
+            provider: { metadata: { name: provider.name, labels: {} }, type: provider.type },
+          }),
+        );
+        return { cancel: () => cancellations++ };
+      },
+      close() {},
+    };
+    const client = new GrpcOpenShellGatewayClient({ endpoint: "http://127.0.0.1:1" });
+    return { client, grpc, transport, calls: () => calls, cancellations: () => cancellations };
+  };
+
+  await t.test("an abort during client initialization prevents metadata preparation", async () => {
+    const abort = new AbortController();
+    let metadataCalls = 0;
+    const fake = prepare(
+      () => metadataCalls++,
+      () => {},
+    );
+    let release;
+    fake.client.client = new Promise((resolve) => {
+      release = resolve;
+    });
+    const pending = fake.client.createProvider(provider, abort.signal);
+    abort.abort(new Error("cancelled during initialization"));
+    release({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(pending, /cancelled during initialization/);
+    assert.equal(metadataCalls, 0);
+    assert.equal(fake.calls(), 0);
+    fake.client.close();
+  });
+
+  await t.test("an abort during metadata preparation prevents dispatch", async () => {
+    const abort = new AbortController();
+    const fake = prepare(
+      () => abort.abort(new Error("cancelled during metadata")),
+      () => {},
+    );
+    fake.client.client = Promise.resolve({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(
+      fake.client.createProvider(provider, abort.signal),
+      /cancelled during metadata/,
+    );
+    assert.equal(fake.calls(), 0);
+    assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    fake.client.close();
+  });
+
+  await t.test("an abort before the call handle returns cancels that handle", async () => {
+    const abort = new AbortController();
+    const fake = prepare(
+      () => {},
+      () => abort.abort(new Error("cancelled during dispatch")),
+    );
+    fake.client.client = Promise.resolve({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(
+      fake.client.createProvider(provider, abort.signal),
+      /cancelled during dispatch/,
+    );
+    assert.equal(fake.calls(), 1);
+    assert.equal(fake.cancellations(), 1);
+    assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    fake.client.close();
+  });
+
+  await t.test("a synchronous transport failure removes its abort listener", async () => {
+    const abort = new AbortController();
+    const fake = prepare(
+      () => {},
+      () => {
+        throw new Error("transport failed");
+      },
+    );
+    fake.client.client = Promise.resolve({ grpc: fake.grpc, client: fake.transport });
+    await assert.rejects(fake.client.createProvider(provider, abort.signal), /transport failed/);
+    assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+    fake.client.close();
+  });
 });
