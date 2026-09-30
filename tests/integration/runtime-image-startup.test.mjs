@@ -2562,8 +2562,8 @@ process.stdout.write("shared-codex-0.158.0-ready\n");
 // answers the Responses API as api.openai.com (mapped to loopback, trusted
 // through a private CA), and observes the wrapper from outside.
 // The Codex wrapper runs under the production example's 500m CPU limit. The
-// embedded Gateway gets one CPU: at 500m its serial probe's node boot alone can
-// take most of the 30-second attempt cap (board finding 181).
+// embedded Gateway gets one CPU to keep these cases quick;
+// runtime-image-model-probe.test.mjs covers it at 500m.
 const startupProbeCpuLimit = "0.5";
 const gatewayStartupProbeCpuLimit = "1";
 const startupProbeMemoryLimit = "2g";
@@ -3103,7 +3103,7 @@ test(
   "runtime image embedded Gateway probes its model before it starts OpenClaw",
   { ...imageTestOptions, timeout: 600_000 },
   async (t) => {
-    // A short turn keeps the probe well inside its 30-second attempt cap.
+    // A short turn keeps the probe well inside its attempt cap.
     await assertProbeGatesStartup(t, "gateway", 2_000);
   },
 );
