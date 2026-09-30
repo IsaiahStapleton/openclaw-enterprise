@@ -22,6 +22,8 @@ import type {
   GitHubDriverFactory,
 } from "../../drivers/repo/github/credentials/types.ts";
 import { createGitHubRegistryDriverFactory } from "../../drivers/repo/github/credentials/registry-factory.ts";
+import { createProviderQueue } from "../../drivers/repo/credentials/provider-queue.ts";
+import { createGitHubRepositoryDescriptions } from "../../drivers/repo/github/credentials/descriptions.ts";
 import { readProtectedFile } from "./protected-file.ts";
 
 type SelectedBackend = {
@@ -132,6 +134,18 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
         });
         break;
     }
+    const providerQueue = createProviderQueue(config.limits.providerQueue);
+    const repositoryDescriptions =
+      selected.kind === "github-app-registry"
+        ? createGitHubRepositoryDescriptions({
+            registry: selected.registry,
+            privateKeyFile: selected.key.privateKeyFile,
+            key: owner,
+            config,
+            clock,
+            providerQueue,
+          })
+        : undefined;
     const ownedCert = cert;
     const ownedTlsKey = tlsKey;
     const ownedKey = owner;
@@ -139,6 +153,8 @@ export async function loadConfiguration(path: string, clock: Clock): Promise<Loa
       config,
       tls: Object.freeze({ cert: ownedCert, key: ownedTlsKey }),
       factory,
+      providerQueue,
+      ...(repositoryDescriptions === undefined ? {} : { repositoryDescriptions }),
       trustedUpstreamOrigins: factory.trustedUpstreamOrigins,
       close() {
         ownedKey.close();

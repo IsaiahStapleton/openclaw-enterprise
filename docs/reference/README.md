@@ -33,6 +33,11 @@ paths, schemas, permissions, and error codes. It is generated from the checked-i
 The [OCC metrics reference](metrics.md) defines application and process metrics
 and the private listener configuration.
 
+## PostgreSQL authentication
+
+The [auth binding](postgres-auth-binding.md) defines the package interface and
+pool/schema ownership for controller authentication.
+
 ## Related
 
 <span id="features"></span>

@@ -1,5 +1,5 @@
 import type { RequestHead } from "../../../credentials/backend-contracts.ts";
-import type { GitHubProfile } from "../types.ts";
+import type { GitHubTokenProfile } from "../types.ts";
 import { permissionsForProfile } from "../profiles.ts";
 
 export type Route = Readonly<{
@@ -61,7 +61,7 @@ function classifyGitRoute(
   head: RequestHead,
   target: ParsedTarget,
   repository: string,
-  profile: GitHubProfile,
+  profile: GitHubTokenProfile,
 ): Route | undefined {
   const { path, query } = target;
   const parts = /^\/([^/]+\/[^/]+)\/(.*)$/.exec(path);
@@ -235,7 +235,7 @@ function classifyApiRoute(
   head: RequestHead,
   target: ParsedTarget,
   repository: string,
-  profile: GitHubProfile,
+  profile: GitHubTokenProfile,
 ): Route | undefined {
   const { raw, path, query } = target;
   const policy = matchApiRoute(path, repository);
@@ -285,11 +285,22 @@ function classifyApiRoute(
 
 export function classifyRoute(
   head: RequestHead,
-  policy: Readonly<{ repository: string; profile: GitHubProfile; targetBytes: number }>,
+  policy: Readonly<{ repository: string; profile: GitHubTokenProfile; targetBytes: number }>,
 ): Route | undefined {
   const target = parseTarget(head.rawTarget, policy.targetBytes);
   if (!target) {
     return;
+  }
+  // This private scope is only used for a single repository metadata read.
+  if (policy.profile === "metadata-read") {
+    if (
+      head.method !== "GET" ||
+      head.contentEncoding !== "identity" ||
+      target.raw !== `/repos/${policy.repository}`
+    ) {
+      return;
+    }
+    return { kind: "api", effect: "read", target: target.raw };
   }
   const git = classifyGitRoute(head, target, policy.repository, policy.profile);
   if (git) {

@@ -330,6 +330,12 @@
       "expectedTests": [
         "password-only sign-in limits failures per client and email with a reserved administrator lane"
       ]
+    },
+    {
+      "path": "tests/integration/postgres-auth-binding.test.mjs",
+      "expectedTests": [
+        "PostgreSQL auth binding pins transactions, rolls back failures, and preserves caller pool ownership"
+      ]
     }
   ]
 }

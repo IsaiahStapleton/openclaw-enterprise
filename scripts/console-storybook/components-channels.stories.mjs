@@ -54,6 +54,11 @@ export const SlackChannelAccessFlow = {
 export const ChannelsEmpty = { ...story("channelsEmpty"), name: "Not configured" };
 export const ChannelsReadOnly = { ...story("channelsReadOnly"), name: "Revision read only" };
 export const ChannelConflict = { ...story("channelConflict"), name: "Save conflict" };
+export const ChannelSavePending = { ...story("channelSavePending"), name: "Channel save pending" };
+export const ChannelSaveUnknown = {
+  ...story("channelSaveUnknown"),
+  name: "Channel save outcome unknown",
+};
 
 export const SlackNavigation = story("slackNavigation");
 

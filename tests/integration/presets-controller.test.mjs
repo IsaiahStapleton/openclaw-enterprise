@@ -140,6 +140,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
       reviewer: { type: "string", default: "U456" },
       enabled: { type: "boolean", default: true },
       mode: { type: "string", default: "unfinished" },
+      access: { type: "string", default: "git-read" },
     },
     agent: {
       name: "{{ vars.name }}",
@@ -147,6 +148,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
       plugins: { github: { enabled: "unfinished", toolDefaults: { approval: "all_actions" } } },
       pluginApprovers: [{ channel: "slack", id: "team:T123:user:{{ vars.reviewer }}" }],
       harnessAuth: null,
+      repositoryAccess: { defaultProfile: "{{ vars.access }}", repositories: [] },
       initialWorkspaceFiles: {
         "AGENTS.md": "# {{ vars.name }}\n",
         "IDENTITY.md": "",
@@ -227,6 +229,7 @@ test("Preset variables create independent ordinary Agent drafts that survive tem
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.data.name, 'My "Agent"');
   assert.equal(created.data.configurationId, configuration.data.id);
+  assert.deepEqual(created.data.repositoryAccess, { defaultProfile: "git-read", repositories: [] });
   assert.deepEqual(created.data.pluginApprovers, rendered.agent.pluginApprovers);
   assert.equal(Object.hasOwn(created.data, "presetId"), false);
   const workspaceSetup = await fixture.state.read((state) =>
@@ -262,7 +265,12 @@ test("Preset admission rejects malformed templates and credential leaks while pr
   const secret = await fixture.createSecret(alpha.id, "Model key", "synthetic-preset-secret-value");
   const wrongSecret = await fixture.createSecret(beta.id, "Other key", "synthetic-other-secret");
   const sentinel = "synthetic-preset-credential-must-not-persist";
+  // A null list used to persist successfully, then crash the Console's Use Preset flow.
+  const nullRepositoryTemplate = {
+    agent: { repositoryAccess: { defaultProfile: "git-read", repositories: null } },
+  };
   const unsafeTemplates = [
+    nullRepositoryTemplate,
     { configuration: { secretBindings: { OPENAI_API_KEY: { source: secret.ref } } } },
     { agent: { namespaceId: beta.id } },
     { agent: { harnessAuth: { method: "api_key", source: wrongSecret.ref } } },
@@ -297,6 +305,13 @@ test("Preset admission rejects malformed templates and credential leaks while pr
       },
     },
   });
+  const rejectedUpdate = await fixture.request("PATCH", `${collection(alpha.id)}/${preset.id}`, {
+    body: { template: nullRepositoryTemplate },
+  });
+  assert.equal(rejectedUpdate.status, 400, JSON.stringify(rejectedUpdate.body));
+  const unchanged = await fixture.request("GET", `${collection(alpha.id)}/${preset.id}`);
+  assert.equal(unchanged.status, 200);
+  assert.deepEqual(unchanged.data.template, preset.template);
   const rendered = renderPresetTemplate(preset.template, { secretId: secret.ref.id });
   const reader = await fixture.createAccountWithPolicy(
     "preset-user-without-secret",

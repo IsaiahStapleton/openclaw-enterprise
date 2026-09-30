@@ -10,6 +10,7 @@ import type {
   RunningListeners,
   TlsMaterial,
 } from "./internal-contracts.ts";
+import type { RepositoryDescriptions } from "./service-contracts.ts";
 import { createControlAdmission, handleControl } from "./control.ts";
 import { createAgentHandler } from "./transport/agent.ts";
 import type { AgentHandlerOptions } from "./transport/agent.ts";
@@ -18,6 +19,7 @@ import { sendError } from "./transport/errors.ts";
 export interface StartListenersOptions extends AgentHandlerOptions {
   readonly service: CredentialServiceOwner;
   readonly tls: TlsMaterial;
+  readonly repositoryDescriptions?: RepositoryDescriptions;
 }
 
 export type BoundListeners = RunningListeners & Readonly<{ address: AddressInfo }>;
@@ -134,7 +136,14 @@ export async function startListeners(options: StartListenersOptions): Promise<Bo
       void (
         kind === "agent"
           ? onAgent(request, response)
-          : handleControl(request, response, config, clock, admissions)
+          : handleControl(
+              request,
+              response,
+              config,
+              clock,
+              admissions,
+              options.repositoryDescriptions,
+            )
       ).catch(() => sendError(response, 503, "unavailable"));
     };
   for (const [server, handler, sockets] of [

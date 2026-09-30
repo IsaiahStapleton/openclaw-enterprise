@@ -118,7 +118,7 @@ export function validateGitHubRepositoryRegistry(
     return invalid();
   }
   let namespaceRows = 0;
-  const repositories = array(root.repositories, 128).map((candidate) => {
+  const repositories = array(root.repositories, 1000).map((candidate) => {
     const entry = object(candidate, ["repositoryRef", "repositoryId", "repository", "namespaces"]);
     const namespaces = array(entry.namespaces, 128).map((candidatePolicy) => {
       const policy = object(candidatePolicy, ["namespaceId", "profiles", "pushRefAllowlist"]);
