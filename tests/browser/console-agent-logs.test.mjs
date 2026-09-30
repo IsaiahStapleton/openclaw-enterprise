@@ -310,6 +310,18 @@ test("a log reader without operate reads log text in the Logs tab without runtim
   // A source this version does not have is explained, not a generic failure.
   await page.locator("#runtime-log-source").selectOption("sandbox");
   await page.getByText(/This version has no sandbox log source/).waitFor();
+
+  // Reopening the tab remembers the status denial and still reads log text; with no
+  // Pod list there is no Harness hint.
+  const statusReads = () =>
+    requests.filter(({ path }) => path.endsWith(`/deployments/${revisionId}/runtime`)).length;
+  const before = statusReads();
+  await page.getByRole("button", { name: "Configuration", exact: true }).click();
+  await page.getByRole("button", { name: "Logs", exact: true }).click();
+  await pane.getByText("log reader can see this").waitFor();
+  assert.equal(await page.locator("#runtime-log-source").isDisabled(), false);
+  assert.equal(statusReads(), before);
+  assert.equal(await page.getByRole("note").count(), 0);
 });
 
 test("the Logs tab explains cluster RBAC, unsupported Drivers and unavailable reads", async (t) => {

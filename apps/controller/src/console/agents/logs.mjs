@@ -410,9 +410,11 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     // own source holds the cause (for example a failed model probe).
     // Only a revision with a dedicated Harness lists an "agent" source; the hint fires
     // when no Harness Pod is ready (none created yet, or every one unready), not while a
-    // ready replacement serves beside an old Pod during a rollout.
+    // ready replacement serves beside an old Pod during a rollout. Without status the
+    // Pod list is unknown, so there is no hint.
     const harnessPods = description.pods.filter(({ role }) => role === "agent");
     const harnessDown =
+      !statusDenied &&
       source?.id === "gateway" &&
       description.sources.some(({ id }) => id === "agent") &&
       !harnessPods.some(({ ready }) => ready);
@@ -439,6 +441,19 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     followButton.disabled = !readable || previous.checked;
   }
 
+  // Status is denied, but log text has its own grant: offer the log reads anyway.
+  function offerLogsWithoutStatus() {
+    if (description !== null) {
+      return;
+    }
+    statusDenied = true;
+    description = unobservedDescription();
+    renderPickers();
+    if (!logsDenied) {
+      void readLogs({ restart: true });
+    }
+  }
+
   async function loadStatus() {
     clearTimeout(statusTimer);
     if (!current()) {
@@ -446,6 +461,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     }
     if (deniedStatusViews.has(statusKey)) {
       stripStatus.textContent = runtimeErrorText({ status: 403 }, "status");
+      offerLogsWithoutStatus();
       return;
     }
     if (!document.hidden) {
@@ -469,14 +485,8 @@ export function renderAgentLogs(context, { agent, revisionId }) {
           return;
         }
         stripStatus.textContent = withRequestId(runtimeErrorText(error, "status"), error);
-        if (error.status === 403 && description === null) {
-          // Status is denied, but log text has its own grant: offer the log reads anyway.
-          statusDenied = true;
-          description = unobservedDescription();
-          renderPickers();
-          if (!logsDenied) {
-            void readLogs({ restart: true });
-          }
+        if (error.status === 403) {
+          offerLogsWithoutStatus();
         }
         // Authorization and support failures do not change on their own.
         if ([403, 404, 501].includes(error.status)) {
