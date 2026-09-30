@@ -123,6 +123,8 @@ interface CredentialWithdrawalDispatchResult extends DispatchResult {
   readonly credentialSourceId?: string;
   /** True once the gateway confirmed revocation or the Sandbox no longer exists. */
   readonly revoked?: boolean;
+  /** An earlier attempt already settled the withdrawal; this one changed nothing. */
+  readonly nothingPending?: boolean;
 }
 
 interface AgentDeletionDispatchResult extends DispatchResult {
@@ -1941,6 +1943,7 @@ export class ControllerWorker {
         await this.finalizeCredentialWithdrawal(claim, {
           outcome: "success",
           code: "CREDENTIALS_WITHDRAWN",
+          nothingPending: true,
         });
         return;
       }
@@ -2006,7 +2009,10 @@ export class ControllerWorker {
         (result.outcome === "retry" && claim.attemptCount >= this.maxAttempts);
       if (result.decision !== undefined) {
         await this.appendCredentialWithdrawalAudit(unit, claim, result, "denied");
-      } else if (result.outcome === "success" || terminalFailure) {
+      } else if (
+        (result.outcome === "success" && result.nothingPending !== true) ||
+        terminalFailure
+      ) {
         await this.appendCredentialWithdrawalAudit(
           unit,
           claim,

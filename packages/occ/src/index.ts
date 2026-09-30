@@ -4706,8 +4706,8 @@ export class OpenClawController {
 
   /**
    * Records a withdrawal of `credentialSourceId` from the Agent's active revision and queues
-   * worker work to revoke it. A replay of a pending withdrawal queues another attempt; a
-   * revoked withdrawal is returned unchanged.
+   * worker work to revoke it. A replay of a pending withdrawal queues another attempt only when
+   * no earlier attempt is still queued or running; a revoked withdrawal is returned unchanged.
    */
   async withdrawAgentCredentialSource(
     principalId: string,
@@ -4738,7 +4738,13 @@ export class OpenClawController {
           requestedAt: this.timestamp(),
         }),
       );
-      if (withdrawal.state === "pending") {
+      if (
+        withdrawal.state === "pending" &&
+        !(await state.operations.hasOutstandingCredentialWithdrawalWork(
+          agent.namespaceId,
+          revision.id,
+        ))
+      ) {
         await this.record(state, {
           kind: "agent_revision",
           action: "reconcile",

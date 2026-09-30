@@ -656,6 +656,8 @@ export interface PlatformOperationReadRepository {
   list(): Promise<readonly Readonly<PlatformOperation>[]>;
   findWork(idempotencyKey: string): Promise<Readonly<ControllerWork> | undefined>;
   findWorkAttempt(idempotencyKey: string): Promise<Readonly<ControllerWorkAttempt> | undefined>;
+  /** True while credential withdrawal work for the revision is queued or claimed. */
+  hasOutstandingCredentialWithdrawalWork(namespaceId: string, revisionId: string): Promise<boolean>;
 }
 
 export interface PlatformOperationRepository extends PlatformOperationReadRepository {
@@ -2526,6 +2528,15 @@ function repositories(
       retryFailedAgentDeletion: async () => false,
       retryFailedNamespaceDeletion: async () => false,
       findWorkAttempt: async () => undefined,
+      // Recorded work never executes here, so every recorded withdrawal stays outstanding.
+      hasOutstandingCredentialWithdrawalWork: async (namespaceId, revisionId) =>
+        snapshot.operations.some(
+          (operation) =>
+            operation.kind === "agent_revision" &&
+            operation.target === CREDENTIAL_WITHDRAWAL_TARGET &&
+            operation.namespaceId === namespaceId &&
+            operation.resourceId === revisionId,
+        ),
       findWork: async (idempotencyKey) => {
         const operation = snapshot.operations.find(
           (candidate) => operationIdempotencyKey(candidate) === idempotencyKey,

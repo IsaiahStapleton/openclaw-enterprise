@@ -4205,6 +4205,17 @@ export class PostgresPlatformState implements PlatformStateStore {
           await this.requireInitialized(context);
           return queue.findWorkAttempt(idempotencyKey);
         },
+        hasOutstandingCredentialWithdrawalWork: async (namespaceId, revisionId) => {
+          await this.requireInitialized(context);
+          const found = await client.query(
+            `SELECT 1 FROM occ.controller_work
+             WHERE namespace_id = $1 AND revision_id = $2 AND agent_target = $3
+               AND state IN ('queued', 'claimed')
+             LIMIT 1`,
+            [namespaceId, revisionId, CREDENTIAL_WITHDRAWAL_TARGET],
+          );
+          return found.rowCount === 1;
+        },
       },
     };
   }

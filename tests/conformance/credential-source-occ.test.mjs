@@ -889,12 +889,12 @@ test("withdrawal is recorded for the active revision and queued for the worker o
     withdrawal,
   );
 
-  // A replay keeps the same withdrawal and queues another attempt for the worker to retry.
+  // A replay keeps the same withdrawal; while the first attempt is outstanding it queues none.
   assert.deepEqual(
     await controller.withdrawAgentCredentialSource(administrator, request),
     withdrawal,
   );
-  assert.equal(withdrawalWork().length, 2);
+  assert.equal(withdrawalWork().length, 1);
 
   // Only the source the active revision authenticates with can be withdrawn.
   const other = await controller.createCredentialSource(administrator, {

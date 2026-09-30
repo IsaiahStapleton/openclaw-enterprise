@@ -145,6 +145,7 @@ export function bindPlatformUnitOfWork(
       "list",
       "findWork",
       "findWorkAttempt",
+      "hasOutstandingCredentialWithdrawalWork",
       "retryFailedAgentDeletion",
       "retryFailedNamespaceDeletion",
     ]),
