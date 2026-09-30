@@ -17,8 +17,8 @@ its launcher and filesystem layout are concrete Kubernetes implementation choice
 | Execution        | The selected Harness owns execution and its workspace lifecycle.                          | Codex app-server executes turns; a separate node serves file, Memory and Skills operations.                                 |
 | Startup          | Compute delivers the selected workload and observes readiness.                            | The launcher supervises Codex and the file node separately, separates their credentials, and sets Codex shell/PATH options. |
 
-These Codex details belong in OCE because OCE deploys this Harness. They are not
-requirements for every Harness or additions to the public Compute contract.
+These deployment details are specific to Codex, not requirements for every
+Harness or additions to the public Compute contract.
 The file node's explicit command allowlist disables OpenClaw worker hosting;
 this launcher is not an OpenClaw remote worker launcher.
 

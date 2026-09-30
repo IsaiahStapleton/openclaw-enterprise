@@ -2094,6 +2094,19 @@ export const scenarios = {
     description:
       "A denied authorization request leaves the form usable and does not create a browser credential.",
   },
+  createOAuthUnavailable: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login unavailable (Experimental)",
+    path: create,
+    rules: [{ suffix: "/device-authorizations", method: "POST", status: 501 }],
+    actions: [
+      ...form,
+      { selector: "#agent-auth-method", value: "oauth" },
+      click("Sign in with ChatGPT"),
+    ],
+    description:
+      "An Installation whose selected Drivers do not support device login reports it as unavailable. Choose another authentication method; no device code or sign-in link appears.",
+  },
   createOAuthError: {
     group: "Pages/Create Agent",
     name: "ChatGPT login exchange failed (Experimental)",

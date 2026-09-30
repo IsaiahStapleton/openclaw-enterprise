@@ -22,7 +22,11 @@ provider login, token persistence, refresh rotation, or runtime handoff.
 4. Check **ChatGPT login permission denied (Experimental)**, **ChatGPT login exchange failed (Experimental)**,
    and **ChatGPT device login expired (Experimental)**. Failed or expired polls stop; recovery
    requires cancelling and starting a new login. Other form choices remain usable.
-5. Switch the harness to OpenClaw. ChatGPT OAuth disappears and API-key
+5. Open **ChatGPT login unavailable (Experimental)**. Confirm the message says sign-in
+   is unavailable for this Installation and suggests another authentication method.
+   No device code or provider link appears. Switch to API key and confirm the form
+   remains usable.
+6. Switch the harness to OpenClaw. ChatGPT OAuth disappears and API-key
    authentication is selected. Switching providers also clears the selected model
    credential. A staged login is discarded only through its explicit control.
 

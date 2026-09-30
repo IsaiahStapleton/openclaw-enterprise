@@ -96,9 +96,6 @@ Compute-owned dedicated Codex, no selected Sandbox or Credential Gateway, and
 fresh private credential storage. The normal deployment prerequisites still
 apply: configured runtime images, provisionable storage, provider connectivity,
 and access to the selected model. Readiness requires a successful native model probe.
-An operator must first set `experimental.codexDeviceLogin: true` in the
-[Kubernetes Compute Driver options](../../reference/drivers/kubernetes-compute/codex-oauth-storage.md#enable-device-login);
-without it, signing in reports that device authorization is unavailable.
 
 Choose **ChatGPT OAuth (Experimental)** with dedicated Codex when creating an Agent. Open the
 provided verification link, enter the displayed code, and complete sign-in.

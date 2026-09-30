@@ -86,7 +86,7 @@ export function createDeviceLogin({ context, agentId, initial, onChange, hint })
           : failure.status === 410
             ? "This login expired. Cancel it and start a new login."
             : failure.status === 501
-              ? "ChatGPT sign-in is not enabled for this Installation. Choose another authentication method or ask an operator to enable Codex device login."
+              ? "ChatGPT sign-in is unavailable for this Installation. Choose another authentication method."
               : `Codex login could not be completed. ${message(failure)} ${login ? "Cancel this login and sign in again." : "Try signing in again."}`;
     }
   }

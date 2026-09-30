@@ -40,17 +40,13 @@ const plugin = {
   },
 };
 
-async function createFixture(
-  t,
-  { approve = async () => true, exchange = async () => {}, codexDeviceLogin = true } = {},
-) {
+async function createFixture(t, { approve = async () => true, exchange = async () => {} } = {}) {
   const clock = createControlledClock();
   const auditSink = new InMemoryAuditSink();
   const secretDriver = createTestSecretDriver();
   const fixture = await createConsoleAppFixture(t, {
     auditSink,
     secretDriver,
-    codexDeviceLogin,
     now: () => new Date(clock.wallNow()),
   });
   await fixture.bootstrap();
@@ -311,27 +307,6 @@ test("device login configures plugins and admits its opaque Secret reference in 
     "consumed credentials must fail before provider I/O",
   );
   assertNoCredentials(fixture);
-});
-
-test("device login and OAuth bindings stay unavailable until the installation opts in", async (t) => {
-  const fixture = await createFixture(t, { codexDeviceLogin: false });
-  const started = await fixture.request("POST", fixture.path, { body: { harnessId: "codex" } });
-  assert.equal(started.status, 501);
-  assert.deepEqual(fixture.requests, []);
-  // A binding crafted through the API cannot be admitted into a revision.
-  const source = await fixture.createSecret(fixture.namespace.id, "Crafted login", "{}");
-  const agent = await fixture.createAgent(
-    fixture.namespace.id,
-    "OAuth Agent",
-    createHarnessConfiguration("codex", "gpt-5.1"),
-    { executionMode: "dedicated", harnessAuth: { method: "oauth", source: source.ref } },
-  );
-  grantAgentSecret(fixture, agent, source.ref);
-  const deployed = await fixture.request(
-    "POST",
-    `/namespaces/${fixture.namespace.id}/agents/${agent.id}/deploy`,
-  );
-  assert.equal(deployed.status, 409, JSON.stringify(deployed.body));
 });
 
 test("device login is bound to its initiating actor, Namespace, and exact Agent scope", async (t) => {

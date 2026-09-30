@@ -1,6 +1,6 @@
 ---
 created: 2026-08-24
-updated: 2026-09-29
+updated: 2026-09-30
 last_updated_session: codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
@@ -119,9 +119,8 @@ access-token reference and private Backend, member Driver, and workspace
 ownership. `runtime` needs no source grant, lookup, or delivery metadata. The
 selected Compute validates the combination: SSH accepts only embedded OpenClaw
 with `runtime`; Kubernetes continues to require managed authentication. It
-admits OAuth only when `experimental.codexDeviceLogin` is set, and only for
-Compute-owned dedicated Codex without a Sandbox Driver, so an unsupported
-binding fails before predecessors stop.
+admits OAuth only for Compute-owned dedicated Codex without a Sandbox Driver,
+so an unsupported binding fails before predecessors stop.
 
 A runtime revision records only `{ "method": "runtime" }`. Host credential
 changes can affect that revision after restart without redeployment; see the
@@ -288,6 +287,8 @@ The source seal prevents ordinary Secret updates from resetting custody.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 17:23: Remove the Installation opt-in for Codex device login while retaining Experimental status and topology checks in the accompanying change. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 9ae40ce59eadfd03d52c78086de92f0034dd9974)
 
 - 2026-09-30 04:00: Record OAuth opt-in, admission topology check, clean reseed, and codex-home removal on method change. (aligner-524 - 591f553f6)
 
