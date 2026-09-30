@@ -466,7 +466,16 @@ test(
       assert.equal(detached.statusCode, 200, detached.body);
       assert.equal(await currentSession(app, cookie), null, "the Google session ends");
       await assertGoogleRefused({ subject: memberSubject }, "detached subject");
-      assert.equal((await passwordSignIn(app, origin, member, address())).statusCode, 200);
+      // The reserved-lane check above spent the member's email budget. The browser's
+      // known-device cookie from its Google sign-in keeps its own lane for password fallback.
+      const fallback = await app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress: address(),
+        headers: { origin, cookie },
+        payload: { email: member.email, password: member.password },
+      });
+      assert.equal(fallback.statusCode, 200, fallback.body);
     });
 
     await t.test("a disabled account is refused Google sign-in", async () => {
