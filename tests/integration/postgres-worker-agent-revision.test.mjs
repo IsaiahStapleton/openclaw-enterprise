@@ -3295,9 +3295,11 @@ test(
     );
     assert.equal(withdrawal.rowCount, 1);
     assert.equal(withdrawal.rows[0].actor_id, fixture.actor.id);
+    // Five pending attempts back off 1+2+4+8 s times jitter, which can exceed the default wait.
     await fixture.work(
       { id: active.id, idempotencyKey: withdrawal.rows[0].idempotency_key },
       "failed_permanent",
+      30_000,
     );
     const [next] = await queuedWork(`agent_revision:${active.id}:maintenance:%`);
     assert.notEqual(next.idempotency_key, first.idempotencyKey);
@@ -3373,23 +3375,34 @@ test(
       undefined,
       withCredentialGateway,
     );
-    await waitFor("the deployment retry to stop at the withdrawal", async () =>
-      events.some(
-        (event) =>
-          event.event === "worker.completed" &&
-          event.revisionId === active.id &&
-          event.operation === "agent_revision.reconcile" &&
-          event.code === "CREDENTIAL_WITHDRAWN",
-      )
-        ? true
-        : undefined,
+    await waitFor(
+      "the deployment retry to stop at the withdrawal",
+      async () =>
+        events.some(
+          (event) =>
+            event.event === "worker.completed" &&
+            event.revisionId === active.id &&
+            event.operation === "agent_revision.reconcile" &&
+            event.code === "CREDENTIAL_WITHDRAWN",
+        )
+          ? true
+          : undefined,
+      30_000,
     );
-    await waitFor("the withdrawal to be revoked", async () => {
-      const found = await fixture.state.read((view) =>
-        view.credentialSources.findCredentialWithdrawal(fixture.namespace.id, active.id, sourceId),
-      );
-      return found?.state === "revoked" ? found : undefined;
-    });
+    await waitFor(
+      "the withdrawal to be revoked",
+      async () => {
+        const found = await fixture.state.read((view) =>
+          view.credentialSources.findCredentialWithdrawal(
+            fixture.namespace.id,
+            active.id,
+            sourceId,
+          ),
+        );
+        return found?.state === "revoked" ? found : undefined;
+      },
+      30_000,
+    );
     await fixture.stop();
 
     // Only the first attempt prepared the revision; the retry stopped before re-attaching.
