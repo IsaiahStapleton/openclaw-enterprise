@@ -153,11 +153,14 @@ a random nonce, so every sign-in gets its own entry; it never carries the email.
 Each entry is also bound to the account's password: its user, password method and
 that method's authentication version, which the database bumps on every password
 change. An external sign-in marks the browser only when the account has a password.
-A later password attempt for an email with a valid
-entry spends that browser's own budget, the size of the email's, instead of the
-email's, and does not wait for the email's slowed slots. Strangers who spend an
-email's budget therefore cannot refuse or crowd out a browser that signed in to
-that account before, including an administrator's or the recovery account's.
+When fresh account proof is available, a later password attempt with a valid
+entry spends that browser's own budget, the size of the email's, and does not
+wait for the email's slowed slots. Spending the shared email budget alone cannot
+refuse that verified browser. If finite proof capacity is exhausted or the reader
+is unavailable, the attempt instead uses shared email/address admission with
+signed-device constraints. A nonreserved account can then receive `429` from a
+spent shared lane despite its valid cookie. Administrator and recovery accounts
+retain their existing paced password checks.
 
 The cookie never authenticates: a wrong password with it is `401` and spends the
 browser's lane, and the address lane and global caps still apply. Tampered,
@@ -297,6 +300,8 @@ endpoint exposure and provisioning authorization.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 22:10: Qualify known-browser availability when finite account proof is unavailable. (authoring-run/d22560bc-da4b-4470-ab17-83e8ce51825c - a4daf446aef9eb3571c4b43dac986a6f58d86cf0)
 
 - 2026-09-20 08:53: Replaced native-admin launch-code sessions with the shared OCE session cookie boundary and cookie-domain validation. (cody/01a0b7fd-13fa-7dc2-8653-5c5814b59305 - 5e5f12f37842ae7239d73432e00609547627ded8)
 
