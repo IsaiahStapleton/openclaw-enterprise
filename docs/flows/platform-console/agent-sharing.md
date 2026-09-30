@@ -47,8 +47,9 @@ graph TD
 
 Agent detail mounts sharing independently of revision/configuration reads and
 native admission. The panel reads the selected Namespace's existing `/iam/roles`
-and `/iam/access-bindings` endpoints. A policy `403` leaves the other panels
-usable; a current `401` retains global session expiry.
+and `/iam/access-bindings` endpoints. A policy `403` hides the sharing panel,
+because sharing requires Installation administration, and leaves the other
+panels usable; a current `401` retains global session expiry.
 
 ### 2. Serialize Role and binding writes
 
@@ -72,8 +73,8 @@ The panel retains discovery grants and explains other possible access sources.
 
 ## Debugging and Verification
 
-- A `403` on the policy reads affects only the sharing panel; check Installation
-  administration before treating it as a console fault.
+- A `403` on the policy reads hides only the sharing panel; check Installation
+  administration before treating a missing panel as a console fault.
 - After an uncertain write, select **Refresh sharing** and inspect the direct
   grants before submitting again. A present binding does not prove an earlier
   request's outcome.
