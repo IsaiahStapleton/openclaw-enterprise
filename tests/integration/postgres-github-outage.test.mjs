@@ -270,7 +270,7 @@ test(
         url: "/api/auth/sign-in/email",
         remoteAddress,
         headers: { origin, cookie },
-        payload: account,
+        payload: { email: account.email, password: account.password },
       });
     const wrong = "outage-wrong-password";
 

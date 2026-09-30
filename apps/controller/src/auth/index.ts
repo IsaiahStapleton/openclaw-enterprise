@@ -1198,7 +1198,8 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
             returnStatus: true,
           });
           // Only a successful sign-in marks the browser as a known device for this email.
-          if (result.status === 200) {
+          // Rejections throw; a success leaves the status unset (200).
+          if ((result.status ?? 200) === 200) {
             result.headers.append(
               "set-cookie",
               knownDeviceSetCookie(
