@@ -92,11 +92,25 @@ Diagnostics explain setup failures without establishing coverage.
 
 The `k3d-model`, `gateway-routing`, `slack`, and `k3d-otel` lanes prepare the controller image and workspace routing for dedicated Harness node enrollment. Supply an immutable `NODE_BASE_IMAGE` for the build. Preparation supplies the imported controller digest and private routing CA paths; Slack still requires approved runtime images and credentials.
 
-Routing, OpenShell, and logging have concrete CI preparation contracts. The
-[preparation flow](../flows/github-actions-testing/preparation.md) records their
-pinned infrastructure, admission checks, Docker setup, and proof limits. Full-suite
-acceptance still requires main-only protected hosted execution of every selected
-lane. See the
+Implementation status: routing, OpenShell, and logging have concrete CI
+preparation contracts. Routing installs pinned Gateway API, cert-manager v1.18.4
+and Envoy Gateway v1.6.7 manifests, then generates a private test CA. OpenShell
+creates an owned K3s v1.36.4 cluster, installs a matched kubectl, configures and
+smoke-tests the selected RuntimeClass with the cluster's `runc` handler,
+installs CLI/chart and Agent Sandbox assets, and imports gateway and supervisor
+images. Only that disposable cluster exempts the selected RuntimeClass from Pod
+Security Admission; preparation proves an ordinary violating Pod is rejected and
+the same Pod is admitted with the selected class. The full OpenShell suite
+proves provider-owned supervisor filesystem, endpoint/L7 network, and process
+enforcement while the sidecar policy remains binary-unaware. Logging
+preparation owns a real OpenTelemetry Collector backend with JSONL evidence, so
+`OCC_TEST_OTEL_LOGS_URL` is no longer an external input. The Collector and
+Docker-model jobs use the shared [setup-test-docker action](../../.github/actions/setup-test-docker/action.yml)
+to pin Docker 29.4.0 for the production `fluentd-write-timeout` option. The
+action replaces the preinstalled daemon and shares `/var/run/docker.sock` across
+the CLI, Compose, and Driver; other jobs keep the runner daemon. Full-suite
+acceptance still requires main-only
+protected hosted execution of every selected lane. See the
 [delivery status](../../specs/19-github-actions-test-coverage/delivery-status.md#delivery-status)
 for proof boundaries and live gaps.
 
