@@ -341,31 +341,29 @@ export class PostgresHumanAuthentication {
   /**
    * The known-device account state (see `knownDeviceAccountState`) for an enrolled, enabled
    * account of this Installation with a password, by normalized email; undefined otherwise,
-   * so a disabled account's entries verify nothing while it stays disabled. A plain read: it
-   * locks nothing and writes no audit.
+   * so a disabled account's entries verify nothing while it stays disabled. A plain read
+   * outside any transaction (it runs before password admission, once per attempt): one
+   * statement that locks nothing and writes no audit.
    */
   async knownDeviceState(email: string): Promise<string | undefined> {
-    return this.state.transact(async (unit) => {
-      const rows = await this.query(
-        unit,
-        `SELECT u.id AS user_id, m.id AS method_id, m.authentication_version
-         FROM occ."user" u
-         JOIN occ.human_authentication_accounts h
-           ON h.user_id = u.id AND h.installation_id = $2 AND NOT h.disabled
-         JOIN occ.account m ON m.user_id = u.id AND m.provider_id = 'credential'
-           AND m.password IS NOT NULL AND m.password <> ''
-         WHERE u.email = $1`,
-        [email, this.installationId],
-      );
-      const [row] = rows;
-      if (rows.length !== 1 || row === undefined) {
-        return undefined;
-      }
-      return knownDeviceAccountState({
-        userId: row.user_id as string,
-        methodId: row.method_id as string,
-        methodVersion: row.authentication_version as number,
-      });
+    const rows = await this.state.readStatement(
+      `SELECT u.id AS user_id, m.id AS method_id, m.authentication_version
+       FROM occ."user" u
+       JOIN occ.human_authentication_accounts h
+         ON h.user_id = u.id AND h.installation_id = $2 AND NOT h.disabled
+       JOIN occ.account m ON m.user_id = u.id AND m.provider_id = 'credential'
+         AND m.password IS NOT NULL AND m.password <> ''
+       WHERE u.email = $1`,
+      [email, this.installationId],
+    );
+    const [row] = rows;
+    if (rows.length !== 1 || row === undefined) {
+      return undefined;
+    }
+    return knownDeviceAccountState({
+      userId: row.user_id as string,
+      methodId: row.method_id as string,
+      methodVersion: row.authentication_version as number,
     });
   }
 
