@@ -134,6 +134,10 @@ An Installation can let enrolled existing accounts sign in with GitHub or Google
 defines the single-controller profile, provider flow, session binding, the
 recovery user, the administrator account API, and sign-in limits.
 
+## Session and recovery controls
+
+See [session and recovery controls](authentication/external-sign-in.md#session-and-recovery-controls).
+
 ## Native admin shared sessions
 
 Agent native admin UI access starts from an ordinary controller browser session.
