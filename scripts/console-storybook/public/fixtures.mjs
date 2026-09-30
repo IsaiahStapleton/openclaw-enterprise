@@ -67,6 +67,7 @@ function configurationValues(scenario) {
 export function installFixture(scenario, evidence) {
   const rules = structuredClone(scenario.rules ?? []);
   let signedIn = !scenario.signedOut;
+  let repositoryDescriptionRequests = 0;
   if (scenario.pendingGithubAttempt) {
     // Simulates returning from a GitHub callback started in this tab.
     sessionStorage.setItem("occ.console.githubAttempt", "a".repeat(43));
@@ -198,6 +199,9 @@ export function installFixture(scenario, evidence) {
     servicePrincipalId: "identity_demo_agent",
     createdAt,
     activeRevisionId: selectedRevisionId,
+    ...(scenario.repositoryAccess
+      ? { repositoryAccess: structuredClone(scenario.repositoryAccess) }
+      : {}),
     ...(scenario.repositoryBindings
       ? { repositoryBindings: structuredClone(scenario.repositoryBindings) }
       : {}),
@@ -401,13 +405,13 @@ export function installFixture(scenario, evidence) {
       });
     }
   }
-  const response = (data, status = 200, errorCode) =>
+  const response = (data, status = 200, errorCode, meta = {}) =>
     new Response(
       JSON.stringify({
         ...(errorCode
           ? { error: { code: errorCode, message: "The selected preview simulates this failure." } }
           : { data }),
-        meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000001", ...meta },
       }),
       { status, headers: { "content-type": "application/json" } },
     );
@@ -574,20 +578,41 @@ export function installFixture(scenario, evidence) {
       if (resource === "service-accounts" && method === "GET") {
         return response(accounts);
       }
-      if (resource === "agents/repository-options" && method === "GET") {
+      if (
+        (resource === "agents/repository-options" ||
+          /^agents\/[^/]+\/repository-options$/.test(resource)) &&
+        method === "GET"
+      ) {
+        const options = scenario.repositoryOptions ?? [
+          {
+            repositoryRef: "application",
+            displayName: "example/application",
+            description: "The application and services used by the team.",
+            allowedProfiles: ["git-read", "git-write", "git-full"],
+          },
+          {
+            repositoryRef: "handbook",
+            displayName: "example/handbook",
+            description: "Guides and operating practices for the team.",
+            allowedProfiles: ["git-read"],
+          },
+        ];
+        const requestedDescriptions = new Set(
+          url.searchParams.get("descriptionRefs")?.split(",") ?? [],
+        );
+        const descriptionsPending =
+          requestedDescriptions.size > 0 &&
+          scenario.repositoryDescriptionsPending &&
+          repositoryDescriptionRequests++ === 0;
         return response(
-          scenario.repositoryOptions ?? [
-            {
-              repositoryRef: "application",
-              displayName: "example/application",
-              allowedProfiles: ["git-read", "git-write", "git-full"],
-            },
-            {
-              repositoryRef: "handbook",
-              displayName: "example/handbook",
-              allowedProfiles: ["git-read"],
-            },
-          ],
+          options.map(({ description, ...option }) =>
+            requestedDescriptions.has(option.repositoryRef) && !descriptionsPending && description
+              ? { ...option, description }
+              : option,
+          ),
+          200,
+          undefined,
+          descriptionsPending ? { descriptionsPending: true } : {},
         );
       }
       if (resource === "presets" && method === "GET") {

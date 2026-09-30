@@ -244,6 +244,12 @@
       "path": "tests/browser/console-codex-oauth.test.mjs"
     },
     {
+      "path": "tests/browser/console-agent-repositories.test.mjs"
+    },
+    {
+      "path": "tests/browser/console-agent-draft-guards.test.mjs"
+    },
+    {
       "path": "tests/browser/console-agent-detail.test.mjs"
     },
     {
@@ -388,6 +394,12 @@
       "path": "tests/integration/repository-credentials-control.test.mjs"
     },
     {
+      "path": "tests/integration/repository-credentials-descriptions.test.mjs"
+    },
+    {
+      "path": "tests/integration/repository-credentials-descriptions-uncertain.test.mjs"
+    },
+    {
       "path": "tests/integration/repository-credentials-shutdown.test.mjs"
     },
     {
@@ -473,6 +485,15 @@
     },
     {
       "path": "tests/integration/password-sign-in-admission.test.mjs"
+    },
+    {
+      "path": "tests/conformance/postgres-auth-binding.test.mjs"
+    },
+    {
+      "path": "tests/conformance/postgres-controller-auth-binding.test.mjs"
+    },
+    {
+      "path": "tests/conformance/schema-auth-boundary-v1.test.mjs"
     }
   ]
 }

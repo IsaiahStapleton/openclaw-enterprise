@@ -50,6 +50,7 @@ export function createTokenAuthority({
     assert.deepEqual(body.repository_ids.map(String), [String(repositoryId)]);
     const permissions = body.permissions;
     const acceptedPermissions = [
+      { metadata: "read" },
       {
         metadata: "read",
         contents: "read",

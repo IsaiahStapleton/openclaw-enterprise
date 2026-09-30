@@ -286,7 +286,14 @@
       "idx": 40,
       "version": "7",
       "when": 1787000000040,
-      "tag": "0040_oauth_harness_auth",
+      "tag": "0040_repository_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787000000041,
+      "tag": "0041_oauth_harness_auth",
       "breakpoints": true
     }
   ]

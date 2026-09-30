@@ -71,8 +71,10 @@ export const CreateDedicatedOpenclawExperimental = {
 };
 export const RepositorySelection = {
   ...story("createRepositoriesSelected"),
-  name: "Approved repositories and shared access",
+  name: "Repositories using the Agent default",
 };
+export const RepositoryDetails = story("createRepositoriesDetails");
+export const RepositoryDescriptionsPending = story("createRepositoriesDescriptionsPending");
 export const RepositoryContributor = {
   ...story("createRepositoriesContributor"),
   name: "Contributor without issue management",
@@ -156,6 +158,14 @@ export const CreatePasswordPresetDenied = {
   ...story("createPasswordPresetDenied"),
   name: "Password Secret creation denied",
 };
+
+export const RepositoryOne = story("createRepositories1");
+export const RepositoryFive = story("createRepositories5");
+export const RepositoryTwentyFive = story("createRepositories25");
+export const RepositoryLargeCatalog = story("createRepositories140");
+export const RepositoryExactSearch = story("createRepositoriesExactSearch");
+export const RepositoryCustom = story("createRepositoriesCustom");
+export const RepositoryPolicyConflict = story("createRepositoriesPolicyConflict");
 
 export const CreateStandardOpenclawPreset = {
   ...story("createStandardOpenclawPreset"),

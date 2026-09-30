@@ -140,6 +140,9 @@ function classifyReceipts(receipts, manifest) {
         return "preNamespaceDeletionTakeover";
       }
       if (receipts.length === 40) {
+        return "preRepositoryAccess";
+      }
+      if (receipts.length === 41) {
         return "preOAuth";
       }
       return "providerCompleted";
@@ -202,6 +205,9 @@ function classifyReceipts(receipts, manifest) {
     return "preNamespaceDeletionTakeover";
   }
   if (receipts.length === 40) {
+    return "preRepositoryAccess";
+  }
+  if (receipts.length === 41) {
     return "preOAuth";
   }
   refuse("an incomplete or unsupported development history is installed");

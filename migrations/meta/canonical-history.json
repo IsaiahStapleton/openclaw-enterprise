@@ -326,7 +326,15 @@
       "idx": 40,
       "version": "7",
       "when": 1787000000040,
-      "tag": "0040_oauth_harness_auth",
+      "tag": "0040_repository_access",
+      "breakpoints": true,
+      "sha256": "956234282a16ede3ce90a3b35441177ad459c0e536af0bac832ac7078cd2621a"
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787000000041,
+      "tag": "0041_oauth_harness_auth",
       "breakpoints": true,
       "sha256": "b71d901a6ad8ce8e095a35d7dbabbeabfc804e5861a7ecc8c16125b02a4e3dcd"
     }
@@ -356,7 +364,7 @@
     "main": "bd490d16dd23ec1ea722bb370155e9454fb52187bd2b16cd8a0fe277e3e41bde",
     "repositoryCredentials": "5f9359057412199ea7a5659bdedbef664fb6da7bcd99d7a552f01a5782b904ea",
     "workspaceSetup": "3d7801c345eea875fb79adba4e04a4e2b24bad49ffe6ada62cc58117c5cce134",
-    "completed": "cb14a981767eae07c4e5ab629b1f077d9507e2d4cefef826796d3c6c88a98fe5",
+    "completed": "eb96260a1dfd997dcbd206d1d8406ec566fa3147c845cc3df94c9dc33d593985",
     "repositoryRetention": "a66448129d9ae2adf076f1d7887d3c7151cdc68f635c6fac7984d4254604d074",
     "agentProvisioning": "baac9e369ace8610f96948c1a930e6387431b1d0a33cefa3893765e52f8f7a52",
     "backendCompleted": "a2ba6fc82fbf0047cea491efad4a9e58eacaed7c29ce8528accff331569c51dd",
@@ -369,7 +377,8 @@
     "preHumanAuthentication": "04afe7195a43827e39103c8ed78b19e4edc29f21bd857a79fba95caa39a9074b",
     "preAgentDeletionTakeover": "0f093bdf3b0a5c1f8aefd18bd7ecd3be99a8a5c8559d25b309e2e582119a4c4c",
     "preNamespaceDeletionTakeover": "0dc81ad5504c9e05cf285c3c4c7cf9da1d4e1556c4c674d39eed4a32abe44b1d",
-    "preOAuth": "89dee96b21e37a8e67afd09c3d8096672ed2825ce7bdccd62153da5965e984bd"
+    "preRepositoryAccess": "89dee96b21e37a8e67afd09c3d8096672ed2825ce7bdccd62153da5965e984bd",
+    "preOAuth": "e3eb8e9d95e40f6e2356b6b9318f50b20ce929bbef582d42b7be56d2407f8337"
   },
   "ledgerCatalogs": {
     "initialized": "62946da6b1fc2b06df09e97dda4cf1831f170a2f3d5ff35a9f107af206c425dc",

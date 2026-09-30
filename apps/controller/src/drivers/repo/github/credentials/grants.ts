@@ -7,12 +7,26 @@ import { sameAuthority } from "./driver/state.ts";
 type GrantDependencies = Readonly<{
   config: GitHubConfiguration;
   gatewayOrigin: string;
+  metadataOnly?: true;
   selectedBinding?: GitHubFactoryOptions["binding"];
 }>;
 
-export function createGrantResolver({ config, gatewayOrigin, selectedBinding }: GrantDependencies) {
+export function createGrantResolver({
+  config,
+  gatewayOrigin,
+  metadataOnly,
+  selectedBinding,
+}: GrantDependencies) {
   function resolve(profile: string): ResolvedGrant {
-    if (profile !== "git-read" && profile !== "git-write" && profile !== "git-full") {
+    if (
+      profile !== "git-read" &&
+      profile !== "git-write" &&
+      profile !== "git-full" &&
+      profile !== "metadata-read"
+    ) {
+      throw new Error("unsupported-profile");
+    }
+    if ((profile === "metadata-read") !== (metadataOnly === true)) {
       throw new Error("unsupported-profile");
     }
     if (selectedBinding && profile !== selectedBinding.profile) {
@@ -50,7 +64,11 @@ export function createGrantResolver({ config, gatewayOrigin, selectedBinding }: 
   }
   function forAuthority(authority: AuthorityIdentity) {
     const profile = (
-      selectedBinding ? [selectedBinding.profile] : (["git-read", "git-write", "git-full"] as const)
+      selectedBinding
+        ? [selectedBinding.profile]
+        : metadataOnly
+          ? (["metadata-read"] as const)
+          : (["git-read", "git-write", "git-full"] as const)
     ).find((value) =>
       sameAuthority({ ...resolve(value).binding, sessionId: authority.sessionId }, authority),
     );

@@ -10,6 +10,7 @@ import {
 import { Check } from "typebox/value";
 import { PluginApproversSchema } from "./api/common.ts";
 import type {
+  RepositoryAccess,
   RepositoryBindingSelection,
   RepositoryCredentialMaterialRef,
   RepositoryCredentialRuntimeBinding,
@@ -25,12 +26,14 @@ export {
 } from "./logging.ts";
 
 export type {
+  RepositoryAccess,
   AdmittedRepositoryBinding,
   OpenRepositorySessionInput,
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
   RepositoryOption,
+  RepositoryOptions,
   RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialMaterialRef,
@@ -595,6 +598,7 @@ export interface Agent extends Scope {
   readonly plugins?: PluginDesiredState;
   readonly pluginApprovers?: PluginApprovers;
   readonly repositoryBindings?: readonly RepositoryBindingSelection[];
+  readonly repositoryAccess?: RepositoryAccess;
   readonly servicePrincipalId: string;
   readonly activeRevisionId?: string;
   readonly createdAt: string;
@@ -607,6 +611,7 @@ export interface ConfigurationReadError {
     | "plugins"
     | "pluginApprovers"
     | "repositoryBindings"
+    | "repositoryAccess"
     | "harnessAuth"
     | "secretBindings"
     | "repositoryCredentials"
@@ -615,7 +620,7 @@ export interface ConfigurationReadError {
 
 export type AgentMetadata = Omit<
   Agent,
-  "plugins" | "pluginApprovers" | "repositoryBindings" | "harnessAuth"
+  "plugins" | "pluginApprovers" | "repositoryBindings" | "repositoryAccess" | "harnessAuth"
 >;
 
 export type AgentRead =

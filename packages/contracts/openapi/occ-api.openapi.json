@@ -5539,7 +5539,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "data": {
-                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth.",
+                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth.",
                       "items": {
                         "anyOf": [
                           {
@@ -5719,6 +5719,43 @@
                               },
                               "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                               "plugins": { "$ref": "#/components/schemas/def-6" },
+                              "repositoryAccess": {
+                                "additionalProperties": false,
+                                "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                                "properties": {
+                                  "defaultProfile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositories": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "profile": {
+                                          "maxLength": 128,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "repositoryRef": {
+                                          "maxLength": 128,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["repositoryRef"],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 16,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": ["defaultProfile", "repositories"],
+                                "type": "object"
+                              },
                               "repositoryBindings": {
                                 "items": {
                                   "additionalProperties": false,
@@ -5804,6 +5841,7 @@
                                       { "const": "plugins", "type": "string" },
                                       { "const": "pluginApprovers", "type": "string" },
                                       { "const": "repositoryBindings", "type": "string" },
+                                      { "const": "repositoryAccess", "type": "string" },
                                       { "const": "harnessAuth", "type": "string" },
                                       { "const": "secretBindings", "type": "string" },
                                       { "const": "repositoryCredentials", "type": "string" },
@@ -5873,7 +5911,7 @@
                             "type": "object"
                           }
                         ],
-                        "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth."
+                        "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth."
                       },
                       "type": "array"
                     },
@@ -6129,6 +6167,43 @@
                   },
                   "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                   "plugins": { "$ref": "#/components/schemas/def-6" },
+                  "repositoryAccess": {
+                    "additionalProperties": false,
+                    "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                    "properties": {
+                      "defaultProfile": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                        "type": "string"
+                      },
+                      "repositories": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "profile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositoryRef": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["repositoryRef"],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["defaultProfile", "repositories"],
+                    "type": "object"
+                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -6343,6 +6418,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -7863,6 +7975,43 @@
                   },
                   "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                   "plugins": { "$ref": "#/components/schemas/def-6" },
+                  "repositoryAccess": {
+                    "additionalProperties": false,
+                    "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                    "properties": {
+                      "defaultProfile": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                        "type": "string"
+                      },
+                      "repositories": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "profile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositoryRef": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["repositoryRef"],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["defaultProfile", "repositories"],
+                    "type": "object"
+                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -8385,6 +8534,17 @@
         "operationId": "listRepositoryOptions",
         "parameters": [
           {
+            "description": "Up to 20 visible repository references to enrich with provider descriptions.",
+            "in": "query",
+            "name": "descriptionRefs",
+            "required": false,
+            "schema": {
+              "maxLength": 2579,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "namespaceId",
             "required": true,
@@ -8417,6 +8577,7 @@
                             "type": "array",
                             "uniqueItems": true
                           },
+                          "description": { "maxLength": 512, "minLength": 1, "type": "string" },
                           "displayName": {
                             "maxLength": 200,
                             "minLength": 1,
@@ -8433,18 +8594,19 @@
                         "required": ["repositoryRef", "displayName", "allowedProfiles"],
                         "type": "object"
                       },
-                      "maxItems": 128,
+                      "maxItems": 1000,
                       "type": "array"
                     },
                     "meta": {
                       "additionalProperties": false,
                       "properties": {
+                        "descriptionsPending": { "type": "boolean" },
                         "requestId": {
                           "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                           "type": "string"
                         }
                       },
-                      "required": ["requestId"],
+                      "required": ["requestId", "descriptionsPending"],
                       "type": "object"
                     }
                   },
@@ -8710,6 +8872,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -9038,6 +9237,43 @@
                             },
                             "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                             "plugins": { "$ref": "#/components/schemas/def-6" },
+                            "repositoryAccess": {
+                              "additionalProperties": false,
+                              "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                              "properties": {
+                                "defaultProfile": {
+                                  "maxLength": 128,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "repositories": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "profile": {
+                                        "maxLength": 128,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "repositoryRef": {
+                                        "maxLength": 128,
+                                        "minLength": 1,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["repositoryRef"],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 16,
+                                  "type": "array"
+                                }
+                              },
+                              "required": ["defaultProfile", "repositories"],
+                              "type": "object"
+                            },
                             "repositoryBindings": {
                               "items": {
                                 "additionalProperties": false,
@@ -9123,6 +9359,7 @@
                                     { "const": "plugins", "type": "string" },
                                     { "const": "pluginApprovers", "type": "string" },
                                     { "const": "repositoryBindings", "type": "string" },
+                                    { "const": "repositoryAccess", "type": "string" },
                                     { "const": "harnessAuth", "type": "string" },
                                     { "const": "secretBindings", "type": "string" },
                                     { "const": "repositoryCredentials", "type": "string" },
@@ -9192,7 +9429,7 @@
                           "type": "object"
                         }
                       ],
-                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, and harnessAuth."
+                      "description": "An Agent with readable saved settings, or Agent metadata with configurationReadError (code SAVED_CONFIGURATION_UNREADABLE and the unreadable field). The error variant omits plugins, pluginApprovers, repositoryBindings, repositoryAccess, and harnessAuth."
                     },
                     "meta": {
                       "additionalProperties": false,
@@ -9424,6 +9661,43 @@
                     "anyOf": [{ "$ref": "#/components/schemas/def-2" }, { "type": "null" }]
                   },
                   "plugins": { "$ref": "#/components/schemas/def-6" },
+                  "repositoryAccess": {
+                    "additionalProperties": false,
+                    "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                    "properties": {
+                      "defaultProfile": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                        "type": "string"
+                      },
+                      "repositories": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "profile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositoryRef": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["repositoryRef"],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["defaultProfile", "repositories"],
+                    "type": "object"
+                  },
                   "repositoryBindings": {
                     "description": "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
                     "items": {
@@ -9637,6 +9911,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -11859,6 +12170,154 @@
         ]
       }
     },
+    "/namespaces/{namespaceId}/agents/{agentId}/repository-options": {
+      "get": {
+        "description": "Requires update permission on the requested Agent.",
+        "operationId": "listAgentRepositoryOptions",
+        "parameters": [
+          {
+            "description": "Up to 20 visible repository references to enrich with provider descriptions.",
+            "in": "query",
+            "name": "descriptionRefs",
+            "required": false,
+            "schema": {
+              "maxLength": 2579,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespaceId",
+            "required": true,
+            "schema": {
+              "pattern": "^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "pattern": "^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "allowedProfiles": {
+                            "items": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "maxItems": 16,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "description": { "maxLength": 512, "minLength": 1, "type": "string" },
+                          "displayName": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+                            "type": "string"
+                          },
+                          "repositoryRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["repositoryRef", "displayName", "allowedProfiles"],
+                        "type": "object"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "meta": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "descriptionsPending": { "type": "boolean" },
+                        "requestId": {
+                          "pattern": "^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["requestId", "descriptionsPending"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["data", "meta"],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "401": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "403": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "404": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "409": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "500": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/def-7" } }
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "List approved repository choices for updating one Agent",
+        "tags": ["Agents"],
+        "x-openclaw-permissions": [
+          { "action": "update", "resourceKind": "agent", "scope": "requested" }
+        ]
+      }
+    },
     "/namespaces/{namespaceId}/agents/{agentId}/revisions": {
       "get": {
         "description": "Requires read permission on the requested Agent. Only AgentRevision resources with individual read permission are returned.",
@@ -12223,6 +12682,7 @@
                                       { "const": "plugins", "type": "string" },
                                       { "const": "pluginApprovers", "type": "string" },
                                       { "const": "repositoryBindings", "type": "string" },
+                                      { "const": "repositoryAccess", "type": "string" },
                                       { "const": "harnessAuth", "type": "string" },
                                       { "const": "secretBindings", "type": "string" },
                                       { "const": "repositoryCredentials", "type": "string" },
@@ -12697,6 +13157,7 @@
                                     { "const": "plugins", "type": "string" },
                                     { "const": "pluginApprovers", "type": "string" },
                                     { "const": "repositoryBindings", "type": "string" },
+                                    { "const": "repositoryAccess", "type": "string" },
                                     { "const": "harnessAuth", "type": "string" },
                                     { "const": "secretBindings", "type": "string" },
                                     { "const": "repositoryCredentials", "type": "string" },
@@ -13370,6 +13831,43 @@
                         },
                         "pluginApprovers": { "$ref": "#/components/schemas/def-2" },
                         "plugins": { "$ref": "#/components/schemas/def-6" },
+                        "repositoryAccess": {
+                          "additionalProperties": false,
+                          "description": "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+                          "properties": {
+                            "defaultProfile": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                              "type": "string"
+                            },
+                            "repositories": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "profile": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "repositoryRef": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["repositoryRef"],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["defaultProfile", "repositories"],
+                          "type": "object"
+                        },
                         "repositoryBindings": {
                           "items": {
                             "additionalProperties": false,
@@ -16592,7 +17090,9 @@
                                   },
                                   "name": { "$ref": "#/components/schemas/def-0" },
                                   "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                  "plugins": { "$ref": "#/components/schemas/def-0" }
+                                  "plugins": { "$ref": "#/components/schemas/def-0" },
+                                  "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                  "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                                 },
                                 "type": "object"
                               },
@@ -16799,7 +17299,9 @@
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
                           "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                          "plugins": { "$ref": "#/components/schemas/def-0" }
+                          "plugins": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
                       },
@@ -16945,7 +17447,9 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -17266,7 +17770,9 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
@@ -17477,7 +17983,9 @@
                           },
                           "name": { "$ref": "#/components/schemas/def-0" },
                           "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                          "plugins": { "$ref": "#/components/schemas/def-0" }
+                          "plugins": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                          "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                         },
                         "type": "object"
                       },
@@ -17622,7 +18130,9 @@
                                 },
                                 "name": { "$ref": "#/components/schemas/def-0" },
                                 "pluginApprovers": { "$ref": "#/components/schemas/def-0" },
-                                "plugins": { "$ref": "#/components/schemas/def-0" }
+                                "plugins": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryAccess": { "$ref": "#/components/schemas/def-0" },
+                                "repositoryBindings": { "$ref": "#/components/schemas/def-0" }
                               },
                               "type": "object"
                             },
