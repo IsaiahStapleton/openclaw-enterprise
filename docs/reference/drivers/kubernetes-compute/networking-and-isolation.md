@@ -266,8 +266,8 @@ Services and HTTPRoutes live only in the Gateway target; Harness resources and
 model credentials remain in the data target. Explicit namespace **and** Pod
 selectors allow only the same Agent's selected Harness revision on app-server
 and private plugin-status ports. DNS uses `agent-<hash>.<harness-namespace>.svc`.
-The stable dedicated Harness Service keeps the same Namespace, Agent, revision,
-and workload-role labels as the gateway egress and Harness ingress policies
+The stable dedicated Harness Service keeps the same network-profile, Namespace,
+Agent, revision, and workload-role labels as the gateway egress and Harness ingress policies
 while a revision is active. A prepared successor does not change that Service
 selector until activation; deactivation moves the Service back to an inactive
 selector. Active Gateway Services include Namespace, Agent, and gateway-role

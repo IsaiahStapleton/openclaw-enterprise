@@ -1235,6 +1235,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     "the first Gateway starts alongside the Harness",
   );
   assert.deepEqual(read("Service", `agent-${digest(revision.agentId)}`).spec.selector, {
+    "openclaw.dev/network-profile": "broad-egress-v1",
     "openclaw.dev/namespace": revision.namespaceId,
     "openclaw.dev/agent": revision.agentId,
     "openclaw.dev/revision": revision.id,
@@ -7047,6 +7048,7 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
   fixture.setObservation({ items: [fixture.pod("ready")] });
   await driver.activateRevision(revision, authContext(revision));
   assert.deepEqual(objects.get(key("Service", agentServiceName)).spec.selector, {
+    "openclaw.dev/network-profile": "provider-fenced-v1",
     "openclaw.dev/namespace": revision.namespaceId,
     "openclaw.dev/agent": revision.agentId,
     "openclaw.dev/revision": revision.id,
@@ -10146,12 +10148,10 @@ test("dedicated Harness Service selector satisfies the gateway policy during cut
     assert.deepEqual(gatewayTargetNamespace(selectedRevision), {
       "kubernetes.io/metadata.name": namespace,
     });
-    // Service selectors intentionally stay profile-free; the policy peer carries it.
+    // EKS resolves policy peers before destination translation, so the Service
+    // must include every peer label, including the Harness network profile.
     assert.equal(target["openclaw.dev/network-profile"], "broad-egress-v1");
     for (const [name, value] of Object.entries(target)) {
-      if (name === "openclaw.dev/network-profile") {
-        continue;
-      }
       assert.equal(selector[name], value, `${name} must match the gateway egress selector`);
     }
     assert.equal(
