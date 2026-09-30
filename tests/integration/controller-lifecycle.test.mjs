@@ -13,6 +13,7 @@ import {
   DriverSelectionError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
+  NativeWorkerSupportError,
   OpenClawController,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
@@ -163,9 +164,10 @@ function createSandboxDriver(options = {}) {
   };
 }
 
-function createController(iam = createIAMDriver()) {
+function createController(iam = createIAMDriver(), options = {}) {
   let nextIdentifier = 0;
   const controller = new OpenClawController(installation, {
+    ...options,
     now: () => new Date("2026-08-15T00:00:00.000Z"),
     createId: (kind) =>
       kind === "configuration"
@@ -906,13 +908,22 @@ for (const facets of [["networking"], ["filesystem"], ["process"], ["networking"
   });
 }
 
-test("dedicated native OpenClaw requires a full-facet provisioning Sandbox", async () => {
-  for (const [name, sandbox, admitted] of [
-    ["missing", undefined, false],
-    ["partial", createSandboxDriver({ facets: ["networking", "filesystem"] }), false],
-    ["complete", createSandboxDriver(), true],
+test("dedicated native OpenClaw requires native worker support and a full-facet provisioning Sandbox", async () => {
+  for (const [name, sandbox, nativeWorkerSupport, refusal] of [
+    ["pinned runtime", createSandboxDriver(), undefined, NativeWorkerSupportError],
+    ["missing", undefined, "custom-image", DependencyUnavailableError],
+    [
+      "partial",
+      createSandboxDriver({ facets: ["networking", "filesystem"] }),
+      "custom-image",
+      DependencyUnavailableError,
+    ],
+    ["complete", createSandboxDriver(), "custom-image", undefined],
   ]) {
-    const { controller } = createController();
+    const { controller } = createController(
+      undefined,
+      nativeWorkerSupport === undefined ? {} : { nativeWorkerSupport },
+    );
     if (sandbox !== undefined) {
       controller.registerDriver(sandbox);
       controller.selectDriver("sandbox", sandbox.id);
@@ -942,12 +953,12 @@ test("dedicated native OpenClaw requires a full-facet provisioning Sandbox", asy
       { namespaceId: namespace.id, agentId: agent.id },
       resolveApprovedDevelopmentHarness,
     );
-    if (admitted) {
+    if (refusal === undefined) {
       const revision = await deployment;
       assert.equal(revision.harness.id, "openclaw");
       assert.equal(revision.sandboxDriverId, sandbox.id);
     } else {
-      await assert.rejects(deployment, DependencyUnavailableError);
+      await assert.rejects(deployment, refusal, name);
       assert.deepEqual(
         await controller.transact((state) => state.revisions.listRevisions(namespace.id, agent.id)),
         [],

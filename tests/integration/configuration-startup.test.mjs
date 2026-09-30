@@ -76,6 +76,34 @@ test("Installation startup validates the optional external observability URL", a
   }
 });
 
+test("Installation startup declares native worker support only as a custom runtime image", async (t) => {
+  const configuration = installation();
+  const path = await fixture(t, configuration);
+  const load = () =>
+    loadInstallationConfiguration({ mode: "development", environment: { OCC_CONFIG_PATH: path } });
+  // Off by default: the pinned runtime cannot run dedicated native OpenClaw.
+  assert.equal((await load()).installation.runtime, undefined);
+  configuration.runtime = { nativeWorkerSupport: "custom-image" };
+  await writeFile(path, JSON.stringify(configuration), "utf8");
+  assert.deepEqual((await load()).installation.runtime, { nativeWorkerSupport: "custom-image" });
+  for (const [runtime, message] of [
+    [{ nativeWorkerSupport: true }, /runtime\.nativeWorkerSupport must be "custom-image"/],
+    [
+      { nativeWorkerSupport: "pinned-runtime" },
+      /runtime\.nativeWorkerSupport must be "custom-image"/,
+    ],
+    [{}, /runtime\.nativeWorkerSupport must be "custom-image"/],
+    [
+      { nativeWorkerSupport: "custom-image", image: "x" },
+      /runtime contains unsupported option image/,
+    ],
+  ]) {
+    configuration.runtime = runtime;
+    await writeFile(path, JSON.stringify(configuration), "utf8");
+    await assert.rejects(load(), message);
+  }
+});
+
 test("development accepts a Metrics URL with its default Compose Drivers", async (t) => {
   const url = "https://metrics.example.test/d/operations";
   const path = await fixture(t, { observability: { url } });

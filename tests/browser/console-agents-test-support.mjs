@@ -102,7 +102,7 @@ export async function routeInstallationProvisioning(page, fixture, executionMode
   });
 }
 
-export async function routeInstallationWithoutProvisioning(page, fixture) {
+export async function routeInstallationWithoutProvisioning(page, fixture, capabilities) {
   await page.route(`${fixture.origin}/installation`, async (route) => {
     await route.fulfill({
       status: 200,
@@ -112,6 +112,7 @@ export async function routeInstallationWithoutProvisioning(page, fixture) {
           id: "ins_00000000-0000-4000-8000-000000000001",
           name: "Console test installation",
           createdAt: new Date().toISOString(),
+          ...(capabilities === undefined ? {} : { capabilities }),
         },
         meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
       }),
