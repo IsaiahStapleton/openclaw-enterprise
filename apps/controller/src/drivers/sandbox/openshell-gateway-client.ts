@@ -141,7 +141,9 @@ export interface OpenShellSandboxLogReader {
 }
 
 /** Narrows a gateway client to its log read; the result exposes nothing else. */
-export function openShellSandboxLogReader(client: OpenShellSandboxLogReader): OpenShellSandboxLogReader {
+export function openShellSandboxLogReader(
+  client: OpenShellSandboxLogReader,
+): OpenShellSandboxLogReader {
   const read = client.getSandboxLogs.bind(client);
   return Object.freeze({
     getSandboxLogs: (request: OpenShellSandboxLogsRequest, signal: AbortSignal) =>

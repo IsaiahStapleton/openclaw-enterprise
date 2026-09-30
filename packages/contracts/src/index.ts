@@ -1130,7 +1130,10 @@ export interface SandboxDriver extends Driver {
    * reach its runtime through a read-only interface. The Sandbox name is the Driver's own
    * derivation from the revision; callers never name it.
    */
-  readSandboxLogs?(context: SandboxLogContext, request: SandboxLogRequest): Promise<SandboxLogChunk>;
+  readSandboxLogs?(
+    context: SandboxLogContext,
+    request: SandboxLogRequest,
+  ): Promise<SandboxLogChunk>;
 }
 
 export interface PluginDriverContext {

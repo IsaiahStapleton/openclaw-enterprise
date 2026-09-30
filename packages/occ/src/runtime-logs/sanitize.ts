@@ -365,11 +365,12 @@ function ocsfFields(message: string): {
 } {
   const fields: Record<string, string> = {};
   let rest = message;
-  // The command line closes the PROC shorthand and may itself contain brackets.
-  const command = / \[cmd:([\s\S]*)\]$/.exec(rest);
-  if (command !== null && rest.startsWith("PROC:")) {
-    fields.cmd_line = command[1]!;
-    rest = rest.slice(0, command.index);
+  // The command line closes the PROC shorthand and may itself contain brackets. A string
+  // search, not a regex, keeps hostile lines full of ` [cmd:` linear.
+  const command = rest.startsWith("PROC:") && rest.endsWith("]") ? rest.indexOf(" [cmd:") : -1;
+  if (command !== -1) {
+    fields.cmd_line = rest.slice(command + " [cmd:".length, -1);
+    rest = rest.slice(0, command);
   }
   const head = /^([A-Z]{2,16}:[A-Z_]{1,32}) \[([A-Z]{3,5})\]/.exec(rest);
   if (head !== null) {
@@ -411,7 +412,8 @@ function ocsfFields(message: string): {
   if (reason !== null) {
     fields.reason = reason[1]!;
   }
-  let severity: RuntimeLogLevel = head === null ? "unknown" : (OCSF_SEVERITIES[head[2]!] ?? "unknown");
+  let severity: RuntimeLogLevel =
+    head === null ? "unknown" : (OCSF_SEVERITIES[head[2]!] ?? "unknown");
   if (fields.action === "DENIED" && (severity === "info" || severity === "unknown")) {
     severity = "warn";
   }
@@ -508,7 +510,9 @@ export function sanitizeSandboxLogLines(
     }
     const message = sanitizeRuntimeLogText(shown);
     const subsystem =
-      line.target.length === 0 ? undefined : sanitizeRuntimeLogText(line.target, MAX_FIELD_CHARS).text;
+      line.target.length === 0
+        ? undefined
+        : sanitizeRuntimeLogText(line.target, MAX_FIELD_CHARS).text;
     const fields = sandboxFields(line, parsed?.fields ?? {});
     const record: LineRecord = {
       type: "line",
@@ -542,7 +546,10 @@ export function runtimeLogGap(
     time: validTime(time),
     stream: cleanStream(stream),
     reason,
-    remedy: GAP_REMEDIES[reason],
+    remedy:
+      reason === "stream_replaced" && stream.source === "sandbox"
+        ? "The Sandbox was recreated; showing the new one."
+        : GAP_REMEDIES[reason],
   });
 }
 

@@ -1256,9 +1256,7 @@ export class OpenShellSandboxDriver implements SandboxDriver {
       );
     }
     const sandbox = this.sandboxRef(context);
-    const reader = openShellSandboxLogReader(
-      this.gatewayClientForNamespace(sandbox.namespaceName),
-    );
+    const reader = openShellSandboxLogReader(this.gatewayClientForNamespace(sandbox.namespaceName));
     let response;
     try {
       response = await reader.getSandboxLogs(
