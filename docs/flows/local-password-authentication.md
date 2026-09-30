@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
 updated: 2026-09-30
-last_updated_session: authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f
+last_updated_session: authoring-run/d58e793e-df0f-40de-8f08-5d0ee989927a
 ---
 
 # Bootstrap and human authentication flow
@@ -147,12 +147,16 @@ password state (user, password method, and its `authentication_version`; with an
 external provider, only while the account is enabled), reading the account only
 for an entry issued for that email, and on success reissues it; a verified entry
 replaces the email lane with a device lane.
-In the password-only profile with PostgreSQL State, `passwordSignInAudit` appends `authentication.login` for
-each accepted password (actor: the account's Principal; details: `userId`) and a
-denied event with `INVALID_CREDENTIALS` and no account for each refused one. If
-the success audit fails, the new session is deleted and sign-in returns `503`.
-If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), but
-admission still counts the wrong password against the email and address budgets.
+In the password-only profile with PostgreSQL State, `passwordSignInAudit` appends
+`authentication.login` for each accepted password (actor: the account's Principal;
+details: `userId`) and a denied event with `INVALID_CREDENTIALS` and no account for
+each refused one. If the success audit fails, the controller attempts to delete
+the new session and returns `503` without issuing its cookie. A server-side
+session may persist if creation or cleanup cannot be confirmed.
+If the denial audit fails, sign-in returns `503` (`DenialAuditUnavailable`), and
+admission treats the wrong password as a credential failure for any tracked
+entries. The slow lane may instead return `429`; exhausted or untracked lanes
+are paced without necessarily adding a tracked failure entry.
 With an external sign-in provider, `/oce/password` writes the denial itself; if
 that write fails, it answers `503` with `PASSWORD_DENIAL_AUDIT_UNAVAILABLE`, which
 the controller counts the same way.
@@ -328,6 +332,8 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 20:12: Qualify audit-failure session cleanup and tracked-budget accounting. (authoring-run/d58e793e-df0f-40de-8f08-5d0ee989927a - d7b2e4c0697ace45cf2d4b3ab630ce3976334a16)
 
 - 2026-09-30 12:00: Trace the password-only refusal of account and recovery routes. (fix/dogfood-2)
 
