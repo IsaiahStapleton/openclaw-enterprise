@@ -503,10 +503,9 @@ export function sanitizeSandboxLogLines(
     let shown = parsed?.message ?? text;
     if (parsed?.fields.url !== undefined) {
       // The URL in the message is cut like the field so a long query cannot fill a page.
-      shown = shown.replace(
-        parsed.fields.url,
-        sanitizeRuntimeLogText(parsed.fields.url, SANDBOX_REDACTED_FIELD_BYTES).text,
-      );
+      // A replacer function: a URL may contain `$&`-style replacement patterns.
+      const url = sanitizeRuntimeLogText(parsed.fields.url, SANDBOX_REDACTED_FIELD_BYTES).text;
+      shown = shown.replace(parsed.fields.url, () => url);
     }
     const message = sanitizeRuntimeLogText(shown);
     const subsystem =

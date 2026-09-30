@@ -2418,6 +2418,7 @@ export class OpenClawController {
     return this.runtimeLogOperation(signal, async (deadline) =>
       this.withSandboxLogSource(
         await this.describedAgentRuntime(driver, binding, deadline),
+        driver,
         binding.revision,
       ),
     );
@@ -2518,8 +2519,8 @@ export class OpenClawController {
       readonly signal?: AbortSignal;
     },
   ): Promise<Readonly<RuntimeLogPage>> {
-    const sandbox = this.sandboxLogDriver(binding.revision);
-    if (sandbox === undefined || compute.resolveSandboxNamespace === undefined) {
+    const sandbox = this.sandboxLogDriver(compute, binding.revision);
+    if (sandbox === undefined) {
       throw new RuntimeLogsError("RUNTIME_LOGS_SOURCE_UNAVAILABLE");
     }
     const description = this.withSandboxLogSource(
@@ -2529,6 +2530,7 @@ export class OpenClawController {
         pods: Object.freeze([]),
         sources: Object.freeze([]),
       }),
+      compute,
       binding.revision,
     );
     return this.runtimeLogOperation(options.signal, async (deadline) => {
@@ -2578,9 +2580,19 @@ export class OpenClawController {
     });
   }
 
-  /** The selected Sandbox Driver, when it provisioned this revision and exposes its log. */
-  private sandboxLogDriver(revision: Readonly<AgentRevision>): SandboxDriver | undefined {
-    if (revision.sandboxDriverId === undefined || !this.selections.has("sandbox")) {
+  /**
+   * The selected Sandbox Driver, when it provisioned this revision and exposes its log,
+   * and Compute can name the placement the Sandbox was provisioned in.
+   */
+  private sandboxLogDriver(
+    compute: ComputeDriver,
+    revision: Readonly<AgentRevision>,
+  ): SandboxDriver | undefined {
+    if (
+      revision.sandboxDriverId === undefined ||
+      typeof compute.resolveSandboxNamespace !== "function" ||
+      !this.selections.has("sandbox")
+    ) {
       return undefined;
     }
     let sandbox: SandboxDriver;
@@ -2597,10 +2609,11 @@ export class OpenClawController {
   /** Appends the `sandbox` source when the revision's Sandbox Driver exposes its log. */
   private withSandboxLogSource(
     description: Readonly<AgentRuntimeDescription>,
+    compute: ComputeDriver,
     revision: Readonly<AgentRevision>,
   ): Readonly<AgentRuntimeDescription> {
     if (
-      this.sandboxLogDriver(revision) === undefined ||
+      this.sandboxLogDriver(compute, revision) === undefined ||
       description.sources.some(({ id }) => id === "sandbox")
     ) {
       return description;

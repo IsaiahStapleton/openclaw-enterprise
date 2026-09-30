@@ -153,7 +153,7 @@ test("sandbox log pages never contain planted credentials from command lines or 
     ),
     sandboxLine(
       3,
-      `HTTP:GET [INFO] ALLOWED curl(51) -> GET https://storage.example.com/obj?token=${values.QUERY_TOKEN}&sig=${values.QUERY_SIG} [policy:egress engine:opa]`,
+      `HTTP:GET [INFO] ALLOWED curl(51) -> GET https://storage.example.com/obj$&?token=${values.QUERY_TOKEN}&sig=${values.QUERY_SIG} [policy:egress engine:opa]`,
     ),
     sandboxLine(
       4,
@@ -239,11 +239,15 @@ test("sandbox log pages never contain planted credentials from command lines or 
     },
     {
       method: "GET",
-      url: "https://storage.example.com/obj?token=[redacted:query]&sig=[redacted:query]",
+      url: "https://storage.example.com/obj$&?token=[redacted:query]&sig=[redacted:query]",
       rule_name: "egress",
       rule_type: "opa",
       action: "ALLOWED",
     },
+  );
+  assert.equal(
+    http.message,
+    "HTTP:GET [INFO] ALLOWED curl(51) -> GET https://storage.example.com/obj$&?token=[redacted:query]&sig=[redacted:query] [policy:egress engine:opa]",
   );
   assert.equal(denied.level, "warn");
   assert.equal(denied.fields.dst_host, "blocked.example.com");
