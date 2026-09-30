@@ -255,5 +255,112 @@ test(
       const callback = await githubSignIn("192.0.2.60");
       assert.equal(callback.headers.location, "/console/", callback.body);
     });
+
+    // Known-device cookie in the guarded profile: a browser that signed in to an account
+    // before spends its own lane instead of the email's (or the shared recovery lane), so a
+    // stranger who knows the email cannot keep that browser out. The cookie never signs in.
+    const knownDeviceOf = (response) =>
+      [response.headers["set-cookie"] ?? []]
+        .flat()
+        .find((value) => value.startsWith("__Host-occ_known_device="))
+        ?.split(";", 1)[0];
+    const signInWith = (cookie, account, remoteAddress) =>
+      app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        remoteAddress,
+        headers: { origin, cookie },
+        payload: { email: account.email, password: account.password },
+      });
+    const wrong = "outage-wrong-password";
+
+    await t.test("a GitHub sign-in marks the browser for password fallback", async () => {
+      mode = "up";
+      const callback = await githubSignIn("192.0.2.61");
+      assert.equal(callback.headers.location, "/console/", callback.body);
+      const setCookie = [callback.headers["set-cookie"]]
+        .flat()
+        .find((value) => value.startsWith("__Host-occ_known_device="));
+      assert.match(setCookie, /HttpOnly/i);
+      assert.match(setCookie, /Secure/i);
+      assert.match(setCookie, /SameSite=Strict/i);
+      assert.match(setCookie, /Path=\//);
+      assert.doesNotMatch(setCookie, /Domain=/i);
+      const refused = await passwordSignIn(
+        app,
+        origin,
+        { ...member, password: wrong },
+        "192.0.2.61",
+      );
+      assert.equal(refused.statusCode, 401);
+      assert.equal(knownDeviceOf(refused), undefined, "a failure marks nothing");
+    });
+
+    await t.test(
+      "a known browser keeps signing in while strangers spend the member's email",
+      async () => {
+        const signedIn = await passwordSignIn(app, origin, member, "192.0.2.62");
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const device = knownDeviceOf(signedIn);
+        assert.ok(device, "a password sign-in marks the browser");
+        // Strangers from many addresses spend the member's email key.
+        let refusedAt;
+        for (let index = 0; index < 12 && refusedAt === undefined; index += 1) {
+          const response = await passwordSignIn(
+            app,
+            origin,
+            { ...member, password: wrong },
+            `203.0.113.${140 + index}`,
+          );
+          if (response.statusCode === 429) {
+            refusedAt = index;
+          } else {
+            assert.equal(response.statusCode, 401, response.body);
+          }
+        }
+        assert.notEqual(refusedAt, undefined, "the email key is spent");
+        assert.equal(
+          (await passwordSignIn(app, origin, member, "192.0.2.63")).statusCode,
+          429,
+          "a new browser is refused",
+        );
+        const known = await signInWith(device, member, "192.0.2.62");
+        assert.equal(known.statusCode, 200, known.body);
+        const cookie = cookieHeaderFromSetCookie(known.headers["set-cookie"]);
+        assert.equal((await currentSession(app, cookie)).user.id, member.id);
+        // The cookie is bound to its account and grants nothing for another email.
+        const foreign = await signInWith(device, { ...other, password: wrong }, "192.0.2.62");
+        assert.equal(foreign.statusCode, 401);
+        // A valid cookie never authenticates a wrong password.
+        const guessed = await signInWith(device, { ...member, password: wrong }, "192.0.2.62");
+        assert.equal(guessed.statusCode, 401);
+      },
+    );
+
+    await t.test(
+      "the recovery administrator's known browser survives a spent recovery lane",
+      async () => {
+        const signedIn = await passwordSignIn(app, origin, admin, "192.0.2.64");
+        assert.equal(signedIn.statusCode, 200, signedIn.body);
+        const device = knownDeviceOf(signedIn);
+        // T5: anyone who knows the recovery email can spend its reserved lane.
+        let spent = false;
+        for (let index = 0; index < 25 && !spent; index += 1) {
+          const response = await passwordSignIn(
+            app,
+            origin,
+            { ...admin, password: wrong },
+            `203.0.113.${170 + index}`,
+          );
+          spent = response.statusCode === 429;
+        }
+        assert.ok(spent, "the recovery lane is spent");
+        assert.equal((await passwordSignIn(app, origin, admin, "192.0.2.65")).statusCode, 429);
+        const known = await signInWith(device, admin, "192.0.2.64");
+        assert.equal(known.statusCode, 200, known.body);
+        const cookie = cookieHeaderFromSetCookie(known.headers["set-cookie"]);
+        assert.equal((await currentSession(app, cookie)).user.id, adminId);
+      },
+    );
   },
 );

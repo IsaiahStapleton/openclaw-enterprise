@@ -259,3 +259,73 @@ test("a full table reports the untracked lane once, and a failing reporter chang
   }
   assert.deepEqual(reports, [{ lane: "untracked" }]);
 });
+
+test("a known device keeps its own budget when the email lane is exhausted", async () => {
+  const limiter = admission();
+  const email = "victim@example.test";
+  const device = { email, knownDevice: "device-1" };
+  // Strangers spend the victim's email lane (T1): ordinary attempts are now refused.
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  assert.equal(await status(limiter, { email }, right), 429);
+  // The victim's known browser still has its password checked at once, repeatedly.
+  for (let index = 0; index < 5; index += 1) {
+    const started = performance.now();
+    assert.equal(await status(limiter, device, right), 200);
+    assert.ok(performance.now() - started < slow.floorMs, "not paced");
+  }
+  // Every known device of the account has its own lane.
+  assert.equal(await status(limiter, { email, knownDevice: "device-2" }, right), 200);
+});
+
+test("a known device's failures spend the device lane, not the email lane", async () => {
+  const limiter = admission();
+  const email = "member@example.test";
+  const device = { email, knownDevice: "device-1" };
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, device), 401);
+  }
+  // The device's lane is spent: it is limited like an email, and a correct non-administrator
+  // password is refused there, so a stolen cookie buys only its own budget.
+  assert.equal(await status(limiter, device, right), 429);
+  // The email lane is untouched: other browsers are unaffected by that device's typos.
+  assert.equal(await status(limiter, { email }, right), 200);
+});
+
+test("strangers holding the email's slow-lane slots do not crowd out a known device", async () => {
+  const email = "admin@example.test";
+  const limiter = admission({ administrators: [email] });
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  // T2: enough concurrent slow attempts to fill the email's running and waiting slots.
+  const flood = Array.from({ length: slow.concurrentPerEmail + slow.waitingPerEmail }, () =>
+    status(limiter, { email }),
+  );
+  // Without the cookie, the administrator's own attempt finds the wait list full and is
+  // refused after the floor, however correct its password.
+  assert.equal(await status(limiter, { email }, right), 429);
+  // With it, the administrator signs in without waiting on the email's slots.
+  const started = performance.now();
+  assert.equal(await status(limiter, { email, knownDevice: "admin-browser" }, right), 200);
+  assert.ok(performance.now() - started < slow.floorMs, "not queued behind the flood");
+  assert.deepEqual(new Set(await Promise.all(flood)), new Set([429]));
+});
+
+test("a known device is still bound by the client address lane", async () => {
+  const limiter = admission();
+  const clientAddress = "203.0.113.90";
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(await status(limiter, { clientAddress, email: `junk-${index}@x.test` }), 401);
+  }
+  // The address lane is spent; a known device of a non-administrator behind it is refused.
+  assert.equal(
+    await status(
+      limiter,
+      { clientAddress, email: "member@example.test", knownDevice: "device-1" },
+      right,
+    ),
+    429,
+  );
+});
