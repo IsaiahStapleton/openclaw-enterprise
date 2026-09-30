@@ -8,13 +8,18 @@ const TAIL_LINES = 200;
 // A 403 is audited; remember it for this page session instead of re-asking every poll.
 const deniedLogViews = new Set();
 
-const SOURCE_LABELS = { gateway: "Gateway", agent: "Agent (Harness)" };
+const SOURCE_LABELS = {
+  gateway: "Gateway",
+  agent: "Agent (Harness)",
+  sandbox: "Sandbox (policy decisions)",
+};
 const LEVELS = ["error", "warn", "info", "debug", "unknown"];
 const GAP_LABELS = {
   stream_replaced: "Container restarted",
   window_exceeded: "Lines skipped",
   cursor_expired: "View resumed",
   truncated: "Page limit reached",
+  buffer_lost: "Sandbox buffer lost lines",
 };
 const WITHHELD_LABELS = {
   unrecognised_structured: "structured output withheld",
@@ -22,7 +27,7 @@ const WITHHELD_LABELS = {
   malformed: "malformed structured lines withheld",
 };
 
-function runtimeErrorText(error, tier) {
+function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
     return tier === "logs"
       ? "Log text requires Agent administer and read access plus read access to this version."
@@ -30,6 +35,12 @@ function runtimeErrorText(error, tier) {
   }
   if (error.status === 501) {
     return "This Compute Driver does not expose runtime status or logs, or an operator turned them off.";
+  }
+  if (error.code === "RUNTIME_LOGS_CLUSTER_RBAC" && source === "sandbox") {
+    return "OpenShell denied the sandbox log read. Ask your platform operator to grant the OpenClaw Enterprise gateway identity the sandbox:read scope (see the Agent logs guide).";
+  }
+  if (error.code === "RUNTIME_LOGS_SANDBOX_NOT_FOUND") {
+    return "OpenShell reports no such sandbox: it is not provisioned yet or was removed, or the OpenClaw Enterprise gateway identity is not a member of its Workspace (see the Agent logs guide).";
   }
   if (error.code === "RUNTIME_LOGS_CLUSTER_RBAC") {
     return "The cluster denied the read. Ask your platform operator to enable agentRuntimeLogs in the Helm chart (see the Agent logs guide).";
@@ -122,7 +133,13 @@ function recordRow(record) {
     return element(
       "div",
       { className: "log-row log-row-gap", role: "note" },
-      element("strong", {}, GAP_LABELS[record.reason] ?? record.reason),
+      element(
+        "strong",
+        {},
+        record.reason === "stream_replaced" && record.stream?.source === "sandbox"
+          ? "Sandbox recreated"
+          : (GAP_LABELS[record.reason] ?? record.reason),
+      ),
       element("span", {}, ` ${record.remedy}`),
     );
   }
@@ -237,6 +254,8 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   let followTimer;
   let statusTimer;
   let reading = false;
+  // A source, Pod or instance change while a read is in flight restarts the view after it.
+  let restartPending = false;
   let rows = 0;
   let logsDenied = deniedLogViews.has(deniedKey);
 
@@ -249,6 +268,23 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   function selectedPod() {
     const source = selectedSource();
     return source?.pods.find(({ name }) => name === podSelect.value) ?? source?.pods[0];
+  }
+
+  // A sandbox source has no Pods: OCC derives the Sandbox from the revision.
+  function readableSelection() {
+    const source = selectedSource();
+    return Boolean(source) && (source.kind === "sandbox" || Boolean(selectedPod()));
+  }
+
+  function logQuery(source, pod) {
+    const query = new URLSearchParams({ source: source.id });
+    if (source.kind !== "sandbox") {
+      query.set("pod", pod.name);
+    }
+    if (previous.checked) {
+      query.set("previous", "true");
+    }
+    return query;
   }
 
   function showLogError(text) {
@@ -305,7 +341,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     if (previous.disabled) {
       previous.checked = false;
     }
-    const readable = !logsDenied && Boolean(pod);
+    const readable = !logsDenied && readableSelection();
     sourceSelect.disabled = logsDenied || description.sources.length === 0;
     refreshButton.disabled = !readable;
     downloadButton.disabled = !readable;
@@ -396,13 +432,11 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   async function download() {
     const source = selectedSource();
     const pod = selectedPod();
-    if (!current() || logsDenied || !source || !pod) {
+    if (!current() || logsDenied || !readableSelection()) {
       return;
     }
-    const query = new URLSearchParams({ source: source.id, pod: pod.name, download: "true" });
-    if (previous.checked) {
-      query.set("previous", "true");
-    }
+    const query = logQuery(source, pod);
+    query.set("download", "true");
     downloadButton.disabled = true;
     try {
       const text = await context.request(`${base}/logs?${query}`, { responseType: "text" });
@@ -417,7 +451,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
       const link = element("a", {
         href: url,
-        download: downloadFileName(agent.id, revisionId, source.id, pod.name),
+        download: downloadFileName(agent.id, revisionId, source.id, pod?.name ?? source.id),
         hidden: true,
       });
       section.append(link);
@@ -432,9 +466,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
         context.onExpired();
         return;
       }
-      showLogError(withRequestId(runtimeErrorText(error, "logs"), error));
+      showLogError(withRequestId(runtimeErrorText(error, "logs", source.id), error));
     } finally {
-      downloadButton.disabled = logsDenied || !selectedPod();
+      downloadButton.disabled = logsDenied || !readableSelection();
     }
   }
 
@@ -467,8 +501,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   async function readLogs({ restart }) {
     const source = selectedSource();
     const pod = selectedPod();
-    if (!current() || reading || logsDenied || !source || !pod) {
-      if (source && !pod) {
+    if (reading && restart) {
+      restartPending = true;
+      return;
+    }
+    if (!current() || reading || logsDenied || !readableSelection()) {
+      if (source && !readableSelection()) {
         logStatus.textContent = "This version has no running Pod for this source.";
       }
       return;
@@ -480,10 +518,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       rows = 0;
       logStatus.textContent = "Reading output…";
     }
-    const query = new URLSearchParams({ source: source.id, pod: pod.name });
-    if (previous.checked) {
-      query.set("previous", "true");
-    }
+    const query = logQuery(source, pod);
     if (restart) {
       query.set("tailLines", String(TAIL_LINES));
     }
@@ -493,7 +528,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     let retryAfter = FOLLOW_POLL_MS;
     try {
       const page = await context.request(`${base}/logs?${query}`);
-      if (!current()) {
+      if (!current() || restartPending) {
         return;
       }
       showLogError(null);
@@ -508,10 +543,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
               ? `Only withheld output in the last ${TAIL_LINES} lines.`
               : lines === 0
                 ? `No output in the last ${TAIL_LINES} lines.`
-                : `Showing ${previous.checked ? "the previous instance of " : ""}${pod.container} in ${pod.name}.`;
+                : source.kind === "sandbox"
+                  ? `Showing policy decisions and supervisor output of sandbox ${page.stream.sandbox ?? ""}.`
+                  : `Showing ${previous.checked ? "the previous instance of " : ""}${pod.container} in ${pod.name}.`;
       }
     } catch (error) {
-      if (!current()) {
+      if (!current() || (restartPending && error.status !== 401)) {
         return;
       }
       if (error.status === 401) {
@@ -528,7 +565,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       if (restart) {
         logStatus.textContent = "";
       }
-      showLogError(withRequestId(runtimeErrorText(error, "logs"), error));
+      showLogError(withRequestId(runtimeErrorText(error, "logs", source.id), error));
       if (error.status === 403) {
         // Never re-poll after a denial; the view needs new grants.
         logsDenied = true;
@@ -542,6 +579,11 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       }
     } finally {
       reading = false;
+      if (restartPending && current()) {
+        // The page just read belongs to the previous selection; start the new view.
+        restartPending = false;
+        void readLogs({ restart: true });
+      }
     }
     if (following && current()) {
       scheduleFollow(retryAfter);
@@ -573,7 +615,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     element(
       "p",
       { className: "muted" },
-      "Operational output only: credential-shaped text is masked and structured payloads, prompts and protocol traffic are withheld. Nothing here is stored.",
+      "Operational output and sandbox policy decisions only: credential-shaped text is masked and structured payloads, prompts and protocol traffic are withheld. Nothing here is stored.",
     ),
     element(
       "div",

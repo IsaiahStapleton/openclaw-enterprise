@@ -58,6 +58,9 @@
       "path": "tests/conformance/runtime-logs-content.test.mjs"
     },
     {
+      "path": "tests/conformance/runtime-logs-sandbox.test.mjs"
+    },
+    {
       "path": "tests/conformance/occ-read.test.mjs"
     },
     {

@@ -66,6 +66,7 @@
                             { "const": "wrapper", "type": "string" },
                             { "const": "openclaw", "type": "string" },
                             { "const": "codex", "type": "string" },
+                            { "const": "sandbox", "type": "string" },
                             { "const": "text", "type": "string" }
                           ]
                         },
@@ -101,10 +102,17 @@
                               "type": "string"
                             },
                             "restartCount": { "minimum": 0, "type": "integer" },
+                            "sandbox": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
                             "source": {
                               "anyOf": [
                                 { "const": "gateway", "type": "string" },
-                                { "const": "agent", "type": "string" }
+                                { "const": "agent", "type": "string" },
+                                { "const": "sandbox", "type": "string" }
                               ]
                             }
                           },
@@ -144,7 +152,8 @@
                             { "const": "stream_replaced", "type": "string" },
                             { "const": "window_exceeded", "type": "string" },
                             { "const": "cursor_expired", "type": "string" },
-                            { "const": "truncated", "type": "string" }
+                            { "const": "truncated", "type": "string" },
+                            { "const": "buffer_lost", "type": "string" }
                           ]
                         },
                         "remedy": { "maxLength": 512, "type": "string" },
@@ -170,10 +179,17 @@
                               "type": "string"
                             },
                             "restartCount": { "minimum": 0, "type": "integer" },
+                            "sandbox": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
                             "source": {
                               "anyOf": [
                                 { "const": "gateway", "type": "string" },
-                                { "const": "agent", "type": "string" }
+                                { "const": "agent", "type": "string" },
+                                { "const": "sandbox", "type": "string" }
                               ]
                             }
                           },
@@ -228,10 +244,17 @@
                               "type": "string"
                             },
                             "restartCount": { "minimum": 0, "type": "integer" },
+                            "sandbox": {
+                              "maxLength": 253,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                              "type": "string"
+                            },
                             "source": {
                               "anyOf": [
                                 { "const": "gateway", "type": "string" },
-                                { "const": "agent", "type": "string" }
+                                { "const": "agent", "type": "string" },
+                                { "const": "sandbox", "type": "string" }
                               ]
                             }
                           },
@@ -265,7 +288,8 @@
               "source": {
                 "anyOf": [
                   { "const": "gateway", "type": "string" },
-                  { "const": "agent", "type": "string" }
+                  { "const": "agent", "type": "string" },
+                  { "const": "sandbox", "type": "string" }
                 ]
               },
               "stream": {
@@ -292,10 +316,17 @@
                         "type": "string"
                       },
                       "restartCount": { "minimum": 0, "type": "integer" },
+                      "sandbox": {
+                        "maxLength": 253,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                        "type": "string"
+                      },
                       "source": {
                         "anyOf": [
                           { "const": "gateway", "type": "string" },
-                          { "const": "agent", "type": "string" }
+                          { "const": "agent", "type": "string" },
+                          { "const": "sandbox", "type": "string" }
                         ]
                       }
                     },
@@ -682,6 +713,7 @@
                   { "const": "RUNTIME_LOGS_SOURCE_UNAVAILABLE", "type": "string" },
                   { "const": "RUNTIME_LOGS_RATE_LIMITED", "type": "string" },
                   { "const": "RUNTIME_LOGS_CLUSTER_RBAC", "type": "string" },
+                  { "const": "RUNTIME_LOGS_SANDBOX_NOT_FOUND", "type": "string" },
                   { "const": "RUNTIME_LOGS_UNAVAILABLE", "type": "string" },
                   { "const": "RUNTIME_LOGS_AUDIT_UNAVAILABLE", "type": "string" },
                   { "const": "RUNTIME_LOGS_TIMEOUT", "type": "string" }
@@ -1005,10 +1037,16 @@
                     "id": {
                       "anyOf": [
                         { "const": "gateway", "type": "string" },
-                        { "const": "agent", "type": "string" }
+                        { "const": "agent", "type": "string" },
+                        { "const": "sandbox", "type": "string" }
                       ]
                     },
-                    "kind": { "const": "container", "type": "string" },
+                    "kind": {
+                      "anyOf": [
+                        { "const": "container", "type": "string" },
+                        { "const": "sandbox", "type": "string" }
+                      ]
+                    },
                     "pods": {
                       "items": {
                         "additionalProperties": false,
@@ -11102,10 +11140,16 @@
                               "id": {
                                 "anyOf": [
                                   { "const": "gateway", "type": "string" },
-                                  { "const": "agent", "type": "string" }
+                                  { "const": "agent", "type": "string" },
+                                  { "const": "sandbox", "type": "string" }
                                 ]
                               },
-                              "kind": { "const": "container", "type": "string" },
+                              "kind": {
+                                "anyOf": [
+                                  { "const": "container", "type": "string" },
+                                  { "const": "sandbox", "type": "string" }
+                                ]
+                              },
                               "pods": {
                                 "items": {
                                   "additionalProperties": false,
@@ -11244,7 +11288,8 @@
             "schema": {
               "anyOf": [
                 { "const": "gateway", "type": "string" },
-                { "const": "agent", "type": "string" }
+                { "const": "agent", "type": "string" },
+                { "const": "sandbox", "type": "string" }
               ]
             }
           },
@@ -11384,6 +11429,7 @@
                                       { "const": "wrapper", "type": "string" },
                                       { "const": "openclaw", "type": "string" },
                                       { "const": "codex", "type": "string" },
+                                      { "const": "sandbox", "type": "string" },
                                       { "const": "text", "type": "string" }
                                     ]
                                   },
@@ -11419,10 +11465,17 @@
                                         "type": "string"
                                       },
                                       "restartCount": { "minimum": 0, "type": "integer" },
+                                      "sandbox": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
                                       "source": {
                                         "anyOf": [
                                           { "const": "gateway", "type": "string" },
-                                          { "const": "agent", "type": "string" }
+                                          { "const": "agent", "type": "string" },
+                                          { "const": "sandbox", "type": "string" }
                                         ]
                                       }
                                     },
@@ -11462,7 +11515,8 @@
                                       { "const": "stream_replaced", "type": "string" },
                                       { "const": "window_exceeded", "type": "string" },
                                       { "const": "cursor_expired", "type": "string" },
-                                      { "const": "truncated", "type": "string" }
+                                      { "const": "truncated", "type": "string" },
+                                      { "const": "buffer_lost", "type": "string" }
                                     ]
                                   },
                                   "remedy": { "maxLength": 512, "type": "string" },
@@ -11488,10 +11542,17 @@
                                         "type": "string"
                                       },
                                       "restartCount": { "minimum": 0, "type": "integer" },
+                                      "sandbox": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
                                       "source": {
                                         "anyOf": [
                                           { "const": "gateway", "type": "string" },
-                                          { "const": "agent", "type": "string" }
+                                          { "const": "agent", "type": "string" },
+                                          { "const": "sandbox", "type": "string" }
                                         ]
                                       }
                                     },
@@ -11546,10 +11607,17 @@
                                         "type": "string"
                                       },
                                       "restartCount": { "minimum": 0, "type": "integer" },
+                                      "sandbox": {
+                                        "maxLength": 253,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                        "type": "string"
+                                      },
                                       "source": {
                                         "anyOf": [
                                           { "const": "gateway", "type": "string" },
-                                          { "const": "agent", "type": "string" }
+                                          { "const": "agent", "type": "string" },
+                                          { "const": "sandbox", "type": "string" }
                                         ]
                                       }
                                     },
@@ -11583,7 +11651,8 @@
                         "source": {
                           "anyOf": [
                             { "const": "gateway", "type": "string" },
-                            { "const": "agent", "type": "string" }
+                            { "const": "agent", "type": "string" },
+                            { "const": "sandbox", "type": "string" }
                           ]
                         },
                         "stream": {
@@ -11610,10 +11679,17 @@
                                   "type": "string"
                                 },
                                 "restartCount": { "minimum": 0, "type": "integer" },
+                                "sandbox": {
+                                  "maxLength": 253,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
                                 "source": {
                                   "anyOf": [
                                     { "const": "gateway", "type": "string" },
-                                    { "const": "agent", "type": "string" }
+                                    { "const": "agent", "type": "string" },
+                                    { "const": "sandbox", "type": "string" }
                                   ]
                                 }
                               },

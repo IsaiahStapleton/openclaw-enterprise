@@ -257,3 +257,94 @@ test("the Logs tab explains cluster RBAC, unsupported Drivers and unavailable re
     .first()
     .waitFor();
 });
+
+test("the Sandbox source shows redacted policy decisions without a Pod picker", async (t) => {
+  const computeDriver = createRuntimeLogComputeDriver({ sandboxNamespace: "tenant-console" });
+  const secret = `Zq9${randomUUID().replaceAll("-", "")}`;
+  const sandboxState = { lines: [], error: undefined };
+  const sandboxRequests = [];
+  const sandboxDriver = {
+    id: "console-sandbox",
+    capability: "sandbox",
+    implementation: "openshell",
+    facets: ["networking", "filesystem", "process"],
+    async provisionHarness(context) {
+      return {
+        namespaceName: context.namespace.name,
+        resourceName: `sb-${context.revision.id.slice(4, 12)}`,
+        agentId: context.revision.agentId,
+        revisionId: context.revision.id,
+      };
+    },
+    async cleanup() {},
+    async readSandboxLogs(context, request) {
+      sandboxRequests.push({ namespace: context.namespace.name, ...request });
+      if (sandboxState.error !== undefined) {
+        throw sandboxState.error;
+      }
+      return {
+        sandbox: `sb-${context.revision.id.slice(4, 12)}`,
+        observedAt: "2026-09-30T12:00:05.000Z",
+        lines: sandboxState.lines,
+        bufferTotal: sandboxState.lines.length,
+      };
+    },
+  };
+  const fixture = await createConsoleAppFixture(t, {
+    computeDriver,
+    sandboxDriver,
+    agentRuntimeLogs: { enabled: true, cursorSecret: `console-logs-${randomUUID()}` },
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Sandbox logs", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Sandbox Agent",
+    nativeValues("v1", { harnessId: "codex" }),
+    { executionMode: "dedicated" },
+  );
+  const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const sandboxLine = (second, message) => ({
+    sandboxId: "7c0e5d4a-1b2c-4d3e-8f90-a1b2c3d4e5f6",
+    time: `2026-09-30T12:00:0${second}.000000000Z`,
+    level: "OCSF",
+    target: "ocsf",
+    message,
+    source: "sandbox",
+    fields: {},
+  });
+  sandboxState.lines = [
+    sandboxLine(
+      1,
+      `PROC:LAUNCH [INFO] git(42) [cmd:git clone https://x-access-token:${secret}@github.com/acme/repo.git]`,
+    ),
+    sandboxLine(
+      2,
+      "NET:OPEN [MED] DENIED python3(7) -> blocked.example.com:443 [policy:default engine:opa]",
+    ),
+  ];
+
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  await page.locator("#runtime-log-source").selectOption("sandbox");
+  await pane
+    .getByText("NET:OPEN [MED] DENIED python3(7) -> blocked.example.com:443", {
+      exact: false,
+    })
+    .waitFor();
+  await page.getByText(/OpenShell keeps the last 2000 lines per sandbox/).waitFor();
+  await page.getByText(/Showing policy decisions and supervisor output of sandbox sb-/).waitFor();
+  assert.equal(await page.getByText(secret).count(), 0);
+  assert.equal(await page.locator("#runtime-log-pod").isVisible(), false);
+  assert.equal(await page.getByLabel("Previous instance").isDisabled(), true);
+  assert.equal(sandboxRequests.at(-1).namespace, "tenant-console");
+
+  const { RuntimeLogsForbiddenByClusterError } = await import("../../packages/occ/src/index.ts");
+  sandboxState.error = new RuntimeLogsForbiddenByClusterError();
+  await page.getByRole("button", { name: "Refresh logs" }).click();
+  await page
+    .getByText(/grant the OpenClaw Enterprise gateway identity the sandbox:read scope/)
+    .waitFor();
+});

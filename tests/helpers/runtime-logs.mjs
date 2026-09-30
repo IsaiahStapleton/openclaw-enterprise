@@ -62,6 +62,15 @@ export function createRuntimeLogComputeDriver(options = {}) {
       };
     },
     async retireRevision() {},
+    ...(options.sandboxNamespace === undefined
+      ? {}
+      : {
+          // Compute's placement of the Namespace, where the Sandbox Driver finds the Sandbox.
+          async resolveSandboxNamespace(namespace) {
+            calls.push({ operation: "resolveSandboxNamespace", namespaceId: namespace.id });
+            return Object.freeze({ ...namespace, name: options.sandboxNamespace });
+          },
+        }),
     ...(options.withoutDescribe
       ? {}
       : {
@@ -190,6 +199,7 @@ export async function createRuntimeLogFixture(options = {}) {
     auditSink,
     development: { enabled: true, installationId },
     computeDriver,
+    ...(options.sandboxDriver === undefined ? {} : { sandboxDriver: options.sandboxDriver }),
     configurationDriver: createTestConfigurationDriver({ id: "runtime-log-configuration" }),
     secretDriver: createTestSecretDriver({ id: "runtime-log-secret" }),
     resolveHarness: resolveApprovedHarness,
@@ -252,14 +262,22 @@ export async function createRuntimeLogFixture(options = {}) {
     });
     assert.equal(secret.status, 201, secret.text);
     const configuration = await request("POST", `/namespaces/${namespace.data.id}/configurations`, {
-      body: { kind: "agent", values: createHarnessConfiguration("openclaw", "gpt-4.1") },
+      // Dedicated revisions under a Sandbox Driver run the Codex Harness.
+      body: {
+        kind: "agent",
+        values:
+          options.sandboxDriver === undefined
+            ? createHarnessConfiguration("openclaw", "gpt-4.1")
+            : createHarnessConfiguration("codex", "gpt-5.5"),
+      },
     });
     assert.equal(configuration.status, 201, configuration.text);
     const agent = await request("POST", `/namespaces/${namespace.data.id}/agents`, {
       body: {
         name: "Runtime log Agent",
         configurationId: configuration.data.id,
-        executionMode: "embedded",
+        // A selected Sandbox Driver provisions dedicated Harnesses only.
+        executionMode: options.sandboxDriver === undefined ? "embedded" : "dedicated",
         harnessAuth: { method: "api_key", source: secret.data.ref },
       },
     });
