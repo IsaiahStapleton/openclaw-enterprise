@@ -58,8 +58,8 @@ An exit-0 `migration.checked` record reports one reviewed history shape:
 `backendCompleted`, `providerCompleted`, `backendTerminology`, `prePluginApprovers`,
 `preBrokerReceipts`, `preAgentDeletion`, `preDeploymentProgress`,
 `preHumanAuthentication`, `preAgentDeletionTakeover`,
-`preNamespaceDeletionTakeover`, `preRepositoryAccess`, `preOAuth`, or
-`completed`.
+`preNamespaceDeletionTakeover`, `preRepositoryAccess`, `preRestrictionReadLogs`,
+`preOAuth`, or `completed`.
 `prePresetsMain` means
 the exact canonical history through `0023_runtime_failure_timestamp_validation`;
 `main` also includes `0024_agent_presets`. `repositoryCredentials` adds
@@ -77,9 +77,10 @@ through `0033_agent_plugin_approvers`; `preAgentDeletion` has 35 through
 the 37 receipts through `0036_deployment_progress`; `preAgentDeletionTakeover`
 has 38 through `0037_human_authentication`; `preNamespaceDeletionTakeover` has
 39 through `0038_agent_deletion_takeover`; `preRepositoryAccess` has 40 through
-`0039_namespace_deletion_takeover`; `preOAuth` has 41 through
-`0040_repository_access`. `completed` is the current canonical history with all
-receipts, including `0041_oauth_harness_auth`.
+`0039_namespace_deletion_takeover`; `preRestrictionReadLogs` has 41 through
+`0040_repository_access`; `preOAuth` has 42 through
+`0041_restriction_read_logs`. `completed` is the current canonical history with
+all receipts, including `0042_oauth_harness_auth`.
 The source manifest is
 [`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).
 Empty schemas may be absent or have only their owner's ordinary `CREATE` and

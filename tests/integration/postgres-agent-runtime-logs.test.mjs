@@ -249,5 +249,25 @@ test(
         ["access", "openclaw.agents.runtime_logs.download", "administer"],
       ],
     );
+
+    // A persisted read_logs Restriction denies log text outright; administer cannot bypass it.
+    await pool.query(
+      `INSERT INTO occ.iam_restrictions
+         (id, namespace_id, action, resource_kind, resource_id, effect)
+       VALUES ($1, $2, 'read_logs', 'agent', $3, 'deny')`,
+      [`restriction-${randomUUID()}`, namespace.id, agent.id],
+    );
+    const reads = computeDriver.calls.filter(({ operation }) => operation === "read").length;
+    const restricted = await inject("GET", logs, session);
+    assert.equal(restricted.statusCode, 403, restricted.body);
+    assert.equal(restricted.body.includes("first line"), false);
+    assert.equal(computeDriver.calls.filter(({ operation }) => operation === "read").length, reads);
+    assert.deepEqual(
+      (await viewRows()).rows.map(({ kind, outcome }) => [kind, outcome]),
+      [
+        ["access", "success"],
+        ["authorization_denial", "denied"],
+      ],
+    );
   },
 );
