@@ -43,6 +43,7 @@ import {
   PostgresWorkQueue,
   OpenClawController,
   WorkClaimLostError,
+  isCredentialWithdrawalWork,
   isRepositoryCleanupWork,
   repositoryCleanupRevisionId,
   isRepositoryRuntimeRetirementWork,
@@ -142,7 +143,7 @@ function positiveInteger(value: number, name: string): number {
 }
 
 function workOperation(claim: ClaimedWork): string {
-  if (claim.agentTarget === "credentials_withdrawn") {
+  if (isCredentialWithdrawalWork(claim)) {
     return "agent_revision.credentials_withdraw";
   }
   if (claim.revisionId !== undefined) {
@@ -673,7 +674,7 @@ export class ControllerWorker {
               kind = "agent_delete";
             } else if (claim.agentTarget === "stopped") {
               kind = "agent_stop";
-            } else if (claim.agentTarget === "credentials_withdrawn") {
+            } else if (isCredentialWithdrawalWork(claim)) {
               kind = "agent_credential_withdrawal";
             } else if (claim.revisionId !== undefined) {
               kind = "agent_revision";
@@ -1199,7 +1200,7 @@ export class ControllerWorker {
       return;
     }
     // A withdrawal names an active revision but never deploys it.
-    if (claim.agentTarget === "credentials_withdrawn") {
+    if (isCredentialWithdrawalWork(claim)) {
       await this.processCredentialWithdrawal(claim);
       return;
     }

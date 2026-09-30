@@ -104,6 +104,11 @@ import {
   type PostgresWorkQueueOptions,
 } from "./postgres-work-queue.ts";
 import { beginProvisioningEffectProgress } from "../provisioning-effects.ts";
+import {
+  CREDENTIAL_WITHDRAWAL_TARGET,
+  credentialWithdrawalOperationId,
+  credentialWithdrawalWorkKey,
+} from "./controller-work.ts";
 
 type PostgresRow = Record<string, unknown>;
 
@@ -4023,7 +4028,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           let agentId: string | undefined;
           let revisionId: string | undefined;
           let namespaceTarget: "ready" | "deleted" | undefined;
-          let agentTarget: "stopped" | "deleted" | "credentials_withdrawn" | undefined;
+          let agentTarget: "stopped" | "deleted" | typeof CREDENTIAL_WITHDRAWAL_TARGET | undefined;
           if (operation.kind === "namespace") {
             if (namespaceId !== operation.resourceId) {
               throw new ScopeViolationError("Namespace work does not match its exact owner.");
@@ -4073,9 +4078,8 @@ export class PostgresPlatformState implements PlatformStateStore {
                   ? `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
                   : `agent:${operation.resourceId}:${operation.action}:${operation.target}`
                 : operation.kind === "agent_revision" &&
-                    operation.target === "credentials_withdrawn"
-                  ? // Distinct from the revision's deployment key, which it must never replace.
-                    `agent_revision:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`
+                    operation.target === CREDENTIAL_WITHDRAWAL_TARGET
+                  ? credentialWithdrawalWorkKey(operation.resourceId, operation.operationId)
                   : `${operation.kind}:${operation.resourceId}:${operation.action}${
                       namespaceTarget === undefined ? "" : `:${namespaceTarget}`
                     }`,
@@ -4151,13 +4155,11 @@ export class PostgresPlatformState implements PlatformStateStore {
               if (revisionTarget === undefined) {
                 return immutableCopy({ ...base, kind: "agent_revision" });
               }
-              const key = text(row, "idempotency_key");
-              const prefix = `agent_revision:${revisionId}:reconcile:credentials_withdrawn:`;
-              if (
-                revisionTarget !== "credentials_withdrawn" ||
-                !key.startsWith(prefix) ||
-                key.length === prefix.length
-              ) {
+              const operationId = credentialWithdrawalOperationId(
+                revisionId,
+                text(row, "idempotency_key"),
+              );
+              if (revisionTarget !== CREDENTIAL_WITHDRAWAL_TARGET || operationId === undefined) {
                 throw new DependencyUnavailableError(
                   "Persisted AgentRevision work has an invalid target.",
                 );
@@ -4166,7 +4168,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                 ...base,
                 kind: "agent_revision",
                 target: revisionTarget,
-                operationId: key.slice(prefix.length),
+                operationId,
               });
             }),
           );

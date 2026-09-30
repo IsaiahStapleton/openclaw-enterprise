@@ -85,6 +85,37 @@ export interface PluginDeploymentWarning {
   readonly pluginId: string;
 }
 
+/**
+ * Revision-scoped work that revokes credential sources from a running revision. It names the
+ * revision but is not a deployment: it never prepares, activates, or supersedes it, and it owns
+ * no repository-credential cleanup. The value is persisted in `controller_work.agent_target`.
+ */
+export const CREDENTIAL_WITHDRAWAL_TARGET = "credentials_withdrawn";
+
+const CREDENTIAL_WITHDRAWAL_ACTION = "reconcile";
+
+/** One key per request, so a withdrawal never replaces the revision's deployment key. */
+export function credentialWithdrawalWorkKey(revisionId: string, operationId: string): string {
+  return `agent_revision:${nonempty(revisionId, "Credential withdrawal revision")}:${CREDENTIAL_WITHDRAWAL_ACTION}:${CREDENTIAL_WITHDRAWAL_TARGET}:${nonempty(operationId, "Credential withdrawal operation")}`;
+}
+
+/** The request's operation ID, or undefined when the key is not this revision's withdrawal key. */
+export function credentialWithdrawalOperationId(
+  revisionId: string,
+  idempotencyKey: string,
+): string | undefined {
+  const prefix = `agent_revision:${revisionId}:${CREDENTIAL_WITHDRAWAL_ACTION}:${CREDENTIAL_WITHDRAWAL_TARGET}:`;
+  return idempotencyKey.startsWith(prefix) && idempotencyKey.length > prefix.length
+    ? idempotencyKey.slice(prefix.length)
+    : undefined;
+}
+
+export function isCredentialWithdrawalWork(
+  work: Pick<ControllerWork, "revisionId" | "agentTarget">,
+): boolean {
+  return work.revisionId !== undefined && work.agentTarget === CREDENTIAL_WITHDRAWAL_TARGET;
+}
+
 export interface ControllerWork {
   readonly kind: ControllerWorkKind;
   readonly idempotencyKey: string;
@@ -93,8 +124,9 @@ export interface ControllerWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
-  /** `credentials_withdrawn` is revision-scoped and never deploys that revision. */
-  readonly agentTarget?: "stopped" | "deleted" | "provisioned" | "credentials_withdrawn";
+  /** See `CREDENTIAL_WITHDRAWAL_TARGET` for the revision-scoped target. */
+  readonly agentTarget?:
+    "stopped" | "deleted" | "provisioned" | typeof CREDENTIAL_WITHDRAWAL_TARGET;
   readonly state: ControllerWorkState;
   readonly availableAt: Date;
   readonly attemptCount: number;
@@ -121,8 +153,9 @@ export interface EnqueueWork {
   readonly revisionId?: string;
   readonly actorId: string;
   readonly namespaceTarget?: "ready" | "deleted";
-  /** `credentials_withdrawn` is revision-scoped and never deploys that revision. */
-  readonly agentTarget?: "stopped" | "deleted" | "provisioned" | "credentials_withdrawn";
+  /** See `CREDENTIAL_WITHDRAWAL_TARGET` for the revision-scoped target. */
+  readonly agentTarget?:
+    "stopped" | "deleted" | "provisioned" | typeof CREDENTIAL_WITHDRAWAL_TARGET;
   readonly availableAt?: Date | string;
 }
 

@@ -61,7 +61,12 @@ import {
   ResourceConflictError,
   ScopeViolationError,
 } from "../errors.ts";
-import type { ControllerWork, ControllerWorkAttempt } from "./controller-work.ts";
+import {
+  CREDENTIAL_WITHDRAWAL_TARGET,
+  credentialWithdrawalWorkKey,
+  type ControllerWork,
+  type ControllerWorkAttempt,
+} from "./controller-work.ts";
 import type {
   AgentProvisioningReadRepository,
   AgentProvisioningRepository,
@@ -629,7 +634,7 @@ export type PlatformOperation =
   | (PlatformOperationBase & {
       /** Revokes pending credential withdrawals from an active revision; never deploys it. */
       readonly kind: "agent_revision";
-      readonly target: "credentials_withdrawn";
+      readonly target: typeof CREDENTIAL_WITHDRAWAL_TARGET;
       readonly operationId: string;
     })
   | (PlatformOperationBase & {
@@ -779,8 +784,8 @@ function operationIdempotencyKey(operation: Readonly<PlatformOperation>): string
   if (operation.kind === "agent") {
     return `agent:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`;
   }
-  if (operation.kind === "agent_revision" && operation.target === "credentials_withdrawn") {
-    return `agent_revision:${operation.resourceId}:${operation.action}:${operation.target}:${operation.operationId}`;
+  if (operation.kind === "agent_revision" && operation.target === CREDENTIAL_WITHDRAWAL_TARGET) {
+    return credentialWithdrawalWorkKey(operation.resourceId, operation.operationId);
   }
   return `${operation.kind}:${operation.resourceId}:${operation.action}${
     operation.kind === "namespace" ? `:${operation.target}` : ""
@@ -2493,7 +2498,7 @@ function repositories(
               (operation.kind === "agent_revision" &&
                 existing.target === operation.target &&
                 (existing.target === undefined ||
-                  (operation.target === "credentials_withdrawn" &&
+                  (operation.target === CREDENTIAL_WITHDRAWAL_TARGET &&
                     existing.operationId === operation.operationId)))) &&
             (existing.kind !== "agent" ||
               (operation.kind === "agent" &&

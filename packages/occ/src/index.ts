@@ -132,6 +132,7 @@ import {
   type PlatformUnitOfWork,
 } from "./state/platform-state.ts";
 import {
+  CREDENTIAL_WITHDRAWAL_TARGET,
   controllerWorkDeploymentStatus,
   deploymentErrorForWork,
   deploymentProgressForWork,
@@ -297,6 +298,9 @@ export {
   type WorkResult,
 } from "./state/postgres-work-queue.ts";
 export {
+  CREDENTIAL_WITHDRAWAL_TARGET,
+  credentialWithdrawalWorkKey,
+  isCredentialWithdrawalWork,
   validateRuntimeFailureEvidence,
   type DeploymentStatus,
   type DeploymentStatusError,
@@ -1232,7 +1236,10 @@ export class OpenClawController {
       const deploymentsInProgress = new Set<string>();
       for (const operation of await state.operations.list()) {
         // Credential withdrawal work targets an active revision without deploying it.
-        if (operation.kind !== "agent_revision" || operation.target !== undefined) {
+        if (
+          operation.kind !== "agent_revision" ||
+          operation.target === CREDENTIAL_WITHDRAWAL_TARGET
+        ) {
           continue;
         }
         const work = await state.operations.findWork(
@@ -4735,7 +4742,7 @@ export class OpenClawController {
         await this.record(state, {
           kind: "agent_revision",
           action: "reconcile",
-          target: "credentials_withdrawn",
+          target: CREDENTIAL_WITHDRAWAL_TARGET,
           namespaceId: agent.namespaceId,
           resourceId: revision.id,
           actorId: principalId,
