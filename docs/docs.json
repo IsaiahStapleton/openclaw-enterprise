@@ -818,6 +818,7 @@
             "hidden": [
               "contributing/rfc-template",
               "guides/deploy/local-repository-credentials",
+              "guides/deploy/local-compose-kubernetes",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
