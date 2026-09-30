@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   Agent,
   AgentRead,
   AgentRevisionRead,
   InitialWorkspaceFiles,
   AgentDeploymentDiagnostics,
+  AgentRuntimeDescribeOptions,
+  AgentRuntimeDescription,
+  ComputeAgentRevisionBinding,
   AgentRevision,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
@@ -113,8 +117,19 @@ import {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  RuntimeLogsError,
+  RuntimeLogsForbiddenByClusterError,
   ScopeViolationError,
 } from "./errors.ts";
+import {
+  readRuntimeLogPage,
+  RuntimeLogReadError,
+  validRuntimeDescription,
+  type RuntimeLogCursorCodec,
+  type RuntimeLogPage,
+  type RuntimeLogQuery,
+  type RuntimeLogViewAdmission,
+} from "./runtime-logs/index.ts";
 import {
   nativeWorkerSupportSource,
   type NativeWorkerSupport,
@@ -190,9 +205,26 @@ export {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  RuntimeLogsError,
+  RuntimeLogsForbiddenByClusterError,
   SandboxRevisionUnsupportedError,
   ScopeViolationError,
+  type RuntimeLogsErrorCode,
 } from "./errors.ts";
+export {
+  createRuntimeLogCursorCodec,
+  maskRuntimeEventText,
+  redactRuntimeLogText,
+  RUNTIME_LOG_DEFAULT_TAIL_LINES,
+  RUNTIME_LOG_LIMIT_BYTES,
+  RUNTIME_LOG_MAX_TAIL_LINES,
+  sanitizeRuntimeLogChunk,
+  type RuntimeLogCursorCodec,
+  type RuntimeLogPage,
+  type RuntimeLogQuery,
+  type RuntimeLogViewAdmission,
+  type SanitizedRuntimeLogRecord,
+} from "./runtime-logs/index.ts";
 export {
   PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS,
   type NativeWorkerSupport,
@@ -524,6 +556,8 @@ type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capabil
 
 /** Bounds each synchronous Credential Gateway call made while serving an API request. */
 const CREDENTIAL_GATEWAY_TIMEOUT_MS = 30_000;
+/** Overall deadline for one runtime status or log request, Driver calls included. */
+const RUNTIME_LOG_REQUEST_TIMEOUT_MS = 10_000;
 /**
  * A Credential Gateway must finish any effect of an aborted registration within
  * CREDENTIAL_GATEWAY_TIMEOUT_MS after the abort. Until this long after `createdAt`, an absent
@@ -688,6 +722,10 @@ function driverHasCapabilityContract(driver: Driver): boolean {
       typeof candidate.provisionAgentRuntimeCredentials === "function") &&
     (candidate.diagnoseAgentDeployment === undefined ||
       typeof candidate.diagnoseAgentDeployment === "function") &&
+    (candidate.describeAgentRuntime === undefined ||
+      typeof candidate.describeAgentRuntime === "function") &&
+    (candidate.readAgentRuntimeLogs === undefined ||
+      typeof candidate.readAgentRuntimeLogs === "function") &&
     (candidate.deleteAgentRuntimeCredentials === undefined ||
       typeof candidate.deleteAgentRuntimeCredentials === "function")
   );
@@ -2357,6 +2395,189 @@ export class OpenClawController {
     return this.deploymentDiagnostics(diagnostics, revision.id);
   }
 
+  /** Tier 1: Pod status, restarts, Events and log sources (Agent operate + read). */
+  async describeAgentRuntime(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+    signal?: AbortSignal,
+  ): Promise<Readonly<AgentRuntimeDescription>> {
+    const { binding, driver } = await this.runtimeLogTarget(
+      principalId,
+      namespaceId,
+      agentId,
+      deploymentId,
+      "operate",
+    );
+    return this.runtimeLogOperation(signal, (deadline) =>
+      this.describedAgentRuntime(driver, binding, deadline),
+    );
+  }
+
+  /**
+   * Tier 2: one bounded, redacted page of container output (Agent administer + read).
+   * `admitView` writes the view audit event before the first Driver log read.
+   */
+  async readAgentRuntimeLogs(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+    query: RuntimeLogQuery,
+    options: {
+      readonly codec: RuntimeLogCursorCodec;
+      readonly admitView: (admission: RuntimeLogViewAdmission) => Promise<void>;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Readonly<RuntimeLogPage>> {
+    const { binding, driver } = await this.runtimeLogTarget(
+      principalId,
+      namespaceId,
+      agentId,
+      deploymentId,
+      "administer",
+    );
+    if (typeof driver.readAgentRuntimeLogs !== "function") {
+      throw new NotImplementedError(
+        "readAgentRuntimeLogs",
+        "The selected Compute Driver does not expose runtime logs.",
+      );
+    }
+    return this.runtimeLogOperation(options.signal, async (deadline) => {
+      // Every follow poll describes the runtime again for the ownership re-check; it
+      // needs only the requested source's Pods, not their Events.
+      const description = await this.describedAgentRuntime(driver, binding, deadline, {
+        source: query.source,
+        events: false,
+      });
+      try {
+        return await readRuntimeLogPage({
+          description,
+          query,
+          codec: options.codec,
+          binding: { principalId, agentId, revisionId: binding.revision.id, source: query.source },
+          signal: deadline,
+          admitView: async (admission) => {
+            try {
+              await options.admitView(admission);
+            } catch {
+              throw new RuntimeLogsError("RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+            }
+          },
+          readLogs: async (request) => {
+            try {
+              return await driver.readAgentRuntimeLogs!(binding, request);
+            } catch (error) {
+              throw this.runtimeLogDriverFailure(error, deadline);
+            }
+          },
+        });
+      } catch (error) {
+        if (error instanceof RuntimeLogReadError) {
+          throw new RuntimeLogsError(
+            error.reason === "cursor_invalid"
+              ? "RUNTIME_LOGS_CURSOR_INVALID"
+              : error.reason === "pod_invalid"
+                ? "RUNTIME_LOGS_POD_INVALID"
+                : error.reason === "source_unavailable"
+                  ? "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+                  : "RUNTIME_LOGS_UNAVAILABLE",
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  private async runtimeLogTarget(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+    tier: "operate" | "administer",
+  ): Promise<{ binding: ComputeAgentRevisionBinding; driver: ComputeDriver }> {
+    const revision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
+    await this.authorize(principalId, tier, { kind: "agent", id: agentId, namespaceId });
+    await this.authorize(principalId, "read", { kind: "agent", id: agentId, namespaceId });
+    const binding = await this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgent(namespace.id, agentId);
+      if (!agent) {
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      return { namespace, agent, revision };
+    });
+    let driver: ComputeDriver;
+    try {
+      driver = this.selectedDriver("compute");
+    } catch {
+      throw new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+    }
+    if (
+      driver.id !== revision.compute.id ||
+      driver.implementation !== revision.compute.implementation
+    ) {
+      throw new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+    }
+    // The operator owns runtime logging for Drivers that declare it; OCC never reads it.
+    if (driver.runtimeLogging === "driver" || typeof driver.describeAgentRuntime !== "function") {
+      throw new NotImplementedError(
+        "describeAgentRuntime",
+        "The selected Compute Driver does not expose runtime status or logs.",
+      );
+    }
+    return { binding, driver };
+  }
+
+  private async runtimeLogOperation<T>(
+    signal: AbortSignal | undefined,
+    operation: (deadline: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const timeout = AbortSignal.timeout(RUNTIME_LOG_REQUEST_TIMEOUT_MS);
+    const deadline = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+    try {
+      return await operation(deadline);
+    } catch (error) {
+      if (timeout.aborted && !(error instanceof RuntimeLogsError)) {
+        throw new RuntimeLogsError("RUNTIME_LOGS_TIMEOUT");
+      }
+      throw error;
+    }
+  }
+
+  private async describedAgentRuntime(
+    driver: ComputeDriver,
+    binding: ComputeAgentRevisionBinding,
+    signal: AbortSignal,
+    options?: AgentRuntimeDescribeOptions,
+  ): Promise<Readonly<AgentRuntimeDescription>> {
+    let described: unknown;
+    try {
+      described = await driver.describeAgentRuntime!(binding, signal, options);
+    } catch (error) {
+      throw this.runtimeLogDriverFailure(error, signal);
+    }
+    try {
+      return validRuntimeDescription(described, binding.revision.id);
+    } catch {
+      throw new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+    }
+  }
+
+  /** Driver and cluster error text can hold private runtime details; never propagate it. */
+  private runtimeLogDriverFailure(error: unknown, signal: AbortSignal): RuntimeLogsError {
+    if (error instanceof RuntimeLogsForbiddenByClusterError) {
+      return new RuntimeLogsError("RUNTIME_LOGS_CLUSTER_RBAC");
+    }
+    if (signal.aborted) {
+      return new RuntimeLogsError("RUNTIME_LOGS_TIMEOUT");
+    }
+    return new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+  }
+
   async getServiceAccount(
     principalId: string,
     namespaceId: string,
@@ -2835,23 +3056,48 @@ export class OpenClawController {
   async deletePreset(principalId: string, namespaceId: string, presetId: string): Promise<void> {
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
-      await this.authorize(principalId, "delete", {
-        kind: "preset",
-        id: presetId,
-        namespaceId: namespace.id,
-      });
-      if (!(await state.presets.lockPreset(namespace.id, presetId))) {
-        throw new ScopeViolationError("The Preset does not belong to the exact Namespace.");
-      }
-      for (const binding of await state.iamPolicy.listAccessBindings(namespace.id)) {
-        if (binding.resourceKind === "preset" && binding.resourceId === presetId) {
-          await state.iamPolicy.deleteAccessBinding(namespace.id, binding.id);
-        }
-      }
-      if (!(await state.presets.deletePreset(namespace.id, presetId))) {
-        throw new ResourceConflictError("The Preset changed during deletion.");
-      }
+      await this.deletePresetInState(state, principalId, namespace.id, presetId);
     });
+  }
+
+  private async deletePresetInState(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    namespaceId: string,
+    presetId: string,
+  ): Promise<void> {
+    await this.authorize(principalId, "delete", {
+      kind: "preset",
+      id: presetId,
+      namespaceId,
+    });
+    if (!(await state.presets.lockPreset(namespaceId, presetId))) {
+      throw new ScopeViolationError("The Preset does not belong to the exact Namespace.");
+    }
+    for (const binding of await state.iamPolicy.listAccessBindings(namespaceId)) {
+      if (binding.resourceKind === "preset" && binding.resourceId === presetId) {
+        await state.iamPolicy.deleteAccessBinding(namespaceId, binding.id);
+      }
+    }
+    if (!(await state.presets.deletePreset(namespaceId, presetId))) {
+      throw new ResourceConflictError("The Preset changed during deletion.");
+    }
+  }
+
+  /** True when a Preset is still the exact Installation default seeded into its Namespace. */
+  private isUnmodifiedDefaultPreset(preset: Readonly<Preset>): boolean {
+    const seeded = this.defaultPresets.find((candidate) => candidate.name === preset.name);
+    if (seeded === undefined) {
+      return false;
+    }
+    try {
+      return isDeepStrictEqual(
+        normalizePresetTemplate(seeded.template, preset.namespaceId),
+        preset.template,
+      );
+    } catch {
+      return false;
+    }
   }
 
   private async admitPresetTemplate(
@@ -4783,26 +5029,50 @@ export class OpenClawController {
         }
         return namespace;
       }
+      const contents: string[] = [];
       if (await state.namespaces.hasAgents(namespace.id)) {
-        throw new NamespaceNotEmptyError();
-      }
-      if (await state.namespaces.hasPresets(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("Agents");
       }
       if (await state.namespaces.hasConfigurations(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("Configurations");
+      }
+      const presets = await state.presets.listPresets(namespace.id);
+      const seededPresets = presets.filter((preset) => this.isUnmodifiedDefaultPreset(preset));
+      if (seededPresets.length < presets.length) {
+        contents.push("Presets");
       }
       if (await state.namespaces.hasSecrets(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("Secrets");
       }
       if (await state.namespaces.hasCredentialSources(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("credential sources");
       }
       if (await state.namespaces.hasServiceAccounts(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("service accounts");
       }
       if (await state.provisioning.hasPendingNamespaceProvisioning(namespace.id)) {
-        throw new NamespaceNotEmptyError();
+        contents.push("pending Agent provisioning");
+      }
+      if (contents.length > 0) {
+        throw new NamespaceNotEmptyError(contents);
+      }
+      // Installation defaults were seeded by Namespace creation, so deletion removes
+      // them only while they still match the defaults; edited copies block above.
+      for (const preset of seededPresets) {
+        await this.deletePresetInState(state, principalId, namespace.id, preset.id);
+        await state.audit.append({
+          id: `aud_${crypto.randomUUID()}`,
+          installationId: this.installation.id,
+          namespaceId: namespace.id,
+          occurredAt: this.timestamp(),
+          kind: "mutation",
+          actorId: principalId,
+          source: "occ",
+          action: "openclaw.presets.delete",
+          resource: { kind: "preset", id: preset.id, namespaceId: namespace.id },
+          outcome: "success",
+          details: { source: "namespace-deletion" },
+        });
       }
       const deleting = await state.namespaces.transitionNamespaceStatus(
         namespace.id,

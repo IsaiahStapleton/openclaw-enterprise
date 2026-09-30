@@ -328,16 +328,18 @@ or change its access mode to adopt the new default.
 
 ### Preserve storage across restarts
 
-Keep the node's `/var/lib/rancher/k3s` volume, which contains workspace files and
-K3s state. Normal container restarts retain that volume; cluster deletion, volume
-deletion, and profile cleanup can destroy the data. Local-path storage is bound
-to its node; adding another node does not replicate existing workspace data.
-Use a portable StorageClass if workloads must move between nodes.
+Keep the node's `/var/lib/rancher/k3s` volume (workspace files and K3s state).
+Restarts keep it; deleting the cluster, volume, or profile destroys it.
+Local-path storage is node-bound; use a portable StorageClass for workloads that
+move between nodes.
 
-The `local-path` StorageClass uses reclaim policy `Delete`, so deleting a claim
-also permits deletion of its backing directory. PostgreSQL lives in the owned
-cluster; this does not back up Agent workspaces. Use a durable private
-state directory instead of `/tmp` for a long-lived demo.
+PostgreSQL is a StatefulSet, and a launcher NetworkPolicy allows egress by its
+Pod label and the k3d subnet, so the profile survives `k3d cluster stop`/`start`.
+
+The `local-path` reclaim policy is `Delete`: deleting a claim may delete its
+backing directory. PostgreSQL lives in the owned cluster; this does not back up
+Agent workspaces. Long-lived demos need a durable private state directory, not
+`/tmp`.
 
 ## Rebuild after a source edit
 

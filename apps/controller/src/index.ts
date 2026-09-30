@@ -29,6 +29,8 @@ import {
   type InitialWorkspaceFiles,
   ErrorResponse,
   AgentDeploymentDiagnosticsResponse,
+  AgentRuntimeLogsResponse,
+  AgentRuntimeResponse,
   AgentRuntimeCredentialResponse,
   JsonValue,
   PluginDesiredSelectionSchema,
@@ -67,6 +69,7 @@ import {
   type SecretReference,
   type UpdateWorkspaceFileBody,
   type WorkspaceFileName,
+  type AgentRuntimeLogsQuery,
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
@@ -76,6 +79,8 @@ import {
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
   UserAlreadyExistsError,
+  RuntimeLogsError,
+  createRuntimeLogCursorCodec,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
   type DeployAgentAuthorization,
@@ -84,6 +89,16 @@ import {
   type OpenClawController,
 } from "@openclaw-enterprise/occ";
 import type { AdmittedCaller } from "./admission/admission-verifier.ts";
+import {
+  isRuntimeLogDownload,
+  RUNTIME_LOG_DOWNLOAD_ACTION,
+  RuntimeLogLimiter,
+  runtimeLogDownloadBody,
+  runtimeLogDownloadFileName,
+  runtimeLogPageBody,
+  runtimeLogQuery,
+  type AgentRuntimeLogsConfig,
+} from "./http/runtime-logs.ts";
 import {
   hostnameMatchesSharedCookieDomain,
   normalizeSharedCookieDomain,
@@ -162,6 +177,8 @@ export interface ControllerAppOptions {
   readonly workspaceFileRequestTimeoutMs?: number;
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
+  /** Absent or disabled: both runtime routes answer 501. */
+  readonly agentRuntimeLogs?: AgentRuntimeLogsConfig;
   readonly publicOrigin?: string;
   /** Writes the prepared account with its Principal, bindings and enrolment atomically. */
   readonly provisionAuthAccount?: (
@@ -699,6 +716,22 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
+  if (operation.operationId === "getAgentDeploymentRuntime") {
+    return [
+      { action: "operate", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
+  if (operation.operationId === "getAgentDeploymentRuntimeLogs") {
+    return [
+      { action: "administer", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
   switch (operation.authorizationTarget) {
     case "namespace_collection":
       return [{ ...permission, scope: "namespace" }];
@@ -1176,6 +1209,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       503: { description: "Service Unavailable", ...nativeAdminErrorSchema },
     },
   } as DocumentedFastifySchema;
+  const runtimeLogLimiter = new RuntimeLogLimiter();
+  const runtimeLogCursor =
+    options.agentRuntimeLogs?.enabled === true
+      ? createRuntimeLogCursorCodec(options.agentRuntimeLogs.cursorSecret)
+      : undefined;
   function event(
     operation: OccApiRoute,
     request: FastifyRequest,
@@ -1240,7 +1278,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   },
                 }),
           }),
-      action: operation.action,
+      action: auditAction(operation, request),
       resource,
       outcome,
       ...(result?.reasonCode === undefined
@@ -1249,6 +1287,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           : {}
         : { reasonCode: result.reasonCode }),
     });
+  }
+
+  /** Log views and downloads share a route and permissions but not an audit action. */
+  function auditAction(operation: OccApiRoute, request: FastifyRequest): string {
+    return operation.operationId === "getAgentDeploymentRuntimeLogs" &&
+      isRuntimeLogDownload(request.query as AgentRuntimeLogsQuery)
+      ? RUNTIME_LOG_DOWNLOAD_ACTION
+      : operation.action;
   }
 
   function selectedIAMDriver(): IAMDriver {
@@ -1795,7 +1841,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     if (
       Object.keys(request.query as Record<string, unknown>).length > 0 &&
       operation.operationId !== "listRepositoryOptions" &&
-      operation.operationId !== "listAgentRepositoryOptions"
+      operation.operationId !== "listAgentRepositoryOptions" &&
+      operation.operationId !== "getAgentDeploymentRuntimeLogs"
     ) {
       throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
     }
@@ -2907,6 +2954,90 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (
+      operation.operationId === "getAgentDeploymentRuntime" ||
+      operation.operationId === "getAgentDeploymentRuntimeLogs"
+    ) {
+      if (runtimeLogCursor === undefined) {
+        throw failure(
+          501,
+          "NOT_IMPLEMENTED",
+          "Agent runtime status and logs are disabled for this Installation.",
+        );
+      }
+      runtimeLogLimiter.admit(context.actorId, agentId);
+      // A client that disconnects cancels its Driver reads.
+      const disconnected = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) {
+          disconnected.abort();
+        }
+      };
+      reply.raw.once("close", onClose);
+      try {
+        if (operation.operationId === "getAgentDeploymentRuntime") {
+          const description = await runtimeLogLimiter.run(() =>
+            controller!.describeAgentRuntime(
+              context.actorId,
+              namespaceId,
+              agentId,
+              params.deploymentId as string,
+              disconnected.signal,
+            ),
+          );
+          reply.send({ data: description, meta: { requestId: request.id } });
+          return;
+        }
+        const target: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+        const query = request.query as AgentRuntimeLogsQuery;
+        const download = isRuntimeLogDownload(query);
+        // A download is a fresh snapshot; it never continues a follow view.
+        if (download && query.cursor !== undefined) {
+          throw failure(
+            400,
+            "INVALID_REQUEST",
+            "The request does not match the operation contract.",
+          );
+        }
+        const page = await runtimeLogLimiter.run(() =>
+          controller!.readAgentRuntimeLogs(
+            context.actorId,
+            namespaceId,
+            agentId,
+            params.deploymentId as string,
+            runtimeLogQuery(query),
+            {
+              codec: runtimeLogCursor,
+              signal: disconnected.signal,
+              // Once per view or download, before the first Driver read; failure means
+              // no content.
+              admitView: async (admission) => {
+                const base = event(operation, request, target, "mutation", context);
+                await options.auditSink.append({
+                  ...base,
+                  details: { ...base.details, runtimeLogs: { ...admission } },
+                });
+              },
+            },
+          ),
+        );
+        if (download) {
+          reply
+            .header("content-type", "text/plain; charset=utf-8")
+            .header(
+              "content-disposition",
+              `attachment; filename="${runtimeLogDownloadFileName(page, agentId)}"`,
+            )
+            .send(runtimeLogDownloadBody(page, agentId));
+          return;
+        }
+        reply.send({ data: runtimeLogPageBody(page), meta: { requestId: request.id } });
+        return;
+      } finally {
+        reply.raw.off("close", onClose);
+      }
+    }
+
     if (operation.operationId === "diagnoseAgentDeployment") {
       const diagnostics = await controller.diagnoseAgentDeployment(
         context.actorId,
@@ -3332,10 +3463,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           response: responses({
             type: "object",
             additionalProperties: false,
-            required: ["github", "google", "sessionBinding"],
+            required: ["github", "google", "password", "sessionBinding"],
             properties: {
               github: { type: "boolean" },
               google: { type: "boolean" },
+              password: {
+                type: "boolean",
+                description:
+                  "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+              },
               sessionBinding: { type: "boolean" },
             },
           }),
@@ -3345,8 +3481,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         reply.header("cache-control", "no-store");
         const github = options.auth.githubEnabled === true;
         const google = options.auth.googleEnabled === true;
+        const password = options.auth.passwordSignIn !== "recovery-only";
         return {
-          data: { github, google, sessionBinding: github || google },
+          data: { github, google, password, sessionBinding: github || google },
           meta: { requestId: request.id },
         };
       },
@@ -4026,7 +4163,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "signInEmail",
           summary: "Sign in with email and password",
           description:
-            "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are delayed and return 429 with Retry-After.",
+            "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub or Google sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.",
           tags: ["Authentication"],
           security: [],
           body: {
@@ -4255,6 +4392,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   void app.register(async (routes) => {
     routes.addSchema(ErrorResponse);
     routes.addSchema(AgentDeploymentDiagnosticsResponse);
+    routes.addSchema(AgentRuntimeResponse);
+    routes.addSchema(AgentRuntimeLogsResponse);
     routes.addSchema(AgentRuntimeCredentialResponse);
     routes.addSchema(SecretResponse);
     routes.addSchema(CredentialSourceResponse);
@@ -4631,6 +4770,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   app.setErrorHandler(async (error, request, reply) => {
     let mapped = requestFailure(error);
+    if (error instanceof RuntimeLogsError && error.retryAfterSeconds !== undefined) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+    }
     if (isAuthorizationDenied(error) && !isDependencyUnavailable(error)) {
       const context = contexts.get(request);
       if (context) {

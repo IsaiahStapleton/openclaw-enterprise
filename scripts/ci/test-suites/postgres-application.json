@@ -173,6 +173,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-agent-runtime-logs.test.mjs",
+      "expectedTests": [
+        "runtime log views and downloads persist audit rows before the read and fail closed without them"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-worker-stale-claim.test.mjs",
       "expectedTests": [
         "a worker that loses its claim during Compute cannot publish Namespace status, lifecycle audit, or completion"

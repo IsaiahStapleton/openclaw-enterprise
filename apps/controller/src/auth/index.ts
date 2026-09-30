@@ -45,6 +45,12 @@ import {
   passwordFailureBudget,
   type PasswordSignInAdmission,
 } from "./admission.ts";
+import {
+  issueKnownDevice,
+  knownDeviceFromCookieHeader,
+  knownDeviceSetCookie,
+  verifyKnownDevice,
+} from "./known-device.ts";
 
 export { githubLoginConfiguration, type GitHubLoginConfiguration } from "./github.ts";
 export {
@@ -53,15 +59,38 @@ export {
   type GoogleSignInConfiguration,
 } from "./google.ts";
 
+/**
+ * Who may sign in with a password in the guarded profile: every enrolled account
+ * (`all`, the default) or only the recovery account (`recovery-only`).
+ */
+export type PasswordSignInPolicy = "all" | "recovery-only";
+
 export interface HumanLoginConfiguration {
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
+  /** Set only for `recovery-only`; absent means every enrolled account keeps its password. */
+  readonly passwordSignIn?: "recovery-only";
+}
+
+/** Parses OCC_AUTH_PASSWORD_SIGN_IN; empty or unset keeps the default, `all`. */
+export function passwordSignInPolicy(
+  environment: Readonly<Record<string, string | undefined>>,
+): PasswordSignInPolicy {
+  const value = environment.OCC_AUTH_PASSWORD_SIGN_IN?.trim() ?? "";
+  if (value === "" || value === "all") {
+    return "all";
+  }
+  if (value === "recovery-only") {
+    return value;
+  }
+  throw new Error("OCC_AUTH_PASSWORD_SIGN_IN must be all or recovery-only.");
 }
 
 /**
  * Parses every external sign-in provider. The recovery user ID (still named
  * OCC_AUTH_GITHUB_RECOVERY_USER_ID) seeds the guarded profile, so it is required exactly
- * when at least one provider is configured.
+ * when at least one provider is configured. Recovery-only password sign-in needs a
+ * provider: without one it would leave only the recovery account able to sign in.
  */
 export function humanLoginConfiguration(
   environment: Readonly<Record<string, string | undefined>>,
@@ -69,11 +98,15 @@ export function humanLoginConfiguration(
   const github = githubLoginConfiguration(environment);
   const google = googleLoginConfiguration(environment);
   const recoveryUserId = environment.OCC_AUTH_GITHUB_RECOVERY_USER_ID;
+  const passwordSignIn = passwordSignInPolicy(environment);
   if (github === undefined && google === undefined) {
     if (recoveryUserId !== undefined) {
       throw new Error(
         "External sign-in requires client ID, client secret and recovery user ID for GitHub or Google.",
       );
+    }
+    if (passwordSignIn !== "all") {
+      throw new Error("OCC_AUTH_PASSWORD_SIGN_IN=recovery-only requires GitHub or Google sign-in.");
     }
     return {};
   }
@@ -86,6 +119,7 @@ export function humanLoginConfiguration(
   return {
     ...(github === undefined ? {} : { github }),
     ...(google === undefined ? {} : { google: { ...google, recoveryUserId: recoveryUserId! } }),
+    ...(passwordSignIn === "all" ? {} : { passwordSignIn }),
   };
 }
 export {
@@ -137,12 +171,12 @@ export interface ControllerAuthOptions {
   /** Trusted proxies whose client-address header keys sign-in admission. */
   readonly clientAddress?: ClientAddressConfiguration;
   /**
-   * Password-only profile: whether a user administers the Installation. Once the shared
-   * budget is spent, only administrators' passwords are still checked (slowly). Without it
-   * no account is.
+   * Whether a user administers the Installation. Once the shared budget is spent, only
+   * administrators' passwords (and, with an external provider, the recovery account's) are
+   * still checked (slowly). Without it no administrator is.
    */
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
-  /** Password-only profile: replaces the in-memory failure-counting admission. */
+  /** Replaces the in-memory failure-counting password admission (both profiles). */
   readonly passwordAdmission?: PasswordSignInAdmission;
   /**
    * Password-only profile: audits each password sign-in Better Auth accepted (with the
@@ -174,6 +208,8 @@ export interface PostgresControllerAuthOptions extends Omit<
   readonly iamDriver?: IAMDriver;
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
+  /** Guarded profile only: `recovery-only` admits only the recovery account's password. */
+  readonly passwordSignIn?: "recovery-only";
   /** Receives nonfatal startup conditions as structured log events. */
   readonly onWarning?: (event: { readonly event: string; readonly message: string }) => void;
 }
@@ -213,6 +249,13 @@ export interface ControllerAuth {
   readonly githubProviderId?: string;
   /** Users this startup's activation left unenrolled (no Principal or not exactly one password). */
   readonly activationSkipped?: readonly string[];
+  /** Who may sign in with a password: `recovery-only` only in the guarded profile. */
+  readonly passwordSignIn: PasswordSignInPolicy;
+  /**
+   * Recovery-only password sign-in: enabled accounts, other than the recovery account, with
+   * no identity for a configured provider. They cannot sign in until one is attached.
+   */
+  readonly withoutExternalIdentity?: readonly string[];
   githubStart(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubCallback(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   githubResult(request: FastifyRequest, reply: FastifyReply): Promise<void>;
@@ -450,8 +493,23 @@ function authFailure(error: unknown): { readonly status: number; readonly code: 
   return { status: 503, code: "DEPENDENCY_UNAVAILABLE" };
 }
 
-// Credential rejections spend the password budget; dependency failures do not.
+/**
+ * A rejected password whose denial audit could not be written. The response is 503 (audit
+ * outages fail closed), yet admission still counts it as a credential failure.
+ */
+class DenialAuditUnavailable extends Error {
+  constructor(cause: unknown) {
+    super("The sign-in denial could not be audited.", { cause });
+    this.name = "DenialAuditUnavailable";
+  }
+}
+
+// Credential rejections spend the password budget; dependency failures do not, except a
+// rejection whose denial audit failed.
 function countsAsSignInFailure(error: unknown): boolean {
+  if (error instanceof DenialAuditUnavailable) {
+    return true;
+  }
   const { status } = authFailure(error);
   return status >= 400 && status < 500;
 }
@@ -470,20 +528,29 @@ function ensureEmailPassword(input: Record<string, unknown>): { email: string; p
   return { email, password };
 }
 
+function untrustedOrigin(): AdmissionFailure {
+  return new AdmissionFailure(
+    403,
+    "FORBIDDEN",
+    "The browser origin is not trusted.",
+    "untrusted_origin",
+  );
+}
+
 function requireTrustedBrowserOrigin(request: FastifyRequest, expectedOrigin: string): void {
   const origin = request.headers.origin;
   if (Array.isArray(origin)) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
   if (origin !== undefined) {
     if (origin !== expectedOrigin) {
-      throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+      throw untrustedOrigin();
     }
     return;
   }
 
   if (request.headers["sec-fetch-site"] === "cross-site") {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
 }
 
@@ -520,7 +587,7 @@ function requireSessionMutationOrigin(headers: Headers, expectedOrigin: string):
     headers.get("origin") !== expectedOrigin ||
     (fetchSite !== null && fetchSite !== "same-origin")
   ) {
-    throw new AdmissionFailure(403, "FORBIDDEN", "The browser origin is not trusted.");
+    throw untrustedOrigin();
   }
 }
 
@@ -905,37 +972,49 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     },
   });
   const api = auth.api;
-  // Password-only profile: failure-counting admission keyed on email and, behind a trusted
-  // proxy, client address; administrators are slowed, never refused (see admission.ts).
+  // The known-device cookie is host-only (__Host-) whenever the origin is HTTPS. With an
+  // external provider its name follows the curated endpoints that issue it.
+  const knownDeviceSecure =
+    humanLogin?.knownDeviceSecure ?? (secureOrigin && options.secureCookies !== false);
+  // Failure-counting admission for password sign-in in both profiles, keyed on email (or a
+  // known device) and, behind a trusted proxy, client address. Reserved accounts are slowed,
+  // never refused (see admission.ts).
   const passwordAdmission =
-    humanLogin !== undefined
-      ? undefined
-      : (options.passwordAdmission ??
-        passwordFailureAdmission({
-          ...passwordFailureBudget,
-          countsAsFailure: countsAsSignInFailure,
-          ...(options.onOperationalEvent === undefined
-            ? {}
-            : {
-                onLimited: ({ lane, key }) =>
-                  options.onOperationalEvent!({
-                    event: "authentication.sign-in-limited",
-                    lane,
-                    ...(key === undefined
-                      ? {}
-                      : { keyHash: signInLimitKeyHash(options.secret, key) }),
-                  }),
+    options.passwordAdmission ??
+    passwordFailureAdmission({
+      ...passwordFailureBudget,
+      countsAsFailure: countsAsSignInFailure,
+      ...(options.onOperationalEvent === undefined
+        ? {}
+        : {
+            onLimited: ({ lane, key }) =>
+              options.onOperationalEvent!({
+                event: "authentication.sign-in-limited",
+                lane,
+                ...(key === undefined ? {} : { keyHash: signInLimitKeyHash(options.secret, key) }),
               }),
-          // Timing differences here are hidden by the slow lane's floor. Lookup failures
-          // propagate, so an outage is 503 rather than a refusal.
-          async isReserved(email) {
-            if (options.passwordAdministrator === undefined) {
-              return false;
-            }
-            const found = await (await auth.$context).internalAdapter.findUserByEmail(email);
-            return found !== null && (await options.passwordAdministrator(found.user.id));
-          },
-        }));
+          }),
+      // Timing differences here are hidden by the slow lane's floor. Lookup failures
+      // propagate, so an outage is 503 rather than a refusal.
+      async isReserved(email) {
+        if (humanLogin !== undefined) {
+          // The recovery account is the documented way in when a provider is down, so
+          // strangers spending its email can slow it but never refuse it.
+          if (humanLogin.isRecoveryEmail(email)) {
+            return true;
+          }
+          // Recovery-only: every other password is refused unread, reserved or not.
+          if (humanLogin.passwordSignIn === "recovery-only") {
+            return false;
+          }
+        }
+        if (options.passwordAdministrator === undefined) {
+          return false;
+        }
+        const found = await (await auth.$context).internalAdapter.findUserByEmail(email);
+        return found !== null && (await options.passwordAdministrator(found.user.id));
+      },
+    });
 
   /** Validates and hashes a new password account without writing it. */
   async function prepareAccount(input: ProvisionAuthAccountInput): Promise<PreparedAuthAccount> {
@@ -1176,20 +1255,28 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         requireTrustedBrowserOrigin(request, expectedBrowserOrigin);
         const input = authBody(request);
         const body = ensureEmailPassword(input);
-        if (humanLogin) {
-          return runPrivateEndpoint(request, "/oce/password", body);
-        }
+        // Read from the validated input, not the credential pair, so the admission key
+        // is plainly derived from the email alone.
+        const email = String(input.email).trim().toLowerCase();
+        const deviceCookie = knownDeviceFromCookieHeader(request.headers.cookie, knownDeviceSecure);
+        const device = verifyKnownDevice(options.secret, email, deviceCookie, Date.now());
         // The address lane needs a trusted proxy: without one, browsers behind the ingress
-        // share its address, so only the email lane applies.
+        // share its address, so only the email (or known-device) lane applies.
         const attempt = {
           ...(options.clientAddress === undefined
             ? {}
             : { clientAddress: clientAddressOf(request) }),
-          // Read from the validated input, not the credential pair, so the admission key
-          // is plainly derived from the email alone.
-          email: String(input.email).trim().toLowerCase(),
+          email,
+          ...(device === undefined ? {} : { knownDevice: device.deviceKey }),
         };
-        return passwordAdmission!.admit(attempt, async () => {
+        if (humanLogin) {
+          // The curated endpoint checks the password, issues the session and marks the
+          // browser as a known device; only credential rejections spend budget.
+          return passwordAdmission.admit(attempt, () =>
+            runPrivateEndpoint(request, "/oce/password", body),
+          );
+        }
+        return passwordAdmission.admit(attempt, async () => {
           const audit = options.passwordSignInAudit;
           let result;
           try {
@@ -1202,7 +1289,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
             });
           } catch (error) {
             if (audit !== undefined && countsAsSignInFailure(error)) {
-              await audit.refused();
+              try {
+                await audit.refused();
+              } catch (auditError) {
+                // Denial audits fail closed (503), but the wrong password still spends budget.
+                throw new DenialAuditUnavailable(auditError);
+              }
             }
             throw error;
           }
@@ -1215,6 +1307,17 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
               await context.internalAdapter.deleteSession(result.response.token).catch(() => {});
               throw error;
             }
+          }
+          // Only a successful sign-in marks the browser as a known device for this email.
+          // Rejections throw; a success leaves the status unset (200).
+          if ((result.status ?? 200) === 200) {
+            result.headers.append(
+              "set-cookie",
+              knownDeviceSetCookie(
+                knownDeviceSecure,
+                issueKnownDevice(options.secret, email, Date.now(), deviceCookie),
+              ),
+            );
           }
           return result;
         });
@@ -1341,6 +1444,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
       ),
     githubEnabled: humanLogin?.githubProviderId !== undefined,
     humanProfile: humanLogin === undefined ? "password" : "guarded",
+    passwordSignIn: humanLogin?.passwordSignIn ?? "all",
     githubStart: githubRoutes.start,
     githubCallback: githubRoutes.callback,
     githubResult: githubRoutes.result,
@@ -1466,7 +1570,16 @@ export async function hashLocalPassword(password: string): Promise<string> {
 export async function createPostgresControllerAuth(
   options: PostgresControllerAuthOptions,
 ): Promise<ControllerAuth> {
-  const { pool, state, iamDriver, github, google, onWarning, ...controllerOptions } = options;
+  const {
+    pool,
+    state,
+    iamDriver,
+    github,
+    google,
+    passwordSignIn,
+    onWarning,
+    ...controllerOptions
+  } = options;
   const persistence =
     state === undefined
       ? undefined
@@ -1479,6 +1592,9 @@ export async function createPostgresControllerAuth(
   const recoveryUserId = github?.recoveryUserId ?? google?.recoveryUserId;
   const guarded = recoveryUserId !== undefined;
   const providerLabel = github === undefined ? "Google" : "GitHub";
+  if (!guarded && passwordSignIn !== undefined) {
+    throw new Error("Recovery-only password sign-in requires GitHub or Google sign-in.");
+  }
   if (!guarded && persistence && (await persistence.recoveryDesignation())) {
     throw new Error(
       "An activated human authentication profile requires a configured external sign-in provider.",
@@ -1514,13 +1630,15 @@ export async function createPostgresControllerAuth(
           recoveryUserId,
           ...(github === undefined ? {} : { github }),
           ...(google === undefined ? {} : { google }),
+          ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
         },
         options.baseURL,
+        { trustedClientAddress: controllerOptions.clientAddress !== undefined },
       );
   const auth = createControllerAuth({
     ...controllerOptions,
     ...(humanLogin === undefined ? {} : { humanLogin }),
-    ...(humanLogin !== undefined || iamDriver === undefined
+    ...(iamDriver === undefined
       ? {}
       : {
           passwordAdministrator: (userId: string) =>
@@ -1539,6 +1657,7 @@ export async function createPostgresControllerAuth(
   // Finish static auth initialization before the one-way activation transaction.
   await auth.auth.$context;
   let activationSkipped: readonly string[] = [];
+  let withoutExternalIdentity: readonly string[] = [];
   if (guarded) {
     const activation = await activateRecoveryAccount(
       persistence!,
@@ -1562,10 +1681,18 @@ export async function createPostgresControllerAuth(
     // The recovery account's password lane stays admitted under sign-in floods. It follows the
     // stored designation, never the environment seed, which may name a replaced holder.
     humanLogin!.designateRecovery(designation.email);
+    if (passwordSignIn === "recovery-only") {
+      withoutExternalIdentity = await persistence!.accountsWithoutExternalIdentity(
+        [humanLogin!.githubProviderId, humanLogin!.googleProviderId].filter(
+          (providerId): providerId is string => providerId !== undefined,
+        ),
+      );
+    }
   }
   return {
     ...auth,
     ...(activationSkipped.length === 0 ? {} : { activationSkipped }),
+    ...(withoutExternalIdentity.length === 0 ? {} : { withoutExternalIdentity }),
     ...(humanLogin === undefined
       ? {}
       : {

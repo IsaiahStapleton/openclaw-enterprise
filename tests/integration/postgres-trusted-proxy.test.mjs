@@ -91,22 +91,25 @@ test(
     await t.test(
       "a flood from one client behind the ingress leaves other clients admitted",
       async () => {
+        // Twenty failed sign-ins per client address, each for a different email.
         const client = { "x-forwarded-for": `1.2.3.4, ${ingress}` };
-        for (let index = 0; index < 10; index += 1) {
+        for (let index = 0; index < 20; index += 1) {
           assert.equal((await guess(ingress, client, index)).statusCode, 401);
         }
-        assert.equal((await guess(ingress, client, 10)).statusCode, 429);
-        assert.equal((await guess(ingress, { "x-forwarded-for": "5.6.7.8" }, 11)).statusCode, 401);
+        const refused = await guess(ingress, client, 20);
+        assert.equal(refused.statusCode, 429);
+        assert.ok(Number(refused.headers["retry-after"]) >= 1);
+        assert.equal((await guess(ingress, { "x-forwarded-for": "5.6.7.8" }, 21)).statusCode, 401);
       },
     );
 
     await t.test("an untrusted peer cannot choose its client address", async () => {
-      for (let index = 0; index < 10; index += 1) {
+      for (let index = 0; index < 20; index += 1) {
         const spoofed = { "x-forwarded-for": `198.51.100.${index}` };
         assert.equal((await guess(outsider, spoofed, index)).statusCode, 401);
       }
       assert.equal(
-        (await guess(outsider, { "x-forwarded-for": "198.51.100.99" }, 10)).statusCode,
+        (await guess(outsider, { "x-forwarded-for": "198.51.100.99" }, 20)).statusCode,
         429,
       );
     });

@@ -55,6 +55,9 @@
       "path": "tests/conformance/occ-api-security.test.mjs"
     },
     {
+      "path": "tests/conformance/runtime-logs-content.test.mjs"
+    },
+    {
       "path": "tests/conformance/occ-read.test.mjs"
     },
     {
@@ -458,6 +461,9 @@
       "path": "tests/integration/google-login-transport.test.mjs"
     },
     {
+      "path": "tests/integration/password-sign-in-policy.test.mjs"
+    },
+    {
       "path": "tests/integration/client-address.test.mjs"
     },
     {
@@ -465,6 +471,9 @@
     },
     {
       "path": "tests/integration/password-sign-in-audit.test.mjs"
+    },
+    {
+      "path": "tests/integration/known-device-cookie.test.mjs"
     },
     {
       "path": "tests/conformance/postgres-auth-binding.test.mjs"

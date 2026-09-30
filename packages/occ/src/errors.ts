@@ -147,9 +147,13 @@ export class AgentDeletingError extends ResourceConflictError {
 }
 
 export class NamespaceNotEmptyError extends ResourceConflictError {
-  constructor(message = "The Namespace must be empty before deletion.") {
-    super(message);
+  /** Public resource kinds that still occupy the Namespace, such as "Presets". */
+  readonly contents: readonly string[];
+
+  constructor(contents: readonly string[] = []) {
+    super("The Namespace must be empty before deletion.");
     this.name = "NamespaceNotEmptyError";
+    this.contents = Object.freeze([...contents]);
   }
 }
 
@@ -199,6 +203,39 @@ export class NotImplementedError extends Error {
     super(message);
     this.name = "NotImplementedError";
     this.operation = operation;
+  }
+}
+
+/** The cluster denied `pods/log` or `events`: an operator must grant the documented roles. */
+export class RuntimeLogsForbiddenByClusterError extends Error {
+  constructor() {
+    super("The cluster denied a runtime log or Event read.");
+    this.name = "RuntimeLogsForbiddenByClusterError";
+  }
+}
+
+export type RuntimeLogsErrorCode =
+  | "RUNTIME_LOGS_CURSOR_INVALID"
+  | "RUNTIME_LOGS_POD_INVALID"
+  | "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+  | "RUNTIME_LOGS_RATE_LIMITED"
+  | "RUNTIME_LOGS_CLUSTER_RBAC"
+  | "RUNTIME_LOGS_UNAVAILABLE"
+  | "RUNTIME_LOGS_AUDIT_UNAVAILABLE"
+  | "RUNTIME_LOGS_TIMEOUT";
+
+/** A fixed-message runtime log failure; Driver and cluster error text never reaches it. */
+export class RuntimeLogsError extends Error {
+  readonly code: RuntimeLogsErrorCode;
+  readonly retryAfterSeconds?: number;
+
+  constructor(code: RuntimeLogsErrorCode, retryAfterSeconds?: number) {
+    super(`Runtime log request failed: ${code}.`);
+    this.name = "RuntimeLogsError";
+    this.code = code;
+    if (retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
   }
 }
 

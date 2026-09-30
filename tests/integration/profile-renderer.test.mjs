@@ -724,6 +724,24 @@ test(
     assert.match(manifests, /name: OCC_AUTH_GITHUB_CLIENT_ID/);
     assert.match(manifests, /name: OCC_AUTH_GITHUB_RECOVERY_USER_ID\n\s+value: "recovery-admin_1"/);
     assert.match(manifests, /name: OCC_AUTH_TRUSTED_PROXY_CIDRS\n\s+value: "10\.42\.0\.0\/16"/);
+    // Password sign-in stays open to every account unless recovery-only is chosen.
+    assert.doesNotMatch(github.values, /passwordSignIn/);
+    assert.doesNotMatch(manifests, /OCC_AUTH_PASSWORD_SIGN_IN/);
+    assert.doesNotMatch(github.preflight.prerequisites.join("\n"), /identity attached/);
+    const recoveryOnly = render(
+      "openclaw",
+      externalSignInInput({ trustedProxy, passwordSignIn: "recovery-only" }),
+    );
+    assert.equal(recoveryOnly.summary.ok, true);
+    assert.match(recoveryOnly.values, /passwordSignIn: recovery-only/);
+    assert.match(
+      recoveryOnly.preflight.prerequisites.join("\n"),
+      /GitHub or Google identity attached to every ordinary account/,
+    );
+    assert.match(
+      helmTemplate(recoveryOnly),
+      /name: OCC_AUTH_PASSWORD_SIGN_IN\n\s+value: recovery-only/,
+    );
 
     const google = render(
       "codex",
@@ -757,7 +775,7 @@ test("preflight warns, without failing, when no trusted proxy is set", () => {
   assert.equal(github.summary.ok, true);
   assert.match(
     github.preflight.warnings.join("\n"),
-    /controlPlane\.trustedProxy is not set: .*every browser shares one address budget/,
+    /controlPlane\.trustedProxy is not set: .*GitHub or Google sign-in starts have no per-client limit/,
   );
   assert.doesNotMatch(github.values, /trustedProxy:/);
   const password = render("openclaw", baseInput());
@@ -778,6 +796,16 @@ test("preflight rejects external sign-in and trusted proxy inputs Helm would rej
     "openclaw",
     baseInput({ controlPlane: { ...baseInput().controlPlane, recoveryUserId: "admin" } }),
     /controlPlane.recoveryUserId requires controlPlane.github or controlPlane.google/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    baseInput({ controlPlane: { ...baseInput().controlPlane, passwordSignIn: "recovery-only" } }),
+    /controlPlane.passwordSignIn requires controlPlane.github or controlPlane.google/,
+  );
+  assertPreflightFailure(
+    "openclaw",
+    externalSignInInput({ passwordSignIn: "none" }),
+    /controlPlane.passwordSignIn must be all or recovery-only/,
   );
   assertPreflightFailure(
     "openclaw",

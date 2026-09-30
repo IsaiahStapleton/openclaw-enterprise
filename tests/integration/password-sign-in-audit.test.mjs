@@ -6,7 +6,7 @@ const baseURL = "http://127.0.0.1";
 const email = "audited@example.test";
 const password = "audited-account-password";
 
-function controller(audit) {
+function controller(audit, extra = {}) {
   const memoryDatabase = { user: [], session: [], account: [], verification: [], apikey: [] };
   const auth = createControllerAuth({
     mode: "development",
@@ -16,6 +16,7 @@ function controller(audit) {
     secureCookies: false,
     memoryDatabase,
     passwordSignInAudit: audit,
+    ...extra,
   });
   return { auth, memoryDatabase };
 }
@@ -79,4 +80,35 @@ test("a sign-in whose audit cannot be written is refused and its session revoked
   assert.equal(response.status, 503, JSON.stringify(response.payload));
   assert.equal(response.headers["set-cookie"], undefined);
   assert.equal(memoryDatabase.session.length, 0);
+});
+
+test("a wrong password whose denial audit fails is 503 and still spends the budget", async () => {
+  let refusals = 0;
+  const events = [];
+  const { auth } = controller(
+    {
+      accepted: async () => {},
+      refused: async () => {
+        refusals += 1;
+        throw new Error("audit unavailable");
+      },
+    },
+    { onOperationalEvent: (event) => events.push(event) },
+  );
+  await auth.createAccount({ email, password });
+  const statuses = [];
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    statuses.push((await signIn(auth, { email, password: "wrong-password-guess" })).status);
+  }
+  // The audit outage is reported, never hidden behind a 401.
+  assert.deepEqual(new Set(statuses), new Set([503]));
+  assert.equal(refusals, 10);
+  // Every failed guess counted: the next attempt is refused before the password is checked.
+  const limited = await signIn(auth, { email, password: "wrong-password-guess" });
+  assert.equal(limited.status, 429, JSON.stringify(limited.payload));
+  assert.equal(refusals, 10);
+  assert.deepEqual(
+    events.map(({ event, lane }) => [event, lane]),
+    [["authentication.sign-in-limited", "email"]],
+  );
 });

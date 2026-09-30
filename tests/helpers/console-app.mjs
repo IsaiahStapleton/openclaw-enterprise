@@ -210,6 +210,9 @@ export async function createConsoleAppFixture(t, options = {}) {
       ? {}
       : { observabilityUrl: options.observabilityUrl }),
     ...(options.nativeAdmin === undefined ? {} : { nativeAdmin: options.nativeAdmin }),
+    ...(options.agentRuntimeLogs === undefined
+      ? {}
+      : { agentRuntimeLogs: options.agentRuntimeLogs }),
     ...(options.nativeAdminGatewayApiKey === undefined
       ? {}
       : { nativeAdminGatewayApiKey: options.nativeAdminGatewayApiKey }),

@@ -1,6 +1,9 @@
 import { button, element } from "../dom.mjs";
 import { message } from "./list.mjs";
 
+// Deletion finishes in the background; poll until the Agent is gone, then return to the list.
+export const DELETION_POLL_MS = 3000;
+
 export function createAgentDeletion(context, path, agent, onDeleting) {
   const section = element("section", {
     className: "agent-card deletion-note",
@@ -17,6 +20,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     notice: "",
     error: null,
   };
+  let pollTimer;
 
   section.append(
     element("h2", { id: "agent-deletion-title" }, "Delete Agent"),
@@ -65,10 +69,23 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     state.needsRefresh = false;
     state.notice = "";
     onDeleting();
+    schedulePoll();
   }
 
-  async function refreshStatus() {
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(() => {
+      if (context.isCurrent() && state.deleting) {
+        void refreshStatus({ poll: true });
+      }
+    }, DELETION_POLL_MS);
+  }
+
+  async function refreshStatus({ poll = false } = {}) {
     if (state.pending || !context.isCurrent()) {
+      if (poll && state.deleting && context.isCurrent()) {
+        schedulePoll();
+      }
       return;
     }
     state.pending = true;
@@ -80,7 +97,11 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
         return;
       }
       if (current?.status === "deleting") {
-        setDeleting();
+        if (state.deleting) {
+          schedulePoll();
+        } else {
+          setDeleting();
+        }
       } else if (current?.status === "active" && !state.deleting) {
         state.needsRefresh = false;
         state.notice = "The Agent is still active. You can try deleting it again.";
@@ -100,12 +121,15 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
           text: `Could not refresh deletion status. ${message(error)}`,
           requestId: error.requestId,
         };
+        // Stop polling on errors; the reader can retry with Refresh deletion status.
       }
     } finally {
       if (context.isCurrent()) {
         state.pending = false;
         render();
-        (state.deleting || state.needsRefresh ? refresh : remove).focus();
+        if (!poll) {
+          (state.deleting || state.needsRefresh ? refresh : remove).focus();
+        }
       }
     }
   }
@@ -216,5 +240,8 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
   }
 
   render();
+  if (state.deleting) {
+    schedulePoll();
+  }
   return section;
 }
