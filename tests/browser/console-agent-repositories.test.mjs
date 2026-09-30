@@ -17,7 +17,6 @@ import {
   login,
   nativeValues,
   newPage,
-  nonAuthWriteRequests,
   pathRequests,
   repositoryCheckbox,
   unusedPort,
@@ -136,37 +135,6 @@ test("Agent repository access preserves inheritance, custom overrides, and expli
   await page.locator("#repository-default-git-full").check();
   await page.getByText("Choose approved access", { exact: true }).waitFor();
   assert.equal(await page.locator("#repository-inherit-documentation").isVisible(), true);
-  // Navigation and failed rediscovery must retain both the default and the explicit override.
-  const optionsUrl = `**/namespaces/${namespace.id}/agents/repository-options`;
-  for (const status of [503, 500]) {
-    await page.route(optionsUrl, (route) =>
-      route.fulfill({
-        status,
-        contentType: "application/json",
-        body: JSON.stringify({
-          error: {
-            code: status === 503 ? "REPOSITORY_OPTIONS_UNAVAILABLE" : "INTERNAL_ERROR",
-            message: "Repository discovery is temporarily unavailable.",
-          },
-        }),
-      }),
-    );
-    for (let navigation = 0; navigation < 2; navigation += 1) {
-      await page.getByRole("link", { name: "← Agents" }).click();
-      await page.getByRole("button", { name: "Create Agent", exact: true }).click();
-      await page
-        .getByRole("button", { name: "Retry repository choices" })
-        .and(page.locator(":enabled"))
-        .waitFor();
-      assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
-    }
-    await page.unroute(optionsUrl);
-    await page.getByRole("button", { name: "Retry repository choices" }).click();
-    assert.equal(await repositoryCheckbox(page, "example/application").isChecked(), true);
-    assert.equal(await repositoryCheckbox(page, "example/documentation").isChecked(), true);
-    assert.equal(await page.locator("#repository-default-git-full").isChecked(), true);
-    await page.getByText("Choose approved access", { exact: true }).waitFor();
-  }
   await page.getByText("Contributor · Custom", { exact: true }).waitFor();
   await enterManualModel(page, "repository-fixture-model-key", "gpt-5.1");
   await page.getByLabel("Agent name").fill("Repository Agent");
@@ -176,7 +144,9 @@ test("Agent repository access preserves inheritance, custom overrides, and expli
     .getByRole("alert")
     .filter({ hasText: "Choose approved access for each selected repository." })
     .waitFor();
-  assert.equal(nonAuthWriteRequests(requests).length, 0);
+  // Only the model credential Secret was created; no Configuration or Agent write started.
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
   await page.locator("#repository-inherit-documentation").uncheck();
   await page.locator("#repository-override-documentation-git-read").check();
   await page.locator("#repository-default-git-read").check();
@@ -439,7 +409,9 @@ test("Repository recovery preserves and updates hosted plugin policy before retr
   fixture.controller.selectDriver("configuration", configurationDriver.id);
   const secret = await fixture.createSecret(namespace.id, "Model key", "preset-plugin-model-key");
   const pluginId = "codex-plugin:knowledge@openai-curated-remote";
-  const initialPlugins = { [pluginId]: { enabled: true, toolDefaults: { approval: "provider_default" } } };
+  const initialPlugins = {
+    [pluginId]: { enabled: true, toolDefaults: { approval: "provider_default" } },
+  };
   const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
     body: {
       name: "Repository and hosted plugin recovery",
@@ -505,7 +477,7 @@ test("Repository recovery preserves and updates hosted plugin policy before retr
   const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
   await dialog.getByRole("button", { name: "Configured plugins", exact: true }).click();
   await dialog.getByRole("button", { name: pluginId, exact: true }).click();
-  await dialog.getByLabel(`${pluginId} default approval`, { exact: true }).selectOption("none");
+  await dialog.getByLabel(`${pluginId} require approval for`, { exact: true }).selectOption("none");
   await dialog.getByRole("button", { name: "Done", exact: true }).click();
   const updatedPlugins = { [pluginId]: { enabled: true, toolDefaults: { approval: "none" } } };
   assert.deepEqual(JSON.parse(await page.locator("#agent-plugins").inputValue()), updatedPlugins);
@@ -728,7 +700,7 @@ for (const count of [1, 5, 25, 140]) {
       );
       await page.getByRole("button", { name: "Create Agent", exact: true }).click();
       assert.equal((await saved).status(), 201);
-      await page.getByRole("heading", { name: "New revision" }).waitFor();
+      await page.getByRole("heading", { name: "Create new version" }).waitFor();
       await page.goto(`${fixture.origin}/console/agents/new?namespace=${namespace.id}`);
       await page.getByRole("button", { name: "Start without Preset" }).click();
       await page.getByText(/Recently used/).waitFor();

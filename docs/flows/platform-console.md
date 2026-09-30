@@ -195,7 +195,7 @@ Compute supplies gateway authentication; Presets replace the starter unchanged.
 
 `createRepositoryFields` loads `GET /namespaces/:namespaceId/agents/repository-options`,
 then requests optional descriptions for visible refs. [Repository admission](agent-repository-credentials.md) resolves the
-submitted `repositoryAccess`. Drafts retain selections across navigation and failed
+submitted `repositoryAccess`. Retained drafts keep selections through failed
 discovery; retries recheck current policy. Only `503 REPOSITORY_OPTIONS_UNAVAILABLE`
 permits creation without bindings, and only without retained selections; other
 failures block submission.

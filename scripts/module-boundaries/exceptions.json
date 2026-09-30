@@ -294,9 +294,14 @@
       "specifier": "./state/repository-credential-state.ts",
       "kind": "import",
       "typeOnly": false,
-      "bindings": ["value:validAdmittedRepositoryBindings", "value:validRepositoryRevisionState"],
+      "bindings": [
+        "value:normalizedRepositoryAccess",
+        "value:validAdmittedRepositoryBindings",
+        "value:validRepositoryAccess",
+        "value:validRepositoryRevisionState"
+      ],
       "owner": "Repository revision admission",
-      "reason": "OCC admission reuses the canonical material-free repository snapshot validators currently located in the State module.",
+      "reason": "OCC admission reuses the canonical material-free repository snapshot and access-intent validators currently located in the State module.",
       "removeWhen": "Move shared repository snapshot validation into neutral contracts and update admission and State consumers."
     },
     {
