@@ -9,6 +9,7 @@ import { repositoryProfile, repositoryWriteAccessHelp } from "./repository-profi
 import { createRepositoryFields } from "./repositories.mjs";
 import { renderChannels } from "../channels.mjs";
 import { renderWorkspaceFiles } from "./workspace.mjs";
+import { renderAgentLogs } from "./logs.mjs";
 import {
   displayDate,
   shortId,
@@ -461,7 +462,7 @@ function createVersionDiagnosticsPanel(context, path, revisionId) {
       element(
         "p",
         { className: "muted" },
-        "For Kubernetes Compute, Gateway checks currently cover Slack configuration, authentication, and connectivity. They do not inspect Pod conditions, restarts, Events, logs, or run a model turn.",
+        "For Kubernetes Compute, Gateway checks currently cover Slack configuration, authentication, and connectivity. They do not run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
       ),
       ...(error
         ? [
@@ -503,6 +504,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     "channels",
     ...(selected === "draft" ? ["repositories", "credentials"] : []),
     "workspace",
+    ...(selected === "draft" ? [] : ["logs"]),
   ];
   let selectedTab = tabsForSelection.includes(tab) ? tab : "configuration";
   let deployInFlight = false;
@@ -641,6 +643,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         ]
       : []),
     ["workspace", "Workspace files"],
+    ...(selected === "draft" ? [] : [["logs", "Logs"]]),
   ]) {
     const control = button(
       label,
@@ -1390,7 +1393,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       mountedTab = null;
     }
     renderDetailHeading();
-    versionEvidence.hidden = selectedTab === "workspace";
+    versionEvidence.hidden = selectedTab === "workspace" || selectedTab === "logs";
     const tab = selectedTab;
     for (const [index, id] of tabsForSelection.entries()) {
       const control = tabs.children[index];
@@ -1437,6 +1440,14 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     content.replaceChildren();
     if (tab === "workspace") {
       content.append(renderWorkspaceFiles(tabContext, agent, path));
+      state.loading = false;
+      content.style.minHeight = "";
+      return;
+    }
+    if (tab === "logs") {
+      // Polling views are rebuilt on every visit instead of being retained.
+      state.reusable = false;
+      content.append(renderAgentLogs(tabContext, { agent, revisionId: selected }));
       state.loading = false;
       content.style.minHeight = "";
       return;
@@ -2219,7 +2230,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     void renderTab();
     return true;
   });
-  if (selectedTab === "workspace") {
+  if (selectedTab === "workspace" || selectedTab === "logs") {
     void loadOverview();
   } else {
     details ??= loadDetails();
