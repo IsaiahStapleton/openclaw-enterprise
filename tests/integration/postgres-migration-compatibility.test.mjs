@@ -1485,6 +1485,7 @@ test(
       [38, "preAgentDeletionTakeover"],
       [39, "preNamespaceDeletionTakeover"],
       [40, "preRepositoryAccess"],
+      [41, "preRestrictionReadLogs"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1733,6 +1734,7 @@ test(
       [38, "preAgentDeletionTakeover"],
       [39, "preNamespaceDeletionTakeover"],
       [40, "preRepositoryAccess"],
+      [41, "preRestrictionReadLogs"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1802,6 +1804,7 @@ test(
       [38, "preAgentDeletionTakeover"],
       [39, "preNamespaceDeletionTakeover"],
       [40, "preRepositoryAccess"],
+      [41, "preRestrictionReadLogs"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

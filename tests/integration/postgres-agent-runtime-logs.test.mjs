@@ -262,6 +262,12 @@ test(
     assert.equal(restricted.statusCode, 403, restricted.body);
     assert.equal(restricted.body.includes("first line"), false);
     assert.equal(computeDriver.calls.filter(({ operation }) => operation === "read").length, reads);
-    assert.equal((await viewRows()).rowCount, 1);
+    assert.deepEqual(
+      (await viewRows()).rows.map(({ kind, outcome }) => [kind, outcome]),
+      [
+        ["access", "success"],
+        ["authorization_denial", "denied"],
+      ],
+    );
   },
 );
