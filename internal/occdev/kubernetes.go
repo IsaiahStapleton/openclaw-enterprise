@@ -162,17 +162,21 @@ func (r *runner) engineImageReference(ctx context.Context, image string) (string
 	}
 	first, _, hasSlash := strings.Cut(image, "/")
 	qualified := hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost")
+	// Docker Hub spells one repository several ways: `postgres`,
+	// `library/postgres`, and `docker.io/library/postgres` all name the same
+	// image. Compare expanded names so any spelling finds the recorded one.
+	requestedHub, requestedOnHub := dockerHubReference(requested)
 	match := ""
 	for _, tag := range tags {
 		matched := false
-		if qualified && (first == "docker.io" || first == "index.docker.io") {
-			requestedHub, ok := dockerHubReference(requested)
-			recordedHub, recordedOK := dockerHubReference(tag)
-			matched = ok && recordedOK && requestedHub == recordedHub
-		} else if !qualified {
+		if requestedOnHub {
+			recordedHub, recordedOnHub := dockerHubReference(tag)
+			matched = recordedOnHub && requestedHub == recordedHub
+		}
+		if !matched && !qualified {
 			registry, unqualified, found := strings.Cut(tag, "/")
 			matched = found && (registry == "localhost" || strings.ContainsAny(registry, ".:")) &&
-				(unqualified == image || unqualified == requested || (registry == "docker.io" && !hasSlash && unqualified == "library/"+requested))
+				(unqualified == image || unqualified == requested)
 		}
 		if !matched {
 			continue
