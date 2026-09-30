@@ -97,6 +97,7 @@ import {
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
   AgentDeletingError,
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
@@ -104,6 +105,7 @@ import {
   PluginDiscoveryError,
   ChannelDirectoryError,
   ChannelCredentialError,
+  ConfigurationHarnessError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -172,6 +174,7 @@ import type {
 
 export {
   AgentDeletingError,
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DependencyUnavailableError,
   DriverSelectionError,
@@ -179,6 +182,7 @@ export {
   PluginDiscoveryError,
   ChannelDirectoryError,
   ChannelCredentialError,
+  ConfigurationHarnessError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -186,6 +190,7 @@ export {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  SandboxRevisionUnsupportedError,
   ScopeViolationError,
 } from "./errors.ts";
 export {
@@ -735,7 +740,9 @@ function configuredRuntime(value: unknown): string | undefined {
   }
   const runtime = asRecord(runtimeValue);
   if (runtime === undefined || (runtime.id !== "openclaw" && runtime.id !== "codex")) {
-    throw new ScopeViolationError("The configured model Harness runtime identity is unsupported.");
+    throw new ConfigurationHarnessError(
+      "The configured model Harness runtime identity is unsupported.",
+    );
   }
   return runtime.id;
 }
@@ -747,7 +754,7 @@ function configuredModels(value: unknown): readonly string[] {
   const configured = asRecord(value);
   const fallbacks = configured?.fallbacks;
   if (fallbacks !== undefined && !Array.isArray(fallbacks)) {
-    throw new ScopeViolationError("Configured Agent model fallbacks must be an array.");
+    throw new ConfigurationHarnessError("Configured Agent model fallbacks must be an array.");
   }
   const model = typeof value === "string" ? value : configured?.primary;
   const models = [model, ...(fallbacks ?? [])].map((selected) => {
@@ -757,14 +764,16 @@ function configuredModels(value: unknown): readonly string[] {
       selected.startsWith("/") ||
       selected.endsWith("/")
     ) {
-      throw new ScopeViolationError(
+      throw new ConfigurationHarnessError(
         "The configured Agent model must identify its provider and model.",
       );
     }
     return selected;
   });
   if (models.some((selected) => selected.split("/", 2)[0] !== models[0]!.split("/", 2)[0])) {
-    throw new ScopeViolationError("Configured model fallbacks must retain the primary provider.");
+    throw new ConfigurationHarnessError(
+      "Configured model fallbacks must retain the primary provider.",
+    );
   }
   return models;
 }
@@ -795,14 +804,14 @@ function providerModelEntry(
     return undefined;
   }
   if (!Array.isArray(configured)) {
-    throw new ScopeViolationError("Configured provider models must be a native model array.");
+    throw new ConfigurationHarnessError("Configured provider models must be a native model array.");
   }
   const matches = configured.filter((candidate) => {
     const value = asRecord(candidate);
     return value?.id === model || value?.id === model.split("/", 2)[1];
   });
   if (matches.length > 1) {
-    throw new ScopeViolationError("The selected provider model Harness policy is ambiguous.");
+    throw new ConfigurationHarnessError("The selected provider model Harness policy is ambiguous.");
   }
   return asRecord(matches[0]);
 }
@@ -815,7 +824,7 @@ export function resolveConfiguredHarnessId(
   const defaults = asRecord(agents?.defaults);
   const entries = asRecord(agents?.entries);
   if (agents?.list !== undefined && (!Array.isArray(agents.list) || agents.list.length > 0)) {
-    throw new ScopeViolationError("Configured Agent lists are unsupported.");
+    throw new ConfigurationHarnessError("Configured Agent lists are unsupported.");
   }
   const providerConfigurations = asRecord(asRecord(values.models)?.providers);
   const defaultSelection = configuredModels(defaults?.model);
@@ -826,19 +835,21 @@ export function resolveConfiguredHarnessId(
   for (const value of Object.values(entries ?? {})) {
     const entry = asRecord(value);
     if (entry === undefined) {
-      throw new ScopeViolationError("The configured Agent runtime entry is invalid.");
+      throw new ConfigurationHarnessError("The configured Agent runtime entry is invalid.");
     }
     const selection = entry.model === undefined ? defaultSelection : configuredModels(entry.model);
     const model = selection[0];
     if (model === undefined) {
-      throw new ScopeViolationError("The configured Agent runtime model cannot be resolved.");
+      throw new ConfigurationHarnessError("The configured Agent runtime model cannot be resolved.");
     }
     if (candidates[0] !== undefined && model !== candidates[0].model) {
-      throw new ScopeViolationError("Configured Agent entries must match the primary model.");
+      throw new ConfigurationHarnessError("Configured Agent entries must match the primary model.");
     }
     const models = asRecord(entry.models);
     if (entry.models !== undefined && !matchingSelectableModels(models, model)) {
-      throw new ScopeViolationError("Configured selectable models must match the primary model.");
+      throw new ConfigurationHarnessError(
+        "Configured selectable models must match the primary model.",
+      );
     }
     candidates.push(...selection.map((model) => ({ model, entry })));
   }
@@ -847,19 +858,23 @@ export function resolveConfiguredHarnessId(
     defaults?.models !== undefined &&
     !matchingSelectableModels(defaultModels, candidates[0]?.model)
   ) {
-    throw new ScopeViolationError("Configured selectable models must match the primary model.");
+    throw new ConfigurationHarnessError(
+      "Configured selectable models must match the primary model.",
+    );
   }
 
   for (const [providerId, value] of Object.entries(providerConfigurations ?? {})) {
     const provider = asRecord(value);
     if (provider === undefined) {
-      throw new ScopeViolationError("The configured Agent model provider is invalid.");
+      throw new ConfigurationHarnessError("The configured Agent model provider is invalid.");
     }
     if (provider.models === undefined) {
       continue;
     }
     if (!Array.isArray(provider.models)) {
-      throw new ScopeViolationError("Configured provider models must be a native model array.");
+      throw new ConfigurationHarnessError(
+        "Configured provider models must be a native model array.",
+      );
     }
     if (
       provider.models.some((value) => {
@@ -871,7 +886,7 @@ export function resolveConfiguredHarnessId(
         );
       })
     ) {
-      throw new ScopeViolationError(
+      throw new ConfigurationHarnessError(
         "Configured selectable provider models must match the primary model.",
       );
     }
@@ -895,7 +910,9 @@ export function resolveConfiguredHarnessId(
         .filter((runtime): runtime is string => runtime !== undefined),
     );
     if (policies.size > 1) {
-      throw new ScopeViolationError("The selected model has conflicting Harness runtime policies.");
+      throw new ConfigurationHarnessError(
+        "The selected model has conflicting Harness runtime policies.",
+      );
     }
     const selected = [...policies][0];
     if (
@@ -905,7 +922,7 @@ export function resolveConfiguredHarnessId(
         provider !== undefined ||
         plugins?.[providerId] !== undefined)
     ) {
-      throw new ScopeViolationError(
+      throw new ConfigurationHarnessError(
         "The configured Agent model requires an explicit supported Harness runtime.",
       );
     }
@@ -921,13 +938,15 @@ export function resolveConfiguredHarnessId(
         codexAppServer?.transport === "websocket"
       )
     ) {
-      throw new ScopeViolationError("The Codex Harness requires the native codex model provider.");
+      throw new ConfigurationHarnessError(
+        "The Codex Harness requires the native codex model provider.",
+      );
     }
     resolved.add(selected ?? "openclaw");
   }
 
   if (resolved.size !== 1) {
-    throw new ScopeViolationError(
+    throw new ConfigurationHarnessError(
       "The configured Agent models select conflicting Harness runtimes.",
     );
   }
@@ -4421,8 +4440,6 @@ export class OpenClawController {
         );
       }
       this.assertCredentialGatewayDelivery(lockedAgent.harnessAuth);
-      const harnessAuth = await this.admitHarnessAuth(state, principalId, lockedAgent);
-      const credentialSourceType = await this.admittedCredentialSourceType(harnessAuth, sandbox);
       await this.authorize(principalId, "read", {
         kind: "configuration",
         id: lockedAgent.configurationId,
@@ -4436,32 +4453,6 @@ export class OpenClawController {
         throw new ScopeViolationError(
           "The Agent Configuration must belong to the exact Namespace and configure an Agent.",
         );
-      }
-      const secretBindings = this.bindings(metadata.secretBindings);
-      const sources = await this.authorizeBindings(
-        state,
-        principalId,
-        namespace.id,
-        secretBindings,
-      );
-      const secretDriver =
-        Object.keys(secretBindings).length === 0 ? undefined : this.secretDriver();
-      for (const secret of sources) {
-        await this.authorize(lockedAgent.servicePrincipalId, "operate", {
-          kind: "secret",
-          id: secret.id,
-          namespaceId: namespace.id,
-        });
-        const resolved = await this.secretOperation(() => secretDriver!.resolve(secret));
-        if (
-          Object.keys(secret.backendRef).some(
-            (key) =>
-              resolved[key as keyof typeof resolved] !==
-              secret.backendRef[key as keyof typeof secret.backendRef],
-          )
-        ) {
-          throw new DependencyUnavailableError("The Secret backend identity changed.");
-        }
       }
       const configurationDriver = this.configurationDriver();
       const configuration = this.exactConfiguration(
@@ -4489,7 +4480,37 @@ export class OpenClawController {
         ...approvedHarness,
         mode: lockedAgent.executionMode,
       });
+      // Capability refusals precede Agent principal grants: a grant cannot make an unsupported
+      // topology deployable, so the refusal the operator can act on must surface first.
       requireDedicatedNativeSupport(revisionHarness, sandbox, this.nativeWorkers);
+      const harnessAuth = await this.admitHarnessAuth(state, principalId, lockedAgent);
+      const credentialSourceType = await this.admittedCredentialSourceType(harnessAuth, sandbox);
+      const secretBindings = this.bindings(metadata.secretBindings);
+      const sources = await this.authorizeBindings(
+        state,
+        principalId,
+        namespace.id,
+        secretBindings,
+      );
+      const secretDriver =
+        Object.keys(secretBindings).length === 0 ? undefined : this.secretDriver();
+      for (const secret of sources) {
+        await this.authorizeAgentPrincipal(lockedAgent.servicePrincipalId, "operate", {
+          kind: "secret",
+          id: secret.id,
+          namespaceId: namespace.id,
+        });
+        const resolved = await this.secretOperation(() => secretDriver!.resolve(secret));
+        if (
+          Object.keys(secret.backendRef).some(
+            (key) =>
+              resolved[key as keyof typeof resolved] !==
+              secret.backendRef[key as keyof typeof secret.backendRef],
+          )
+        ) {
+          throw new DependencyUnavailableError("The Secret backend identity changed.");
+        }
+      }
       const sandboxConfiguration =
         sandbox?.configureAgent !== undefined
           ? frozenValues(
@@ -5138,6 +5159,25 @@ export class OpenClawController {
       );
     }
     return authorization;
+  }
+
+  /** Authorizes an Agent's own service principal and names it and the grant when denied. */
+  private async authorizeAgentPrincipal(
+    principalId: string,
+    action: AuthorizationRequest["action"],
+    resource: ResourceRef,
+  ): Promise<void> {
+    try {
+      await this.authorize(principalId, action, resource);
+    } catch (error) {
+      if (
+        error instanceof AuthorizationDeniedError &&
+        !(error instanceof DependencyUnavailableError)
+      ) {
+        throw new AgentPrincipalAuthorizationError(principalId, action, resource, error.evidence);
+      }
+      throw error;
+    }
   }
 
   private async canRead(principalId: string, resource: ResourceRef): Promise<boolean> {
@@ -6166,7 +6206,7 @@ export class OpenClawController {
       return immutableCopy(binding);
     }
     if (binding.method === "api_key" || binding.method === "codex_pat") {
-      await this.authorize(agent.servicePrincipalId, "operate", binding.source);
+      await this.authorizeAgentPrincipal(agent.servicePrincipalId, "operate", binding.source);
       const source = await state.secrets.lockSecret(agent.namespaceId, binding.source.id);
       if (source === undefined) {
         throw new ScopeViolationError("The Harness Secret is unavailable.");
@@ -6185,7 +6225,7 @@ export class OpenClawController {
       return immutableCopy({ ...binding, secretDriverId: driver.id });
     }
     if (binding.method === "credential_source") {
-      await this.authorize(agent.servicePrincipalId, "operate", {
+      await this.authorizeAgentPrincipal(agent.servicePrincipalId, "operate", {
         kind: "credential_source",
         namespaceId: agent.namespaceId,
         id: binding.sourceId,

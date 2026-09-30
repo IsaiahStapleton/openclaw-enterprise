@@ -229,6 +229,8 @@ that version and invalidate target sessions and proofs without changing IAM.
 A guarded read returns current account and method state, not a prior operation
 receipt. Unknown completion returns an explicit dependency failure without
 replay or compensation; operators must resolve uncertainty before a new action.
+Without GitHub or Google, the composition supplies no account operations; the routes
+still authorize the caller, then return `409 RESOURCE_CONFLICT`.
 Logout commits deletion and audit before clearing the cookie. The [authentication reference](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
 owns configuration, recovery limits, and operator-visible behavior.
 
@@ -309,6 +311,8 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 12:00: Trace the password-only refusal of account and recovery routes. (fix/dogfood-2)
 
 - 2026-09-30 01:03: Receive the PostgreSQL binding and independent schema views. (authoring-run/f1ccd2eb-7d83-40d8-9fe1-c79672f9f98f - f2c9f98b0b89762cc9edda189c102ed8c593c678)
 

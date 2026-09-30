@@ -21,6 +21,7 @@ export async function createKubernetesClientConfiguration(
   readonly sdk: KubernetesSdk;
   readonly clientConfiguration: KubernetesClientConfiguration;
   readonly kubeConfig: import("@kubernetes/client-node").KubeConfig;
+  readonly server: string;
 }> {
   let sdk: KubernetesSdk;
   try {
@@ -97,5 +98,25 @@ export async function createKubernetesClientConfiguration(
     authMethods: { default: configuration },
     middleware: [cancellationMiddleware],
   });
-  return { sdk, clientConfiguration, kubeConfig: configuration };
+  return { sdk, clientConfiguration, kubeConfig: configuration, server: cluster.server };
+}
+
+/**
+ * The Kubernetes API server did not answer (connection refused, reset, or timed
+ * out). It names only the endpoint so startup logs can say which dependency and
+ * address failed without exposing credentials or client error objects.
+ */
+export class KubernetesApiUnavailableError extends Error {
+  readonly host: string;
+  readonly port: number;
+
+  constructor(server: string, options?: ErrorOptions) {
+    const endpoint = new URL(server);
+    const host = endpoint.hostname.replace(/^\[(.*)\]$/, "$1");
+    const port = endpoint.port === "" ? 443 : Number(endpoint.port);
+    super(`The Kubernetes API server at ${host}:${port} is unreachable.`, options);
+    this.name = "KubernetesApiUnavailableError";
+    this.host = host;
+    this.port = port;
+  }
 }

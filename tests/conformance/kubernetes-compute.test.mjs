@@ -8299,6 +8299,12 @@ for (const cutover of ["already deployed", "during Deployment deletion", "during
         async readNamespacedServiceAccount() {
           return read("ServiceAccount");
         },
+        async readNamespacedConfigMap() {
+          throw missing();
+        },
+        async readNamespacedSecret() {
+          throw missing();
+        },
         async deleteNamespacedService({ body }) {
           remove("Service", body);
         },
@@ -8419,6 +8425,9 @@ test("stopping a containment-only Kubernetes revision removes its workload befor
   const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
   driver.apiClients = Promise.resolve({
     core: {
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
       async readNamespacedSecret() {
         throw notFound();
       },
@@ -8548,6 +8557,9 @@ test("stopping a provider-owned Kubernetes revision waits for Sandbox workload t
   const notFound = () => Object.assign(new Error("Not found"), { code: 404 });
   driver.apiClients = Promise.resolve({
     core: {
+      async readNamespacedConfigMap() {
+        throw notFound();
+      },
       async readNamespacedSecret() {
         throw notFound();
       },
@@ -10051,6 +10063,46 @@ for (const method of ["api_key", "codex_pat"]) {
   });
 }
 
+for (const embedded of [true, false]) {
+  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} stop removes the stopped revision's credential copies and snapshots`, async () => {
+    const { driver, revision, namespace, context, objects } = workspaceSetupFixture(embedded);
+    revision.harnessAuth = { ...revision.harnessAuth, method: "api_key" };
+    context.harnessAuth = { ...context.harnessAuth, method: "api_key" };
+    await driver.prepareRevision(revision, context);
+    const revisionSuffix = `${digest(revision.agentId)}-${digest(revision.id)}`;
+    const revisionScoped = () =>
+      [...objects.values()]
+        .filter(
+          ({ kind, metadata }) =>
+            (kind === "Secret" || kind === "ConfigMap") &&
+            metadata.name.endsWith(digest(revision.id)),
+        )
+        .map(({ kind, metadata }) => `${kind}:${metadata.name}`)
+        .sort();
+    assert.ok(
+      revisionScoped().includes(`Secret:harness-secrets-${revisionSuffix}`),
+      "preparation projects the model credential into a per-revision Secret",
+    );
+    assert.ok(
+      revisionScoped().includes(
+        `ConfigMap:gateway-${digest(revision.agentId)}-rev-${digest(revision.id)}`,
+      ),
+    );
+    await driver.stopRevision(revision);
+    // A stopped revision keeps no copy of its credentials; preparing it again re-projects them.
+    assert.deepEqual(revisionScoped(), []);
+    assert.ok(objects.has(`Namespace::${namespace}`));
+    assert.ok(
+      [...objects.values()].some(
+        ({ kind, metadata }) => kind === "Secret" && metadata.name === "occ-model-key",
+      ),
+      "the canonical control-plane source is retained",
+    );
+    await driver.prepareRevision(revision, context);
+    assert.ok(revisionScoped().includes(`Secret:harness-secrets-${revisionSuffix}`));
+  });
+}
+
 test("dedicated Harness Service selector satisfies the gateway policy during cutover", async () => {
   const fixture = workspaceSetupFixture(false);
   const { driver, revision, namespace, objects, state } = fixture;
@@ -11322,3 +11374,43 @@ for (const embedded of [true, false]) {
     assert.equal(await prepareUntilReady(driver, next, { ...context, ...authContext(next) }), 1);
   });
 }
+
+// A first embedded deploy that never became ready (for example rejected model
+// auth) leaves an unready Gateway behind an inactive Service while workspace
+// setup is still pending. The next deploy must repair it with its own template
+// rather than wait on the failed predecessor until the convergence deadline.
+test("embedded redeploy repairs a never-served unready Gateway while workspace setup is pending", async () => {
+  const { driver, revision, namespace, objects, state, context } = workspaceSetupFixture(true);
+  const gatewayName = `gateway-${digest(revision.agentId)}`;
+  const gatewayKey = `Deployment:${namespace}:${gatewayName}`;
+  const serviceKey = `Service:${namespace}:${gatewayName}`;
+  assert.equal((await driver.prepareRevision(revision, context)).ready, false);
+  assert.equal(
+    objects.get(gatewayKey).metadata.annotations["openclaw.dev/agent-revision-id"],
+    revision.id,
+  );
+  assert.equal(
+    objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
+    `${gatewayName}-inactive`,
+  );
+
+  const successor = { ...revision, id: "redeploy-successor", revision: revision.revision + 1 };
+  const successorContext = { ...context, ...authContext(successor) };
+  assert.equal(successorContext.workspaceSetup.completed, false);
+  assert.equal((await driver.prepareRevision(successor, successorContext)).ready, false);
+  const repaired = objects.get(gatewayKey);
+  assert.equal(repaired.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
+  assert.equal(
+    objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
+    `${gatewayName}-inactive`,
+    "the repaired Gateway stays unserved until activation",
+  );
+
+  state.ready = true;
+  assert.equal(await prepareUntilReady(driver, successor, successorContext), 1);
+  await driver.activateRevision(successor, successorContext);
+  assert.equal(
+    objects.get(gatewayKey).metadata.annotations["openclaw.dev/agent-revision-id"],
+    successor.id,
+  );
+});

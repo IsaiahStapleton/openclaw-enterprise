@@ -863,7 +863,8 @@ test("Unsupported Compute refuses repository deployment while ordinary deploymen
 
 test("Repository admission retains unknown Harness and execution-mode rejection", async (t) => {
   for (const { harness, executionMode, status, code } of [
-    { harness: "unknown", executionMode: "embedded", status: 404, code: "NOT_FOUND" },
+    // An unsupported runtime identity is Configuration content, not a missing resource.
+    { harness: "unknown", executionMode: "embedded", status: 400, code: "INVALID_REQUEST" },
     // The pinned runtime lacks native worker support, so admission refuses first.
     { harness: "openclaw", executionMode: "dedicated", status: 400, code: "INVALID_REQUEST" },
     { harness: "codex", executionMode: "embedded", status: 503, code: "DEPENDENCY_UNAVAILABLE" },
