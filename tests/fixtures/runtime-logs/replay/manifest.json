@@ -2,7 +2,7 @@
   "count": 5,
   "fixtures": [
     {
-      "file": "gateway-wrapper-probe-failed.log",
+      "file": "gateway-wrapper-probe-failed.kubelet.txt",
       "golden": "gateway-wrapper-probe-failed.golden.json",
       "replay": "kubelet-container",
       "source": "gateway",
@@ -11,7 +11,7 @@
       "scrubbed": "nothing to scrub"
     },
     {
-      "file": "gateway-console-startup.log",
+      "file": "gateway-console-startup.kubelet.txt",
       "golden": "gateway-console-startup.golden.json",
       "replay": "kubelet-container",
       "source": "gateway",
@@ -20,7 +20,7 @@
       "scrubbed": "nothing to scrub"
     },
     {
-      "file": "codex-app-server-startup.log",
+      "file": "codex-app-server-startup.kubelet.txt",
       "golden": "codex-app-server-startup.golden.json",
       "replay": "kubelet-container",
       "source": "agent",

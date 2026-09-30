@@ -168,7 +168,7 @@ test("real Gateway, wrapper and Codex output is classified, not withheld", async
     await Promise.all(fixtures.map(async (entry) => [entry.file, await replay(entry)])),
   );
 
-  const wrapper = byFile["gateway-wrapper-probe-failed.log"];
+  const wrapper = byFile["gateway-wrapper-probe-failed.kubelet.txt"];
   assert.deepEqual(
     wrapper.records.map(({ kind, level, message }) => [kind, level, message]),
     [
@@ -179,7 +179,7 @@ test("real Gateway, wrapper and Codex output is classified, not withheld", async
   );
   assert.equal(wrapper.records[0].fields.code, "AUTHENTICATION_FAILED");
 
-  const gateway = byFile["gateway-console-startup.log"];
+  const gateway = byFile["gateway-console-startup.kubelet.txt"];
   assert.equal(gateway.withheld, 0);
   assert.equal(gateway.records.length, gateway.input);
   assert.ok(gateway.records.every(({ kind, time }) => kind === "openclaw" && time !== null));
@@ -188,7 +188,7 @@ test("real Gateway, wrapper and Codex output is classified, not withheld", async
   // Keys outside the operational allowlist (`intervalMs`, `providers`, `generatedAt`) drop.
   assert.ok(gateway.records.every(({ fields }) => fields === undefined));
 
-  const codex = byFile["codex-app-server-startup.log"];
+  const codex = byFile["codex-app-server-startup.kubelet.txt"];
   assert.equal(codex.withheld, 0);
   const tracing = codex.records.filter(({ kind }) => kind === "codex");
   assert.ok(tracing.length > 20);
