@@ -165,16 +165,20 @@ password-only profile an authorized administrator receives
 version, disabled state, or session binding, so it cannot disable an account or
 revoke its sessions online. Enable an external provider to use these controls.
 
-Password sign-in allows 10 requests/minute, two active, per client address and
-per email; GitHub start/callback (even invalid) allows 30 and four per
-address. Global caps: four and eight active. The recovery email has a
-reserved lane (20, two active). A browser with a valid
+Password sign-in has the password-only profile's
+[failure-counting limit](../authentication.md#session-lifecycle): only failed sign-ins
+spend it, and a spent email is slowed and answered with `429` and `Retry-After`. The
+recovery account and Installation administrators are slowed, never refused: their
+correct password still signs in. A browser with a valid
 [known-device cookie](../authentication.md#known-devices) for the email spends its own
-per-email or recovery budget instead of the shared one. A 4,096-key table bounds memory. Clients behind
-an ingress share its address unless
+budget instead. GitHub and Google start, callback, and result each allow 30
+requests/minute and four active per client address, eight active in all; a sign-in
+spends one of each. Without
 [trusted proxies](../cheatsheets/environment-variables.md#controller-and-authentication)
-are set, so the whole Installation shares one budget; startup and Helm's install
-notes warn ([trusted proxies](../settings/production.md#github-sign-in-and-trusted-proxies)).
-Pending attempts cap at 1,000, oldest evicted. Provider
-calls share a ten-second deadline, refuse redirects, read at most 64 KiB. Limits
-are per controller.
+every browser behind an ingress shares its address, so the address is never a key:
+callback and result key on the browser's attempt and receipt cookies, and start is
+bounded only by the active cap and the 1,000 pending attempts (oldest evicted).
+Startup and Helm's install notes warn
+([trusted proxies](../settings/production.md#github-sign-in-and-trusted-proxies)).
+A 4,096-key table bounds memory. Provider calls share a ten-second deadline, refuse
+redirects, read at most 64 KiB. Limits are per controller.

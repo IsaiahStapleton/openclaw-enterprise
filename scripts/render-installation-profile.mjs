@@ -689,7 +689,7 @@ function buildRendered(profile, parsed, diagnostics) {
   if (controlPlane.trustedProxy === undefined) {
     diagnostics.warnings.push(
       externalSignIn
-        ? "controlPlane.trustedProxy is not set: behind a proxy that does not preserve client addresses, every browser shares one address budget: 10 password sign-in attempts and 30 GitHub or Google sign-in requests (about 10 sign-ins) per minute for the whole Installation. Set it unless the API sees each client's own address."
+        ? "controlPlane.trustedProxy is not set: failed password sign-ins are limited per email only, and GitHub or Google sign-in starts have no per-client limit, because every browser behind a proxy shares its address. Set it unless the API sees each client's own address."
         : "controlPlane.trustedProxy is not set: failed password sign-ins are limited per email only, with no per-client-address limit. Set it when a proxy fronts the API.",
     );
   }

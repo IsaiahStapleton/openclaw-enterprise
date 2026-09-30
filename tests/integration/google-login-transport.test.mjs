@@ -90,6 +90,8 @@ function loginFixture(overrides = {}, providers = {}) {
       ...providers,
     },
     origin,
+    // x-occ-client-ip below stands for an address resolved through a trusted proxy.
+    { trustedClientAddress: true },
   );
   const auth = betterAuth({
     baseURL: origin,
@@ -506,7 +508,7 @@ test(
       assert.deepEqual(login.denialReasons, ["PROVIDER_UNAVAILABLE"]);
     });
 
-    await t.test("GitHub and Google share one external admission budget", async () => {
+    await t.test("GitHub and Google share each external step's admission budget", async () => {
       const login = loginFixture(
         {},
         { github: { clientId: "github-client", clientSecret: "github-secret" } },
@@ -516,8 +518,13 @@ test(
         await expectDenied(await login.callback("state=invalid", "10.0.7.1"));
       }
       assert.equal((await login.callback(undefined, "10.0.7.1")).status, 429);
+      // Each step keeps its own budget, so the callback flood leaves start admitted, and
+      // both providers spend one start budget.
+      assert.equal((await login.start("10.0.7.1", "github")).status, 200);
+      for (let i = 1; i < 30; i += 1) {
+        assert.equal((await login.start("10.0.7.1")).status, 200);
+      }
       assert.equal((await login.start("10.0.7.1", "github")).status, 429);
-      assert.equal((await login.start("10.0.7.1")).status, 429);
       assert.equal((await login.start("10.0.7.2")).status, 200);
       assert.equal(requests.length, before);
     });

@@ -397,12 +397,11 @@ API sees each client's own address (for example, behind a source-preserving NLB)
 {{- $google := default dict .Values.auth.google -}}
 {{- if not $proxy.preset -}}
 {{- if or $github.enabled $google.enabled -}}
-WARNING: api.trustedProxy is not set. With GitHub or Google sign-in, sign-in limits
-key on the address the API sees. Behind a proxy that does not preserve client
-addresses, every browser shares one budget: 10 password sign-in attempts and 30
-GitHub or Google sign-in requests per minute for the whole Installation. Set
-api.trustedProxy unless the API sees each client's own address, as behind a
-Network Load Balancer that preserves source addresses.
+WARNING: api.trustedProxy is not set. With GitHub or Google sign-in, failed
+password sign-ins are then limited per email only, and GitHub or Google sign-in
+starts have no per-client limit, because every browser behind a proxy shares its
+address. Set api.trustedProxy unless the API sees each client's own address, as
+behind a Network Load Balancer that preserves source addresses.
 {{- else -}}
 NOTE: api.trustedProxy is not set, so failed password sign-ins are limited per
 email only. Set api.trustedProxy when a proxy fronts the API to add the

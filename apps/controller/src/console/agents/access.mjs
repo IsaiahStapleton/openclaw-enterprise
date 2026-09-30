@@ -221,6 +221,7 @@ export function renderAgentAccess(context, agent) {
     render();
     try {
       await readPolicy();
+      section.hidden = false;
       state.needsRefresh = false;
       state.progress = [
         "Current policy loaded. Listed bindings describe present configuration; they do not confirm a previous request’s outcome.",
@@ -228,7 +229,12 @@ export function renderAgentAccess(context, agent) {
     } catch (error) {
       if (context.isCurrent()) {
         state.loaded = false;
-        failure(error, false);
+        if (error.status === 403) {
+          // Sharing is an Installation administration task; hide it rather than show an error.
+          section.hidden = true;
+        } else {
+          failure(error, false);
+        }
       }
     } finally {
       if (context.isCurrent()) {

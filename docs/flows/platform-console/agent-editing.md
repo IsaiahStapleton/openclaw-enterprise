@@ -293,8 +293,9 @@ worker shutdown and preservation of revisions, credentials, and state.
 **Delete Agent** requests confirmation before sending a bodyless `DELETE` to the
 exact Agent URL. The controller requires Agent `delete`; a `403` stays visible on
 the detail page. An accepted request starts asynchronous cleanup and leaves the
-detail page in a deleting state, with **Refresh deletion status** for an exact
-Agent read. Only a not-found read after
+detail page in a deleting state. The page rereads the exact Agent every few
+seconds until it is gone; **Refresh deletion status** reads it on demand, and
+a read error stops the polling. Only a not-found read after
 an accepted or uncertain request, or when an already-deleting Agent is opened,
 returns to the Agents list in the selected Namespace. An uncertain deletion
 blocks writes until a successful read; the browser never retries it.

@@ -46,7 +46,7 @@ function rollWindow(entry: AdmissionEntry, now: number): void {
 
 // Caller keys are hashed; the address header value is capped before hashing.
 export function admissionKey(
-  kind: "ip" | "email" | "device",
+  kind: "ip" | "email" | "device" | "browser",
   value: string | null | undefined,
 ): string {
   const trimmed = (value ?? "").trim();
@@ -91,34 +91,12 @@ function admissionTable() {
 }
 
 /**
- * Attempt-counting admission for the guarded (external provider) profile: every admitted
- * request spends one unit of each key's budget, with a reserved recovery lane.
+ * Attempt-counting admission for the external sign-in lanes (start, callback, result):
+ * every admitted request spends one unit of each key's budget, under a global concurrency cap.
  */
-export function keyedAdmission(
-  perKey: AdmissionBudget,
-  global: { readonly concurrent: number; readonly reserved: number },
-  recovery?: AdmissionBudget,
-) {
+export function keyedAdmission(perKey: AdmissionBudget, global: { readonly concurrent: number }) {
   const touch = admissionTable();
-  // The recovery entry lives outside the table, so key churn can never evict it.
-  const recoveryEntry = admissionEntry(performance.now());
   let active = 0;
-
-  async function run<T>(entries: readonly AdmissionEntry[], work: () => Promise<T>): Promise<T> {
-    for (const entry of entries) {
-      entry.admitted += 1;
-      entry.active += 1;
-    }
-    active += 1;
-    try {
-      return await work();
-    } finally {
-      active -= 1;
-      for (const entry of entries) {
-        entry.active -= 1;
-      }
-    }
-  }
 
   return {
     async admit<T>(keys: readonly string[], work: () => Promise<T>): Promise<T> {
@@ -136,32 +114,19 @@ export function keyedAdmission(
       ) {
         throw tooManyRequests();
       }
-      return run(entries, work);
-    },
-    /**
-     * The reserved recovery lane. With `deviceKey` (a verified known device of the recovery
-     * account) the attempt spends that device's own recovery budget instead of the shared
-     * one, so strangers spending the recovery email's lane cannot keep that browser out.
-     */
-    async admitRecovery<T>(work: () => Promise<T>, deviceKey?: string): Promise<T> {
-      if (recovery === undefined) {
-        throw tooManyRequests();
+      for (const entry of entries) {
+        entry.admitted += 1;
+        entry.active += 1;
       }
-      const now = performance.now();
-      let entry = recoveryEntry;
-      if (deviceKey === undefined) {
-        rollWindow(recoveryEntry, now);
-      } else {
-        entry = touch(deviceKey, now, []);
+      active += 1;
+      try {
+        return await work();
+      } finally {
+        active -= 1;
+        for (const entry of entries) {
+          entry.active -= 1;
+        }
       }
-      if (
-        active >= global.concurrent + global.reserved ||
-        entry.admitted >= recovery.perMinute ||
-        entry.active >= recovery.concurrent
-      ) {
-        throw tooManyRequests();
-      }
-      return run([entry], work);
     },
   };
 }
@@ -185,8 +150,8 @@ export interface PasswordSignInAttempt {
 }
 
 /**
- * The admission seam for password sign-in in the password-only profile. The in-memory
- * implementation below can be replaced by a State-owned attempt budget later.
+ * The admission seam for password sign-in in both profiles. The in-memory implementation
+ * below can be replaced by a State-owned attempt budget later.
  */
 export interface PasswordSignInAdmission {
   admit<T>(attempt: PasswordSignInAttempt, work: () => Promise<T>): Promise<T>;
@@ -216,7 +181,10 @@ export interface PasswordFailureAdmissionOptions {
   readonly slow: PasswordSlowLaneOptions;
   /** Entries in the budget table; defaults to the shared admission capacity. */
   readonly tableCapacity?: number;
-  /** True when the email belongs to an account that administers the Installation. */
+  /**
+   * True when the email's password must stay checkable once its budget is spent: an account
+   * that administers the Installation or, with an external provider, the recovery account.
+   */
   readonly isReserved: (email: string) => Promise<boolean>;
   /** Failures that spend budget: credential rejections, not dependency errors. */
   readonly countsAsFailure: (error: unknown) => boolean;
@@ -360,7 +328,7 @@ class Gate {
 }
 
 /**
- * Failure-counting password admission for the password-only profile.
+ * Failure-counting password admission for both sign-in profiles.
  *
  * Shared lane: budgets per email and, only when a trusted proxy resolves the client, per
  * client address. Only credential failures spend them (in-flight attempts count too, so
@@ -368,11 +336,12 @@ class Gate {
  *
  * Slow lane: an attempt the shared lane does not admit is paced, never dropped outright.
  * It waits for one of the email's slots, holds it for a floor that doubles with each slow
- * attempt in the window (1 s up to 8 s), and looks the email up. Only an Installation
- * administrator's password is then checked; every other outcome is `429` with Retry-After
- * after the same floor, so the lane reveals neither whether an email exists nor whether it
- * administers. Guessing an administrator is bounded by the email's slots and floor, and the
- * administrator's correct password is admitted however many failures were spent.
+ * attempt in the window (1 s up to 8 s), and looks the email up. Only a reserved account's
+ * password (an Installation administrator, or the recovery account) is then checked; every
+ * other outcome is `429` with Retry-After after the same floor, so the lane reveals neither
+ * whether an email exists nor whether it is reserved. Guessing a reserved account is bounded
+ * by the email's slots and floor, and its correct password is admitted however many failures
+ * were spent.
  *
  * Known devices: an attempt carrying a verified known-device key spends that device's lane
  * instead of the email's and waits on the device's slow-lane slots, so a browser that signed

@@ -559,7 +559,7 @@ test(
   async () => {
     const github = await trustedProxyNotice(githubUpgradeValues(recoveryUserId));
     assert.match(github, /^WARNING: api\.trustedProxy is not set\./);
-    assert.match(github, /10 password sign-in attempts and 30\nGitHub or Google sign-in requests/);
+    assert.match(github, /GitHub or Google sign-in\nstarts have no per-client limit/);
     const google = await trustedProxyNotice(googleUpgradeValues(recoveryUserId));
     assert.match(google, /^WARNING: api\.trustedProxy is not set\./);
     assert.match(
