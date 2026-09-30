@@ -386,6 +386,24 @@ test("production native examples satisfy the current Helm, Installation, and PVC
   assert.equal(drivers.computeDriver.id, "compute-kubernetes");
   const compute = drivers.installation.drivers.compute.configuration;
   assert.equal(compute.network.gatewayClients, undefined);
+  assert.equal(compute.resources.gateway.limits.cpu, "4");
+  assert.equal(compute.resources.agent.limits.cpu, "4");
+  assert.equal(compute.resources.gateway.requests.cpu, "100m");
+  // An unquoted YAML quantity is a number; startup names the field it rejects.
+  const unquotedPath = join(directory, "unquoted-cpu.yaml");
+  await writeFile(
+    unquotedPath,
+    example
+      .replace("<actual-proxy-source-cidr>", "192.0.2.10/32")
+      .replace(/^( {10}limits:\n {12}cpu: )"4"$/m, (_, prefix) => `${prefix}4`),
+  );
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: unquotedPath },
+    }),
+    /drivers\.compute\.configuration does not match its Driver configuration schema at \/resources\/gateway\/limits\/cpu: must be string/,
+  );
   const values = loadYaml(await readFile(new URL("values.yaml", productionExamples), "utf8"));
   assert.equal(values.gatewayRouting.enabled, true);
   assert.equal(compute.gatewayRouting.gatewayName, "oce-agent-gateways");
