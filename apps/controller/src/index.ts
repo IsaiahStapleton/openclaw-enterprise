@@ -1829,7 +1829,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     if (
       Object.keys(request.query as Record<string, unknown>).length > 0 &&
       operation.operationId !== "listRepositoryOptions" &&
-      operation.operationId !== "listAgentRepositoryOptions"
+      operation.operationId !== "listAgentRepositoryOptions" &&
+      operation.operationId !== "getAgentDeploymentRuntimeLogs"
     ) {
       throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
     }

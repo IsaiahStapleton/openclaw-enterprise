@@ -7,8 +7,10 @@ import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  createRuntimeLogCursorCodec,
   InMemoryPlatformState,
   OpenClawController,
+  RuntimeLogsForbiddenByClusterError,
 } from "../../packages/occ/src/index.ts";
 import {
   authenticatedHeaders,
@@ -17,6 +19,12 @@ import {
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
+import {
+  administerGrants,
+  createRuntimeLogComputeDriver,
+  createRuntimeLogFixture,
+  operateGrants,
+} from "../helpers/runtime-logs.mjs";
 
 const installationId = "ins_3033697e-6397-4cc6-9b04-8ec17af78cf1";
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
@@ -953,4 +961,319 @@ test("mutations are attributable and authorization failures never leak credentia
   assert.doesNotMatch(JSON.stringify(denied.payload), new RegExp(secret));
   assert.doesNotMatch(JSON.stringify(fixture.auditSink.events), new RegExp(secret));
   assert.equal(fixture.auditSink.events.at(-1)?.resource.id, agent.id);
+});
+
+// Agent runtime status and log reads. Status (tier 1) needs Agent operate + read and
+// revision read; log text (tier 2) needs Agent administer + read and revision read.
+// Every request is re-authorized, including cursor polls, and a denial never reaches
+// the Compute Driver.
+function runtimeLogLine(index, raw = `gateway output ${index}`) {
+  return { time: `2026-09-30T12:00:${String(index).padStart(2, "0")}.000000001Z`, raw };
+}
+
+function driverReads(fixture) {
+  return fixture.computeDriver.calls.filter(({ operation }) => operation === "read");
+}
+
+test("runtime status and log reads enforce their permission tiers before any Driver call", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [runtimeLogLine(1)];
+
+  const reader = await fixture.createPrincipal("runtime-reader", target, [
+    { action: "read", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent_revision" },
+  ]);
+  const operator = await fixture.createPrincipal("runtime-operator", target, operateGrants);
+  const administerOnly = await fixture.createPrincipal("runtime-administer-only", target, [
+    { action: "administer", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent_revision" },
+  ]);
+  const administrator = await fixture.createPrincipal(
+    "runtime-administrator",
+    target,
+    administerGrants,
+  );
+  fixture.computeDriver.calls.length = 0;
+
+  for (const path of [target.runtimePath, target.logsPath()]) {
+    const denied = await fixture.request("GET", path, { session: reader.session });
+    assert.equal(denied.status, 403, path);
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+    assert.equal(fixture.auditSink.events.at(-1).kind, "authorization_denial");
+  }
+  // Operate is the status audience: it sees Pods and Events but never log text.
+  const status = await fixture.request("GET", target.runtimePath, { session: operator.session });
+  assert.equal(status.status, 200, status.text);
+  assert.equal(status.data.sources[0].pods[0].name, fixture.computeDriver.podName({ id: target.revisionId }));
+  const operatorLogs = await fixture.request("GET", target.logsPath(), {
+    session: operator.session,
+  });
+  assert.equal(operatorLogs.status, 403);
+  assert.deepEqual(fixture.auditSink.events.at(-1).authorization, {
+    principalId: operator.principal.id,
+    action: "administer",
+    resource: { kind: "agent", id: target.agent.id, namespaceId: target.namespace.id },
+  });
+  const missingRead = await fixture.request("GET", target.logsPath(), {
+    session: administerOnly.session,
+  });
+  assert.equal(missingRead.status, 403);
+  assert.equal(fixture.auditSink.events.at(-1).authorization.action, "read");
+  // No denied request reached the Driver.
+  assert.deepEqual(
+    fixture.computeDriver.calls.map(({ operation }) => operation),
+    ["describe"],
+  );
+
+  const logs = await fixture.request("GET", target.logsPath(), {
+    session: administrator.session,
+  });
+  assert.equal(logs.status, 200, logs.text);
+  assert.equal(logs.data.records[0].message, "gateway output 1");
+
+  // A principal of another Namespace is denied like every revision-scoped route: the
+  // exact revision read is authorized before anything about the runtime is observed.
+  const other = await fixture.deployAgent("runtime-other");
+  const foreign = await fixture.createPrincipal("runtime-foreign", other, administerGrants);
+  fixture.computeDriver.calls.length = 0;
+  for (const path of [target.runtimePath, target.logsPath()]) {
+    const crossNamespace = await fixture.request("GET", path, { session: foreign.session });
+    assert.equal(crossNamespace.status, 403, path);
+  }
+  assert.equal(fixture.computeDriver.calls.length, 0);
+
+  // Service principals use the same bindings (CLI and automation).
+  const service = await fixture.createServicePrincipal("runtime-cli", target, administerGrants);
+  const serviceLogs = await fixture.request("GET", target.logsPath(), {
+    serviceKey: service.serviceKey,
+  });
+  assert.equal(serviceLogs.status, 200, serviceLogs.text);
+});
+
+test("runtime log cursors bind one principal and view and are re-authorized on every poll", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  const state = fixture.computeDriver.state;
+  state.lines = [runtimeLogLine(1), runtimeLogLine(2)];
+  const viewer = await fixture.createPrincipal("runtime-viewer", target, administerGrants);
+  const other = await fixture.createPrincipal("runtime-other-viewer", target, administerGrants);
+
+  const first = await fixture.request("GET", target.logsPath(), { session: viewer.session });
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.data.records.length, 2);
+  const views = () =>
+    fixture.auditSink.events.filter(({ action }) => action === "openclaw.agents.runtime_logs.view");
+  assert.equal(views().length, 1);
+  const view = views()[0];
+  assert.equal(view.kind, "mutation");
+  assert.equal(view.actor.principalId, viewer.principal.id);
+  assert.deepEqual(
+    { ...view.details.runtimeLogs, viewId: typeof view.details.runtimeLogs.viewId },
+    {
+      viewId: "string",
+      revisionId: target.revisionId,
+      source: "gateway",
+      pod: fixture.computeDriver.podName({ id: target.revisionId }),
+      container: "gateway",
+      previous: false,
+      tailLines: 200,
+    },
+  );
+
+  // A follow poll returns only lines after the cursor and is not re-audited.
+  state.lines = [runtimeLogLine(1), runtimeLogLine(2), runtimeLogLine(3)];
+  const cursor = encodeURIComponent(first.data.cursor);
+  const next = await fixture.request("GET", target.logsPath(`source=gateway&cursor=${cursor}`), {
+    session: viewer.session,
+  });
+  assert.equal(next.status, 200, next.text);
+  assert.deepEqual(
+    next.data.records.map(({ message }) => message),
+    ["gateway output 3"],
+  );
+  assert.ok(driverReads(fixture).at(-1).sinceSeconds >= 1);
+  assert.equal(views().length, 1);
+
+  // A container restart is labelled, never a silent restart of the stream.
+  state.restartCount = 1;
+  state.lines = [runtimeLogLine(4, "after restart")];
+  const replaced = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&cursor=${encodeURIComponent(next.data.cursor)}`),
+    { session: viewer.session },
+  );
+  assert.equal(replaced.status, 200, replaced.text);
+  assert.deepEqual(
+    replaced.data.records.map(({ type, reason, message }) => type === "gap" ? reason : message),
+    ["stream_replaced", "after restart"],
+  );
+  state.previousLines = [runtimeLogLine(0, "before restart")];
+  const previous = await fixture.request("GET", target.logsPath("source=gateway&previous=true"), {
+    session: viewer.session,
+  });
+  assert.equal(previous.status, 200, previous.text);
+  assert.deepEqual(previous.data.records.map(({ message }) => message), ["before restart"]);
+  assert.equal(driverReads(fixture).at(-1).previous, true);
+
+  // Cursors are bound to the principal, target and signature.
+  const readsBefore = driverReads(fixture).length;
+  for (const [label, forged, session] of [
+    ["foreign principal", first.data.cursor, other.session],
+    ["tampered", `${first.data.cursor.slice(0, -2)}AA`, viewer.session],
+    ["another source", first.data.cursor.replace("v1.", "v1.e"), viewer.session],
+  ]) {
+    const rejected = await fixture.request(
+      "GET",
+      target.logsPath(`source=gateway&cursor=${encodeURIComponent(forged)}`),
+      { session },
+    );
+    assert.equal(rejected.status, 400, label);
+    assert.equal(rejected.body.error.code, "RUNTIME_LOGS_CURSOR_INVALID", label);
+  }
+  assert.equal(driverReads(fixture).length, readsBefore);
+
+  // Only Pods the Driver listed for this revision reach it.
+  const unknownPod = await fixture.request("GET", target.logsPath("source=gateway&pod=kube-apiserver-0"), {
+    session: viewer.session,
+  });
+  assert.equal(unknownPod.status, 400);
+  assert.equal(unknownPod.body.error.code, "RUNTIME_LOGS_POD_INVALID");
+  const unsupported = await fixture.request("GET", target.logsPath("source=gateway&follow=true"), {
+    session: viewer.session,
+  });
+  assert.equal(unsupported.status, 400);
+  assert.equal(driverReads(fixture).length, readsBefore);
+
+  // Revocation between polls is honoured with the same cursor.
+  viewer.revoke("administer", "agent");
+  const revoked = await fixture.request("GET", target.logsPath(`source=gateway&cursor=${cursor}`), {
+    session: viewer.session,
+  });
+  assert.equal(revoked.status, 403);
+  assert.equal(driverReads(fixture).length, readsBefore);
+});
+
+test("an expired runtime log cursor starts a new audited view with a labelled gap", async () => {
+  const cursorSecret = `runtime-log-expiry-secret-${randomUUID()}`;
+  const fixture = await createRuntimeLogFixture({
+    agentRuntimeLogs: { enabled: true, cursorSecret },
+  });
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [runtimeLogLine(1)];
+  const codec = createRuntimeLogCursorCodec(cursorSecret);
+  const expired = codec.encode(
+    {
+      principalId: fixture.admin.seed.principal.id,
+      agentId: target.agent.id,
+      revisionId: target.revisionId,
+      source: "gateway",
+    },
+    {
+      viewId: "rlv_expired",
+      pod: fixture.computeDriver.podName({ id: target.revisionId }),
+      podUid: fixture.computeDriver.state.podUid,
+      restartCount: 0,
+      previous: false,
+      lastTime: "2026-09-30T10:00:00Z",
+      lastHashes: [],
+      issuedAt: Date.now() - 2 * 60 * 60 * 1000,
+    },
+  );
+  const resumed = await fixture.request(
+    "GET",
+    target.logsPath(`source=gateway&cursor=${encodeURIComponent(expired)}`),
+  );
+  assert.equal(resumed.status, 200, resumed.text);
+  assert.deepEqual(
+    resumed.data.records.map(({ type, reason }) => type === "gap" ? reason : type),
+    ["cursor_expired", "line"],
+  );
+  assert.equal(
+    fixture.auditSink.events.filter(({ action }) => action === "openclaw.agents.runtime_logs.view")
+      .length,
+    1,
+  );
+});
+
+test("runtime log failures are fixed, content-free and never read after an audit failure", async () => {
+  const auditSink = new InMemoryAuditSink();
+  const append = auditSink.append.bind(auditSink);
+  let failViews = true;
+  auditSink.append = async (event) => {
+    if (failViews && event.action === "openclaw.agents.runtime_logs.view") {
+      throw new Error("audit store unavailable");
+    }
+    await append(event);
+  };
+  const fixture = await createRuntimeLogFixture({ auditSink });
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [runtimeLogLine(1, "must not be returned")];
+
+  const unaudited = await fixture.request("GET", target.logsPath());
+  assert.equal(unaudited.status, 503);
+  assert.equal(unaudited.body.error.code, "RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+  assert.equal(unaudited.text.includes("must not be returned"), false);
+  assert.equal(driverReads(fixture).length, 0);
+  failViews = false;
+
+  const marker = `private-driver-detail-${randomUUID()}`;
+  fixture.computeDriver.state.readError = new Error(marker);
+  const failed = await fixture.request("GET", target.logsPath());
+  assert.equal(failed.status, 503);
+  assert.equal(failed.body.error.code, "RUNTIME_LOGS_UNAVAILABLE");
+  assert.equal(failed.text.includes(marker), false);
+  assert.equal(JSON.stringify(fixture.auditSink.events).includes(marker), false);
+
+  fixture.computeDriver.state.readError = new RuntimeLogsForbiddenByClusterError();
+  const rbac = await fixture.request("GET", target.logsPath());
+  assert.equal(rbac.status, 503);
+  assert.equal(rbac.body.error.code, "RUNTIME_LOGS_CLUSTER_RBAC");
+  fixture.computeDriver.state.readError = undefined;
+
+  fixture.computeDriver.state.describeError = new Error(marker);
+  const status = await fixture.request("GET", target.runtimePath);
+  assert.equal(status.status, 503);
+  assert.equal(status.text.includes(marker), false);
+  fixture.computeDriver.state.describeError = undefined;
+
+  // A hostile Driver description naming a Pod outside the revision is rejected whole.
+  fixture.computeDriver.state.extraPods = [{ name: "Not A Pod!", uid: "x" }];
+  const hostile = await fixture.request("GET", target.runtimePath);
+  assert.equal(hostile.status, 503);
+  assert.equal(hostile.body.error.code, "RUNTIME_LOGS_UNAVAILABLE");
+});
+
+test("runtime log reads are rate limited per principal and Agent with Retry-After", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  let limited;
+  for (let attempt = 0; attempt < 12 && limited === undefined; attempt += 1) {
+    const response = await fixture.request("GET", target.runtimePath);
+    if (response.status === 429) {
+      limited = response;
+    } else {
+      assert.equal(response.status, 200, response.text);
+    }
+  }
+  assert.ok(limited, "the burst of 10 is exhausted within 12 immediate requests");
+  assert.equal(limited.body.error.code, "RUNTIME_LOGS_RATE_LIMITED");
+  assert.match(limited.headers.get("retry-after") ?? "", /^[1-9][0-9]*$/);
+});
+
+test("runtime routes answer 501 when the Driver, its logging owner or the operator switch opts out", async () => {
+  for (const [label, options] of [
+    ["driver-owned logging", { computeDriver: createRuntimeLogComputeDriver({ runtimeLogging: "driver" }) }],
+    ["no Driver method", { computeDriver: createRuntimeLogComputeDriver({ withoutDescribe: true }) }],
+    ["feature disabled", { agentRuntimeLogs: { enabled: false, cursorSecret: "x".repeat(32) } }],
+  ]) {
+    const fixture = await createRuntimeLogFixture(options);
+    const target = await fixture.deployAgent();
+    for (const path of [target.runtimePath, target.logsPath()]) {
+      const response = await fixture.request("GET", path);
+      assert.equal(response.status, 501, `${label}: ${path}`);
+      assert.equal(response.body.error.code, "NOT_IMPLEMENTED");
+    }
+    assert.equal(fixture.computeDriver.calls.length, 0, label);
+  }
 });

@@ -27,7 +27,11 @@ export class RuntimeLogLimiter {
   private readonly buckets = new Map<string, { tokens: number; updatedAt: number }>();
   private active = 0;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  private readonly now: () => number;
+
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
 
   admit(principalId: string, agentId: string): void {
     const key = `${principalId}\0${agentId}`;
