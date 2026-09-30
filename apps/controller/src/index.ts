@@ -3608,6 +3608,15 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       summary: "Inspect current human account state",
       schema: {},
     } as unknown as OccApiRoute;
+    // Account state and its controls live in the guarded external sign-in profile; the
+    // password-only profile has no account version, disabled state, or bound sessions.
+    function accountControlsUnsupported(): RequestFailure {
+      return failure(
+        409,
+        "RESOURCE_CONFLICT",
+        "Account controls require GitHub or Google sign-in; the password-only profile does not support them.",
+      );
+    }
     async function humanAccountActor(
       request: FastifyRequest,
       operation: OccApiRoute,
@@ -3706,6 +3715,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             }),
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
+            409: { description: "Conflict", ...error },
           },
         },
         onRequest: async (request) => admit(request, accountReadOperation),
@@ -3713,10 +3723,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.readAccount) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const actor = await humanAccountActor(request, accountReadOperation, context);
+        if (!options.auth.readAccount) {
+          throw accountControlsUnsupported();
+        }
         const { userId } = request.params as { userId: string };
         const account = await options.auth.readAccount(userId, actor);
         reply
@@ -3832,11 +3845,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         },
         async (request, reply) => {
           const context = contexts.get(request);
-          if (!context || !options.auth.readAccount || !options.auth.changeAccount) {
+          if (!context) {
             throw dependencyUnavailable();
           }
           const { userId } = request.params as { userId: string };
           const actor = await humanAccountActor(request, operation, context, userId);
+          if (!options.auth.readAccount || !options.auth.changeAccount) {
+            throw accountControlsUnsupported();
+          }
           const { expectedVersion } = request.body as { expectedVersion: number };
           if (operationName === "github") {
             if (!options.auth.attachGitHub || !options.auth.githubEnabled) {
@@ -3903,6 +3919,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             ...responses(recoveryResponse),
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
+            409: { description: "Conflict", ...error },
           },
         },
         onRequest: async (request) => admit(request, recoveryReadOperation),
@@ -3910,10 +3927,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.readRecovery) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const actor = await humanAccountActor(request, recoveryReadOperation, context);
+        if (!options.auth.readRecovery) {
+          throw accountControlsUnsupported();
+        }
         const recovery = await options.auth.readRecovery(actor);
         reply
           .header("cache-control", "no-store")
@@ -3972,7 +3992,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.replaceRecovery) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const { userId, expectedCurrentUserId, expectedVersion } = request.body as {
@@ -3989,6 +4009,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           context,
           expectedCurrentUserId,
         );
+        if (!options.auth.replaceRecovery) {
+          throw accountControlsUnsupported();
+        }
         // The new holder must administer the Installation, as startup requires of the seed. This
         // check runs before the State transaction. That is sound because Installation-scoped access
         // bindings have no online revocation path (deleteAccessBinding is Namespace-scoped), and
@@ -4081,10 +4104,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       },
       async (request, reply) => {
         const context = contexts.get(request);
-        if (!context || !options.auth.enrolAccount) {
+        if (!context) {
           throw dependencyUnavailable();
         }
         const actor = await humanAccountActor(request, enrolOperation, context);
+        if (!options.auth.enrolAccount) {
+          throw accountControlsUnsupported();
+        }
         const { userId } = request.params as { userId: string };
         const enrolled = await options.auth.enrolAccount(userId, actor);
         reply.send({ data: { userId, ...enrolled }, meta: { requestId: request.id } });

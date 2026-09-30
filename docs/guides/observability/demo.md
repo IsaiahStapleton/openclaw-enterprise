@@ -149,16 +149,18 @@ grafana:
   test "$(kubectl --context "$HELM_KUBECONTEXT" get namespace kube-system -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/cluster-uid")"
   rm -f "$OBS_FILES/demo-installed"
   helm install demo deploy/helm/openclaw-observability-demo \
-    -n oce-observability-demo -f "$OBS_FILES/demo.yaml" --wait --timeout 5m
+    -n oce-observability-demo -f "$OBS_FILES/demo.yaml" --wait --timeout 10m
   touch "$OBS_FILES/demo-installed"
 )
 ```
 
-A failed or interrupted install can reserve the name and create resources without
+The first install pulls three images; the 10-minute wait allows for a cold
+image cache. A failed or interrupted install can reserve the name and create resources without
 a marker; follow [recovery](demo-cleanup.md#recover-an-incomplete-setup).
 
 Services use `ClusterIP`. Prometheus reads Pod metadata, not Secrets. Grafana
-bundles plugins; startup downloads are disabled.
+bundles plugins; startup downloads are disabled. Its disposable database is
+memory-backed so first-start migrations finish in seconds.
 
 ## Connect OCC telemetry
 

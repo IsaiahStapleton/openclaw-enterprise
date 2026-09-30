@@ -10,6 +10,7 @@ import { OpenShellGateway } from "../../apps/controller/src/backends/openshell.t
 import { OpenShellCredentialGatewayDriver } from "../../apps/controller/src/drivers/credential-gateway/openshell.ts";
 import { OpenShellSandboxDriver } from "../../apps/controller/src/drivers/sandbox/openshell.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
+import { SandboxRevisionUnsupportedError } from "../../packages/occ/src/index.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
 
 const controllerRequire = createRequire(
@@ -367,6 +368,73 @@ test("OpenShell provisions native OpenClaw without exposing an inbound Harness s
   assert.deepEqual(requests[0].serviceExposures, []);
   assert.deepEqual(requests[0].spec.command, command);
   assert.deepEqual(requests[0].labels, labels);
+});
+
+test("OpenShell rejects Secret-backed Harness environment as a permanent revision failure", async () => {
+  const gatewayClient = workspaceGatewayClient();
+  gatewayClient.createSandbox = async () => {
+    throw new Error("OpenShell must not receive a Sandbox it cannot configure.");
+  };
+  const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
+    id: "openshell-sandbox",
+    implementation: "openshell",
+    backend: backendFor(gatewayClient),
+  });
+  const context = namespaceContext();
+  const revision = {
+    id: "rev_00000000-0000-4000-8000-000000000002",
+    namespaceId: context.namespace.id,
+    agentId: "agt_00000000-0000-4000-8000-000000000002",
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    sandboxDriverId: driver.id,
+  };
+  const provision = (harness) =>
+    driver.provisionHarness({
+      ...context,
+      revision: { ...revision, harness },
+      requirements: {
+        loginMode: "api_key",
+        image: "codex-runtime@sha256:synthetic",
+        command: ["codex"],
+        serviceAccountName: "agent-codex",
+        serviceAccountToken: {
+          audience: "openclaw-enterprise",
+          expirationSeconds: 900,
+          mountPath: "/var/run/secrets/openclaw-enterprise",
+          path: "token",
+          readOnly: true,
+        },
+        workspaceMounts: [
+          {
+            claimName: "harness-workspace-codex",
+            subPath: "workspace",
+            mountPath: "/home/node/workspace",
+            readOnly: false,
+          },
+        ],
+        credentialAttachments: [],
+        environment: [
+          { name: "APP_SERVER_PORT", value: "8080" },
+          {
+            name: "APP_SERVER_TOKEN",
+            valueFrom: { secretKeyRef: { name: "agent-codex-token", key: "token" } },
+          },
+        ],
+        labels: { "openclaw.dev/revision": revision.id },
+      },
+    });
+
+  await assert.rejects(provision(revision.harness), (error) => {
+    assert.ok(error instanceof SandboxRevisionUnsupportedError, String(error));
+    assert.equal(error.code, "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED");
+    assert.match(error.message, /secretKeyRef environment APP_SERVER_TOKEN/);
+    return true;
+  });
+  await assert.rejects(provision({ id: "codex", version: "1.0.0", mode: "embedded" }), (error) => {
+    assert.ok(error instanceof SandboxRevisionUnsupportedError, String(error));
+    assert.equal(error.code, "SANDBOX_HARNESS_UNSUPPORTED");
+    return true;
+  });
 });
 
 test("OpenShell Namespace lifecycle creates, adopts, and deletes its exact operator Workspace", async () => {

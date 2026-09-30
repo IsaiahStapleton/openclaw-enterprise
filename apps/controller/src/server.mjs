@@ -10,6 +10,7 @@ import { composeProduction } from "./composition/production.ts";
 import { validateWorkspaceFilesApiKeyPath } from "./composition/workspace-files.ts";
 import { createOccLogger, emitOccLogEvent } from "./logging.ts";
 import { createOccMetrics } from "./metrics/index.ts";
+import { startupDependencyFailure } from "./startup-failure.ts";
 import { metricsConfiguration, startMetricsListener } from "./metrics/listener.ts";
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
@@ -54,7 +55,10 @@ function startupFailureCode(error) {
 }
 
 function startupFailure(logger, error) {
-  emitOccLogEvent(logger, { event: "startup-error", code: startupFailureCode(error) });
+  emitOccLogEvent(logger, {
+    event: "startup-error",
+    ...(startupDependencyFailure(error) ?? { code: startupFailureCode(error) }),
+  });
   process.exitCode = 1;
 }
 

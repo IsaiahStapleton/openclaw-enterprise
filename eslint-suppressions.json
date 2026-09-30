@@ -16,7 +16,7 @@
   },
   "apps/controller/src/drivers/compute/kubernetes/index.ts": {
     "preserve-caught-error": {
-      "count": 2
+      "count": 1
     }
   },
   "apps/controller/src/drivers/compute/ssh/index.ts": {
