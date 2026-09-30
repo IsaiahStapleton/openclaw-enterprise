@@ -216,9 +216,10 @@ function renderCard(section, state, provider) {
     );
   } else if (disabledByMode) {
     card.append(
+      // Informational: Embedded Agents simply do not offer channels; nothing is wrong yet.
       element(
         "p",
-        { className: "error" },
+        { className: "hint" },
         "Channels require Dedicated execution. Embedded Agents can only keep channels disabled.",
       ),
     );
