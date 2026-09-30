@@ -57,6 +57,8 @@ export interface ProductionConfig {
   readonly channelDirectoryProxyUrl?: string;
   readonly channelDirectoryManagedProxyHost?: string;
   readonly nativeAdmin?: NativeAdminAccessConfig;
+  /** Default: enabled. `false` makes both runtime routes answer 501. */
+  readonly agentRuntimeLogsEnabled?: boolean;
 }
 
 export async function composeProduction(config: ProductionConfig) {
@@ -277,6 +279,10 @@ export async function composeProduction(config: ProductionConfig) {
       secretDriver,
       publicOrigin: config.authBaseURL,
       ...(config.nativeAdmin === undefined ? {} : { nativeAdmin: config.nativeAdmin }),
+      agentRuntimeLogs: {
+        enabled: config.agentRuntimeLogsEnabled !== false,
+        cursorSecret: config.authSecret,
+      },
       ...(config.nativeAdmin?.enabled === true && config.gatewayApiKeyPath !== undefined
         ? { nativeAdminGatewayApiKey: () => readWorkspaceFilesApiKey(config.gatewayApiKeyPath!) }
         : {}),

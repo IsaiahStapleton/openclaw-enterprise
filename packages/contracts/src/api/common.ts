@@ -134,6 +134,37 @@ export const DeploymentParams = Type.Object(
   { additionalProperties: false },
 );
 
+/** Query strings are not coerced; numeric and boolean values are exact decimal text. */
+export const AgentRuntimeLogsQuery = Type.Object(
+  {
+    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent")]),
+    pod: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 253, pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" }),
+    ),
+    previous: Type.Optional(Type.Union([Type.Literal("true"), Type.Literal("false")])),
+    tailLines: Type.Optional(
+      Type.String({
+        pattern: "^(?:[1-9][0-9]{0,2}|1000)$",
+        description: "Lines from the end of the stream, 1 to 1000; default 200.",
+      }),
+    ),
+    sinceSeconds: Type.Optional(
+      Type.String({
+        pattern: "^(?:[1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$",
+        description: "Only lines newer than this many seconds, 1 to 86400.",
+      }),
+    ),
+    cursor: Type.Optional(
+      Type.String({
+        maxLength: 2048,
+        pattern: "^v1\\.[A-Za-z0-9_-]{1,1900}\\.[A-Za-z0-9_-]{43}$",
+        description: "Opaque cursor returned by the previous page of the same view.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const WORKSPACE_FILE_NAMES = Object.freeze([
   "AGENTS.md",
   "SOUL.md",
@@ -790,6 +821,7 @@ export type IAMAccessBindingParams = Type.Static<typeof IAMAccessBindingParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
 export type DeploymentParams = Type.Static<typeof DeploymentParams>;
+export type AgentRuntimeLogsQuery = Type.Static<typeof AgentRuntimeLogsQuery>;
 export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
 export type AgentRuntimeCredentialsBody = Type.Static<typeof AgentRuntimeCredentialsBody>;
 export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;

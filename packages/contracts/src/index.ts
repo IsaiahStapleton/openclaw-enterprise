@@ -1269,6 +1269,138 @@ export interface ComputeAgentRevisionBinding extends ComputeAgentBinding {
   readonly revision: Readonly<AgentRevision>;
 }
 
+/**
+ * Runtime log classes. OCC classifies every record; a source never sets the class.
+ * `content` (message text, prompts, tool output) is reserved and has no producer.
+ */
+export type RuntimeLogContentClass = "operational" | "activity" | "content";
+export type RuntimeLogSourceId = "gateway" | "agent";
+export type RuntimeLogLevel = "error" | "warn" | "info" | "debug" | "unknown";
+export type RuntimeLogKind = "wrapper" | "openclaw" | "codex" | "text";
+export type RuntimeLogGapReason =
+  | "stream_replaced"
+  | "window_exceeded"
+  | "cursor_expired"
+  | "truncated";
+export type RuntimeLogWithheldReason = "unrecognised_structured" | "oversized" | "malformed";
+
+/** One container instance, keyed on server-observed identity only. */
+export interface RuntimeLogStream {
+  readonly source: RuntimeLogSourceId;
+  readonly pod?: string;
+  readonly podUid?: string;
+  readonly container?: string;
+  readonly restartCount?: number;
+}
+
+export type RuntimeLogRecord =
+  | {
+      readonly type: "line";
+      readonly time: string | null;
+      readonly stream: RuntimeLogStream;
+      readonly contentClass: RuntimeLogContentClass;
+      readonly kind: RuntimeLogKind;
+      readonly level: RuntimeLogLevel;
+      readonly message: string;
+      readonly subsystem?: string;
+      readonly fields?: Readonly<Record<string, string | number | boolean>>;
+      readonly truncated?: true;
+    }
+  | {
+      readonly type: "gap";
+      readonly time: string | null;
+      readonly stream: RuntimeLogStream;
+      readonly reason: RuntimeLogGapReason;
+      readonly remedy: string;
+    }
+  | {
+      readonly type: "withheld";
+      readonly time: string | null;
+      readonly stream: RuntimeLogStream;
+      readonly count: number;
+      readonly reason: RuntimeLogWithheldReason;
+    };
+
+export interface AgentRuntimeContainerStatus {
+  readonly name: string;
+  readonly state: "waiting" | "running" | "terminated" | "unknown";
+  readonly reason: string | null;
+  readonly ready: boolean;
+  readonly restartCount: number;
+  readonly startedAt: string | null;
+  readonly lastTermination: {
+    readonly reason: string | null;
+    readonly exitCode: number | null;
+    readonly finishedAt: string | null;
+  } | null;
+}
+
+export interface AgentRuntimeEvent {
+  readonly type: "Normal" | "Warning";
+  readonly reason: string;
+  readonly message: string;
+  readonly count: number;
+  readonly lastObservedAt: string | null;
+}
+
+export interface AgentRuntimePodStatus {
+  readonly role: RuntimeLogSourceId;
+  /** `execution` only when the Pod runs on a separately configured execution cluster. */
+  readonly cluster: "control" | "execution";
+  readonly name: string;
+  readonly uid: string;
+  readonly phase: string;
+  readonly ready: boolean;
+  readonly createdAt: string | null;
+  readonly containers: readonly AgentRuntimeContainerStatus[];
+  /** Pod-scoped Events, newest first, at most 100. */
+  readonly events: readonly AgentRuntimeEvent[];
+}
+
+export interface AgentRuntimeLogSource {
+  readonly id: RuntimeLogSourceId;
+  readonly kind: "container";
+  readonly pods: readonly {
+    readonly name: string;
+    readonly uid: string;
+    readonly container: string;
+    readonly restartCount: number;
+  }[];
+  readonly available: boolean;
+  readonly unavailableCode?: "NO_POD";
+  /** Fixed notice for loss the API cannot observe. */
+  readonly retention: string;
+}
+
+export interface AgentRuntimeDescription {
+  readonly revisionId: string;
+  readonly observedAt: string;
+  readonly pods: readonly AgentRuntimePodStatus[];
+  readonly sources: readonly AgentRuntimeLogSource[];
+}
+
+export interface AgentRuntimeLogRequest {
+  readonly source: RuntimeLogSourceId;
+  readonly pod: string;
+  readonly podUid: string;
+  readonly container: string;
+  readonly previous: boolean;
+  readonly tailLines: number;
+  readonly sinceSeconds?: number;
+  readonly limitBytes: number;
+  readonly signal: AbortSignal;
+}
+
+/** Raw lines as the runtime wrote them; OCC classifies and redacts every line. */
+export interface AgentRuntimeLogChunk {
+  /** Stream identity re-read after the log read. */
+  readonly stream: RuntimeLogStream;
+  readonly observedAt: string;
+  readonly lines: readonly { readonly time: string | null; readonly raw: string }[];
+  /** The byte limit cut the output; the final line may be partial. */
+  readonly truncated: boolean;
+}
+
 /** Observed workload image identity; missing provenance must never be inferred from a tag. */
 export interface RuntimeImage {
   readonly workload: string;
@@ -1340,6 +1472,16 @@ export interface ComputeDriver extends Driver {
   diagnoseAgentDeployment?(
     binding: ComputeAgentRevisionBinding,
   ): Promise<AgentDeploymentDiagnostics>;
+  /** Read-only runtime status and log sources for one exact revision. */
+  describeAgentRuntime?(
+    binding: ComputeAgentRevisionBinding,
+    signal: AbortSignal,
+  ): Promise<AgentRuntimeDescription>;
+  /** Bounded raw container output; `request.pod` was listed by `describeAgentRuntime`. */
+  readAgentRuntimeLogs?(
+    binding: ComputeAgentRevisionBinding,
+    request: AgentRuntimeLogRequest,
+  ): Promise<AgentRuntimeLogChunk>;
   deleteAgentRuntimeCredentials?(binding: ComputeAgentBinding): Promise<void>;
   getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;

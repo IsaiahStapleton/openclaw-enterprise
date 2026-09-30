@@ -6,6 +6,8 @@ import type {
   AgentRevisionRead,
   InitialWorkspaceFiles,
   AgentDeploymentDiagnostics,
+  AgentRuntimeDescription,
+  ComputeAgentRevisionBinding,
   AgentRevision,
   AgentRuntimeCredentialsInput,
   AgentRuntimeCredentialStatus,
@@ -111,8 +113,19 @@ import {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  RuntimeLogsError,
+  RuntimeLogsForbiddenByClusterError,
   ScopeViolationError,
 } from "./errors.ts";
+import {
+  readRuntimeLogPage,
+  RuntimeLogReadError,
+  validRuntimeDescription,
+  type RuntimeLogCursorCodec,
+  type RuntimeLogPage,
+  type RuntimeLogQuery,
+  type RuntimeLogViewAdmission,
+} from "./runtime-logs/index.ts";
 import {
   nativeWorkerSupportSource,
   type NativeWorkerSupport,
@@ -186,8 +199,24 @@ export {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  RuntimeLogsError,
+  RuntimeLogsForbiddenByClusterError,
   ScopeViolationError,
+  type RuntimeLogsErrorCode,
 } from "./errors.ts";
+export {
+  createRuntimeLogCursorCodec,
+  redactRuntimeLogText,
+  RUNTIME_LOG_DEFAULT_TAIL_LINES,
+  RUNTIME_LOG_LIMIT_BYTES,
+  RUNTIME_LOG_MAX_TAIL_LINES,
+  sanitizeRuntimeLogChunk,
+  type RuntimeLogCursorCodec,
+  type RuntimeLogPage,
+  type RuntimeLogQuery,
+  type RuntimeLogViewAdmission,
+  type SanitizedRuntimeLogRecord,
+} from "./runtime-logs/index.ts";
 export {
   PINNED_OPENCLAW_RUNTIME_SUPPORTS_NATIVE_WORKERS,
   type NativeWorkerSupport,
@@ -519,6 +548,8 @@ type DriverFor<Capability extends DriverCapability> = DriverByCapability[Capabil
 
 /** Bounds each synchronous Credential Gateway call made while serving an API request. */
 const CREDENTIAL_GATEWAY_TIMEOUT_MS = 30_000;
+/** Overall deadline for one runtime status or log request, Driver calls included. */
+const RUNTIME_LOG_REQUEST_TIMEOUT_MS = 10_000;
 /**
  * A Credential Gateway must finish any effect of an aborted registration within
  * CREDENTIAL_GATEWAY_TIMEOUT_MS after the abort. Until this long after `createdAt`, an absent
@@ -683,6 +714,10 @@ function driverHasCapabilityContract(driver: Driver): boolean {
       typeof candidate.provisionAgentRuntimeCredentials === "function") &&
     (candidate.diagnoseAgentDeployment === undefined ||
       typeof candidate.diagnoseAgentDeployment === "function") &&
+    (candidate.describeAgentRuntime === undefined ||
+      typeof candidate.describeAgentRuntime === "function") &&
+    (candidate.readAgentRuntimeLogs === undefined ||
+      typeof candidate.readAgentRuntimeLogs === "function") &&
     (candidate.deleteAgentRuntimeCredentials === undefined ||
       typeof candidate.deleteAgentRuntimeCredentials === "function")
   );
@@ -2336,6 +2371,183 @@ export class OpenClawController {
       throw new DependencyUnavailableError("Runtime diagnostics are unavailable.");
     }
     return this.deploymentDiagnostics(diagnostics, revision.id);
+  }
+
+  /** Tier 1: Pod status, restarts, Events and log sources (Agent operate + read). */
+  async describeAgentRuntime(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+    signal?: AbortSignal,
+  ): Promise<Readonly<AgentRuntimeDescription>> {
+    const { binding, driver } = await this.runtimeLogTarget(
+      principalId,
+      namespaceId,
+      agentId,
+      deploymentId,
+      "operate",
+    );
+    return this.runtimeLogOperation(signal, (deadline) =>
+      this.describedAgentRuntime(driver, binding, deadline),
+    );
+  }
+
+  /**
+   * Tier 2: one bounded, redacted page of container output (Agent administer + read).
+   * `admitView` writes the view audit event before the first Driver log read.
+   */
+  async readAgentRuntimeLogs(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+    query: RuntimeLogQuery,
+    options: {
+      readonly codec: RuntimeLogCursorCodec;
+      readonly admitView: (admission: RuntimeLogViewAdmission) => Promise<void>;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Readonly<RuntimeLogPage>> {
+    const { binding, driver } = await this.runtimeLogTarget(
+      principalId,
+      namespaceId,
+      agentId,
+      deploymentId,
+      "administer",
+    );
+    if (typeof driver.readAgentRuntimeLogs !== "function") {
+      throw new NotImplementedError(
+        "readAgentRuntimeLogs",
+        "The selected Compute Driver does not expose runtime logs.",
+      );
+    }
+    return this.runtimeLogOperation(options.signal, async (deadline) => {
+      const description = await this.describedAgentRuntime(driver, binding, deadline);
+      try {
+        return await readRuntimeLogPage({
+          description,
+          query,
+          codec: options.codec,
+          binding: { principalId, agentId, revisionId: binding.revision.id, source: query.source },
+          signal: deadline,
+          admitView: async (admission) => {
+            try {
+              await options.admitView(admission);
+            } catch {
+              throw new RuntimeLogsError("RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+            }
+          },
+          readLogs: async (request) => {
+            try {
+              return await driver.readAgentRuntimeLogs!(binding, request);
+            } catch (error) {
+              throw this.runtimeLogDriverFailure(error, deadline);
+            }
+          },
+        });
+      } catch (error) {
+        if (error instanceof RuntimeLogReadError) {
+          throw new RuntimeLogsError(
+            error.reason === "cursor_invalid"
+              ? "RUNTIME_LOGS_CURSOR_INVALID"
+              : error.reason === "pod_invalid"
+                ? "RUNTIME_LOGS_POD_INVALID"
+                : error.reason === "source_unavailable"
+                  ? "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+                  : "RUNTIME_LOGS_UNAVAILABLE",
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  private async runtimeLogTarget(
+    principalId: string,
+    namespaceId: string,
+    agentId: string,
+    deploymentId: string,
+    tier: "operate" | "administer",
+  ): Promise<{ binding: ComputeAgentRevisionBinding; driver: ComputeDriver }> {
+    const revision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
+    await this.authorize(principalId, tier, { kind: "agent", id: agentId, namespaceId });
+    await this.authorize(principalId, "read", { kind: "agent", id: agentId, namespaceId });
+    const binding = await this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      const agent = await state.agents.findAgent(namespace.id, agentId);
+      if (!agent) {
+        throw new ScopeViolationError(
+          "The Agent does not belong to the exact Installation and Namespace.",
+        );
+      }
+      return { namespace, agent, revision };
+    });
+    let driver: ComputeDriver;
+    try {
+      driver = this.selectedDriver("compute");
+    } catch {
+      throw new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+    }
+    if (
+      driver.id !== revision.compute.id ||
+      driver.implementation !== revision.compute.implementation
+    ) {
+      throw new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+    }
+    // The operator owns runtime logging for Drivers that declare it; OCC never reads it.
+    if (driver.runtimeLogging === "driver" || typeof driver.describeAgentRuntime !== "function") {
+      throw new NotImplementedError(
+        "describeAgentRuntime",
+        "The selected Compute Driver does not expose runtime status or logs.",
+      );
+    }
+    return { binding, driver };
+  }
+
+  private async runtimeLogOperation<T>(
+    signal: AbortSignal | undefined,
+    operation: (deadline: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const timeout = AbortSignal.timeout(RUNTIME_LOG_REQUEST_TIMEOUT_MS);
+    const deadline = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+    try {
+      return await operation(deadline);
+    } catch (error) {
+      if (timeout.aborted && !(error instanceof RuntimeLogsError)) {
+        throw new RuntimeLogsError("RUNTIME_LOGS_TIMEOUT");
+      }
+      throw error;
+    }
+  }
+
+  private async describedAgentRuntime(
+    driver: ComputeDriver,
+    binding: ComputeAgentRevisionBinding,
+    signal: AbortSignal,
+  ): Promise<Readonly<AgentRuntimeDescription>> {
+    let described: unknown;
+    try {
+      described = await driver.describeAgentRuntime!(binding, signal);
+    } catch (error) {
+      throw this.runtimeLogDriverFailure(error, signal);
+    }
+    try {
+      return validRuntimeDescription(described, binding.revision.id);
+    } catch {
+      throw new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
+    }
+  }
+
+  /** Driver and cluster error text can hold private runtime details; never propagate it. */
+  private runtimeLogDriverFailure(error: unknown, signal: AbortSignal): RuntimeLogsError {
+    if (error instanceof RuntimeLogsForbiddenByClusterError) {
+      return new RuntimeLogsError("RUNTIME_LOGS_CLUSTER_RBAC");
+    }
+    if (signal.aborted) {
+      return new RuntimeLogsError("RUNTIME_LOGS_TIMEOUT");
+    }
+    return new RuntimeLogsError("RUNTIME_LOGS_UNAVAILABLE");
   }
 
   async getServiceAccount(

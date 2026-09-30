@@ -29,6 +29,8 @@ import {
   type InitialWorkspaceFiles,
   ErrorResponse,
   AgentDeploymentDiagnosticsResponse,
+  AgentRuntimeLogsResponse,
+  AgentRuntimeResponse,
   AgentRuntimeCredentialResponse,
   JsonValue,
   PluginDesiredSelectionSchema,
@@ -67,6 +69,7 @@ import {
   type SecretReference,
   type UpdateWorkspaceFileBody,
   type WorkspaceFileName,
+  type AgentRuntimeLogsQuery,
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
@@ -76,6 +79,8 @@ import {
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
   UserAlreadyExistsError,
+  RuntimeLogsError,
+  createRuntimeLogCursorCodec,
   type DeploymentStatusResult,
   type AgentProvisioningProgress,
   type DeployAgentAuthorization,
@@ -84,6 +89,12 @@ import {
   type OpenClawController,
 } from "@openclaw-enterprise/occ";
 import type { AdmittedCaller } from "./admission/admission-verifier.ts";
+import {
+  RuntimeLogLimiter,
+  runtimeLogPageBody,
+  runtimeLogQuery,
+  type AgentRuntimeLogsConfig,
+} from "./http/runtime-logs.ts";
 import {
   hostnameMatchesSharedCookieDomain,
   normalizeSharedCookieDomain,
@@ -162,6 +173,8 @@ export interface ControllerAppOptions {
   readonly workspaceFileRequestTimeoutMs?: number;
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
+  /** Absent or disabled: both runtime routes answer 501. */
+  readonly agentRuntimeLogs?: AgentRuntimeLogsConfig;
   readonly publicOrigin?: string;
   /** Writes the prepared account with its Principal, bindings and enrolment atomically. */
   readonly provisionAuthAccount?: (
@@ -699,6 +712,22 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     ];
   }
 
+  if (operation.operationId === "getAgentDeploymentRuntime") {
+    return [
+      { action: "operate", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
+  if (operation.operationId === "getAgentDeploymentRuntimeLogs") {
+    return [
+      { action: "administer", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent", scope: "requested" },
+      { action: "read", resourceKind: "agent_revision", scope: "requested" },
+    ];
+  }
+
   switch (operation.authorizationTarget) {
     case "namespace_collection":
       return [{ ...permission, scope: "namespace" }];
@@ -1176,6 +1205,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       503: { description: "Service Unavailable", ...nativeAdminErrorSchema },
     },
   } as DocumentedFastifySchema;
+  const runtimeLogLimiter = new RuntimeLogLimiter();
+  const runtimeLogCursor =
+    options.agentRuntimeLogs?.enabled === true
+      ? createRuntimeLogCursorCodec(options.agentRuntimeLogs.cursorSecret)
+      : undefined;
   function event(
     operation: OccApiRoute,
     request: FastifyRequest,
@@ -2907,6 +2941,69 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (
+      operation.operationId === "getAgentDeploymentRuntime" ||
+      operation.operationId === "getAgentDeploymentRuntimeLogs"
+    ) {
+      if (runtimeLogCursor === undefined) {
+        throw failure(
+          501,
+          "NOT_IMPLEMENTED",
+          "Agent runtime status and logs are disabled for this Installation.",
+        );
+      }
+      runtimeLogLimiter.admit(context.actorId, agentId);
+      // A client that disconnects cancels its Driver reads.
+      const disconnected = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) {
+          disconnected.abort();
+        }
+      };
+      reply.raw.once("close", onClose);
+      try {
+        if (operation.operationId === "getAgentDeploymentRuntime") {
+          const description = await runtimeLogLimiter.run(() =>
+            controller!.describeAgentRuntime(
+              context.actorId,
+              namespaceId,
+              agentId,
+              params.deploymentId as string,
+              disconnected.signal,
+            ),
+          );
+          reply.send({ data: description, meta: { requestId: request.id } });
+          return;
+        }
+        const target: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+        const page = await runtimeLogLimiter.run(() =>
+          controller!.readAgentRuntimeLogs(
+            context.actorId,
+            namespaceId,
+            agentId,
+            params.deploymentId as string,
+            runtimeLogQuery(request.query as AgentRuntimeLogsQuery),
+            {
+              codec: runtimeLogCursor,
+              signal: disconnected.signal,
+              // Once per view, before the first Driver read; failure means no content.
+              admitView: async (admission) => {
+                const base = event(operation, request, target, "mutation", context);
+                await options.auditSink.append({
+                  ...base,
+                  details: { ...base.details, runtimeLogs: { ...admission } },
+                });
+              },
+            },
+          ),
+        );
+        reply.send({ data: runtimeLogPageBody(page), meta: { requestId: request.id } });
+        return;
+      } finally {
+        reply.raw.off("close", onClose);
+      }
+    }
+
     if (operation.operationId === "diagnoseAgentDeployment") {
       const diagnostics = await controller.diagnoseAgentDeployment(
         context.actorId,
@@ -4229,6 +4326,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   void app.register(async (routes) => {
     routes.addSchema(ErrorResponse);
     routes.addSchema(AgentDeploymentDiagnosticsResponse);
+    routes.addSchema(AgentRuntimeResponse);
+    routes.addSchema(AgentRuntimeLogsResponse);
     routes.addSchema(AgentRuntimeCredentialResponse);
     routes.addSchema(SecretResponse);
     routes.addSchema(CredentialSourceResponse);
@@ -4605,6 +4704,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   app.setErrorHandler(async (error, request, reply) => {
     let mapped = requestFailure(error);
+    if (error instanceof RuntimeLogsError && error.retryAfterSeconds !== undefined) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+    }
     if (isAuthorizationDenied(error) && !isDependencyUnavailable(error)) {
       const context = contexts.get(request);
       if (context) {
