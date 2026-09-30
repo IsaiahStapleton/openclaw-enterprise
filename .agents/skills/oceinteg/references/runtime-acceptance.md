@@ -138,8 +138,12 @@ administration; report unsupported shared-session checks explicitly, not passed.
 ## Completion
 
 Merge these results into main's matrix with separate rows per runtime/topology.
-Preserve original failures and repaired reruns. Stop all run-owned Agents and
-verify their runtime Pods are gone; close run-owned browser, forward, and tunnel
-processes. Record retained infrastructure and claims explicitly. Do not stop
+Preserve original failures and repaired reruns. Honor the resolved retention
+choice, including whether Agents must remain running. If shutdown is selected,
+stop run-owned Agents and verify their runtime Pods are gone before closing
+run-owned access processes or removing infrastructure. If running state is to
+be retained, preserve its required services and access; record Agent states,
+claims, infrastructure, access processes, and resume/cleanup instructions. An
+ambiguous retention request requires clarification before destructive cleanup. Do not stop
 other Slack consumers or delete shared credentials. A blocked required runtime
 keeps overall acceptance incomplete even when every runnable Codex case passes.

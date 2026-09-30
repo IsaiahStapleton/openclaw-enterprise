@@ -71,6 +71,13 @@ and [Credentials tab](../../../../docs/guides/console/agent-details.md#credentia
 
 The following steps describe the Community Agent. For the required Standard
 Codex case, select **Standard Codex** with the same supported Codex authentication.
+After its model-only baseline passes, perform steps 3–5 on that Agent too: bind
+both Slack Secrets, select the exact test channel and authorized sender, save,
+and deploy. Verify its real Slack reply before native-session continuity or
+lifecycle checks. Run it sequentially with the Community Agent when sharing an
+app; preserve any separately authorized external consumers. Configure the
+supported Agent-wide plugin approver identity for the designated human if using
+Slack approval delivery, then verify that human can receive and deny the request.
 For **Standard OpenClaw**, use a separate authorized credential/provider supported
 by that runtime and its matching Plugin Driver installation; leave Slack disabled.
 Do not copy Codex account connections or tokens into OpenClaw. Resolve the selected

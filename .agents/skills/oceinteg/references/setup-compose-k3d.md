@@ -44,6 +44,10 @@ claim full main parity while required capabilities remain unavailable.
 
 ## Clean up
 
+Apply [main's retention decision](./runtime-acceptance.md#completion) first.
+Preserve requested running Agents and their dependencies; the shutdown steps
+below apply only to resources selected for disposal.
+
 Stop repository-bound Agents and verify broker session disposal before stopping
 the broker. Use the original profile's documented `dev down` with the same state,
 project, and engine selection. Remove only the additional owned relay/proxy

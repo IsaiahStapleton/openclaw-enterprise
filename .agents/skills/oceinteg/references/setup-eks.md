@@ -45,6 +45,10 @@ role, authenticated Console, and the required presets. Continue with main's
 baseline Agent and runtime/isolation checks; healthy infrastructure is not Agent
 acceptance. Record actual image IDs and resulting claim identities.
 
+Apply [main's retention decision](./runtime-acceptance.md#completion) first.
+Preserve requested running Agents and their dependencies; the shutdown steps
+below apply only to resources selected for disposal.
+
 Stop run-owned Agents before closing access. Follow the recorded retention
 choice for the exact cluster, database, volumes, registry artifacts, and network
 resources. Verify deletion when authorized; otherwise inventory retained resources

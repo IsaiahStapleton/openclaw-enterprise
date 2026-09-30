@@ -38,6 +38,10 @@ NetworkPolicy enforcement, and image provenance. Then execute main through the
 Console, using separate fresh Installations where runtime Driver selection differs.
 No EKS result may be inferred from this local proof.
 
+Apply [main's retention decision](./runtime-acceptance.md#completion) first.
+Preserve requested running Agents and their dependencies; the shutdown steps
+below apply only to resources selected for disposal.
+
 Stop run-owned Agents and resolve broker disposal before following
 [local shutdown](../../../../docs/guides/deploy/local-operations.md#stop-development-safely).
 Use the original state directory and engine selection. Verify only the owned
