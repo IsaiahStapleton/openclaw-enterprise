@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createControllerAuth } from "../../apps/controller/src/auth/index.ts";
+import {
+  knownDeviceCookieName,
+  knownDeviceFromCookieHeader,
+  verifyKnownDevice,
+} from "../../apps/controller/src/auth/known-device.ts";
 
 const baseURL = "http://127.0.0.1";
 const email = "audited@example.test";
 const password = "audited-account-password";
+
+const secret = "password-sign-in-audit-secret-at-least-32-bytes";
 
 function controller(audit, extra = {}) {
   const memoryDatabase = { user: [], session: [], account: [], verification: [], apikey: [] };
@@ -12,7 +19,7 @@ function controller(audit, extra = {}) {
     mode: "development",
     installationId: "ins_sign_in_audit",
     baseURL,
-    secret: "password-sign-in-audit-secret-at-least-32-bytes",
+    secret,
     secureCookies: false,
     memoryDatabase,
     passwordSignInAudit: audit,
@@ -111,4 +118,42 @@ test("a wrong password whose denial audit fails is 503 and still spends the budg
     events.map(({ event, lane }) => [event, lane]),
     [["authentication.sign-in-limited", "email"]],
   );
+});
+
+test("a password reset during a sign-in revokes the known-device entry that sign-in sets", async () => {
+  // The audit hook runs after the password check, the latest point a reset can commit
+  // before the entry is issued. The entry must be bound to the state the old password
+  // was checked against, so the reset revokes it.
+  let version = 1;
+  const reads = [];
+  const knownDeviceState = async (address) => {
+    reads.push(address);
+    return `password\0user-1\0method-1\0${version}`;
+  };
+  const { auth } = controller(
+    {
+      accepted: async () => {
+        version += 1;
+      },
+      refused: async () => {},
+    },
+    { knownDeviceState },
+  );
+  await auth.createAccount({ email, password });
+  const response = await signIn(auth, { email, password });
+  assert.equal(response.status, 200, JSON.stringify(response.payload));
+  const cookies = [response.headers["set-cookie"]].flat();
+  const name = knownDeviceCookieName(false);
+  const entry = cookies.find((value) => value.startsWith(`${name}=`));
+  assert.ok(entry, "a successful sign-in marks the browser");
+  const value = knownDeviceFromCookieHeader(entry.split(";", 1)[0], false);
+  assert.deepEqual(reads, [email], "the state is read once per attempt");
+  assert.equal(
+    await verifyKnownDevice(secret, email, value, Date.now(), knownDeviceState),
+    undefined,
+    "the entry does not verify against the reset state",
+  );
+  // Without a concurrent reset, the entry verifies against the current state.
+  const current = async () => `password\0user-1\0method-1\0${version - 1}`;
+  assert.ok(await verifyKnownDevice(secret, email, value, Date.now(), current));
 });

@@ -65,8 +65,8 @@ test("a password change, disable, or recreated account revokes the entry", async
   // An account deleted and recreated under the same email is a different user.
   const recreated = accounts({ [email]: stateOf("user-2", 1) });
   assert.equal(await verify(value, now + 1000, email, recreated.lookup), undefined);
-  // Re-enabling does not bring the old state back in the guarded profile: the account
-  // version moved. Only a new sign-in issues an entry for the new state.
+  // After a reset, only a new sign-in issues an entry for the new state; it replaces the
+  // stale one. (Disabling is not a revocation: re-enabling restores the same state.)
   const renewed = issue(email, now + 2000, value, stateOf("user-1", 2));
   assert.equal(renewed.split("~").length, 1, "the stale entry is replaced");
   assert.ok(await verify(renewed, now + 3000, email, reset.lookup));

@@ -161,7 +161,9 @@ browser's lane, and the address lane and global caps still apply. Tampered,
 expired, foreign-account, stale, or duplicated cookies are ignored, returning the
 attempt to the shared lane with the same answer a new browser gets. Resetting an
 account's password, or deleting and recreating the account, revokes every entry
-issued before. With GitHub or Google sign-in, a disabled account's entries verify
+issued before, including a reset that commits while a sign-in with the old password
+is in flight: that sign-in's entry is bound to the state read before its password
+check. With GitHub or Google sign-in, a disabled account's entries verify
 nothing until it is enabled again; reset the password as well to revoke them for
 good. The controller reads the account only for an entry issued for the attempted
 email, so forged or foreign cookies add no timing signal about which emails exist,

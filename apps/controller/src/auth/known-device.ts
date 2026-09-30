@@ -14,9 +14,11 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
  * distinct entries and lanes); `keyId` is a short, non-reversible fingerprint of that
  * secret. The binding is a second MAC over the entry's MAC and the account's sign-in state
  * when it was issued: the user, its password method and that method's version and, with an
- * external provider, the account's version and enabled state. Resetting the password,
- * disabling the account, or deleting and recreating it changes that state, so every entry
- * issued before stops verifying. No entry carries the email or the state.
+ * external provider, whether the account is enabled (not the account's version, so attaching
+ * or detaching an external identity keeps the password fallback). Resetting the password or
+ * deleting and recreating the account changes that state, so every entry issued before stops
+ * verifying; a disabled account has no state, so its entries verify nothing until it is
+ * enabled again. No entry carries the email or the state.
  *
  * Verification reads the account's state only after the MAC shows the entry was issued for
  * this exact email under this secret, which only a browser that signed in to the account can

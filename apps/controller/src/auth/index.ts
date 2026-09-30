@@ -1314,6 +1314,11 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         }
         return passwordAdmission.admit(attempt, async () => {
           const audit = options.passwordSignInAudit;
+          // The entry is bound to the account's state read before the password check: a
+          // password reset or account recreation that commits during the sign-in then bumps
+          // the state past it and revokes the entry, instead of the old password's sign-in
+          // being bound to the new state. A failed read only skips the marking.
+          const accountState = await knownDeviceState(email).catch(() => undefined);
           let result;
           try {
             result = await api.signInEmail({
@@ -1346,13 +1351,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           }
           // Only a successful sign-in marks the browser as a known device for this email.
           // Rejections throw; a success leaves the status unset (200).
-          // The entry is bound to the account's state after the sign-in; a failed read
-          // only skips the marking.
-          const accountState =
-            (result.status ?? 200) === 200
-              ? await knownDeviceState(email).catch(() => undefined)
-              : undefined;
-          if (accountState !== undefined) {
+          if ((result.status ?? 200) === 200 && accountState !== undefined) {
             result.headers.append(
               "set-cookie",
               knownDeviceSetCookie(
@@ -1709,7 +1708,7 @@ export async function createPostgresControllerAuth(
     ...(humanLogin === undefined ? {} : { humanLogin }),
     // Password-only: bind known-device entries to the password method's authentication
     // version, which the database bumps on every password change. The guarded profile's
-    // state (with the account version and enabled state) comes from humanLogin.
+    // state (bound to the enabled state, not the account version) comes from humanLogin.
     knownDeviceState: (email: string) => passwordKnownDeviceState(pool, email),
     ...(iamDriver === undefined
       ? {}
