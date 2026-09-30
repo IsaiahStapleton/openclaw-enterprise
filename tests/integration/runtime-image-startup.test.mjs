@@ -3081,14 +3081,23 @@ async function assertProbeGatesStartup(t, kind, delayMs) {
   });
 }
 
+// Kubelet shows this readiness output after "Readiness probe failed:".
+const heldFailureReason = /; startup check [a-z-]+ failed with AUTHENTICATION_FAILED$/;
+const isHeldFailureReason = (event) =>
+  event.event === "observe" &&
+  event.key === "readinessReason" &&
+  heldFailureReason.test(event.value ?? "");
+
 // A rejected credential reports AUTHENTICATION_FAILED for #583's prompt
-// deployment failure, starts no native process, and the wrapper holds that
-// evidence until it is terminated.
+// deployment failure, starts no native process, the wrapper holds that
+// evidence until it is terminated, and readiness output names it.
 async function assertRejectedCredentialFailsFast(t, kind) {
   const run = await runStartupProbeScenario(t, {
     kind,
     mode: "reject",
-    until: heldFailure("AUTHENTICATION_FAILED"),
+    // Readiness runs beside the status read, so it can report the held failure a poll later.
+    until: (snapshot) =>
+      heldFailure("AUTHENTICATION_FAILED")(snapshot) && snapshot.events.some(isHeldFailureReason),
   });
   await withStartupProbeEvidence(run, async () => {
     const { events, phases, output } = run.snapshot;
@@ -3098,6 +3107,7 @@ async function assertRejectedCredentialFailsFast(t, kind) {
     assert.equal(phaseAt(phases, "model-probe")?.outcome, "failed");
     assert.equal(phaseAt(phases, "native-spawn"), undefined, "a failed probe starts nothing");
     assert.match(output, /Harness model authentication probe failed\./);
+    assert.ok(events.some(isHeldFailureReason), "readiness output names the held failure");
     assert.doesNotMatch(output, new RegExp(startupProbeApiKey));
     const failure = run.first(events, observedValue("runtimeFailure", "AUTHENTICATION_FAILED"));
     // Far inside the 900-second convergence deadline #583 cuts short.

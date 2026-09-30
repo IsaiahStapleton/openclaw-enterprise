@@ -457,6 +457,22 @@ test("Gateway password access saves the generated reference without changing adm
   await page.getByLabel("Available versions").selectOption(first.revision.id);
   await page.getByRole("button", { name: "Edit current Configuration", exact: true }).waitFor();
   assert.equal(await enable.count(), 0);
+
+  // A fresh Agent whose v1 was admitted from this exact Configuration generation needs no redeploy.
+  const fresh = await fixture.createAgent(namespace.id, "Gateway password fresh Agent", expected);
+  const freshV1 = await fixture.seedActiveAgentRevision(namespace.id, fresh.id);
+  assert.deepEqual(
+    freshV1.revision.configuration.gateway.auth.password,
+    expected.gateway.auth.password,
+  );
+  const freshUrl = detailUrl(fixture, namespace.id, fresh.id, "draft", "configuration");
+  await page.goto(`${fixture.origin}${freshUrl.pathname}${freshUrl.search}`);
+  await page
+    .getByText(
+      `Gateway password access is enabled in the saved Configuration and included in v${freshV1.revision.revision}.`,
+    )
+    .waitFor();
+  assert.equal(await page.getByText(/Deploy a new version to apply it/).count(), 0);
 });
 
 test("Agent detail preserves admitted revision history while draft edits change current configuration", async (t) => {
