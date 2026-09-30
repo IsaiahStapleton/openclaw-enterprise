@@ -146,8 +146,9 @@ Use stable feature names for living references. Follow
 document ownership, and lifecycle. Prefer one Markdown file per RFC or plan;
 documents with supporting material use `<number>-<topic>/index.md`, with
 companions in the same directory. Keep completed and superseded documents in
-place. Preserve historical names and content when grouping companions, and leave
-`specs/.archive/` untouched in this first phase.
+place. Preserve historical names and content when grouping companions. This
+first phase does not reorganize `specs/.archive/`; removed image assets remain
+accessible through links to a preserved Git revision.
 Update affected current references, guides, and flows with behavior changes;
 shipped specifications remain historical records. Keep Manual Notes unchanged.
 Put detailed contracts in their owning reference rather than expanding

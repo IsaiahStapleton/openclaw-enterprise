@@ -82,7 +82,8 @@ recorded status is not proof of current implementation or release availability.
 
 ## Archived specifications
 
-The existing `.archive/` is unchanged in this phase. The entries below preserve
+The existing `.archive/` keeps its content and placement; console-image links
+point to a preserved Git revision after removal of `specs/assets/`. The entries below preserve
 its earlier index, including recorded statuses and current-reference links.
 Archive placement does not establish completion. New completed or superseded
 RFCs and plans stay in their own folders. Historical commands and source links

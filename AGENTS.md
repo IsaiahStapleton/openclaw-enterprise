@@ -301,8 +301,9 @@ preserve its original design decisions and implementation details.
 
 Use stable feature names in `docs/reference/` and preserve grandfathered
 specification names and IDs when grouping companions under `index.md`.
-This first organization phase leaves `specs/.archive/` unchanged; do not add new
-records to it. A behavior-changing implementation PR
+This first organization phase preserves `specs/.archive/` content and placement;
+only the removed console-image links change to a preserved Git revision. Do not
+add new records to it. A behavior-changing implementation PR
 updates its affected reference, guides, and flows together. Record completion
 and the owning current reference when a specification ships.
 Keep Manual Notes unchanged. Link maintenance after document moves is permitted

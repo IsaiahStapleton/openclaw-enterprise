@@ -171,6 +171,7 @@ the full path when a number is ambiguous. Do not infer completion from placement
 rewrite historical content to match the new template.
 
 This first phase moves non-archived specifications and supporting evidence.
-`specs/.archive/` remains unchanged and is linked from the index. Its referenced
-images and one forwarding page remain at their existing paths so archived links
-still resolve. A future archive reorganization requires a separate change.
+`specs/.archive/` retains its content and placement and is linked from the index.
+The console spec's image links point to a preserved Git revision after removal
+of `specs/assets/`. The egress forwarding page remains so archived links still
+resolve. A future archive reorganization requires a separate change.
