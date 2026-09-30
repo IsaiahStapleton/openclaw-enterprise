@@ -217,8 +217,8 @@ change the Collector boundary above; nothing is stored, cached, logged or sent
 to the Collector, and responses carry `Cache-Control: no-store`.
 
 - **Access.** Pod status and Events need Agent `operate` and `read` plus
-  revision `read`. Log text needs Agent `read_logs` or `administer`, Agent `read`
-  and revision `read`. `administer` is the audience that already reaches Gateway
+  revision `read`. Log text needs Agent `read_logs` or `administer` and Agent
+  `read`, for any revision of that Agent. `administer` is the audience that already reaches Gateway
   logs through the native admin UI; `read_logs` delegates log text alone and is
   never granted by bootstrap. A `read_logs` Restriction also blocks
   `administer`. Every poll is authorized again; a denial is audited and reaches

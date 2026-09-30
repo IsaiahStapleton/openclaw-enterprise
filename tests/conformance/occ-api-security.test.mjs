@@ -964,7 +964,7 @@ test("mutations are attributable and authorization failures never leak credentia
 });
 
 // Agent runtime status and log reads. Status (tier 1) needs Agent operate + read and
-// revision read; log text (tier 2) needs Agent administer + read and revision read.
+// revision read; log text (tier 2) needs Agent read_logs (or administer) + read.
 // Every request is re-authorized, including cursor polls, and a denial never reaches
 // the Compute Driver.
 function runtimeLogLine(index, raw = `gateway output ${index}`) {
@@ -1153,6 +1153,48 @@ test("a delegated read_logs principal reads and downloads logs without administe
     { session: delegate.session },
   );
   assert.equal(revoked.status, 403);
+});
+
+test("an Agent-level read_logs grant covers every revision, including later deployments", async () => {
+  const fixture = await createRuntimeLogFixture();
+  const target = await fixture.deployAgent();
+  fixture.computeDriver.state.lines = [runtimeLogLine(1)];
+  // No per-revision grant: log text is delegated on the exact Agent alone.
+  const delegate = await fixture.createPrincipal("runtime-log-agent-only", target, [
+    { action: "read_logs", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent" },
+  ]);
+  const first = await fixture.request("GET", target.logsPath(), { session: delegate.session });
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.data.records[0].message, "gateway output 1");
+
+  // A new deployment creates a new revision; the same Agent grant still reads its logs.
+  const redeployed = await fixture.request(
+    "POST",
+    `/namespaces/${target.namespace.id}/agents/${target.agent.id}/deploy`,
+  );
+  assert.equal(redeployed.status, 202, redeployed.text);
+  assert.notEqual(redeployed.data.id, target.revisionId);
+  const secondPath = `/namespaces/${target.namespace.id}/agents/${target.agent.id}/deployments/${redeployed.data.id}/runtime/logs?source=gateway`;
+  const second = await fixture.request("GET", secondPath, { session: delegate.session });
+  assert.equal(second.status, 200, second.text);
+
+  // Runtime status keeps its revision requirement, and a revision of another Agent is
+  // never reachable through this Agent's path.
+  const status = await fixture.request("GET", target.runtimePath, { session: delegate.session });
+  assert.equal(status.status, 403);
+  const sibling = await fixture.deployAgent("runtime-log-agent-only-sibling");
+  const crossed = await fixture.request(
+    "GET",
+    `/namespaces/${target.namespace.id}/agents/${target.agent.id}/deployments/${sibling.revisionId}/runtime/logs?source=gateway`,
+    { session: delegate.session },
+  );
+  assert.notEqual(crossed.status, 200);
+  const reads = driverReads(fixture).length;
+  delegate.revoke("read_logs", "agent");
+  const revoked = await fixture.request("GET", secondPath, { session: delegate.session });
+  assert.equal(revoked.status, 403);
+  assert.equal(driverReads(fixture).length, reads);
 });
 
 test("runtime log cursors bind one principal and view and are re-authorized on every poll", async () => {

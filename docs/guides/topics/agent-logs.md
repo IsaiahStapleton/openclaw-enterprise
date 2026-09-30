@@ -85,22 +85,24 @@ command waits out `429` responses and exits nonzero on `501` and `503`. See the
 
 ## Who can see what
 
-| Read                                                                       | Required grants                                                            | Audited                                                   |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Runtime status: Pods, phase, readiness, restarts, last termination, Events | Agent `operate` and `read`, and `read` on the version                      | No, like [diagnostics](../../reference/agents.md)         |
-| Log text                                                                   | Agent `read_logs` or `administer`, Agent `read`, and `read` on the version | Once per view as `openclaw.agents.runtime_logs.view`      |
-| Log download                                                               | Same as log text                                                           | Every download as `openclaw.agents.runtime_logs.download` |
+| Read                                                                       | Required grants                                       | Audited                                                   |
+| -------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------- |
+| Runtime status: Pods, phase, readiness, restarts, last termination, Events | Agent `operate` and `read`, and `read` on the version | No, like [diagnostics](../../reference/agents.md)         |
+| Log text                                                                   | Agent `read_logs` or `administer`, and Agent `read`   | Once per view as `openclaw.agents.runtime_logs.view`      |
+| Log download                                                               | Same as log text                                      | Every download as `openclaw.agents.runtime_logs.download` |
 
 Installation administrators hold Agent `administer`. The same principals can
 already open the [native admin UI](../../reference/agent-native-admin.md), whose
 Logs page shows Gateway log text. To let someone read logs without that
-access, grant a Namespace Role with Agent `read_logs` and `read` plus version
-`read` on the exact Agent; a `read_logs` Restriction blocks log text for
-everyone, administrators included. Without `operate`, the Logs tab shows no
-runtime strip and no Pod picker: it offers every source, reads the source's
-current Pod, and says so when this version lacks a source. Service principals
-may call both routes under the same grants. Every request, including each follow
-poll, is authorized again, so revoking a grant stops the next poll. See
+access, bind a Namespace Role with Agent `read_logs` and `read` to the exact
+Agent. It covers every version of that Agent, including later deployments.
+Runtime status still needs `read` bound to each exact version. A `read_logs`
+Restriction blocks log text for everyone, administrators included. Without
+`operate`, the Logs tab shows no runtime strip and no Pod picker: it offers
+every source, reads the source's current Pod, and says so when this version
+lacks a source. Service principals may call both routes under the same grants.
+Every request, including each follow poll, is authorized again, so revoking a
+grant stops the next poll. See
 [authorization](../../reference/authorization.md).
 
 ## What the output contains
