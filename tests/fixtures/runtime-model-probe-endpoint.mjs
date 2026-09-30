@@ -290,6 +290,7 @@ server.listen(443, "127.0.0.1", () => {
         ready(),
       ]);
       observe("native", listening);
+      observe("startup", runtime?.startup ?? null);
       observe("runtimeFailure", runtime?.runtimeFailure?.code ?? null);
       observe("plugin", plugin?.phase ?? null);
       observe("ready", readiness);

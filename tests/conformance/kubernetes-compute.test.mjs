@@ -12,6 +12,7 @@ import {
   AGENT_RUNTIME_ENTRYPOINT,
   AGENT_WITH_NODE_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
+  RUNTIME_WRAPPER_COMMAND,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
@@ -1199,7 +1200,7 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
       mountPath: "/run/openclaw-node-setup",
       readOnly: true,
     },
-    command: ["/usr/bin/tini", "-s", "--", "node", "-e"],
+    command: [...RUNTIME_WRAPPER_COMMAND],
   });
   const renderedConfiguration = JSON.parse(
     read(
@@ -9681,10 +9682,11 @@ test("rendered exec arguments and environment values stay within the per-string 
     state.ready = true;
     await driver.prepareRevision(revision, context);
     const workloads = [...objects.values()].filter(({ kind }) => kind === "Deployment");
-    assert.equal(
-      workloads.some(({ spec }) => spec.template.spec.containers[0].command[0] === "/usr/bin/tini"),
-      !embedded,
-    );
+    // Every runtime wrapper runs under tini, so it is never PID 1: a Pod stop's
+    // SIGTERM ends it in every startup phase, not only once it installs a handler.
+    for (const { spec } of workloads) {
+      assert.deepEqual(spec.template.spec.containers[0].command, [...RUNTIME_WRAPPER_COMMAND]);
+    }
     assertExecStringsWithinBudget(workloads);
     for (const { spec } of workloads) {
       // Runtime programs travel as bounded pieces and arrive intact.
