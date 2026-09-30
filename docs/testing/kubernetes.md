@@ -13,12 +13,12 @@ pnpm cli:build
 OCC_TEST_DEV_UP_K3D_REAL=1 node --test tests/integration/dev-up-k3d-real.test.mjs
 ```
 
-The test exercises the regular launcher, in-cluster PostgreSQL and OCE,
-authenticated Namespace readiness, standard Presets, and curated plugin
-discovery. It provisions a dedicated Codex Agent with a synthetic model Secret
-and checks workspace-write and outside-write behavior inside its real sandbox.
-It does not run a model or prove Codex WebSocket tool execution. If cleanup fails, it preserves the recorded state directory for
-recovery with `occ dev down`.
+The Kubernetes-only case checks authenticated readiness, presets, plugin discovery,
+and a dedicated Codex Agent’s sandbox using a synthetic credential. The Compose
+case checks the launcher’s generated image and seccomp profile in a real Pod. Both
+verify workspace writes succeed and outside writes fail; neither proves model
+execution. The Compose case does not prove Agent routing. Failed cleanup preserves
+state for `occ dev down`.
 
 See [two-cluster validation](two-cluster-local.md).
 

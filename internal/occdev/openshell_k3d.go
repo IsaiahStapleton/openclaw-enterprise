@@ -192,6 +192,7 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	fmt.Fprintf(r.opts.Out, "Creating Kubernetes-only k3d cluster %s...\n", state.Cluster)
 	clusterArgs := []string{
 		"cluster", "create", state.Cluster,
+		"--timeout", (time.Duration(timeoutSeconds) * time.Second).String(),
 		"--image", openShellK3sImage,
 		"--servers", "1", "--agents", "0",
 		"--api-port", fmt.Sprintf("127.0.0.1:%d", kubernetesPort),
@@ -270,24 +271,10 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	}
 	var codexSeccompProfile string
 	if sandboxDriver == "none" {
-		fmt.Fprintln(r.opts.Out, "Verifying the dedicated Codex sandbox on the owned k3d node...")
-		command := r.command(ctx, "node", "scripts/prepare-development-codex-seccomp.mjs", state.directory, runtimeImage, strconv.Itoa(timeoutSeconds))
-		command.Stderr = r.opts.Err
-		output, err := command.Output()
+		codexSeccompProfile, err = r.prepareDevelopmentCodexSandbox(ctx, state, runtimeImage, timeoutSeconds)
 		if err != nil {
-			return fmt.Errorf("dedicated Codex sandbox preparation failed: %w", err)
+			return err
 		}
-		var result struct {
-			Mode        string `json:"mode"`
-			ProfileName string `json:"profileName"`
-		}
-		if err := json.Unmarshal(output, &result, json.RejectUnknownMembers(true)); err != nil {
-			return fmt.Errorf("invalid dedicated Codex sandbox preparation result: %w", err)
-		}
-		if !validDevelopmentCodexSeccompResult(result.Mode, result.ProfileName) {
-			return fmt.Errorf("invalid dedicated Codex sandbox preparation result")
-		}
-		codexSeccompProfile = result.ProfileName
 	}
 	if err := r.ensureKubernetesNamespace(ctx, state.PlatformNamespace); err != nil {
 		return err

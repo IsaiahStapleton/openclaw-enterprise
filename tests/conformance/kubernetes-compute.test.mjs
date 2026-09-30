@@ -2881,7 +2881,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   );
   assert.match(
     nativeAdminPod.initContainers[0].args[0],
-    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/home\/node\/\.openclaw\/openclaw\.json"\)/,
+    /copyFileSync\("\/etc\/openclaw-managed\/openclaw\.json", "\/runtime-state\/home\/\.openclaw\/openclaw\.json"\)/,
   );
 
   const privateRuntimeDriver = createKubernetesComputeDriver(
