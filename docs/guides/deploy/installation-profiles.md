@@ -30,6 +30,20 @@ Both profiles enable:
   private metrics, digest-pinned images, DNS policy, trusted proxy CIDRs, and
   plugin-status proxy CIDRs.
 
+Both profiles give Gateway Pods (embedded or dedicated), Harness Pods, and the
+tenant namespace container default a `100m` CPU request and a four-core (`"4"`)
+CPU limit, with `128Mi` memory requests and `2Gi` memory limits. The limit only
+permits bursts: an embedded OpenClaw Gateway runs a full agent turn as its
+startup model probe, about 16 CPU-seconds of local work, and was ready 24 to 30
+seconds after start at one core against 51 to 72 seconds at `500m`. The probe
+uses about one core, so cores beyond the first serve later work, not startup. The request
+sets the scheduling reservation, so the higher limit reserves no node capacity.
+The trade-off is overcommit: several busy runtimes on one node can each take up
+to four cores from their neighbors, and a `limits.cpu` namespace quota counts
+the whole limit. Profile input cannot change these values; for others, write
+the Installation from the production example (see
+[Images and resources](../../reference/drivers/kubernetes-compute.md#images-and-resources)).
+
 Seeding both Presets does not change the profile's PluginDriver. An Agent
 created from the other profile's Preset still needs a compatible driver,
 runtime, harness mode, credentials, and channel support.
