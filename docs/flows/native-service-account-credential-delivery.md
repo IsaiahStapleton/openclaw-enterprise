@@ -18,7 +18,7 @@ the operator supplies credentials directly on an SSH host instead; OCC freezes
 only the method and performs gateway readiness without model authentication.
 
 Codex OAuth device login and its one-time credential handoff are **Experimental**;
-see the [launch limits](../reference/drivers/kubernetes-compute/storage-and-credentials.md#oauth-launch-limits).
+see the [launch limits](../reference/drivers/kubernetes-compute/codex-oauth-storage.md#oauth-launch-limits).
 
 ## Entry Points
 

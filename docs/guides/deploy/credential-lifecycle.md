@@ -139,8 +139,8 @@ reconnecting. Ordinary revision changes do not need another runtime login.
 Durable token brokerage is separate work in progress. Reconnect hardening,
 automatic cleanup, and replacement recovery are follow-up work; they are not
 first-deploy acceptance requirements. See the
-[known runtime limitations](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#oauth-launch-limits)
-and [verification gaps](../../testing/plugins.md#device-login-verification).
+[known runtime limitations](../../reference/drivers/kubernetes-compute/codex-oauth-storage.md#oauth-launch-limits)
+and [verification gaps](../../reference/drivers/kubernetes-compute/codex-oauth-storage.md#device-login-verification).
 
 ## Preserve administrator recovery
 

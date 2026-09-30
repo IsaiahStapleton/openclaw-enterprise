@@ -12,6 +12,7 @@ export function bindPlatformUnitOfWork(
       "findInstallation",
       "getInstallation",
       "createInstallation",
+      "holdPrincipalAccount",
     ]),
     namespaces: bindRepository(repositories.namespaces, lifetime, [
       "findNamespace",
@@ -77,6 +78,8 @@ export function bindPlatformUnitOfWork(
       "delete",
     ]),
     agents: bindRepository(repositories.agents, lifetime, [
+      "findAgentForBrowsing",
+      "listAgentsForBrowsing",
       "findAgent",
       "listAgents",
       "createAgent",
@@ -88,6 +91,8 @@ export function bindPlatformUnitOfWork(
       "transitionAgentStatus",
     ]),
     revisions: bindRepository(repositories.revisions, lifetime, [
+      "findRevisionForBrowsing",
+      "listRevisionsForBrowsing",
       "findRevision",
       "listRevisions",
       "createRevision",
@@ -134,7 +139,9 @@ export function bindPlatformUnitOfWork(
       "append",
       "list",
       "findWork",
+      "findWorkAttempt",
       "retryFailedAgentDeletion",
+      "retryFailedNamespaceDeletion",
     ]),
   });
 }

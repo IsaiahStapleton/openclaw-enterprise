@@ -61,8 +61,10 @@ import {
   AgentRuntimeCredentialResponse,
   AgentRuntimeImagesResponse,
   AgentResponse,
+  AgentReadResponse,
   AgentRevisionListResponse,
   AgentRevisionResponse,
+  AgentRevisionReadResponse,
   ConfigurationResponse,
   IAMAccessBindingListResponse,
   IAMAccessBindingResponse,
@@ -73,6 +75,7 @@ import {
   NamespaceListResponse,
   NamespaceResponse,
   BackendListResponse,
+  ObservabilityResponse,
   RepositoryOptionListResponse,
   SecretListResponse,
   CredentialSourceListResponse,
@@ -385,6 +388,21 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "getObservability",
+    method: "GET",
+    path: "/observability",
+    action: "openclaw.observability.read",
+    iamAction: "administer",
+    resourceKind: "installation",
+    authorizationTarget: "installation",
+    summary: "Get the configured external observability destination",
+    tags: ["Installation"],
+    schema: {
+      querystring: EmptyQuery,
+      response: { 200: ObservabilityResponse, ...readErrors },
+    },
+  },
+  {
     operationId: "createNamespace",
     method: "POST",
     path: "/namespaces",
@@ -439,7 +457,7 @@ export const occApiRoutes = [
     iamAction: "delete",
     resourceKind: "namespace",
     authorizationTarget: "namespace",
-    summary: "Begin deletion of an empty Installation-owned Namespace",
+    summary: "Begin or retry deletion of an empty Installation-owned Namespace",
     tags: ["Namespaces"],
     schema: {
       querystring: EmptyQuery,
@@ -667,7 +685,7 @@ export const occApiRoutes = [
     action: "openclaw.secrets.read",
     iamAction: "read",
     resourceKind: "secret",
-    authorizationTarget: "namespace_collection",
+    authorizationTarget: "namespace_and_secret_candidates",
     summary: "List readable Namespace-owned Secret metadata without revealing material",
     tags: ["Secrets"],
     schema: {
@@ -749,7 +767,7 @@ export const occApiRoutes = [
     action: "openclaw.credential_sources.read",
     iamAction: "read",
     resourceKind: "credential_source",
-    authorizationTarget: "namespace_collection",
+    authorizationTarget: "namespace_and_credential_source_candidates",
     summary: "List readable credential sources without revealing credential values",
     tags: ["Credential sources"],
     schema: {
@@ -1148,7 +1166,7 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       params: AgentParams,
-      response: { 200: AgentResponse, ...readErrors },
+      response: { 200: AgentReadResponse, ...readErrors },
     },
   },
   {
@@ -1349,7 +1367,7 @@ export const occApiRoutes = [
     schema: {
       querystring: EmptyQuery,
       params: RevisionParams,
-      response: { 200: AgentRevisionResponse, ...readErrors },
+      response: { 200: AgentRevisionReadResponse, ...readErrors },
     },
   },
   {

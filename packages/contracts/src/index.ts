@@ -598,6 +598,27 @@ export interface Agent extends Scope {
   readonly createdAt: string;
 }
 
+/** Browsing failures never stand in for an empty or deployable configuration. */
+export interface ConfigurationReadError {
+  readonly code: "SAVED_CONFIGURATION_UNREADABLE";
+  readonly field:
+    | "plugins"
+    | "pluginApprovers"
+    | "repositoryBindings"
+    | "harnessAuth"
+    | "secretBindings"
+    | "repositoryCredentials"
+    | "configuration";
+}
+
+export type AgentMetadata = Omit<
+  Agent,
+  "plugins" | "pluginApprovers" | "repositoryBindings" | "harnessAuth"
+>;
+
+export type AgentRead =
+  Agent | (AgentMetadata & { readonly configurationReadError: ConfigurationReadError });
+
 export interface InstallationDeploymentInventoryAgent {
   readonly id: string;
   readonly status: AgentStatus;
@@ -652,6 +673,15 @@ export interface AgentRevision extends Scope {
   readonly servicePrincipalId: string;
   readonly createdAt: string;
 }
+
+export type AgentRevisionMetadata = Pick<
+  AgentRevision,
+  "id" | "namespaceId" | "agentId" | "revision" | "backendId" | "createdAt"
+>;
+
+export type AgentRevisionRead =
+  | AgentRevision
+  | (AgentRevisionMetadata & { readonly configurationReadError: ConfigurationReadError });
 
 export function freezeAgentRevision(revision: AgentRevision): Readonly<AgentRevision> {
   return Object.freeze({
@@ -744,6 +774,12 @@ export interface AuthorizationRequest {
   readonly principalId: string;
   readonly action: PermissionAction;
   readonly resource: ResourceRef;
+}
+
+/** Asks whether one identity already holds every grant of another identity. */
+export interface IdentityAccessCoverageRequest {
+  readonly principalId: string;
+  readonly targetIdentityId: string;
 }
 
 export interface AuthorizationDecision {
@@ -890,6 +926,12 @@ export interface IAMDriver extends Driver {
   readonly namespacePolicyTransaction?: "platform-unit-of-work";
   lookupIdentity(input: IdentityLookup): Promise<Identity | undefined>;
   authorize(request: AuthorizationRequest): Promise<AuthorizationDecision>;
+  /**
+   * True only when `principalId` holds every grant of `targetIdentityId` at the
+   * same or a broader scope. Credential issuance for another identity requires it;
+   * a Driver without it cannot issue such credentials.
+   */
+  coversIdentityAccess?(request: IdentityAccessCoverageRequest): Promise<boolean>;
   listNamespaceRoles?(
     context: IAMPolicyReadContext,
     namespaceId: string,
@@ -954,6 +996,7 @@ export interface IAMPolicyManagementContext {
 }
 
 export type ManagedIAMResourceKind =
+  | "namespace"
   | "agent"
   | "agent_revision"
   | "configuration"
@@ -1075,6 +1118,7 @@ export interface SandboxDriver extends Driver {
   readonly facets: readonly SandboxFacet[];
   configureAgent?(
     configuration: Readonly<OpenClawConfigurationDocument>,
+    harness: Readonly<RevisionHarnessDescriptor>,
   ): OpenClawConfigurationDocument;
   ensureNamespace?(context: SandboxNamespaceContext): Promise<void>;
   provisionHarness?(context: SandboxHarnessContext): Promise<SandboxResourceRef>;
@@ -1136,8 +1180,19 @@ export interface ChannelDirectoryResult {
   readonly complete: boolean;
 }
 
+/** Values stay inside the Secret Driver callback; adapters own native field semantics. */
+export type ChannelCredentialReader = (
+  binding: string,
+  path: string,
+  validate: (value: string) => Promise<void>,
+) => Promise<void>;
+
 export interface ChannelDriver extends Driver {
   readonly capability: "channel";
+  validateCredentials?(
+    values: Readonly<Record<string, unknown>>,
+    withSecret: ChannelCredentialReader,
+  ): Promise<void>;
   lookupDirectory(
     input: ChannelDirectoryLookupInput,
     signal?: AbortSignal,

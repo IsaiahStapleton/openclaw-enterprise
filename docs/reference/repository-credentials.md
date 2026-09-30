@@ -50,8 +50,8 @@ Public status contains only `sessionId`, `state`, `deadlineWallMs` and `binding`
 snapshot after complete private validation. Cleanup counters and configuration
 decoding remain private. Status cannot regenerate the closed-schema Git/gh files.
 
-`maintenanceIntervalMs` schedules worker reconciliation; it is not a measured
-withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
+`maintenanceIntervalMs` schedules worker reconciliation and retries of incomplete
+repository cleanup; it is not a measured withdrawal bound. Configured IDs, `AgentRevision.repositoryCredentials` and
 persisted `admitted_spec.repository_credentials` retain their meaning.
 
 State derives immutable Driver, Backend, profile and grant context from the
@@ -230,7 +230,7 @@ no admission or close endpoint.
 lowercase UUIDv4. The CLI prints this nonsecret ID before dispatch. HTTP 201
 returns the bearer once; matching ID/duration/profile returns HTTP 200 with
 status only. Conflicts fail. Follow
-[lost-response recovery](../guides/repository-credentials.md#recover-an-admission)
+[lost-response recovery](../guides/repository-credentials/standalone-service.md#recover-an-admission)
 before explicitly requesting replacement material.
 
 Registry-backed brokers advertise `durableAdmissionVersion: 1` privately. The

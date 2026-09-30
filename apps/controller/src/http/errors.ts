@@ -4,6 +4,7 @@ import {
   AgentDeletingError,
   AuthorizationDeniedError,
   ChannelDirectoryError,
+  ChannelCredentialError,
   DependencyUnavailableError,
   ModelDiscoveryError,
   PluginDiscoveryError,
@@ -11,6 +12,7 @@ import {
   NamespaceNotReadyError,
   NotImplementedError,
   PluginPolicyValidationError,
+  PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
   ScopeViolationError,
 } from "@openclaw-enterprise/occ";
@@ -137,6 +139,22 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof RequestFailure) {
     return error;
   }
+  if (error instanceof ChannelCredentialError) {
+    const messages = {
+      role_mismatch: "The selected Secret has the wrong token role for this field.",
+      credentials_rejected:
+        "The channel provider rejected this credential. Check the selected Secret.",
+      unavailable:
+        "Channel credential validation is temporarily unavailable. Retry before deploying.",
+      binding_required: "Select an environment-backed Secret for this channel credential.",
+    };
+    return failure(
+      error.reason === "unavailable" ? 503 : 400,
+      `CHANNEL_CREDENTIAL_${error.reason.toUpperCase()}`,
+      messages[error.reason],
+      [{ path: error.path, code: "INVALID_VALUE" }],
+    );
+  }
   if (error instanceof ChannelDirectoryError) {
     switch (error.reason) {
       case "credentials_rejected":
@@ -254,6 +272,13 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof NotImplementedError) {
     return failure(501, "NOT_IMPLEMENTED", error.message);
+  }
+  if (error instanceof PostgresCommitOutcomeUnknownError) {
+    return failure(
+      503,
+      "DEPENDENCY_UNAVAILABLE",
+      "The operation outcome is unknown. Do not retry automatically; inspect current state before a deliberate new action.",
+    );
   }
   if (isDependencyUnavailable(error)) {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");

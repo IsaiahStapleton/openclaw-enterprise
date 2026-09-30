@@ -1,7 +1,7 @@
 ---
 created: "2026-09-20"
-updated: "2026-09-27"
-last_updated_session: "codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f"
+updated: "2026-09-29"
+last_updated_session: "codex/01a0eb4c-5933-7752-bddc-f787e8da79e7"
 ---
 
 # Namespace IAM Policy Flow
@@ -59,15 +59,21 @@ policy delegation.
 List and read operations call the corresponding `OpenClawController` IAM method
 and return policy metadata. Create and delete operations run inside
 `controller.transact`, append an attributable mutation audit event, and return
-only after the transaction commits.
+only after the transaction commits. The event's authorization records the
+Installation `administer` check. Role events carry the Namespace as resource and
+`roleId` plus `permissions` in details. AccessBinding create and delete events
+carry the bound target as resource (the Namespace for a Namespace binding) and
+`bindingId`, `subjectKind`, `subjectId`, and `roleId` in details. Deletion reads
+the removed Role or AccessBinding in the same transaction to record it.
 
 ### 3. OCC validates policy ownership
 
 `packages/occ/src/index.ts:createIAMAccessBinding`
 
 Role creation accepts only nonempty, duplicate-free permissions for Namespace
-resource kinds. AccessBinding creation accepts identity subjects and exact
-targets in the same Namespace. OCC verifies the target resource exists and that
+resource kinds; `namespace` permissions support only `read`. AccessBinding creation accepts identity subjects and exact
+targets in the same Namespace, including the Namespace itself when the target
+ID matches the path Namespace. OCC verifies the target resource exists and that
 the caller can read it before asking the IAM Driver to create the binding.
 
 ### 4. The IAM Driver persists or reads policy
@@ -78,6 +84,17 @@ The native IAM Driver implements Namespace policy methods against the
 platform-provided policy repository. It rejects missing Roles, cross-Namespace
 targets, unsupported subjects, duplicate IDs, referenced Role deletion, and
 unknown exact bindings without weakening authorization.
+Existing human Principals can receive bindings without a Namespace service
+identity. ServicePrincipal subjects must belong to that exact Namespace.
+
+When the selected native Driver reloads policy during a PostgreSQL State callback,
+`PostgresPlatformState.loadNativeIAMState` reads through that State instance's
+original transaction. Authorization therefore sees that unit's pending grants
+and removals. Outside a callback, the loader opens its ordinary read transaction.
+Work that escapes the callback retains its original closed lifetime and fails;
+it cannot obtain another client after commit, rollback, or an unknown outcome.
+This transaction binding supplies neither authenticated session custody nor a
+fence against concurrent policy invalidation.
 
 ### 5. Platform state commits policy and audit together
 
@@ -88,7 +105,18 @@ same unit of work used by the API audit append. If commit outcome is unknown,
 State discards the connection without another query. OCC reports dependency
 failure; a caller must not infer rollback or replay the mutation from that
 result. Later authorization requests read the current policy through the IAM
-Driver.
+Driver. Namespace locking serializes grant creation with Namespace deletion;
+exact resource targets retain their existing deletion locks, and deleting a
+target resource deletes the bindings on it in the same transaction. Identity foreign
+keys protect persisted bindings without expanding application-role privileges.
+Both adapters apply one subject rule on every AccessBinding write: a human
+without a Namespace, a non-Agent ServicePrincipal of the exact Namespace, or the
+ServicePrincipal of a live Agent there. PostgreSQL checks the owning Agent in
+the same query because its Agent owner key is deferred to commit. The in-memory
+adapter resolves subjects live through its `resolveIAMIdentity` lookup, so
+humans enrolled after construction can be bound, then falls back to identities
+provisioned at construction. Agent-owned ServicePrincipals resolve only through
+its current Agent state.
 
 State also provides an opt-in Installation authority and native-IAM barrier
 for an original transaction. Its SQL supplier is unregistered, and the
@@ -121,6 +149,10 @@ selected account, session, and policy writers join the same protocol.
 
 ## Changelog
 
+- 2026-09-29 16:40: Record the Installation authorization and the Role or AccessBinding changed in IAM policy audit events. (fix-5)
+- 2026-09-29 05:28: Bind selected native policy reloads to the original State transaction and reject escaped reads. (codex/01a0eb4c-5933-7752-bddc-f787e8da79e7 - 2a191c74c0079e329db130d0a81a1f0f87869bb9)
 - 2026-09-27 19:15: Clarify unknown commit handling and the unregistered authority barrier. (codex/01a0b3bf-83a8-7392-ae2d-1a369b54ab3f - 181b0472f9a5a9d422035edf5121d3a15c200cb5)
 - 2026-09-23 22:56: Update source ownership for extracted IAM HTTP handlers; preserve admission and transaction boundaries. (codex/01a0d075-a358-7620-8c16-fd4290acddf1 - 4df9f9800836dc1c2b57afd5f8af4d91f55088d5)
+
+- 2026-09-23 08:44: Extend the managed grant path to existing humans and exact Namespace targets. (authoring-run/1d5da2d1-e61e-4277-bd91-037d64c10744 - 370570d788725a178a7441f8388a333c47c29798)
 - 2026-09-20 09:32: Document Namespace IAM policy management flow. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 5f7728e8c5d128bc7067b7035e07f06c3c4da92c)

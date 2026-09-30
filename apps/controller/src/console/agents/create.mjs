@@ -65,7 +65,20 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
     [providerId]: {
       baseUrl,
       api: nativeProvider === "anthropic" ? "anthropic-messages" : "openai-responses",
-      models: [{ id: providerModel, name: providerModel }],
+      models: [
+        {
+          id: providerModel,
+          name: providerModel,
+          ...(harnessId === "openclaw" && nativeProvider === "openai"
+            ? {
+                contextWindow: 128000,
+                maxTokens: 8192,
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              }
+            : {}),
+        },
+      ],
     },
   };
 
@@ -344,6 +357,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     element("option", { value: "openclaw" }, "OpenClaw"),
   );
   const harnessHint = element("p", { id: "agent-harness-hint", className: "hint" });
+  const nativeHarnessWarning = element(
+    "p",
+    { className: "notice", role: "status", hidden: true },
+    "Experimental: Dedicated OpenClaw requires a runtime build with native worker-inference support. Released OpenClaw images may not include it yet.",
+  );
   const configuration = element("textarea", {
     id: "configuration-json",
     name: "configuration",
@@ -506,6 +524,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     field("Provider", nativeProvider),
     field("Harness", harness),
     harnessHint,
+    nativeHarnessWarning,
     binding
       ? element("p", {}, `Preset authentication: ${harnessAuthDescription(binding)}`)
       : authMethodField,
@@ -535,7 +554,15 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   } else if (nativeProvider.value === "anthropic" || binding?.method === "runtime") {
     mode.value = "embedded";
   }
-  harness.value = mode.value === "dedicated" ? "codex" : "openclaw";
+  // A Preset or draft keeps its own harness; execution mode only chooses the default.
+  const configuredHarness =
+    rendered.configuration?.values?.agents?.defaults?.models?.[initialModel]?.agentRuntime?.id;
+  // Service account tokens authenticate Codex only.
+  harness.value =
+    mode.value === "dedicated" &&
+    (authMethod.value === "codex_pat" || configuredHarness !== "openclaw")
+      ? "codex"
+      : "openclaw";
   const currentTemplate = () =>
     JSON.stringify(
       configurationTemplate(harness.value, nativeProvider.value, model.value.trim()),
@@ -603,7 +630,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       delete providers.codex;
       Object.assign(providers, next.models?.providers);
     } else if (selectedModel) {
-      const providerId = mode.value === "dedicated" ? "codex" : nativeProvider.value;
+      const providerId = harness.value === "codex" ? "codex" : nativeProvider.value;
       const templateProvider = next.models.providers[providerId];
       const existingProvider = providers[providerId] ?? templateProvider;
       const existingModels = existingProvider.models ?? [];
@@ -677,6 +704,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   });
   model.addEventListener("change", () => updateModelConfiguration());
   harness.addEventListener("change", () => {
+    // Embedded is OpenClaw's default because dedicated OpenClaw needs a provisioning
+    // Sandbox Driver; operators opt into it through Execution mode.
     mode.value = harness.value === "codex" ? "dedicated" : "embedded";
     // Service account tokens cannot authenticate OpenClaw; require a new API key.
     if (
@@ -693,6 +722,13 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     } else {
       updateModelConfiguration(true);
     }
+    updateControls();
+  });
+  mode.addEventListener("change", () => {
+    if (mode.value === "embedded") {
+      harness.value = "openclaw";
+    }
+    updateModelConfiguration(true);
     updateControls();
   });
   configuration.addEventListener("input", () => {
@@ -964,7 +1000,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       field(
         "Execution mode",
         mode,
-        "Codex uses Dedicated execution; OpenClaw uses Embedded execution. Slack requires Codex.",
+        "Codex uses Dedicated execution. OpenClaw supports Dedicated or Embedded execution. Slack requires Codex.",
       ),
     ),
     (repositories = createRepositoryFields(
@@ -1232,16 +1268,20 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
     oauthLogin.setActive(usesOAuth && !binding);
     oauthLogin.setDisabled(pending || saved || outcomeUnknown);
-    mode.disabled = true;
+    mode.disabled ||=
+      harness.value === "codex" ||
+      nativeProvider.value === "anthropic" ||
+      binding?.method === "runtime";
     harness.disabled ||=
       binding?.method === "runtime" || (usesPat && Boolean(binding || savedSecret));
+    nativeHarnessWarning.hidden = harness.value !== "openclaw" || mode.value !== "dedicated";
     const codexOption = harness.querySelector('[value="codex"]');
     codexOption.hidden = nativeProvider.value === "anthropic";
     codexOption.disabled = nativeProvider.value === "anthropic";
     harnessHint.textContent =
       harness.disabled && usesPat
         ? "This saved service account token requires Codex. Create a new draft without a Preset to use OpenClaw with an API key."
-        : "OpenClaw is available for both providers. OpenAI defaults to Codex; Anthropic uses OpenClaw.";
+        : "OpenClaw is available for both providers. With OpenAI it supports Dedicated or Embedded execution; Anthropic uses Embedded OpenClaw.";
     if (binding?.method === "runtime") {
       harnessHint.textContent =
         "This Preset's operator-managed credentials require the OpenClaw harness.";
@@ -1497,11 +1537,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     const selected = values.agents?.defaults?.model;
     const primaryModel = typeof selected === "string" ? selected : selected?.primary;
     const fallbackPrefixes =
-      mode.value === "dedicated" ? ["openai/", "codex/"] : [`${nativeProvider.value}/`];
+      harness.value === "codex" ? ["openai/", "codex/"] : [`${nativeProvider.value}/`];
     // Bound credentials must keep their provider; dedicated Presets support both native prefixes.
     const primaryPrefixes = hasBoundModelCredential
       ? fallbackPrefixes
-      : [mode.value === "dedicated" ? "codex/" : `${nativeProvider.value}/`];
+      : [harness.value === "codex" ? "codex/" : `${nativeProvider.value}/`];
     if (
       (!binding || hasBoundModelCredential) &&
       !primaryPrefixes.some((prefix) => primaryModel === `${prefix}${model.value.trim()}`)

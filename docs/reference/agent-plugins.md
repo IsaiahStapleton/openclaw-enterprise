@@ -26,7 +26,7 @@ Dedicated Codex supports selected concrete apps from the
 `all_actions`, `write_actions`, and `none`, independent per-tool
 enablement/approval overrides, a default reviewer, and the Codex destructive
 default in `driverPolicy`. It rejects per-tool reviewers.
-Nothing is selected by default. Scoped tool IDs must match the app's native
+Scoped tool IDs must match the app's native
 runtime inventory before startup can complete. The internal Codex catalog reader
 currently returns `tools: null`. This policy interface does not provide an HTTP
 catalog discovery endpoint.
@@ -39,7 +39,7 @@ The new policy paths still need
 [real Agent verification](../testing/plugins.md#current-proof-notes). There is
 no bundled Claude PluginDriver.
 
-**Experimental** OAuth discovery requires [login after deployment](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login).
+**Experimental** OAuth discovery needs [login](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login).
 
 ## Lifecycle
 
@@ -63,9 +63,7 @@ rejection or plugin authentication requirement disables that selection while
 other successfully prepared plugins can serve. Ordinary retirement removes
 old workload state, but does not delete the Agent-owned database.
 
-Read `Agent.plugins` for saved selections and the AgentRevision for the
-selections requested by that deployment. Check
-[deployment status](agents.md#deployment-status) for startup results.
+Check [deployment status](agents.md#deployment-status) for startup results.
 `activeRevisionId` is not evidence that installation succeeded: the worker
 records it before runtime activation completes. Saved selections remain
 readable if the catalog entry or Driver disappears.
@@ -105,8 +103,7 @@ endpoint, or plugin-tool invocation endpoint.
 | `POST /namespaces/:namespaceId/agents`           | Agent create body with optional `plugins` and `pluginApprovers` | `201`, Agent response with saved policy |
 | `PATCH /namespaces/:namespaceId/agents/:agentId` | Agent update body with optional `plugins` and `pluginApprovers` | `200`, Agent response with saved policy |
 
-Every Agent update must include `configurationId`, even when only plugins
-change. Agent creation also requires `name`. See the
+Updates also require `configurationId`, and creation requires `name`; see the
 [Agent request contract](agents.md#editable-configuration).
 
 Agent creation requires Agent `create` on the Namespace and the existing exact
@@ -151,9 +148,8 @@ The former `native`, `prompt`, and `approve` approval values, top-level
 `approvalMode`, and category approval fields are not accepted. Reviewer `auto`
 is a distinct value.
 
-This example enables Diffs with its tools disabled by default, then enables its
-known `diffs` tool. Use the Agent's current Configuration ID and deploy after
-saving:
+This example enables Diffs with tools disabled by default except its known
+`diffs` tool. Deploy after saving:
 
 ```json
 {
@@ -191,8 +187,8 @@ The `approvers` capability reports whether Agent defaults, plugin overrides, and
 tool overrides can be saved. These are Slack identities for plugin approval
 requests, separate from `reviewer` (`human` or `auto`).
 
-This is capability discovery, not plugin or tool discovery. It does not prove
-that a particular plugin is available to the Agent's credentials.
+This is capability discovery; it does not prove that a plugin is available to
+the Agent's credentials.
 
 ### Response fields
 
@@ -211,8 +207,7 @@ credentials, claim tokens, and workload paths are never returned.
 
 [Agent responses](agents.md) optionally include `plugins`, an object keyed by
 plugin ID whose values are the desired selections above. An absent or empty map
-means no desired selections. These fields are managed through Agent
-create/update bodies.
+means no desired selections.
 
 [AgentRevision responses](api.md) optionally include a `plugins` snapshot with
 the following fields. This is admitted deployment state, not another mutation
@@ -255,11 +250,23 @@ entry keeps `channel: "slack"`; `id` accepts `team:T123:user:U456` or raw
 replaces the plugin list. Omission inherits; an explicit empty array denies
 Slack approval. Tool keys use the plugin catalog's exact composite tool ID.
 
-Without this policy, OpenClaw uses account-level Slack destinations (`allowFrom`
-and `defaultTo`), never an implicit OCE-owner mapping. Console defaults remain
-omitted until explicitly selected. Slack approval requires an authorized
-destination. This policy routes runtime plugin approval requests; it creates no
-review prompts and leaves exec approvals unchanged.
+Codex supports only `pluginApprovers`. Its approval requests omit plugin and
+tool identity, so OpenClaw would deny every request once any plugin list exists.
+Agent create, update, and deploy reject Codex plugin or tool `approvers` with
+`400 INVALID_REQUEST`; remove them to update or redeploy an Agent saved earlier.
+Its deployed revision keeps running without working plugin approvals.
+
+<!-- TODO(policySubject): allow Codex plugin and tool approvers once upstream
+Codex plugin approval requests carry policySubject. -->
+
+Omission uses native account destinations (`allowFrom` and `defaultTo`).
+Console defaults stay omitted. This policy selects authorized reviewers for
+existing plugin prompts; it leaves exec approvals unchanged.
+
+Docker and Kubernetes omit Slack policy when Slack is absent or disabled.
+Otherwise the gateway validates it before launch; incompatibility prevents
+launch. See the
+[compatibility check](../flows/agent-plugin-approvals.md#3-check-the-selected-gateway-before-launch).
 
 The Console resolves display names with the selected same-Namespace bot Secret
 and stores IDs. Lookup requires Agent edit and Secret `operate` permission.
@@ -343,8 +350,7 @@ for its native review trigger.
 - `409`: ordinary Agent conflict, such as duplicate name.
 - `503`: temporarily unavailable platform dependency.
 
-Errors use `{error,meta:{requestId}}`, with no top-level `data` field. The
-[generated API reference](api.md) owns the full error envelope shape.
+The [generated API reference](api.md) owns the error envelope.
 
 Invalid policy writes fail atomically before save. Nonempty selections require
 a selected PluginDriver; a missing Driver produces `501 NOT_IMPLEMENTED`. OCC

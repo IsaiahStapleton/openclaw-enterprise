@@ -25,13 +25,15 @@ Presets and edited Configuration JSON retain their settings.
 2. To reuse a [Preset](../presets.md), choose one, fill its variables, and select
    **Use Preset**. Review defaults and choose an existing or new model Secret.
    Select **Start without Preset** for standard defaults.
-3. Enter a name that is unique within the Namespace. Choose **OpenAI** or
-   **Anthropic** under **Provider**, then choose **Harness**. OpenAI defaults to
-   **Codex** and also offers **OpenClaw**; Anthropic currently offers only
-   **OpenClaw**. **Execution mode** follows the harness: Dedicated for Codex,
-   Embedded for OpenClaw.
-   For Codex, choose **OpenAI API key**, **Service Accounts**, or
-   **ChatGPT OAuth (Experimental)** under **Authentication method** ([limits](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)). OpenClaw uses the selected provider's API key.
+3. Enter a unique name within the Namespace. Choose **Provider**, then
+   **Harness**. OpenAI offers **Codex** by default and **OpenClaw**;
+   Anthropic offers only **OpenClaw**. **Execution mode** is Dedicated for Codex,
+   Embedded for Anthropic OpenClaw, and selectable for OpenAI OpenClaw. Dedicated
+   OpenClaw is experimental. Verify its runtime supports native worker inference;
+   released images may not.
+   For Codex, choose **OpenAI API key**, **Service Accounts**, or **ChatGPT
+   OAuth** ([experimental](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)).
+   OpenClaw uses the provider's API key.
    For API keys, use [OpenAI API keys](https://platform.openai.com/api-keys). For
    Service Accounts, open [OpenAI admin](https://admin.openai.com/), choose your
    workspace, open **Service accounts**, and create a token with Codex scope.

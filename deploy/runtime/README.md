@@ -27,18 +27,33 @@ an equivalent implementation is available upstream, the build applies its
 `readOnlyPaths` compatibility change as
 `openclaw-codex-read-only-paths.patch`. This preserves the restricted Codex
 filesystem profile required by the repository broker and selected plugins.
+The build also applies `openclaw-connect-ephemeral-expired-setup.patch`. Upstream
+`connect --ephemeral` rejects an expired setup code before it checks saved node
+credentials, so a dedicated native worker that restarts more than ten minutes
+after enrollment cannot reconnect. The patch lets that path decode an expired
+code and hands the expiry to the node host. The node host then reconnects with
+the saved device token for the same Gateway, or still refuses the code, as
+upstream `node run --pair-if-needed` already does.
 The source archive and patch hashes identify the resulting custom build.
+
+The selected commit does not support dedicated native OpenClaw. That Harness
+needs required worker placement (`cloudWorkers.requiredProfile`) and native
+worker inference (`nodeHost.workerRuns.nativeInferenceConfig`), which are not in
+upstream main yet. This image's configuration validation rejects both keys, so
+its Gateway and Harness exit at startup rather than place sessions on the
+Gateway. The images-packaging lane runs both entrypoints against this image and
+fails when that gap changes.
 
 | Input                                        | Selection                                                                                                    |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Build base                                   | `docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584` |
-| OpenClaw source commit                       | `9190ad7c12667af435734d4944060effd6ad0a71`                                                                   |
-| Source archive SHA-256                       | `5393d25ac73b98030609fa40b2c2bc3f44c62a455660b7cc3f28371fc92dc851`                                           |
+| OpenClaw source commit                       | `9d9c8568c51e340540f634f71bd7c7582a70debc`                                                                   |
+| Source archive SHA-256                       | `175260a3e26e6de4c1225ff27d8c2b17b01b700640db915a8bac9ee3d4cf903f`                                           |
 | Dedicated Codex CLI (`OPENAI_CODEX_VERSION`) | `0.158.0`                                                                                                    |
 
 The source's package version is `2026.9.6`; it does not identify this custom
 build. `/opt/oce/runtime/provenance.json` records the source commit, verified archive
-hash, bridge patch hash, lockfile hash, pinned package manager, selected plugins, architecture, stock Codex
+hash, both bridge patch hashes, lockfile hash, pinned package manager, selected plugins, architecture, stock Codex
 package identity, and the SHA-256 of `contents.json`, which inventories
 packaged files, modes, hashes, and symlinks after final-stage permission
 normalization. The final stage copies the assembled
@@ -79,7 +94,7 @@ installing packages at gateway startup. Slack credentials remain operator-owned
 runtime Secrets; do not put them in the image.
 
 Keep the source commit and archive checksum together when updating OpenClaw.
-Follow the [pinned upstream Docker assembly](https://github.com/openclaw/openclaw/blob/9190ad7c12667af435734d4944060effd6ad0a71/Dockerfile)
+Follow the [pinned upstream Docker assembly](https://github.com/openclaw/openclaw/blob/9d9c8568c51e340540f634f71bd7c7582a70debc/Dockerfile)
 to keep plugin dependencies and runtime assets consistent. Its plugin-local
 dependency layout preserves dependencies that differ from core versions.
 Plugin chunks emitted directly under `dist` also need package-root resolution.
@@ -145,7 +160,8 @@ Manual `CI` dispatches also call this native verification workflow, including on
 a branch before its first merge. The default Blacksmith runner labels can be overridden with repository
 variables `CONTAINER_AMD64_RUNNER` and `CONTAINER_ARM64_RUNNER`. Each override must
 name a provisioned Linux runner with the matching architecture, at least four
-CPUs and 12 GiB RAM, and sufficient disk.
+CPUs and 12 GiB RAM, and sufficient disk. The workflow installs checksum-pinned
+kubectl, k3d, Helm, and yq for both Linux architectures before runtime verification.
 
 ## Verify the local image
 

@@ -9,6 +9,8 @@ import test from "node:test";
 
 import { chromium } from "playwright";
 
+import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
+import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 
@@ -39,9 +41,11 @@ async function newPage(t, fixture) {
   const artifacts = await artifactDirectory(t);
   const browser = await launchBrowser();
   let context;
+  let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
+      await diagnostics?.capture();
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
@@ -57,6 +61,8 @@ async function newPage(t, fixture) {
     }
   });
   context = await browser.newContext();
+  diagnostics = await watchBrowserContext(t, context);
+  await keepRequestInterceptionEnabled(context);
   return { page: await context.newPage(), artifacts };
 }
 
@@ -659,7 +665,13 @@ test("bound Slack credential fields show Secret references without reading value
   assert.equal(await appToken.evaluate((node) => node.value), secretOptionLabel(appSecret));
   assert.equal(await botToken.evaluate((node) => node.value), secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
-  assert.deepEqual(channelApi.requests, []);
+  // The Agent sharing panel reads current policy; no credential or policy write occurs.
+  assert.deepEqual(
+    channelApi.requests.filter(
+      ({ operation }) => operation !== "roles-get" && operation !== "bindings-get",
+    ),
+    [],
+  );
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });
 

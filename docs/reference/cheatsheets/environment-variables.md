@@ -29,11 +29,21 @@ console uses the current origin and has no separate environment settings.
 - `OCC_CONFIG_PATH` — Absolute path to trusted Installation YAML; required in production and shared with the worker.
 - `OCC_AUTH_SECRET` — Production requires a high-entropy session-signing secret; development has a local-only fallback.
 - `OCC_AUTH_BASE_URL` — Authentication and cookie origin; required in production; default in development: `http://127.0.0.1:3000`.
+- `OCC_AUTH_GITHUB_CLIENT_ID` — Optional GitHub App client ID, not App ID; selects the provider instance. Requires PostgreSQL, native IAM, and both GitHub settings below; see [GitHub sign-in](../authentication/external-sign-in.md#github-sign-in-for-existing-accounts).
+- `OCC_AUTH_GITHUB_CLIENT_SECRET` — Protected server-side client secret for the configured GitHub App; its private key stays with the repository credential consumer.
+- `OCC_AUTH_GITHUB_RECOVERY_USER_ID` — Existing local password administrator protected for recovery when GitHub or Google sign-in is enabled.
+- `OCC_AUTH_GOOGLE_CLIENT_ID` — Optional Google OAuth web client ID; selects the provider instance. Requires the client secret and the recovery user ID; see [Google sign-in](../../guides/deploy/google-sign-in.md).
+- `OCC_AUTH_GOOGLE_CLIENT_SECRET` — Protected server-side client secret for the configured Google OAuth client.
+- `OCC_AUTH_GOOGLE_ALLOWED_DOMAINS` — Optional comma-separated Google Workspace hosted domains; when set, sign-in requires a matching `hd` claim and a verified email.
+- `OCC_AUTH_TRUSTED_PROXY_CIDRS` — Production-only, off by default: comma-separated CIDRs of the ingress or load balancer in front of the API (never `/0`). Requests from these peers may carry forwarded headers, and sign-in limits key on the client address they report; other peers keep direct-request rules.
+- `OCC_AUTH_TRUSTED_PROXY_PRESET` — `ingress-nginx` (default) or `aws` (Application Load Balancer), both reading `X-Forwarded-For`, or `generic`. A Network Load Balancer that preserves client addresses needs no trusted proxy.
+- `OCC_AUTH_CLIENT_IP_HEADER` — Lowercase header carrying the client address, such as `x-real-ip`; required by `generic` only.
 - `OCC_AGENT_NATIVE_ADMIN_ENABLED` — Enables the Agent native admin pilot; default: `false`.
 - `OCC_AGENT_NATIVE_ADMIN_DOMAIN` — Agent hostname suffix; required when the pilot is enabled.
 - `OCC_AUTH_COOKIE_DOMAIN` — Shared parent domain for console and Agent cookies; required when the pilot is enabled.
 - `OCC_GATEWAY_API_KEY_PATH` — API/worker absolute path to the private gateway service-key file for operator RPCs and dedicated node enrollment.
-- `OCC_CHANNEL_DIRECTORY_PROXY_URL` — Optional API-only HTTP(S) proxy endpoint for production Slack directory lookup; set by Helm `api.channelDirectoryProxyUrl`.
+- `OCC_CHANNEL_DIRECTORY_PROXY_URL` — Optional API-only HTTP(S) proxy endpoint for production Slack directory lookup and credential validation; set by Helm `slackProxy.enabled` or `api.channelDirectoryProxyUrl`.
+- `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST` — Exact Kubernetes Service host accepted as a managed Slack directory proxy; set only by Helm `slackProxy.enabled`.
 - `NODE_EXTRA_CA_CERTS` — Additional Node.js PEM trust bundle for a private OCC or gateway CA; read at process startup.
 
 ## PostgreSQL and migrations
@@ -42,7 +52,7 @@ See [PostgreSQL settings](../settings/operations.md#postgresql-connection-authen
 for authentication modes and TLS requirements.
 
 - `OCC_DATABASE_URL` — Application-role URL for the API, worker, and bootstrap.
-- `OCC_MIGRATION_DATABASE_URL` — Separate migrator-role URL; never use it for the API or worker.
+- `OCC_MIGRATION_DATABASE_URL` — Separate migrator-role URL for migrations and `pnpm auth:maintain`; never use it for the API or worker.
 - `OCC_DATABASE_POOL_MAX` — API pool size; client default: `10`.
 - `OCC_DATABASE_AUTH` — `password` (default) or `azure-workload-identity`.
 - `AZURE_TENANT_ID` — Workload identity tenant; required in Azure mode.

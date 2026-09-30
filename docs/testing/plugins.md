@@ -22,30 +22,6 @@ The Kubernetes provisioning fixture also exercises selected-PAT discovery using
 the bundled Kubernetes Secret Driver and a real cluster, with simulated upstream
 responses. Neither test verifies the live hosted provider.
 
-## Device-login verification
-
-Codex OAuth device login is **Experimental**.
-
-`node --test tests/integration/device-authorization-api.test.mjs` exercises device
-login, authenticated discovery, and revision submission through the real HTTP/OCC
-workflow. It verifies exact actor and Agent scope, cancellation during an exchange,
-and credential redaction using simulated provider transport and a test Secret
-Driver. `tests/conformance/harness-device-auth.test.mjs` checks the native protocol
-adapter. These cases do not prove live OAuth, token refresh, or runtime deployment.
-The bootstrap case in `tests/integration/runtime-image-startup.test.mjs` executes
-the actual script on local disk and simulates a rotated bundle. Kubernetes
-conformance substitutes API observations; neither proves native refresh or
-credential handoff on a real cluster.
-
-Live first-deploy proof remains outstanding: complete device login, search and
-select plugins, deploy a new Agent on the supported topology, and verify a real
-Codex model turn. Follow-up proof must cover native token refresh, restart and
-revision reuse, reconnect, and another discovery login while the deployed Agent
-continues operating. The launch scope and deferred fixes are documented in
-[OAuth launch limits](../reference/drivers/kubernetes-compute/storage-and-credentials.md#oauth-launch-limits).
-
-## Recording runtime proof
-
 Skipped infrastructure or native-runtime cases are not evidence. Record the exact
 commit, selected suite, nonsecret image references, native runtime versions,
 model, pass/fail/skip counts, and relevant sanitized log path for every claimed
@@ -89,6 +65,35 @@ The status suite requires a worker node and schedules its runtime there to prove
 cross-node access. Fixture images may use a local tag; native proof
 still requires immutable image references. PostgreSQL cases use a dedicated
 migrated `openclaw_k8s_*` database via `OCC_TEST_DATABASE_URL`.
+
+## Native startup metadata reads
+
+`tests/integration/codex-plugin-startup-reads.test.mjs` normally runs controlled
+protocol cases that verify read batching, error draining, and ordered writes.
+The opt-in companion `codex-plugin-startup-reads-real.test.mjs`, registered in the
+credentialed `plugin-model` lane, launches a disposable Docker container with Codex 0.156.0,
+logs in using an authorized service-account token, and runs the generated
+production client against the real authenticated app-server. It checks six
+catalog reads in batches of at most four, ordered results, a native invalid-plugin
+error followed by successful reads, and the full installer with four disabled
+selections and effective app-policy readback.
+
+After obtaining credential authorization under [the contribution policy](../../CONTRIBUTING.md),
+inject `CODEX_ACCESS_TOKEN` without putting its value in a command or file, and
+set `OCC_TEST_KUBERNETES_AGENT_IMAGE` to a locally available immutable runtime
+image ID or digest containing Codex 0.156.0:
+
+```sh
+OCC_TEST_CODEX_STARTUP_READS_REAL=1 node --test \
+  --test-name-pattern='native Codex app-server' \
+  tests/integration/codex-plugin-startup-reads-real.test.mjs
+```
+
+The test passes the credential through stdin, creates no host mounts or published
+ports, and removes its container. It does not call a model or connector tool.
+This proves compatibility with the native metadata and configuration protocol;
+it does not measure production latency or replace the separate Kubernetes
+lifecycle and enabled-plugin install/auth proofs.
 
 ## Native runtime prerequisites
 

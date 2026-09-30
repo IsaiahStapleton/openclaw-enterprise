@@ -204,7 +204,7 @@ async function createAuthenticatedControllerUrlRequest(origin, credentials, requ
   };
 }
 
-async function attachPostgresToK3d(context) {
+async function attachPostgresToK3d(registerCleanup) {
   const statePath = process.env.OPENCLAW_ENTERPRISE_CI_STATE;
   const containerBin = process.env.OCC_DOCKER_BIN ?? "docker";
   assert.ok(statePath, "OPENCLAW_ENTERPRISE_CI_STATE is required for in-cluster OCC");
@@ -251,7 +251,7 @@ async function attachPostgresToK3d(context) {
   if (!alreadyAttached) {
     await executeFile(containerBin, ["network", "connect", network, postgresContainer]);
   }
-  context.after(async () => {
+  registerCleanup(async () => {
     if (!alreadyAttached) {
       await executeFile(containerBin, [
         "network",
@@ -334,7 +334,7 @@ async function createScopedController(context, identifier, platformNamespace, ku
       {
         op: "add",
         path: "/rules/-",
-        value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch"] },
+        value: { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "watch", "patch"] },
       },
       {
         op: "add",
@@ -426,6 +426,7 @@ async function startInClusterControllers(
     authBaseURL,
     controller,
     controllerPort,
+    databaseAddress,
     events,
     nativeAdminDomain,
     nativeAdminSharedCookieDomain,
@@ -433,7 +434,6 @@ async function startInClusterControllers(
     workspaceGateway,
   },
 ) {
-  const databaseAddress = await attachPostgresToK3d(context);
   const databaseServiceName = "occ-test-postgres";
   const inClusterDatabaseUrl = new URL(databaseUrl);
   inClusterDatabaseUrl.hostname = `${databaseServiceName}.${platformNamespace}.svc`;
@@ -1262,7 +1262,7 @@ async function ensureHarnessAdminPrincipal(
   if (existingPrincipal.rows.length === 1) {
     return;
   }
-  const seed = auth.principalSeed(account);
+  const seed = auth.principalSeed(account, { grant: "administrator" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1537,7 +1537,8 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       : undefined;
   const observerPool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
   const platformState = new PostgresPlatformState(observerPool);
-  let activeInstallation = await platformState.loadInstallation();
+  let detachPostgres;
+  let databaseAddress;
   let workerPool;
   let worker;
   let productionApp;
@@ -1559,6 +1560,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
         await productionApp.close();
       }
       await observerPool.end();
+      await detachPostgres?.();
       if (gatewayRuntimeNamespace !== undefined) {
         await kubectl(
           "delete",
@@ -1582,6 +1584,16 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  // Docker may replace published-port connections when another network attaches.
+  // Complete that topology change before opening the observer/bootstrap pools;
+  // its registered cleanup runs only after those pools and controllers stop.
+  if (workspaceGateway !== undefined) {
+    databaseAddress = await attachPostgresToK3d((cleanup) => {
+      detachPostgres = cleanup;
+    });
+  }
+  let activeInstallation = await platformState.loadInstallation();
 
   let createdFreshInstallation = false;
   if (activeInstallation !== undefined) {
@@ -1623,6 +1635,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
       apiConfiguration,
       authBaseURL: controllerAuthBaseURL,
       controller,
+      databaseAddress,
       controllerPort: options.controllerPort,
       events,
       nativeAdminDomain: options.nativeAdmin?.domain,
@@ -1953,7 +1966,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
     );
   }
 
-  const harnessId = mode === "dedicated" ? "codex" : "openclaw";
+  const harnessId = options.harnessId ?? (mode === "dedicated" ? "codex" : "openclaw");
   const secretBindings = {
     ...(includeSecretProbes
       ? {
@@ -2215,9 +2228,9 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   await assertModelRuntimeProjection(harnessPod ?? gatewayPod, modelStorage);
   if (mode === "dedicated") {
     assert.equal(
-      gatewayPod.spec.containers.some((container) =>
-        (container.env ?? []).some(({ name }) => name === "OPENAI_API_KEY"),
-      ),
+      gatewayPod.spec.containers
+        .find(({ name }) => name === "gateway")
+        ?.env?.some(({ name }) => name === "OPENAI_API_KEY") ?? false,
       false,
     );
   }
@@ -2324,6 +2337,7 @@ async function arrangeProductionTopology(context, mode, slack, options = {}) {
   };
   return {
     mode,
+    harnessId,
     placement,
     gatewayPlacement,
     namespaceId,
@@ -2450,6 +2464,10 @@ async function assertUnauthorizedCodexSocket(topology) {
 async function assertActualModelTurn(topology) {
   topology.gatewayUrl = await topology.refreshGatewayUrl();
   try {
+    if (topology.mode === "dedicated" && topology.harnessId === "openclaw") {
+      await assertNativeWorkerTurn(topology);
+      return;
+    }
     await assertGatewayModelTurn({
       gatewayUrl: topology.gatewayUrl,
       gatewayPassword: topology.gatewayPassword,
@@ -2457,15 +2475,32 @@ async function assertActualModelTurn(topology) {
       secrets: [process.env.OPENAI_API_KEY],
     });
   } catch (error) {
-    const transport = await resource(
-      "secret",
-      `openclaw-agent-transport-${hash(topology.agent.id)}`,
-      topology.placement,
+    const projectedSecrets = new Map();
+    for (const pod of [topology.gatewayPod, topology.harnessPod].filter(Boolean)) {
+      for (const container of [...pod.spec.containers, ...(pod.spec.initContainers ?? [])]) {
+        for (const { valueFrom } of container.env ?? []) {
+          const reference = valueFrom?.secretKeyRef;
+          if (reference !== undefined) {
+            const id = `${pod.metadata.namespace}/${reference.name}:${reference.key}`;
+            projectedSecrets.set(id, {
+              id,
+              namespace: pod.metadata.namespace,
+              name: reference.name,
+              key: reference.key,
+            });
+          }
+        }
+      }
+    }
+    const protectedValues = await Promise.all(
+      [...projectedSecrets.values()].map(async (reference) => {
+        const secret = await resource("secret", reference.name, reference.namespace);
+        return {
+          id: reference.id,
+          value: Buffer.from(secret.data[reference.key], "base64").toString(),
+        };
+      }),
     );
-    const protectedValues = [
-      process.env.OPENAI_API_KEY,
-      ...Object.values(transport.data).map((value) => Buffer.from(value, "base64").toString()),
-    ];
     const logs = await Promise.all(
       [topology.gatewayPod, topology.harnessPod]
         .filter(Boolean)
@@ -2473,13 +2508,83 @@ async function assertActualModelTurn(topology) {
           kubectl("logs", pod.metadata.name, "--namespace", pod.metadata.namespace, "--tail=100"),
         ),
     );
-    assertNoSecretMaterial(
-      logs,
-      protectedValues,
-      "Runtime failure logs must not expose credentials",
-    );
+    assertNoSecretMaterial(logs, [process.env.OPENAI_API_KEY], "Runtime logs expose the model key");
+    for (const secret of protectedValues) {
+      assertNoSecretMaterial(logs, [secret.value], `Runtime logs expose ${secret.id}`);
+    }
     throw new Error(`${error.message}\n${logs.join("\n")}`, { cause: error });
   }
+}
+
+async function assertNativeWorkerTurn(topology) {
+  const sessionKey = `agent:main:native-worker-${randomUUID()}`;
+  const proofName = `.oce-native-worker-proof-${randomUUID()}.json`;
+  const nonce = `OCC-NATIVE-WORKER-${randomUUID()}`;
+  const session = await gatewayCall(topology, "sessions.create", {
+    key: sessionKey,
+    agentId: "main",
+    model: `openai/${providerModel}`,
+    label: "native worker proof",
+    worktree: true,
+    worktreeSource: "empty",
+  });
+  assert.equal(session.key, sessionKey);
+  await gatewayCall(topology, "sessions.dispatch", {
+    key: sessionKey,
+    profileId: "dedicated-native",
+  });
+  const proofCommand = `node -e '${[
+    'const fs=require("node:fs")',
+    `fs.writeFileSync(${JSON.stringify(proofName)},JSON.stringify({pid:process.pid,ppid:process.ppid,OPENAI_API_KEY:"OPENAI_API_KEY" in process.env,OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP:"OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP" in process.env}))`,
+  ].join(";")}'`;
+  const response = await requestDedicatedAgentTurn(
+    topology,
+    sessionKey,
+    [
+      `Use the exec tool to run exactly this command: ${proofCommand}`,
+      `Then use the read tool to read ${proofName}. After both tools succeed, reply with exactly ${nonce}.`,
+    ].join(" "),
+  );
+  assert.match(response, new RegExp(nonce));
+  const history = await gatewayCall(topology, "chat.history", { sessionKey, limit: 20 });
+  const toolResults = history.messages.filter(({ role }) => role === "toolResult");
+  assert.ok(
+    toolResults.some(({ toolName, isError }) => toolName === "exec" && isError === false),
+    "the authoritative Gateway transcript must contain successful worker exec",
+  );
+  assert.ok(
+    toolResults.some(({ toolName, isError }) => toolName === "read" && isError === false),
+    "the authoritative Gateway transcript must contain successful worker read",
+  );
+  const remoteWorkspaceDir = history.sessionInfo?.placement?.remoteWorkspaceDir;
+  assert.equal(typeof remoteWorkspaceDir, "string");
+  // A successful turn can race a Deployment replacement; inspect the durable
+  // workspace through the current ready Harness rather than a stale Pod name.
+  const matches = (
+    await kubectlInReadyAgentPod(
+      topology,
+      "find",
+      remoteWorkspaceDir,
+      "-name",
+      proofName,
+      "-type",
+      "f",
+      "-print",
+    )
+  )
+    .trim()
+    .split(/\r?\n/u)
+    .filter(Boolean);
+  assert.equal(matches.length, 1, "the exec proof must exist in the native worker workspace");
+  const proof = JSON.parse(await kubectlInReadyAgentPod(topology, "cat", matches[0]));
+  assert.equal(Number.isInteger(proof.pid) && proof.pid > 1, true);
+  assert.equal(Number.isInteger(proof.ppid) && proof.ppid > 1, true);
+  assert.equal(proof.OPENAI_API_KEY, false, "tool processes must not inherit the provider key");
+  assert.equal(
+    proof.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP,
+    false,
+    "tool processes must not inherit the native inference startup carrier",
+  );
 }
 
 // Exercise the regular Secret -> Agent draft -> deployment -> worker -> native startup path.
@@ -2584,17 +2689,15 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
   assert.equal(active.status, 200);
   if (topology.mode === "dedicated") {
     assert.equal(active.data.activeRevisionId, predecessor.id);
-    assert.equal(
-      (await resource("pod", topology.gatewayPod.metadata.name, topology.gatewayPlacement)).metadata
-        .uid,
-      topology.gatewayPod.metadata.uid,
-      "invalid auth must preserve the dedicated serving gateway Pod",
-    );
-    assert.equal(
-      (await resource("pod", topology.harnessPod.metadata.name, topology.placement)).metadata.uid,
-      topology.harnessPod.metadata.uid,
-      "invalid auth must preserve the serving Codex Pod",
-    );
+    // Dedicated RWO replacement stops the predecessor before preparing its successor.
+    const currentPods = await topologyPods(topology);
+    for (const previousPod of [topology.gatewayPod, topology.harnessPod]) {
+      assert.equal(
+        currentPods.some(({ metadata }) => metadata.uid === previousPod.metadata.uid),
+        false,
+        "exclusive replacement must stop predecessor Pods before preparing its successor",
+      );
+    }
   } else {
     // Embedded activation publishes the revision before replacing the shared
     // gateway. Failed native startup keeps that replacement unready, with no rollback.
@@ -2611,17 +2714,29 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
     assert.equal(gateways.length, 1);
     assert.equal(gateways[0].metadata.uid, rejectedPod.metadata.uid);
   }
-  const stillServing = await resource("service", serviceName, topology.placement);
-  assert.deepEqual(
-    stillServing.spec.selector,
-    servingService.spec.selector,
-    "the Service keeps its existing topology selector through failed authentication",
-  );
+  const currentService = await resource("service", serviceName, topology.placement);
+  if (topology.mode === "dedicated") {
+    // With the predecessor drained, preparation selects the candidate before
+    // readiness; the EndpointSlice checks below ensure invalid auth cannot serve.
+    assert.deepEqual(currentService.spec.selector, {
+      "app.kubernetes.io/name": `${serviceName}-rev-${hash(candidate.data.id)}`,
+      "openclaw.dev/namespace": topology.agent.namespaceId,
+      "openclaw.dev/agent": topology.agent.id,
+      "openclaw.dev/revision": candidate.data.id,
+      "openclaw.dev/workload-role": "agent",
+    });
+  } else {
+    assert.deepEqual(
+      currentService.spec.selector,
+      servingService.spec.selector,
+      "the Service keeps its existing topology selector through failed authentication",
+    );
+  }
   const slices = await resources("endpointslices", topology.placement);
   assert.equal(
     slices
       .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
-      .flatMap(({ endpoints = [] }) => endpoints)
+      .flatMap(({ endpoints }) => endpoints ?? [])
       .some(
         (endpoint) =>
           endpoint.targetRef?.uid === rejectedPod.metadata.uid &&
@@ -2630,11 +2745,23 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
     false,
     "the rejected candidate must never become a serving endpoint",
   );
-  if (topology.mode === "embedded") {
+  if (topology.mode === "dedicated") {
+    await waitFor(
+      "failed dedicated replacement leaves no ready Harness endpoint",
+      async () => {
+        const currentSlices = await resources("endpointslices", topology.placement);
+        return currentSlices
+          .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
+          .flatMap(({ endpoints }) => endpoints ?? [])
+          .every((endpoint) => endpoint.conditions?.ready === false);
+      },
+      60_000,
+    );
+  } else {
     assert.equal(
       slices
         .filter(({ metadata }) => metadata.labels?.["kubernetes.io/service-name"] === serviceName)
-        .flatMap(({ endpoints = [] }) => endpoints)
+        .flatMap(({ endpoints }) => endpoints ?? [])
         .some((endpoint) => endpoint.conditions?.ready !== false),
       false,
       "failed embedded cutover leaves no ready gateway endpoint",
@@ -2652,13 +2779,6 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
   if (options.recover === false) {
     return { revision: candidate.data, rejectedPod };
   }
-  if (topology.mode === "dedicated") {
-    await assertActualModelTurn(topology);
-    const afterTurn = await topology.request("GET", agentPath);
-    assert.equal(afterTurn.status, 200);
-    assert.equal(afterTurn.data.activeRevisionId, predecessor.id);
-  }
-
   const restored = await topology.request("PATCH", agentPath, {
     configurationId: topology.agent.configurationId,
     harnessAuth: validBinding,
@@ -2686,6 +2806,13 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
       recovery.data.id,
       topology.harnessPod.metadata.uid,
     );
+    assert.equal(
+      (await topologyPods(topology)).some(
+        ({ metadata }) => metadata.uid === rejectedPod.metadata.uid,
+      ),
+      false,
+      "exclusive recovery must stop the rejected Harness before activating its successor",
+    );
   }
   topology.agent = restored.data;
   topology.revision = recovery.data;
@@ -2693,7 +2820,7 @@ async function assertInvalidHarnessAuthStaysUnready(context, topology, options =
   await assertActualModelTurn(topology);
   context.diagnostic(
     topology.mode === "dedicated"
-      ? "dedicated: invalid-key candidate stayed unready; predecessor served and valid binding recovered"
+      ? "dedicated: predecessor stopped; invalid-key candidate stayed unready; valid binding recovered"
       : "embedded: invalid-key replacement left the shared gateway unavailable; valid redeploy recovered",
   );
 }
@@ -2884,10 +3011,14 @@ function assertPrivateStateInitContainer(pod) {
     ],
     [
       [
-        { name: "runtime-state", mountPath: "/home/node" },
+        { name: "runtime-state", mountPath: "/runtime-state" },
+        { name: "runtime-temporary", mountPath: "/runtime-temporary" },
         ...(pod.metadata.labels?.["openclaw.dev/workload-role"] === "gateway"
           ? [{ name: "openclaw-gateway-state", mountPath: "/gateway-state" }]
-          : [{ name: "openclaw-node-state", mountPath: "/workspace-node-state" }]),
+          : [
+              { name: "openclaw-workspace", mountPath: "/harness-workspace-state" },
+              { name: "openclaw-node-state", mountPath: "/workspace-node-state" },
+            ]),
       ],
       [],
       [],
@@ -2996,18 +3127,34 @@ async function assertGatewayPrivateResources(topology) {
 
 async function gatewayCall(topology, method, params) {
   // The real CLI authenticates from the Pod's env/config; credentials never enter kubectl args.
-  return JSON.parse(
+  const result = JSON.parse(
     await execNode(
       topology.gatewayPlacement,
       topology.gatewayPod.metadata.name,
       `
     const { execFileSync } = require("node:child_process");
-    process.stdout.write(execFileSync(process.execPath, ["/app/openclaw.mjs", "gateway", "call",
+    try {
+      process.stdout.write(execFileSync(process.execPath, ["/app/openclaw.mjs", "gateway", "call",
       ${JSON.stringify(method)}, "--params", ${JSON.stringify(JSON.stringify(params))},
       "--json", "--timeout", "180000"], { encoding: "utf8", timeout: 210000 }));
+    } catch (error) {
+      if (error.status !== 1 || error.signal !== null) throw error;
+      let failure;
+      try {
+        failure = JSON.parse(error.stdout);
+      } catch {
+        throw error;
+      }
+      if (failure?.ok !== false || failure.error?.type !== "gateway_request_error") throw error;
+      process.stdout.write(JSON.stringify(failure));
+    }
   `,
     ),
   );
+  if (result?.ok === false && result.error?.type === "gateway_request_error") {
+    throw new Error(result.error.message, { cause: result.error });
+  }
+  return result;
 }
 
 async function assertGatewayEffectiveDefaultModel(context, topology, expectedModel) {
@@ -3094,7 +3241,22 @@ function assertNativeToolSucceeded(history, marker, expectedText) {
 
 async function assertConversation(topology, sessionKey, nonce) {
   return waitFor(`provider transcript ${nonce}`, async () => {
-    const history = await gatewayCall(topology, "chat.history", { sessionKey, limit: 30 });
+    let history;
+    try {
+      history = await gatewayCall(topology, "chat.history", { sessionKey, limit: 30 });
+    } catch (error) {
+      const failure = error.cause;
+      if (
+        failure?.type === "gateway_request_error" &&
+        failure.code === "UNAVAILABLE" &&
+        failure.retryable === true &&
+        failure.details?.method === "chat.history"
+      ) {
+        // Pinned runtime requests 250 ms; waitFor polls every 750 ms within its deadline.
+        return undefined;
+      }
+      throw error;
+    }
     assert.equal(
       history.messages.some(
         ({ role, stopReason }) => role === "assistant" && stopReason === "error",
@@ -3144,11 +3306,11 @@ function artifactSummaryForDiagnostics({
 
 async function inspectGatewayPersistence(topology, imageDigest, sessionKey, sessionId) {
   // Read existing persisted state only. Missing/corrupt storage fails; the probe never creates it.
-  return JSON.parse(
-    await execNode(
-      topology.gatewayPlacement,
-      topology.gatewayPod.metadata.name,
-      `
+  const prefix = "OCE_GATEWAY_PERSISTENCE=";
+  const output = await execNode(
+    topology.gatewayPlacement,
+    topology.gatewayPod.metadata.name,
+    `
     const { DatabaseSync } = require("node:sqlite");
     const fs = require("node:fs");
     const path = require("node:path");
@@ -3209,18 +3371,20 @@ async function inspectGatewayPersistence(topology, imageDigest, sessionKey, sess
 
       const media = files("/home/node/.openclaw/media").filter(file =>
         createHash("sha256").update(fs.readFileSync(file)).digest("hex") === ${JSON.stringify(imageDigest)});
-      process.stdout.write(JSON.stringify({
+      process.stdout.write("\\n" + ${JSON.stringify(prefix)} + JSON.stringify({
         databases,
         media,
         transcript,
-      }));
+      }) + "\\n");
     })().catch(error => {
       console.error(error);
       process.exit(1);
     });
   `,
-    ),
   );
+  const records = output.split(/\r?\n/).filter((line) => line.startsWith(prefix));
+  assert.equal(records.length, 1, "Expected one persistence probe result");
+  return JSON.parse(records[0].slice(prefix.length));
 }
 
 async function assertRetainedArtifact(
@@ -3735,6 +3899,44 @@ async function waitForReadyAgentPod(topology, revisionId, previousUid) {
     );
     return ready;
   });
+}
+
+async function kubectlInReadyAgentPod(topology, ...args) {
+  const result = await waitFor("the current ready dedicated Harness Pod", async () => {
+    const pod = (await topologyPods(topology)).find(
+      (candidate) =>
+        candidate.metadata.deletionTimestamp === undefined &&
+        candidate.metadata.labels?.["openclaw.dev/workload-role"] === "agent" &&
+        candidate.metadata.labels?.["openclaw.dev/agent"] === topology.agent.id &&
+        candidate.metadata.labels?.["openclaw.dev/revision"] === topology.revision.id &&
+        candidate.status.phase === "Running" &&
+        candidate.status.conditions?.some(
+          ({ type, status }) => type === "Ready" && status === "True",
+        ),
+    );
+    if (pod === undefined) {
+      return undefined;
+    }
+    try {
+      const output = await kubectl(
+        "exec",
+        pod.metadata.name,
+        "--namespace",
+        topology.placement,
+        "--",
+        ...args,
+      );
+      return { output, pod };
+    } catch (error) {
+      const message = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+      if (/NotFound|not found|PodInitializing|ContainerCreating|completed pod/iu.test(message)) {
+        return undefined;
+      }
+      throw error;
+    }
+  });
+  topology.harnessPod = result.pod;
+  return result.output;
 }
 
 async function waitForReadyGatewayPod(topology, revisionId, previousUid) {
@@ -5028,6 +5230,7 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
     topology.harnessPod.metadata.uid,
   );
   harnessPod = restartedHarness.metadata.name;
+  topology.harnessPod = restartedHarness;
   assert.equal(
     await readFileInPod(topology.placement, harnessPod, workspaceFromGateway),
     ownerContent,
@@ -5087,6 +5290,9 @@ async function assertDedicatedWorkspaceRuntime(context, topology, claim, private
     await readFileInPod(topology.placement, nextHarness.metadata.name, workspaceFromHarness),
     harnessContent,
   );
+  topology.gatewayPod = await waitForReadyGatewayPod(topology, secondRevision.data.id);
+  topology.harnessPod = nextHarness;
+  topology.revision = secondRevision.data;
   const afterRevision = await gatewayCall(topology, "agents.files.get", {
     agentId: "main",
     name: "AGENTS.md",

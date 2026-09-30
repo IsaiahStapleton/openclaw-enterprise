@@ -90,6 +90,10 @@ without credentials or additional privileges. The nested
 `agents/main/agent/codex-home` is overmounted from Pod-local `emptyDir` so
 Codex credentials remain ephemeral. The remaining private runtime home is
 also ephemeral. Persisting these directories does not persist the entire home.
+The same init container creates a node-owned mode-`0700` subdirectory on the
+Pod-local temporary `emptyDir` and mounts that subdirectory at `/tmp`. This
+preserves private temp-workspace ancestry for Gateway and Harness processes;
+the fsGroup-writable volume root is never exposed as their runtime temp root.
 
 The same nonroot initializer creates a private temporary directory in each
 Pod's `emptyDir`, mounted at `/tmp` for native safe temporary-file operations.
@@ -98,57 +102,43 @@ node; runtime upgrades use the operator-selected image and ordinary redeployment
 
 ## Harness storage
 
-Each dedicated Agent receives a `40Gi` `ReadWriteOnce` (RWO) filesystem claim
+Each dedicated Agent receives a `40Gi` `ReadWriteOnce` filesystem claim
 from the default StorageClass, mounted only by its Harness:
 
-| Subpath                                       | Harness mount                        |
-| --------------------------------------------- | ------------------------------------ |
-| `codex-home` (OAuth only, **Experimental**)   | `/home/node/.codex`                  |
-| `workspace`                                   | `/home/node/workspace`               |
-| `generated-images`                            | `/home/node/.codex/generated_images` |
-| `workspace-node-<agent-hash>-<revision-hash>` | `/home/node/.openclaw-node`          |
+| Subpath                                        | Harness mount                        |
+| ---------------------------------------------- | ------------------------------------ |
+| `codex-home` ([OAuth](codex-oauth-storage.md)) | `/home/node/.codex`                  |
+| `workspace`                                    | `/home/node/workspace`               |
+| `generated-images`                             | `/home/node/.codex/generated_images` |
+| `workspace-node-<agent-hash>-<harness-hash>`   | `/home/node/.openclaw-node`          |
 
-OAuth's private `codex-home` directory is excluded from workspace serving and
-Sandbox mounts. It retains the complete native `auth.json`, including rotated
-refresh tokens and account metadata. Only the bootstrap workload and dedicated
-Codex workload mount it; the separate Gateway receives no model credential.
+This directory keeps node identity across Pod and revision replacement.
+The node Secret's setup code expires ten minutes after preparation mints it. A
+node with a saved device token for the same Gateway reconnects with that token;
+one without saved credentials rejects an expired code.
 
-**Launch scope:** persistent runtime-owned credentials deliberately replace the
-planned token broker for P0. Brokerage is separate work in progress. After the
-initial handoff, OCC retains a consumed source marker and never restores the
-original token pair. Restarts and revisions reopen the current disk bundle.
-Loss of the claim or credential file requires a new login and explicit deployment.
-This version has no broker-based backup, recovery, or shared refresh ownership.
+A Deployment-backed Codex Harness renders this wiring from its first start. It
+mounts the node Secret as an optional volume at `/run/openclaw-node-setup` that
+projects only `setupCode`, so the Harness starts before the Secret exists.
+Codex starts at once; the node starts when the file holds a complete code.
+After writing the Secret, preparation annotates the running Harness Pod. That
+Pod update makes the kubelet refresh the volume within about two seconds
+instead of on its periodic resync of about a minute, so enrollment restarts
+neither the Harness nor its Gateway. The worker needs `patch` on Pods in tenant
+namespaces; without it the pass fails.
 
-### OAuth launch limits
-
-Codex OAuth login is **Experimental**. The launch MVP targets a new Agent's first
-deployment with fresh private credential storage. The following limitations are
-recorded for follow-up:
-
-- OAuth requires Compute-owned dedicated Codex without a selected Sandbox Driver.
-  The current admission check can accept the unsupported Sandbox combination;
-  preparation rejects it after stopping predecessor workloads. Admission-time
-  rejection is deferred. Do not select this combination.
-- Reconnect bootstrap does not yet reject filesystem links or create exclusive
-  temporary files. A process with write access to the private auth directory can
-  redirect a replacement bundle into the served workspace. Bootstrap readiness
-  can still succeed, consume the source, and leave native startup failing.
-  Exclusive writes and final-file validation are deferred reconnect hardening;
-  this is separate from the choice to persist tokens on disk. Recovery on
-  untrusted reused storage is outside the first-deploy MVP.
-- Broker-backed custody, automatic recovery, and shared refresh remain deferred.
-  Existing revision reuse does not provide rollback of credential-file changes.
-  The replacement downtime and recovery behavior below still apply.
-
-The [credential guide](../../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
-owns staged-login expiry and manual cleanup.
-[Device-login verification](../../../testing/plugins.md#device-login-verification)
-distinguishes existing tests from outstanding live runtime proof.
-
-### Replacement and storage recovery
-
-The revision-specific directory retains file-node identity across Pod replacement.
+The file mode is `0440`. Secret volume files are root-owned and the kubelet
+grants the Pod `fsGroup` read access, so `0400` would behave the same. Codex
+runs as the same user and group and can read the code, as it can already read
+the node's command line. Once readiness records the device ID, the controller
+removes `setupCode` from the Secret and annotates the Pod again, so the kubelet
+removes the file within seconds. The node then reconnects with its saved device
+token, and preparation does not mint a new code for it. If the Gateway loses that
+pairing, delete the Agent's node Secret: the next pass mints a code, which the
+node uses when it restarts. Native workers and SandboxDriver Harnesses receive the code in
+their environment, keep it for restarts, and are replaced to attach the node.
+Installations that enrolled one node per revision enroll a new Agent device once,
+at the first replacement; retiring each earlier revision deletes its node Secret.
 Sessions stay on the private Gateway claim. Selected generated-image bytes return
 through the Codex remote-media reader; there is no shared image mount. Each image
 initializes its own bundled/plugin assets instead of mounting shared Skill trees.
@@ -290,8 +280,10 @@ OpenShell Sandbox instead.
 
 If channels are enabled, configure `runtime.channels.proxyUrl`, then store the
 Agent's channel credentials as Namespace Secrets referenced by Configuration
-`secretBindings`. Channel credentials are available only to the dedicated gateway,
-never to its Codex Harness.
+`secretBindings`. Use a literal-IP proxy URL, or pair the Helm-managed proxy
+Service URL with `runtime.channels.managedProxy` so Compute limits gateway egress
+to that proxy's Pods by selector. Channel credentials are available only to the
+dedicated gateway, never to its Codex Harness.
 
 Repository-bearing revisions support embedded OpenClaw or dedicated Codex,
 without a Sandbox Driver. Compute delivers each immutable repository-material

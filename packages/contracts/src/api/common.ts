@@ -412,6 +412,7 @@ export const ResourceKindSchema = Type.Union([
 ]);
 
 export const NamespacePolicyResourceKindSchema = Type.Union([
+  Type.Literal("namespace"),
   Type.Literal("agent"),
   Type.Literal("agent_revision"),
   Type.Literal("configuration"),
@@ -689,6 +690,10 @@ export const ERROR_CODES = Object.freeze([
   "CHANNEL_DIRECTORY_RATE_LIMITED",
   "CHANNEL_DIRECTORY_INVALID_RESPONSE",
   "CHANNEL_DIRECTORY_UNAVAILABLE",
+  "CHANNEL_CREDENTIAL_ROLE_MISMATCH",
+  "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED",
+  "CHANNEL_CREDENTIAL_UNAVAILABLE",
+  "CHANNEL_CREDENTIAL_BINDING_REQUIRED",
 ] as const);
 
 export const ErrorDetail = Type.Object(
@@ -748,6 +753,10 @@ export const ErrorResponse = Type.Object(
           Type.Literal("CHANNEL_DIRECTORY_RATE_LIMITED"),
           Type.Literal("CHANNEL_DIRECTORY_INVALID_RESPONSE"),
           Type.Literal("CHANNEL_DIRECTORY_UNAVAILABLE"),
+          Type.Literal("CHANNEL_CREDENTIAL_ROLE_MISMATCH"),
+          Type.Literal("CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED"),
+          Type.Literal("CHANNEL_CREDENTIAL_UNAVAILABLE"),
+          Type.Literal("CHANNEL_CREDENTIAL_BINDING_REQUIRED"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
         details: Type.Optional(Type.Array(ErrorDetail, { maxItems: 32 })),
