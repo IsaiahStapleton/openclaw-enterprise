@@ -2346,7 +2346,7 @@ if (followsPeerStatus) {
     if (timedOut) throw new Error("The native Gateway did not stop.");
   };
   // Serving means the new process answers its own readiness endpoint; the
-  // plugin status stays "starting", so the Pod stays unready, until then.
+  // plugin status stays "starting" until the peer is rechecked.
   const waitForGatewayServing = async () => {
     const deadline = Date.now() + GATEWAY_RESPAWN_READY_TIMEOUT_MS;
     while (childRunning && Date.now() < deadline) {
@@ -2370,7 +2370,7 @@ if (followsPeerStatus) {
   // no kubelet crash-loop backoff.
   const respawnForPeerStatus = async (current) => {
     respawning = true;
-    // Readiness drops first; nothing routes to this Gateway until it is replaced.
+    // Mark plugin status unready before replacing the native Gateway.
     publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
     const respawnStartedAt = Date.now();
     logStartupPhase("peer-status-changed", startupPhaseOrigin);
@@ -2413,7 +2413,7 @@ if (followsPeerStatus) {
         await stopGatewayProcess();
         await pluginRuntimeDelay(1_000 * 2 ** (attempt - 1));
       }
-      // Do not route to a replacement configured for a superseded Harness.
+      // Recheck the Harness before marking the replacement ready.
       let verifiedPeer;
       try {
         verifiedPeer = await readPeerPluginRuntimeStatus();

@@ -1,7 +1,7 @@
 ---
 created: 2026-09-08
 updated: 2026-09-30
-last_updated_session: authoring-run/fc09b5f8-3fc8-4144-ac80-8bfd8ef24f52
+last_updated_session: codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a
 ---
 
 # Agent Plugin Deployment Flow
@@ -224,8 +224,10 @@ and rendering exclusions. After restart, the old gateway cannot authenticate
 while its supervisor awaits status. For a changed peer, the supervisor publishes
 non-ready, restarts only OpenClaw and rechecks peer startup, Pod, successes and
 failures after it serves. Changed or unavailable peers trigger container restart.
-During an outage, the gateway stays unready; its exit ends the wrapper for
-container recovery.
+During an outage, the supervisor reports unready. Kubernetes propagates that
+state asynchronously, so the signal alone is not a per-request traffic fence.
+If OpenClaw exits while the supervisor waits for its peer, the wrapper exits
+for container recovery.
 
 ### 5. Complete revision reconciliation
 
@@ -288,6 +290,8 @@ the completed attempt, not ongoing runtime health.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 13:32: Clarify readiness and routing propagation. (codex/01a0b0e4-839a-71b3-9ec1-3b1000b5d06a - a0ca6376)
 
 - 2026-09-30 02:10: Recheck the peer before replacement readiness. (authoring-run/fc09b5f8-3fc8-4144-ac80-8bfd8ef24f52 - ed69e6eee87ca004d2970069e8e18cf4cce29a32)
 
