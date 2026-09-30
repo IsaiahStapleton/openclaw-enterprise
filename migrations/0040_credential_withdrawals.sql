@@ -79,4 +79,7 @@ ALTER TABLE occ.controller_work
       AND (agent_target IS NULL OR agent_target = 'credentials_withdrawn'))
     OR (work_kind = 'provisioning' AND agent_id IS NULL AND revision_id IS NULL
       AND namespace_target IS NULL AND agent_target IS NULL)
+    OR (work_kind = 'lifecycle' AND agent_id IS NULL AND revision_id IS NULL
+      AND namespace_target IS NULL AND agent_target IS NULL
+      AND idempotency_key ~ '^agent_revision:rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:repository_cleanup:(retire:)?[0-9a-f]{64}$')
   );
