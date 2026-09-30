@@ -8,7 +8,12 @@ import type {
   RuntimeLogStream,
   RuntimeLogWithheldReason,
 } from "@openclaw-enterprise/contracts";
-import { redactArgvCredentials, redactRuntimeLogText, stripRuntimeLogControls } from "./redact.ts";
+import {
+  maskPemBlockLines,
+  redactArgvCredentials,
+  redactRuntimeLogText,
+  stripRuntimeLogControls,
+} from "./redact.ts";
 
 declare const sanitizedRuntimeLogRecord: unique symbol;
 
@@ -33,6 +38,12 @@ const WRAPPER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freez
   "codex.model_probe": ["attempt", "elapsedMs", "exitCode", "signal", "code"],
   "runtime.workspace_node": ["container", "outcome", "code"],
 });
+
+// Fixed plain-text failure lines the runtime wrapper prints next to its structured
+// events (`runtime-entrypoints.ts`). They are wrapper errors, not `unknown` text.
+const WRAPPER_ERROR_LINES: ReadonlySet<string> = new Set([
+  "Harness model authentication probe failed.",
+]);
 
 // Operational keys only. Anything else, and every free-text or payload key
 // (`args`, `payload`, `body`, `prompt`, `messages`, `content`, `text`, `transcript`,
@@ -226,18 +237,84 @@ function codexRecord(value: Readonly<Record<string, unknown>>, message: string):
   };
 }
 
-function classify(line: string): Classified {
+/** Net bracket depth of one line, ignoring brackets inside JSON strings. */
+function bracketDelta(text: string): number {
+  let delta = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (character === "\\") {
+        index += 1;
+      } else if (character === '"') {
+        inString = false;
+      }
+    } else if (character === '"') {
+      inString = true;
+    } else if (character === "{" || character === "[") {
+      delta += 1;
+    } else if (character === "}" || character === "]") {
+      delta -= 1;
+    }
+  }
+  return delta;
+}
+
+// A pretty-printed member (`"prompt": "..."`) or string element (`"...",`). These lines
+// carry payload values even when the enclosing `{` is on another line or page.
+const JSON_MEMBER_LINE = /^"(?:[^"\\]|\\.){0,4096}"\s*(?::|,?$)/;
+// Any line that can continue a pretty-printed JSON value.
+const JSON_CONTINUATION_LINE = /^(?:["{}[\]\-\d]|true\b|false\b|null\b)/;
+
+/**
+ * Tracks one multi-line JSON value within a chunk. JSON.parse sees one line at a time,
+ * so the `{` line alone is malformed and every inner line would otherwise read as text.
+ *
+ * Depth only falls on closing brackets or a line that cannot continue JSON, so after an
+ * unclosed `{` (or a bare quoted-string line) plain lines that start with a digit, `-`,
+ * `"`, `{`, `[`, `true`, `false` or `null` stay withheld until such a line appears. That
+ * errs toward withholding, never toward showing payload. Bracket-tagged text lines such
+ * as `[node-host] ...` always end the block.
+ */
+interface JsonBlock {
+  depth: number;
+}
+
+// A plain-text line tagged with a bracketed component name, such as
+// `[node-host] advertised commands: ...`. The tag starts with a letter and holds no
+// quotes, commas, braces or spaces, so no JSON array (or fragment of one) matches.
+const BRACKET_TAG = /^\[(?!(?:true|false|null)\])[A-Za-z][\w.:/@-]{0,63}\](?:\s|$)/;
+
+function classify(line: string, block: JsonBlock): Classified {
   if (byteLength(line) > RUNTIME_LOG_MAX_INPUT_BYTES) {
     return { type: "withheld", reason: "oversized" };
   }
   const text = stripRuntimeLogControls(line);
   const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+  if (block.depth > 0) {
+    if (
+      JSON_CONTINUATION_LINE.test(trimmed) &&
+      !BRACKET_TAG.test(trimmed) &&
+      !parsesAlone(trimmed)
+    ) {
+      block.depth += bracketDelta(trimmed);
+      return { type: "withheld", reason: "malformed" };
+    }
+    // Plain text, or a complete single-line record: the value ended or was interleaved.
+    block.depth = 0;
+  }
+  if (JSON_MEMBER_LINE.test(trimmed)) {
+    // The rest of a value whose opening line was on an earlier page, or was not seen.
+    block.depth = Math.max(0, 1 + bracketDelta(trimmed));
+    return { type: "withheld", reason: "malformed" };
+  }
+  if (trimmed.startsWith("{") || (trimmed.startsWith("[") && !BRACKET_TAG.test(trimmed))) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);
     } catch {
       // JSON-shaped but unparseable output may be a structured payload; never show it.
+      block.depth = Math.max(0, bracketDelta(trimmed));
       return { type: "withheld", reason: "malformed" };
     }
     if (!withinDepth(parsed)) {
@@ -251,7 +328,22 @@ function classify(line: string): Classified {
   if (byteLength(text) > RUNTIME_LOG_MAX_TEXT_BYTES) {
     return { type: "withheld", reason: "oversized" };
   }
+  if (WRAPPER_ERROR_LINES.has(trimmed)) {
+    return { type: "line", kind: "wrapper", level: "error", message: trimmed };
+  }
   return { type: "line", kind: "text", level: "unknown", message: text };
+}
+
+function parsesAlone(trimmed: string): boolean {
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface SanitizedRuntimeLogChunk {
@@ -276,8 +368,17 @@ export function sanitizeRuntimeLogChunk(
   const records: SanitizedRuntimeLogRecord[] = [];
   let withheld = 0;
   let run: Mutable<Extract<RuntimeLogRecord, { type: "withheld" }>> | undefined;
-  for (const line of lines) {
-    const classified = classify(line.raw);
+  const block: JsonBlock = { depth: 0 };
+  // Classify in order: an open pretty-printed JSON block carries across lines.
+  const classifiedLines = lines.map((line) => classify(line.raw, block));
+  // A key printed over several lines is split across records; mask the whole block.
+  const pem = maskPemBlockLines(
+    classifiedLines.map((classified) =>
+      classified.type === "line" && classified.kind === "text" ? classified.message : undefined,
+    ),
+  );
+  for (const [index, line] of lines.entries()) {
+    const classified = classifiedLines[index]!;
     const time = validTime(line.time);
     if (classified.type === "withheld") {
       withheld += 1;
@@ -295,7 +396,7 @@ export function sanitizeRuntimeLogChunk(
       records.push(brand(run));
       run = undefined;
     }
-    const message = sanitizeRuntimeLogText(classified.message);
+    const message = sanitizeRuntimeLogText(pem.get(index) ?? classified.message);
     const subsystem =
       classified.subsystem === undefined
         ? undefined

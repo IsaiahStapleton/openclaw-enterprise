@@ -1171,6 +1171,7 @@ export const AgentRuntimeDescriptionSchema = Type.Object(
             Type.Object(
               {
                 type: Type.Union([Type.Literal("Normal"), Type.Literal("Warning")]),
+                container: Type.Union([KubernetesObjectName, Type.Null()]),
                 reason: RuntimeReason,
                 message: Type.String({ maxLength: 2048 }),
                 count: Type.Integer({ minimum: 1 }),

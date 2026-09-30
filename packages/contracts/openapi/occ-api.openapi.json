@@ -962,6 +962,17 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "container": {
+                            "anyOf": [
+                              {
+                                "maxLength": 253,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                "type": "string"
+                              },
+                              { "type": "null" }
+                            ]
+                          },
                           "count": { "minimum": 1, "type": "integer" },
                           "lastObservedAt": {
                             "anyOf": [
@@ -982,7 +993,14 @@
                             ]
                           }
                         },
-                        "required": ["type", "reason", "message", "count", "lastObservedAt"],
+                        "required": [
+                          "type",
+                          "container",
+                          "reason",
+                          "message",
+                          "count",
+                          "lastObservedAt"
+                        ],
                         "type": "object"
                       },
                       "maxItems": 100,
@@ -11772,6 +11790,17 @@
                                 "items": {
                                   "additionalProperties": false,
                                   "properties": {
+                                    "container": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 253,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        { "type": "null" }
+                                      ]
+                                    },
                                     "count": { "minimum": 1, "type": "integer" },
                                     "lastObservedAt": {
                                       "anyOf": [
@@ -11794,6 +11823,7 @@
                                   },
                                   "required": [
                                     "type",
+                                    "container",
                                     "reason",
                                     "message",
                                     "count",
@@ -11991,7 +12021,7 @@
     },
     "/namespaces/{namespaceId}/agents/{agentId}/deployments/{deploymentId}/runtime/logs": {
       "get": {
-        "description": "Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.",
+        "description": "Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent.",
         "operationId": "getAgentDeploymentRuntimeLogs",
         "parameters": [
           {
@@ -12517,8 +12547,7 @@
             "resourceKind": "agent",
             "scope": "requested"
           },
-          { "action": "read", "resourceKind": "agent", "scope": "requested" },
-          { "action": "read", "resourceKind": "agent_revision", "scope": "requested" }
+          { "action": "read", "resourceKind": "agent", "scope": "requested" }
         ]
       }
     },

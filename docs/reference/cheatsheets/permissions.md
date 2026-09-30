@@ -85,8 +85,8 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 - [Agent runtime status](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntime)
   requires `agent:operate`, `agent:read` and `agent_revision:read`;
   [runtime log text](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntimelogs)
-  requires `agent:read_logs` or `agent:administer`, plus `agent:read` and
-  `agent_revision:read`; a `read_logs` Restriction also blocks `administer`. See
+  requires `agent:read_logs` or `agent:administer`, plus `agent:read`, for every
+  revision of the Agent; a `read_logs` Restriction also blocks `administer`. See
   [Agent logs](../../guides/topics/agent-logs.md#who-can-see-what).
 - A first [Agent deployment](../agents/deployment.md#revisions-and-deployment)
   also requires exact-Agent `read` and `operate` when the selected Compute Driver

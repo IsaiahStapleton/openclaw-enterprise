@@ -41,6 +41,13 @@ function errorPanel(error, context, retry) {
         : "Configuration unavailable",
     ),
     element("p", {}, message(error)),
+    error.remembered
+      ? element(
+          "p",
+          { className: "hint" },
+          "This tab remembers the earlier denial. Retry checks your access again.",
+        )
+      : null,
     error.requestId
       ? element("p", { className: "request-id" }, `Request ID: ${error.requestId}`)
       : null,
@@ -77,7 +84,7 @@ const DEPLOYMENT_FAILURE_GUIDANCE = {
     "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
 };
 
-function deploymentFailure(error, credentialsHref = null) {
+function deploymentFailure(error, credentialsHref = null, logs = null) {
   if (!error) {
     return element("p", { className: "muted" }, "No persisted startup failure.");
   }
@@ -96,6 +103,14 @@ function deploymentFailure(error, credentialsHref = null) {
           guidance,
           credentialsHref ? " " : null,
           credentialsHref ? element("a", { href: credentialsHref }, "Open Credentials") : null,
+        )
+      : null,
+    // A failed version may never become current, so link its output directly.
+    logs
+      ? element(
+          "p",
+          { className: "hint" },
+          element("a", { href: logs.href }, `Open v${logs.revision} Logs`),
         )
       : null,
     runtimeFailure && typeof runtimeFailure === "object"
@@ -161,6 +176,9 @@ function deploymentProgress(status, progress) {
   );
 }
 
+export const DEPLOYMENT_POLL_MS = 5000;
+const PENDING_DEPLOYMENT_STATUSES = new Set(["queued", "running"]);
+
 function createDeploymentStatusPanel(
   context,
   path,
@@ -168,14 +186,35 @@ function createDeploymentStatusPanel(
   onAgentChange,
   onStatusChange,
   credentialsHref = null,
+  logsHref = null,
 ) {
   const section = element("section", { className: "agent-card deployment-status" });
   const state = { loading: false, status: null, error: null, overviewError: false };
+  let pollTimer = null;
 
-  async function loadStatus(refreshAgent = false) {
+  // Queued and running records are reread until they record a result or a read fails.
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    if (state.error || !PENDING_DEPLOYMENT_STATUSES.has(state.status?.status)) {
+      return;
+    }
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      // A newer deployment replaces this panel; a detached panel stops following.
+      if (context.isCurrent() && section.isConnected) {
+        void loadStatus(false, true);
+      }
+    }, DEPLOYMENT_POLL_MS);
+  }
+
+  async function loadStatus(refreshAgent = false, poll = false) {
     if (state.loading || !context.isCurrent()) {
       return;
     }
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    const previousStatus = state.status?.status ?? null;
     state.loading = true;
     state.error = null;
     state.overviewError = false;
@@ -230,6 +269,17 @@ function createDeploymentStatusPanel(
           state.status?.error?.code ?? null,
           state.status,
         );
+        if (
+          poll &&
+          PENDING_DEPLOYMENT_STATUSES.has(previousStatus) &&
+          !state.error &&
+          !PENDING_DEPLOYMENT_STATUSES.has(state.status?.status)
+        ) {
+          // A recorded result can change the current version; reread it once.
+          void loadStatus(true);
+        } else {
+          schedulePoll();
+        }
       }
     }
   }
@@ -271,7 +321,11 @@ function createDeploymentStatusPanel(
           )
         : null,
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
-      deploymentFailure(state.status.error, credentialsHref),
+      deploymentFailure(
+        state.status.error,
+        credentialsHref,
+        logsHref ? { href: logsHref, revision: revision.revision } : null,
+      ),
       state.status.warnings?.length
         ? element(
             "div",
@@ -488,29 +542,50 @@ function createVersionDiagnosticsPanel(context, path, revisionId, recordedStatus
       diagnostics.checks.length
         ? checks
         : element("p", { className: "muted" }, "No diagnostic checks were returned."),
-      unreachableExplanation(),
+      ...scopeExplanations(),
     );
   }
 
-  function unreachableExplanation() {
+  // The gateway checks cover only the Slack channel. Say what their results do
+  // and do not mean, and keep a recorded deployment failure in view: nothing
+  // here tests model credentials, so no check can confirm or clear it.
+  function scopeExplanations() {
+    const checks = diagnostics.checks;
     const unreachable =
-      diagnostics.checks.length > 0 &&
-      diagnostics.checks.every(
-        (check) => check.state === "unknown" && check.code === "UNAVAILABLE",
-      );
-    if (!unreachable) {
-      return null;
-    }
+      checks.length > 0 &&
+      checks.every((check) => check.state === "unknown" && check.code === "UNAVAILABLE");
+    const slackNotConfigured = checks.some(
+      (check) =>
+        check.component === "gateway" &&
+        check.check === "configuration" &&
+        check.state === "failed" &&
+        check.code === "NOT_CONFIGURED",
+    );
     const recorded = recordedStatus();
     const failure = recorded?.status === "failed" ? recorded.error : null;
-    return element(
-      "p",
-      { className: "hint", role: "status" },
-      "UNAVAILABLE means the runtime did not answer, so these checks could not run. The gateway is usually stopped, still starting, or failed to start. ",
-      failure?.code
-        ? `This version's recorded deployment failed with ${failure.code}; resolve that first. These checks do not test model credentials.`
-        : "Check this version's recorded outcome and its Logs tab for Pod status and container output.",
-    );
+    const hints = [];
+    if (unreachable) {
+      hints.push(
+        "UNAVAILABLE means the runtime did not answer, so these checks could not run. The gateway is usually stopped, still starting, or failed to start.",
+      );
+    }
+    if (slackNotConfigured) {
+      hints.push(
+        "NOT_CONFIGURED means this version has no Slack channel, so Slack authentication and connectivity were not checked. An Agent that does not use Slack always reports this; it is not a model or deployment error.",
+      );
+    }
+    if (failure?.code) {
+      hints.push(
+        `This version's recorded deployment failed with ${failure.code}; resolve that first. These checks do not test model credentials, so they cannot confirm or clear that failure.`,
+      );
+    } else if (unreachable) {
+      hints.push(
+        "Check this version's recorded outcome and its Logs tab for Pod status and container output.",
+      );
+    }
+    return hints.length
+      ? [element("p", { className: "hint", role: "status" }, hints.join(" "))]
+      : [];
   }
 
   function render() {
@@ -535,7 +610,7 @@ function createVersionDiagnosticsPanel(context, path, revisionId, recordedStatus
       element(
         "p",
         { className: "muted" },
-        "For Kubernetes Compute, Gateway checks currently cover Slack configuration, authentication, and connectivity. They do not run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
+        "For Kubernetes Compute, Gateway checks cover only the Slack channel: its configuration, authentication, and connectivity. They do not test model credentials or run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
       ),
       ...(error
         ? [
@@ -1048,6 +1123,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             agent.harnessAuth?.method === "runtime"
               ? null
               : context.pageUrl(`agents/${agent.id}?revision=draft&tab=credentials`, namespaceId),
+            context.pageUrl(
+              `agents/${agent.id}?revision=${encodeURIComponent(mostRecent.id)}&tab=logs`,
+              namespaceId,
+            ),
           )
         : element(
             "section",
@@ -1083,16 +1162,34 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   }
   let refreshDeployControls = () => {};
 
+  const snapshotPath =
+    selected === "draft"
+      ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
+      : `${path}/revisions/${encodeURIComponent(selected)}`;
+
+  async function readSnapshot() {
+    // A denied read is audited, so reuse this tab's settled denial instead of asking per view.
+    if (context.deniedReads?.has(snapshotPath)) {
+      throw Object.assign(new Error("Access denied."), {
+        status: 403,
+        code: "FORBIDDEN",
+        remembered: true,
+      });
+    }
+    try {
+      return await request(snapshotPath);
+    } catch (error) {
+      if (error.status === 403) {
+        context.deniedReads?.remember(snapshotPath);
+      }
+      throw error;
+    }
+  }
+
   async function loadDetails() {
     const results = await Promise.allSettled([
       revisionsPromise,
-      selected === "draft" && agent.configurationReadError
-        ? Promise.resolve(null)
-        : request(
-            selected === "draft"
-              ? `${namespacePath(namespaceId)}/configurations/${encodeURIComponent(agent.configurationId)}`
-              : `${path}/revisions/${encodeURIComponent(selected)}`,
-          ),
+      selected === "draft" && agent.configurationReadError ? Promise.resolve(null) : readSnapshot(),
     ]);
     if (!context.isCurrent() || deleting) {
       return;
@@ -1580,9 +1677,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     if (data?.error) {
       state.reusable = false;
       content.append(
-        errorPanel(data.error, tabContext, () =>
-          context.navigate(target(selected, selectedTab), namespaceId, true),
-        ),
+        errorPanel(data.error, tabContext, () => {
+          context.deniedReads?.forget(snapshotPath);
+          context.navigate(target(selected, selectedTab), namespaceId, true);
+        }),
       );
     } else if (data) {
       renderConfigurationTab(tabContext, tab, data);

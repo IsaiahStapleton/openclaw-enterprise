@@ -5,8 +5,10 @@ const STATUS_POLL_MS = 10_000;
 const FOLLOW_POLL_MS = 2_000;
 const MAX_ROWS = 5_000;
 const TAIL_LINES = 200;
-// A 403 is audited; remember it for this page session instead of re-asking every poll.
+// A 403 is audited; remember it for this page session instead of re-asking every poll
+// or every time the Logs tab reopens.
 const deniedLogViews = new Set();
+const deniedStatusViews = new Set();
 
 const SOURCE_LABELS = {
   gateway: "Gateway",
@@ -29,9 +31,10 @@ const WITHHELD_LABELS = {
 
 function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
+    // Name both grants: without status the Logs section never says what log text needs.
     return tier === "logs"
-      ? "Log text requires Agent read_logs (or administer) and read access plus read access to this version."
-      : "Runtime status requires Agent operate and read access plus read access to this version.";
+      ? "Log text requires Agent read_logs (or administer) and read access."
+      : "Runtime status requires Agent operate and read access plus read access to this version. Log text needs Agent read_logs (or administer) and read access.";
   }
   if (error.status === 501) {
     return "This Compute Driver does not expose runtime status or logs, or an operator turned them off.";
@@ -50,6 +53,9 @@ function runtimeErrorText(error, tier, source) {
   }
   if (error.status === 504) {
     return "The read timed out. Try again.";
+  }
+  if (error.code === "RUNTIME_LOGS_SOURCE_UNAVAILABLE") {
+    return `This version has no ${source ?? "such"} log source.`;
   }
   if (error.code === "RUNTIME_LOGS_AUDIT_UNAVAILABLE") {
     return "The view could not be audited, so no output was read. Try again.";
@@ -120,7 +126,7 @@ function podCard(pod) {
             element(
               "li",
               {},
-              `${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
+              `${event.container ? `${event.container} · ` : ""}${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
             ),
           ),
         )
@@ -181,6 +187,10 @@ function recordRow(record) {
     element("span", { className: "log-kind" }, record.kind),
     record.subsystem ? element("span", { className: "log-subsystem" }, record.subsystem) : null,
     element("span", { className: "log-message" }, record.message),
+    // A failure code is the point of the line; keep it visible without expanding.
+    record.fields?.code === undefined
+      ? null
+      : element("span", { className: "log-code" }, `code=${record.fields.code}`),
   );
   const provenance = record.kind === "sandbox" ? policyProvenance(record.fields) : null;
   if (provenance !== null) {
@@ -212,6 +222,25 @@ function recordRow(record) {
   return row;
 }
 
+/**
+ * Runtime status needs Agent `operate`; log text needs only `read_logs`. Without status
+ * the picker offers every source and names no Pod: OCC reads the source's current Pod
+ * and a view's cursor keeps following it.
+ */
+function unobservedDescription() {
+  return {
+    observedAt: null,
+    pods: [],
+    sources: ["gateway", "agent", "sandbox"].map((id) => ({
+      id,
+      kind: id === "sandbox" ? "sandbox" : "container",
+      pods: [],
+      available: true,
+      retention: "",
+    })),
+  };
+}
+
 function downloadFileName(agentId, revisionId, source, pod) {
   return `${[agentId, revisionId, source, pod].join("-").replace(/[^A-Za-z0-9_.-]/g, "_")}.log`;
 }
@@ -219,7 +248,14 @@ function downloadFileName(agentId, revisionId, source, pod) {
 /** Logs tab: runtime status strip, source picker, bounded log pane and follow. */
 export function renderAgentLogs(context, { agent, revisionId }) {
   const base = `${namespacePath(context.namespaceId)}/agents/${encodeURIComponent(agent.id)}/deployments/${encodeURIComponent(revisionId)}/runtime`;
-  const deniedKey = `${context.namespaceId}/${agent.id}`;
+  // Denials are per signed-in operator: another user signing in on this tab asks again.
+  const deniedKey = JSON.stringify([context.operatorId ?? null, context.namespaceId, agent.id]);
+  const statusKey = JSON.stringify([
+    context.operatorId ?? null,
+    context.namespaceId,
+    agent.id,
+    revisionId,
+  ]);
   const section = element("section", { className: "agent-logs" });
   const strip = element("div", { className: "runtime-strip", "aria-live": "polite" });
   const stripStatus = element(
@@ -269,6 +305,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   filterInput.addEventListener("input", () => applyFilters());
   const filterStatus = element("p", { className: "hint", role: "status" });
   const retention = element("p", { className: "hint" });
+  const sourceHint = element("p", { className: "hint", role: "note", hidden: true });
   const logStatus = element("p", { className: "muted", role: "status" });
   const logError = element("p", { className: "error", role: "alert", hidden: true });
   const pane = element("div", {
@@ -288,6 +325,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   let restartPending = false;
   let rows = 0;
   let logsDenied = deniedLogViews.has(deniedKey);
+  // Set when runtime status is denied; the last page's stream stands in for the Pod list.
+  let statusDenied = false;
+  let lastStream = null;
 
   const current = () => context.isCurrent();
 
@@ -303,12 +343,12 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   // A sandbox source has no Pods: OCC derives the Sandbox from the revision.
   function readableSelection() {
     const source = selectedSource();
-    return Boolean(source) && (source.kind === "sandbox" || Boolean(selectedPod()));
+    return Boolean(source) && (source.kind === "sandbox" || statusDenied || Boolean(selectedPod()));
   }
 
   function logQuery(source, pod) {
     const query = new URLSearchParams({ source: source.id });
-    if (source.kind !== "sandbox") {
+    if (source.kind !== "sandbox" && pod) {
       query.set("pod", pod.name);
     }
     if (previous.checked) {
@@ -366,8 +406,31 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       podSelect.value = chosenPod;
     }
     retention.textContent = source?.retention ?? "";
+    // A dedicated Gateway logs connection errors to a Harness that never came up; its
+    // own source holds the cause (for example a failed model probe).
+    // Only a revision with a dedicated Harness lists an "agent" source; the hint fires
+    // when no Harness Pod is ready (none created yet, or every one unready), not while a
+    // ready replacement serves beside an old Pod during a rollout. Without status the
+    // Pod list is unknown, so there is no hint.
+    const harnessPods = description.pods.filter(({ role }) => role === "agent");
+    const harnessDown =
+      !statusDenied &&
+      source?.id === "gateway" &&
+      description.sources.some(({ id }) => id === "agent") &&
+      !harnessPods.some(({ ready }) => ready);
+    sourceHint.hidden = !harnessDown;
+    sourceHint.textContent = !harnessDown
+      ? ""
+      : harnessPods.length === 0
+        ? "The Agent (Harness) has no Pod yet. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: see Deployment activity for why it has not started."
+        : "The Agent (Harness) Pod is not ready. Gateway errors that fail to reach it, such as ECONNREFUSED, are a symptom: read the Agent (Harness) source for the cause.";
     const pod = selectedPod();
-    previous.disabled = logsDenied || !pod || pod.restartCount === 0;
+    const restarts = pod
+      ? pod.restartCount
+      : statusDenied && lastStream?.source === source?.id
+        ? lastStream.restartCount
+        : 0;
+    previous.disabled = logsDenied || restarts === 0;
     if (previous.disabled) {
       previous.checked = false;
     }
@@ -378,9 +441,27 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     followButton.disabled = !readable || previous.checked;
   }
 
+  // Status is denied, but log text has its own grant: offer the log reads anyway.
+  function offerLogsWithoutStatus() {
+    if (description !== null) {
+      return;
+    }
+    statusDenied = true;
+    description = unobservedDescription();
+    renderPickers();
+    if (!logsDenied) {
+      void readLogs({ restart: true });
+    }
+  }
+
   async function loadStatus() {
     clearTimeout(statusTimer);
     if (!current()) {
+      return;
+    }
+    if (deniedStatusViews.has(statusKey)) {
+      stripStatus.textContent = runtimeErrorText({ status: 403 }, "status");
+      offerLogsWithoutStatus();
       return;
     }
     if (!document.hidden) {
@@ -404,8 +485,14 @@ export function renderAgentLogs(context, { agent, revisionId }) {
           return;
         }
         stripStatus.textContent = withRequestId(runtimeErrorText(error, "status"), error);
+        if (error.status === 403) {
+          offerLogsWithoutStatus();
+        }
         // Authorization and support failures do not change on their own.
         if ([403, 404, 501].includes(error.status)) {
+          if (error.status === 403) {
+            deniedStatusViews.add(statusKey);
+          }
           return;
         }
       }
@@ -564,6 +651,10 @@ export function renderAgentLogs(context, { agent, revisionId }) {
       showLogError(null);
       cursor = page.cursor;
       appendRecords(page.records);
+      if (statusDenied && page.stream) {
+        lastStream = page.stream;
+        renderPickers();
+      }
       const lines = page.records.filter(({ type }) => type === "line").length;
       if (restart) {
         logStatus.textContent =
@@ -575,7 +666,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
                 ? `No output in the last ${TAIL_LINES} lines.`
                 : source.kind === "sandbox"
                   ? `Showing policy decisions and supervisor output of sandbox ${page.stream.sandbox ?? ""}.`
-                  : `Showing ${previous.checked ? "the previous instance of " : ""}${pod.container} in ${pod.name}.`;
+                  : `Showing ${previous.checked ? "the previous instance of " : ""}${page.stream.container} in ${page.stream.pod}.`;
       }
     } catch (error) {
       if (!current() || (restartPending && error.status !== 401)) {
@@ -669,6 +760,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     ),
     filterStatus,
     retention,
+    sourceHint,
     logStatus,
     logError,
     pane,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { detailUrl, login, nativeValues, newPage } from "./console-agents-browser-helpers.mjs";
 
@@ -65,6 +66,54 @@ test("Refresh deployment also refreshes the viewed version's deployment record",
   assert.equal(await record.getByText("No persisted startup failure.").count(), 0);
 });
 
+test("Deployment activity follows pending work until it records a result", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Activity follow", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Follow Agent", nativeValues("v1"));
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  let status = "running";
+  let statusReads = 0;
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`,
+    (route) => {
+      statusReads += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: deploymentBody(
+          namespace.id,
+          agent.id,
+          revision.id,
+          status,
+          status === "failed" ? authenticationFailure : null,
+        ),
+      });
+    },
+  );
+  await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const activity = page.locator(".deployment-status");
+  const record = page.locator(".version-deployment-record");
+  await activity.getByText("Recorded status: running").waitFor();
+  await record.getByText("Recorded outcome: running").waitFor();
+
+  // Pending work is reread on its own; the reader does not have to press Refresh deployment.
+  status = "failed";
+  await page.clock.runFor(DEPLOYMENT_POLL_MS);
+  await activity.getByText("Recorded status: failed").waitFor();
+  await record.getByText("Recorded outcome: failed").waitFor();
+  await page.getByText("v1 · Failed", { exact: true }).waitFor();
+
+  // A recorded result ends the follow-up reads.
+  const readsAtResult = statusReads;
+  await page.clock.runFor(DEPLOYMENT_POLL_MS * 3);
+  assert.equal(statusReads, readsAtResult);
+});
+
 test("Diagnostics explain UNAVAILABLE checks and point at the recorded failure", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -110,6 +159,70 @@ test("Diagnostics explain UNAVAILABLE checks and point at the recorded failure",
   await observations
     .getByText(/recorded deployment failed with RUNTIME_AUTHENTICATION_FAILED/)
     .waitFor();
+});
+
+test("Diagnostics explain a missing Slack channel and keep the recorded failure in view", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Diagnostics scope", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Embedded Agent", nativeValues("v1"));
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  const deploymentPath = `/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`;
+  const { page } = await newPage(t, fixture);
+  await page.route(`${fixture.origin}${deploymentPath}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: deploymentBody(namespace.id, agent.id, revision.id, "failed", authenticationFailure),
+    }),
+  );
+  // The shape the Kubernetes gateway returns when the version has no Slack channel.
+  await page.route(`${fixture.origin}${deploymentPath}/diagnostics`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          revisionId: revision.id,
+          observedAt: "2026-09-30T09:06:47.000Z",
+          checks: [
+            {
+              component: "gateway",
+              check: "configuration",
+              state: "failed",
+              checkedAt: "2026-09-30T09:06:46.000Z",
+              code: "NOT_CONFIGURED",
+            },
+            {
+              component: "gateway",
+              check: "authentication",
+              state: "unknown",
+              checkedAt: "2026-09-30T09:06:46.000Z",
+            },
+            {
+              component: "gateway",
+              check: "connectivity",
+              state: "unknown",
+              checkedAt: "2026-09-30T09:06:46.000Z",
+            },
+          ],
+        },
+        meta: { requestId: "req_test_diagnostics_no_slack" },
+      }),
+    }),
+  );
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const observations = page.locator(".version-diagnostics");
+  await observations.getByText(/Gateway checks cover only the Slack channel/).waitFor();
+  await observations.getByRole("button", { name: "Run diagnostics for this version" }).click();
+  await observations.getByText("gateway / authentication").waitFor();
+  await observations.getByText(/NOT_CONFIGURED means this version has no Slack channel/).waitFor();
+  await observations
+    .getByText(/recorded deployment failed with RUNTIME_AUTHENTICATION_FAILED/)
+    .waitFor();
+  assert.equal(await observations.getByText(/UNAVAILABLE means the runtime/).count(), 0);
 });
 
 test("Agent detail returns to the Agents list once background deletion finishes", async (t) => {

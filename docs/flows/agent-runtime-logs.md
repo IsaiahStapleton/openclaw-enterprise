@@ -18,7 +18,9 @@ download is a local file on the reader's device.
 
 - Trigger: `GET /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime`
   and `GET .../runtime/logs` (optionally `download=true`) from the console Logs
-  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API.
+  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API. The CLI
+  defaults to the active revision, else the latest revision
+  (`agentRevision`, `latestRevisionID`).
 - Source: `apps/controller/src/index.ts:createFastifyApp`,
   `packages/occ/src/index.ts:OpenClawController.describeAgentRuntime` and
   `readAgentRuntimeLogs`, `packages/occ/src/runtime-logs/`, and
@@ -26,9 +28,11 @@ download is a local file on the reader's device.
   and `readAgentRuntimeLogs`.
 - Assumptions: `deploymentId` is an admitted AgentRevision ID. Status needs exact
   Agent `operate` and `read` plus AgentRevision `read`; log text needs Agent
-  `read_logs` or `administer` instead of `operate`
+  `read_logs` or `administer` instead of `operate`, and no AgentRevision grant
   (`OpenClawController.authorizeRuntimeLogRead` tries `read_logs` first and
-  falls back to `administer` unless a Restriction denied `read_logs`).
+  falls back to `administer` unless a Restriction denied `read_logs`). The
+  revision must still belong to the exact Agent, so an Agent grant covers every
+  revision that Agent deploys.
 
 ## Flow
 
@@ -63,8 +67,9 @@ graph TD
 a closed query schema. `apps/controller/src/index.ts:perform` answers `501` when
 `agentRuntimeLogs` is disabled and applies the replica-local
 `apps/controller/src/http/runtime-logs.ts:RuntimeLogLimiter`.
-`OpenClawController.runtimeLogTarget` authorizes revision `read`, the tier action
-and Agent `read`, then rejects a Driver without `describeAgentRuntime` or with
+`OpenClawController.runtimeLogTarget` authorizes the tier action and Agent `read`
+(plus revision `read` for status only), resolves the revision within the exact
+Agent, then rejects a Driver without `describeAgentRuntime` or with
 `runtimeLogging: "driver"`.
 
 ### 2. Describe the runtime
@@ -73,7 +78,9 @@ and Agent `read`, then rejects a Driver without `describeAgentRuntime` or with
 lists Pods by the exact Agent, revision and workload-role labels: dedicated
 Gateways in the control-plane Gateway namespace, Harnesses and embedded Gateways
 in the tenant namespace on the execution plane. It lists Events by
-`involvedObject.uid`, keeps only that Pod's Events and caps them at 100. A log
+`involvedObject.uid`, keeps only that Pod's Events, caps them at 100 and takes each
+Event's `container` from `involvedObject.fieldPath` (`spec.containers{name}` or
+the init or ephemeral form; `null` for Pod-level Events such as `Scheduled`). A log
 read passes `{ source, events: false }`, so it lists only that source's Pods and
 no Events. Each
 Kubernetes call has a five-second deadline; a `403` becomes
@@ -95,7 +102,9 @@ Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 drops lines already delivered at the cursor time, emits `stream_replaced`,
 `window_exceeded`, `cursor_expired` or `truncated` gaps, and passes the rest to
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
-`SanitizedRuntimeLogRecord`.
+`SanitizedRuntimeLogRecord`. It classifies the whole page first, so
+`runtime-logs/redact.ts:maskPemBlockLines` can mask a PEM block whose BEGIN,
+body and END lines arrive as separate plain-text lines.
 
 `source=sandbox` skips the Compute description. `OpenClawController.readSandboxLogs`
 lists the source only when the selected Sandbox Driver provisioned the revision
@@ -126,7 +135,12 @@ sanitized records and fails on the reserved `content` class.
 `runtimeLogDownloadBody` serializes the same branded records as text lines with
 the same check, and `runtimeLogDownloadFileName` names the attachment
 `<agent>-<revision>-<source>-<pod>.log`. The console filters
-(`apps/controller/src/console/agents/logs.mjs`) run only over loaded rows; the
+(`apps/controller/src/console/agents/logs.mjs`) run only over loaded rows. The
+console remembers a `403` from either route for the signed-in operator for the
+page session, so reopening the Logs tab adds no audited denial, and another
+operator signing in on the tab asks again. Its status message names the
+log-text grants too. On the Gateway source it points to the Harness source while
+no Harness Pod is ready, or to Deployment activity while none exists. The
 CLI's `--follow` loop re-sends the cursor every 2 seconds. Driver errors map to
 fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 
@@ -160,3 +174,6 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 - 2026-09-30 11:40: Add downloads, console filters and the `occ agent runtime|logs` callers. (build-2/agent-logs-slice-2)
 - 2026-09-30 13:00: Add the OpenShell sandbox source. (build-logs-3/agent-logs-slice-3)
 - 2026-09-30 15:30: Overlapping sandbox resume with counted de-duplication; NOT_FOUND is a 503. (fix-3/agent-logs-slice-3)
+- 2026-09-30 18:10: Console remembers a runtime status denial per page and points unready-Harness Gateway views to the Harness source. (dogfood3-fix-7)
+- 2026-09-30 18:30: Without an active revision the CLI reads the latest revision; a failed deployment links to its version's Logs tab. (fix/dogfood3-5)
+- 2026-09-30 20:00: Key remembered denials by operator; the Harness hint ignores a rollout's old Pod and covers a missing Pod. (dogfood3-refix-7)

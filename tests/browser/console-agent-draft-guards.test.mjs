@@ -967,6 +967,13 @@ test("Agent deployment guides a rejected model credential and gates unsaved auth
     await activity.getByRole("link", { name: "Open Credentials" }).getAttribute("href"),
     /tab=credentials/,
   );
+  // The draft has no Logs tab, so the failure links to the failed version's output.
+  assert.match(
+    await activity
+      .getByRole("link", { name: `Open v${revision.revision} Logs` })
+      .getAttribute("href"),
+    new RegExp(`revision=${revision.id}&tab=logs`),
+  );
   // Secret values can be updated in place, so the rejected binding warns instead of blocking.
   await page
     .getByText(

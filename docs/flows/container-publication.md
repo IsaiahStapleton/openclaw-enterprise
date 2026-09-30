@@ -1,7 +1,7 @@
 ---
 created: 2026-09-21
-updated: 2026-09-29
-last_updated_session: 01a0eda8-1144-78e3-a1f7-82e8562e5125
+updated: 2026-09-30
+last_updated_session: authoring-run/ccc78f8c-ca87-4c18-bf6e-f06120699584
 ---
 
 # Container publication flow
@@ -10,7 +10,7 @@ last_updated_session: 01a0eda8-1144-78e3-a1f7-82e8562e5125
 
 Manual Enterprise publication builds controller and runtime OCI archives for
 Linux amd64 and arm64, checks both variants, and transfers the tested bytes to
-private GHCR packages. Each package receives one multi-platform index digest.
+public GHCR packages. Each package receives one multi-platform index digest.
 With `publish_chart: true`, a separate protected job tags those digests with the
 OCE version and publishes a Helm chart. Image-only publication is the default.
 
@@ -23,7 +23,7 @@ OCE version and publishes a Helm chart. Image-only publication is the default.
   commands called by the workflow.
 - `scripts/ci/chart-release.mjs:publish`: version-tag and chart publication after
   the image receipt exists.
-- Publication requires pre-existing private packages. The manual dispatch
+- Publication requires pre-existing public packages. The manual dispatch
   authorizes publication without a separate environment approval. GitHub grants
   manual dispatch to repository writers, including maintainers.
 
@@ -39,7 +39,7 @@ graph TD
   H -->|either fails| X["Stop before publication"]
   H -->|both pass| F["Seal and upload each archive"]
   F -->|publish false| G["Finish with retained artifacts"]
-  F -->|publish true| I["Recheck source, CI, seals and private packages"]
+  F -->|publish true| I["Recheck source, CI, seals and public packages"]
   I --> J["Copy and verify both immutable source tags"]
   J --> K["Copy and verify selected mutable aliases"]
   K --> L["Recheck digests and write image receipt"]
@@ -57,9 +57,11 @@ Source review does not prove a hosted build or registry transfer succeeded.
 `scripts/ci/container-release.mjs:validate` verifies the trusted workflow, exact
 main source and successful CI identity, approved Node base digest, and the optional
 image tag. An empty tag selects `latest`; invalid or reserved tags fail before
-preparation. Publication also checks the main-only environment branch policy.
-No-push preparation has no package write permission or protected-environment
-credentials.
+preparation. No-push preparation accepts private or public source only when
+`PUBLISH` is the exact string `"false"`. Publication and recovery require the
+public Enterprise repository and public packages. Publication also checks the
+main-only environment branch policy. No-push preparation has no package write
+permission or protected-environment credentials.
 
 `.github/workflows/container-publish.yml:jobs.prepare` calls the reusable
 `.github/workflows/container-check.yml:jobs.prepare` image/architecture matrix. Controller and runtime each build on native AMD64 and ARM64 Linux runners.
@@ -170,8 +172,8 @@ The custom alias replaces `latest` for that dispatch; recovery does not move an
 alias. The two aliases are updated separately, so a failed run can leave them on
 different digests. The receipt is written only after both verify.
 
-Package metadata must report the expected name and private visibility. Reported
-repository linkage must match the private Enterprise repository. Omitted linkage
+Package metadata must report the expected name and public visibility. Reported
+repository linkage must match the public Enterprise repository. Omitted linkage
 is accepted without review-history lookups; package setup owns that connection.
 
 Each remote index digest must match before the receipt is written. Deployment
@@ -192,7 +194,7 @@ Both jobs share the protected environment. Workflow-level concurrency retains
 the publication lock across preparation and both writes; jobs never reacquire it.
 The chart publisher checks image version tags and any existing chart before writing. Existing tags must resolve to the receipt's digests;
 an existing chart version must have identical packaged files. It rechecks the trusted
-source, CI, environment, and private chart package before each write. After
+source, CI, environment, and public chart package before each write. After
 `helm push`, it pulls the chart, compares its packaged files and new-push archive bytes, inspects the remote
 manifest digest, and writes a separate `chart-publication.json`. A partial
 failure requires a new full dispatch with identical source; chart-only reruns
@@ -235,6 +237,8 @@ owns package-write access and coordination.
 ## Manual Notes
 
 ## Changelog
+
+- 2026-09-30 11:18: Change publication and recovery policy to public source with public GHCR packages; no-push preparation remains allowed only with literal `PUBLISH=false`. (authoring-run/ccc78f8c-ca87-4c18-bf6e-f06120699584 - 76e9de599a1c5b1319af4f9003f86ecbf53aa9ec)
 
 - 2026-09-29 10:10: Make chart publication opt-in with separate image/chart jobs and outcomes. (01a0eda8-1144-78e3-a1f7-82e8562e5125 - 2d251975fba5b05bd83e96f95ee89c2c67635d50)
 

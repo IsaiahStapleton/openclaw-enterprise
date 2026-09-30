@@ -624,6 +624,16 @@ const RUNTIME_LOG_MAX_PODS = 8;
 const RUNTIME_LOG_MAX_EVENTS = 100;
 const RUNTIME_LOG_RETENTION =
   "Kubernetes keeps only the current and the previous instance of each container; older output and output from deleted Pods is gone.";
+// Kubelet Events name their container as `spec.containers{name}` (or init/ephemeral).
+const RUNTIME_EVENT_CONTAINER_FIELD_PATH =
+  /^spec\.(?:containers|initContainers|ephemeralContainers)\{([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)\}$/;
+
+function runtimeEventContainer(fieldPath: unknown): string | null {
+  return typeof fieldPath === "string"
+    ? (RUNTIME_EVENT_CONTAINER_FIELD_PATH.exec(fieldPath)?.[1] ?? null)
+    : null;
+}
+
 const WORKLOAD_TERMINATION_TIMEOUT_MS = 120_000;
 const WORKLOAD_TERMINATION_POLL_MS = 100;
 const AGENT_TRANSPORT_PORT = 18_790;
@@ -2604,6 +2614,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         const series = asRecord(event.series);
         return {
           type: event.type as "Normal" | "Warning",
+          container: runtimeEventContainer(asRecord(event.involvedObject)?.fieldPath),
           reason: isNonEmptyString(event.reason) ? event.reason : "Unknown",
           message: typeof event.message === "string" ? event.message : "",
           count: Math.max(
@@ -3706,6 +3717,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           // The predecessor never served (for example, it failed model auth) and is
           // unready: repair it with this revision's template, as the dedicated path does.
           await reconcileGatewayDeployment(gatewayEnvironment);
+          await this.deleteRepairedPredecessorArtifacts(revision, gateway, namespace);
           return incomplete();
         }
         if (gateway === undefined || !this.deploymentReady(gateway, current)) {
@@ -4793,6 +4805,35 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
     }
     return false;
+  }
+
+  // An embedded repair replaces a never-served predecessor's Gateway with the
+  // successor's template, so nothing runs that predecessor any more. Its
+  // credential and configuration copies go now; without a successor
+  // activation, nothing else would retire them before stop or delete. A newer
+  // revision's copies are left alone: its own pass may still be converging.
+  private async deleteRepairedPredecessorArtifacts(
+    revision: AgentRevision,
+    predecessorGateway: ManagedKubernetesObject<"Deployment">,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<void> {
+    const annotations = predecessorGateway.metadata.annotations ?? {};
+    const predecessorId = annotations[AGENT_REVISION_ID_ANNOTATION];
+    const predecessorNumber = Number(annotations[AGENT_REVISION_ANNOTATION]);
+    if (
+      !isNonEmptyString(predecessorId) ||
+      predecessorId === revision.id ||
+      !Number.isSafeInteger(predecessorNumber) ||
+      predecessorNumber >= revision.revision
+    ) {
+      return;
+    }
+    // The shared embedded Gateway lives in the Harness namespace, so the
+    // predecessor it ran was embedded and shares this Agent's identity.
+    await this.deleteRetiredRevisionArtifacts(
+      { ...revision, id: predecessorId, revision: predecessorNumber },
+      namespace,
+    );
   }
 
   private async deleteRetiredRevisionArtifacts(

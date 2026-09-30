@@ -96,6 +96,12 @@ interface ExternalProvider {
   ): Promise<ProviderExchange>;
 }
 
+/**
+ * Error code of the 503 the curated password endpoint answers when a rejected password's
+ * denial audit could not be written, so the controller still counts the guess.
+ */
+export const PASSWORD_DENIAL_AUDIT_UNAVAILABLE = "PASSWORD_DENIAL_AUDIT_UNAVAILABLE";
+
 export function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -591,6 +597,19 @@ export function createHumanLogin(
     githubLogin === undefined ? undefined : externalProviderEndpoints("github", githubLogin);
   const googleEndpoints =
     googleLogin === undefined ? undefined : externalProviderEndpoints("google", googleLogin);
+  // A rejected password is audited before the refusal. When the audit write fails the
+  // answer is 503 (audits fail closed), marked so admission still spends the budget.
+  async function refusePassword(): Promise<never> {
+    try {
+      await state.recordDenied("INVALID_CREDENTIALS");
+    } catch {
+      throw APIError.fromStatus("SERVICE_UNAVAILABLE", {
+        message: "Authentication dependency unavailable.",
+        code: PASSWORD_DENIAL_AUDIT_UNAVAILABLE,
+      });
+    }
+    throw rejected();
+  }
   const plugin = {
     id: "oce-human-login",
     endpoints: {
@@ -614,14 +633,12 @@ export function createHumanLogin(
           // bad-credential answer and reads no account, so it is the same for every
           // email other than the recovery one, whether or not an account exists.
           await ctx.context.password.hash(password);
-          await state.recordDenied("INVALID_CREDENTIALS");
-          throw rejected();
+          return refusePassword();
         }
         const snapshot = await state.snapshotPassword(email);
         if (!snapshot?.proof.passwordHash) {
           await ctx.context.password.hash(password);
-          await state.recordDenied("INVALID_CREDENTIALS");
-          throw rejected();
+          return refusePassword();
         }
         if (
           !(await ctx.context.password.verify({
@@ -629,8 +646,7 @@ export function createHumanLogin(
             hash: snapshot.proof.passwordHash,
           }))
         ) {
-          await state.recordDenied("INVALID_CREDENTIALS");
-          throw rejected();
+          return refusePassword();
         }
         const startedAt = performance.now();
         const session = await proofScope.run({ proof: snapshot.proof }, () =>

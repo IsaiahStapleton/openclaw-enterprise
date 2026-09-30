@@ -2686,12 +2686,22 @@ export class OpenClawController {
     driver: ComputeDriver;
     grant?: RuntimeLogReadGrant;
   }> {
-    const revision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
     const agent: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+    let authorizedRevision: Readonly<AgentRevision> | undefined;
     let grant: RuntimeLogReadGrant | undefined;
     if (tier === "operate") {
+      authorizedRevision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
       await this.authorize(principalId, "operate", agent);
     } else {
+      if (!isNonEmptyString(namespaceId) || !isNonEmptyString(agentId)) {
+        throw new ScopeViolationError("The exact Agent identity is missing.");
+      }
+      if (!isNonEmptyString(deploymentId)) {
+        throw new ScopeViolationError("The exact AgentRevision identity is missing.");
+      }
+      // Log text is delegated per Agent: `read_logs` (or `administer`) plus `read` on the
+      // exact Agent admit every revision of that Agent, so a new deployment does not
+      // revoke a log reader. The revision is still resolved within that exact Agent.
       grant = await this.authorizeRuntimeLogRead(principalId, agent);
     }
     await this.authorize(principalId, "read", agent);
@@ -2703,8 +2713,17 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
+      const revision =
+        authorizedRevision ??
+        (await state.revisions.findRevision(namespace.id, agent.id, deploymentId));
+      if (!revision) {
+        throw new ScopeViolationError(
+          "The AgentRevision does not belong to the exact Agent and Namespace.",
+        );
+      }
       return { namespace, agent, revision };
     });
+    const revision = binding.revision;
     let driver: ComputeDriver;
     try {
       driver = this.selectedDriver("compute");

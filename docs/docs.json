@@ -664,8 +664,12 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/specifications",
+                    "label": "RFCs and Plans"
+                  },
+                  {
                     "page": "contributing/rfcs",
-                    "label": "RFCs"
+                    "label": "RFC Review"
                   },
                   {
                     "page": "contributing/design-philosophy",

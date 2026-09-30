@@ -11819,6 +11819,31 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
               message: "Back-off restarting failed container",
               count: 4,
               lastTimestamp: new Date("2026-09-30T11:01:00Z"),
+              involvedObject: {
+                kind: "Pod",
+                uid,
+                namespace,
+                fieldPath: "spec.containers{gateway}",
+              },
+            },
+            {
+              type: "Normal",
+              reason: "Pulled",
+              message: "Container image already present on machine",
+              count: 1,
+              lastTimestamp: new Date("2026-09-30T11:00:30Z"),
+              involvedObject: {
+                kind: "Pod",
+                uid,
+                namespace,
+                fieldPath: "spec.initContainers{prepare-private-state}",
+              },
+            },
+            {
+              type: "Normal",
+              reason: "Scheduled",
+              message: "Successfully assigned",
+              lastTimestamp: new Date("2026-09-30T11:00:00Z"),
               involvedObject: { kind: "Pod", uid, namespace },
             },
             // A field selector the server ignored must not leak another object's Events.
@@ -11886,8 +11911,12 @@ test("Kubernetes runtime description reads each plane's Pods and only their own 
     lastTermination: { reason: "OOMKilled", exitCode: 137, finishedAt: "2026-09-30T10:59:00.000Z" },
   });
   assert.deepEqual(
-    gateway.events.map(({ reason, count }) => ({ reason, count })),
-    [{ reason: "BackOff", count: 4 }],
+    gateway.events.map(({ reason, count, container }) => ({ reason, count, container })),
+    [
+      { reason: "BackOff", count: 4, container: "gateway" },
+      { reason: "Pulled", count: 1, container: "prepare-private-state" },
+      { reason: "Scheduled", count: 1, container: null },
+    ],
   );
   assert.deepEqual(
     description.sources.map(({ id, pods }) => ({ id, pods })),
@@ -12090,6 +12119,13 @@ test("embedded redeploy repairs a never-served unready Gateway while workspace s
     objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
     `${gatewayName}-inactive`,
   );
+  const revisionArtifacts = (target) => [
+    `Secret:${namespace}:harness-secrets-${digest(target.agentId)}-${digest(target.id)}`,
+    `ConfigMap:${namespace}:${gatewayName}-rev-${digest(target.id)}`,
+  ];
+  for (const artifact of revisionArtifacts(revision)) {
+    assert.ok(objects.has(artifact), `${artifact} is projected for the first deploy`);
+  }
 
   const successor = { ...revision, id: "redeploy-successor", revision: revision.revision + 1 };
   const successorContext = { ...context, ...authContext(successor) };
@@ -12097,6 +12133,14 @@ test("embedded redeploy repairs a never-served unready Gateway while workspace s
   assert.equal((await driver.prepareRevision(successor, successorContext)).ready, false);
   const repaired = objects.get(gatewayKey);
   assert.equal(repaired.metadata.annotations["openclaw.dev/agent-revision-id"], successor.id);
+  // The repaired Gateway no longer runs the failed predecessor, so its credential
+  // and configuration copies go now rather than on stop or delete.
+  for (const artifact of revisionArtifacts(revision)) {
+    assert.equal(objects.has(artifact), false, `${artifact} is removed once superseded`);
+  }
+  for (const artifact of revisionArtifacts(successor)) {
+    assert.ok(objects.has(artifact), `${artifact} is kept for the repairing successor`);
+  }
   assert.equal(
     objects.get(serviceKey).spec.selector["app.kubernetes.io/name"],
     `${gatewayName}-inactive`,

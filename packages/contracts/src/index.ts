@@ -1376,6 +1376,8 @@ export interface AgentRuntimeContainerStatus {
 
 export interface AgentRuntimeEvent {
   readonly type: "Normal" | "Warning";
+  /** Container the Event concerns (from `involvedObject.fieldPath`), or null for the Pod. */
+  readonly container: string | null;
   readonly reason: string;
   readonly message: string;
   readonly count: number;

@@ -3583,6 +3583,7 @@ Read Pod status, restarts, Events and log sources for one exact Agent revision
 | `data.pods[].containers[].state` | `"waiting" or "running" or "terminated" or "unknown"` | Yes | — |
 | `data.pods[].createdAt` | `string (date-time) or null` | Yes | — |
 | `data.pods[].events` | `array<object>` | Yes | max items: 100 |
+| `data.pods[].events[].container` | `string or null` | Yes | — |
 | `data.pods[].events[].count` | `integer` | Yes | minimum: 1 |
 | `data.pods[].events[].lastObservedAt` | `string (date-time) or null` | Yes | — |
 | `data.pods[].events[].message` | `string` | Yes | max length: 2048 |
@@ -3616,14 +3617,13 @@ Read one bounded, redacted page of container output for one exact Agent revision
 
 **Operation ID:** `getAgentDeploymentRuntimeLogs`
 
-**Permissions:** Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent. Requires read permission on the requested AgentRevision.
+**Permissions:** Requires read_logs permission on the requested Agent. Without read_logs, administer permission on the requested Agent also admits the read. Requires read permission on the requested Agent.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
 | `read_logs` | `agent` | `requested` |
 | `administer` | `agent` | `requested` (instead of `read_logs`) |
 | `read` | `agent` | `requested` |
-| `read` | `agent_revision` | `requested` |
 
 ##### Parameters
 

@@ -217,8 +217,8 @@ change the Collector boundary above; nothing is stored, cached, logged or sent
 to the Collector, and responses carry `Cache-Control: no-store`.
 
 - **Access.** Pod status and Events need Agent `operate` and `read` plus
-  revision `read`. Log text needs Agent `read_logs` or `administer`, Agent `read`
-  and revision `read`. `administer` is the audience that already reaches Gateway
+  revision `read`. Log text needs Agent `read_logs` or `administer` and Agent
+  `read`, for any revision of that Agent. `administer` is the audience that already reaches Gateway
   logs through the native admin UI; `read_logs` delegates log text alone and is
   never granted by bootstrap. A `read_logs` Restriction also blocks
   `administer`. Every poll is authorized again; a denial is audited and reaches
@@ -230,8 +230,8 @@ to the Collector, and responses carry `Cache-Control: no-store`.
   same grants and is not stored on the server.
 - **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
   Codex tracing and short plain-text lines. Other structured output, including
-  Codex protocol traffic and payload keys such as `prompt` and `content`, is
-  withheld and counted. Retained text passes pattern redaction, which is
+  Codex protocol traffic, payload keys such as `prompt` and `content`, and
+  pretty-printed JSON spread over several lines, is withheld and counted. Retained text passes pattern redaction, which is
   best-effort. The `content` class has no producer.
 - **Events.** Pod Event reasons and messages reach the `operate` audience after
   credential redaction. Node names, image references and Secret and ConfigMap
