@@ -2,7 +2,7 @@
 
 The **Logs** tab on an Agent version shows its Pods, restarts, recent Kubernetes
 Events and a bounded, redacted page of container output. Use it to find out why a
-version crashes, restarts or stops serving. Nothing is stored or exported: each
+version crashes, restarts or stops serving. Nothing is stored on the server: each
 read fetches one page from the cluster through the Compute Driver.
 
 Runtime status and logs are available for **Kubernetes Compute** only. Docker and
@@ -40,7 +40,8 @@ file holds the same classified and redacted records as the page, one per line
 (`TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value`, plus `GAP` and `WITHHELD`
 rows), after a `#` header naming the Agent, revision, Pod and container.
 Filters do not apply to the download. Each download is a separate audited read;
-nothing is kept on the server.
+nothing is kept on the server. The saved file stays on your device, and
+redaction is best-effort, so handle it as sensitive and delete it when done.
 
 The HTTP API has the same two reads:
 

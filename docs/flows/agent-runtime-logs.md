@@ -11,7 +11,8 @@ last_updated_session: build-2/agent-logs-slice-2
 An authorized reader requests Pod status or one page of container output for an
 admitted Agent revision. OpenClaw Control Plane (OCC) authorizes the exact target,
 asks the selected Compute Driver for raw Kubernetes data, and returns only
-classified, redacted, bounded records. Nothing is stored or exported.
+classified, redacted, bounded records. Nothing is stored on the server; a
+download is a local file on the reader's device.
 
 ## Entry Points
 
