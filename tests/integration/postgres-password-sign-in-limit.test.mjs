@@ -393,7 +393,7 @@ test(
         // That device's lane is now spent too: a stolen cookie buys only its own budget.
         assert.equal((await plainSignInWith(memberDevice, knownMember)).statusCode, 429);
         // A cookie signed under another secret, or forged, is ignored: the shared lane applies.
-        const forged = `${knownDeviceName}=v1.AAAAAAAA.${Math.floor(Date.now() / 1000)}.${"A".repeat(43)}`;
+        const forged = `${knownDeviceName}=v1.AAAAAAAA.${Math.floor(Date.now() / 1000)}.${"A".repeat(16)}.${"A".repeat(43)}`;
         assert.equal((await plainSignInWith(forged, knownMember)).statusCode, 429);
       },
     );

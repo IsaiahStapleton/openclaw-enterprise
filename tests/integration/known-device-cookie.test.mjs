@@ -18,6 +18,7 @@ test("an issued entry verifies only for its own email and secret", () => {
   const device = verifyKnownDevice(secret, email, value, now + 1000);
   assert.ok(device, "the issuing account's email verifies");
   assert.match(device.deviceKey, /^[A-Za-z0-9_-]{43}$/);
+  assert.match(value, /^v1\.[A-Za-z0-9_-]{8}\.[1-9][0-9]*\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}$/);
   // Emails are normalized the same way sign-in normalizes them.
   assert.deepEqual(verifyKnownDevice(secret, " Member@Example.TEST ", value, now), device);
   // The cookie is bound to its account: it grants nothing to an attempt at another email.
@@ -33,14 +34,18 @@ test("an issued entry verifies only for its own email and secret", () => {
 
 test("tampered, malformed, expired and future entries do not verify", () => {
   const value = issueKnownDevice(secret, email, now);
-  const [version, keyId, issuedAt, mac] = value.split(".");
+  const [version, keyId, issuedAt, nonce, mac] = value.split(".");
   const flipped = `${mac.slice(0, -1)}${mac.endsWith("A") ? "B" : "A"}`;
+  const otherNonce = `${nonce.slice(0, -1)}${nonce.endsWith("A") ? "B" : "A"}`;
   for (const candidate of [
-    `${version}.${keyId}.${issuedAt}.${flipped}`,
+    `${version}.${keyId}.${issuedAt}.${nonce}.${flipped}`,
     // Moving the issue time forward would extend the lifetime; the MAC covers it.
-    `${version}.${keyId}.${Number(issuedAt) + 1}.${mac}`,
-    `v2.${keyId}.${issuedAt}.${mac}`,
-    `${version}.${keyId}.${issuedAt}`,
+    `${version}.${keyId}.${Number(issuedAt) + 1}.${nonce}.${mac}`,
+    // The nonce is signed too, so it cannot be changed to mint another lane.
+    `${version}.${keyId}.${issuedAt}.${otherNonce}.${mac}`,
+    `v2.${keyId}.${issuedAt}.${nonce}.${mac}`,
+    `${version}.${keyId}.${issuedAt}.${mac}`,
+    `${version}.${keyId}.${issuedAt}.${nonce}`,
     "",
     undefined,
     `${value}~${"x".repeat(600)}`,
@@ -53,6 +58,34 @@ test("tampered, malformed, expired and future entries do not verify", () => {
   // An entry issued well ahead of this controller's clock is not accepted.
   const ahead = issueKnownDevice(secret, email, now + 3_600_000);
   assert.equal(verifyKnownDevice(secret, email, ahead, now), undefined);
+});
+
+test("two browsers signing in to one account in the same second get distinct lanes", () => {
+  const first = issueKnownDevice(secret, email, now);
+  const second = issueKnownDevice(secret, email, now + 999);
+  assert.equal(first.split(".")[2], second.split(".")[2], "same issue second");
+  assert.notEqual(first, second);
+  const a = verifyKnownDevice(secret, email, first, now + 1000);
+  const b = verifyKnownDevice(secret, email, second, now + 1000);
+  assert.ok(a && b);
+  assert.notEqual(a.deviceKey, b.deviceKey);
+});
+
+test("a cookie holding several entries for one email selects one lane per request", () => {
+  // A legitimate browser never holds two entries for one email (issuing replaces them);
+  // a crafted cookie that does still selects exactly one lane, the first matching entry.
+  // Each captured entry is its own bounded lane, never a session.
+  const snapshots = [0, 1, 2].map((index) => issueKnownDevice(secret, email, now + index * 1000));
+  const lanes = snapshots.map((value) => verifyKnownDevice(secret, email, value, now + 5000));
+  assert.equal(new Set(lanes.map((lane) => lane.deviceKey)).size, 3);
+  assert.deepEqual(verifyKnownDevice(secret, email, snapshots.join("~"), now + 5000), lanes[0]);
+  assert.deepEqual(
+    verifyKnownDevice(secret, email, [...snapshots].reverse().join("~"), now + 5000),
+    lanes[2],
+  );
+  // Issuing from such a cookie collapses it back to the one fresh entry for this email.
+  const reissued = issueKnownDevice(secret, email, now + 6000, snapshots.join("~"));
+  assert.equal(reissued.split("~").length, 1);
 });
 
 test("a browser keeps entries for its three most recent accounts", () => {

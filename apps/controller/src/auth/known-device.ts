@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * Known-device cookie (OWASP "device cookie"). A successful sign-in marks the browser as a
@@ -8,12 +8,13 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
  * out. The cookie never authenticates and never selects an account: it only chooses which
  * admission lane an attempt for the email it names spends.
  *
- * Each entry is `v1.<keyId>.<issuedAt seconds>.<mac>`, where the MAC is keyed by the auth
- * secret and covers a hash of the normalized email and the issue time; `keyId` is a short,
- * non-reversible fingerprint of that secret. No entry carries the email. Rotating the auth
- * secret invalidates every entry: browsers fall back to the shared lane until their next
- * successful sign-in, which issues a fresh entry under the new secret and drops the entries
- * the old secret signed.
+ * Each entry is `v1.<keyId>.<issuedAt seconds>.<nonce>.<mac>`, where the MAC is keyed by the
+ * auth secret and covers a hash of the normalized email, the issue time and a random
+ * per-issue nonce (so two browsers signing in to one account in the same second still get
+ * distinct entries and lanes); `keyId` is a short, non-reversible fingerprint of that
+ * secret. No entry carries the email. Rotating the auth secret invalidates every entry:
+ * browsers fall back to the shared lane until their next successful sign-in, which issues a
+ * fresh entry under the new secret and drops the entries the old secret signed.
  * Up to three entries (the most recent accounts signed in from the browser) are joined
  * with `~`.
  */
@@ -24,7 +25,9 @@ const maxCookieLength = 512;
 // Entries issued slightly ahead of this controller's clock (another replica, clock steps)
 // are still accepted; anything further ahead is not.
 const futureSkewSeconds = 300;
-const entryPattern = /^v1\.([A-Za-z0-9_-]{8})\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{43})$/;
+const nonceBytes = 12;
+const entryPattern =
+  /^v1\.([A-Za-z0-9_-]{8})\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/;
 
 export function knownDeviceCookieName(secure: boolean): string {
   // __Host- requires Secure, Path=/ and no Domain, so a sibling host cannot plant one.
@@ -42,10 +45,10 @@ function keyId(secret: string): string {
     .slice(0, 8);
 }
 
-function entryMac(secret: string, email: string, issuedAt: number): string {
+function entryMac(secret: string, email: string, issuedAt: number, nonce: string): string {
   const emailHash = createHash("sha256").update(normalizedEmail(email)).digest("hex");
   return createHmac("sha256", secret)
-    .update(`occ-known-device\0${emailHash}\0${issuedAt}`)
+    .update(`occ-known-device\0${emailHash}\0${issuedAt}\0${nonce}`)
     .digest("base64url");
 }
 
@@ -59,6 +62,7 @@ interface Entry {
   readonly raw: string;
   readonly keyId: string;
   readonly issuedAt: number;
+  readonly nonce: string;
   readonly mac: string;
 }
 
@@ -80,19 +84,23 @@ function currentEntries(value: string | undefined, now: number): Entry[] {
     ) {
       continue;
     }
-    entries.push({ raw, keyId: match[1]!, issuedAt, mac: match[3]! });
+    entries.push({ raw, keyId: match[1]!, issuedAt, nonce: match[3]!, mac: match[4]! });
   }
   return entries;
 }
 
 function matches(secret: string, email: string, entry: Entry): boolean {
-  return entry.keyId === keyId(secret) && equal(entryMac(secret, email, entry.issuedAt), entry.mac);
+  return (
+    entry.keyId === keyId(secret) &&
+    equal(entryMac(secret, email, entry.issuedAt, entry.nonce), entry.mac)
+  );
 }
 
 /**
  * The known-device identity for `email`, or undefined when the cookie holds no current,
  * untampered entry issued for that email under this secret. `deviceKey` is opaque and
- * distinct per entry; admission hashes it before use.
+ * distinct per issued entry (the MAC covers a random nonce); admission hashes it before use.
+ * One request selects at most one lane: the first matching entry.
  */
 export function verifyKnownDevice(
   secret: string,
@@ -121,7 +129,8 @@ export function issueKnownDevice(
 ): string {
   const issuedAt = Math.floor(now / 1000);
   const currentKey = keyId(secret);
-  const fresh = `v1.${currentKey}.${issuedAt}.${entryMac(secret, email, issuedAt)}`;
+  const nonce = randomBytes(nonceBytes).toString("base64url");
+  const fresh = `v1.${currentKey}.${issuedAt}.${nonce}.${entryMac(secret, email, issuedAt, nonce)}`;
   const others = currentEntries(existing, now)
     .filter((entry) => entry.keyId === currentKey && !matches(secret, email, entry))
     .map((entry) => entry.raw);

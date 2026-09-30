@@ -130,8 +130,8 @@ exports the event and lane, not the hash.
 Every successful sign-in, password or external, sets `__Host-occ_known_device`
 (`occ_known_device` over plain HTTP): HttpOnly, `SameSite=Strict`, `Path=/`, no
 `Domain`, 90 days. It holds up to three entries, one per recent account, each an
-HMAC under the auth secret over a hash of the account's email and the issue time;
-it never carries the email. A later password attempt for an email with a valid
+HMAC under the auth secret over a hash of the account's email, the issue time and
+a random nonce, so every sign-in gets its own entry; it never carries the email. A later password attempt for an email with a valid
 entry spends that browser's own budget, the size of the email's, instead of the
 email's, and does not wait for the email's slowed slots. Strangers who spend an
 email's budget therefore cannot refuse or crowd out a browser that signed in to
@@ -142,7 +142,9 @@ The cookie never authenticates: a wrong password with it is `401` and spends the
 browser's lane, and the address lane and global caps still apply. Tampered,
 expired, foreign-account, or duplicated cookies are ignored, returning the
 attempt to the shared lane. Rotating the auth secret invalidates every entry; the
-next successful sign-in issues a new one. A new browser gets no exemption.
+next successful sign-in issues a new one. Disabling an account or resetting its
+password does not, so after a suspected compromise rotate the secret as well. A
+new browser gets no exemption.
 
 The controller configures the Better Auth cookie with the `openclaw_occ`
 prefix; the OpenAPI contract names it `openclaw_occ.session_token`. Cookies are
