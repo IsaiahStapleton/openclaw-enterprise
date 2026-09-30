@@ -817,7 +817,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     throw new Error("The human authentication profile requires its guarded State adapter.");
   }
   const auth = betterAuth<BetterAuthOptions & { plugins: ControllerPlugins }>({
-    appName: "OpenClaw Enterprise Controller",
+    appName: "OpenClaw Control Plane",
     baseURL: options.baseURL,
     basePath: "/auth",
     secret: options.secret,

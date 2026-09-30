@@ -1,8 +1,7 @@
 # Contributing to OpenClaw Enterprise
 
-Keep contributions in this private repository. Do not copy source, logs, test
-artifacts, or implementation details into public issues, forks, or paste sites.
-Report suspected vulnerabilities privately to
+Do not post unpatched vulnerabilities, exploits, credentials, or tenant data in
+issues, pull requests, or paste sites. Report suspected vulnerabilities privately to
 [security@openclaw.ai](mailto:security@openclaw.ai), identifying OpenClaw Enterprise.
 
 For a practical introduction, use [Contribute](docs/contributing/README.md)
