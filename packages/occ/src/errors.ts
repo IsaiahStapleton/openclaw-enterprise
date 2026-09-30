@@ -34,6 +34,34 @@ export class AuthorizationDeniedError extends Error {
 }
 
 /**
+ * The Agent's own service principal, not the caller, lacks a grant that deployment needs.
+ * The caller is already authorized for the Agent, so naming the principal and the missing
+ * grant tells an operator exactly what to bind without disclosing anything new.
+ */
+export class AgentPrincipalAuthorizationError extends AuthorizationDeniedError {
+  readonly principalId: string;
+  declare readonly authorization: {
+    readonly action: AuthorizationRequest["action"];
+    readonly resource: ResourceRef;
+  };
+
+  constructor(
+    principalId: string,
+    action: AuthorizationRequest["action"],
+    resource: ResourceRef,
+    evidence?: AuthorizationEvidence,
+  ) {
+    super(
+      `The Agent service principal ${principalId} is not authorized to ${action} ${resource.kind} ${resource.id}. Grant that principal ${action} on the ${resource.kind}, then deploy again.`,
+      evidence,
+      { action, resource },
+    );
+    this.name = "AgentPrincipalAuthorizationError";
+    this.principalId = principalId;
+  }
+}
+
+/**
  * Authority and audit outages fail closed as authorization failures while
  * remaining distinguishable from explicit denials for HTTP and audit handling.
  */
