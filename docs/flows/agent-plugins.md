@@ -222,8 +222,8 @@ The Agent and gateway derive an app-server credential from the transport Secret,
 revision ID, and Agent startup ID. The gateway receives it after matching status
 and rendering exclusions. After restart, the old gateway cannot authenticate
 while its supervisor awaits status. For a changed peer, the supervisor publishes
-non-ready, restarts only OpenClaw and rechecks peer startup, Pod and failures
-after it serves. Changed or unavailable peers trigger container restart.
+non-ready, restarts only OpenClaw and rechecks peer startup, Pod, successes and
+failures after it serves. Changed or unavailable peers trigger container restart.
 During an outage, the gateway stays unready; its exit ends the wrapper for
 container recovery.
 

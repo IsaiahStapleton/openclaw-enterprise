@@ -917,6 +917,12 @@ async function waitForPeerPluginRuntimeStatus() {
   }
 }
 
+function samePluginIds(left, right) {
+  const leftIds = new Set(left ?? []);
+  const rightIds = new Set(right ?? []);
+  return leftIds.size === rightIds.size && [...leftIds].every((id) => rightIds.has(id));
+}
+
 function samePluginFailures(left, right) {
   return JSON.stringify([...(left ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId))) ===
     JSON.stringify([...(right ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
@@ -2319,6 +2325,7 @@ if (followsPeerStatus) {
   const peerChanged = (current) =>
     current.startupId !== peerStatus.startupId ||
     current.podUid !== peerStatus.podUid ||
+    !samePluginIds(current.successfulPluginIds, peerStatus.successfulPluginIds) ||
     !samePluginFailures(current.failures, pluginResult.failures);
   // Stop the native Gateway within its drain budget; one that outlives SIGKILL
   // leaves only the container restart.

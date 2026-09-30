@@ -181,7 +181,13 @@ try {
     throw new Error("Gateway wrapper remained running after its child exited.");
   }
   if (staleReplacement) {
-    peer = { ...peer, startupId: "harness-startup-2", podUid: "harness-pod-2", failures: [] };
+    peer = {
+      ...peer,
+      startupId: "harness-startup-2",
+      podUid: "harness-pod-2",
+      successfulPluginIds: ["codex-plugin:linear@openai-curated-remote"],
+      failures: [],
+    };
     await setTimeout(60_000);
     throw new Error("Gateway wrapper did not reject the stale replacement peer.");
   }
@@ -190,7 +196,13 @@ try {
 
   // The Harness restarts: a new startup and pod, and the plugin is now authorized.
   const changedAt = Date.now();
-  peer = { ...peer, startupId: "harness-startup-2", podUid: "harness-pod-2", failures: [] };
+  peer = {
+    ...peer,
+    startupId: "harness-startup-2",
+    podUid: "harness-pod-2",
+    successfulPluginIds: ["codex-plugin:linear@openai-curated-remote"],
+    failures: [],
+  };
   const samples = [];
   let unreadyAt;
   let readyAgainAt;

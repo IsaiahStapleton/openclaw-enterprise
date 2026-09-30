@@ -3750,6 +3750,7 @@ test("Codex gateway supervisor respawns OpenClaw in place for a changed Harness 
     ...gateway.peerStatus,
     startupId: "agent-startup-2",
     podUid: "agent-pod-2",
+    successfulPluginIds: ["codex-plugin:linear@openai-curated-remote"],
     failures: [],
   };
   gateway.serving = false;
@@ -3861,6 +3862,44 @@ test("Codex gateway supervisor re-applies the workspace node binding on respawn"
   assert.equal(gateway.runtimeStatus().workspaceNodeId, undefined);
   assert.equal(gateway.status().phase, "ready");
   assert.deepEqual(gateway.exits, []);
+});
+
+test("Codex gateway supervisor rejects changed plugin successes while its replacement starts", async (t) => {
+  const gateway = await startCodexGatewaySupervisor(t);
+  const first = gateway.children[0];
+  gateway.peerStatus = {
+    ...gateway.peerStatus,
+    startupId: "agent-startup-2",
+    failures: [],
+    successfulPluginIds: ["codex-plugin:linear@openai-curated-remote"],
+  };
+  gateway.serving = false;
+  const respawn = gateway.pollPeer();
+  await waitForCondition("the stale Gateway stop", () => first.killed.length === 1);
+  first.exit(null, "SIGTERM");
+  await waitForCondition("the replacement Gateway", () => gateway.children.length === 2);
+  const replacement = gateway.children[1];
+  try {
+    // Same peer identity and failure set, but its reported success set changed.
+    gateway.peerStatus = { ...gateway.peerStatus, successfulPluginIds: [] };
+    gateway.serving = true;
+    await respawn;
+    assert.equal(gateway.status().phase, "starting");
+    assert.deepEqual(replacement.killed, ["SIGTERM"]);
+    assert.ok(
+      gateway.logs.some((line) => {
+        try {
+          const entry = JSON.parse(line);
+          return entry.phase === "peer-verification-changed" && entry.outcome === "failed";
+        } catch {
+          return false;
+        }
+      }),
+    );
+  } finally {
+    replacement.exit(null, "SIGTERM");
+  }
+  assert.deepEqual(gateway.exits, [1]);
 });
 
 for (const [changedField, change] of [
