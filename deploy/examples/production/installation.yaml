@@ -67,6 +67,8 @@ drivers:
         # See [Images and resources](../../../docs/reference/drivers/kubernetes-compute.md#images-and-resources).
         requireImmutableDigest: true
       # Requests reserve capacity; limits bound both workload roles.
+      # The Gateway may burst to one core so its startup model probe finishes
+      # sooner; its request, and so its scheduling reservation, stays 100m.
       # See [Images and resources](../../../docs/reference/drivers/kubernetes-compute.md#images-and-resources).
       resources:
         gateway:
@@ -74,7 +76,7 @@ drivers:
             cpu: 100m
             memory: 128Mi
           limits:
-            cpu: 500m
+            cpu: "1"
             memory: 2Gi
         agent:
           requests:

@@ -132,7 +132,7 @@ drivers:
       resources:
         gateway:
           requests: { cpu: 100m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          limits: { cpu: "1", memory: 256Mi }
         agent:
           requests: { cpu: 100m, memory: 128Mi }
           limits: { cpu: 500m, memory: 256Mi }
