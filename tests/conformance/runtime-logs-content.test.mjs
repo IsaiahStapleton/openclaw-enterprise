@@ -346,7 +346,8 @@ test("the linear jwt scan matches the reference regex on random runs", () => {
       () => pieces[randomInt(pieces.length)],
     ).join("");
     const expected = input.replace(reference, "[redacted:jwt]");
-    // Only the jwt rule can fire here: no key names or URLs, and at most 36 characters.
+    // Only the jwt rule can fire here: no key names or URLs, and at most 12 pieces of up
+    // to 3 characters each (randomInt excludes its upper bound), so 36 characters at most.
     assert.equal(redactRuntimeLogText(input), expected, JSON.stringify(input));
   }
 });
