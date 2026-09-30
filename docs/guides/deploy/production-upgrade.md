@@ -136,6 +136,12 @@ Secret and restarts OCC with the new checksum. A controller-only release still
 does not deploy Agents; plan any Agent changes separately. Keep candidate files
 unchanged and available at the same paths for recovery.
 
+With the bundled Collector enabled, [refresh its config Secret](../observability.md#refresh-the-collector-configuration-on-upgrade)
+from the release source and restart the Collector before upgrading; Helm does
+not update it. The command reads that Secret and stops before mutation when its
+`collector.yaml` or `kubernetes.yaml` differs from the checkout. Add
+`--collector-config-reviewed` only to keep a reviewed custom configuration.
+
 ## Bind the Installation once
 
 Skip this step when the live Installation Secret already has the correct

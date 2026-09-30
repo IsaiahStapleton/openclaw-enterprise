@@ -161,6 +161,70 @@ test("Diagnostics explain UNAVAILABLE checks and point at the recorded failure",
     .waitFor();
 });
 
+test("Diagnostics explain a missing Slack channel and keep the recorded failure in view", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Diagnostics scope", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Embedded Agent", nativeValues("v1"));
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  const deploymentPath = `/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`;
+  const { page } = await newPage(t, fixture);
+  await page.route(`${fixture.origin}${deploymentPath}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: deploymentBody(namespace.id, agent.id, revision.id, "failed", authenticationFailure),
+    }),
+  );
+  // The shape the Kubernetes gateway returns when the version has no Slack channel.
+  await page.route(`${fixture.origin}${deploymentPath}/diagnostics`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          revisionId: revision.id,
+          observedAt: "2026-09-30T09:06:47.000Z",
+          checks: [
+            {
+              component: "gateway",
+              check: "configuration",
+              state: "failed",
+              checkedAt: "2026-09-30T09:06:46.000Z",
+              code: "NOT_CONFIGURED",
+            },
+            {
+              component: "gateway",
+              check: "authentication",
+              state: "unknown",
+              checkedAt: "2026-09-30T09:06:46.000Z",
+            },
+            {
+              component: "gateway",
+              check: "connectivity",
+              state: "unknown",
+              checkedAt: "2026-09-30T09:06:46.000Z",
+            },
+          ],
+        },
+        meta: { requestId: "req_test_diagnostics_no_slack" },
+      }),
+    }),
+  );
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const observations = page.locator(".version-diagnostics");
+  await observations.getByText(/Gateway checks cover only the Slack channel/).waitFor();
+  await observations.getByRole("button", { name: "Run diagnostics for this version" }).click();
+  await observations.getByText("gateway / authentication").waitFor();
+  await observations.getByText(/NOT_CONFIGURED means this version has no Slack channel/).waitFor();
+  await observations
+    .getByText(/recorded deployment failed with RUNTIME_AUTHENTICATION_FAILED/)
+    .waitFor();
+  assert.equal(await observations.getByText(/UNAVAILABLE means the runtime/).count(), 0);
+});
+
 test("Agent detail returns to the Agents list once background deletion finishes", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

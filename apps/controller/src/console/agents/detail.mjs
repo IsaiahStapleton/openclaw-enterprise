@@ -542,29 +542,50 @@ function createVersionDiagnosticsPanel(context, path, revisionId, recordedStatus
       diagnostics.checks.length
         ? checks
         : element("p", { className: "muted" }, "No diagnostic checks were returned."),
-      unreachableExplanation(),
+      ...scopeExplanations(),
     );
   }
 
-  function unreachableExplanation() {
+  // The gateway checks cover only the Slack channel. Say what their results do
+  // and do not mean, and keep a recorded deployment failure in view: nothing
+  // here tests model credentials, so no check can confirm or clear it.
+  function scopeExplanations() {
+    const checks = diagnostics.checks;
     const unreachable =
-      diagnostics.checks.length > 0 &&
-      diagnostics.checks.every(
-        (check) => check.state === "unknown" && check.code === "UNAVAILABLE",
-      );
-    if (!unreachable) {
-      return null;
-    }
+      checks.length > 0 &&
+      checks.every((check) => check.state === "unknown" && check.code === "UNAVAILABLE");
+    const slackNotConfigured = checks.some(
+      (check) =>
+        check.component === "gateway" &&
+        check.check === "configuration" &&
+        check.state === "failed" &&
+        check.code === "NOT_CONFIGURED",
+    );
     const recorded = recordedStatus();
     const failure = recorded?.status === "failed" ? recorded.error : null;
-    return element(
-      "p",
-      { className: "hint", role: "status" },
-      "UNAVAILABLE means the runtime did not answer, so these checks could not run. The gateway is usually stopped, still starting, or failed to start. ",
-      failure?.code
-        ? `This version's recorded deployment failed with ${failure.code}; resolve that first. These checks do not test model credentials.`
-        : "Check this version's recorded outcome and its Logs tab for Pod status and container output.",
-    );
+    const hints = [];
+    if (unreachable) {
+      hints.push(
+        "UNAVAILABLE means the runtime did not answer, so these checks could not run. The gateway is usually stopped, still starting, or failed to start.",
+      );
+    }
+    if (slackNotConfigured) {
+      hints.push(
+        "NOT_CONFIGURED means this version has no Slack channel, so Slack authentication and connectivity were not checked. An Agent that does not use Slack always reports this; it is not a model or deployment error.",
+      );
+    }
+    if (failure?.code) {
+      hints.push(
+        `This version's recorded deployment failed with ${failure.code}; resolve that first. These checks do not test model credentials, so they cannot confirm or clear that failure.`,
+      );
+    } else if (unreachable) {
+      hints.push(
+        "Check this version's recorded outcome and its Logs tab for Pod status and container output.",
+      );
+    }
+    return hints.length
+      ? [element("p", { className: "hint", role: "status" }, hints.join(" "))]
+      : [];
   }
 
   function render() {
@@ -589,7 +610,7 @@ function createVersionDiagnosticsPanel(context, path, revisionId, recordedStatus
       element(
         "p",
         { className: "muted" },
-        "For Kubernetes Compute, Gateway checks currently cover Slack configuration, authentication, and connectivity. They do not run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
+        "For Kubernetes Compute, Gateway checks cover only the Slack channel: its configuration, authentication, and connectivity. They do not test model credentials or run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
       ),
       ...(error
         ? [
