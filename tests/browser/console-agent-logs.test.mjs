@@ -304,14 +304,14 @@ test("the Sandbox source shows redacted policy decisions without a Pod picker", 
     { executionMode: "dedicated" },
   );
   const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
-  const sandboxLine = (second, message) => ({
+  const sandboxLine = (second, message, fields = {}) => ({
     sandboxId: "7c0e5d4a-1b2c-4d3e-8f90-a1b2c3d4e5f6",
     time: `2026-09-30T12:00:0${second}.000000000Z`,
     level: "OCSF",
     target: "ocsf",
     message,
     source: "sandbox",
-    fields: {},
+    fields,
   });
   sandboxState.lines = [
     sandboxLine(
@@ -321,6 +321,15 @@ test("the Sandbox source shows redacted policy decisions without a Pod picker", 
     sandboxLine(
       2,
       "NET:OPEN [MED] DENIED python3(7) -> blocked.example.com:443 [policy:default engine:opa]",
+    ),
+    sandboxLine(
+      3,
+      "NET:OPEN [MED] DENIED curl(9) -> 169.254.169.254:80 [policy:- engine:ssrf] [reason:resolves to always-blocked address]",
+    ),
+    sandboxLine(
+      4,
+      "HTTP:GET [INFO] ALLOWED GET https://api.github.com/zen [policy:github_api engine:opa]",
+      { policy_generation: "12" },
     ),
   ];
 
@@ -335,6 +344,33 @@ test("the Sandbox source shows redacted policy decisions without a Pod picker", 
     })
     .waitFor();
   await page.getByText(/OpenShell keeps the last 2000 lines per sandbox/).waitFor();
+  // Every decision names its rule and engine; a missing policy generation reads "unknown"
+  // and a sandbox decision is never presented as attributed to a Gateway line.
+  const rows = pane.locator(".log-row");
+  const rowFor = (text) => rows.filter({ hasText: text });
+  assert.equal(
+    await rowFor("blocked.example.com").locator(".log-provenance").textContent(),
+    "rule default · engine opa · policy generation unknown",
+  );
+  assert.equal(
+    await rowFor("169.254.169.254").locator(".log-provenance").textContent(),
+    "rule no matching rule · engine ssrf · policy generation unknown",
+  );
+  assert.equal(
+    await rowFor("api.github.com/zen").locator(".log-provenance").textContent(),
+    "rule github_api · engine opa · policy generation 12",
+  );
+  assert.equal(await rows.locator(".log-join").count(), 3);
+  assert.equal(
+    await rowFor("blocked.example.com").locator(".log-join").textContent(),
+    "Gateway lines: inferred (time window)",
+  );
+  assert.match(
+    await rowFor("blocked.example.com").locator(".log-join").getAttribute("title"),
+    /does not record which Agent turn made this request/,
+  );
+  // A process launch is not a policy decision: no provenance, no join label.
+  assert.equal(await rowFor("PROC:LAUNCH").locator(".log-provenance").count(), 0);
   await page.getByText(/Showing policy decisions and supervisor output of sandbox sb-/).waitFor();
   assert.equal(await page.getByText(secret).count(), 0);
   assert.equal(await page.locator("#runtime-log-pod").isVisible(), false);

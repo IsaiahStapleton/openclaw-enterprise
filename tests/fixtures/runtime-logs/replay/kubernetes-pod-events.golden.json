@@ -1,0 +1,61 @@
+{
+  "input": 9,
+  "events": [
+    {
+      "type": "Warning",
+      "reason": "Unhealthy",
+      "message": "Readiness probe failed: ",
+      "count": 5,
+      "lastObservedAt": "2026-09-30T14:58:39.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Pulled",
+      "message": "Container image \"[redacted:image]\" already present on machine and can be accessed by the pod",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:32.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Created",
+      "message": "Container created",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:32.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Started",
+      "message": "Container started",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:32.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Pulled",
+      "message": "Container image \"[redacted:image]\" already present on machine and can be accessed by the pod",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:31.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Created",
+      "message": "Container created",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:31.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Started",
+      "message": "Container started",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:31.000Z"
+    },
+    {
+      "type": "Normal",
+      "reason": "Scheduled",
+      "message": "Successfully assigned oce-0123456789abcde/gateway-000000000000-0000000000-2fkbx to [redacted:node]",
+      "count": 1,
+      "lastObservedAt": "2026-09-30T14:58:30.638Z"
+    }
+  ]
+}

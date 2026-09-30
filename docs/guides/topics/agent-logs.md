@@ -192,6 +192,40 @@ RUNTIME_LOGS_POD_INVALID`).
   sandbox that is not provisioned yet or was removed: both answer
   `503 RUNTIME_LOGS_SANDBOX_NOT_FOUND`.
 
+### Which rule decided
+
+Each network or HTTP decision row shows
+`rule <name> · engine <engine> · policy generation <generation>`, taken from the
+`rule_name`, `rule_type` and `policy_generation` fields:
+
+- **rule** is the policy rule that matched. `no matching rule` means OpenShell
+  matched none (it reports `-`), which is the usual cause of a denial.
+- **engine** is the OpenShell component that decided, for example `opa`,
+  `ssrf`, `mechanistic` or `nftables`.
+- **policy generation** is the policy version that decided. The pinned OpenShell
+  release does not send it with pushed decision lines, so it usually reads
+  `unknown`. Do not assume the current policy decided an older line.
+
+### Relating sandbox decisions to other sources
+
+OpenShell records no Agent turn, session or request ID with a decision. Each
+decision row therefore carries the label **Gateway lines: inferred (time
+window)**: Gateway or Harness lines near that time may be related, but nothing
+links them. The console never labels a join as exact, because no source shares
+an ID with the sandbox.
+
+The logs cannot tell you, and you should not infer:
+
+- which Agent turn, session, user or prompt caused a sandbox decision;
+- which policy generation decided a line whose generation reads `unknown`;
+- which credential OpenShell injected into an allowed request;
+- the order of two lines from different sources less than a few seconds apart:
+  the sandbox stamps its own lines, the cluster stamps container lines, and
+  their clocks can differ;
+- who made a request from its source IP address;
+- what the Harness printed inside a sandbox, what a deleted Pod or an older
+  restart printed, or which lines a sandbox dropped under load.
+
 ## Errors
 
 | Response                             | Meaning and action                                                                            |

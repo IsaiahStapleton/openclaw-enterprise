@@ -1,0 +1,50 @@
+{
+  "count": 5,
+  "fixtures": [
+    {
+      "file": "gateway-wrapper-probe-failed.log",
+      "golden": "gateway-wrapper-probe-failed.golden.json",
+      "replay": "kubelet-container",
+      "source": "gateway",
+      "provenance": "captured",
+      "origin": "kubectl logs --timestamps of the gateway container, runtime image at OpenClaw 2026.9.6 (9d9c856), local k3d, 2026-09-30",
+      "scrubbed": "nothing to scrub"
+    },
+    {
+      "file": "gateway-console-startup.log",
+      "golden": "gateway-console-startup.golden.json",
+      "replay": "kubelet-container",
+      "source": "gateway",
+      "provenance": "captured",
+      "origin": "stdout and stderr of openclaw gateway run with logging.consoleStyle json, OpenClaw 2026.9.6 (9d9c856) in the runtime image, local k3d, 2026-09-30; kubelet timestamp prefixes added from each record's time",
+      "scrubbed": "nothing to scrub"
+    },
+    {
+      "file": "codex-app-server-startup.log",
+      "golden": "codex-app-server-startup.golden.json",
+      "replay": "kubelet-container",
+      "source": "agent",
+      "provenance": "captured",
+      "origin": "stderr of codex app-server with LOG_FORMAT=json and RUST_LOG=info,codex_otel=off, codex-cli 0.158.0 in the runtime image, local k3d, 2026-09-30; each distinct target and message kept once; kubelet timestamp prefixes added from each record's timestamp",
+      "scrubbed": "installation_id set to a fixed UUID, Pod name in server_name replaced, scratch CODEX_HOME path replaced with /home/node/.codex"
+    },
+    {
+      "file": "sandbox-ocsf-decisions.json",
+      "golden": "sandbox-ocsf-decisions.golden.json",
+      "replay": "openshell-sandbox",
+      "source": "sandbox",
+      "provenance": "upstream-derived",
+      "origin": "OpenShell 496ebba: messages from docs/observability/logging.mdx and crates/openshell-ocsf/src/format/shorthand.rs tests, SandboxLogLine envelope as built by crates/openshell-supervisor-process/src/log_push.rs (OCSF lines carry an empty field map) and crates/openshell-server/src/tracing_bus.rs (source gateway); no OpenShell runs in the local k3d",
+      "scrubbed": "sandbox name and id are fixed placeholders"
+    },
+    {
+      "file": "kubernetes-pod-events.json",
+      "golden": "kubernetes-pod-events.golden.json",
+      "replay": "kubernetes-events",
+      "source": "events",
+      "provenance": "captured",
+      "origin": "kubectl get events -o json for a recreated gateway Pod and its ReplicaSet, K3s v1.36.4, local k3d, 2026-09-30",
+      "scrubbed": "tenant Namespace, Pod and ReplicaSet names, node name, image digest and object UIDs replaced"
+    }
+  ]
+}
