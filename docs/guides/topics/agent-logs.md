@@ -169,17 +169,28 @@ RUNTIME_LOGS_POD_INVALID`).
   `source`, `cmd_line` and `url`. Command lines and URLs often carry tokens:
   they are redacted like every string and cut to 1 KiB. In command lines the
   value after a credential flag is masked too (`-p`, `-pass`, `--pass`,
-  `--token`, `--with-token`, `--username`, `-u` or `--user` with `user:password`,
-  and the token of `vault login`). Masking is best effort: a secret passed
+  `--token`, `--with-token`, `--username`, `-u`, `--user`, `-U` or
+  `--proxy-user` with `user:password`, `smbclient -U user%password`,
+  `lftp -u user,password`, `redis-cli -a`, `sqlcmd -P`, and the token of
+  `vault login`). Masking is best effort: a secret passed
   under another flag name can still show. A message that holds structured data
   is withheld.
 - OpenShell keeps the last 2000 lines per sandbox in memory and loses them when
   its gateway restarts. A follow poll that finds its last line gone reports
   **Sandbox buffer lost** or **Lines skipped**. Lines the sandbox drops under
   load are not reported.
+- The sandbox stamps its lines when it records them and sends them in batches,
+  so a line can arrive after a newer one was shown. A follow poll re-reads the
+  5 seconds before the newest line it showed and shows each line once, repeats
+  included. A line that arrives more than 5 seconds late, or behind more than
+  48 lines in those 5 seconds, can be missed. When more than 48 lines share one
+  millisecond, the poll shows **Lines skipped** at that time.
 - OCC reads through the read-only `GetSandboxLogs` call. Its OpenShell identity
-  needs the `sandbox:read` scope and Workspace role `user`; without them the
-  read answers `503 RUNTIME_LOGS_CLUSTER_RBAC`.
+  needs the `sandbox:read` scope and Workspace role `user`; without the scope
+  the read answers `503 RUNTIME_LOGS_CLUSTER_RBAC`. OpenShell hides a sandbox
+  from an identity outside its Workspace, so a missing role looks like a
+  sandbox that is not provisioned yet or was removed: both answer
+  `503 RUNTIME_LOGS_SANDBOX_NOT_FOUND`.
 
 ## Errors
 
@@ -191,6 +202,7 @@ RUNTIME_LOGS_POD_INVALID`).
 | `429 RUNTIME_LOGS_RATE_LIMITED`      | Wait for `Retry-After`.                                                                       |
 | `501 NOT_IMPLEMENTED`                | The Compute Driver does not expose runtime logs, or an operator disabled them.                |
 | `503 RUNTIME_LOGS_CLUSTER_RBAC`      | The cluster or OpenShell denied the read. An operator must grant the roles or scope.          |
+| `503 RUNTIME_LOGS_SANDBOX_NOT_FOUND` | OpenShell reports no such sandbox: not provisioned yet, removed, or outside OCC's Workspace.  |
 | `503 RUNTIME_LOGS_AUDIT_UNAVAILABLE` | The view could not be audited, so nothing was read. Retry.                                    |
 | `503 RUNTIME_LOGS_UNAVAILABLE`       | The runtime or cluster is unreachable. Retry.                                                 |
 | `504 RUNTIME_LOGS_TIMEOUT`           | The read exceeded 10 seconds. Retry or read fewer lines.                                      |

@@ -119,6 +119,7 @@ import {
   ResourceConflictError,
   RuntimeLogsError,
   RuntimeLogsForbiddenByClusterError,
+  RuntimeLogsSandboxNotFoundError,
   ScopeViolationError,
 } from "./errors.ts";
 import {
@@ -209,6 +210,7 @@ export {
   ResourceConflictError,
   RuntimeLogsError,
   RuntimeLogsForbiddenByClusterError,
+  RuntimeLogsSandboxNotFoundError,
   SandboxRevisionUnsupportedError,
   ScopeViolationError,
   type RuntimeLogsErrorCode,
@@ -2714,6 +2716,9 @@ export class OpenClawController {
   private runtimeLogDriverFailure(error: unknown, signal: AbortSignal): RuntimeLogsError {
     if (error instanceof RuntimeLogsForbiddenByClusterError) {
       return new RuntimeLogsError("RUNTIME_LOGS_CLUSTER_RBAC");
+    }
+    if (error instanceof RuntimeLogsSandboxNotFoundError) {
+      return new RuntimeLogsError("RUNTIME_LOGS_SANDBOX_NOT_FOUND");
     }
     if (signal.aborted) {
       return new RuntimeLogsError("RUNTIME_LOGS_TIMEOUT");

@@ -122,14 +122,80 @@ export interface ReadSandboxLogPageInput {
 }
 
 /**
- * One bounded page of the revision's Sandbox log: cursor validation, resume from the
- * last delivered time, de-duplication, gap records and sanitization.
+ * How far a follow resume re-reads behind the newest line it delivered. OpenShell stamps
+ * a supervisor line when it is recorded and pushes it up to 500 ms later (longer across a
+ * reconnect), while the gateway files its own lines at once, so a line can arrive after
+ * a newer one was already shown. The gateway filters by time only, so without the
+ * overlap such a line would fall before the resume time and never be returned.
+ */
+export const SANDBOX_LOG_OVERLAP_MS = 5_000;
+/** Occurrences the cursor remembers inside the overlap; bounded by the cursor size. */
+export const SANDBOX_LOG_OVERLAP_LINES = 48;
+
+const FRACTION_TIME = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/;
+
+/** `time` moved by whole seconds plus nanoseconds, kept at nanosecond precision. */
+function shiftTime(time: string, seconds: number, nanos = 0): string {
+  const match = FRACTION_TIME.exec(time)!;
+  let wholeMs = Date.parse(`${match[1]}Z`) + seconds * 1000;
+  let fraction = Number((match[2] ?? "").padEnd(9, "0")) + nanos;
+  if (fraction >= 1e9) {
+    fraction -= 1e9;
+    wholeMs += 1000;
+  }
+  return `${new Date(wholeMs).toISOString().slice(0, 19)}.${String(fraction).padStart(9, "0")}Z`;
+}
+
+interface OverlapLine {
+  readonly time: string;
+  readonly hash: string;
+}
+
+/**
+ * The cursor's overlap: a resume time and the occurrences delivered at or after it. Whole
+ * timestamps are dropped from the oldest end until the rest fits, so every delivered line
+ * at or after `since` is counted. When one timestamp alone holds more lines than fit, the
+ * cursor resumes just after it and `overflow` is set: a late line stamped at or before it
+ * could be missed, which the page reports as a gap.
+ */
+function overlapWindow(
+  seen: readonly OverlapLine[],
+  floor: string | null,
+): { since: string | null; hashes: string[]; overflow: string | null } {
+  if (seen.length === 0) {
+    return { since: floor, hashes: [], overflow: null };
+  }
+  const ordered = [...seen].sort((a, b) => compareRuntimeLogTime(a.time, b.time));
+  const newest = ordered.at(-1)!.time;
+  let since = shiftTime(newest, -SANDBOX_LOG_OVERLAP_MS / 1000);
+  if (floor !== null && compareRuntimeLogTime(floor, since) > 0) {
+    since = floor;
+  }
+  let kept = ordered.filter((line) => compareRuntimeLogTime(line.time, since) >= 0);
+  while (kept.length > SANDBOX_LOG_OVERLAP_LINES) {
+    const oldest = kept[0]!.time;
+    if (compareRuntimeLogTime(oldest, newest) === 0) {
+      return { since: shiftTime(newest, 0, 1), hashes: [], overflow: newest };
+    }
+    kept = kept.filter((line) => compareRuntimeLogTime(line.time, oldest) > 0);
+    since = kept[0]!.time;
+  }
+  return { since, hashes: kept.map(({ hash }) => hash), overflow: null };
+}
+
+/**
+ * One bounded page of the revision's Sandbox log: cursor validation, an overlapping
+ * resume, occurrence-counted de-duplication, gap records and sanitization.
  *
- * The source is a ring buffer read as "the last N lines at or after `sinceTime`". On a
- * resume the line the previous page ended with (the anchor) is still in the buffer when
- * nothing was lost. When the anchor is gone and nothing older came back either, lines
- * were lost: `window_exceeded` when the requested window was full (more lines exist
- * than were read), otherwise `buffer_lost` (the buffer rolled over or restarted).
+ * The source is a ring buffer read as "of the last N lines, those at or after
+ * `sinceTime`". The cursor holds a resume time up to `SANDBOX_LOG_OVERLAP_MS` behind the
+ * newest delivered line and one hash per line delivered at or after it, repeats included.
+ * A resume re-reads that overlap and each returned line consumes one matching hash; what
+ * is left over is new, so a late-arriving older line and a repeat of an identical line
+ * are both delivered, and no delivered line is shown twice. When no remembered line came
+ * back and nothing older did either, lines were lost: `window_exceeded` when the
+ * requested window was full, otherwise `buffer_lost` (the buffer rolled over or
+ * restarted).
  */
 export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promise<RuntimeLogPage> {
   const now = input.now ?? Date.now;
@@ -159,6 +225,7 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
       tailLines: query.tailLines,
     });
   }
+  // For this source the cursor's `lastTime` is the resume time, not the newest line.
   const resume = prior?.lastTime === null ? undefined : prior;
   const sinceTime =
     resume !== undefined
@@ -186,20 +253,52 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
   if (replaced) {
     leading.push(runtimeLogGap("stream_replaced", stream));
   }
+  const continuing = resume !== undefined && !replaced;
+  // Lines already delivered that the read returned again, with their times.
+  const matched: OverlapLine[] = [];
+  const carried: OverlapLine[] = [];
+  let gapFloor: string | null = null;
   let lines = chunk.lines;
-  if (resume !== undefined && !replaced) {
-    const lastTime = resume.lastTime!;
-    const seen = new Set(resume.lastHashes);
-    const anchored = lines.some(
-      (line) =>
-        line.time !== null &&
-        compareRuntimeLogTime(line.time, lastTime) === 0 &&
-        seen.has(sandboxLogLineHash(line)),
-    );
-    // Lines the source dropped by time were older than the anchor: nothing is missing.
-    const olderSeen = lines.length < chunk.bufferTotal;
-    if (!anchored && !olderSeen) {
+  if (continuing) {
+    const remaining = new Map<string, number>();
+    for (const hash of resume.lastHashes) {
+      remaining.set(hash, (remaining.get(hash) ?? 0) + 1);
+    }
+    lines = lines.filter((line) => {
+      if (line.time === null) {
+        return true;
+      }
+      const hash = sandboxLogLineHash(line);
+      const count = remaining.get(hash) ?? 0;
+      if (count === 0) {
+        return true;
+      }
+      remaining.set(hash, count - 1);
+      matched.push({ time: line.time, hash });
+      return false;
+    });
+    // A remembered line the read did not return may only be outside a smaller tail than
+    // before; keep it, dated at the resume time (its earliest possible time), so it is
+    // forgotten once the window moves past that time instead of being shown again.
+    for (const [hash, count] of remaining) {
+      for (let index = 0; index < count; index += 1) {
+        carried.push({ time: resume.lastTime!, hash });
+      }
+    }
+    // Lines the source dropped by time were older than the resume time: nothing between
+    // pages is missing. A cursor with no remembered lines has nothing to anchor on.
+    const olderSeen = chunk.lines.length < chunk.bufferTotal;
+    if (resume.lastHashes.length > 0 && matched.length === 0 && !olderSeen) {
       const earliest = lines.find((line) => line.time !== null)?.time ?? null;
+      // The gap covers everything before the lines read now; resume from the oldest.
+      for (const line of lines) {
+        if (
+          line.time !== null &&
+          (gapFloor === null || compareRuntimeLogTime(line.time, gapFloor) < 0)
+        ) {
+          gapFloor = line.time;
+        }
+      }
       leading.push(
         runtimeLogGap(
           chunk.bufferTotal >= tailLines ? "window_exceeded" : "buffer_lost",
@@ -208,13 +307,6 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
         ),
       );
     }
-    lines = lines.filter((line) => {
-      if (line.time === null) {
-        return true;
-      }
-      const order = compareRuntimeLogTime(line.time, lastTime);
-      return order > 0 || (order === 0 && !seen.has(sandboxLogLineHash(line)));
-    });
   }
   let pageBytes = 0;
   let pageCut = false;
@@ -228,25 +320,24 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
     delivered.push(line);
   }
   const sanitized = sanitizeSandboxLogLines(stream, delivered);
+  const window = overlapWindow(
+    [
+      ...carried,
+      ...matched,
+      ...delivered
+        .filter((line) => line.time !== null)
+        .map((line) => ({ time: line.time!, hash: sandboxLogLineHash(line) })),
+    ],
+    gapFloor ?? (continuing ? resume.lastTime : null),
+  );
   const records = [
     ...leading,
     ...sanitized.records,
+    ...(window.overflow === null
+      ? []
+      : [runtimeLogGap("window_exceeded", stream, window.overflow)]),
     ...(pageCut ? [runtimeLogGap("truncated", stream, delivered.at(-1)?.time ?? null)] : []),
   ];
-  const last = [...delivered].reverse().find((line) => line.time !== null);
-  let lastTime = resume !== undefined && !replaced ? resume.lastTime : null;
-  let lastHashes = resume !== undefined && !replaced ? [...resume.lastHashes] : [];
-  if (last !== undefined) {
-    if (lastTime === null || compareRuntimeLogTime(last.time!, lastTime) !== 0) {
-      lastHashes = [];
-    }
-    lastTime = last.time;
-    for (const line of delivered) {
-      if (line.time !== null && compareRuntimeLogTime(line.time, lastTime!) === 0) {
-        lastHashes.push(sandboxLogLineHash(line));
-      }
-    }
-  }
   // The cursor reuses the container position shape: `pod` holds the Sandbox name and
   // `podUid` the Sandbox object ID the source reported.
   const position: RuntimeLogCursorPosition = {
@@ -255,8 +346,8 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
     podUid: sandboxId,
     restartCount: 0,
     previous: false,
-    lastTime,
-    lastHashes: lastHashes.slice(-16),
+    lastTime: window.since,
+    lastHashes: window.hashes,
     issuedAt: now(),
   };
   return Object.freeze({

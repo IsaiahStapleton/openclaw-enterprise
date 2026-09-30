@@ -2,6 +2,7 @@ import { asRecord, isNonEmptyString, sha256Hex } from "@openclaw-enterprise/util
 import { KubernetesObjectApi, type KubernetesObject, PatchStrategy } from "@kubernetes/client-node";
 import {
   RuntimeLogsForbiddenByClusterError,
+  RuntimeLogsSandboxNotFoundError,
   SandboxRevisionUnsupportedError,
 } from "@openclaw-enterprise/occ";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1270,14 +1271,11 @@ export class OpenShellSandboxDriver implements SandboxDriver {
       );
     } catch (error) {
       const code = asRecord(error)?.code;
-      // NOT_FOUND: the Sandbox is not provisioned (yet) or was removed; it has no lines.
+      // NOT_FOUND: the Sandbox is not provisioned (yet) or was removed, or OCC's identity
+      // is not a member of its Workspace (OpenShell conceals the Sandbox then). Neither
+      // means "no lines", and the two cannot be told apart.
       if (code === GRPC_NOT_FOUND) {
-        return Object.freeze({
-          sandbox: sandbox.resourceName,
-          observedAt: new Date().toISOString(),
-          lines: Object.freeze([]),
-          bufferTotal: 0,
-        });
+        throw new RuntimeLogsSandboxNotFoundError();
       }
       // The OCC identity lacks `sandbox:read` or the Workspace role `user`.
       if (code === GRPC_PERMISSION_DENIED || code === GRPC_UNAUTHENTICATED) {

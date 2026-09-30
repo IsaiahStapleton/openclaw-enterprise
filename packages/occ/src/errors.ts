@@ -214,12 +214,25 @@ export class RuntimeLogsForbiddenByClusterError extends Error {
   }
 }
 
+/**
+ * OpenShell answered NOT_FOUND for the revision's Sandbox. It gives the same answer when
+ * the Sandbox is not provisioned (yet) and when OCC's identity is not a member of its
+ * Workspace, so the two cannot be told apart and neither is reported as "no lines".
+ */
+export class RuntimeLogsSandboxNotFoundError extends Error {
+  constructor() {
+    super("OpenShell reported the Sandbox as not found.");
+    this.name = "RuntimeLogsSandboxNotFoundError";
+  }
+}
+
 export type RuntimeLogsErrorCode =
   | "RUNTIME_LOGS_CURSOR_INVALID"
   | "RUNTIME_LOGS_POD_INVALID"
   | "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
   | "RUNTIME_LOGS_RATE_LIMITED"
   | "RUNTIME_LOGS_CLUSTER_RBAC"
+  | "RUNTIME_LOGS_SANDBOX_NOT_FOUND"
   | "RUNTIME_LOGS_UNAVAILABLE"
   | "RUNTIME_LOGS_AUDIT_UNAVAILABLE"
   | "RUNTIME_LOGS_TIMEOUT";

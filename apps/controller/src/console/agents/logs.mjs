@@ -39,6 +39,9 @@ function runtimeErrorText(error, tier, source) {
   if (error.code === "RUNTIME_LOGS_CLUSTER_RBAC" && source === "sandbox") {
     return "OpenShell denied the sandbox log read. Ask your platform operator to grant the OpenClaw Enterprise gateway identity the sandbox:read scope (see the Agent logs guide).";
   }
+  if (error.code === "RUNTIME_LOGS_SANDBOX_NOT_FOUND") {
+    return "OpenShell reports no such sandbox: it is not provisioned yet or was removed, or the OpenClaw Enterprise gateway identity is not a member of its Workspace (see the Agent logs guide).";
+  }
   if (error.code === "RUNTIME_LOGS_CLUSTER_RBAC") {
     return "The cluster denied the read. Ask your platform operator to enable agentRuntimeLogs in the Helm chart (see the Agent logs guide).";
   }

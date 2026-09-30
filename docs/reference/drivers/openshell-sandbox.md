@@ -351,7 +351,8 @@ Harness.
 ## Sandbox log reads
 
 `readSandboxLogs` calls only `GetSandboxLogs`. The OCC gateway identity needs
-the `sandbox:read` scope and Workspace role `user`. See
+the `sandbox:read` scope and Workspace role `user`. OpenShell `NOT_FOUND`
+becomes `RUNTIME_LOGS_SANDBOX_NOT_FOUND`. See
 [Agent logs](../../guides/topics/agent-logs.md#sandbox-source).
 
 ## Troubleshooting

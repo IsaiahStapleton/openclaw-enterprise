@@ -713,6 +713,7 @@
                   { "const": "RUNTIME_LOGS_SOURCE_UNAVAILABLE", "type": "string" },
                   { "const": "RUNTIME_LOGS_RATE_LIMITED", "type": "string" },
                   { "const": "RUNTIME_LOGS_CLUSTER_RBAC", "type": "string" },
+                  { "const": "RUNTIME_LOGS_SANDBOX_NOT_FOUND", "type": "string" },
                   { "const": "RUNTIME_LOGS_UNAVAILABLE", "type": "string" },
                   { "const": "RUNTIME_LOGS_AUDIT_UNAVAILABLE", "type": "string" },
                   { "const": "RUNTIME_LOGS_TIMEOUT", "type": "string" }

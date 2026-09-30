@@ -100,9 +100,15 @@ and implements `readSandboxLogs`, resolves Compute's placement with
 `resolveSandboxNamespace`, and runs `runtime-logs/sandbox.ts:readSandboxLogPage`.
 `OpenShellSandboxDriver.readSandboxLogs` derives the Sandbox name from the
 revision and calls `GetSandboxLogs` through `openShellSandboxLogReader`, which
-exposes nothing else. A resume sends the last delivered time as `since_time`; if
-the last delivered line is gone and nothing older came back, OCC emits
-`buffer_lost` or, when the window was full, `window_exceeded`. Lines naming two
+exposes nothing else. OpenShell stamps supervisor lines when recorded but
+batches them, and filters `since_time` by that stamp, so a resume sends a time
+`SANDBOX_LOG_OVERLAP_MS` (5 s) behind the newest delivered line; the cursor
+keeps one hash per line delivered since then (up to 48), and each re-read line
+consumes one. If no remembered line came back and nothing older did, OCC emits
+`buffer_lost` or, when the window was full, `window_exceeded`; more than 48
+lines in one millisecond also emit `window_exceeded`. gRPC `NOT_FOUND` (absent
+Sandbox, or concealed from a non-member) maps to
+`RUNTIME_LOGS_SANDBOX_NOT_FOUND`, never to an empty page. Lines naming two
 Sandbox IDs are refused; a new Sandbox ID emits `stream_replaced`.
 `sanitizeSandboxLogLines` parses the OCSF shorthand into allowlisted fields.
 
@@ -150,3 +156,4 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 - 2026-09-30 08:30: Document runtime status and container log reads for Kubernetes Compute. (build-1/agent-logs-slice-1 - 0918be781)
 - 2026-09-30 11:40: Add downloads, console filters and the `occ agent runtime|logs` callers. (build-2/agent-logs-slice-2)
 - 2026-09-30 13:00: Add the OpenShell sandbox source. (build-logs-3/agent-logs-slice-3)
+- 2026-09-30 15:30: Overlapping sandbox resume with counted de-duplication; NOT_FOUND is a 503. (fix-3/agent-logs-slice-3)

@@ -300,7 +300,8 @@ test("sandbox follow resumes after the anchor and labels buffer loss and a full 
     second.data.records.map((record) => record.fields?.dst_host ?? record.reason),
     ["c.example.com"],
   );
-  assert.equal(gateway.requests.at(-1).sinceTime, lineTime(2));
+  // The resume re-reads a 5 s overlap behind the newest delivered line.
+  assert.equal(gateway.requests.at(-1).sinceTime, "2026-09-30T11:59:57.000000000Z");
   assert.equal(auditSink.events.length, auditAfterFirst, "cursor polls are not re-audited");
 
   // The gateway restarted and lost its ring: the anchor and everything older are gone.
@@ -360,6 +361,78 @@ test("sandbox follow resumes after the anchor and labels buffer loss and a full 
   assert.equal(replaced.data.records[0].reason, "stream_replaced");
 });
 
+test("sandbox follow delivers late-stamped lines and counts repeats in one millisecond", async () => {
+  const { gateway, target, request } = await sandboxFixture();
+  const page = async (cursor) => {
+    const response = await request(
+      "GET",
+      target.logsPath(`source=sandbox&cursor=${encodeURIComponent(cursor)}`),
+    );
+    assert.equal(response.status, 200, response.text);
+    return response.data;
+  };
+  const hosts = (data) => data.records.map((record) => record.fields?.dst_host ?? record.reason);
+  // A gateway line at 12:00:05 is shown before a supervisor line stamped 12:00:04.6
+  // that was still batched; the late line arrives after it and must still be delivered.
+  gateway.state.lines = [sandboxLine(5, "NET:OPEN [INFO] ALLOWED curl(1) -> gw.example.com:443")];
+  const first = (await request("GET", target.logsPath("source=sandbox"))).data;
+  assert.deepEqual(hosts(first), ["gw.example.com"]);
+  gateway.state.lines.push({
+    ...sandboxLine(4, "NET:OPEN [INFO] DENIED curl(1) -> late.example.com:443"),
+    time: lineTime(4, 600_000_000),
+  });
+  const late = await page(first.cursor);
+  assert.deepEqual(hosts(late), ["late.example.com"]);
+  // Nothing new: nothing is shown again.
+  const idle = await page(late.cursor);
+  assert.deepEqual(hosts(idle), []);
+
+  // A second identical line in the same millisecond is a new occurrence.
+  const repeat = sandboxLine(6, "NET:OPEN [INFO] DENIED curl(1) -> same.example.com:443");
+  gateway.state.lines.push({ ...repeat });
+  const once = await page(idle.cursor);
+  assert.deepEqual(hosts(once), ["same.example.com"]);
+  gateway.state.lines.push({ ...repeat });
+  const twice = await page(once.cursor);
+  assert.deepEqual(hosts(twice), ["same.example.com"]);
+  assert.deepEqual(hosts(await page(twice.cursor)), []);
+
+  // Twenty distinct lines in one millisecond are delivered once and not replayed.
+  for (let index = 0; index < 20; index += 1) {
+    gateway.state.lines.push(
+      sandboxLine(7, `NET:OPEN [INFO] ALLOWED curl(1) -> b${index}.example.com:443`),
+    );
+  }
+  const burst = await page(twice.cursor);
+  assert.equal(burst.records.length, 20);
+  const settled = await page(burst.cursor);
+  assert.deepEqual(hosts(settled), []);
+});
+
+test("sandbox follow reports a gap when one millisecond holds more lines than the cursor", async () => {
+  const { gateway, target, request } = await sandboxFixture();
+  gateway.state.lines = Array.from({ length: 60 }, (_, index) =>
+    sandboxLine(8, `NET:OPEN [INFO] ALLOWED curl(1) -> o${index}.example.com:443`),
+  );
+  const first = await request("GET", target.logsPath("source=sandbox"));
+  assert.equal(first.status, 200, first.text);
+  const lines = first.data.records.filter((record) => record.type === "line");
+  assert.equal(lines.length, 60);
+  const gap = first.data.records.at(-1);
+  assert.equal(gap.type, "gap");
+  assert.equal(gap.reason, "window_exceeded");
+  assert.equal(gap.time, lineTime(8));
+  // The next read resumes strictly after that millisecond, so nothing is shown twice.
+  const next = await request(
+    "GET",
+    target.logsPath(`source=sandbox&cursor=${encodeURIComponent(first.data.cursor)}`),
+  );
+  assert.equal(next.status, 200, next.text);
+  assert.equal(gateway.requests.at(-1).sinceTime, lineTime(8, 1));
+  assert.deepEqual(next.data.records, []);
+  assert.ok(first.data.cursor.length <= 2048);
+});
+
 test("sandbox reads reject mixed Sandbox IDs, Pods and previous instances, and map denials", async () => {
   const { gateway, target, request, createPrincipal } = await sandboxFixture();
   gateway.state.lines = [
@@ -388,10 +461,16 @@ test("sandbox reads reject mixed Sandbox IDs, Pods and previous instances, and m
   assert.equal(denied.body.error.code, "RUNTIME_LOGS_CLUSTER_RBAC");
   assert.equal(denied.text.includes("sandbox:read"), false, "gateway error text never leaks");
 
-  gateway.state.error = Object.assign(new Error("sandbox not found"), { code: 5 });
-  const missing = await request("GET", target.logsPath("source=sandbox"));
-  assert.equal(missing.status, 200, missing.text);
-  assert.deepEqual(missing.data.records, []);
+  // OpenShell answers NOT_FOUND both for an absent Sandbox and, to conceal it, for an
+  // identity outside its Workspace. Neither is reported as an empty log.
+  for (const message of ["sandbox not found", "sandbox not found (caller is not a member)"]) {
+    gateway.state.error = Object.assign(new Error(message), { code: 5 });
+    const missing = await request("GET", target.logsPath("source=sandbox"));
+    assert.equal(missing.status, 503, missing.text);
+    assert.equal(missing.body.error.code, "RUNTIME_LOGS_SANDBOX_NOT_FOUND");
+    assert.equal(missing.body.data, undefined);
+    assert.equal(missing.text.includes("member)"), false, "gateway error text never leaks");
+  }
   gateway.state.error = undefined;
 
   // Sandbox text is tier 2 like container text: operate alone is not enough.
@@ -488,7 +567,21 @@ test("sandbox sanitization masks credentials passed as command-line arguments", 
       `tool --username bob --pass ${secret}`,
       "tool --username [redacted:argv] --pass [redacted:argv]",
     ],
+    [`curl --proxy-user alice:${secret} https://a`, "curl --proxy-user [redacted:argv] https://a"],
+    [`curl -U alice:${secret} https://a`, "curl -U [redacted:argv] https://a"],
+    [`smbclient //h/s -U alice%${secret}`, "smbclient //h/s -U [redacted:argv]"],
+    [`smbclient //h/s -Ualice%${secret}`, "smbclient //h/s -U[redacted:argv]"],
+    [`smbclient //h/s --user=alice%${secret}`, "smbclient //h/s --user=[redacted:argv]"],
+    [`lftp -u alice,${secret} ftp.example.com`, "lftp -u [redacted:argv] ftp.example.com"],
+    [`redis-cli -h r -a ${secret} ping`, "redis-cli -h r -a [redacted:argv] ping"],
+    [`/usr/bin/redis-cli -a${secret}`, "/usr/bin/redis-cli -a[redacted:argv]"],
+    [`sqlcmd -S db -U sa -P ${secret}`, "sqlcmd -S db -U sa -P [redacted:argv]"],
     // Ordinary flags that share a letter stay readable.
+    ["ls -a /tmp", "ls -a /tmp"],
+    ["cp -P a b", "cp -P a b"],
+    ["psql -U postgres app", "psql -U postgres app"],
+    ["date -u +%s", "date -u +%s"],
+    ["lftp -u alice ftp.example.com", "lftp -u alice ftp.example.com"],
     ["mkdir -p /workspace/out", "mkdir -p /workspace/out"],
     ["find . -path ./x -print", "find . -path ./x -print"],
     ["pip install --user requests", "pip install --user requests"],
