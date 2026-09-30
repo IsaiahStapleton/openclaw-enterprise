@@ -202,6 +202,39 @@ export class NotImplementedError extends Error {
   }
 }
 
+/** The cluster denied `pods/log` or `events`: an operator must grant the documented roles. */
+export class RuntimeLogsForbiddenByClusterError extends Error {
+  constructor() {
+    super("The cluster denied a runtime log or Event read.");
+    this.name = "RuntimeLogsForbiddenByClusterError";
+  }
+}
+
+export type RuntimeLogsErrorCode =
+  | "RUNTIME_LOGS_CURSOR_INVALID"
+  | "RUNTIME_LOGS_POD_INVALID"
+  | "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+  | "RUNTIME_LOGS_RATE_LIMITED"
+  | "RUNTIME_LOGS_CLUSTER_RBAC"
+  | "RUNTIME_LOGS_UNAVAILABLE"
+  | "RUNTIME_LOGS_AUDIT_UNAVAILABLE"
+  | "RUNTIME_LOGS_TIMEOUT";
+
+/** A fixed-message runtime log failure; Driver and cluster error text never reaches it. */
+export class RuntimeLogsError extends Error {
+  readonly code: RuntimeLogsErrorCode;
+  readonly retryAfterSeconds?: number;
+
+  constructor(code: RuntimeLogsErrorCode, retryAfterSeconds?: number) {
+    super(`Runtime log request failed: ${code}.`);
+    this.name = "RuntimeLogsError";
+    this.code = code;
+    if (retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  }
+}
+
 export class PluginPolicyValidationError extends Error {
   constructor(field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers") {
     let message = "The supplied plugin policies are invalid.";

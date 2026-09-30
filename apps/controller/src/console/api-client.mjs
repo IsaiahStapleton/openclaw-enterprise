@@ -48,6 +48,10 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
       if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
         error.code = code;
       }
+      const retryAfter = response.headers.get("retry-after");
+      if (retryAfter !== null && /^[1-9][0-9]{0,4}$/.test(retryAfter)) {
+        error.retryAfterSeconds = Number(retryAfter);
+      }
       const requestId = payload?.meta?.requestId;
       if (
         typeof requestId === "string" &&

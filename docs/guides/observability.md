@@ -18,6 +18,7 @@ not provide traces.
 | Signal              | Available path                                                                                                                                                           |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Operational logs    | Local container output; optional OpenTelemetry Collector export over OTLP/HTTP to your log backend.                                                                      |
+| One Agent's output  | The console **Logs** tab and `runtime/logs` API read a bounded, redacted page from Kubernetes on demand; nothing is exported. See [Agent logs](topics/agent-logs.md).    |
 | Collector metrics   | Prometheus endpoint on port `8888` for the collection pipeline itself.                                                                                                   |
 | Audit records       | Stored separately in PostgreSQL; the Collector does not export them. See [Audit Log](topics/audit-log.md).                                                               |
 | Application metrics | Private OCC Prometheus endpoints enabled by default in Helm; see [production scraping](observability/metrics.md) and the [development dashboard](../testing/metrics.md). |

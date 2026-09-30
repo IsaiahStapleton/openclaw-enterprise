@@ -81,6 +81,12 @@ agentNativeAdmin:
   domain: ""
   sharedCookieDomain: ""
 
+# Console and API runtime status and container log reads (Agent administer for text).
+# Grants pods/log get and events get,list to the tenant API and Gateway observer roles
+# and sets OCC_AGENT_RUNTIME_LOGS_ENABLED. false removes both and the routes answer 501.
+agentRuntimeLogs:
+  enabled: true
+
 bootstrap:
   adminEmail: ""
   password:
