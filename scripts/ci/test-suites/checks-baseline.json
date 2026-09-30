@@ -199,6 +199,12 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
+      "path": "tests/integration/ci-impact.test.mjs"
+    },
+    {
+      "path": "tests/integration/ci-impact-gate.test.mjs"
+    },
+    {
       "path": "tests/integration/metrics-monitoring-readiness.test.mjs",
       "expectedTests": [
         "datasource readiness retries a transient HTTP 400",

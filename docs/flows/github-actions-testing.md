@@ -1,14 +1,14 @@
 ---
 created: 2026-09-04
-updated: 2026-09-27
-last_updated_session: authoring-run/9266dd42-e257-4e84-b7ac-d6c87ba3ed23
+updated: 2026-09-30
+last_updated_session: authoring-run/5e0d97eb-d171-45a3-8d25-24825b3545ef
 ---
 
 # GitHub Actions testing flow
 
 ## Overview
 
-GitHub Actions selects explicit test lanes, prepares disposable resources, runs the real Node test runner, and rejects missing or skipped required coverage. This flow ends at the aggregate check and resource cleanup. A PR check proves its ten selected noncredentialed lanes; it does not establish that protected model or service integrations passed.
+GitHub Actions selects explicit test lanes, prepares disposable resources, runs the real Node test runner, and rejects missing or skipped required coverage. This flow ends at the aggregate check and resource cleanup. Full CI covers twelve noncredentialed lanes; it does not establish that protected model or service integrations passed. The source implements a reduced documentation-only PR selection, but hosted validation of that selection is not yet established.
 
 ## Entry Points
 
@@ -21,9 +21,13 @@ GitHub Actions selects explicit test lanes, prepares disposable resources, runs 
 ```mermaid
 graph TD
   subgraph Actions["GitHub Actions"]
-    A["PR or main event"] --> B["Ten PR-safe jobs"]
+    A["PR or other CI event"] --> S["Select impact mode"]
+    S -->|full| B["Eleven other CI lanes"]
+    S -->|docs| L
+    A --> Q["Baseline lane"]
     A --> N["Suite audit"]
     N --> L
+    Q --> F
     C["Manual integration dispatch"] --> D["Environment protection preflight"]
     D -->|main-only provider or approved other lane| E["Protected jobs"]
     D -->|missing protection| X["Failed check"]
@@ -61,7 +65,13 @@ coverage groups. `loadTestSuites` loads each referenced
 its test inventory, environment, required inputs, and preparation settings. The
 runner and preparation tools consume the assembled map.
 
-The PR workflow uses the event checkout and supplies no external service credentials. Suite Audit and all ten lanes start independently on ephemeral runners. Kubernetes fixture lanes use `ubuntu-22.04` for bridge netfilter support; other lanes and the audit use `blacksmith-8vcpu-ubuntu-2404`. Its aggregate uses `ubuntu-22.04` and requires a successful audit plus `checks-baseline`, `postgres`, `postgres-application`, `images-packaging`, `k3d-fixture-configuration`, `k3d-fixture-state`, `k3d-fixture-plugins`, `logging-collector`, `repository-credentials-container`, and `repository-credentials-platform`. A failed audit still fails CI Required even when the lanes pass. Full Integration checks configured environment protection and checks out the immutable event SHA. It admits `refs/heads/main` for every lane. Only `k3d-model` may use another branch: preflight requires an exact branch rule in `integration-model`, and GitHub still requires reviewer approval with self-review prevention. Wildcards, tags, and other non-main lanes are rejected. The administrator removes the temporary branch rule after verification. A manual dispatch selects its requested lane or `all`; pushes and merges do not start this workflow. Manual runs share one concurrency group and do not cancel an in-progress run. The provider environment must allow exactly the `main` branch and needs no per-run reviewer approval. Other credentialed environments still require reviewers with self-review prevention. No PR event enters this credentialed workflow. A targeted integration run has a narrower claim than a full inventory run.
+The CI workflow uses the event checkout and supplies no external service credentials. Impact, Suite Audit and `checks-baseline` start independently on ephemeral runners. The ten-lane matrix and separate `runtime-image-fixture` job depend on impact and run only in full mode. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` also uses that runner. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404`; the remaining lanes and audit use `blacksmith-8vcpu-ubuntu-2404`. `CI Required` uses `ubuntu-22.04` and requires successful impact, audit and baseline jobs. In full mode it also requires every other lane in the `ci` group, including `k3d-observability` and `runtime-image-fixture`. A failed audit fails `CI Required` even when the lanes pass.
+
+For a pull request, the selector checks the tested checkout and its merge parents against the event's base and head, then compares the base and tested trees. Only nonempty changes to allowlisted regular Markdown files select docs mode. Code, configuration, workflow, mixed or unknown changes and non-PR events select full. Missing or unverifiable policy or source evidence selects full or fails the check closed. The selector policy is taken from the verified PR base; if that base does not yet contain the policy, selection falls back to full. `CI Required` independently verifies the selected mode and checks expected job states and same-revision result artifacts. The complete baseline and Suite Audit remain required in docs mode; skipped lanes are outside its coverage.
+
+The `pull_request` workflow definition itself comes from the PR merge checkout and can be changed by the PR. Loading policy from the base does not protect against a changed workflow that bypasses or replaces these steps. A separately trusted required workflow or equivalent external enforcement is a deployment decision, not an established property of this source. Hosted behavior, including fork and required-check enforcement, remains unverified.
+
+Full Integration checks configured environment protection and checks out the immutable event SHA. It admits `refs/heads/main` for every lane. Only `k3d-model` may use another branch: preflight requires an exact branch rule in `integration-model`, and GitHub still requires reviewer approval with self-review prevention. Wildcards, tags, and other non-main lanes are rejected. The administrator removes the temporary branch rule after verification. A manual dispatch selects its requested lane or `all`; pushes and merges do not start this workflow. Manual runs share one concurrency group and do not cancel an in-progress run. The provider environment must allow exactly the `main` branch and needs no per-run reviewer approval. Other credentialed environments still require reviewers with self-review prevention. No PR event enters this credentialed workflow. A targeted integration run has a narrower claim than a full inventory run.
 
 PostgreSQL migration and application suites own separate servers. Each of the three Kubernetes fixture files owns a separate cluster and PostgreSQL server. For these Kubernetes fixture lanes, the shared action enables bridge netfilter on the ephemeral runner before creating k3d nodes, which share its kernel. Missing bridge filtering fails setup rather than running with unenforced Pod network policies. The repository credential platform lane uses Blacksmith for its full-image HTTP, PostgreSQL, Unix-control and credential-material proof; NetworkPolicy enforcement remains the fixture lanes' separate responsibility. Lane state and cleanup stay local to its runner; files within each lane remain sequential. The suite map retains one owner per file in both workflow groups.
 
@@ -143,7 +153,7 @@ aggregate's required test results.
 
 Per-file cleanup releases its disposable database. Job cleanup removes only the state-owned resources. A whole owned `k3d-cluster` resource owns Kubernetes API object deletion for its Collector Namespace and RBAC. Logging cleanup cleans the local Docker backend container and JSONL/config directory independently, so a dead Kubernetes API does not block local log backend teardown. Cleanup failure fails the check and keeps the private state file usable only while that runner host and path remain available. User databases, contexts, unrelated containers and global images remain outside that ownership.
 
-The aggregate runs after success or failure and checks expected job outcomes plus same-revision lane results. Case validation belongs to the runner; the aggregate checks lane identity and success, required evidence, and cleanup outcomes without interpreting cases again. Missing, failed, cancelled or skipped selected jobs cannot pass. A full-suite result accounts for every lane selected by the `full` group. The explicitly selected `ssh-host` lane remains outside the automatic groups until an operator prepares its disposable host; see [SSH raw-host testing](../testing/ssh.md#ssh-raw-hosts). Abrupt hosted-runner loss can prevent teardown and also loses the private `RUNNER_TEMP` state at job end. External resource reconciliation is deferred until an approved resource ledger exists.
+The aggregate runs after success or failure and checks expected job outcomes plus same-revision lane results. Case validation belongs to the runner; the aggregate checks lane identity and success, required evidence, and cleanup outcomes without interpreting cases again. Missing, failed, cancelled or skipped selected jobs cannot pass. In docs mode, the gate expects the other CI jobs to be skipped and the aggregate requires the complete baseline result. In full mode it requires every CI lane. The docs-only result proves only that selected coverage. A Full Integration result accounts for every lane selected by its `full` group or the requested lane. The explicitly selected `ssh-host` lane remains outside the automatic groups until an operator prepares its disposable host; see [SSH raw-host testing](../testing/ssh.md#ssh-raw-hosts). Abrupt hosted-runner loss can prevent teardown and also loses the private `RUNNER_TEMP` state at job end. External resource reconciliation is deferred until an approved resource ledger exists.
 
 ## Debugging and Verification
 
@@ -166,6 +176,10 @@ The aggregate runs after success or failure and checks expected job outcomes plu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 01:24: Describe implemented CI selection and its workflow trust boundary in the accompanying changes. (authoring-run/5e0d97eb-d171-45a3-8d25-24825b3545ef - f2c9f98b0b89762cc9edda189c102ed8c593c678)
+
+- 2026-09-30 01:14: Correct the CI lane inventory and describe the proposed docs-only selection. (authoring-run/c4a28d56-7f94-4870-8688-f150945b32ff - f2c9f98b0b89762cc9edda189c102ed8c593c678)
 
 - 2026-09-27 03:44: Retain bounded CI image cleanup evidence. (authoring-run/9266dd42-e257-4e84-b7ac-d6c87ba3ed23 - 3a1acc0db234f8d018593ea3a8b2fd59ad94a4da)
 

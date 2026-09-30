@@ -10,45 +10,43 @@ separate migrator-role connection for test-only table contention. The
 `logging-collector` lane also runs real Prometheus/Grafana collection and
 dashboard provisioning. See [metrics testing](metrics.md) for local setup.
 
-The [suite index](../../scripts/ci/test-suites.json) holds ordered lane references
-and coverage groups. Each `scripts/ci/test-suites/<lane>.json` owns that lane's
-test files, required inputs, environment, and preparation resources. Edit the
-owning lane file when adding or renaming tests; update the index when adding a
-lane or changing a group. The shared
-[loader](../../scripts/ci/test-suites.mjs) assembles these definitions for the
-runner and preparation tools. Check that every active test file has exactly one
-lane owner:
+The [suite index](../../scripts/ci/test-suites.json) holds lane references and coverage groups. Each `scripts/ci/test-suites/<lane>.json` owns its files, inputs, environment and resources. Edit the lane for test changes and the index for lane or group changes. The [loader](../../scripts/ci/test-suites.mjs) assembles these definitions. Check that every active test file has one lane owner:
 
 ```sh
 node scripts/ci/run-tests.mjs audit
 ```
 
-CI workflows reuse the [run-ci-lane action](../../.github/actions/run-ci-lane/action.yml) for setup, tests, cleanup, and per-job environment isolation.
+CI uses [run-ci-lane](../../.github/actions/run-ci-lane/action.yml) for setup, tests, cleanup and job isolation.
 
-Compare per-file `wallDurationMs`, preparation `[ci-timing]` phases, and Actions
-step timestamps to find slow setup or tests. Preparation timings include image
-archive save/import times. Image imports copy the archive into each owned k3d
-node and run node-local `ctr image import`; k3d `tools-node` can hide per-node
-failures while exiting successfully. Imports targeting one cluster stay
-serialized, then preparation verifies digest and CRI references on owned nodes.
+Compare per-file `wallDurationMs`, preparation `[ci-timing]` phases and Actions timestamps to find slow setup or tests; timings include image archive save and import. Imports copy the archive into each owned k3d node and use node-local `ctr image import`: k3d `tools-node` can hide per-node failures while exiting successfully. Imports to one cluster are serialized, then preparation verifies digest and CRI references.
 
-The `checks-baseline` lane runs `pnpm docs:check`: pages above 1,500 visible
-words are flagged for review and pages above 2,500 fail, except the approved
-[API reference](../reference/api.md) and `AGENTS.md` instruction files. The
-generated API, site build, navigation, and links must pass. Run
-`pnpm docs:check-length` for the word-count check alone.
+`checks-baseline` runs `pnpm docs:check` and the [dependency policy](repository-boundaries.md). Pages above 1,500 visible words require review; above 2,500 fail except the approved [API reference](../reference/api.md) and `AGENTS.md` files. The generated API, site build, navigation, and links must pass. Run `pnpm docs:check-length` for word counts alone.
 
-The `checks-baseline` lane runs the [dependency policy](repository-boundaries.md).
-
-Suite Audit and the eleven PR lanes start independently on ephemeral runners.
+CI Impact, Suite Audit and `checks-baseline` start independently. The ten-lane
+matrix and `runtime-image-fixture` depend on the impact result and run in full
+mode. The complete baseline runs in both modes.
 Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge
 netfilter support. The repository credential platform lane uses
 `blacksmith-16vcpu-ubuntu-2404` because it builds the delivered runtime image and
 the repository platform fixture in one job; other lanes and the audit use
-`blacksmith-8vcpu-ubuntu-2404`.
-`CI Required` uses `ubuntu-22.04` and still requires the audit and every lane to
-pass, including result-artifact accounting. This avoids serial runner allocation
-before test lanes without changing selection or failure handling.
+`blacksmith-8vcpu-ubuntu-2404`; `runtime-image-fixture` uses `ubuntu-22.04`.
+`CI Required` uses `ubuntu-22.04` and requires the impact, audit and baseline
+jobs to pass. Full mode also requires all eleven other lanes and their result
+artifacts; docs mode expects those jobs to be skipped.
+
+The source implements docs mode for a verified documentation-only PR merge tree.
+The selector loads its policy from the verified PR base, and `CI Required`
+independently checks the mode and selected job states against the tested source
+and result artifacts. Code, configuration, workflow, mixed or unknown changes and
+non-PR events select full; unavailable or unverifiable selection evidence selects
+full or fails closed. A base that does not yet contain the selector also selects
+full. Docs mode reports only baseline and audit coverage. Hosted validation of
+this behavior is not yet established.
+
+The `pull_request` workflow itself is PR-controlled. Base-controlled selector
+policy does not prevent a changed workflow from bypassing these checks. A trusted
+required workflow or other external enforcement is not established by this
+source. See the [testing flow](../flows/github-actions-testing.md) for details.
 
 The repository credential platform lane proves HTTP, PostgreSQL, Unix control and credential material inside
 Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The images
@@ -69,9 +67,7 @@ The `postgres` lane owns migration compatibility tests; `postgres-application`
 owns the remaining PostgreSQL files. Each has its own disposable PostgreSQL
 server. Kubernetes fixture files run in `k3d-fixture-configuration`,
 `k3d-fixture-state`, and `k3d-fixture-plugins`, each with independent cluster,
-database, image, and cleanup state. Files still execute sequentially inside
-a lane. The suite audit requires every file to have exactly one owner, and
-both workflow aggregates require all eleven lanes.
+database, image, and cleanup state. Files execute sequentially inside each lane. The audit requires exactly one owner per file; Full Integration aggregates its selected `full` group or targeted lane.
 
 The `repository-credentials-container` lane builds
 `.build/repository-credentials/{service,client}` using Dockerfiles under
@@ -157,11 +153,7 @@ See the [execution flow](../flows/github-actions-testing.md) for entrypoints, re
 Failed browser tests upload
 [diagnostics](local.md#browser-failure-diagnostics).
 
-A lane retry replaces that lane's result artifact within the workflow run so the
-aggregate reads its latest result. Other lanes keep their existing artifacts.
-Preserve a failed result before retrying if it is needed for investigation;
-earlier attempt logs remain available. Reruns still require every selected lane
-and the aggregate to pass.
+A lane retry replaces its result artifact; other lanes keep theirs. Preserve a failed result before retrying if needed; earlier logs remain available. Reruns still require every selected lane and the aggregate to pass.
 
 ### Select immutable images for local preparation
 
@@ -195,8 +187,7 @@ lane cleanup removes the owned cluster and partial imports.
 
 ### Integration coverage by trigger
 
-The [CI workflow](../../.github/workflows/ci.yml) runs eleven noncredentialed lanes on
-pull requests, pushes to `main`, merge groups, and manual dispatch.
+The [CI workflow](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, merge groups, and manual dispatch.
 [Full Integration](../../.github/workflows/full-integration.yml) runs only through
 manual dispatch, using the requested lane or `all`. The `k3d-model` branch exception below does not enable other lanes outside `main`. It does not run
 on pushes or merges. The `provider-account` lane remains manual because its
