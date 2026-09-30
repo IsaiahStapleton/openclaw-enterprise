@@ -1323,15 +1323,16 @@ test(
         .data,
       null,
     );
-    // The recovery-lane checks above spent this email's budget; the browser's known-device
-    // cookie from its GitHub sign-in gives it its own lane, so the refusal is the credential one.
+    // The recovery-lane checks above spent this email's budget. A disabled account's
+    // known-device entries verify nothing, so the browser's cookie from its GitHub sign-in
+    // no longer gives it its own lane: the attempt is slowed and refused like any other.
     const disabledPassword = await app.inject({
       method: "POST",
       url: "/api/auth/sign-in/email",
       headers: { origin, cookie: limitedCookie },
       payload: { email: "github-limited@example.test", password },
     });
-    assert.equal(disabledPassword.statusCode, 401);
+    assert.equal(disabledPassword.statusCode, 429, disabledPassword.body);
     assert.equal(disabledPassword.headers["set-cookie"], undefined);
     async function accountAction(path, expectedVersion) {
       return app.inject({

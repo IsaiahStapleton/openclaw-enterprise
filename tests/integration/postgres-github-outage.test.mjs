@@ -15,6 +15,7 @@ import {
   signedInHeaders,
 } from "../helpers/production-sign-in.mjs";
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
+import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "outage-recovery@example.test";
@@ -97,7 +98,12 @@ test(
     let adminHeaders = await signedInHeaders(app, origin, admin);
     const adminId = (await currentSession(app, adminHeaders.cookie)).user.id;
     const members = [];
-    for (const email of ["outage-member@example.test", "outage-other@example.test"]) {
+    for (const email of [
+      "outage-member@example.test",
+      "outage-other@example.test",
+      "outage-reset@example.test",
+      "outage-disabled@example.test",
+    ]) {
       const created = await app.inject({
         method: "POST",
         url: "/api/auth/accounts",
@@ -107,7 +113,7 @@ test(
       assert.equal(created.statusCode, 201, created.body);
       members.push({ id: created.json().data.id, email, password });
     }
-    const [member, other] = members;
+    const [member, other, resetMember, disabledMember] = members;
     await app.close();
     app = await composeProductionSignIn(t, {
       databaseUrl,
@@ -371,6 +377,99 @@ test(
       assert.equal(known.statusCode, 200, known.body);
       const cookie = cookieHeaderFromSetCookie(known.headers["set-cookie"]);
       assert.equal((await currentSession(app, cookie)).user.id, adminId);
+    });
+
+    // A known-device entry is bound to the account's password and enabled state: a password
+    // reset revokes every entry issued before it, and a disabled account's entries verify
+    // nothing. A revoked entry is simply ignored: the attempt spends the shared lane like a
+    // new browser, with the same answer.
+    const spendEmail = async (account, prefix) => {
+      for (let index = 0; index < 12; index += 1) {
+        const response = await passwordSignIn(
+          app,
+          origin,
+          { ...account, password: wrong },
+          `${prefix}.${index + 1}`,
+        );
+        if (response.statusCode === 429) {
+          return;
+        }
+        assert.equal(response.statusCode, 401, response.body);
+      }
+      assert.fail("the email key is spent");
+    };
+    const accountVersion = async (userId) => {
+      const read = await app.inject({ url: `/api/auth/accounts/${userId}`, headers: adminHeaders });
+      assert.equal(read.statusCode, 200, read.body);
+      return read.json().data.version;
+    };
+    const changeAccount = async (userId, operation) => {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/auth/accounts/${userId}/${operation}`,
+        headers: adminHeaders,
+        payload: { expectedVersion: await accountVersion(userId) },
+      });
+      assert.equal(response.statusCode, 200, response.body);
+    };
+
+    await t.test("a password reset revokes the browser's known-device exemption", async () => {
+      const before = await passwordSignIn(app, origin, resetMember, "192.0.2.70");
+      assert.equal(before.statusCode, 200, before.body);
+      const staleDevice = knownDeviceOf(before);
+      assert.ok(staleDevice);
+      // An operator resets the password; the database bumps the method's version.
+      const newPassword = "outage-reset-new-password";
+      const { rowCount } = await pool.query(
+        `UPDATE occ.account SET password = $1 WHERE provider_id = 'credential'
+         AND user_id = $2`,
+        [await hashLocalPassword(newPassword), resetMember.id],
+      );
+      assert.equal(rowCount, 1);
+      const reset = { ...resetMember, password: newPassword };
+      // A sign-in with the new password marks another browser under the new state.
+      const after = await passwordSignIn(app, origin, reset, "192.0.2.71");
+      assert.equal(after.statusCode, 200, after.body);
+      const currentDevice = knownDeviceOf(after);
+      await spendEmail(reset, "203.0.113.20");
+      // The entry from before the reset is ignored: same answer as a new browser.
+      const stale = await signInWith(staleDevice, reset, "192.0.2.70");
+      const fresh = await passwordSignIn(app, origin, reset, "192.0.2.72");
+      assert.equal(stale.statusCode, 429, stale.body);
+      assert.equal(fresh.statusCode, 429, fresh.body);
+      assert.equal(knownDeviceOf(stale), undefined);
+      // The entry issued after the reset still keeps its own lane.
+      const known = await signInWith(currentDevice, reset, "192.0.2.71");
+      assert.equal(known.statusCode, 200, known.body);
+    });
+
+    await t.test("a disabled account's known-device entries verify nothing", async () => {
+      const signedIn = await passwordSignIn(app, origin, disabledMember, "192.0.2.80");
+      assert.equal(signedIn.statusCode, 200, signedIn.body);
+      const device = knownDeviceOf(signedIn);
+      assert.ok(device);
+      await changeAccount(disabledMember.id, "disable");
+      // With the email's budget left, the correct password is refused exactly like a wrong
+      // one, with or without the cookie.
+      const withCookie = await signInWith(device, disabledMember, "192.0.2.80");
+      const withoutCookie = await passwordSignIn(app, origin, disabledMember, "192.0.2.81");
+      assert.equal(withCookie.statusCode, 401, withCookie.body);
+      assert.equal(withoutCookie.statusCode, 401, withoutCookie.body);
+      const bodyOf = (response) => ({ ...response.json(), meta: undefined });
+      assert.deepEqual(bodyOf(withCookie), bodyOf(withoutCookie));
+      // Once strangers spend the email, the cookie no longer buys its own lane: the attempt
+      // is refused like a new browser's, never answered as a credential check.
+      await spendEmail(disabledMember, "203.0.113.30");
+      const stale = await signInWith(device, disabledMember, "192.0.2.80");
+      const fresh = await passwordSignIn(app, origin, disabledMember, "192.0.2.83");
+      assert.equal(stale.statusCode, 429, stale.body);
+      assert.equal(fresh.statusCode, 429, fresh.body);
+      assert.deepEqual(bodyOf(stale), bodyOf(fresh));
+      // Enabling the account again restores entries issued under the unchanged password;
+      // resetting the password is what revokes them for good.
+      await changeAccount(disabledMember.id, "enable");
+      const restored = await signInWith(device, disabledMember, "192.0.2.80");
+      assert.equal(restored.statusCode, 200, restored.body);
     });
   },
 );

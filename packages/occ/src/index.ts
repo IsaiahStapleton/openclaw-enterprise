@@ -277,6 +277,7 @@ export { PostgresCommitOutcomeUnknownError };
 export {
   PostgresHumanAuthentication,
   UserAlreadyExistsError,
+  knownDeviceAccountState,
 } from "./state/human-authentication.ts";
 export type {
   HumanAuthenticationActivation,
