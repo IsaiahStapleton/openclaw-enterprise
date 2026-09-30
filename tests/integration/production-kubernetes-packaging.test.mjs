@@ -371,6 +371,7 @@ test("production native examples satisfy the current Helm, Installation, and PVC
   assert.deepEqual(drivers.defaultPresets.map(({ name }) => name).sort(), [
     "Standard Codex",
     "Standard OpenClaw",
+    "default-codex",
   ]);
   assert.equal(drivers.pluginDriver.id, "codex-plugin");
   assert.equal(drivers.pluginDriver.discoveryCredential, "none");
