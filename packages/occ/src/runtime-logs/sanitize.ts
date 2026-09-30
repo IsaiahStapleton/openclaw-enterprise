@@ -8,7 +8,12 @@ import type {
   RuntimeLogStream,
   RuntimeLogWithheldReason,
 } from "@openclaw-enterprise/contracts";
-import { redactArgvCredentials, redactRuntimeLogText, stripRuntimeLogControls } from "./redact.ts";
+import {
+  maskPemBlockLines,
+  redactArgvCredentials,
+  redactRuntimeLogText,
+  stripRuntimeLogControls,
+} from "./redact.ts";
 
 declare const sanitizedRuntimeLogRecord: unique symbol;
 
@@ -290,8 +295,15 @@ export function sanitizeRuntimeLogChunk(
   const records: SanitizedRuntimeLogRecord[] = [];
   let withheld = 0;
   let run: Mutable<Extract<RuntimeLogRecord, { type: "withheld" }>> | undefined;
-  for (const line of lines) {
-    const classified = classify(line.raw);
+  const classifiedLines = lines.map((line) => classify(line.raw));
+  // A key printed over several lines is split across records; mask the whole block.
+  const pem = maskPemBlockLines(
+    classifiedLines.map((classified) =>
+      classified.type === "line" && classified.kind === "text" ? classified.message : undefined,
+    ),
+  );
+  for (const [index, line] of lines.entries()) {
+    const classified = classifiedLines[index]!;
     const time = validTime(line.time);
     if (classified.type === "withheld") {
       withheld += 1;
@@ -309,7 +321,7 @@ export function sanitizeRuntimeLogChunk(
       records.push(brand(run));
       run = undefined;
     }
-    const message = sanitizeRuntimeLogText(classified.message);
+    const message = sanitizeRuntimeLogText(pem.get(index) ?? classified.message);
     const subsystem =
       classified.subsystem === undefined
         ? undefined

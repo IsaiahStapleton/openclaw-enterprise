@@ -18,7 +18,9 @@ download is a local file on the reader's device.
 
 - Trigger: `GET /namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime`
   and `GET .../runtime/logs` (optionally `download=true`) from the console Logs
-  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API.
+  tab, `occ agent runtime|logs` (`internal/occcli/cli.go`) or the API. The CLI
+  defaults to the active revision, else the latest revision
+  (`agentRevision`, `latestRevisionID`).
 - Source: `apps/controller/src/index.ts:createFastifyApp`,
   `packages/occ/src/index.ts:OpenClawController.describeAgentRuntime` and
   `readAgentRuntimeLogs`, `packages/occ/src/runtime-logs/`, and
@@ -97,7 +99,9 @@ Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 drops lines already delivered at the cursor time, emits `stream_replaced`,
 `window_exceeded`, `cursor_expired` or `truncated` gaps, and passes the rest to
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
-`SanitizedRuntimeLogRecord`.
+`SanitizedRuntimeLogRecord`. It classifies the whole page first, so
+`runtime-logs/redact.ts:maskPemBlockLines` can mask a PEM block whose BEGIN,
+body and END lines arrive as separate plain-text lines.
 
 `source=sandbox` skips the Compute description. `OpenClawController.readSandboxLogs`
 lists the source only when the selected Sandbox Driver provisioned the revision
@@ -168,4 +172,5 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 - 2026-09-30 13:00: Add the OpenShell sandbox source. (build-logs-3/agent-logs-slice-3)
 - 2026-09-30 15:30: Overlapping sandbox resume with counted de-duplication; NOT_FOUND is a 503. (fix-3/agent-logs-slice-3)
 - 2026-09-30 18:10: Console remembers a runtime status denial per page and points unready-Harness Gateway views to the Harness source. (dogfood3-fix-7)
+- 2026-09-30 18:30: Without an active revision the CLI reads the latest revision; a failed deployment links to its version's Logs tab. (fix/dogfood3-5)
 - 2026-09-30 20:00: Key remembered denials by operator; the Harness hint ignores a rollout's old Pod and covers a missing Pod. (dogfood3-refix-7)

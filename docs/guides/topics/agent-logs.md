@@ -14,6 +14,8 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 1. Open the Agent and select a deployed version. The editable draft is not a
    version and has no runtime; a version without a running Pod shows no Pod.
+   When the latest deployment failed, **Deployment activity** links straight to
+   that version's Logs tab.
 2. Select **Logs**. The runtime strip refreshes every 10 seconds. Each Pod card
    lists its recent warning Events, prefixed with the container they concern.
 3. Choose a **Source**: **Gateway** (the OpenClaw Gateway container) or
@@ -77,7 +79,9 @@ occ agent logs agt_... --source agent --previous -o json
 occ agent logs agt_... --source sandbox --follow
 ```
 
-Both use the active revision unless you pass `--revision`. Gaps and withheld
+Both use the active revision unless you pass `--revision`. An Agent with no
+active revision, such as one whose first deployment failed, uses the latest
+revision and says so on stderr. Gaps and withheld
 counts are printed to stderr as notices; `-o json` prints NDJSON records. The
 command waits out `429` responses and exits nonzero on `501` and `503`. See the
 [CLI reference](../../reference/cli.md#runtime-status-and-logs).
@@ -127,7 +131,9 @@ Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
 `github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
 query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
-long base64 or hex runs with `[redacted:<pattern>]`. Redaction is best-effort
+long base64 or hex runs with `[redacted:<pattern>]`. A PEM block printed over
+several lines is masked on every line from BEGIN through END; the block ends early
+at the first line that is not base64, a PEM header or blank. Redaction is best-effort
 pattern masking: an opaque token under 40 characters with no known prefix and no
 key name or `Bearer` next to it stays visible. Do not rely on redaction to make
 a runtime that prints secrets safe.
