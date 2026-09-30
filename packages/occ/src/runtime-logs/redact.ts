@@ -297,7 +297,7 @@ function maskPemEnd(text: string): string {
  */
 export function maskPemBlockLines(
   lines: readonly (string | undefined)[],
-  context?: { open: boolean | undefined; readonly canClose?: readonly boolean[] },
+  context?: { open: boolean | undefined; readonly canClose?: readonly boolean[] | undefined },
 ): ReadonlyMap<number, string> {
   const masked = new Map<number, string>();
   let open = context?.open;

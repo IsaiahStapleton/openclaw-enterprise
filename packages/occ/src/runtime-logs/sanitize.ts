@@ -358,7 +358,10 @@ export interface SanitizedRuntimeLogChunk {
  */
 export function sanitizeRuntimeLogChunk(
   chunk: Pick<AgentRuntimeLogChunk, "stream" | "lines" | "truncated">,
-  pemContext?: { readonly open: boolean | undefined; readonly canClose?: readonly boolean[] },
+  pemContext?: {
+    readonly open: boolean | undefined;
+    readonly canClose?: readonly boolean[] | undefined;
+  },
 ): SanitizedRuntimeLogChunk & { readonly pemOpen?: boolean } {
   const stream = cleanStream(chunk.stream);
   let lines = chunk.lines;
