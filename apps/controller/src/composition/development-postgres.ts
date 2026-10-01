@@ -157,7 +157,10 @@ export async function composePostgresDevelopment(
       ...(config.passwordSignIn === undefined ? {} : { passwordSignIn: config.passwordSignIn }),
       ...(config.logger === undefined
         ? {}
-        : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
+        : {
+            onWarning: (warning) => emitOccLogEvent(config.logger!, warning),
+            onOperationalEvent: (event) => emitOccLogEvent(config.logger!, event),
+          }),
       secureCookies: config.nativeAdmin?.enabled === true,
       ...(config.nativeAdmin?.enabled === true
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }

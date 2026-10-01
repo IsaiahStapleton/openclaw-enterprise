@@ -38,6 +38,7 @@ import {
   providerJSON,
   rejected,
   type ProviderExchange,
+  type ProviderFailure,
 } from "./provider-transport.ts";
 import { admissionKey, keyedAdmission } from "./admission.ts";
 import {
@@ -140,6 +141,7 @@ async function exchangeGithubSubject(
       tokenEndpoint,
       { method: "POST", ...request },
       controller.signal,
+      "token",
     );
     if ("error" in data) {
       throw rejected();
@@ -158,6 +160,7 @@ async function exchangeGithubSubject(
         },
       },
       controller.signal,
+      "profile",
     );
     controller.signal.throwIfAborted();
     const subject = githubSubject(profile.id);
@@ -263,6 +266,11 @@ export interface HumanLoginAdmissionOptions {
    * lanes key on the browser's own cookies instead of the address.
    */
   readonly trustedClientAddress?: boolean;
+  /**
+   * Receives one operational event per sign-in the provider could not serve. The event
+   * carries only the provider instance and a bounded cause, never codes, tokens or users.
+   */
+  readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
 }
 
 export function createHumanLogin(
@@ -312,6 +320,27 @@ export function createHumanLogin(
       return await state.knownDeviceState(email.trim().toLowerCase());
     } catch {
       return undefined;
+    }
+  }
+
+  // The audit row records that the provider failed; the operator log says how.
+  function providerUnavailable(
+    provider: ExternalProvider,
+    name: ExternalProviderName,
+    failure: ProviderFailure | undefined,
+  ): void {
+    try {
+      admission.onOperationalEvent?.({
+        event: "authentication.provider-unavailable-warning",
+        provider: name,
+        providerId: provider.providerId,
+        cause: failure?.cause ?? "network",
+        ...(failure?.step === undefined ? {} : { step: failure.step }),
+        ...(failure?.status === undefined ? {} : { status: failure.status }),
+        ...(failure?.code === undefined ? {} : { code: failure.code }),
+      });
+    } catch {
+      // Logging never changes the sign-in outcome.
     }
   }
 
@@ -531,12 +560,14 @@ export function createHumanLogin(
               }
               if (error) {
                 // RFC 6749 section 4.1.2.1: the provider reports its own failure.
-                return rejectExternal(
-                  name,
-                  error === "server_error" || error === "temporarily_unavailable"
-                    ? "PROVIDER_UNAVAILABLE"
-                    : "EXTERNAL_IDENTITY_REJECTED",
-                );
+                if (error === "server_error" || error === "temporarily_unavailable") {
+                  providerUnavailable(provider, name, {
+                    step: "authorization",
+                    cause: "provider_error",
+                  });
+                  return rejectExternal(name, "PROVIDER_UNAVAILABLE");
+                }
+                return rejectExternal(name, "EXTERNAL_IDENTITY_REJECTED");
               }
               ctx.setCookie(bindingCookie, "", { ...cookieAttributes, maxAge: 0 });
               const exchange = await provider.exchange(
@@ -546,6 +577,9 @@ export function createHumanLogin(
                 stateValue,
               );
               if ("denial" in exchange) {
+                if (exchange.denial === "PROVIDER_UNAVAILABLE") {
+                  providerUnavailable(provider, name, exchange.failure);
+                }
                 return rejectExternal(name, exchange.denial);
               }
               const snapshot = await state.snapshotExternal(

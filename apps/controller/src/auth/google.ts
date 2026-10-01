@@ -143,11 +143,12 @@ export async function exchangeGoogleSubject(
       tokenEndpoint,
       { method: "POST", ...request },
       controller.signal,
+      "token",
     );
     if ("error" in data || typeof data.id_token !== "string" || !data.id_token) {
       throw rejected();
     }
-    const jwks = await providerJSON(certsEndpoint, {}, controller.signal);
+    const jwks = await providerJSON(certsEndpoint, {}, controller.signal, "jwks");
     controller.signal.throwIfAborted();
     const subject = verifyGoogleIdToken(data.id_token, {
       clientId: config.clientId,

@@ -6,6 +6,7 @@ import test from "node:test";
 import { createHumanLogin } from "../../apps/controller/src/auth/github.ts";
 import { humanLoginConfiguration } from "../../apps/controller/src/auth/index.ts";
 import { oidcLoginConfiguration, oidcNonce } from "../../apps/controller/src/auth/oidc.ts";
+import { createOccLogger, emitOccLogEvent } from "../../apps/controller/src/logging.ts";
 
 const require = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
 const { APIError, betterAuth } = await import(require.resolve("better-auth"));
@@ -54,6 +55,13 @@ function idToken(state = callbackState, overrides = {}) {
 // The actual Better Auth handler and provider transport run here; State is a boundary
 // fixture (the PostgreSQL suite covers persistence and sessions).
 function loginFixture(providers = { oidc }) {
+  // Operational events go through the production logger and sanitizer.
+  const logLines = [];
+  const logger = createOccLogger({
+    component: "occ-api",
+    level: "info",
+    destination: { write: (chunk) => logLines.push(JSON.parse(chunk)) },
+  });
   const subjects = [];
   const denials = [];
   const attempts = [];
@@ -79,7 +87,10 @@ function loginFixture(providers = { oidc }) {
     state,
     { recoveryUserId: "fixture-recovery", ...providers },
     origin,
-    { trustedClientAddress: true },
+    {
+      trustedClientAddress: true,
+      onOperationalEvent: (event) => emitOccLogEvent(logger, event),
+    },
   );
   const auth = betterAuth({
     baseURL: origin,
@@ -116,6 +127,8 @@ function loginFixture(providers = { oidc }) {
     attempts,
     subjects,
     denials,
+    // Log records without their timestamp.
+    logs: () => logLines.map(({ time, ...line }) => line),
     callback: (query = `state=${callbackState}&code=fixture-code`, ip = "10.0.0.1") =>
       call(
         `/oce/providers/oidc/callback?${query}`,
@@ -257,6 +270,49 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     await expectDenied(await fixture.callback());
     assert.deepEqual(requests.slice(before), ["/oauth/token"]);
     assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+    assert.deepEqual(fixture.logs(), [unavailableLog({ step: "token", cause: "redirect" })]);
+  });
+
+  await t.test("an unavailable JWKS logs one warning with the HTTP status", async () => {
+    const fixture = loginFixture();
+    serve = (request, response) => {
+      if (request.url === "/oauth/token") {
+        provider()(request, response);
+        return;
+      }
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "jwks down", detail: "fixture-code" }));
+    };
+    await expectDenied(await fixture.callback());
+    assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+    assert.deepEqual(fixture.logs(), [
+      unavailableLog({ step: "jwks", cause: "http_status", status: 503 }),
+    ]);
+    assertNoSecrets(fixture.logs());
+  });
+
+  await t.test("a provider-reported server_error logs the authorization step", async () => {
+    const fixture = loginFixture();
+    const before = requests.length;
+    await expectDenied(
+      await fixture.callback(`state=${callbackState}&error=server_error&error_description=x`),
+    );
+    assert.equal(requests.length, before);
+    assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+    assert.deepEqual(fixture.logs(), [
+      unavailableLog({ step: "authorization", cause: "provider_error" }),
+    ]);
+  });
+
+  await t.test("a rejected exchange is audited but logs no provider warning", async () => {
+    const fixture = loginFixture();
+    serve = (_request, response) => {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "invalid_grant" }));
+    };
+    await expectDenied(await fixture.callback());
+    assert.deepEqual(fixture.denials, [["EXTERNAL_IDENTITY_REJECTED", "oidc"]]);
+    assert.deepEqual(fixture.logs(), []);
   });
 
   await t.test("GitHub, Google and OIDC share the start budget", async () => {
@@ -275,4 +331,76 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     }
     assert.equal((await fixture.start("10.0.8.2")).status, 200);
   });
+});
+
+function unavailableLog(fields) {
+  return {
+    severity: "WARN",
+    service: "occ-api",
+    event: "authentication.provider-unavailable-warning",
+    provider: "oidc",
+    providerId,
+    ...fields,
+  };
+}
+
+function assertNoSecrets(lines) {
+  const text = JSON.stringify(lines);
+  for (const value of [
+    "fixture-code",
+    oidc.clientSecret,
+    "fixture-access",
+    "tenant.idp.example.test",
+    "127.0.0.1",
+    "jwks down",
+  ]) {
+    assert.ok(!text.includes(value), `log leaked ${value}`);
+  }
+}
+
+test("an unreachable OIDC token endpoint logs connect_refused with its code", async (t) => {
+  // A port that was just released refuses connections.
+  const closed = createServer();
+  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
+  const { port } = closed.address();
+  await new Promise((resolve) => closed.close(resolve));
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    assert.ok(pinned.has(url.href), `Unexpected provider request: ${url.href}`);
+    return originalFetch(new URL(url.pathname, `http://127.0.0.1:${port}`), init);
+  });
+  const fixture = loginFixture();
+  await expectDenied(await fixture.callback());
+  assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+  assert.deepEqual(fixture.logs(), [
+    unavailableLog({ step: "token", cause: "connect_refused", code: "ECONNREFUSED" }),
+  ]);
+  assertNoSecrets(fixture.logs());
+});
+
+test("a TLS failure at the OIDC token endpoint logs cause tls", async (t) => {
+  // A plain-HTTP listener answers the TLS handshake with garbage.
+  const server = createServer((_request, response) => response.end("{}"));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const { port } = server.address();
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    assert.ok(pinned.has(url.href), `Unexpected provider request: ${url.href}`);
+    return originalFetch(new URL(url.pathname, `https://127.0.0.1:${port}`), init);
+  });
+  const fixture = loginFixture();
+  await expectDenied(await fixture.callback());
+  assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+  const [line, ...rest] = fixture.logs();
+  assert.deepEqual(rest, []);
+  assert.equal(line.event, "authentication.provider-unavailable-warning");
+  assert.equal(line.step, "token");
+  assert.equal(line.cause, "tls");
+  assertNoSecrets(fixture.logs());
 });

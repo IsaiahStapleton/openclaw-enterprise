@@ -359,7 +359,8 @@ test("code exchange fetches only the pinned token and JWKS URLs", async (t) => {
   );
 
   const rejectedIdentity = { denial: "EXTERNAL_IDENTITY_REJECTED" };
-  const unavailable = { denial: "PROVIDER_UNAVAILABLE" };
+  // The bounded failure is what the callback logs for operators.
+  const unavailable = (failure) => ({ denial: "PROVIDER_UNAVAILABLE", failure });
   assert.deepEqual(
     await exchangeOidcSubject(config, "code-1", "v".repeat(43), redirectURI, "other"),
     rejectedIdentity,
@@ -396,16 +397,16 @@ test("code exchange fetches only the pinned token and JWKS URLs", async (t) => {
       : new Response("x".repeat(64 * 1024 + 1));
   assert.deepEqual(
     await exchangeOidcSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    unavailable,
+    unavailable({ step: "jwks", cause: "oversized_response" }),
   );
   respond = () => json({}, 503);
   assert.deepEqual(
     await exchangeOidcSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    unavailable,
+    unavailable({ step: "token", cause: "http_status", status: 503 }),
   );
   respond = () => Promise.reject(new TypeError("fetch failed"));
   assert.deepEqual(
     await exchangeOidcSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    unavailable,
+    unavailable({ step: "token", cause: "network" }),
   );
 });

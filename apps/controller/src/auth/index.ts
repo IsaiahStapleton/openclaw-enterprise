@@ -1786,7 +1786,12 @@ export async function createPostgresControllerAuth(
           ...(passwordSignIn === undefined ? {} : { passwordSignIn }),
         },
         options.baseURL,
-        { trustedClientAddress: controllerOptions.clientAddress !== undefined },
+        {
+          trustedClientAddress: controllerOptions.clientAddress !== undefined,
+          ...(controllerOptions.onOperationalEvent === undefined
+            ? {}
+            : { onOperationalEvent: controllerOptions.onOperationalEvent }),
+        },
       );
   const auth = createControllerAuth({
     ...controllerOptions,

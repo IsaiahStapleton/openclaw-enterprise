@@ -273,7 +273,8 @@ test("code exchange posts to the fixed token endpoint and verifies against fixed
   assert.equal(exchange.get("grant_type"), "authorization_code");
 
   const rejectedIdentity = { denial: "EXTERNAL_IDENTITY_REJECTED" };
-  const unavailable = { denial: "PROVIDER_UNAVAILABLE" };
+  // The bounded failure is what the callback logs for operators.
+  const unavailable = (failure) => ({ denial: "PROVIDER_UNAVAILABLE", failure });
   assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, "other"),
     rejectedIdentity,
@@ -297,16 +298,16 @@ test("code exchange posts to the fixed token endpoint and verifies against fixed
       : new Response("x".repeat(64 * 1024 + 1));
   assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    unavailable,
+    unavailable({ step: "jwks", cause: "oversized_response" }),
   );
   respond = () => json({}, 503);
   assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    unavailable,
+    unavailable({ step: "token", cause: "http_status", status: 503 }),
   );
   respond = () => Promise.reject(new TypeError("fetch failed"));
   assert.deepEqual(
     await exchangeGoogleSubject(config, "code-1", "v".repeat(43), redirectURI, nonce),
-    unavailable,
+    unavailable({ step: "token", cause: "network" }),
   );
 });

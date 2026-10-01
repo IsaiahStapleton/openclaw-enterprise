@@ -84,6 +84,17 @@ to `/console/?authError=github` without automatic retry. The starting tab sends 
 which returns the callback session's `sessionKey` once, only while that session's
 cookie is current. It never issues or extends a session.
 
+When a provider cannot answer a consumed attempt (transport failure, deadline,
+redirect, 429 or 5xx, an oversized or malformed body, or its own `server_error`
+or `temporarily_unavailable`), the denial is audited as `PROVIDER_UNAVAILABLE` and the
+API logs one `authentication.provider-unavailable-warning` at WARN. It carries
+`provider` (`github`, `google`, or `oidc`), the provider instance `providerId`, `step`
+(`authorization`, `token`, `jwks`, or `profile`), a bounded `cause` (`connect_refused`,
+`dns`, `timeout`, `tls`, `connection_reset`, `network`, `redirect`, `http_status`,
+`oversized_response`, `malformed_response`, or `provider_error`), and, when present, the
+HTTP `status` or transport `code` such as `ECONNREFUSED`. It never carries URLs,
+codes, tokens, response bodies, or user data. A rejected identity logs nothing.
+
 ## Recovery-only password sign-in
 
 By default every enrolled account can still sign in with its password once a

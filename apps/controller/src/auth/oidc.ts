@@ -197,13 +197,14 @@ export async function exchangeOidcSubject(
       config.tokenUrl,
       { method: "POST", ...request },
       controller.signal,
+      "token",
     );
     if ("error" in data || typeof data.id_token !== "string" || !data.id_token) {
       throw rejected();
     }
     // Fetched for every callback, uncached: key rotation needs no restart, and an
     // unreachable JWKS fails sign-in closed.
-    const jwks = await providerJSON(config.jwksUrl, {}, controller.signal);
+    const jwks = await providerJSON(config.jwksUrl, {}, controller.signal, "jwks");
     controller.signal.throwIfAborted();
     const claims = verifyIdToken(data.id_token, {
       issuers: new Set([config.issuer]),
