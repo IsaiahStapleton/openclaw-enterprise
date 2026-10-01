@@ -204,6 +204,9 @@ The same composition covers the GitHub profile against the fixture provider:
 - `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
   signed in with GitHub signs out after another tab's password sign-in, and the
   login receipt is one-use and needs the exact Origin.
+- `postgres-oidc-tab-binding.test.mjs`: the same proof with only OIDC configured
+  (`proveTabBinding` in `tests/helpers/tab-binding.mjs`), so discovery must report
+  `sessionBinding` for an OIDC-only installation.
 - `postgres-github-recovery-replacement.test.mjs`: online recovery replacement
   moves the reserved password lane and survives a restart with the original seed.
 - `postgres-google-sign-in.test.mjs`: Google sign-in against a fixture OpenID
