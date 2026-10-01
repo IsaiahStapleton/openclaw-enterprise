@@ -4,6 +4,32 @@ Use this page when local startup, the Kubernetes installation, the control plane
 or several Agents are affected. For a problem with one Agent, start with
 [Agent troubleshooting](../topics/agent-troubleshoot.md).
 
+## Local K3s cannot find the cpuset controller
+
+If the k3d server logs report `failed to find cpuset cgroup (v2)`, inspect
+`/sys/fs/cgroup/cgroup.controllers` inside that server. Docker running inside a
+containerized development host needs the outer host to delegate `cpuset`;
+a running Docker daemon does not prove delegation. For Podman, check the
+[rootful setup requirements](../deploy/local-kubernetes-development.md#start-the-profile).
+
+Use the host management service's documented delegation procedure. If delegation
+changes fail, check that service before concluding that an outer-host change is
+required. Restore any paused management service and verify its health before
+continuing; do not disable the K3s check. Confirm `cpuset` is available inside the
+k3d server and that K3s starts successfully.
+
+## Local K3s image lookup times out
+
+The Compose control-plane profile without OpenShell resolves a K3s channel
+unless `OCC_DEVELOPMENT_K3S_IMAGE` selects an explicit image. If that lookup times out,
+select an approved Kubernetes 1.35-or-newer image through the
+[profile settings](../../reference/settings/development.md).
+
+After a failed creation, wait for startup to exit, then run `./scripts/dev-down`
+from the repository root with the same profile and state directory. Retry the
+[Compose profile startup](../deploy/local-kubernetes-development.md#run-occ-in-compose-with-kubernetes-compute)
+with the selected image and wait for the development stack to report ready.
+
 ## Local startup stalls on cert-manager
 
 On some Linux hosts, especially Ubuntu with Docker 29, the k3d node cannot
