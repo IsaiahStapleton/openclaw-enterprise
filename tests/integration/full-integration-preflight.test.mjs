@@ -68,7 +68,9 @@ test("full integration preflight selects only manual workflow lanes", async () =
   assert.deepEqual(requiredEnvironmentsForLane("provider-account"), [
     "integration-provider-account",
   ]);
+  assert.deepEqual(requiredEnvironmentsForLane("qa-matrix"), ["integration-qa"]);
   assert.deepEqual(requiredEnvironmentsForLane("all"), [
+    "integration-qa",
     "integration-model",
     "integration-otel",
     "integration-routing",

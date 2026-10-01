@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 export const fullIntegrationLanes = Object.freeze([
+  "qa-matrix",
   "docker-model",
   "k3d-model",
   "gateway-routing",
@@ -18,6 +19,7 @@ const lanes = new Set(fullIntegrationLanes);
 const branchEligibleLanes = new Set(["k3d-model", "openshell"]);
 const providerAccountEnvironment = "integration-provider-account";
 const laneEnvironments = Object.freeze({
+  "qa-matrix": "integration-qa",
   "docker-model": "integration-model",
   "k3d-model": "integration-model",
   "production-tui": "integration-model",

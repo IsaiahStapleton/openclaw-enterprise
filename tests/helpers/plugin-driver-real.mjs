@@ -49,7 +49,6 @@ function selectPluginProofDatabaseUrl({ scenario, databaseUrl }) {
     const scenarioKeys = {
       openclaw: "OCC_TEST_PLUGIN_DRIVER_OPENCLAW_DATABASE_URL",
       codex_linear: "OCC_TEST_PLUGIN_DRIVER_CODEX_LINEAR_DATABASE_URL",
-      codex_calendar: "OCC_TEST_PLUGIN_DRIVER_CODEX_CALENDAR_DATABASE_URL",
       codex_failure: "OCC_TEST_PLUGIN_DRIVER_CODEX_FAILURE_DATABASE_URL",
     };
     assert.ok(Object.hasOwn(scenarioKeys, scenario), "unknown real plugin-driver scenario.");
@@ -882,7 +881,7 @@ function assertDiagnosticText(value, secrets) {
   return text;
 }
 
-function createNativePluginAssertions({
+export function createNativePluginAssertions({
   gatewayUrl,
   execGateway,
   execCodex,
@@ -1232,6 +1231,20 @@ function createNativePluginAssertions({
     );
     assert.equal(evidence.results.length, 1, "the denied call must have a terminal result");
     assert.equal(evidence.results[0].toolCallId, evidence.calls[0].id);
+    if (proofMode === "codex") {
+      const prefix = codexToolTurnPrefix(evidence.calls[0].mirrorIdentity, ":call");
+      assert.ok(
+        prefix && prefix === codexToolTurnPrefix(evidence.results[0].mirrorIdentity, ":result"),
+        "denial must correlate to the attempted native call",
+      );
+      const turn = evidence.codexTurns.find((value) => value.turnPrefix === prefix);
+      assert.ok(
+        turn?.promptSeen &&
+          turn.terminalAssistantSeen &&
+          turn.toolCallMirrorSeen &&
+          turn.toolResultMirrorSeen,
+      );
+    }
     assert.equal(evidence.results[0].isError, true, "denial must prevent a successful native read");
     assert.equal(
       evidence.results[0].deniedByUser,
