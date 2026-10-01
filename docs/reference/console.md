@@ -119,7 +119,7 @@ requires exact Agent `read`/`update` and a catalog-capable Driver. The curated
 catalog needs no Secret. Hosted browsing reads bound `codex_pat` server-side and
 requires caller and Agent ServicePrincipal Secret `operate`.
 **Save plugin selections** updates the Agent; deployment snapshots them.
-Admitted versions are read-only. **Operator-managed credentials** saves
+**Operator-managed credentials** saves
 `{ "method": "runtime" }` for SSH embedded OpenClaw; OCC does not validate host
 credentials or generate metadata for that binding. API permissions and topology
 checks still apply. **Current version** displays `activeRevisionId`, which
@@ -127,12 +127,13 @@ can differ from the viewed snapshot without proving live serving.
 **Deployment activity** shows the latest visible version's persisted result;
 the viewed version shows its own recorded outcome.
 
-**Current observations** runs only when **Run diagnostics for this version** is
-selected. The bodyless POST checks the exact viewed version and returns an
-observation time and bounded checks marked `succeeded`, `failed`, or `unknown`.
-Agent `read` and `operate` plus exact AgentRevision `read` are required.
-An unavailable request shows an error. Results do not change deployment history,
-repeat the startup model probe, or prove message delivery.
+**Current observations** runs on **Run diagnostics for this version**: a
+bodyless POST checking the exact viewed version. Kubernetes checks cover only
+Slack (`NOT_CONFIGURED`: no Slack channel), never model credentials; recorded
+failures stay shown. Checks are timestamped `succeeded`, `failed`, or `unknown`.
+Agent `read`/`operate` and exact AgentRevision `read` are required. Unavailable
+requests show an error. Results do not change deployment history, repeat the
+startup model probe, or prove message delivery.
 
 **Save authentication source** stores the binding and confirms exact
 `secret:operate` access for the Agent principal on an API-key or Service Accounts
@@ -300,13 +301,13 @@ result. For unavailable gateways, follow the
 
 When [Agent native admin UI access](agent-native-admin.md) is enabled, the
 Agent detail tabs, including Configuration and Workspace files, include a
-**Native admin UI** panel for callers with exact Agent `administer` permission;
-otherwise, or when the Installation disables the feature, it is hidden.
+**Native admin UI** panel for callers with exact Agent `administer` permission.
+It is hidden otherwise, when the Installation disables the feature, and until
+the next sign-in or new tab after a denial.
 Installation administrators can [share an Agent](console/agent-sharing.md)
-with an existing person. An Agent that is stopped reports that it must be started,
-including before its first deployment or after stopping clears its active
-revision. If a desired-running Agent has no active revision yet, the panel asks
-you to check the Agent's deployment and refresh access. It also reports when
+with an existing person. A stopped Agent reports that it must be started,
+including before its first deployment. If a desired-running Agent has no active
+revision yet, the panel asks you to check its deployment and refresh access. It also reports when
 native admin is unsupported.
 
 **Open native admin UI** opens the Agent's active revision in a new tab, even

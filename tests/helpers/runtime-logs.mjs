@@ -35,6 +35,14 @@ export function createRuntimeLogComputeDriver(options = {}) {
     readError: undefined,
     /** Pods named by the Driver; tests may add a Pod that does not belong to the revision. */
     extraPods: [],
+    /**
+     * `{ ready }` adds a dedicated Harness Pod and the Agent (Harness) source;
+     * `{ created: false }` lists the source with no Pod; `{ ready, stale: true }`
+     * also keeps an unready old Harness Pod, as during a rollout.
+     */
+    harnessPod: undefined,
+    /** Lines the Agent (Harness) source returns. */
+    harnessLines: [],
     ...options.state,
   };
   const podName = (revision) => `gateway-${revision.id.slice(4, 12)}-0`;
@@ -85,7 +93,26 @@ export function createRuntimeLogComputeDriver(options = {}) {
               { name, uid: state.podUid },
               ...state.extraPods.map((pod) => ({ name: pod.name, uid: pod.uid })),
             ];
-            return {
+            const harnessPods =
+              state.harnessPod === undefined || state.harnessPod.created === false
+                ? []
+                : [
+                    {
+                      name: `agent-${binding.revision.id.slice(4, 12)}-0`,
+                      uid: "8d6b1c2e-3f4a-4b5c-9d6e-7f8a9b0c1d2e",
+                      ready: state.harnessPod.ready,
+                    },
+                    ...(state.harnessPod.stale
+                      ? [
+                          {
+                            name: `agent-${binding.revision.id.slice(4, 12)}-old`,
+                            uid: "9e7c2d3f-4a5b-4c6d-8e7f-8a9b0c1d2e3f",
+                            ready: false,
+                          },
+                        ]
+                      : []),
+                  ];
+            const described = {
               revisionId: binding.revision.id,
               observedAt: "2026-09-30T12:00:00.000Z",
               pods: pods.map((pod) => ({
@@ -131,6 +158,44 @@ export function createRuntimeLogComputeDriver(options = {}) {
                 },
               ],
             };
+            if (state.harnessPod !== undefined) {
+              for (const { ready, ...harness } of harnessPods) {
+                described.pods.push({
+                  role: "agent",
+                  cluster: "control",
+                  ...harness,
+                  phase: "Running",
+                  ready,
+                  createdAt: "2026-09-30T11:00:00Z",
+                  containers: [
+                    {
+                      name: "agent",
+                      state: "running",
+                      reason: null,
+                      ready,
+                      restartCount: 0,
+                      startedAt: "2026-09-30T11:00:05Z",
+                      lastTermination: null,
+                    },
+                  ],
+                  events: [],
+                });
+              }
+              described.sources.push({
+                id: "agent",
+                kind: "container",
+                pods: harnessPods.map(({ name, uid }) => ({
+                  name,
+                  uid,
+                  container: "agent",
+                  restartCount: 0,
+                })),
+                available: harnessPods.length > 0,
+                ...(harnessPods.length > 0 ? {} : { unavailableCode: "NO_POD" }),
+                retention: "Kubernetes keeps the current and the previous instance.",
+              });
+            }
+            return described;
           },
         }),
     ...(options.withoutRead
@@ -150,12 +215,17 @@ export function createRuntimeLogComputeDriver(options = {}) {
             if (state.readError !== undefined) {
               throw state.readError;
             }
-            const source = request.previous ? state.previousLines : state.lines;
+            const harness = request.source === "agent";
+            const source = harness
+              ? state.harnessLines
+              : request.previous
+                ? state.previousLines
+                : state.lines;
             return {
               stream: {
-                source: "gateway",
+                source: request.source ?? "gateway",
                 pod: request.pod,
-                podUid: state.readPodUid ?? state.podUid,
+                podUid: harness ? request.podUid : (state.readPodUid ?? state.podUid),
                 container: request.container,
                 restartCount: state.readRestartCount ?? state.restartCount,
               },

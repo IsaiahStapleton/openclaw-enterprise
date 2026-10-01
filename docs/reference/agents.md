@@ -144,9 +144,11 @@ A managed source must belong to the Agent's exact Namespace:
 
 See [supported providers and topologies](harness-execution.md#harness-authentication).
 
-For a directly supplied service account token stored in an OCC Secret, use the same
-`source` with `"method": "codex_pat"`. Console labels this source **Service Accounts**.
-It requires dedicated Codex; no managed account is created.
+For a service account token, use `"method": "codex_pat"` with its Secret `source`.
+This requires dedicated Codex.
+
+Personal [Codex OAuth device login](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
+is **Experimental**. Bind the returned `source` with `"method": "oauth"`.
 
 For an already issued ChatGPT account credential, use
 `{ "method": "chatgpt_service_account", "serviceAccountId": "sa_123e4567-e89b-42d3-a456-426614174000" }`.
@@ -164,7 +166,7 @@ Configuration authorization, topology checks, and process readiness remain
 required. No credential-source permission is needed because OCC owns no source.
 Kubernetes and Docker reject this method. See [SSH credentials](drivers/ssh-compute.md#credentials-and-supported-boundaries).
 
-API-key and service account token bindings require the actor's exact Secret `operate`. Deployment also
+API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. Deployment also
 requires the Agent service principal's exact Secret `operate`. ChatGPT binding
 requires the actor's exact account `read`, including the current account when
 replacing or clearing a binding. There is no implied account grant for the Agent

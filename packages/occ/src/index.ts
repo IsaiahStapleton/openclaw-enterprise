@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+  deviceAuthorizationSession,
+  type DeviceAuthorizationSession,
+} from "./device-authorization.ts";
 import type {
   Agent,
   AgentRead,
@@ -29,6 +33,8 @@ import type {
   Driver,
   DriverCapability,
   HarnessDescriptor,
+  HarnessDeviceAuthorization,
+  HarnessDeviceAuthorizationResult,
   HarnessExecutionMode,
   IAMDriver,
   Installation,
@@ -47,6 +53,7 @@ import type {
   PluginDesiredState,
   PluginApprovers,
   PluginCatalogEntry,
+  PluginDiscoveryAuthentication,
   PluginCatalogPage,
   PluginDriver,
   ChannelDriver,
@@ -627,10 +634,11 @@ function validName(value: unknown): value is string {
   return isNonEmptyString(value) && value.length <= 200;
 }
 
-type PluginDiscoveryCredential =
-  | { readonly accessToken: string; readonly secretRef?: never }
-  | { readonly accessToken?: never; readonly secretRef: SecretReference }
-  | { readonly accessToken?: never; readonly secretRef?: never };
+type PluginDiscoveryCredential = {
+  readonly accessToken?: string;
+  readonly secretRef?: SecretReference;
+  readonly oauthLogin?: SecretReference;
+};
 
 function capability(value: unknown): value is DriverCapability {
   return typeof value === "string" && DRIVER_CAPABILITIES.some((candidate) => candidate === value);
@@ -1135,6 +1143,22 @@ function validChannelDirectoryResult(value: unknown): value is ChannelDirectoryR
   return true;
 }
 
+/** Discovery needs the access token and identity; refresh custody stays with the login. */
+function discoveryLoginCredential(value: string): string {
+  try {
+    const bundle = asRecord(JSON.parse(value));
+    const auth = asRecord(bundle?.auth);
+    const tokens = asRecord(auth?.tokens);
+    if (bundle === undefined || auth === undefined || tokens === undefined) {
+      return "{}";
+    }
+    const { refresh_token: _refreshToken, ...discoveryTokens } = tokens;
+    const { last_refresh: _lastRefresh, ...discoveryAuth } = auth;
+    return JSON.stringify({ ...bundle, auth: { ...discoveryAuth, tokens: discoveryTokens } });
+  } catch {
+    return "{}";
+  }
+}
 export class OpenClawController {
   readonly installation: Readonly<Installation>;
 
@@ -2662,12 +2686,22 @@ export class OpenClawController {
     driver: ComputeDriver;
     grant?: RuntimeLogReadGrant;
   }> {
-    const revision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
     const agent: ResourceRef = { kind: "agent", id: agentId, namespaceId };
+    let authorizedRevision: Readonly<AgentRevision> | undefined;
     let grant: RuntimeLogReadGrant | undefined;
     if (tier === "operate") {
+      authorizedRevision = await this.getRevision(principalId, namespaceId, agentId, deploymentId);
       await this.authorize(principalId, "operate", agent);
     } else {
+      if (!isNonEmptyString(namespaceId) || !isNonEmptyString(agentId)) {
+        throw new ScopeViolationError("The exact Agent identity is missing.");
+      }
+      if (!isNonEmptyString(deploymentId)) {
+        throw new ScopeViolationError("The exact AgentRevision identity is missing.");
+      }
+      // Log text is delegated per Agent: `read_logs` (or `administer`) plus `read` on the
+      // exact Agent admit every revision of that Agent, so a new deployment does not
+      // revoke a log reader. The revision is still resolved within that exact Agent.
       grant = await this.authorizeRuntimeLogRead(principalId, agent);
     }
     await this.authorize(principalId, "read", agent);
@@ -2679,8 +2713,17 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
+      const revision =
+        authorizedRevision ??
+        (await state.revisions.findRevision(namespace.id, agent.id, deploymentId));
+      if (!revision) {
+        throw new ScopeViolationError(
+          "The AgentRevision does not belong to the exact Agent and Namespace.",
+        );
+      }
       return { namespace, agent, revision };
     });
+    const revision = binding.revision;
     let driver: ComputeDriver;
     try {
       driver = this.selectedDriver("compute");
@@ -4048,6 +4091,255 @@ export class OpenClawController {
     });
   }
 
+  private async authorizeDeviceAuthorizationScope(
+    principalId: string,
+    namespaceId: string,
+    agentId?: string,
+  ): Promise<void> {
+    if (agentId === undefined) {
+      await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
+    } else {
+      const resource = { kind: "agent" as const, id: agentId, namespaceId };
+      await this.authorize(principalId, "read", resource);
+      await this.authorize(principalId, "update", resource);
+    }
+    await this.read(async (state) => {
+      const namespace = await this.exactNamespace(state, namespaceId);
+      if (namespace.status !== "ready") {
+        throw new NamespaceNotReadyError();
+      }
+      if (agentId !== undefined) {
+        const agent = await state.agents.findAgent(namespaceId, agentId);
+        if (agent === undefined) {
+          throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
+        }
+        if (agent.status !== "active") {
+          throw new AgentDeletingError();
+        }
+        if (agent.executionMode !== "dedicated") {
+          throw new NotImplementedError("Device login requires a dedicated Agent.");
+        }
+      }
+    });
+  }
+
+  async startAgentDeviceAuthorization(
+    principalId: string,
+    namespaceId: string,
+    harnessId: string,
+    agentId?: string,
+  ) {
+    await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);
+    await this.authorize(principalId, "create", { kind: "secret", id: namespaceId, namespaceId });
+    if (harnessId !== "codex") {
+      // Permanent: retrying cannot help, so this is not reported as a provider outage.
+      throw new NotImplementedError("Device login is available only for the Codex Harness.");
+    }
+    const compute = this.selectedDriver("compute");
+    const secrets = this.secretDriver();
+    if (
+      !compute.startHarnessDeviceAuthorization ||
+      !compute.pollHarnessDeviceAuthorization ||
+      !secrets.withValue ||
+      !secrets.compareAndSwap
+    ) {
+      throw new NotImplementedError(
+        "Device authorization is unavailable for the selected Drivers.",
+      );
+    }
+    let started: HarnessDeviceAuthorization;
+    try {
+      started = await compute.startHarnessDeviceAuthorization(harnessId);
+    } catch {
+      throw new DependencyUnavailableError("Could not start device login. Try again.");
+    }
+    // Repeat authority checks after provider I/O, before persisting a credential session.
+    await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);
+    const { privateState, expiresAt, ...authorization } = started;
+    const session: DeviceAuthorizationSession = {
+      kind: "harness_device_authorization",
+      version: 1,
+      actorId: principalId,
+      namespaceId,
+      ...(agentId === undefined ? {} : { agentId }),
+      harnessId,
+      computeDriverId: compute.id,
+      phase: "pending",
+      expiresAt,
+      nextPollAt: new Date(
+        Date.parse(this.timestamp()) + authorization.intervalSeconds * 1000,
+      ).toISOString(),
+      authorization,
+      privateState,
+    };
+    const secret = await this.createSecret(principalId, {
+      namespaceId,
+      name: `Device login ${crypto.randomUUID()}`,
+      value: JSON.stringify(session),
+    });
+    return { source: secret.ref, status: "pending" as const, expiresAt, ...authorization };
+  }
+
+  private async readAgentDeviceAuthorization(
+    principalId: string,
+    namespaceId: string,
+    secretId: string,
+    agentId?: string,
+  ) {
+    await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);
+    await this.authorize(principalId, "operate", { kind: "secret", id: secretId, namespaceId });
+    const secret = await this.read((state) => state.secrets.findSecret(namespaceId, secretId));
+    if (secret === undefined) {
+      throw new ScopeViolationError("The login Secret does not belong to the exact Namespace.");
+    }
+    const driver = this.secretDriver(secret.driverId);
+    if (!driver.withValue || !driver.compareAndSwap) {
+      throw new NotImplementedError("Device authorization is unavailable for the Secret Driver.");
+    }
+    const value = await this.secretOperation(() =>
+      driver.withValue!(secret, async (value) => value),
+    );
+    const session = deviceAuthorizationSession(value);
+    if (
+      session.actorId !== principalId ||
+      session.namespaceId !== namespaceId ||
+      session.agentId !== agentId
+    ) {
+      throw new ScopeViolationError("The login belongs to another actor or Agent scope.");
+    }
+    if (
+      session.phase !== "cancelled" &&
+      Date.parse(session.expiresAt) <= Date.parse(this.timestamp())
+    ) {
+      // Expiry erases provider material on first touch instead of only blocking use.
+      // A source sealed by the runtime refuses the swap and keeps its own lifecycle.
+      const expired = JSON.stringify({
+        ...session,
+        phase: "cancelled",
+        privateState: undefined,
+        credential: undefined,
+      });
+      if (await this.secretOperation(() => driver.compareAndSwap!(secret, value, expired))) {
+        return { secret, driver, value: expired, session: deviceAuthorizationSession(expired) };
+      }
+    }
+    return { secret, driver, value, session };
+  }
+
+  async pollAgentDeviceAuthorization(
+    principalId: string,
+    namespaceId: string,
+    secretId: string,
+    agentId?: string,
+  ) {
+    const { secret, driver, value, session } = await this.readAgentDeviceAuthorization(
+      principalId,
+      namespaceId,
+      secretId,
+      agentId,
+    );
+    if (
+      session.phase === "cancelled" ||
+      Date.parse(session.expiresAt) <= Date.parse(this.timestamp())
+    ) {
+      throw new ResourceConflictError("Device login expired or was cancelled. Connect again.");
+    }
+    const response = (status: "pending" | "ready", expiresAt = session.expiresAt) => ({
+      source: this.secretMetadata(secret).ref,
+      status,
+      expiresAt,
+      ...session.authorization,
+    });
+    if (session.phase === "ready") {
+      return response("ready");
+    }
+    if (
+      session.phase === "polling" ||
+      Date.parse(session.nextPollAt) > Date.parse(this.timestamp())
+    ) {
+      return response("pending");
+    }
+    const compute = this.selectedDriver("compute");
+    if (compute.id !== session.computeDriverId || !compute.pollHarnessDeviceAuthorization) {
+      throw new ResourceConflictError("The login Driver changed. Connect again.");
+    }
+    const claimed = JSON.stringify({ ...session, phase: "polling" });
+    if (!(await this.secretOperation(() => driver.compareAndSwap!(secret, value, claimed)))) {
+      return response("pending");
+    }
+    let result: HarnessDeviceAuthorizationResult;
+    try {
+      result = await compute.pollHarnessDeviceAuthorization(session.privateState!);
+    } catch {
+      // An exchange can consume its code even if the response is lost. Never replay it.
+      await this.secretOperation(() =>
+        driver.compareAndSwap!(
+          secret,
+          claimed,
+          JSON.stringify({
+            ...session,
+            phase: "cancelled",
+            privateState: undefined,
+          }),
+        ),
+      );
+      throw new DependencyUnavailableError("Could not complete device login. Connect again.");
+    }
+    await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);
+    await this.authorize(principalId, "operate", { kind: "secret", id: secretId, namespaceId });
+    const { privateState: _privateState, ...completedSession } = session;
+    const next: DeviceAuthorizationSession =
+      result.status === "pending"
+        ? {
+            ...session,
+            phase: "pending",
+            nextPollAt: new Date(
+              Date.parse(this.timestamp()) + session.authorization.intervalSeconds * 1000,
+            ).toISOString(),
+          }
+        : {
+            ...completedSession,
+            phase: "ready",
+            credential: result.credential,
+            expiresAt: new Date(Date.parse(this.timestamp()) + 24 * 60 * 60 * 1000).toISOString(),
+          };
+    // Cancellation or another owner changing the Secret fences a late provider response.
+    if (
+      !(await this.secretOperation(() =>
+        driver.compareAndSwap!(secret, claimed, JSON.stringify(next)),
+      ))
+    ) {
+      throw new ResourceConflictError("The login changed while completing. Connect again.");
+    }
+    return response(result.status, next.expiresAt);
+  }
+
+  async cancelAgentDeviceAuthorization(
+    principalId: string,
+    namespaceId: string,
+    secretId: string,
+    agentId?: string,
+  ): Promise<void> {
+    const { secret, driver, value, session } = await this.readAgentDeviceAuthorization(
+      principalId,
+      namespaceId,
+      secretId,
+      agentId,
+    );
+    // Local discard must never revoke a shared upstream login session.
+    const discarded = JSON.stringify({
+      ...session,
+      phase: "cancelled",
+      privateState: undefined,
+      credential: undefined,
+    });
+    if (!(await this.secretOperation(() => driver.compareAndSwap!(secret, value, discarded)))) {
+      throw new ResourceConflictError(
+        "The login changed or belongs to the runtime. Refresh and retry.",
+      );
+    }
+  }
+
   async discoverAgentModels(
     principalId: string,
     namespaceId: string,
@@ -4089,13 +4381,17 @@ export class OpenClawController {
           "Plugin discovery is unavailable.",
         );
       }
-      return (accessToken) => {
-        if (accessToken === undefined && driver.discoveryCredential !== "none") {
+      return (authentication) => {
+        if (
+          authentication.accessToken === undefined &&
+          authentication.credential === undefined &&
+          driver.discoveryCredential !== "none"
+        ) {
           throw new PluginDiscoveryError("credentials_rejected");
         }
         return driver.discoverCatalog!(
           {
-            ...(accessToken === undefined ? {} : { accessToken }),
+            ...authentication,
             ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
             ...(input.q === undefined ? {} : { q: input.q }),
           },
@@ -4304,14 +4600,15 @@ export class OpenClawController {
           "Plugin tool discovery is unavailable.",
         );
       }
-      return (accessToken) => {
-        if (accessToken === undefined && driver.discoveryCredential !== "none") {
+      return (authentication) => {
+        if (
+          authentication.accessToken === undefined &&
+          authentication.credential === undefined &&
+          driver.discoveryCredential !== "none"
+        ) {
           throw new PluginDiscoveryError("credentials_rejected");
         }
-        return driver.getCatalogPlugin!(
-          { ...(accessToken === undefined ? {} : { accessToken }), pluginId: input.pluginId },
-          signal,
-        );
+        return driver.getCatalogPlugin!({ ...authentication, pluginId: input.pluginId }, signal);
       };
     });
   }
@@ -4320,10 +4617,11 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     credential: PluginDiscoveryCredential,
-    prepareDiscovery: () => (accessToken: string | undefined) => Promise<T>,
+    prepareDiscovery: () => (authentication: PluginDiscoveryAuthentication) => Promise<T>,
     validateCurrent?: () => Promise<void>,
+    scopeAgentId?: string,
   ): Promise<T> {
-    const source = credential.secretRef;
+    const source = credential.secretRef ?? credential.oauthLogin;
     if (source !== undefined) {
       if (source.kind !== "secret" || source.namespaceId !== namespaceId) {
         throw new ScopeViolationError("Secret references cannot cross Namespaces.");
@@ -4335,6 +4633,7 @@ export class OpenClawController {
     // Keep both upstream errors and accidentally echoed credential material out of responses.
     const invoke = async (
       accessToken: string | undefined,
+      oauthCredential?: string,
     ): Promise<{ value: T } | { error: PluginDiscoveryError } | { validationError: unknown }> => {
       try {
         await validateCurrent?.();
@@ -4344,7 +4643,12 @@ export class OpenClawController {
         return { validationError: error };
       }
       try {
-        const value = await discover(accessToken);
+        const value = await discover({
+          ...(accessToken === undefined ? {} : { accessToken }),
+          ...(oauthCredential === undefined
+            ? {}
+            : { credential: { kind: "oauth", value: oauthCredential } }),
+        });
         const serialized = JSON.stringify(value);
         const encodedToken =
           accessToken === undefined ? undefined : JSON.stringify(accessToken).slice(1, -1);
@@ -4366,7 +4670,23 @@ export class OpenClawController {
     };
 
     let outcome: { value: T } | { error: PluginDiscoveryError } | { validationError: unknown };
-    if (credential.accessToken !== undefined) {
+    if (credential.oauthLogin !== undefined) {
+      const { session } = await this.readAgentDeviceAuthorization(
+        principalId,
+        namespaceId,
+        credential.oauthLogin.id,
+        scopeAgentId,
+      );
+      if (
+        session.phase !== "ready" ||
+        Date.parse(session.expiresAt) <= Date.parse(this.timestamp())
+      ) {
+        throw new ResourceConflictError(
+          "Connect again to configure plugins. This login is no longer available in OCE.",
+        );
+      }
+      outcome = await invoke(undefined, discoveryLoginCredential(session.credential!));
+    } else if (credential.accessToken !== undefined) {
       outcome = await invoke(credential.accessToken);
     } else if (credential.secretRef !== undefined) {
       const source = credential.secretRef;
@@ -4429,54 +4749,79 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     agentId: string,
-    input: { readonly cursor?: string; readonly q?: string },
+    input: { readonly cursor?: string; readonly q?: string; readonly oauthLogin?: SecretReference },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage> {
-    return this.withSavedAgentPluginCredential(principalId, namespaceId, agentId, () => {
-      const driver = this.pluginDriver();
-      if (!driver.discoverCatalog) {
-        throw new NotImplementedError(
-          "agent_plugins.discovery",
-          "Plugin discovery is unavailable.",
-        );
-      }
-      return (accessToken) =>
-        driver.discoverCatalog!(
-          { ...(accessToken === undefined ? {} : { accessToken }), ...input },
-          signal,
-        );
-    });
+    return this.withSavedAgentPluginCredential(
+      principalId,
+      namespaceId,
+      agentId,
+      () => {
+        const driver = this.pluginDriver();
+        if (!driver.discoverCatalog) {
+          throw new NotImplementedError(
+            "agent_plugins.discovery",
+            "Plugin discovery is unavailable.",
+          );
+        }
+        return (authentication) =>
+          driver.discoverCatalog!(
+            {
+              ...authentication,
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+              ...(input.q === undefined ? {} : { q: input.q }),
+            },
+            signal,
+          );
+      },
+      input.oauthLogin,
+    );
   }
 
   async discoverSavedAgentPluginDetails(
     principalId: string,
     namespaceId: string,
     agentId: string,
-    input: { readonly pluginId: string },
+    input: { readonly pluginId: string; readonly oauthLogin?: SecretReference },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry> {
-    return this.withSavedAgentPluginCredential(principalId, namespaceId, agentId, () => {
-      const driver = this.pluginDriver();
-      if (!driver.getCatalogPlugin) {
-        throw new NotImplementedError(
-          "agent_plugins.discovery",
-          "Plugin tool discovery is unavailable.",
-        );
-      }
-      return (accessToken) =>
-        driver.getCatalogPlugin!(
-          { ...(accessToken === undefined ? {} : { accessToken }), pluginId: input.pluginId },
-          signal,
-        );
-    });
+    return this.withSavedAgentPluginCredential(
+      principalId,
+      namespaceId,
+      agentId,
+      () => {
+        const driver = this.pluginDriver();
+        if (!driver.getCatalogPlugin) {
+          throw new NotImplementedError(
+            "agent_plugins.discovery",
+            "Plugin tool discovery is unavailable.",
+          );
+        }
+        return (authentication) =>
+          driver.getCatalogPlugin!({ ...authentication, pluginId: input.pluginId }, signal);
+      },
+      input.oauthLogin,
+    );
   }
 
   private async withSavedAgentPluginCredential<T>(
     principalId: string,
     namespaceId: string,
     agentId: string,
-    prepareDiscovery: () => (accessToken: string | undefined) => Promise<T>,
+    prepareDiscovery: () => (authentication: PluginDiscoveryAuthentication) => Promise<T>,
+    oauthLogin?: SecretReference,
   ): Promise<T> {
+    if (oauthLogin !== undefined) {
+      await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);
+      return this.withPluginDiscoveryCredential(
+        principalId,
+        namespaceId,
+        { oauthLogin },
+        prepareDiscovery,
+        () => this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId),
+        agentId,
+      );
+    }
     const first = await this.boundAgentPluginSecret(principalId, namespaceId, agentId);
     if (first === undefined) {
       return this.withPluginDiscoveryCredential(principalId, namespaceId, {}, prepareDiscovery);
@@ -5829,7 +6174,11 @@ export class OpenClawController {
     if (binding === null || binding.method === "runtime") {
       return;
     }
-    if (binding.method === "api_key" || binding.method === "codex_pat") {
+    if (
+      binding.method === "api_key" ||
+      binding.method === "codex_pat" ||
+      binding.method === "oauth"
+    ) {
       if (binding.source.namespaceId !== namespaceId) {
         throw new ScopeViolationError("Harness authentication sources cannot cross Namespaces.");
       }
@@ -5952,11 +6301,11 @@ export class OpenClawController {
       throw new ScopeViolationError("The provisioning Agent is unavailable.");
     }
     const secretDriver =
-      binding.method === "api_key" || binding.method === "codex_pat"
+      binding.method === "api_key" || binding.method === "codex_pat" || binding.method === "oauth"
         ? this.secretDriver()
         : undefined;
     const auth: HarnessAuthSnapshot =
-      binding.method === "api_key" || binding.method === "codex_pat"
+      binding.method === "api_key" || binding.method === "codex_pat" || binding.method === "oauth"
         ? { ...binding, secretDriverId: secretDriver!.id }
         : agent === undefined
           ? await this.serviceAccountHarnessAuthSnapshot(state, namespaceId, backendId, binding)
@@ -6499,7 +6848,11 @@ export class OpenClawController {
     for (const binding of Object.values(input.secretBindings ?? {})) {
       ids.add(binding.source.id);
     }
-    if (input.harnessAuth?.method === "api_key" || input.harnessAuth?.method === "codex_pat") {
+    if (
+      input.harnessAuth?.method === "api_key" ||
+      input.harnessAuth?.method === "codex_pat" ||
+      input.harnessAuth?.method === "oauth"
+    ) {
       ids.add(input.harnessAuth.source.id);
     }
     const secrets: Secret[] = [];
@@ -6594,7 +6947,11 @@ export class OpenClawController {
     for (const binding of Object.values(bindings ?? {})) {
       await this.authorizeProvisioningSecretSource(state, principalId, namespaceId, binding.source);
     }
-    if (harnessAuth?.method === "api_key" || harnessAuth?.method === "codex_pat") {
+    if (
+      harnessAuth?.method === "api_key" ||
+      harnessAuth?.method === "codex_pat" ||
+      harnessAuth?.method === "oauth"
+    ) {
       await this.authorizeProvisioningSecretSource(
         state,
         principalId,
@@ -6676,7 +7033,11 @@ export class OpenClawController {
     if (binding.method === "runtime") {
       return immutableCopy(binding);
     }
-    if (binding.method === "api_key" || binding.method === "codex_pat") {
+    if (
+      binding.method === "api_key" ||
+      binding.method === "codex_pat" ||
+      binding.method === "oauth"
+    ) {
       await this.authorizeAgentPrincipal(agent.servicePrincipalId, "operate", binding.source);
       const source = await state.secrets.lockSecret(agent.namespaceId, binding.source.id);
       if (source === undefined) {

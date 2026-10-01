@@ -36,7 +36,7 @@ const env = {
   GITHUB_SHA: sourceSha,
   SOURCE_SHA: sourceSha,
 };
-const repo = { full_name: repository, private: true, default_branch: "main" };
+const repo = { full_name: repository, private: false, default_branch: "main" };
 
 const releaseImages = ["controller", "runtime"].map((image) => ({
   image,
@@ -204,7 +204,7 @@ test("chart push accepts a digest on stderr only after a successful exit", async
 test("container release requires manual execution of the trusted main workflow", () => {
   for (const context of [
     { env, repo },
-    { env: { ...env, PUBLISH: "false" }, repo: { ...repo, private: false } },
+    { env: { ...env, PUBLISH: "false" }, repo: { ...repo, private: true } },
   ]) {
     validateContext(context.env, context.repo);
     for (const patch of [
@@ -224,14 +224,14 @@ test("container release requires manual execution of the trusted main workflow",
   }
 });
 
-test("public container preparation requires the exact false string", () => {
-  validateContext({ ...env, PUBLISH: "false" }, { ...repo, private: false });
+test("private-source container preparation requires the exact false string", () => {
+  validateContext({ ...env, PUBLISH: "false" }, { ...repo, private: true });
   validateContext({ ...env, PUBLISH: "false" }, repo);
   for (const PUBLISH of ["true", undefined, "", "FALSE", "0", false]) {
     validateContext({ ...env, PUBLISH }, repo);
     assert.throws(
-      () => validateContext({ ...env, PUBLISH }, { ...repo, private: false }),
-      /Publication requires the private Enterprise repository/,
+      () => validateContext({ ...env, PUBLISH }, { ...repo, private: true }),
+      /Publication requires the public Enterprise repository/,
     );
   }
 });
@@ -239,8 +239,9 @@ test("public container preparation requires the exact false string", () => {
 for (const workflow of [
   ".github/workflows/container-promote.yml",
   ".github/workflows/container-bootstrap.yml",
+  ".github/workflows/container-resume.yml",
 ]) {
-  test(`${workflow} retains private source and workflow identity even with PUBLISH false`, () => {
+  test(`${workflow} requires public source and workflow identity even with PUBLISH false`, () => {
     const promotion = {
       ...env,
       GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/main`,
@@ -248,8 +249,8 @@ for (const workflow of [
     for (const PUBLISH of [undefined, "true", "false"]) {
       validateContext({ ...promotion, PUBLISH }, repo, workflow);
       assert.throws(
-        () => validateContext({ ...promotion, PUBLISH }, { ...repo, private: false }, workflow),
-        /Publication requires the private Enterprise repository/,
+        () => validateContext({ ...promotion, PUBLISH }, { ...repo, private: true }, workflow),
+        /Publication requires the public Enterprise repository/,
       );
     }
     assert.throws(() => validateContext({ ...env, PUBLISH: "false" }, repo, workflow));
@@ -282,7 +283,7 @@ test("only explicit bootstrap lookups tolerate missing package metadata", async 
     }
     t.mock.restoreAll();
   }
-  const pkg = { name: "example", visibility: "private" };
+  const pkg = { name: "example", visibility: "public" };
   t.mock.method(globalThis, "fetch", async () => Response.json(pkg));
   assert.deepEqual(
     await github("orgs/openclaw/packages/container/example", { allowNotFound: true }),
@@ -310,7 +311,7 @@ test("post-marker metadata retries only 404 and remains bounded", async (t) => {
   });
   // Accelerate only the backoff; the real client still interprets API responses.
   t.mock.method(globalThis, "setTimeout", (resolve) => queueMicrotask(resolve));
-  const pkg = { name: "example", package_type: "container", visibility: "private" };
+  const pkg = { name: "example", package_type: "container", visibility: "public" };
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () =>
     ++calls === 1 ? new Response(null, { status: 404 }) : Response.json(pkg),
@@ -350,7 +351,7 @@ test("GHCR publication accepts omitted repository metadata without approval and 
   let pkg = {
     name: "openclaw-enterprise-controller",
     package_type: "container",
-    visibility: "private",
+    visibility: "public",
   };
   t.mock.method(globalThis, "fetch", async (url) => {
     const path = new URL(url).pathname;
@@ -366,11 +367,11 @@ test("GHCR publication accepts omitted repository metadata without approval and 
   pkg.repository = null;
   await verifyGhcr(image, digest, `sha-${sourceSha}`);
   for (const patch of [
-    { visibility: "public" },
+    { visibility: "private" },
     { visibility: undefined },
     { name: "other" },
     { repository: { ...repo, full_name: "openclaw/other" } },
-    { repository: { ...repo, private: false } },
+    { repository: { ...repo, private: true } },
     { repository: {} },
   ]) {
     const original = pkg;
@@ -421,7 +422,7 @@ test("container release requires exact successful CI identity and its aggregate 
   }
 });
 
-test("container publication requires main-only environments and private matching packages", () => {
+test("container publication requires main-only environments and public matching packages", () => {
   const environment = {
     name: "container-publish",
     can_admins_bypass: false,
@@ -440,7 +441,7 @@ test("container publication requires main-only environments and private matching
   const pkg = {
     name: "openclaw-enterprise/controller",
     package_type: "container",
-    visibility: "private",
+    visibility: "public",
     repository: repo,
   };
   validatePackage(pkg, image);
@@ -450,13 +451,13 @@ test("container publication requires main-only environments and private matching
     assert.throws(() => validatePackage(unreported, image));
     assert.equal(validatePackage(unreported, image, { allowMissingRepository: true }), false);
     assert.throws(() =>
-      validatePackage({ ...unreported, visibility: "public" }, image, {
+      validatePackage({ ...unreported, visibility: "private" }, image, {
         allowMissingRepository: true,
       }),
     );
   }
-  assert.throws(() => validatePackage({ ...pkg, visibility: "public" }, image));
-  assert.throws(() => validatePackage({ ...pkg, repository: { ...repo, private: false } }, image));
+  assert.throws(() => validatePackage({ ...pkg, visibility: "private" }, image));
+  assert.throws(() => validatePackage({ ...pkg, repository: { ...repo, private: true } }, image));
   assert.throws(() =>
     validatePackage({ ...pkg, repository: { full_name: "openclaw/openclaw" } }, image),
   );
@@ -469,6 +470,32 @@ test("container publication requires main-only environments and private matching
     "docker.io/openclaw/controller",
   ]) {
     assert.throws(() => ghcrPackageName(destination));
+  }
+});
+
+test("private packages are accepted only for explicit marker bootstrap", () => {
+  const image = "ghcr.io/openclaw/openclaw-enterprise-controller";
+  const pkg = {
+    name: "openclaw-enterprise-controller",
+    package_type: "container",
+    repository: repo,
+  };
+  for (const visibility of ["public", "private"]) {
+    validatePackage({ ...pkg, visibility }, image, { allowPrivateBootstrap: true });
+  }
+  assert.throws(() => validatePackage({ ...pkg, visibility: "private" }, image));
+  for (const patch of [
+    { visibility: "internal" },
+    { visibility: undefined },
+    { repository: { ...repo, private: true } },
+    { repository: { ...repo, full_name: "other/repository" } },
+    { name: "other" },
+  ]) {
+    assert.throws(() =>
+      validatePackage({ ...pkg, visibility: "private", ...patch }, image, {
+        allowPrivateBootstrap: true,
+      }),
+    );
   }
 });
 
@@ -608,9 +635,9 @@ test("metadata GET transport retries are bounded, diagnostic and do not retry de
         },
       };
     }
-    return Response.json({ visibility: "private" });
+    return Response.json({ visibility: "public" });
   });
-  assert.deepEqual(await github(path), { visibility: "private" });
+  assert.deepEqual(await github(path), { visibility: "public" });
   assert.equal(calls, 3);
   calls = 0;
   t.mock.method(globalThis, "fetch", async () => {

@@ -152,7 +152,7 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 Replace the endpoint. For authenticated export, select your protected
 `--from-file=exporter.yaml=...` and add referenced credentials from protected
 files to the exporter Secret. Update existing Secrets through your normal
-Secret-management workflow.
+Secret-management workflow, and [refresh them on upgrade](#refresh-the-collector-configuration-on-upgrade).
 
 Set the exact approved exporter or proxy IPv4 address and port in the protected
 values copy; `203.0.113.10/32` below is a placeholder:
@@ -182,6 +182,29 @@ Restart the Collector after changing either Secret to load its configuration:
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
   rollout restart daemonset/openclaw-enterprise-collector
 ```
+
+##### Refresh the Collector configuration on upgrade
+
+Helm never updates these Secrets, so an upgrade keeps the previous release's
+filtering until you refresh them. Before each upgrade, including image-only
+releases, reapply `collector.yaml` and `kubernetes.yaml` from the target
+revision's checkout and merge any reviewed local changes. Substitute your
+protected exporter file if you use one. Then restart the Collector as shown above:
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+  create secret generic occ-otel-collector-config \
+  --from-file=collector.yaml=deploy/logging/collector.yaml \
+  --from-file=kubernetes.yaml=deploy/logging/kubernetes.yaml \
+  --from-file=exporter.yaml=deploy/logging/exporter.yaml \
+  --dry-run=client --output yaml |
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system apply -f -
+```
+
+Review the `deploy/logging/` diff between the two revisions first.
+`scripts/upgrade-production-images` compares both files with its checkout and
+stops before any change when they differ. Pass `--collector-config-reviewed`
+only to keep a reviewed custom configuration.
 
 ## Tests
 

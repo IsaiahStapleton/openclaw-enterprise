@@ -18,6 +18,8 @@ let observabilityOwner = null;
 // Whether that owner administers the Installation: true, false, or null when unknown.
 let installationAdmin = null;
 const installationAccessStorageKey = "occ.console.installationAccess";
+const deniedReadsStorageKey = "occ.console.deniedReads";
+const deniedReadsLimit = 200;
 let loggingOut = false;
 let navigateAgentTab = null;
 let discardCreationOnExit = null;
@@ -100,6 +102,71 @@ function recalledInstallationAccess(owner) {
 function forgetInstallationAccess() {
   try {
     sessionStorage.removeItem(installationAccessStorageKey);
+  } catch {
+    // Nothing to clear without tab storage.
+  }
+}
+
+// Agent detail reads that the viewer's grants may not allow (saved settings, native admin
+// status) return 403, which the API audits as an authorization denial. This tab remembers
+// each denied API path for the same session owner so reloads and revisits do not add a
+// denial per view. The first denial is always requested and audited; views offer Retry,
+// which forgets the path and asks again. Paths hold resource IDs only, never credentials.
+function storedDeniedReads(owner) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(deniedReadsStorageKey) ?? "null");
+    if (
+      stored?.owner === owner &&
+      Array.isArray(stored.paths) &&
+      stored.paths.every((path) => typeof path === "string")
+    ) {
+      return stored.paths;
+    }
+  } catch {
+    // Unreadable tab storage asks again.
+  }
+  return [];
+}
+
+function storeDeniedReads(owner, paths) {
+  try {
+    sessionStorage.setItem(
+      deniedReadsStorageKey,
+      JSON.stringify({ owner, paths: paths.slice(-deniedReadsLimit) }),
+    );
+  } catch {
+    // Without tab storage the next view asks again.
+  }
+}
+
+function deniedReadsFor(owner) {
+  return {
+    has: (path) => Boolean(owner) && storedDeniedReads(owner).includes(path),
+    remember(path) {
+      if (owner) {
+        storeDeniedReads(owner, [
+          ...storedDeniedReads(owner).filter((item) => item !== path),
+          path,
+        ]);
+      }
+    },
+    forget(path) {
+      if (owner) {
+        const paths = storedDeniedReads(owner);
+        if (paths.includes(path)) {
+          storeDeniedReads(
+            owner,
+            paths.filter((item) => item !== path),
+          );
+        }
+      }
+    },
+  };
+}
+
+function forgetDeniedReads() {
+  try {
+    sessionStorage.removeItem(deniedReadsStorageKey);
   } catch {
     // Nothing to clear without tab storage.
   }
@@ -865,6 +932,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     const agentContext = {
       operatorId: session.user.id,
       installationAdmin,
+      deniedReads: deniedReadsFor(owner),
       drafts: drafts.scope(namespaceId, current.agentId ?? "create"),
       suspendDrafts: () => drafts.suspend(),
       view: shell.view,
@@ -1204,6 +1272,7 @@ async function logout() {
   const active = resetReads();
   clearPrivate();
   forgetInstallationAccess();
+  forgetDeniedReads();
   publicPanel("Signing out…", "Confirming that your session has ended.");
   let confirmed = false;
   try {

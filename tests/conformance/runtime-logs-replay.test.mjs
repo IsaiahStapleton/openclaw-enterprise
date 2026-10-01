@@ -182,6 +182,21 @@ test("real Gateway, wrapper and Codex output is classified, not withheld", async
   // Keys outside the operational allowlist (`intervalMs`, `providers`, `generatedAt`) drop.
   assert.ok(gateway.records.every(({ fields }) => fields === undefined));
 
+  // The Harness prints its node setup result as pretty-printed JSON; the whole value is
+  // one withheld run, and the wrapper events after it are still classified.
+  const harness = byFile["agent-harness-startup.kubelet.txt"];
+  assert.deepEqual(
+    harness.records
+      .slice(0, 2)
+      .map(({ type, reason, count, message }) => [type, reason ?? message, count]),
+    [
+      ["withheld", "malformed", 7],
+      ["line", "runtime.startup_phase", undefined],
+    ],
+  );
+  assert.equal(JSON.stringify(harness.records).includes("configPath"), false);
+  assert.ok(harness.records.some(({ message }) => message === "codex.model_probe"));
+
   const codex = byFile["codex-app-server-startup.kubelet.txt"];
   assert.equal(codex.withheld, 0);
   const tracing = codex.records.filter(({ kind }) => kind === "codex");

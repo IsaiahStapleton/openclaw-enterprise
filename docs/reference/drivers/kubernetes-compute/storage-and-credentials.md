@@ -17,8 +17,8 @@ its launcher and filesystem layout are concrete Kubernetes implementation choice
 | Execution        | The selected Harness owns execution and its workspace lifecycle.                          | Codex app-server executes turns; a separate node serves file, Memory and Skills operations.                                 |
 | Startup          | Compute delivers the selected workload and observes readiness.                            | The launcher supervises Codex and the file node separately, separates their credentials, and sets Codex shell/PATH options. |
 
-These Codex details belong in OCE because OCE deploys this Harness. They are not
-requirements for every Harness or additions to the public Compute contract.
+These deployment details are specific to Codex, not requirements for every
+Harness or additions to the public Compute contract.
 The file node's explicit command allowlist disables OpenClaw worker hosting;
 this launcher is not an OpenClaw remote worker launcher.
 
@@ -102,14 +102,15 @@ node; runtime upgrades use the operator-selected image and ordinary redeployment
 
 ## Harness storage
 
-Each dedicated Agent receives a `40Gi` `ReadWriteOnce` (RWO) filesystem claim
+Each dedicated Agent receives a `40Gi` `ReadWriteOnce` filesystem claim
 from the default StorageClass, mounted only by its Harness:
 
-| Subpath                                      | Harness mount                        |
-| -------------------------------------------- | ------------------------------------ |
-| `workspace`                                  | `/home/node/workspace`               |
-| `generated-images`                           | `/home/node/.codex/generated_images` |
-| `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
+| Subpath                                        | Harness mount                        |
+| ---------------------------------------------- | ------------------------------------ |
+| `codex-home` ([OAuth](codex-oauth-storage.md)) | `/home/node/.codex`                  |
+| `workspace`                                    | `/home/node/workspace`               |
+| `generated-images`                             | `/home/node/.codex/generated_images` |
+| `workspace-node-<agent-hash>-<harness-hash>`   | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
 The node Secret's setup code expires ten minutes after preparation mints it. A
@@ -235,7 +236,7 @@ reads the existing projection and does not refresh it from CP. See
 Deleting a source or runtime Secret does not revoke bytes a process loaded or a
 provider accepted.
 Transport rotation, finite token TTL and immediate revocation remain open; see
-[follow-up tracking](../../../../specs/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
+[follow-up tracking](../../../../specs/plans/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
 Embedded execution retains its combined workload and transport bundle; CP-backed
 model/configuration sources are delivered to that workload as needed. It is
 outside the dedicated trust-boundary acceptance scope.

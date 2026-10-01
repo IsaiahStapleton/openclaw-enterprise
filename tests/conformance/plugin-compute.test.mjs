@@ -3065,6 +3065,13 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                   const isLogin = args.includes("login");
                   if (isLogin) {
                     loginCalls++;
+                    const loginEnvironment = options.env ?? sandbox.process.env;
+                    assert.equal(Object.hasOwn(loginEnvironment, "APP_SERVER_TOKEN"), false);
+                    assert.equal(
+                      loginEnvironment.CODEX_LOGIN_MODE,
+                      sandbox.process.env.CODEX_LOGIN_MODE,
+                    );
+                    assert.equal(sandbox.process.env.APP_SERVER_TOKEN, "fixture-transport-token");
                   }
                   if (isLogin && scenario.pat) {
                     assert.equal(command, "codex");
@@ -3316,8 +3323,8 @@ test("Codex agent app-server uses a per-startup plugin status token", () => {
                       .join("\n"),
                   };
             },
-            spawn(command, args) {
-              appServerSpawn = { command, args };
+            spawn(command, args, options) {
+              appServerSpawn = { command, args, options };
               return { on() {}, kill() {} };
             },
           };
@@ -3340,6 +3347,11 @@ test("Codex agent app-server uses a per-startup plugin status token", () => {
       appServerSpawn.args[appServerSpawn.args.indexOf("--ws-token-sha256") + 1];
     assert.equal(digestArgument, sha256(expectedToken));
     assert.notEqual(digestArgument, sha256(baseToken));
+    // Node inherits the wrapper environment when spawn does not supply one.
+    const childEnvironment = appServerSpawn.options.env ?? sandbox.process.env;
+    assert.equal(Object.hasOwn(childEnvironment, "APP_SERVER_TOKEN"), false);
+    assert.equal(childEnvironment.PATH, sandbox.process.env.PATH);
+    assert.equal(sandbox.process.env.APP_SERVER_TOKEN, expectedToken);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

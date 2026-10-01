@@ -53,6 +53,13 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 
 ## Additional checks
 
+- [Experimental personal Codex login](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)
+  requires Namespace `agent:create`, or exact `agent:read` and `agent:update` for
+  an existing Agent. Start also requires `secret:create`; polling, cancellation,
+  and discovery require exact `secret:operate` and the initiating actor. The
+  staged login is an ordinary Secret, so other `secret:operate` holders can bind
+  or project it outside these operations.
+
 - [Channel directory lookup](../api.md#post-namespacesnamespaceidchanneldirectorylookup)
   requires `agent:create` in the Namespace, or `agent:update` or
   `configuration:update` on the exact edit target, plus `secret:operate` on the
@@ -78,8 +85,8 @@ needs its principal’s own grants; it does not inherit the issuer’s. See
 - [Agent runtime status](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntime)
   requires `agent:operate`, `agent:read` and `agent_revision:read`;
   [runtime log text](../api.md#get-namespacesnamespaceidagentsagentiddeploymentsdeploymentidruntimelogs)
-  requires `agent:read_logs` or `agent:administer`, plus `agent:read` and
-  `agent_revision:read`; a `read_logs` Restriction also blocks `administer`. See
+  requires `agent:read_logs` or `agent:administer`, plus `agent:read`, for every
+  revision of the Agent; a `read_logs` Restriction also blocks `administer`. See
   [Agent logs](../../guides/topics/agent-logs.md#who-can-see-what).
 - A first [Agent deployment](../agents/deployment.md#revisions-and-deployment)
   also requires exact-Agent `read` and `operate` when the selected Compute Driver
