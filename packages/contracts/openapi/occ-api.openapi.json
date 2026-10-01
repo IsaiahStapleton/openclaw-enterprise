@@ -687,6 +687,11 @@
                   { "const": "INTERNAL_ERROR", "type": "string" },
                   { "const": "DEPENDENCY_UNAVAILABLE", "type": "string" },
                   {
+                    "const": "CREDENTIAL_GATEWAY_NOT_CONFIGURED",
+                    "description": "The Installation selects no Credential Gateway, so credential sources cannot be registered.",
+                    "type": "string"
+                  },
+                  {
                     "const": "REPOSITORY_OPTIONS_UNAVAILABLE",
                     "description": "Only repository-option discovery is unavailable after Agent create authorization. An Agent without repository bindings may be submitted and is authorized again. Other dependency failures do not carry this meaning.",
                     "type": "string"

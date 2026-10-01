@@ -401,6 +401,61 @@ test("service API keys authenticate scoped automation without replacing sessions
       { env: adminEnv },
     );
     assert.deepEqual(JSON.parse(bindingRead.stdout), binding);
+    // A secret Role bound to the Namespace could never grant anything there: the CLI shows
+    // the API's refusal naming the Permissions instead of reporting a created binding.
+    const inapplicableFile = join(directory, "inapplicable-binding.json");
+    await writeFile(
+      inapplicableFile,
+      JSON.stringify({
+        subjectKind: "identity",
+        subjectId: boundAgent.servicePrincipalId,
+        roleId: role.id,
+        resourceKind: "namespace",
+        resourceId: namespaceId,
+      }),
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      run(occCli, ["iam", "access-binding", "create", "--file", inapplicableFile], {
+        env: adminEnv,
+      }),
+      (error) => {
+        assert.match(
+          error.stderr,
+          /HTTP 400\): INVALID_REQUEST: Role \S+ grants nothing on the namespace target: its Permissions \(secret:operate\)/,
+        );
+        return true;
+      },
+    );
+
+    // This Installation selects no Credential Gateway: the CLI names it and the reference
+    // instead of an opaque dependency failure.
+    policy.roles.push({
+      id: "cli-credential-source-creator",
+      namespaceId,
+      permissions: [{ action: "create", resourceKind: "credential_source" }],
+    });
+    policy.bindings.push({
+      id: "cli-credential-source-creator",
+      namespaceId,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "cli-credential-source-creator",
+    });
+    const sourceFile = join(directory, "credential-source.json");
+    await writeFile(sourceFile, JSON.stringify({ name: "openai-key", type: "openai" }), {
+      mode: 0o600,
+    });
+    await assert.rejects(
+      run(occCli, ["credential-source", "create", "--file", sourceFile], { env }),
+      (error) => {
+        assert.match(
+          error.stderr,
+          /HTTP 409\): CREDENTIAL_GATEWAY_NOT_CONFIGURED: This Installation has no Credential Gateway.*docs\/reference\/credential-sources\.md/,
+        );
+        return true;
+      },
+    );
     const runtimeInitial = await run(
       occCli,
       ["agent", "runtime-credentials", "get", agent.data.id, "-o", "json"],

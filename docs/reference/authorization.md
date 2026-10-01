@@ -184,7 +184,14 @@ ID. The narrower subject and target requirements below apply to creation.
 
 Every operation requires Installation `administer` and exact Namespace `read`,
 evaluated by the selected IAM Driver and applicable Restrictions. Creating a
-binding also requires `read` on its exact target. Ordinary resource access
+binding also requires `read` on its exact target.
+
+A binding applies only its Role's Permissions for the target's resource kind,
+and `create` is checked against the Namespace rather than an existing resource.
+Binding creation therefore returns `400 INVALID_REQUEST` (detail path
+`/roleId`) naming the Permissions when the Role has any `create` Permission or
+none for the target's kind. One Role may still name several kinds and be bound
+to a target of each. Ordinary resource access
 does not authorize delegation. Drivers without policy management return
 `503 DEPENDENCY_UNAVAILABLE`; OCC never substitutes native IAM.
 

@@ -7,7 +7,9 @@ import {
   ChannelDirectoryError,
   ChannelCredentialError,
   ConfigurationHarnessError,
+  CredentialGatewayNotConfiguredError,
   DependencyUnavailableError,
+  IAMAccessBindingRoleError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
@@ -328,6 +330,14 @@ export function requestFailure(error: unknown): RequestFailure {
           "The plugin service is unavailable. Retry discovery.",
         );
     }
+  }
+  if (error instanceof IAMAccessBindingRoleError) {
+    return failure(400, "INVALID_REQUEST", error.message, [
+      { path: "/roleId", code: "INVALID_VALUE" },
+    ]);
+  }
+  if (error instanceof CredentialGatewayNotConfiguredError) {
+    return failure(409, "CREDENTIAL_GATEWAY_NOT_CONFIGURED", error.message);
   }
   if (error instanceof ConfigurationHarnessError) {
     return failure(400, "INVALID_REQUEST", error.message);

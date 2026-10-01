@@ -82,6 +82,8 @@ A new account starts with no access. As a human Installation administrator:
    [attach their identity](../../reference/authentication/external-sign-in.md).
 
 Add actions such as `update` or `deploy` to the Role for more access; see
-[Authorization](../../reference/authorization.md) for actions and scope. Pass the
+[Authorization](../../reference/authorization.md) for actions and scope. A
+binding refuses a Role with `create` Permissions or none for its target's kind,
+because those grants could never apply. Pass the
 Installation administrator `roleId` at creation only for someone who
 administers the whole Installation.

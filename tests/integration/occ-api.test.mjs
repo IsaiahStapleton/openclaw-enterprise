@@ -1119,6 +1119,95 @@ test("credential withdrawal routes authorize the Agent, not the credential sourc
   );
 });
 
+test("Namespace IAM refuses bindings whose Role cannot apply to the target", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("inapplicable-role-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "inapplicable-role");
+  const agent = await createAgent(controller, namespace.id, "inapplicable-role-agent");
+  const createRole = async (permissions) => {
+    const role = await controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+      body: { permissions },
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    return role.data.id;
+  };
+  const bind = (roleId, resourceKind, resourceId) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId,
+        resourceKind,
+        resourceId,
+      },
+    });
+
+  // The dogfood "share the Namespace" attempt: create is authorized against the Namespace,
+  // never an exact resource, so these Permissions would be silently dropped at evaluation.
+  const creator = await createRole([
+    { action: "read", resourceKind: "namespace" },
+    { action: "create", resourceKind: "agent" },
+    { action: "create", resourceKind: "configuration" },
+    { action: "create", resourceKind: "secret" },
+  ]);
+  for (const [resourceKind, resourceId] of [
+    ["namespace", namespace.id],
+    ["agent", agent.id],
+  ]) {
+    const rejected = await bind(creator, resourceKind, resourceId);
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.deepEqual(rejected.body.error.details, [{ path: "/roleId", code: "INVALID_VALUE" }]);
+    assert.match(
+      rejected.body.error.message,
+      /agent:create, configuration:create, secret:create\. Create is authorized on the Namespace/,
+    );
+  }
+
+  // A Role with no Permission for the target's kind would grant nothing there.
+  const agentReader = await createRole([{ action: "read", resourceKind: "agent" }]);
+  const nothing = await bind(agentReader, "namespace", namespace.id);
+  assert.equal(nothing.status, 400, JSON.stringify(nothing.body));
+  assert.match(nothing.body.error.message, /grants nothing on the namespace target.*agent:read/);
+
+  // The same Role still binds to a target its Permissions name.
+  const granted = await bind(agentReader, "agent", agent.id);
+  assert.equal(granted.status, 201, JSON.stringify(granted.body));
+  const bindings = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+  );
+  assert.deepEqual(
+    bindings.data.map((binding) => binding.id),
+    [granted.data.id],
+    "refused bindings must leave policy unchanged",
+  );
+});
+
+test("credential source registration names the missing Credential Gateway", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "no-credential-gateway");
+  // This Installation selects no Credential Gateway, like the Kubernetes production profile;
+  // the missing gateway is reported before Namespace readiness or the source catalog.
+  const rejected = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/credential-sources`,
+    { body: { name: "openai-key", type: "openai" } },
+  );
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error.code, "CREDENTIAL_GATEWAY_NOT_CONFIGURED");
+  assert.match(rejected.body.error.message, /no Credential Gateway.*credential-sources\.md/);
+});
+
 test("Namespace IAM routes bind humans enrolled after bootstrap through the live resolver", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
