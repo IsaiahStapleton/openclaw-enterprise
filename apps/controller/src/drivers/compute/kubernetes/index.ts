@@ -685,6 +685,13 @@ const WORKSPACE_NODE_BINDING_ANNOTATION = "openclaw.dev/workspace-node-binding";
 // image test), with margin. A slower Gateway retries on the next pass.
 const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 20_000;
 const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
+// After the setup reaches the Harness of a first dedicated deploy, its node host
+// boots and pairs (7-12 s on a loaded dogfood k3d host, D25). The
+// preparation pass that delivered it watches for the pairing on one Gateway
+// connection for this long instead of ending pending and paying a full pass
+// (about 1-3 s of reconciliation) per check. The worker is serial, so keep it
+// short: a node that has not paired by then is checked again on the next pass.
+const WORKSPACE_NODE_PAIRING_WAIT_MS = 8_000;
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["state", "/home/node/.openclaw/state"],
@@ -1643,6 +1650,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private readonly sandboxDriver: SandboxDriver | undefined;
   private readonly credentialGatewayDriver: CredentialGatewayDriver | undefined;
   private readonly nodeEnrollment: GatewayNodeEnrollment | undefined;
+  // How long a first-deploy preparation pass waits for its node to pair.
+  private workspaceNodePairingWaitMs = WORKSPACE_NODE_PAIRING_WAIT_MS;
   private readonly readNodeCa: (() => Promise<string | undefined>) | undefined;
   private lifecycle: ComputeLifecycleDispatcher;
   private lifecycleOwners: readonly LifecycleOwnerSelection[];
@@ -3988,7 +3997,30 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
       // Enrolling the workspace node replaces the Harness and restarts its
       // Gateway. Wait for that Gateway before making enrollment RPCs.
-      const workspaceNodeIsReady = await this.workspaceNodeReady(revision, namespace);
+      const workspaceNodeIsReady = await this.workspaceNodeReady(
+        revision,
+        namespace,
+        this.workspaceNodePairingWaitMs,
+      );
+      if (
+        workspaceNodeIsReady &&
+        configuration.workspaceNodeBinding !== undefined &&
+        configuration.workspaceNodeId === undefined
+      ) {
+        // The node paired during this pass. The Gateway here is this revision's
+        // own, so hand it the node now, as the next pass would: its kubelet
+        // refresh and hot-apply then overlap the rest of this pass and the
+        // start of activation, which still waits for the Gateway's ack.
+        const deviceId = await this.workspaceNodeDeviceId(admittedRevision, namespace);
+        if (deviceId !== undefined) {
+          await this.deliverWorkspaceNodeBinding(
+            revision,
+            this.gatewayConfiguration(admittedRevision, deviceId, namespace),
+            gatewayNamespace,
+            gatewayOwnership,
+          );
+        }
+      }
       if (pluginStatusContainer === "gateway") {
         return ready(pluginWarnings, "gateway");
       }
@@ -7366,6 +7398,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
   private async workspaceNodeReady(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
+    pairingWaitMs = 0,
   ): Promise<boolean> {
     const enrollment = this.nodeEnrollment;
     const url = this.getGatewayEndpoint(revision);
@@ -7426,7 +7459,12 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       return enrollment.isConnected(url, deviceId, this.operationSignal());
     }
     const setupId = required(read("setupId"), "Workspace node setup ID");
-    const observation = await enrollment.observeSetup(url, setupId, this.operationSignal());
+    const observation = await enrollment.observeSetup(
+      url,
+      setupId,
+      this.operationSignal(),
+      pairingWaitMs > 0 ? { waitMs: pairingWaitMs } : undefined,
+    );
     if (observation === undefined) {
       // No completion is visible: the setup was never redeemed, or its
       // completion aged out of native status retention. Preparation renews an
