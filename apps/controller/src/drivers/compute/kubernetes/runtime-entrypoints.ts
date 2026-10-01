@@ -1765,6 +1765,35 @@ function probeOpenClawAuthenticationFailureCode() {
   return code;
 }
 
+// The full probe needs 10-20 s of local work before its model request. A
+// rejected credential is found first with one empty request to the default
+// endpoint, sent with the credential exactly as OpenClaw sends it: the provider
+// authenticates before validating, so only 401 means rejection. Anything else
+// (400, an error, the 10 s limit) proves nothing and the full probe decides,
+// so acceptance still needs a real model turn. A configured endpoint, API,
+// headers or request option other than allowPrivateNetwork, or an Anthropic
+// setup token, skips this request.
+const UPFRONT_ENDPOINTS = {
+  openai: ["https://api.openai.com/v1", "/responses", ["openai-responses", "openai-completions"], (key) => ({ authorization: "Bearer " + key })],
+  anthropic: ["https://api.anthropic.com", "/v1/messages", ["anthropic-messages"], (key) => !key.startsWith("sk-ant-oat") && { "x-api-key": key, "anthropic-version": "2023-06-01" }],
+};
+function credentialRejectedUpfront(provider, fragment, key, stage) {
+  fragment ??= {};
+  const [base, path, apis, authorize] = UPFRONT_ENDPOINTS[provider] ?? [];
+  const headers = authorize?.(key.trim());
+  if (!headers || Object.keys(fragment).some((name) => !["baseUrl", "api", "models", "request"].includes(name)) ||
+    Object.keys(fragment.request ?? {}).some((name) => name !== "allowPrivateNetwork") ||
+    String(fragment.baseUrl ?? base).replace(/\/+$/, "") !== base || !apis.includes(fragment.api ?? apis[0]) ||
+    JSON.stringify(fragment.models ?? []).includes('"headers"')) return false;
+  stage("preflight");
+  return require("node:child_process").spawnSync(process.execPath, ["-e",
+    'fetch(process.env.U,{method:"POST",headers:JSON.parse(process.env.H),body:"{}",signal:AbortSignal.timeout(8000)}).then((r)=>process.exit(r.status===401?3:0),()=>process.exit(0))',
+  ], {
+    env: { U: base + path, H: JSON.stringify({ ...headers, "content-type": "application/json" }), NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS, SSL_CERT_FILE: process.env.SSL_CERT_FILE },
+    stdio: "ignore", timeout: 10000, killSignal: "SIGKILL",
+  }).status === 3;
+}
+
 function runOpenClawAuthenticationProbe(fs, capMs) {
   const stageStartedAt = Date.now();
   const stage = (stage) => console.error(JSON.stringify({ event: "openclaw.model_probe_stage", stage, elapsedMs: Date.now() - stageStartedAt, capMs }));
@@ -1781,6 +1810,7 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
       !process.env[credentialEnvironment]?.trim()) return "UNAVAILABLE";
     const configuration = JSON.parse(process.env.OPENCLAW_HARNESS_PROBE_CONFIG);
     if (configuration.agents?.defaults?.model !== model) return "UNAVAILABLE";
+    if (credentialRejectedUpfront(provider, configuration.models?.providers?.[provider], process.env[credentialEnvironment], stage)) return "AUTHENTICATION_FAILED";
     configuration.agents.defaults.workspace = directory + "/workspace";
     fs.mkdirSync(directory + "/workspace", { mode: 0o700 });
     const configPath = directory + "/openclaw.json";
