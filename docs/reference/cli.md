@@ -126,6 +126,7 @@ audited.
 | `--tail N`             | Lines from the end of the stream, 1 to 1000 (default 200).                                                                        |
 | `--since DURATION`     | Only lines newer than a Go duration such as `10m`, up to `24h`.                                                                   |
 | `--follow`             | Poll every 2 seconds with the view's cursor until Ctrl-C.                                                                         |
+| `--level LEVEL`        | Only `error`, `warn`, `info` or `debug` lines and above, filtered by OCC; lines of unknown level stay. Default: every level.      |
 | `-o text` or `-o json` | Text lines (default) or NDJSON, one API record per line.                                                                          |
 
 Text output prints `TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value` per line.

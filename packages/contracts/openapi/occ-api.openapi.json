@@ -12902,6 +12902,20 @@
             }
           },
           {
+            "description": "Return only lines at this level or above; lines of unknown level, gaps and withheld counts are always returned. Default: every level.",
+            "in": "query",
+            "name": "minLevel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                { "const": "error", "type": "string" },
+                { "const": "warn", "type": "string" },
+                { "const": "info", "type": "string" },
+                { "const": "debug", "type": "string" }
+              ]
+            }
+          },
+          {
             "description": "Opaque cursor returned by the previous page of the same view.",
             "in": "query",
             "name": "cursor",

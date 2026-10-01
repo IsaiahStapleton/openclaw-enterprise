@@ -235,19 +235,49 @@ func TestAgentLogsBuildsTheQueryAndDefaultsToTheActiveRevision(t *testing.T) {
 		logPage("v1.a.b", logLine(1, "warn", "slow start")),
 	}}
 	out, _, err := runLogsCommand(t, context.Background(), stub,
-		"agent", "logs", "agt_1", "--source", "gateway", "--pod", "gw-0", "--previous", "--tail", "50", "--since", "10m")
+		"agent", "logs", "agt_1", "--source", "gateway", "--pod", "gw-0", "--previous", "--tail", "50", "--since", "10m", "--level", "warn")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := url.Values{
 		"source": {"gateway"}, "pod": {"gw-0"}, "previous": {"true"},
-		"tailLines": {"50"}, "sinceSeconds": {"600"},
+		"tailLines": {"50"}, "sinceSeconds": {"600"}, "minLevel": {"warn"},
 	}
 	if !reflect.DeepEqual(stub.queries[0], want) {
 		t.Fatalf("query = %v, want %v", stub.queries[0], want)
 	}
 	if got := strings.TrimSpace(out); got != `2026-09-30T12:00:01.000000001Z WARN openclaw [gateway] slow start method="GET /x" status=503` {
 		t.Fatalf("text output = %q", got)
+	}
+}
+
+func TestAgentLogsFollowKeepsTheLevelOnCursorPolls(t *testing.T) {
+	recordSleeps(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stub := &runtimeLogStub{t: t, activeID: "rev_1", pages: []func(http.ResponseWriter, url.Values){
+		logPage("v1.first.sig", logLine(1, "info", "ready")),
+		logPage("v1.second.sig", logLine(2, "warn", "slow")),
+	}}
+	stub.beforeLogPage = func(*http.Request) {
+		if len(stub.queries) == 2 {
+			cancel()
+		}
+	}
+	if _, _, err := runLogsCommand(t, ctx, stub,
+		"agent", "logs", "agt_1", "--source", "agent", "--follow", "--level", "info"); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.queries) != 2 {
+		t.Fatalf("queries = %v", stub.queries)
+	}
+	for index, query := range stub.queries {
+		if got := query.Get("minLevel"); got != "info" {
+			t.Fatalf("query %d minLevel = %q, want info", index, got)
+		}
+	}
+	if got := stub.queries[1].Get("cursor"); got != "v1.first.sig" {
+		t.Fatalf("poll cursor = %q", got)
 	}
 }
 
@@ -278,6 +308,7 @@ func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 		{"agent", "logs", "agt_1", "--source", "gateway", "--tail", "1001"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "--since", "25h"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "--follow", "--previous"},
+		{"agent", "logs", "agt_1", "--source", "gateway", "--level", "unknown"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "-o", "yaml"},
 		{"agent", "runtime", "agt_1", "-o", "text"},
 	} {

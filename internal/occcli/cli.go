@@ -1230,6 +1230,7 @@ type runtimeLogOptions struct {
 	tail     int
 	since    time.Duration
 	follow   bool
+	level    string
 }
 
 func (app *application) agentLogsCommand() *cobra.Command {
@@ -1255,6 +1256,7 @@ func (app *application) agentLogsCommand() *cobra.Command {
 	flags.IntVar(&options.tail, "tail", 200, "Lines from the end of the stream, 1 to 1000")
 	flags.DurationVar(&options.since, "since", 0, "Only lines newer than this duration, up to 24h")
 	flags.BoolVar(&options.follow, "follow", false, "Poll for new lines every 2 seconds")
+	flags.StringVar(&options.level, "level", "", "Minimum level: error, warn, info or debug (default: every level; lines of unknown level are always shown)")
 	_ = command.MarkFlagRequired("source")
 	return command
 }
@@ -1278,6 +1280,11 @@ func (options runtimeLogOptions) query() (url.Values, error) {
 	if options.follow && options.previous {
 		return nil, fmt.Errorf("--follow cannot be combined with --previous: the previous instance does not change")
 	}
+	switch options.level {
+	case "", "error", "warn", "info", "debug":
+	default:
+		return nil, fmt.Errorf("invalid --level %q: expected error, warn, info or debug", options.level)
+	}
 	query := url.Values{
 		"source":    {options.source},
 		"tailLines": {strconv.Itoa(options.tail)},
@@ -1290,6 +1297,9 @@ func (options runtimeLogOptions) query() (url.Values, error) {
 	}
 	if options.since > 0 {
 		query.Set("sinceSeconds", strconv.Itoa(max(1, int(math.Ceil(options.since.Seconds())))))
+	}
+	if options.level != "" {
+		query.Set("minLevel", options.level)
 	}
 	return query, nil
 }
@@ -1325,6 +1335,9 @@ func (app *application) runAgentLogs(command *cobra.Command, agentID string, opt
 			}
 			if pod := query.Get("pod"); pod != "" {
 				pageQuery.Set("pod", pod)
+			}
+			if level := query.Get("minLevel"); level != "" {
+				pageQuery.Set("minLevel", level)
 			}
 		}
 		page, err := client.GetAgentRuntimeLogs(namespace, agentID, revisionID, pageQuery)

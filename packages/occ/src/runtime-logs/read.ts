@@ -2,6 +2,7 @@ import type {
   AgentRuntimeDescription,
   AgentRuntimeLogChunk,
   AgentRuntimeLogRequest,
+  RuntimeLogLevel,
   RuntimeLogSourceId,
   RuntimeLogStream,
 } from "@openclaw-enterprise/contracts";
@@ -32,6 +33,41 @@ export interface RuntimeLogQuery {
   readonly tailLines: number;
   readonly sinceSeconds?: number;
   readonly cursor?: string;
+  /** Drop lines below this level; unknown-level lines, gaps and withheld counts stay. */
+  readonly minLevel?: RuntimeLogMinimumLevel;
+}
+
+export type RuntimeLogMinimumLevel = Exclude<RuntimeLogLevel, "unknown">;
+
+const LEVEL_RANK: Readonly<Record<RuntimeLogMinimumLevel, number>> = Object.freeze({
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3,
+});
+
+/**
+ * The page with lines below `minLevel` removed. It runs after the page is read,
+ * sanitized and its cursor signed, so the cursor still resumes after the last line
+ * read (shown or not), and gap and withheld records are kept.
+ */
+export function runtimeLogPageAtLevel(
+  page: RuntimeLogPage,
+  minLevel: RuntimeLogMinimumLevel | undefined,
+): RuntimeLogPage {
+  if (minLevel === undefined || minLevel === "debug") {
+    return page;
+  }
+  const floor = LEVEL_RANK[minLevel];
+  return Object.freeze({
+    ...page,
+    records: Object.freeze(
+      page.records.filter(
+        (record) =>
+          record.type !== "line" || record.level === "unknown" || LEVEL_RANK[record.level] >= floor,
+      ),
+    ),
+  });
 }
 
 /** Audit details for one view; never message text. */

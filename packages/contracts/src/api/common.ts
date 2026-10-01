@@ -159,6 +159,15 @@ export const AgentRuntimeLogsQuery = Type.Object(
         description: "Only lines newer than this many seconds, 1 to 86400.",
       }),
     ),
+    minLevel: Type.Optional(
+      Type.Union(
+        [Type.Literal("error"), Type.Literal("warn"), Type.Literal("info"), Type.Literal("debug")],
+        {
+          description:
+            "Return only lines at this level or above; lines of unknown level, gaps and withheld counts are always returned. Default: every level.",
+        },
+      ),
+    ),
     cursor: Type.Optional(
       Type.String({
         maxLength: 2048,
