@@ -172,7 +172,7 @@ failure status is published only after retries end.
 probe status `auth` (401/403 or invalid key), 401 to OpenClaw's first, empty
 request to a default OpenAI or Anthropic endpoint, or a Codex `turn.failed`
 event or access-token login error reporting 401 or 403. The worker then fails the deployment with
-`RUNTIME_AUTHENTICATION_FAILED` instead of waiting for the convergence deadline.
+`RUNTIME_AUTHENTICATION_FAILED` before the convergence deadline.
 A CPU-starved OpenClaw probe reports `MODEL_PROBE_CPU_STARVED`, failing with
 `RUNTIME_CPU_STARVED`.
 Other timeouts, provider server errors, and transport failures keep `MODEL_PROBE_TIMEOUT`,
