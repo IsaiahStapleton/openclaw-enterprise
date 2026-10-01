@@ -1228,6 +1228,9 @@ func (app *application) runAgentLogs(command *cobra.Command, agentID string, opt
 				cursor = *page.Cursor
 			}
 		}
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err := sleepContext(ctx, wait); err != nil {
 			return nil
 		}
