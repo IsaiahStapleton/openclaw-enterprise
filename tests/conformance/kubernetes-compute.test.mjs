@@ -1563,6 +1563,10 @@ test("activation fails with OpenClaw's reason when the Gateway cannot apply its 
   );
 });
 
+// The start-count ratchet for installs without network.pluginStatusProxySourceCidrs.
+// The second Gateway start is the price of omitting them: the development
+// launcher sets them (internal/occdev status_proxy_k3d.go), so its first deploys
+// take the single-start path pinned above.
 test("without a status proxy a dedicated Codex Gateway keeps its workspace node in the pod spec", async () => {
   const {
     state,
@@ -1592,6 +1596,11 @@ test("without a status proxy a dedicated Codex Gateway keeps its workspace node 
   await driver.activateRevision(revision, authContext(revision));
   const gateways = templates.filter(({ name }) => name === gatewayName);
   assert.equal(gateways.length, 2, "activation replaces the Gateway once");
+  assert.deepEqual(
+    templates.map(({ name }) => (name === agentName ? "harness" : name)),
+    [gatewayName, "harness", gatewayName],
+    "Harness 1 + Gateway 2",
+  );
   const activated = gateways.at(-1).template;
   assert.equal(environment(activated).OPENCLAW_WORKSPACE_NODE_ID, "node-1");
   assert.equal(environment(activated).OPENCLAW_WORKSPACE_NODE_PATH, undefined);
@@ -3840,6 +3849,108 @@ test("direct service account token is confined to the model container and exact 
         agents: { defaults: { model: "anthropic/claude" } },
       }),
     /compatible model provider/i,
+  );
+});
+
+test("credential withdrawal revokes through the revision's exact Sandbox", async () => {
+  const withdrawals = [];
+  const sandboxDriver = {
+    id: "sandbox-openshell",
+    capability: "sandbox",
+    facets: ["networking"],
+    harnessResource({ namespace, revision }) {
+      return {
+        namespaceName: namespace.name,
+        resourceName: `os-${revision.id}`,
+        agentId: revision.agentId,
+        revisionId: revision.id,
+      };
+    },
+    async cleanup() {},
+  };
+  let reportedSource;
+  const credentialGatewayDriver = {
+    id: "credential-gateway",
+    capability: "credential_gateway",
+    async withdraw(context) {
+      withdrawals.push(context);
+      return { sourceId: reportedSource ?? context.sourceId, state: "revoked" };
+    },
+  };
+  const driver = new KubernetesComputeDriver(options(), { sandboxDriver, credentialGatewayDriver });
+  const namespace = kubernetesNamespaceName(tenant.id);
+  const namespaceResource = {
+    ...driver.manifest("v1", "Namespace", namespace, { namespaceId: tenant.id }),
+    status: { phase: "Active" },
+  };
+  let namespaceExists = true;
+  driver.apiClients = Promise.resolve({
+    core: {
+      async listNamespace() {
+        return { items: namespaceExists ? [structuredClone(namespaceResource)] : [] };
+      },
+      async readNamespace() {
+        if (!namespaceExists) {
+          throw Object.assign(new Error("Not found"), { statusCode: 404 });
+        }
+        return structuredClone(namespaceResource);
+      },
+    },
+  });
+  const revision = {
+    id: "rev-withdraw",
+    namespaceId: tenant.id,
+    agentId: "agent-withdraw",
+    compute: { id: driver.id, implementation: driver.implementation },
+    sandboxDriverId: sandboxDriver.id,
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    createdAt: "2026-09-28T00:00:00.000Z",
+  };
+  const source = {
+    id: "cs_00000000-0000-4000-8000-000000000002",
+    namespaceId: tenant.id,
+    type: "openai",
+    driverId: credentialGatewayDriver.id,
+  };
+  const signal = AbortSignal.timeout(5_000);
+
+  // Compute hands the gateway the Sandbox provisioning created, in the Namespace's placement.
+  assert.deepEqual(await driver.withdrawCredentialSource(revision, source, signal), {
+    sourceId: source.id,
+    state: "revoked",
+  });
+  assert.equal(withdrawals[0].namespace.name, namespace);
+  assert.deepEqual(withdrawals[0].sandbox, {
+    namespaceName: namespace,
+    resourceName: "os-rev-withdraw",
+    agentId: revision.agentId,
+    revisionId: revision.id,
+  });
+  assert.equal(withdrawals[0].sourceId, source.id);
+  assert.equal(withdrawals[0].revision, revision);
+
+  // A gateway answer about another source is not evidence for this withdrawal.
+  reportedSource = "cs_00000000-0000-4000-8000-000000000003";
+  await assert.rejects(
+    driver.withdrawCredentialSource(revision, source, signal),
+    /withdrew another credential source/,
+  );
+
+  // Without the Namespace there is no Sandbox left to revoke, and the gateway is not called.
+  namespaceExists = false;
+  withdrawals.length = 0;
+  assert.deepEqual(await driver.withdrawCredentialSource(revision, source, signal), {
+    sourceId: source.id,
+    state: "absent",
+  });
+  assert.equal(withdrawals.length, 0);
+  await assert.rejects(
+    driver.withdrawCredentialSource(
+      { ...revision, compute: { id: "other-compute", implementation: driver.implementation } },
+      source,
+      signal,
+    ),
+    /another Compute Driver/,
   );
 });
 

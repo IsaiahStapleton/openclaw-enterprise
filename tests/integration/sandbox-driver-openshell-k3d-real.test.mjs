@@ -1709,6 +1709,14 @@ function createIntegrationSandboxDriverFactory(
           backend: backendFor(undefined),
         }).configureAgent(configuration, harness);
       },
+      harnessResource(context) {
+        // The bridge provisions through the real Driver, so its Sandbox identity is the same.
+        return new OpenShellSandboxDriver(selection.configuration, {
+          id: selection.id,
+          implementation: "openshell",
+          backend: backendFor(undefined),
+        }).harnessResource(context);
+      },
       async ensureNamespace(context) {
         try {
           const endpoint = await endpointForNamespace(context);
@@ -2449,6 +2457,120 @@ async function prepareProductionInstallation(
   };
 }
 
+/**
+ * Updates the source through the API, then withdraws it from the running Agent. After the
+ * worker records `revoked`, a completed turn from the same running Codex app server must
+ * fail this test. A rejected turn alone does not establish the cause of rejection.
+ */
+async function assertCredentialSourceUpdateAndLiveWithdrawal(topology) {
+  const { request, namespaceId } = topology;
+  const agentId = topology.agent.id;
+  const sourceId = topology.agent.harnessAuth.sourceId;
+  const current = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
+  assert.equal(current.status, 200, JSON.stringify(current.error));
+  const revision = { id: current.data.activeRevisionId, agentId };
+  assert.ok(revision.id, "the replaced Agent must have an active revision");
+  const harnessPod = await waitForProviderHarnessPod(topology.placement, revision);
+  const turn = (prompt) =>
+    requestCodexTurnFromOpenShellHarnessPod({
+      namespace: topology.placement,
+      harnessPod: harnessPod.metadata.name,
+      providerModel,
+      appServerTokenPath: `${credentialMountPath}/app-server-token`,
+      prompt,
+    });
+  const before = `OCC-OPENSHELL-BEFORE-${randomUUID()}`;
+  assert.match((await turn(`Reply with exactly ${before}.`)).assistant, new RegExp(before));
+  // The same Pod and containers must serve both turns: revocation reaches the running Harness.
+  const harnessProcess = async () => {
+    const pod = await resource("pod", harnessPod.metadata.name, topology.placement);
+    return {
+      uid: pod.metadata.uid,
+      restarts: (pod.status?.containerStatuses ?? []).map(({ name, restartCount }) => [
+        name,
+        restartCount,
+      ]),
+    };
+  };
+  const servingBefore = await harnessProcess();
+
+  // A bare update re-sends the current Secret value; a replacement switches the source's Secret.
+  const resynced = await request(
+    "PATCH",
+    `/namespaces/${namespaceId}/credential-sources/${sourceId}`,
+    {},
+  );
+  assert.equal(resynced.status, 200, JSON.stringify(resynced.error));
+  assert.deepEqual(resynced.data.status, { state: "ready" });
+  const replacement = await request("POST", `/namespaces/${namespaceId}/secrets`, {
+    name: `openshell-model-replacement-${randomUUID()}`,
+    value: process.env.OPENAI_API_KEY,
+  });
+  assert.equal(replacement.status, 201, JSON.stringify(replacement.error));
+  const replaced = await request(
+    "PATCH",
+    `/namespaces/${namespaceId}/credential-sources/${sourceId}`,
+    { secrets: { api_key: replacement.data.ref } },
+  );
+  assert.equal(replaced.status, 200, JSON.stringify(replaced.error));
+  assert.deepEqual(replaced.data.secrets, { api_key: replacement.data.ref });
+  assert.equal(JSON.stringify(replaced).includes(process.env.OPENAI_API_KEY), false);
+
+  // The API records the withdrawal; only the worker's confirmed detach makes it revoked.
+  const withdrawalPath = `/namespaces/${namespaceId}/agents/${agentId}/credential-sources/${sourceId}`;
+  const requested = await request("POST", `${withdrawalPath}/withdraw`);
+  assert.equal(requested.status, 202, JSON.stringify(requested.error));
+  assert.equal(requested.data.revisionId, revision.id);
+  assert.equal(typeof requested.data.requestedBy, "string");
+  const revoked = await waitFor(
+    "the worker to confirm credential revocation",
+    async () => {
+      const observed = await request("GET", `${withdrawalPath}/withdrawal`);
+      assert.equal(observed.status, 200, JSON.stringify(observed.error));
+      return observed.data.state === "revoked" ? observed.data : undefined;
+    },
+    180_000,
+  );
+  assert.ok(revoked.completedAt);
+  assert.equal(revoked.requestedBy, requested.data.requestedBy);
+  assert.equal(revoked.reason, "CREDENTIALS_WITHDRAWN");
+  const unchanged = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
+  assert.equal(unchanged.data.activeRevisionId, revision.id, "withdrawal must not redeploy");
+
+  // A successful turn after withdrawal violates the live-revocation boundary.
+  const after = `OCC-OPENSHELL-AFTER-${randomUUID()}`;
+  let observation;
+  let result;
+  let rejected = false;
+  try {
+    result = await turn(`Reply with exactly ${after}.`);
+  } catch (error) {
+    rejected = true;
+    observation = error instanceof Error ? error.message : String(error);
+  }
+  if (!rejected) {
+    observation = JSON.stringify(result);
+  }
+  assert.equal(
+    String(observation).includes(process.env.OPENAI_API_KEY),
+    false,
+    "a revoked turn must not expose the model key",
+  );
+  assert.equal(rejected, true, "a turn must not complete after credential withdrawal");
+  assert.deepEqual(
+    await harnessProcess(),
+    servingBefore,
+    "withdrawal must revoke from the running Harness without replacing or restarting it",
+  );
+
+  // The active revision still references the source, so it cannot be deleted yet.
+  const deletion = await request(
+    "DELETE",
+    `/namespaces/${namespaceId}/credential-sources/${sourceId}`,
+  );
+  assert.equal(deletion.status, 409, JSON.stringify(deletion.error));
+}
+
 async function nativeOpenClawTurnFailureDiagnostic(topology, gatewayPassword) {
   const redactions = [process.env.OPENAI_API_KEY, gatewayPassword, topology.appServerToken].filter(
     (secret) => typeof secret === "string" && secret.length > 0,
@@ -3005,6 +3127,13 @@ test(
         "OpenShell integration: tool filesystem and egress verified; testing Pod-absent replacement and cleanup.\n",
       );
       await assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology);
+      process.stderr.write(
+        "OpenShell integration: replacement verified; testing credential source update and live withdrawal.\n",
+      );
+      await assertCredentialSourceUpdateAndLiveWithdrawal(topology);
+      process.stderr.write(
+        "OpenShell integration: withdrawal recorded and post-withdrawal turn did not complete; testing embedded fail-closed.\n",
+      );
       await assertEmbeddedOpenShellFailsClosed(topology);
       return;
     }

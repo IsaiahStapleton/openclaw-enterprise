@@ -1275,10 +1275,19 @@ test("runtime log cursors bind one principal and view and are re-authorized on e
   assert.equal(views().length, 3);
 
   // Cursors are bound to the principal, target and signature.
+  const cursorParts = first.data.cursor.split(".");
+  const originalMac = cursorParts[2];
+  const tamperedMac = `${originalMac[0] === "A" ? "B" : "A"}${originalMac.slice(1)}`;
+  const tamperedCursor = `${cursorParts[0]}.${cursorParts[1]}.${tamperedMac}`;
+  assert.equal(
+    Buffer.from(originalMac, "base64url").equals(Buffer.from(tamperedMac, "base64url")),
+    false,
+    "the tamper control must change decoded MAC bytes",
+  );
   const readsBefore = driverReads(fixture).length;
   for (const [label, forged, session] of [
     ["foreign principal", first.data.cursor, other.session],
-    ["tampered", `${first.data.cursor.slice(0, -2)}AA`, viewer.session],
+    ["tampered", tamperedCursor, viewer.session],
     ["another source", first.data.cursor.replace("v1.", "v1.e"), viewer.session],
   ]) {
     const rejected = await fixture.request(

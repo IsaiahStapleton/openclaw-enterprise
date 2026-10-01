@@ -313,6 +313,25 @@ export interface CredentialSourceMetadata {
   readonly ref: CredentialSourceReference;
 }
 
+/**
+ * An authorized request to revoke one credential source from one Agent revision. `revoked`
+ * is recorded only after the Credential Gateway confirms the revision's placeholders no
+ * longer resolve; the revision cannot re-attach the source.
+ */
+export interface CredentialWithdrawal {
+  readonly namespaceId: string;
+  readonly agentId: string;
+  readonly revisionId: string;
+  readonly credentialSourceId: string;
+  readonly state: "pending" | "revoked";
+  readonly requestedBy: string;
+  readonly requestedAt: string;
+  readonly completedAt?: string;
+  /** The worker's most recent outcome code, for example why the withdrawal is still pending. */
+  readonly lastReason?: string;
+  readonly lastAttemptAt?: string;
+}
+
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
   | { readonly method: "codex_pat"; readonly source: SecretReference }
@@ -1094,6 +1113,16 @@ export interface CredentialRevisionContext extends CredentialGatewayContext {
   readonly sandbox?: SandboxResourceRef;
 }
 
+/** Names the one source to revoke from one provisioned revision Sandbox. */
+export interface CredentialWithdrawalContext extends CredentialGatewayContext {
+  /** Resolved by Compute: `name` is the runtime placement shared with the paired Sandbox. */
+  readonly namespace: Readonly<Namespace>;
+  readonly revision: Readonly<AgentRevision>;
+  /** The Sandbox provisioning created for `revision`. */
+  readonly sandbox: SandboxResourceRef;
+  readonly sourceId: string;
+}
+
 /** Opaque grant that only the paired SandboxDriver can consume. */
 export interface CredentialSourceAttachment {
   readonly sourceId: string;
@@ -1129,9 +1158,11 @@ export interface CredentialGatewayDriver extends Driver {
   attachmentStatus(
     context: CredentialRevisionContext,
   ): Promise<readonly CredentialAttachmentStatus[]>;
-  withdraw(
-    context: CredentialRevisionContext & { readonly sourceId: string },
-  ): Promise<CredentialAttachmentStatus>;
+  /**
+   * Returns `revoked` only on gateway evidence that the revision's placeholders no longer
+   * resolve, `absent` when the Sandbox no longer exists, and `pending` otherwise.
+   */
+  withdraw(context: CredentialWithdrawalContext): Promise<CredentialAttachmentStatus>;
 }
 
 export interface SandboxDriver extends Driver {
@@ -1144,6 +1175,13 @@ export interface SandboxDriver extends Driver {
   ): OpenClawConfigurationDocument;
   ensureNamespace?(context: SandboxNamespaceContext): Promise<void>;
   provisionHarness?(context: SandboxHarnessContext): Promise<SandboxResourceRef>;
+  /**
+   * The exact Sandbox `provisionHarness` creates for this revision, derived without effects.
+   * Required to revoke credentials from a running revision.
+   */
+  harnessResource?(
+    context: Pick<SandboxHarnessContext, "namespace" | "revision">,
+  ): SandboxResourceRef;
   /** Required for revision stop, retirement, and Namespace cleanup, independent of Harness ownership. */
   cleanup(
     context: SandboxNamespaceContext & { readonly revision?: Readonly<AgentRevision> },
@@ -1602,6 +1640,16 @@ export interface ComputeDriver extends Driver {
    * Compute Driver's runtime placement. Required to register Credential Gateway sources.
    */
   resolveSandboxNamespace?(namespace: Readonly<Namespace>): Promise<Readonly<Namespace>>;
+  /**
+   * Revokes `source` from the revision's paired Sandbox through the selected Credential
+   * Gateway. Returns `revoked` only after the gateway confirms revocation, and `absent` when
+   * the revision has no Sandbox or attachment left to revoke. Required for withdrawal.
+   */
+  withdrawCredentialSource?(
+    revision: Readonly<AgentRevision>,
+    source: Readonly<CredentialSource>,
+    signal: AbortSignal,
+  ): Promise<CredentialAttachmentStatus>;
   prepareRevision(
     revision: AgentRevision,
     context?: ComputeRevisionContext,
