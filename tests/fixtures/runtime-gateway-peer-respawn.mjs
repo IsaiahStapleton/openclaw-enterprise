@@ -27,6 +27,10 @@ const outageExit = process.env.OCC_TEST_GATEWAY_SCENARIO === "peer-outage-exit";
 const staleReplacement = process.env.OCC_TEST_GATEWAY_SCENARIO === "stale-replacement";
 let initialGateway;
 let replacementPeerReads = 0;
+let trackSamePeerOutage = false;
+let trackSamePeerRecovery = false;
+let samePeerOutageResponses = 0;
+let samePeerRecoveryResponses = 0;
 
 let peer = {
   revisionId,
@@ -42,7 +46,12 @@ let peer = {
 const server = createServer(async (request, response) => {
   assert.equal(request.url, "/openclaw/plugin-runtime/status");
   if (peer === undefined) {
-    response.writeHead(503).end();
+    const countOutage = trackSamePeerOutage;
+    response.writeHead(503).end(() => {
+      if (countOutage) {
+        samePeerOutageResponses++;
+      }
+    });
     return;
   }
   if (staleReplacement && peer.startupId === "harness-startup-2") {
@@ -79,7 +88,12 @@ const server = createServer(async (request, response) => {
     }
   }
   response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify(peer));
+  const countRecovery = trackSamePeerRecovery;
+  response.end(JSON.stringify(peer), () => {
+    if (countRecovery) {
+      samePeerRecoveryResponses++;
+    }
+  });
 });
 await new Promise((resolve) => server.listen(statusPort, "::1", resolve));
 
@@ -195,6 +209,7 @@ try {
   // A transient status outage does not require a new Gateway if the same
   // Harness returns. Observe production readiness before restoring the peer.
   const samePeer = peer;
+  trackSamePeerOutage = true;
   peer = undefined;
   await waitFor("the Gateway to become unready during a peer outage", 30_000, async () => {
     const status = await (
@@ -204,10 +219,24 @@ try {
     ).json();
     return status.phase === "starting" && !(await ready());
   });
+  let samePeerUnreadySamples = 0;
+  await waitFor("the Gateway to stay unready while peer status fails", 30_000, async () => {
+    const status = await (
+      await fetch(`http://127.0.0.1:${statusPort}/openclaw/plugin-runtime/status`, {
+        signal: AbortSignal.timeout(3_000),
+      })
+    ).json();
+    assert.equal(status.phase, "starting");
+    assert.equal(await ready(), false);
+    samePeerUnreadySamples++;
+    return samePeerOutageResponses >= 2 && samePeerUnreadySamples >= 2;
+  });
   const duringOutage = await gatewayProcess();
   assert.equal(duringOutage.length, 1);
   assert.equal(duringOutage[0].pid, before.pid);
   assert.equal(duringOutage[0].startTicks, before.startTicks);
+  trackSamePeerOutage = false;
+  trackSamePeerRecovery = true;
   peer = samePeer;
   await waitFor("the same peer to restore Gateway readiness", 60_000, async () => {
     const status = await (
@@ -215,8 +244,13 @@ try {
         signal: AbortSignal.timeout(3_000),
       })
     ).json();
-    return status.phase === "ready" && (await ready());
+    if (status.phase !== "ready") {
+      return false;
+    }
+    assert.ok(samePeerRecoveryResponses > 0, "readiness returned before a restored peer response");
+    return await ready();
   });
+  trackSamePeerRecovery = false;
   const afterOutage = await gatewayProcess();
   assert.equal(afterOutage.length, 1);
   assert.equal(afterOutage[0].pid, before.pid);
@@ -271,7 +305,9 @@ try {
     JSON.stringify({
       before: { pid: before.pid, startTicks: before.startTicks },
       after: { pid: after.pid, startTicks: after.startTicks },
-      samePeerRecovered: true,
+      samePeerOutageResponses,
+      samePeerUnreadySamples,
+      samePeerRecoveryResponses,
       unreadyAfterMs: unreadyAt,
       readyAgainAfterMs: readyAgainAt,
       workspaceNodeAckAfterMs: ackAt,

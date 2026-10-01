@@ -1875,14 +1875,16 @@ test(
           "-e",
           fixture,
         ],
-        { timeout: 600_000 * imageSmokeTimeoutMultiplier },
+        { timeout: 780_000 * imageSmokeTimeoutMultiplier },
       ));
     } catch (error) {
       const logs = await runDocker(["logs", containerName]).catch((logsError) => logsError);
       throw new Error(`${commandOutput(error)}\n${commandOutput(logs)}`, { cause: error });
     }
     const result = JSON.parse(stdout.trim().split("\n").at(-1));
-    assert.equal(result.samePeerRecovered, true);
+    assert.ok(result.samePeerOutageResponses >= 2);
+    assert.ok(result.samePeerUnreadySamples >= 2);
+    assert.ok(result.samePeerRecoveryResponses >= 1);
     assert.notDeepEqual(result.after, result.before);
     // The container, and the wrapper that is its main process, never restarted.
     const inspect = await runDocker([
