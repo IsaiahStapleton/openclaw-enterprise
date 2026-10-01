@@ -1341,7 +1341,9 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
       "node",
       image,
       "-e",
-      probe,
+      // The probe embeds the whole Harness entrypoint; bounded pieces keep each
+      // exec argument under Linux's 128 KiB MAX_ARG_STRLEN.
+      ...nodeProgramArguments(probe),
     ]);
     assert.match(stdout, /native-repository-shell-ready/);
   },
