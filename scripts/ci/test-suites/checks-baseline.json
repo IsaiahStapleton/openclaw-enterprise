@@ -40,6 +40,9 @@
       "path": "tests/conformance/kubernetes-compute.test.mjs"
     },
     {
+      "path": "tests/conformance/node-enrollment-client.test.mjs"
+    },
+    {
       "path": "tests/conformance/kubernetes-preflight.test.mjs"
     },
     {
