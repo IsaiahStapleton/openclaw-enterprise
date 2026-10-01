@@ -36,8 +36,9 @@ still block initial workspace files and Secret-backed environment projection.
    and selecting OpenClaw starts in Embedded mode. For OpenAI OpenClaw, a supported
    Installation also offers **Dedicated** under **Runtime details**. Anthropic
    OpenClaw stays Embedded.
-   For Codex, choose **OpenAI API key** or **Service Accounts**. OpenClaw uses
-   the provider's API key.
+   For Codex, choose **OpenAI API key**, **Service Accounts**, or **ChatGPT
+   OAuth** ([experimental](../../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login)).
+   OpenClaw uses the provider's API key.
    Use [OpenAI API keys](https://platform.openai.com/api-keys), or
    [OpenAI admin](https://admin.openai.com/) → your workspace → **Service accounts**
    to create a token with Codex scope.

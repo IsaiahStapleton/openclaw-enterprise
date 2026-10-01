@@ -26,7 +26,7 @@ Dedicated Codex supports selected concrete apps from the
 `all_actions`, `write_actions`, and `none`, independent per-tool
 enablement/approval overrides, a default reviewer, and the Codex destructive
 default in `driverPolicy`. It rejects per-tool reviewers.
-Nothing is selected by default. Scoped tool IDs must match the app's native
+Scoped tool IDs must match the app's native
 runtime inventory before startup can complete. The internal Codex catalog reader
 currently returns `tools: null`. This policy interface does not provide an HTTP
 catalog discovery endpoint.
@@ -38,6 +38,8 @@ effective review.
 The new policy paths still need
 [real Agent verification](../testing/plugins.md#current-proof-notes). There is
 no bundled Claude PluginDriver.
+
+**Experimental** OAuth discovery needs [login](../guides/deploy/credential-lifecycle.md#use-a-personal-codex-login).
 
 ## Lifecycle
 
