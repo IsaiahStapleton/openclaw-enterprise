@@ -95,6 +95,9 @@
   },
   "files": [
     {
+      "path": "tests/integration/qa-fixture-inputs.test.mjs"
+    },
+    {
       "path": "tests/integration/dev-codex-seccomp-failure.test.mjs"
     },
     {
@@ -218,7 +221,9 @@
     },
     {
       "path": "tests/conformance/postgres-transaction-unknown-commit.test.mjs",
-      "expectedTests": ["lost COMMIT response returns unknown without waiting for a hung rollback"]
+      "expectedTests": [
+        "lost COMMIT response returns unknown without waiting for a hung rollback"
+      ]
     },
     {
       "path": "tests/integration/native-admin-access.test.mjs",

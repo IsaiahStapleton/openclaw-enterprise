@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, copyFile, chmod, readFile, writeFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdtemp, mkdir, copyFile, chmod, open, readFile, writeFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -77,12 +78,21 @@ export function redactQaError(error) {
 
 export async function protectedText(path, label) {
   assert.ok(path, `${label} path is required`);
-  const info = await stat(path);
-  assert.ok(info.isFile() && (info.mode & 0o077) === 0, `${label} must be a private regular file`);
-  const value = (await readFile(path, "utf8")).trim();
-  assert.ok(value.length > 0, `${label} must not be empty`);
-  protectedValues.add(value);
-  return value;
+  // Check and read the same opened file; never follow a substituted symlink.
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await file.stat();
+    assert.ok(
+      info.isFile() && (info.mode & 0o077) === 0,
+      `${label} must be a private regular file`,
+    );
+    const value = (await file.readFile("utf8")).trim();
+    assert.ok(value.length > 0, `${label} must not be empty`);
+    protectedValues.add(value);
+    return value;
+  } finally {
+    await file.close();
+  }
 }
 
 export function launcherEnvironment() {
@@ -189,10 +199,12 @@ export async function createQaInstallation(context, controlPlane, artifacts) {
     retained: false,
     resources: createResourceScope({ cleanupTimeoutMs: 600_000 }),
     async record(name, value) {
+      // API results are evidence only: a fixed JSON suffix, a confined basename,
+      // and exclusive creation prevent replacing files or following symlinks.
       await writeFile(
         join(artifacts, `${controlPlane}-${name.replaceAll(/[^a-zA-Z0-9-]/g, "-")}.json`),
         JSON.stringify(value, null, 2) + "\n",
-        { mode: 0o600 },
+        { mode: 0o600, flag: "wx" },
       );
     },
     async run(command, args, options = {}) {
@@ -587,8 +599,8 @@ export async function createQaAgent(f, presetName, browserOrigin, nameSuffix = "
     process.env[codex ? "OCC_TEST_QA_CODEX_TOKEN_FILE" : "OCC_TEST_QA_OPENAI_KEY_FILE"],
     "model credential",
   );
-  const model = process.env[codex ? "OCC_TEST_QA_CODEX_MODEL" : "OCC_TEST_QA_OPENAI_MODEL"];
-  assert.ok(model, "explicit model selection is required");
+  const model =
+    process.env[codex ? "OCC_TEST_QA_CODEX_MODEL" : "OCC_TEST_QA_OPENAI_MODEL"] || "gpt-6-luna";
   const rendered = renderPresetTemplate(preset.template, {
     name: `qa-${f.suffix}-${presetName}${nameSuffix}`,
     model,

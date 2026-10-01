@@ -489,7 +489,7 @@ jobs:
           } else if (lane === "logging-collector") {
             out["logging-collector"] = needs["logging-collector"] ?? { result: "missing" };
           }
-          for (const name of ["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "k3d-otel"]) {
+          for (const name of ["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "k3d-otel", "qa-matrix"]) {
             if (lane === "all" || lane === name) {
               out[name] = needs[name] ?? { result: "missing" };
             }
