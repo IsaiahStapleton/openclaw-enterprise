@@ -191,6 +191,38 @@ try {
     await setTimeout(60_000);
     throw new Error("Gateway wrapper did not reject the stale replacement peer.");
   }
+
+  // A transient status outage does not require a new Gateway if the same
+  // Harness returns. Observe production readiness before restoring the peer.
+  const samePeer = peer;
+  peer = undefined;
+  await waitFor("the Gateway to become unready during a peer outage", 30_000, async () => {
+    const status = await (
+      await fetch(`http://127.0.0.1:${statusPort}/openclaw/plugin-runtime/status`, {
+        signal: AbortSignal.timeout(3_000),
+      })
+    ).json();
+    return status.phase === "starting" && !(await ready());
+  });
+  const duringOutage = await gatewayProcess();
+  assert.equal(duringOutage.length, 1);
+  assert.equal(duringOutage[0].pid, before.pid);
+  assert.equal(duringOutage[0].startTicks, before.startTicks);
+  peer = samePeer;
+  await waitFor("the same peer to restore Gateway readiness", 60_000, async () => {
+    const status = await (
+      await fetch(`http://127.0.0.1:${statusPort}/openclaw/plugin-runtime/status`, {
+        signal: AbortSignal.timeout(3_000),
+      })
+    ).json();
+    return status.phase === "ready" && (await ready());
+  });
+  const afterOutage = await gatewayProcess();
+  assert.equal(afterOutage.length, 1);
+  assert.equal(afterOutage[0].pid, before.pid);
+  assert.equal(afterOutage[0].startTicks, before.startTicks);
+  assert.equal(afterOutage[0].token, before.token);
+
   await waitFor("the first workspace node ack", 60_000, workspaceNodeAck);
   const assetsBefore = (await stat("/home/node/openclaw-runtime-assets/bundled-skills")).mtimeMs;
 
@@ -239,6 +271,7 @@ try {
     JSON.stringify({
       before: { pid: before.pid, startTicks: before.startTicks },
       after: { pid: after.pid, startTicks: after.startTicks },
+      samePeerRecovered: true,
       unreadyAfterMs: unreadyAt,
       readyAgainAfterMs: readyAgainAt,
       workspaceNodeAckAfterMs: ackAt,

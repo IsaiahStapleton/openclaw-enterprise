@@ -1882,6 +1882,7 @@ test(
       throw new Error(`${commandOutput(error)}\n${commandOutput(logs)}`, { cause: error });
     }
     const result = JSON.parse(stdout.trim().split("\n").at(-1));
+    assert.equal(result.samePeerRecovered, true);
     assert.notDeepEqual(result.after, result.before);
     // The container, and the wrapper that is its main process, never restarted.
     const inspect = await runDocker([
