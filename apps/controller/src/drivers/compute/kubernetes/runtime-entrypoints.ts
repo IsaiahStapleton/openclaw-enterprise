@@ -1756,16 +1756,19 @@ function probeOpenClawAuthenticationFailureCode() {
   const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
   const [quota, period] = cgroup("cpu.max").split(" ");
   const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
-  const waited = () => (/^some .*total=(\d+)/m.exec(cgroup("cpu.pressure")) ?? /throttled_usec (\d+)/.exec(cgroup("cpu.stat")))?.[1] / 1000;
-  const startedAt = Date.now(), before = waited();
+  const read = (name) => (name === "cpu.pressure" ? /^some .*total=(\d+)/m : /throttled_usec (\d+)/).exec(cgroup(name))?.[1] / 1000;
+  const startedAt = Date.now(), pressure = read("cpu.pressure"), metric = Number.isFinite(pressure) ? "cpu.pressure" : "cpu.stat", before = metric === "cpu.pressure" ? pressure : read(metric);
   let code = runOpenClawAuthenticationProbe(fs, capMs);
-  const elapsedMs = Date.now() - startedAt, cpuWaitMs = Math.round(waited() - before);
+  const elapsedMs = Date.now() - startedAt, after = read(metric), cpuWaitMs = Math.round(Number.isFinite(after) && after >= before ? after - before : NaN);
   if (code === "CAP") code = cpuWaitMs > elapsedMs / 4 ? "MODEL_PROBE_CPU_STARVED" : "MODEL_PROBE_TIMEOUT";
   console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY" }));
   return code;
 }
 
 function runOpenClawAuthenticationProbe(fs, capMs) {
+  const stageStartedAt = Date.now();
+  const stage = (stage) => console.error(JSON.stringify({ event: "openclaw.model_probe_stage", stage, elapsedMs: Date.now() - stageStartedAt, capMs }));
+  stage("prepare");
   const { spawnSync } = require("node:child_process");
   const temporary = (process.env.TMPDIR || "/tmp").replace(/\/+$/, "");
   const directory = fs.mkdtempSync(temporary + "/openclaw-auth-probe-");
@@ -1782,6 +1785,7 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
     fs.mkdirSync(directory + "/workspace", { mode: 0o700 });
     const configPath = directory + "/openclaw.json";
     fs.writeFileSync(configPath, JSON.stringify(configuration), { mode: 0o600 });
+    stage("spawn");
     const result = spawnSync("node", [
       "/app/openclaw.mjs", "models", "status", "--json", "--probe",
       "--probe-provider", provider, "--probe-concurrency", "1",
@@ -1802,6 +1806,7 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: capMs, killSignal: "SIGKILL", maxBuffer: 262144,
     });
+    stage("returned");
     if (result.error?.code === "ETIMEDOUT") return "CAP";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
@@ -1814,7 +1819,9 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
   } catch {
     return "MODEL_PROBE_FAILED";
   } finally {
+    stage("cleanup");
     fs.rmSync(directory, { recursive: true, force: true });
+    stage("complete");
   }
 }
 `;

@@ -3,6 +3,7 @@ import { createPluginDiscovery } from "./plugin-discovery.mjs";
 import { createSlackApproverField } from "./slack-approvers.mjs";
 import { assertReadableConfiguration, message } from "./list.mjs";
 import { createDeviceLogin } from "./device-login.mjs";
+import { configuredHarnessId } from "./harness-auth.mjs";
 
 export function renderAgentPlugins(
   context,
@@ -70,6 +71,7 @@ export function renderAgentPlugins(
   let catalogCapabilityError = false;
   const hasBoundCredential =
     agent.harnessAuth?.method === "codex_pat" && agent.harnessAuth.source?.kind === "secret";
+  const codex = configuredHarnessId(snapshot.values) === "codex";
   const oauthLogin = createDeviceLogin({
     context,
     agentId: agent.id,
@@ -79,9 +81,7 @@ export function renderAgentPlugins(
       discovery.reset();
     },
   });
-  oauthLogin.setActive(
-    agent.executionMode === "dedicated" && agent.harnessAuth?.method === "oauth",
-  );
+  oauthLogin.setActive(codex && agent.harnessAuth?.method === "oauth");
   const getSlackBotSecretId = () => {
     const source = snapshot.secretBindings?.SLACK_BOT_TOKEN?.source;
     return source?.kind === "secret" && source.namespaceId === context.namespaceId
@@ -94,14 +94,14 @@ export function renderAgentPlugins(
     catalogPath: `${path}/plugins`,
     requestBody: (body) => (oauthLogin.source ? { ...body, oauthLogin: oauthLogin.source } : body),
     canDiscover: () =>
-      agent.executionMode === "dedicated" &&
+      codex &&
       (catalogCredential === "none" ||
         (catalogCredential === "required" && (hasBoundCredential || Boolean(oauthLogin.source)))),
-    canPrefetch: () => hasBoundCredential || Boolean(oauthLogin.source),
+    canPrefetch: () => codex && (hasBoundCredential || Boolean(oauthLogin.source)),
     isPending: () => pending,
     unavailableMessage: () =>
-      agent.executionMode !== "dedicated"
-        ? "Plugin browsing requires a dedicated Agent. You can still edit existing plugin selections."
+      !codex
+        ? "Plugin browsing requires the Codex harness. You can still edit existing plugin selections."
         : !catalogCapabilityChecked
           ? "Checking plugin catalog availability…"
           : catalogCapabilityError

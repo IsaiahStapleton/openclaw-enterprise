@@ -3,6 +3,36 @@ import { message, namespacePath } from "./list.mjs";
 import { createSecretReferenceField, renderSecretReference } from "./secret-picker.mjs";
 import { createDeviceLogin } from "./device-login.mjs";
 
+// Display native model policy; deployment admission owns full Configuration validation.
+export function configuredHarnessId(values) {
+  const defaults = values?.agents?.defaults;
+  const entries = Object.values(values?.agents?.entries ?? {});
+  const selection = defaults?.model ?? entries.find((entry) => entry?.model)?.model;
+  const model = typeof selection === "string" ? selection : selection?.primary;
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const providerId = model.split("/", 1)[0];
+  const provider = values?.models?.providers?.[providerId];
+  const providerModels = Array.isArray(provider?.models) ? provider.models : [];
+  const policies = [
+    defaults?.models?.[model],
+    ...entries.map((entry) => entry?.models?.[model]),
+    providerModels.find(
+      (entry) => entry?.id === model || entry?.id === model.slice(providerId.length + 1),
+    ),
+    provider,
+  ];
+  const runtimes = new Set(policies.map((policy) => policy?.agentRuntime?.id).filter(Boolean));
+  if (runtimes.size === 1) {
+    const [runtime] = runtimes;
+    return ["codex", "openclaw"].includes(runtime) ? runtime : undefined;
+  }
+  return runtimes.size === 0 && !provider && !["openai", "codex"].includes(providerId)
+    ? "openclaw"
+    : undefined;
+}
+
 export function harnessAuthDescription(binding) {
   if (!binding) {
     return "None selected";
@@ -37,21 +67,14 @@ export function renderHarnessAuthSummary(context, binding) {
   );
 }
 
-export function createHarnessAuthFields(
-  context,
-  binding = null,
-  executionMode = "embedded",
-  options = {},
-) {
+export function createHarnessAuthFields(context, binding = null, harnessId, options = {}) {
   const method = element(
     "select",
     { id: "harness-auth-method" },
     element("option", { value: "" }, "None"),
     element("option", { value: "api_key" }, "API key"),
-    executionMode === "dedicated"
-      ? element("option", { value: "codex_pat" }, "Service Accounts")
-      : null,
-    executionMode === "dedicated"
+    harnessId === "codex" ? element("option", { value: "codex_pat" }, "Service Accounts") : null,
+    harnessId === "codex"
       ? element("option", { value: "oauth" }, "ChatGPT OAuth (Experimental)")
       : null,
     element("option", { value: "runtime" }, "Operator-managed credentials"),

@@ -280,6 +280,12 @@
       "path": "tests/conformance/plugin-compute.test.mjs"
     },
     {
+      "path": "tests/conformance/runtime-probe-cpu-counter.test.mjs"
+    },
+    {
+      "path": "tests/conformance/runtime-model-probe-settlement.test.mjs"
+    },
+    {
       "path": "tests/conformance/plugin-runtime-policy.test.mjs"
     },
     {

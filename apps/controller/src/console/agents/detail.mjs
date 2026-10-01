@@ -1,5 +1,9 @@
 import { element, button } from "../dom.mjs";
-import { createHarnessAuthFields, renderHarnessAuthSummary } from "./harness-auth.mjs";
+import {
+  configuredHarnessId,
+  createHarnessAuthFields,
+  renderHarnessAuthSummary,
+} from "./harness-auth.mjs";
 import { renderAgentAccess } from "./access.mjs";
 import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { createAgentDeletion } from "./deletion.mjs";
@@ -1834,11 +1838,16 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         harnessAuth: agent.harnessAuth,
       };
       let syncUnsavedAuthentication = () => {};
-      const auth = createHarnessAuthFields(context, agent.harnessAuth, agent.executionMode, {
-        agentName: agent.name,
-        draft: retained?.fields,
-        onChange: () => syncUnsavedAuthentication(),
-      });
+      const auth = createHarnessAuthFields(
+        context,
+        agent.harnessAuth,
+        configuredHarnessId(values),
+        {
+          agentName: agent.name,
+          draft: retained?.fields,
+          onChange: () => syncUnsavedAuthentication(),
+        },
+      );
       const feedback = element("p", { role: "status", className: "hint" });
       const save = element(
         "button",
