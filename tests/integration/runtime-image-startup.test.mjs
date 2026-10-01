@@ -1108,6 +1108,7 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
     tmpfs = ["/home/node:size=1024m,uid=1000,gid=1000,mode=700"],
     volumes = [],
     waitUntilReady = true,
+    withAppServer = true,
   } = options;
   const containerName = `oce-runtime-image-${harnessId}-${randomBytes(6).toString("hex")}`;
   t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
@@ -1120,8 +1121,12 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
     "OPENCLAW_GATEWAY_PORT=8080",
     "OPENCLAW_GATEWAY_PASSWORD=openclaw-runtime-image-smoke-password",
     "OPENCLAW_STATE_DIR=/home/node/.openclaw",
-    "APP_SERVER_URL=ws://127.0.0.1:9",
-    "APP_SERVER_TOKEN=openclaw-runtime-image-app-server-token",
+    ...(withAppServer
+      ? [
+          "APP_SERVER_URL=ws://127.0.0.1:9",
+          "APP_SERVER_TOKEN=openclaw-runtime-image-app-server-token",
+        ]
+      : []),
     "HOME=/home/node",
     ...extraEnvironment,
   ];
@@ -1169,6 +1174,19 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
     const logs = await runDocker(["logs", containerName]).catch((logsError) => logsError);
     throw new Error(`${error.message}\n${commandOutput(logs)}`, { cause: error });
   }
+}
+
+// The native Gateway process's environment, as OpenClaw itself sees it.
+async function gatewayProcessEnvironment(containerName) {
+  const { stdout } = await runDocker([
+    "exec",
+    containerName,
+    "node",
+    "-e",
+    'const fs = require("node:fs"); for (const pid of fs.readdirSync("/proc")) { try { if (fs.readFileSync("/proc/" + pid + "/cmdline", "utf8").startsWith("openclaw-gateway")) { process.stdout.write(fs.readFileSync("/proc/" + pid + "/environ", "utf8")); break; } } catch {} }',
+  ]);
+  assert.notEqual(stdout, "", "the native Gateway process must be running");
+  return stdout.split("\0");
 }
 
 async function assertGatewayRuntimeAssets(containerName) {
@@ -1514,6 +1532,36 @@ test(
     const runtimeStopTimeoutMs = Number(stdout.trim());
     assert.ok(runtimeStopTimeoutMs > 0 && runtimeStopTimeoutMs <= GATEWAY_STOP_TIMEOUT_MS);
     assertNoPackagingFailure(logs);
+  },
+);
+
+test(
+  "runtime image tells OpenClaw that a read-only Kubernetes configuration is externally managed",
+  imageTestOptions,
+  async (t) => {
+    // An embedded OpenClaw Gateway starts from the Configuration OCC mounts read-only.
+    const configurationPath = await temporaryGatewayConfiguration(t, "openclaw");
+    const { containerName } = await runGatewaySmoke(t, "openclaw", {
+      configurationPath: "/etc/openclaw/openclaw.json",
+      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+      withAppServer: false,
+    });
+    assert.ok(
+      (await gatewayProcessEnvironment(containerName)).includes("OPENCLAW_CONFIG_READONLY=1"),
+    );
+    // OpenClaw promotes its last-known-good backup just after it reports ready.
+    const deadline = Date.now() + 20_000 * imageSmokeTimeoutMultiplier;
+    let logs = "";
+    while (!logs.includes("heartbeat: started") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const output = await runDocker(["logs", containerName]);
+      logs = `${output.stdout}\n${output.stderr}`;
+    }
+    assert.match(logs, /heartbeat: started/);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const output = await runDocker(["logs", containerName]);
+    assert.doesNotMatch(`${output.stdout}\n${output.stderr}`, /last-known-good|EROFS/);
   },
 );
 

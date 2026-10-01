@@ -127,6 +127,16 @@ When the startup wrapper holds a failed check, the event adds it, for example
 [Harness authentication](../../reference/harness-execution.md#harness-authentication)
 for the probe codes.
 
+## A Gateway log asks for a restart to apply the model catalog
+
+OpenClaw downloads its hosted model catalog in the background and logs
+`remote model catalog downloaded; restart the Gateway to apply it`. No action
+is needed: the Gateway keeps serving with the catalog it started with, and the
+download applies, if at all, at its next start. To stop this background
+traffic, set `models.catalogRefresh.enabled` to `false` in the Agent's
+Configuration and deploy it; the Gateway then uses only the catalog bundled in
+the runtime image.
+
 ## Authentication fails after installation
 
 Use the intended credential: `occ installation get` uses the protected service
