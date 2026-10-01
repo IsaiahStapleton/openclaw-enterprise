@@ -117,17 +117,17 @@ ends with each Pod's Events (`POD`, `CONTAINER`, `TYPE`, `REASON`, `COUNT`,
 Agent `administer` and `read` plus `read` on the revision, and each view is
 audited.
 
-| `occ agent logs` flag  | Meaning                                                                                                                           |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `--source SOURCE`      | Required: `gateway`, `agent` (dedicated Harness container) or `sandbox` (OpenShell policy decisions; no `--pod` or `--previous`). |
-| `--revision ID`        | Revision to read; defaults to the active revision, else the latest revision.                                                      |
-| `--pod NAME`           | Pod to read when the source has more than one.                                                                                    |
-| `--previous`           | Read the container instance before the last restart.                                                                              |
-| `--tail N`             | Lines from the end of the stream, 1 to 1000 (default 200).                                                                        |
-| `--since DURATION`     | Only lines newer than a Go duration such as `10m`, up to `24h`.                                                                   |
-| `--follow`             | Poll every 2 seconds with the view's cursor until Ctrl-C.                                                                         |
-| `--level LEVEL`        | Only `error`, `warn`, `info` or `debug` lines and above, filtered by OCC; lines of unknown level stay. Default: every level.      |
-| `-o text` or `-o json` | Text lines (default) or NDJSON, one API record per line.                                                                          |
+| `occ agent logs` flag  | Meaning                                                                                                                                                                                                    |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--source SOURCE`      | Required: `gateway`, `agent` (dedicated Harness container) or `sandbox` (OpenShell policy decisions; no `--pod` or `--previous`).                                                                          |
+| `--revision ID`        | Revision to read; defaults to the active revision, else the latest revision.                                                                                                                               |
+| `--pod NAME`           | Pod to read when the source has more than one.                                                                                                                                                             |
+| `--previous`           | Read the container instance before the last restart.                                                                                                                                                       |
+| `--tail N`             | Lines from the end of the stream, 1 to 1000 (default 200).                                                                                                                                                 |
+| `--since DURATION`     | Only lines newer than a Go duration such as `10m`, up to `24h`.                                                                                                                                            |
+| `--follow`             | Poll every 2 seconds with the view's cursor until Ctrl-C.                                                                                                                                                  |
+| `--level LEVEL`        | Only `error`, `warn`, `info` or `debug` lines and above, filtered by OCC after `--tail` (the last N lines are read, then filtered, so fewer may print); lines of unknown level stay. Default: every level. |
+| `-o text` or `-o json` | Text lines (default) or NDJSON, one API record per line.                                                                                                                                                   |
 
 Text output prints `TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value` per line.
 Gap and withheld records are printed to stderr as `notice:` lines; in JSON mode

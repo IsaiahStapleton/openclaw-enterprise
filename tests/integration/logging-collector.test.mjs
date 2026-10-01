@@ -286,6 +286,26 @@ test(
           keyHash: `limitkey${fixture.suffix}`,
           ...payload,
         }),
+        JSON.stringify({
+          event: "authentication.provider-unavailable-warning",
+          severity: "WARN",
+          provider: "oidc",
+          providerId: `oidc:providerkey${fixture.suffix}`,
+          step: "token",
+          cause: "connect_refused",
+          code: "ECONNREFUSED",
+          ...payload,
+        }),
+        JSON.stringify({
+          event: "authentication.provider-unavailable-warning",
+          severity: "WARN",
+          provider: "github",
+          providerId: `github:providerkey${fixture.suffix}`,
+          step: "profile",
+          cause: "http_status",
+          status: 503,
+          ...payload,
+        }),
       ],
       [],
       ["com.docker.compose.service=controller"],
@@ -301,10 +321,14 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 5);
+    await waitFor(async () => (await records()).length >= 7);
     const initial = await records();
-    assert.equal(initial.length, 5, "only reviewed JSON classes and Codex stderr pass");
-    const warningEvents = ["compute.preflight-warning", "authentication.sign-in-limited"];
+    assert.equal(initial.length, 7, "only reviewed JSON classes and Codex stderr pass");
+    const warningEvents = [
+      "compute.preflight-warning",
+      "authentication.sign-in-limited",
+      "authentication.provider-unavailable-warning",
+    ];
     for (const { resource, record } of initial) {
       assert.ok(record.timeUnixNano, "OTLP record has an Engine timestamp");
       assert.equal(
@@ -319,6 +343,8 @@ test(
     }
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
+      "occ-api",
+      "occ-api",
       "occ-api",
       "occ-api",
       "occ-worker",
@@ -351,9 +377,41 @@ test(
       "log.iostream": "stdout",
       "occ.sign_in.lane": "email",
     });
+    // A provider outage keeps the provider, step, bounded cause, and transport code or
+    // HTTP status; the provider instance ID stays in local logs.
+    const outages = initial
+      .filter(
+        ({ record }) => record.body.stringValue === "authentication.provider-unavailable-warning",
+      )
+      .map(({ record }) => {
+        assert.equal(record.severityText, "WARN");
+        return attributes(record.attributes);
+      })
+      .sort((left, right) =>
+        left["occ.sign_in.provider"].localeCompare(right["occ.sign_in.provider"]),
+      );
+    assert.deepEqual(outages, [
+      {
+        "event.name": "authentication.provider-unavailable-warning",
+        "log.iostream": "stdout",
+        "occ.sign_in.provider": "github",
+        "occ.sign_in.step": "profile",
+        "occ.sign_in.cause": "http_status",
+        "occ.sign_in.status": "503",
+      },
+      {
+        "event.name": "authentication.provider-unavailable-warning",
+        "log.iostream": "stdout",
+        "occ.code": "ECONNREFUSED",
+        "occ.sign_in.provider": "oidc",
+        "occ.sign_in.step": "token",
+        "occ.sign_in.cause": "connect_refused",
+      },
+    ]);
     const serialized = JSON.stringify(initial);
     assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
     assert.equal(serialized.includes(`limitkey${fixture.suffix}`), false);
+    assert.equal(serialized.includes(`providerkey${fixture.suffix}`), false);
     for (const value of [...canaries, "forged-service", "forged-agent"]) {
       assert.equal(serialized.includes(value), false);
     }

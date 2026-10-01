@@ -164,7 +164,9 @@ OCC `compute.preflight-warning` records retain WARN severity and bounded `occ.co
 the local diagnostic message is excluded from remote export.
 `authentication.sign-in-limit-warning` keeps `occ.code`, and
 `authentication.sign-in-limited` keeps only `occ.sign_in.lane`; its local key
-hash is not exported. It drops malformed,
+hash is not exported. `authentication.provider-unavailable-warning` keeps
+`occ.sign_in.provider`, `.step`, `.cause` and `.status`, plus a transport code as
+`occ.code`; the provider instance ID stays local. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex protocol stdout records.
 Collector-only configuration holds exporter credentials and TLS settings. Finite
 queues and retries make logs best-effort; outage or overflow cannot block API
@@ -206,6 +208,8 @@ for panels, correlation, and authorization limits.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-01 14:45: Export sign-in provider outage warnings with bounded provider, step, cause and status attributes. (collector-auth-warning - 769c8cd88)
 
 - 2026-09-25 11:31: Documented query-time operational summaries and filtering in the accompanying demo dashboard change. (redacted - 1a458b227585c572ec0ac70fd10efc3834165075)
 
