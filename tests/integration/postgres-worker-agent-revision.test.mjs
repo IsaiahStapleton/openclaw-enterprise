@@ -318,6 +318,10 @@ async function setup(
     };
     const idempotencyKey = `agent_revision:${candidate.id}:reconcile`;
     await state.transactWithQueue(async (unit, queue) => {
+      // Match production Namespace→Agent admission order so queue foreign keys
+      // cannot deadlock with a worker holding the Namespace while locking the Agent.
+      await unit.namespaces.lockNamespace(namespace.id);
+      await unit.agents.lockAgent(namespace.id, owner.id);
       await unit.revisions.createRevision(candidate);
       await unit.agents.transitionAgentDesiredRuntimeState(
         namespace.id,
