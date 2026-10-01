@@ -1148,7 +1148,11 @@ export class PostgresHumanAuthentication {
     });
   }
 
-  async recordDenied(reason: HumanAuthenticationDenial): Promise<void> {
+  /** `provider` names the external sign-in provider whose callback was refused. */
+  async recordDenied(
+    reason: HumanAuthenticationDenial,
+    provider?: "github" | "google" | "oidc",
+  ): Promise<void> {
     if (
       ![
         "INVALID_CREDENTIALS",
@@ -1156,7 +1160,8 @@ export class PostgresHumanAuthentication {
         "EXTERNAL_IDENTITY_REJECTED",
         "SESSION_REJECTED",
         "PROVIDER_UNAVAILABLE",
-      ].includes(reason)
+      ].includes(reason) ||
+      (provider !== undefined && !["github", "google", "oidc"].includes(provider))
     ) {
       throw new ScopeViolationError("The authentication denial classification is invalid.");
     }
@@ -1172,6 +1177,7 @@ export class PostgresHumanAuthentication {
         resource: { kind: "installation", id: this.installationId },
         outcome: "denied",
         reasonCode: reason,
+        ...(provider === undefined ? {} : { details: { provider } }),
       }),
     );
   }

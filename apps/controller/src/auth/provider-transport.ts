@@ -1,6 +1,6 @@
 import { APIError } from "better-auth";
 
-// Bounded HTTP transport shared by the GitHub and Google sign-in providers.
+// Bounded HTTP transport shared by the GitHub, Google and OIDC sign-in providers.
 
 export function rejected(): APIError {
   return APIError.fromStatus("UNAUTHORIZED", { message: "Authentication was not accepted." });
@@ -33,10 +33,18 @@ export type ProviderEndpoint =
   | "https://oauth2.googleapis.com/token"
   | "https://www.googleapis.com/oauth2/v3/certs";
 
+declare const pinnedEndpoint: unique symbol;
+/**
+ * An operator-configured OIDC endpoint that passed the startup checks in oidc.ts (HTTPS on
+ * 443, the issuer's DNS host, no userinfo, query or fragment). Only that parser constructs
+ * one; request input never chooses what the controller fetches.
+ */
+export type PinnedEndpoint = string & { readonly [pinnedEndpoint]: true };
+
 // A provider's fixed requests share a deadline, including streaming body reads.
 // Only a well-formed 4xx answer is a rejection; every other failure is unavailability.
 export async function providerJSON(
-  endpoint: ProviderEndpoint,
+  endpoint: ProviderEndpoint | PinnedEndpoint,
   init: RequestInit,
   signal: AbortSignal,
 ): Promise<Record<string, unknown>> {
@@ -48,7 +56,7 @@ export async function providerJSON(
 }
 
 async function readProviderJSON(
-  endpoint: ProviderEndpoint,
+  endpoint: ProviderEndpoint | PinnedEndpoint,
   init: RequestInit,
   signal: AbortSignal,
 ): Promise<Record<string, unknown>> {

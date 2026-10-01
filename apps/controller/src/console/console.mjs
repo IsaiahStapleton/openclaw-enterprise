@@ -31,6 +31,7 @@ let externalSessionBinding = false;
 const externalAttemptStorageKeys = {
   github: "occ.console.githubAttempt",
   google: "occ.console.googleAttempt",
+  oidc: "occ.console.oidcAttempt",
 };
 const externalProviders = {
   github: {
@@ -43,7 +44,34 @@ const externalProviders = {
     origin: "https://accounts.google.com",
     pathname: "/o/oauth2/v2/auth",
   },
+  // The operator configures the IdP: discovery supplies its label and authorization
+  // endpoint, and the start URL must use exactly that HTTPS endpoint.
+  oidc: {
+    label: "single sign-on",
+    origin: null,
+    pathname: null,
+  },
 };
+
+// Adopts discovery's OIDC settings; false when they are missing or malformed.
+function configureOidc(signIn) {
+  try {
+    const endpoint = new URL(signIn?.authorizationUrl);
+    const label = signIn?.label;
+    if (
+      endpoint.protocol !== "https:" ||
+      typeof label !== "string" ||
+      label.length === 0 ||
+      label.length > 40
+    ) {
+      return false;
+    }
+    externalProviders.oidc = { label, origin: endpoint.origin, pathname: endpoint.pathname };
+    return true;
+  } catch {
+    return false;
+  }
+}
 const bindingValue = /^[A-Za-z0-9_-]{43}$/;
 
 // A failed provider sign-in. Where password sign-in is recovery-only, ordinary users
@@ -462,6 +490,7 @@ function showLogin(message = "", returnPath = null) {
         }
         const authorization = new URL(result.url);
         if (
+          origin === null ||
           authorization.origin !== origin ||
           authorization.pathname !== pathname ||
           (externalSessionBinding && !bindingValue.test(result.attemptId ?? ""))
@@ -490,6 +519,8 @@ function showLogin(message = "", returnPath = null) {
   };
   const github = providerButton("github");
   const google = providerButton("google");
+  // Created once discovery has supplied its label and endpoint.
+  let oidc = null;
   const recovery = button(
     "Recovery sign-in",
     () => {
@@ -505,6 +536,9 @@ function showLogin(message = "", returnPath = null) {
     submit.disabled = disabled;
     github.disabled = disabled;
     google.disabled = disabled;
+    if (oidc !== null) {
+      oidc.disabled = disabled;
+    }
   }
   const providers = element("div", { className: "auth-providers" });
   let pending = false;
@@ -576,8 +610,16 @@ function showLogin(message = "", returnPath = null) {
         if (available?.google === true) {
           providers.append(google);
         }
+        if (available?.oidc === true && configureOidc(available.oidcSignIn)) {
+          oidc = providerButton("oidc");
+          oidc.disabled = pending;
+          providers.append(oidc);
+        }
         // Only an explicit false hides the form: failed or older discovery keeps it.
-        if (available?.password === false && (available.github || available.google)) {
+        if (
+          available?.password === false &&
+          (available.github || available.google || available.oidc)
+        ) {
           recoveryOnly = true;
           if (feedback.textContent === describe(true)) {
             feedback.textContent = describe(false);

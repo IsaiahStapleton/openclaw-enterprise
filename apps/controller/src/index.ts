@@ -3481,14 +3481,26 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           response: responses({
             type: "object",
             additionalProperties: false,
-            required: ["github", "google", "password", "sessionBinding"],
+            required: ["github", "google", "oidc", "password", "sessionBinding"],
             properties: {
               github: { type: "boolean" },
               google: { type: "boolean" },
+              oidc: { type: "boolean" },
+              oidcSignIn: {
+                type: "object",
+                description:
+                  "Present only when OIDC sign-in is configured: the Console's button label and the configured authorization endpoint that the start URL must use.",
+                additionalProperties: false,
+                required: ["label", "authorizationUrl"],
+                properties: {
+                  label: { type: "string", minLength: 1, maxLength: 40 },
+                  authorizationUrl: { type: "string", format: "uri" },
+                },
+              },
               password: {
                 type: "boolean",
                 description:
-                  "False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password.",
+                  "False when password sign-in is recovery-only: ordinary accounts sign in with an external provider, and only the recovery account uses a password.",
               },
               sessionBinding: { type: "boolean" },
             },
@@ -3499,153 +3511,121 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         reply.header("cache-control", "no-store");
         const github = options.auth.githubEnabled === true;
         const google = options.auth.googleEnabled === true;
+        const oidc = options.auth.oidcEnabled === true;
         const password = options.auth.passwordSignIn !== "recovery-only";
         return {
-          data: { github, google, password, sessionBinding: github || google },
+          data: {
+            github,
+            google,
+            oidc,
+            ...(oidc && options.auth.oidcSignIn !== undefined
+              ? { oidcSignIn: options.auth.oidcSignIn }
+              : {}),
+            password,
+            sessionBinding: github || google || oidc,
+          },
           meta: { requestId: request.id },
         };
       },
     );
-    routes.post(
-      "/api/auth/providers/github/start",
+    const externalSignInProviders = [
       {
-        schema: {
-          operationId: "startGitHubSignIn",
-          summary: "Start GitHub sign-in for an enrolled account",
-          description:
-            "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
-          tags: ["Authentication"],
-          security: [],
-          response: {
-            ...responses({
+        name: "github",
+        label: "GitHub",
+        operation: "GitHub",
+        start: options.auth.githubStart,
+        callback: options.auth.githubCallback,
+        result: options.auth.githubResult,
+      },
+      {
+        name: "google",
+        label: "Google",
+        operation: "Google",
+        start: options.auth.googleStart,
+        callback: options.auth.googleCallback,
+        result: options.auth.googleResult,
+      },
+      {
+        name: "oidc",
+        label: "OIDC",
+        operation: "Oidc",
+        start: options.auth.oidcStart,
+        callback: options.auth.oidcCallback,
+        result: options.auth.oidcResult,
+      },
+    ] as const;
+    for (const provider of externalSignInProviders) {
+      routes.post(
+        `/api/auth/providers/${provider.name}/start`,
+        {
+          schema: {
+            operationId: `start${provider.operation}SignIn`,
+            summary: `Start ${provider.label} sign-in for an enrolled account`,
+            description:
+              "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
+            tags: ["Authentication"],
+            security: [],
+            response: {
+              ...responses({
+                type: "object",
+                additionalProperties: false,
+                required: ["url", "attemptId"],
+                properties: {
+                  url: { type: "string", format: "uri" },
+                  attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
+                },
+              }),
+              403: { description: "Forbidden", ...error },
+            },
+          },
+        },
+        async (request, reply) => provider.start(request, reply),
+      );
+      routes.get(
+        `/api/auth/providers/${provider.name}/callback`,
+        {
+          schema: {
+            operationId: `complete${provider.operation}SignIn`,
+            summary: `Complete an enrolled ${provider.label} sign-in`,
+            description:
+              "Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.",
+            tags: ["Authentication"],
+            security: [],
+            response: { 302: { description: "Redirect to Console", type: "null" } },
+          },
+        },
+        async (request, reply) => provider.callback(request, reply),
+      );
+      routes.post(
+        `/api/auth/providers/${provider.name}/result`,
+        {
+          schema: {
+            operationId: `confirm${provider.operation}SignIn`,
+            summary: `Confirm which session a ${provider.label} sign-in created`,
+            description:
+              "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
+            tags: ["Authentication"],
+            security: [{ sessionCookie: [] }],
+            body: {
               type: "object",
               additionalProperties: false,
-              required: ["url", "attemptId"],
-              properties: {
-                url: { type: "string", format: "uri" },
-                attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
-              },
-            }),
-            403: { description: "Forbidden", ...error },
+              required: ["attemptId"],
+              properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
+            },
+            response: {
+              ...responses({
+                type: "object",
+                additionalProperties: false,
+                required: ["sessionKey"],
+                properties: { sessionKey: { type: "string" } },
+              }),
+              403: { description: "Forbidden", ...error },
+            },
           },
         },
-      },
-      async (request, reply) => options.auth.githubStart(request, reply),
-    );
-    routes.get(
-      "/api/auth/providers/github/callback",
-      {
-        schema: {
-          operationId: "completeGitHubSignIn",
-          summary: "Complete an enrolled GitHub sign-in",
-          description:
-            "Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.",
-          tags: ["Authentication"],
-          security: [],
-          response: { 302: { description: "Redirect to Console", type: "null" } },
-        },
-      },
-      async (request, reply) => options.auth.githubCallback(request, reply),
-    );
-    routes.post(
-      "/api/auth/providers/github/result",
-      {
-        schema: {
-          operationId: "confirmGitHubSignIn",
-          summary: "Confirm which session a GitHub sign-in created",
-          description:
-            "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
-          tags: ["Authentication"],
-          security: [{ sessionCookie: [] }],
-          body: {
-            type: "object",
-            additionalProperties: false,
-            required: ["attemptId"],
-            properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
-          },
-          response: {
-            ...responses({
-              type: "object",
-              additionalProperties: false,
-              required: ["sessionKey"],
-              properties: { sessionKey: { type: "string" } },
-            }),
-            403: { description: "Forbidden", ...error },
-          },
-        },
-      },
-      async (request, reply) => options.auth.githubResult(request, reply),
-    );
-    routes.post(
-      "/api/auth/providers/google/start",
-      {
-        schema: {
-          operationId: "startGoogleSignIn",
-          summary: "Start Google sign-in for an enrolled account",
-          description:
-            "Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.",
-          tags: ["Authentication"],
-          security: [],
-          response: {
-            ...responses({
-              type: "object",
-              additionalProperties: false,
-              required: ["url", "attemptId"],
-              properties: {
-                url: { type: "string", format: "uri" },
-                attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
-              },
-            }),
-            403: { description: "Forbidden", ...error },
-          },
-        },
-      },
-      async (request, reply) => options.auth.googleStart(request, reply),
-    );
-    routes.get(
-      "/api/auth/providers/google/callback",
-      {
-        schema: {
-          operationId: "completeGoogleSignIn",
-          summary: "Complete an enrolled Google sign-in",
-          description:
-            "Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.",
-          tags: ["Authentication"],
-          security: [],
-          response: { 302: { description: "Redirect to Console", type: "null" } },
-        },
-      },
-      async (request, reply) => options.auth.googleCallback(request, reply),
-    );
-    routes.post(
-      "/api/auth/providers/google/result",
-      {
-        schema: {
-          operationId: "confirmGoogleSignIn",
-          summary: "Confirm which session a Google sign-in created",
-          description:
-            "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
-          tags: ["Authentication"],
-          security: [{ sessionCookie: [] }],
-          body: {
-            type: "object",
-            additionalProperties: false,
-            required: ["attemptId"],
-            properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
-          },
-          response: {
-            ...responses({
-              type: "object",
-              additionalProperties: false,
-              required: ["sessionKey"],
-              properties: { sessionKey: { type: "string" } },
-            }),
-            403: { description: "Forbidden", ...error },
-          },
-        },
-      },
-      async (request, reply) => options.auth.googleResult(request, reply),
-    );
+        async (request, reply) => provider.result(request, reply),
+      );
+    }
 
     const accountParams = {
       type: "object",
@@ -3671,7 +3651,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return failure(
         409,
         "RESOURCE_CONFLICT",
-        "Account controls require GitHub or Google sign-in; the password-only profile does not support them.",
+        "Account controls require GitHub, Google or OIDC sign-in; the password-only profile does not support them.",
       );
     }
     async function humanAccountActor(
@@ -3809,6 +3789,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         summary: "Attach an exact Google identity to an existing account",
       },
       {
+        operationName: "oidc",
+        path: "/api/auth/accounts/:userId/providers/oidc",
+        operationId: "attachOidcIdentity",
+        summary: "Attach an exact OIDC identity to an existing account",
+      },
+      {
         operationName: "disable",
         path: "/api/auth/accounts/:userId/disable",
         operationId: "disableAuthAccount",
@@ -3873,14 +3859,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               type: "object",
               additionalProperties: false,
               required:
-                operationName === "github" || operationName === "google"
+                operationName === "github" ||
+                operationName === "google" ||
+                operationName === "oidc"
                   ? ["subject", "expectedVersion"]
                   : ["expectedVersion"],
               properties: {
                 expectedVersion: { type: "integer", minimum: 1, maximum: 2147483647 },
                 ...(operationName === "github"
                   ? { subject: { type: "string", pattern: "^[1-9][0-9]{0,19}$" } }
-                  : operationName === "google"
+                  : operationName === "google" || operationName === "oidc"
                     ? { subject: { type: "string", pattern: "^[\\x21-\\x7E]{1,255}$" } }
                     : {}),
               },
@@ -3923,6 +3911,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             }
             const { subject } = request.body as { subject: string };
             await options.auth.attachGoogle(userId, subject, actor, expectedVersion);
+          } else if (operationName === "oidc") {
+            if (!options.auth.attachOidc || !options.auth.oidcEnabled) {
+              throw failure(409, "RESOURCE_CONFLICT", "OIDC sign-in is not configured.");
+            }
+            const { subject } = request.body as { subject: string };
+            await options.auth.attachOidc(userId, subject, actor, expectedVersion);
           } else if (operationName === "detach") {
             if (!options.auth.detachMethod) {
               throw dependencyUnavailable();
@@ -4181,7 +4175,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           operationId: "signInEmail",
           summary: "Sign in with email and password",
           description:
-            "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub or Google sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.",
+            "Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub, Google or OIDC sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.",
           tags: ["Authentication"],
           security: [],
           body: {
