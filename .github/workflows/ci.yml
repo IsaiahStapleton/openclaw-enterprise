@@ -42,19 +42,30 @@ jobs:
           policy=$(mktemp "$RUNNER_TEMP/ci-impact-policy.XXXXXX.mjs")
           trap 'rm -f "$policy"' EXIT
           trusted_policy() {
+            reason=bootstrap_non_pr_event
             [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || return 1
+            reason=bootstrap_event_unavailable
             base=$(jq -er '.pull_request.base.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
             head=$(jq -er '.pull_request.head.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
+            reason=bootstrap_invalid_identity
             oid='^([0-9a-f]{40}|[0-9a-f]{64})$'
             [[ $base =~ $oid && $head =~ $oid && ${GITHUB_SHA:-} =~ $oid ]] || return 1
+            reason=bootstrap_git_inspection_failed
             actual=$(git rev-parse --verify 'HEAD^{commit}') || return 1
+            reason=bootstrap_checkout_mismatch
             [ "$actual" = "$GITHUB_SHA" ] || return 1
+            reason=bootstrap_git_inspection_failed
             parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
+            reason=bootstrap_checkout_mismatch
             [ "$parents" = "$base $head" ] || return 1
+            reason=bootstrap_git_inspection_failed
             git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
             entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            reason=bootstrap_policy_unavailable
             [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
+            reason=bootstrap_git_inspection_failed
             git cat-file blob "${BASH_REMATCH[1]}" > "$policy" || return 1
+            reason=bootstrap_policy_unavailable
             [ -s "$policy" ]
           }
           if trusted_policy; then
@@ -65,11 +76,53 @@ jobs:
             fi
           elif [ "$IMPACT_ACTION" = select ]; then
             printf 'CI impact: full (trusted base policy unavailable)\n'
-            printf 'mode=full\n' >> "$GITHUB_OUTPUT"
+            printf 'mode=full\nreason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
           else
             [ "$EXPECTED_MODE" = full ] || exit 1
             printf 'CI impact: full (trusted base policy unavailable)\n'
           fi
+
+      - name: Summarize impact selection
+        if: ${{ always() }}
+        env:
+          SELECT_OUTCOME: ${{ steps.select.outcome }}
+          SELECT_MODE: ${{ steps.select.outputs.mode }}
+          SELECT_REASON: ${{ steps.select.outputs.reason }}
+        run: |
+          # Output only fixed literals, even when workflow inputs are untrusted.
+          mode=unavailable
+          reason=unavailable
+          if [ "$SELECT_OUTCOME" = success ]; then
+            case "$SELECT_MODE" in
+              docs|full) mode="$SELECT_MODE" ;;
+            esac
+            case "$mode:$SELECT_REASON" in
+              docs:docs_only) reason=docs_only ;;
+              full:non_pr_event) reason=non_pr_event ;;
+              full:bootstrap_non_pr_event) reason=bootstrap_non_pr_event ;;
+              full:invalid_event) reason=invalid_event ;;
+              full:invalid_identity) reason=invalid_identity ;;
+              full:event_unavailable) reason=event_unavailable ;;
+              full:bootstrap_event_unavailable) reason=bootstrap_event_unavailable ;;
+              full:bootstrap_invalid_identity) reason=bootstrap_invalid_identity ;;
+              full:checkout_mismatch) reason=checkout_mismatch ;;
+              full:bootstrap_checkout_mismatch) reason=bootstrap_checkout_mismatch ;;
+              full:git_inspection_failed) reason=git_inspection_failed ;;
+              full:bootstrap_git_inspection_failed) reason=bootstrap_git_inspection_failed ;;
+              full:bootstrap_policy_unavailable) reason=bootstrap_policy_unavailable ;;
+              full:malformed_diff) reason=malformed_diff ;;
+              full:empty_diff) reason=empty_diff ;;
+              full:unsupported_change) reason=unsupported_change ;;
+              full:filename_not_utf8) reason=filename_not_utf8 ;;
+              full:ineligible_change) reason=ineligible_change ;;
+            esac
+          fi
+          {
+            printf '### CI impact selection (advisory)\n\n'
+            printf 'Mode: %s\n\n' "$mode"
+            printf 'Reason category: %s\n\n' "$reason"
+            printf 'This PR-controlled workflow is not trusted enforcement.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   native-images:
     name: Native Container Verification
@@ -272,19 +325,30 @@ jobs:
           policy=$(mktemp "$RUNNER_TEMP/ci-impact-policy.XXXXXX.mjs")
           trap 'rm -f "$policy"' EXIT
           trusted_policy() {
+            reason=bootstrap_non_pr_event
             [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || return 1
+            reason=bootstrap_event_unavailable
             base=$(jq -er '.pull_request.base.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
             head=$(jq -er '.pull_request.head.sha | select(type == "string")' "$GITHUB_EVENT_PATH") || return 1
+            reason=bootstrap_invalid_identity
             oid='^([0-9a-f]{40}|[0-9a-f]{64})$'
             [[ $base =~ $oid && $head =~ $oid && ${GITHUB_SHA:-} =~ $oid ]] || return 1
+            reason=bootstrap_git_inspection_failed
             actual=$(git rev-parse --verify 'HEAD^{commit}') || return 1
+            reason=bootstrap_checkout_mismatch
             [ "$actual" = "$GITHUB_SHA" ] || return 1
+            reason=bootstrap_git_inspection_failed
             parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
+            reason=bootstrap_checkout_mismatch
             [ "$parents" = "$base $head" ] || return 1
+            reason=bootstrap_git_inspection_failed
             git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
             entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            reason=bootstrap_policy_unavailable
             [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
+            reason=bootstrap_git_inspection_failed
             git cat-file blob "${BASH_REMATCH[1]}" > "$policy" || return 1
+            reason=bootstrap_policy_unavailable
             [ -s "$policy" ]
           }
           if trusted_policy; then
@@ -295,7 +359,7 @@ jobs:
             fi
           elif [ "$IMPACT_ACTION" = select ]; then
             printf 'CI impact: full (trusted base policy unavailable)\n'
-            printf 'mode=full\n' >> "$GITHUB_OUTPUT"
+            printf 'mode=full\nreason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
           else
             [ "$EXPECTED_MODE" = full ] || exit 1
             printf 'CI impact: full (trusted base policy unavailable)\n'
