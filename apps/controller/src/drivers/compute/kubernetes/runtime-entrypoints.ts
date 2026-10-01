@@ -2906,12 +2906,10 @@ forwardTermination(child);
 const codexStderrDone = child.stderr ? forwardCodexStderr(child.stderr) : Promise.resolve();
 child.on("exit", (code, signal) => {
   const status = code ?? (signal === "SIGTERM" ? 0 : 1);
-  // Forward Codex's last lines; a descendant holding the pipe cannot delay exit.
-  const timer = setTimeout(() => process.exit(status), 2000);
-  codexStderrDone.then(() => {
-    clearTimeout(timer);
-    process.exit(status);
-  });
+  // Forward Codex's last lines; a descendant holding the pipe cannot delay exit
+  // by more than 2 s. The unref'd timer never keeps an otherwise idle wrapper alive.
+  setTimeout(() => process.exit(status), 2000).unref();
+  codexStderrDone.then(() => process.exit(status));
 });
 (async () => {
   try {
