@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Independent wire oracle extracted from NVIDIA OpenShell commit
-// 496ebba293f5cc2bb2753444dddd534f0b4aeb6a. Keep this fixture pinned to that
+// dde8a9a57f34f9d998618b3d35821608165c980f. Keep this fixture pinned to that
 // upstream contract; do not derive it from the production client proto.
 syntax = "proto3";
 
@@ -56,6 +56,13 @@ message CreateSandboxRequest {
 message SandboxServiceExposure {
   string service = 1;
   uint32 target_port = 2;
+  ServiceAuthorizationMode authorization_mode = 3;
+}
+
+enum ServiceAuthorizationMode {
+  SERVICE_AUTHORIZATION_MODE_UNSPECIFIED = 0;
+  SERVICE_AUTHORIZATION_MODE_STRIP = 1;
+  SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH = 2;
 }
 
 message DeleteSandboxRequest {
