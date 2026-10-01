@@ -114,6 +114,11 @@ export const CredentialSourceParams = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentCredentialSourceParams = Type.Object(
+  { namespaceId: NamespaceId, agentId: AgentId, credentialSourceId: CredentialSourceId },
+  { additionalProperties: false },
+);
+
 export const IAMRoleParams = Type.Object(
   { namespaceId: NamespaceId, roleId: IAMRoleId },
   { additionalProperties: false },
@@ -131,6 +136,52 @@ export const RevisionParams = Type.Object(
 
 export const DeploymentParams = Type.Object(
   { namespaceId: NamespaceId, agentId: AgentId, deploymentId: RevisionId },
+  { additionalProperties: false },
+);
+
+/** Query strings are not coerced; numeric and boolean values are exact decimal text. */
+export const AgentRuntimeLogsQuery = Type.Object(
+  {
+    source: Type.Union([Type.Literal("gateway"), Type.Literal("agent"), Type.Literal("sandbox")]),
+    pod: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 253, pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" }),
+    ),
+    previous: Type.Optional(Type.Union([Type.Literal("true"), Type.Literal("false")])),
+    tailLines: Type.Optional(
+      Type.String({
+        pattern: "^(?:[1-9][0-9]{0,2}|1000)$",
+        description: "Lines from the end of the stream, 1 to 1000; default 200.",
+      }),
+    ),
+    sinceSeconds: Type.Optional(
+      Type.String({
+        pattern: "^(?:[1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$",
+        description: "Only lines newer than this many seconds, 1 to 86400.",
+      }),
+    ),
+    minLevel: Type.Optional(
+      Type.Union(
+        [Type.Literal("error"), Type.Literal("warn"), Type.Literal("info"), Type.Literal("debug")],
+        {
+          description:
+            "Return only lines at this level or above; lines of unknown level, gaps and withheld counts are always returned. Default: every level.",
+        },
+      ),
+    ),
+    cursor: Type.Optional(
+      Type.String({
+        maxLength: 2048,
+        pattern: "^v1\\.[A-Za-z0-9_-]{1,1900}\\.[A-Za-z0-9_-]{43}$",
+        description: "Opaque cursor returned by the previous page of the same view.",
+      }),
+    ),
+    download: Type.Optional(
+      Type.Union([Type.Literal("true"), Type.Literal("false")], {
+        description:
+          "`true` returns the last 1000 lines as a text/plain attachment and is audited per download; it cannot be combined with `cursor`.",
+      }),
+    ),
+  },
   { additionalProperties: false },
 );
 
@@ -188,6 +239,10 @@ export const HarnessAuthBindingSchema = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
+    { method: Type.Literal("oauth"), source: SecretReference },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
     { additionalProperties: false },
   ),
@@ -242,6 +297,17 @@ export const CreateCredentialSourceBody = Type.Object(
     secrets: Type.Optional(CredentialSourceSecrets),
   },
   { additionalProperties: false },
+);
+
+export const UpdateCredentialSourceBody = Type.Object(
+  {
+    secrets: Type.Optional(CredentialSourceSecrets),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Re-reads the source's Secret values, or those of replacement Secret references, and updates the Credential Gateway copy. Non-secret config is immutable.",
+  },
 );
 
 export const SecretDelivery = Type.Object(
@@ -315,6 +381,14 @@ const PluginDiscoveryAccessToken = Type.String({
 export const DiscoverAgentPluginsBody = Type.Union([
   Type.Object(
     {
+      oauthLogin: SecretReference,
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
       q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
@@ -340,6 +414,10 @@ export const DiscoverAgentPluginsBody = Type.Union([
 
 export const DiscoverAgentPluginDetailsBody = Type.Union([
   Type.Object(
+    { oauthLogin: SecretReference, pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
     { additionalProperties: false },
   ),
@@ -358,6 +436,7 @@ export const DiscoverAgentPluginDetailsBody = Type.Union([
 
 export const DiscoverSavedAgentPluginsBody = Type.Object(
   {
+    oauthLogin: Type.Optional(SecretReference),
     cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
     q: Type.Optional(Type.String({ maxLength: 1024 })),
   },
@@ -365,7 +444,10 @@ export const DiscoverSavedAgentPluginsBody = Type.Object(
 );
 
 export const DiscoverSavedAgentPluginDetailsBody = Type.Object(
-  { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+  {
+    pluginId: Type.String({ minLength: 1, maxLength: 256 }),
+    oauthLogin: Type.Optional(SecretReference),
+  },
   { additionalProperties: false },
 );
 
@@ -377,6 +459,7 @@ export const PermissionActionSchema = Type.Union([
   Type.Literal("deploy"),
   Type.Literal("operate"),
   Type.Literal("administer"),
+  Type.Literal("read_logs"),
 ]);
 
 export const ResourceKindSchema = Type.Union([
@@ -501,6 +584,18 @@ export const RepositoryBindingRequestsSchema = Type.Array(RepositoryBindingReque
     "Requested repository references and optional profiles. Omission means no bindings on create and preserves bindings on update; an empty update clears bindings. Admission requires unique repository references.",
 });
 
+export const RepositoryAccessSchema = Type.Object(
+  {
+    defaultProfile: RepositoryBindingSelector,
+    repositories: Type.Array(RepositoryBindingRequestSchema, { maxItems: 16 }),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests.",
+  },
+);
+
 export const RepositoryBindingSelectionsSchema = Type.Array(RepositoryBindingSelectionSchema, {
   minItems: 1,
   maxItems: 16,
@@ -528,6 +623,7 @@ export const CreateAgentBody = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
   },
   { additionalProperties: false },
 );
@@ -554,6 +650,7 @@ export const ProvisionAgentBody = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
   },
   { additionalProperties: false },
 );
@@ -567,6 +664,7 @@ export const UpdateAgentBody = Type.Object(
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     pluginApprovers: Type.Optional(Type.Union([Type.Ref("PluginApprovers"), Type.Null()])),
     repositoryBindings: Type.Optional(RepositoryBindingRequestsSchema),
+    repositoryAccess: Type.Optional(RepositoryAccessSchema),
   },
   { additionalProperties: false },
 );
@@ -674,6 +772,15 @@ export const ERROR_CODES = Object.freeze([
   "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED",
   "CHANNEL_CREDENTIAL_UNAVAILABLE",
   "CHANNEL_CREDENTIAL_BINDING_REQUIRED",
+  "RUNTIME_LOGS_CURSOR_INVALID",
+  "RUNTIME_LOGS_POD_INVALID",
+  "RUNTIME_LOGS_SOURCE_UNAVAILABLE",
+  "RUNTIME_LOGS_RATE_LIMITED",
+  "RUNTIME_LOGS_CLUSTER_RBAC",
+  "RUNTIME_LOGS_SANDBOX_NOT_FOUND",
+  "RUNTIME_LOGS_UNAVAILABLE",
+  "RUNTIME_LOGS_AUDIT_UNAVAILABLE",
+  "RUNTIME_LOGS_TIMEOUT",
 ] as const);
 
 export const ErrorDetail = Type.Object(
@@ -737,6 +844,15 @@ export const ErrorResponse = Type.Object(
           Type.Literal("CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED"),
           Type.Literal("CHANNEL_CREDENTIAL_UNAVAILABLE"),
           Type.Literal("CHANNEL_CREDENTIAL_BINDING_REQUIRED"),
+          Type.Literal("RUNTIME_LOGS_CURSOR_INVALID"),
+          Type.Literal("RUNTIME_LOGS_POD_INVALID"),
+          Type.Literal("RUNTIME_LOGS_SOURCE_UNAVAILABLE"),
+          Type.Literal("RUNTIME_LOGS_RATE_LIMITED"),
+          Type.Literal("RUNTIME_LOGS_CLUSTER_RBAC"),
+          Type.Literal("RUNTIME_LOGS_SANDBOX_NOT_FOUND"),
+          Type.Literal("RUNTIME_LOGS_UNAVAILABLE"),
+          Type.Literal("RUNTIME_LOGS_AUDIT_UNAVAILABLE"),
+          Type.Literal("RUNTIME_LOGS_TIMEOUT"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
         details: Type.Optional(Type.Array(ErrorDetail, { maxItems: 32 })),
@@ -775,6 +891,7 @@ export type IAMAccessBindingParams = Type.Static<typeof IAMAccessBindingParams>;
 export type AgentParams = Type.Static<typeof AgentParams>;
 export type RevisionParams = Type.Static<typeof RevisionParams>;
 export type DeploymentParams = Type.Static<typeof DeploymentParams>;
+export type AgentRuntimeLogsQuery = Type.Static<typeof AgentRuntimeLogsQuery>;
 export type WorkspaceFileName = Type.Static<typeof WorkspaceFileName>;
 export type AgentRuntimeCredentialsBody = Type.Static<typeof AgentRuntimeCredentialsBody>;
 export type WorkspaceFileParams = Type.Static<typeof WorkspaceFileParams>;
@@ -797,6 +914,8 @@ export type ProvisionAgentBody = Type.Static<typeof ProvisionAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
 export type ChannelDirectoryLookupBody = Type.Static<typeof ChannelDirectoryLookupBody>;
 export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
+export type UpdateCredentialSourceBody = Type.Static<typeof UpdateCredentialSourceBody>;
+export type AgentCredentialSourceParams = Type.Static<typeof AgentCredentialSourceParams>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -830,9 +949,16 @@ export const PresetTemplateSchema = Type.Object(
       Type.Object(
         {
           ...Object.fromEntries(
-            ["name", "executionMode", "backendId", "harnessAuth", "plugins", "pluginApprovers"].map(
-              (key) => [key, Type.Optional(Type.Ref("SafeJsonValue"))],
-            ),
+            [
+              "name",
+              "executionMode",
+              "backendId",
+              "harnessAuth",
+              "plugins",
+              "pluginApprovers",
+              "repositoryBindings",
+              "repositoryAccess",
+            ].map((key) => [key, Type.Optional(Type.Ref("SafeJsonValue"))]),
           ),
           initialWorkspaceFiles: Type.Optional(CreateAgentBody.properties.initialWorkspaceFiles),
         },

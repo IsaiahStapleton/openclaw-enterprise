@@ -1,5 +1,15 @@
 export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = () => null }) {
-  async function request(path, { method = "GET", body, signal, expectedStatus } = {}) {
+  async function request(
+    path,
+    {
+      method = "GET",
+      body,
+      signal,
+      expectedStatus,
+      includeMeta = false,
+      responseType = "json",
+    } = {},
+  ) {
     const active = lifetime.capture();
     const pinned = sessionKey();
     // A pinned key lets this tab act only as its own session. If another tab
@@ -27,6 +37,14 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
     if (response.status === 204 && response.ok && expectedStatus === 204) {
       return undefined;
     }
+    // Attachments (runtime log downloads) are text; failures stay JSON error envelopes.
+    if (
+      responseType === "text" &&
+      response.status === 200 &&
+      response.headers.get("content-type")?.startsWith("text/plain")
+    ) {
+      return await response.text();
+    }
     let payload;
     try {
       payload = await response.json();
@@ -45,6 +63,10 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
       if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
         error.code = code;
       }
+      const retryAfter = response.headers.get("retry-after");
+      if (retryAfter !== null && /^[1-9][0-9]{0,4}$/.test(retryAfter)) {
+        error.retryAfterSeconds = Number(retryAfter);
+      }
       const requestId = payload?.meta?.requestId;
       if (
         typeof requestId === "string" &&
@@ -54,7 +76,7 @@ export function createApiClient({ lifetime, hasSession, onExpired, sessionKey = 
       }
       throw error;
     }
-    return payload.data;
+    return includeMeta ? { data: payload.data, meta: payload.meta } : payload.data;
   }
 
   return request;

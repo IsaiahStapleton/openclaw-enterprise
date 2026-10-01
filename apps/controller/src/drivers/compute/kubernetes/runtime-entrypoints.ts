@@ -5,6 +5,22 @@ import { nodeProgramArguments } from "../node-program.ts";
 // and 5s supervisor margin. Idle Gateways exit as soon as their work settles.
 export const GATEWAY_STOP_TIMEOUT_MS = 330_000;
 
+// Every runtime wrapper runs under tini. As PID 1, Node ignores SIGTERM until
+// a wrapper installs its handler, and cannot run one inside a blocking model
+// probe, so a Pod stop waited for SIGKILL. Under tini the wrapper exits on
+// SIGTERM in every phase, and container exit ends its children. -e 143 reports
+// that termination as exit 0, as a running wrapper does. -s keeps reaping
+// orphans when a Sandbox provider runs this below PID 1.
+export const RUNTIME_WRAPPER_COMMAND: readonly string[] = Object.freeze([
+  "/usr/bin/tini",
+  "-s",
+  "-e",
+  "143",
+  "--",
+  "node",
+  "-e",
+]);
+
 export const PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN = "openclaw-plugin-runtime/app-server-token/v1";
 
 const STARTUP_PHASE_EVENT = "runtime.startup_phase";
@@ -92,6 +108,7 @@ const RUNTIME_DIAGNOSTIC_CODES = new Set([
   "LOGIN_FAILED",
   "MODEL_PROBE_FAILED",
   "MODEL_PROBE_TIMEOUT",
+  "MODEL_PROBE_CPU_STARVED",
   "UNAVAILABLE",
   "NOT_CONFIGURED",
   "AUTHENTICATION_FAILED",
@@ -1705,21 +1722,53 @@ async function installCodexPlugins(runtime, failures = []) {
 }
 `;
 
+// Holds unready until an explicit restart; readiness polls never submit model calls.
 const AUTH_PROBE_FAILURE_HELPER = String.raw`
 function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
   publishRuntimeFailure(check, code);
   console.error("Harness model authentication probe failed.");
-  // Hold unready until an explicit restart; readiness polls never submit model calls.
   setInterval(() => {}, 3600000);
 }
 `;
 
 // The native probe disables tools and fallback and performs a bounded model turn.
 // Its JSON status, not its process exit status alone, establishes provider acceptance.
+//
+// The probe is a whole embedded agent run. Its local work (Node and OpenClaw
+// boot, SQLite session state, cleanup) took about 16 CPU-seconds on the runtime
+// image, on one core however many it may use; --probe-timeout bounds the model
+// turn itself. A fixed 30-second cap let the example 500m CPU limit starve that
+// local work into MODEL_PROBE_TIMEOUT before the turn finished. The cap is now
+// the 15-second turn, 5 seconds of slack, and 45 CPU-seconds of local work at
+// the container's CPU limit (cgroup cpu.max, at most one core), at most 600 s.
+// A probe that still reaches it after waiting for CPU for over a quarter of the
+// time reports MODEL_PROBE_CPU_STARVED: a restart would get the same CPU. The
+// wait is cgroup cpu.pressure (throttling and node contention) or, on kernels
+// without pressure accounting, cpu.stat throttled_usec (throttling only).
+// OpenClaw buckets provider 401/403 and invalid-key responses as "auth". Only
+// that deterministic rejection fails the deployment before its deadline.
+// The Gateway times its model-probe phase from wrapper start: it is the first step.
+// Generated code stays compact: the Gateway program is near the exec limit.
 const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
 ${AUTH_PROBE_FAILURE_HELPER}
 function probeOpenClawAuthenticationFailureCode() {
   const fs = require("node:fs");
+  const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
+  const [quota, period] = cgroup("cpu.max").split(" ");
+  const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
+  const read = (name) => (name === "cpu.pressure" ? /^some .*total=(\d+)/m : /throttled_usec (\d+)/).exec(cgroup(name))?.[1] / 1000;
+  const startedAt = Date.now(), pressure = read("cpu.pressure"), metric = Number.isFinite(pressure) ? "cpu.pressure" : "cpu.stat", before = metric === "cpu.pressure" ? pressure : read(metric);
+  let code = runOpenClawAuthenticationProbe(fs, capMs);
+  const elapsedMs = Date.now() - startedAt, after = read(metric), cpuWaitMs = Math.round(Number.isFinite(after) && after >= before ? after - before : NaN);
+  if (code === "CAP") code = cpuWaitMs > elapsedMs / 4 ? "MODEL_PROBE_CPU_STARVED" : "MODEL_PROBE_TIMEOUT";
+  console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY" }));
+  return code;
+}
+
+function runOpenClawAuthenticationProbe(fs, capMs) {
+  const stageStartedAt = Date.now();
+  const stage = (stage) => console.error(JSON.stringify({ event: "openclaw.model_probe_stage", stage, elapsedMs: Date.now() - stageStartedAt, capMs }));
+  stage("prepare");
   const { spawnSync } = require("node:child_process");
   const temporary = (process.env.TMPDIR || "/tmp").replace(/\/+$/, "");
   const directory = fs.mkdtempSync(temporary + "/openclaw-auth-probe-");
@@ -1736,6 +1785,7 @@ function probeOpenClawAuthenticationFailureCode() {
     fs.mkdirSync(directory + "/workspace", { mode: 0o700 });
     const configPath = directory + "/openclaw.json";
     fs.writeFileSync(configPath, JSON.stringify(configuration), { mode: 0o600 });
+    stage("spawn");
     const result = spawnSync("node", [
       "/app/openclaw.mjs", "models", "status", "--json", "--probe",
       "--probe-provider", provider, "--probe-concurrency", "1",
@@ -1754,22 +1804,24 @@ function probeOpenClawAuthenticationFailureCode() {
         [credentialEnvironment]: process.env[credentialEnvironment],
       },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+      timeout: capMs, killSignal: "SIGKILL", maxBuffer: 262144,
     });
-    if (result.error?.code === "ETIMEDOUT") return "MODEL_PROBE_TIMEOUT";
+    stage("returned");
+    if (result.error?.code === "ETIMEDOUT") return "CAP";
     if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
     const results = JSON.parse(result.stdout).auth?.probes?.results;
     if (!Array.isArray(results) || results.length !== 1 ||
       results[0].provider !== provider || results[0].model !== model ||
       results[0].source !== "env") return "MODEL_PROBE_FAILED";
     if (results[0].status === "ok") return undefined;
-    // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
-    // Only that deterministic rejection fails the deployment before its deadline.
-    return results[0].status === "auth" ? "AUTHENTICATION_FAILED" : "MODEL_PROBE_FAILED";
+    if (results[0].status === "auth") return "AUTHENTICATION_FAILED";
+    return results[0].status === "timeout" ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_FAILED";
   } catch {
     return "MODEL_PROBE_FAILED";
   } finally {
+    stage("cleanup");
     fs.rmSync(directory, { recursive: true, force: true });
+    stage("complete");
   }
 }
 `;
@@ -1833,13 +1885,29 @@ ${OPENCLAW_AUTH_PROBE_HELPERS}
 ${startupPhaseHelper("gateway")}
 startPluginRuntimeStatusServer();
 
-function forwardTermination(child) {
-  let terminating = false;
+// A respawn for a changed Harness peer bounds its retries and falls back to a
+// container restart when the peer keeps changing.
+const GATEWAY_RESPAWN_ATTEMPTS = 3;
+const GATEWAY_RESPAWN_LIMIT = 5;
+const GATEWAY_RESPAWN_WINDOW_MS = 10 * 60_000;
+const GATEWAY_RESPAWN_READY_TIMEOUT_MS = 180_000;
+const GATEWAY_RESPAWN_READY_POLL_MS = 500;
+const GATEWAY_RESPAWN_KILL_GRACE_MS = 10_000;
+let gatewayTerminating = false;
+
+// Forward to the current native process; between a respawn's stop and spawn
+// there is none, and the wrapper exits itself.
+function forwardTermination(currentChild) {
   const forward = (signal) => {
-    if (terminating) return;
-    terminating = true;
-    child.kill(signal);
-    setTimeout(() => child.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+    if (gatewayTerminating) return;
+    gatewayTerminating = true;
+    const target = currentChild();
+    if (target === undefined) {
+      process.exit(0);
+      return;
+    }
+    target.kill(signal);
+    setTimeout(() => currentChild()?.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
   };
   process.on("SIGTERM", () => forward("SIGTERM"));
   process.on("SIGINT", () => forward("SIGINT"));
@@ -1938,6 +2006,108 @@ function configureWorkspaceNodePlugins(config, workspaceNodeId) {
   (fileConfig.workspaces ??= {}).main = { nodeId: workspaceNodeId, remoteRoot };
 }
 
+// A Gateway with a workspace node serves no workspace: its /home/node/workspace
+// is an empty local directory, while Codex runs in the Harness Pod. OpenClaw executes
+// its dynamic tools in the Gateway process, so these would list, read, write or
+// run commands in the Gateway Pod instead. Codex's native tools cover them in
+// the Harness, and the file-transfer tools reach its workspace through the node.
+// "terminal" types into shells running in the Gateway Pod, and "openclaw"
+// delegates Gateway configuration changes, which could drop this list.
+const GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS = [
+  "ls", "read", "write", "edit", "apply_patch",
+  "exec", "process", "gateway_exec", "gateway_process",
+  "terminal", "openclaw",
+];
+
+function excludeGatewayLocalCodexTools(config) {
+  const codex = config.plugins?.entries?.codex;
+  if (!isPlainObject(codex)) {
+    // APP_SERVER_URL names a remote Codex Harness: pin its providers even when
+    // the Gateway config lacks the plugin entry. A dedicated OpenClaw Gateway
+    // (no APP_SERVER_URL) runs its turns with these rows, so it keeps them.
+    if (process.env.APP_SERVER_URL !== undefined) pinCodexProviderTransport(config);
+    return;
+  }
+  const codexConfig = codex.config ??= {};
+  const configured = codexConfig.codexDynamicToolsExclude ?? [];
+  if (!Array.isArray(configured)) {
+    throw new Error("The Codex plugin codexDynamicToolsExclude setting must be a list.");
+  }
+  codexConfig.codexDynamicToolsExclude = [...new Set([...configured, ...GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS])];
+  // Automation triggers run model-written commands and scripts in the Gateway
+  // process: stream schedules, script payloads and condition scripts. Timed
+  // automations still run Codex turns in the Harness.
+  const cron = config.cron ??= {};
+  if (!isPlainObject(cron)) {
+    throw new Error("The cron setting must be an object.");
+  }
+  const triggers = cron.triggers ??= {};
+  if (!isPlainObject(triggers)) {
+    throw new Error("The cron.triggers setting must be an object.");
+  }
+  triggers.enabled = false;
+  pinCodexProviderTransport(config);
+}
+
+// OpenClaw's built-in runtime runs in the Gateway process with Gateway-local
+// tools. An operator's "/model codex/<model> --runtime openclaw" selects it for
+// a session, and Codex hands a turn to it when the row of one of its providers
+// (codex, openai) carries request transport overrides. The Harness reaches the
+// model itself, so here those rows only name models: fields that override the
+// transport, start a local service, or make Codex declare that fallback are
+// dropped, and an authored transport becomes the unreachable stub. A built-in
+// run then has no model to call.
+const CODEX_PROVIDER_STUB_URL = "http://127.0.0.1:9";
+const CODEX_PROVIDER_KEPT_KEYS = new Set(["models", "maxTokens", "agentRuntime"]);
+const CODEX_MODEL_KEPT_KEYS = new Set([
+  "id", "name", "reasoning", "input", "cost", "contextWindow", "contextTokens",
+  "maxTokens", "thinkingLevelMap", "agentRuntime", "mediaInput", "metadataSource",
+]);
+
+function keepKeys(value, kept) {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => kept.has(key)));
+}
+
+function pinCodexProviderTransport(config) {
+  const models = config.models ??= {};
+  if (!isPlainObject(models)) {
+    throw new Error("The models setting must be an object.");
+  }
+  const providers = models.providers ??= {};
+  if (!isPlainObject(providers)) {
+    throw new Error("The models.providers setting must be an object.");
+  }
+  // OpenClaw matches provider keys after trimming and lowercasing.
+  const providerId = (key) => key.trim().toLowerCase();
+  const keys = Object.keys(providers).filter((key) => ["codex", "openai"].includes(providerId(key)));
+  if (!keys.some((key) => providerId(key) === "codex")) {
+    // "codex" is a bundled provider: without a row it would keep its own transport.
+    providers.codex = {};
+    keys.push("codex");
+  }
+  for (const key of keys) {
+    const id = providerId(key);
+    const provider = providers[key];
+    if (!isPlainObject(provider)) {
+      throw new Error("The " + id + " model provider setting must be an object.");
+    }
+    const pinned = keepKeys(provider, CODEX_PROVIDER_KEPT_KEYS);
+    if (provider.models !== undefined) {
+      if (!Array.isArray(provider.models) || !provider.models.every(isPlainObject)) {
+        throw new Error("The " + id + " model provider models setting must be a list of objects.");
+      }
+      pinned.models = provider.models.map((model) => keepKeys(model, CODEX_MODEL_KEPT_KEYS));
+    }
+    // An openai row that names no transport keeps OpenClaw's default, which has
+    // no credential in the Gateway, and Codex keeps owning its account's models.
+    const authoredTransport =
+      id === "codex" || provider.baseUrl !== undefined || provider.api !== undefined;
+    providers[key] = authoredTransport
+      ? { ...pinned, baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" }
+      : pinned;
+  }
+}
+
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const workspaceNodeBindingPath = process.env.OPENCLAW_WORKSPACE_NODE_PATH;
 
@@ -2024,7 +2194,6 @@ const openClawAuthenticationFailureCode =
     ? undefined
     : probeOpenClawAuthenticationFailureCode();
 if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined) {
-  // The probe is the first startup step, so wrapper start marks its beginning.
   logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailureCode === undefined ? "ok" : "failed");
 }
 if (openClawAuthenticationFailureCode !== undefined) {
@@ -2040,75 +2209,146 @@ if (process.env.OPENCLAW_WORKSPACE_DIR !== undefined) {
 }
 delete process.env.OPENCLAW_LOG_LEVEL;
 const pluginRuntime = readGatewayPluginRuntime();
+const followsPeerStatus =
+  pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime);
+// A respawn configures from the file a container restart would start from.
+const initialConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+
+// Write the configuration the native Gateway starts with. It depends only on the
+// admitted configuration, the Harness peer status and the workspace node binding,
+// so an in-place respawn repeats it for a changed peer. For a Codex peer this
+// installs nothing: the Harness installs the plugins; the Gateway applies its result.
+function configureGateway(peerStatus) {
+  process.env.OPENCLAW_CONFIG_PATH = initialConfigPath;
+  configureNativeWorkerProfile();
+  const peerFailures = peerStatus?.failures ?? readPluginFailuresFromEnvironment();
+  if (peerStatus !== undefined) {
+    process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(peerStatus.startupId);
+  }
+  const pluginInstallStartedAt = Date.now();
+  const pluginResult =
+    pluginRuntime === undefined
+      ? { successfulPluginIds: [], failures: peerFailures }
+      : installOpenClawPlugins(pluginRuntime, peerFailures);
+  if (pluginRuntime !== undefined) {
+    logStartupPhase("plugin-install", pluginInstallStartedAt);
+  }
+  if (peerStatus !== undefined) {
+    pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
+  }
+  // A native worker profile, or a Gateway whose controller cannot read its runtime
+  // status, receives its node in the environment; the others read the binding file.
+  const environmentWorkspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
+  let workspaceNodeId;
+  if (
+    environmentWorkspaceNodeId !== undefined ||
+    workspaceNodeBindingPath !== undefined ||
+    process.env.APP_SERVER_URL !== undefined ||
+    process.env.OPENCLAW_NATIVE_WORKER_PROFILE !== undefined
+  ) {
+    const config = readOpenClawConfig();
+    // The first pairing records its command grant before a node ID is available.
+    // gateway.* changes restart OpenClaw, so this is written only before a spawn.
+    const commands = ((config.gateway ??= {}).nodes ??= {}).commands ??= {};
+    commands.allow = [...new Set([...(commands.allow ?? []), "file.fetch", "file.stat", "file.write", "file.create", "dir.list", "workspace.memory", "workspace.skills"])];
+    if (environmentWorkspaceNodeId !== undefined || workspaceNodeBindingPath !== undefined) {
+      // Refuse a revision that cannot host its node now, not when the node arrives.
+      requireWorkspaceNodePlugins(config);
+      excludeGatewayLocalCodexTools(config);
+    }
+    workspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
+    if (workspaceNodeId !== undefined) {
+      configureWorkspaceNodePlugins(config, workspaceNodeId);
+    }
+    writeOpenClawConfig(config);
+  }
+  return { pluginResult, workspaceNodeId };
+}
+
+// The native Gateway process. A respawn for a changed Harness peer replaces it;
+// any other exit ends the wrapper, and so restarts the container.
+let child;
+let childRunning = false;
+let childExited;
+let respawning = false;
+let waitingForPeerDuringOutage = false;
+let stoppingContainer = false;
+let gatewayGeneration = 0;
+
+function startGatewayProcess() {
+  const spawned = spawn(
+    "node",
+    ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
+    { stdio: "inherit" },
+  );
+  child = spawned;
+  childRunning = true;
+  gatewayGeneration++;
+  childExited = new Promise((resolve) => {
+    spawned.on("exit", (code, signal) => {
+      if (spawned === child) childRunning = false;
+      resolve();
+      if (stoppingContainer) {
+        process.exit(1);
+        return;
+      }
+      if (gatewayTerminating || ((!respawning || waitingForPeerDuringOutage) && spawned === child)) {
+        process.exit(code ?? (signal === "SIGTERM" ? 0 : 1));
+      }
+    });
+  });
+  return Date.now();
+}
+
+// Fall back to a container restart, which the kubelet backs off.
+function stopContainer() {
+  if (stoppingContainer) return;
+  stoppingContainer = true;
+  if (!childRunning) {
+    process.exit(1);
+    return;
+  }
+  child.kill("SIGTERM");
+  setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+}
+
+let pluginResult;
+let peerStatus;
+let resetWorkspaceNodeTracking = () => {};
 (async () => {
-configureNativeWorkerProfile();
-const peerStatus =
-  pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)
-    ? await timeStartupPhase("peer-plugin-status", waitForPeerPluginRuntimeStatus)
-    : undefined;
-const peerFailures = peerStatus?.failures ?? readPluginFailuresFromEnvironment();
-if (peerStatus !== undefined) {
-  process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(peerStatus.startupId);
-}
-const pluginInstallStartedAt = Date.now();
-const pluginResult =
-  pluginRuntime === undefined
-    ? { successfulPluginIds: [], failures: peerFailures }
-    : installOpenClawPlugins(pluginRuntime, peerFailures);
-if (pluginRuntime !== undefined) {
-  logStartupPhase("plugin-install", pluginInstallStartedAt);
-}
-if (peerStatus !== undefined) {
-  pluginResult.successfulPluginIds = peerStatus.successfulPluginIds;
-}
+peerStatus = followsPeerStatus
+  ? await timeStartupPhase("peer-plugin-status", waitForPeerPluginRuntimeStatus)
+  : undefined;
+const started = configureGateway(peerStatus);
+pluginResult = started.pluginResult;
 publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
-// A native worker profile, or a Gateway whose controller cannot read its runtime
-// status, receives its node in the environment; the others read the binding file.
-const environmentWorkspaceNodeId = process.env.OPENCLAW_WORKSPACE_NODE_ID;
-let startWorkspaceNodeId;
-if (
-  environmentWorkspaceNodeId !== undefined ||
-  workspaceNodeBindingPath !== undefined ||
-  process.env.APP_SERVER_URL !== undefined ||
-  process.env.OPENCLAW_NATIVE_WORKER_PROFILE !== undefined
-) {
-  const config = readOpenClawConfig();
-  // The first pairing records its command grant before a node ID is available.
-  // gateway.* changes restart OpenClaw, so this is written only here, at start.
-  const commands = ((config.gateway ??= {}).nodes ??= {}).commands ??= {};
-  commands.allow = [...new Set([...(commands.allow ?? []), "file.fetch", "file.stat", "file.write", "file.create", "dir.list", "workspace.memory", "workspace.skills"])];
-  if (environmentWorkspaceNodeId !== undefined || workspaceNodeBindingPath !== undefined) {
-    // Refuse a revision that cannot host its node now, not when the node arrives.
-    requireWorkspaceNodePlugins(config);
-  }
-  startWorkspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
-  if (startWorkspaceNodeId !== undefined) {
-    configureWorkspaceNodePlugins(config, startWorkspaceNodeId);
-  }
-  writeOpenClawConfig(config);
-}
+const startWorkspaceNodeId = started.workspaceNodeId;
 publishRuntimeReady();
 // Everything before this line delays the native Gateway process.
 logStartupPhase("native-spawn", startupPhaseOrigin);
-const child = spawn(
-  "node",
-  ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
-  { stdio: "inherit" },
-);
 // Apply budgets start when OpenClaw does, not at wrapper start: login, the model
 // probe and plugin install must not count against them.
-const childSpawnedAt = Date.now();
-forwardTermination(child);
+const childSpawnedAt = startGatewayProcess();
+forwardTermination(() => (childRunning ? child : undefined));
 if (workspaceNodeBindingPath !== undefined) {
   // The wrapper writing the config is not the ack: OpenClaw must report the
   // file-transfer plugin active in a plugin registry loaded after the write.
   const WORKSPACE_NODE_APPLY_TIMEOUT_MS = 30_000;
-  let written = startWorkspaceNodeId === undefined
-    ? undefined
-    : { deviceId: startWorkspaceNodeId, at: childSpawnedAt, activeBefore: false };
+  let written;
   let firstSeenAt;
   let stoppingForChangedWorkspaceNode = false;
   let pollInFlight = false;
+  // A new Gateway process loads its configuration, node included, from scratch:
+  // its ack is required again.
+  resetWorkspaceNodeTracking = (deviceId, spawnedAt) => {
+    written = deviceId === undefined
+      ? undefined
+      : { deviceId, at: spawnedAt, activeBefore: false };
+    firstSeenAt = undefined;
+    runtimeWorkspaceNodeId = undefined;
+    runtimeWorkspaceNodeFailure = undefined;
+  };
+  resetWorkspaceNodeTracking(startWorkspaceNodeId, childSpawnedAt);
   const reportFailure = (code) => {
     if (runtimeWorkspaceNodeFailure?.code === code) return;
     runtimeWorkspaceNodeFailure = { code, checkedAt: new Date().toISOString() };
@@ -2124,13 +2364,16 @@ if (workspaceNodeBindingPath !== undefined) {
       stoppingForChangedWorkspaceNode = true;
       clearInterval(workspaceNodePoll);
       logStartupPhase("workspace-node-changed", startupPhaseOrigin);
-      child.kill("SIGTERM");
-      setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+      stopContainer();
       return;
     }
     firstSeenAt ??= Date.now();
+    const generation = gatewayGeneration;
+    // A respawn replaced the process this poll was talking to: start over.
+    const superseded = () => respawning || generation !== gatewayGeneration;
     if (written === undefined) {
       const before = await openClawFileTransferState();
+      if (superseded()) return;
       if (before === undefined) {
         if (Date.now() - firstSeenAt > WORKSPACE_NODE_APPLY_TIMEOUT_MS) reportFailure("GATEWAY_UNAVAILABLE");
         return;
@@ -2149,6 +2392,7 @@ if (workspaceNodeBindingPath !== undefined) {
       return;
     }
     const after = await openClawFileTransferState();
+    if (superseded()) return;
     if (
       after?.state === "active" &&
       (!written.activeBefore || after.generation !== written.generationBefore)
@@ -2165,7 +2409,7 @@ if (workspaceNodeBindingPath !== undefined) {
     }
   };
   const workspaceNodePoll = setInterval(async () => {
-    if (pollInFlight) return;
+    if (pollInFlight || respawning) return;
     pollInFlight = true;
     try {
       await pollWorkspaceNode();
@@ -2178,43 +2422,318 @@ if (workspaceNodeBindingPath !== undefined) {
   }, 1_000);
   workspaceNodePoll.unref?.();
 }
-if (pluginRuntime?.manifest?.kind === "codex" && hasEnabledPluginSelections(pluginRuntime)) {
+if (followsPeerStatus) {
   let pollInFlight = false;
-  let stoppingForChangedPeerStatus = false;
-  const stopForChangedPeerStatus = () => {
-    if (stoppingForChangedPeerStatus) return;
-    stoppingForChangedPeerStatus = true;
-    // The container exits and restarts: a Gateway start the controller cannot see.
-    logStartupPhase("peer-status-changed", startupPhaseOrigin);
-    publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
+  const recentRespawns = [];
+  const peerChanged = (current) =>
+    current.startupId !== peerStatus.startupId ||
+    current.podUid !== peerStatus.podUid ||
+    !samePluginFailures(current.failures, pluginResult.failures);
+  // Stop the native Gateway within its drain budget; one that outlives SIGKILL
+  // leaves only the container restart.
+  const stopGatewayProcess = async () => {
+    if (!childRunning) return;
     child.kill("SIGTERM");
-    setTimeout(() => process.exit(1), ${GATEWAY_STOP_TIMEOUT_MS}).unref();
+    const exited = childExited;
+    const escalate = setTimeout(() => child.kill("SIGKILL"), ${GATEWAY_STOP_TIMEOUT_MS});
+    escalate.unref?.();
+    let giveUp;
+    const stuck = new Promise((resolve) => {
+      giveUp = setTimeout(() => resolve(true), ${GATEWAY_STOP_TIMEOUT_MS} + GATEWAY_RESPAWN_KILL_GRACE_MS);
+      giveUp.unref?.();
+    });
+    const timedOut = await Promise.race([exited.then(() => false), stuck]);
+    clearTimeout(escalate);
+    clearTimeout(giveUp);
+    if (timedOut) throw new Error("The native Gateway did not stop.");
+  };
+  // Serving means the new process answers its own readiness endpoint; the
+  // plugin status stays "starting", so the Pod stays unready, until then.
+  const waitForGatewayServing = async () => {
+    const deadline = Date.now() + GATEWAY_RESPAWN_READY_TIMEOUT_MS;
+    while (childRunning && Date.now() < deadline) {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
+          { signal: AbortSignal.timeout(2_000), redirect: "error" },
+        );
+        if (response.status === 200 && childRunning) return true;
+      } catch {}
+      await pluginRuntimeDelay(GATEWAY_RESPAWN_READY_POLL_MS);
+    }
+    return false;
+  };
+  // A changed Harness peer invalidates the app-server credential and possibly
+  // the plugin result the Gateway was configured with. Respawn only the native
+  // process: the container, its volumes and runtime assets stay, and there is
+  // no kubelet crash-loop backoff.
+  const respawnForPeerStatus = async (current) => {
+    respawning = true;
+    // Readiness drops first; nothing routes to this Gateway until it is replaced.
+    publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
+    const respawnStartedAt = Date.now();
+    logStartupPhase("peer-status-changed", startupPhaseOrigin);
+    try {
+      if (current === undefined) {
+        // Unreadable status need not mean a new Harness: the same Harness
+        // process coming back leaves this Gateway's credential valid.
+        waitingForPeerDuringOutage = true;
+        const returned = await waitForPeerPluginRuntimeStatus();
+        waitingForPeerDuringOutage = false;
+        if (!peerChanged(returned) && childRunning) {
+          publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
+          logStartupPhase("peer-status-restored", respawnStartedAt);
+          return;
+        }
+      }
+      while (recentRespawns.length > 0 && respawnStartedAt - recentRespawns[0] > GATEWAY_RESPAWN_WINDOW_MS) {
+        recentRespawns.shift();
+      }
+      if (recentRespawns.length >= GATEWAY_RESPAWN_LIMIT) {
+        throw new Error("The Harness peer changed too often to respawn the Gateway in place.");
+      }
+      recentRespawns.push(respawnStartedAt);
+      await stopGatewayProcess();
+      for (let attempt = 1; ; attempt++) {
+        // Configure from the latest ready status, which may be newer than the change.
+        peerStatus = await waitForPeerPluginRuntimeStatus();
+        const configured = configureGateway(peerStatus);
+        pluginResult = configured.pluginResult;
+        if (gatewayTerminating) return;
+        const spawnedAt = startGatewayProcess();
+        resetWorkspaceNodeTracking(configured.workspaceNodeId, spawnedAt);
+        if (await waitForGatewayServing()) break;
+        if (attempt >= GATEWAY_RESPAWN_ATTEMPTS) {
+          throw new Error("The respawned native Gateway did not become ready.");
+        }
+        await stopGatewayProcess();
+        await pluginRuntimeDelay(1_000 * 2 ** (attempt - 1));
+      }
+      publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
+      logStartupPhase("gateway-respawn", respawnStartedAt);
+    } catch {
+      logStartupPhase("gateway-respawn", respawnStartedAt, "failed");
+      stopContainer();
+    } finally {
+      waitingForPeerDuringOutage = false;
+      respawning = false;
+    }
   };
   setInterval(async () => {
-    if (pollInFlight) return;
+    if (pollInFlight || respawning || stoppingContainer) return;
     pollInFlight = true;
     try {
-      const current = await readPeerPluginRuntimeStatus();
-      if (current === undefined || peerStatus === undefined) {
-        stopForChangedPeerStatus();
-      } else if (
-        current.startupId !== peerStatus.startupId ||
-        current.podUid !== peerStatus.podUid ||
-        !samePluginFailures(current.failures, pluginResult.failures)
-      ) {
-        stopForChangedPeerStatus();
+      let current;
+      try {
+        current = await readPeerPluginRuntimeStatus();
+      } catch {
+        current = undefined;
       }
-    } catch {
-      stopForChangedPeerStatus();
+      if (current === undefined || peerChanged(current)) {
+        await respawnForPeerStatus(current);
+      }
     } finally {
       pollInFlight = false;
     }
   }, 2_000).unref();
 }
-child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
 })().catch((error) => {
   if (!holdPluginApproverConfigurationFailure(error)) throw error;
 });
+}
+`;
+
+export const CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT = String.raw`
+try {
+const fs = require("node:fs");
+const path = require("node:path");
+const directory = process.env.CODEX_HOME;
+const expected = {
+  sourceUid: process.env.OCE_CODEX_OAUTH_SOURCE_UID,
+  volumeUid: process.env.OCE_CODEX_OAUTH_VOLUME_UID,
+};
+if (!directory || !expected.sourceUid || !expected.volumeUid) {
+  throw new Error("OAuth bootstrap identity is missing.");
+}
+const authPath = path.join(directory, "auth.json");
+const receiptPath = path.join(directory, ".oce-oauth.json");
+const validAuth = (auth) => auth?.auth_mode === "chatgpt" &&
+  [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
+    .every((value) => typeof value === "string" && value.trim().length > 0);
+const readRegularJson = (target) =>
+  fs.lstatSync(target, { throwIfNoEntry: false })?.isFile()
+    ? JSON.parse(fs.readFileSync(target, "utf8"))
+    : undefined;
+if (fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory() === false) {
+  fs.rmSync(directory, { force: true });
+}
+fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+let receipt;
+try {
+  receipt = readRegularJson(receiptPath);
+} catch {
+  // An unreadable receipt proves nothing; seeding below replaces the directory contents.
+}
+if (receipt?.sourceUid === expected.sourceUid) {
+  if (receipt.volumeUid !== expected.volumeUid || !validAuth(readRegularJson(authPath))) {
+    throw new Error("OAuth runtime credentials require reconnect.");
+  }
+} else {
+  const auth = JSON.parse(fs.readFileSync(process.env.OCE_CODEX_OAUTH_SEED_PATH, "utf8"));
+  if (!validAuth(auth)) {
+    throw new Error("OAuth bootstrap credentials are invalid.");
+  }
+  // A new source starts from an empty Codex home: no previous login, sessions, or links.
+  // rmSync removes symbolic links themselves and never follows them.
+  for (const entry of fs.readdirSync(directory)) {
+    fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+  }
+  const writeJson = (target, value) => {
+    const temporary = target + ".bootstrap";
+    // Exclusive creation fails on any existing path, including a planted symbolic link.
+    const descriptor = fs.openSync(temporary, "wx", 0o600);
+    try {
+      fs.writeFileSync(descriptor, JSON.stringify(value));
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.renameSync(temporary, target);
+  };
+  writeJson(authPath, auth);
+  writeJson(receiptPath, expected);
+  const descriptor = fs.openSync(directory, "r");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  // Readiness reports only a verified final state.
+  const written = readRegularJson(receiptPath);
+  if (
+    !validAuth(readRegularJson(authPath)) ||
+    written?.sourceUid !== expected.sourceUid ||
+    written.volumeUid !== expected.volumeUid
+  ) {
+    throw new Error("OAuth bootstrap could not verify private credentials.");
+  }
+}
+} catch {
+  throw new Error("OAuth bootstrap could not initialize private credentials.");
+}
+`;
+
+// Codex 0.158 app-server hard-codes FmtSpan::FULL on its stderr layer, so each
+// instrumented call prints span "new" and "close" records, and each poll of an
+// instrumented future a span "enter" and "exit" record, at the span's level:
+// hundreds per turn at info (fs.read_file, fs.sandbox_*, plugins...). Unless
+// RUST_LOG starts at debug or trace, the wrapper drops every span lifecycle
+// record except the "new" and "close" of the codex_core::tasks "turn" span (a
+// turn's start and end). Every event still passes. Two idle lines are dropped too:
+// the readiness probe's loopback WebSocket connection (every 2 s), and the
+// remote-control preference retry (every 1 s while Codex has no ChatGPT login),
+// which is kept once per 10 minutes. On Linux, Codex warns at every session's
+// network-proxy start that Unix-socket proxying is macOS-only, whatever the
+// policy says; only the first such warning per app-server is kept. Codex's
+// startup ERROR that no bubblewrap is on PATH is dropped: the image runs the
+// bubblewrap Codex ships on purpose, because a bwrap on PATH makes Codex run a
+// namespace probe that the reviewed seccomp profile denies. Everything else is
+// forwarded unchanged.
+export const CODEX_STDERR_FILTER_HELPER = String.raw`
+const codexVerboseLog = /^(?:debug|trace)(?:,|$)/i.test(process.env.RUST_LOG ?? "");
+const CODEX_REMOTE_CONTROL_WAIT = "waiting to resolve remote control preference until authentication is available";
+const CODEX_MISSING_BWRAP_WARNING = "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.";
+const CODEX_UNIX_SOCKETS_PLATFORM_WARNING = "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform";
+const CODEX_STDERR_LINE_LIMIT = 65536;
+let codexRemoteControlWaitAt = -Infinity;
+let codexUnixSocketsPlatformWarned = false;
+function codexStderrLineKept(line, now = Date.now()) {
+  if (codexVerboseLog || !line.startsWith("{")) return true;
+  if (
+    !line.includes('"message":"new"') &&
+    !line.includes('"message":"close"') &&
+    !line.includes('"message":"enter"') &&
+    !line.includes('"message":"exit"') &&
+    !line.includes('"message":"websocket client connected"') &&
+    !line.includes(CODEX_REMOTE_CONTROL_WAIT) &&
+    !line.includes(CODEX_UNIX_SOCKETS_PLATFORM_WARNING) &&
+    !line.includes(CODEX_MISSING_BWRAP_WARNING)
+  ) return true;
+  let record;
+  try { record = JSON.parse(line); } catch { return true; }
+  if (record === null || typeof record !== "object" || record.fields === null || typeof record.fields !== "object") return true;
+  const message = record.fields.message;
+  if (
+    (message === "new" || message === "close" || message === "enter" || message === "exit") &&
+    record.span !== null &&
+    typeof record.span === "object" &&
+    !Array.isArray(record.span)
+  ) {
+    return (
+      (message === "new" || message === "close") &&
+      record.target === "codex_core::tasks" &&
+      record.span.name === "turn"
+    );
+  }
+  if (
+    record.target === "codex_app_server_transport::transport::websocket" &&
+    message === "websocket client connected" &&
+    /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\]|\[::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}\]):\d{1,5}$/.test(String(record.fields.peer_addr))
+  ) {
+    return false;
+  }
+  if (
+    record.target === "codex_app_server_transport::transport::remote_control::websocket" &&
+    message === CODEX_REMOTE_CONTROL_WAIT
+  ) {
+    if (now - codexRemoteControlWaitAt < 600000) return false;
+    codexRemoteControlWaitAt = now;
+  }
+  if (record.target === "codex_app_server" && message === CODEX_MISSING_BWRAP_WARNING) return false;
+  if (record.target === "codex_network_proxy::proxy" && message === CODEX_UNIX_SOCKETS_PLATFORM_WARNING) {
+    if (codexUnixSocketsPlatformWarned) return false;
+    codexUnixSocketsPlatformWarned = true;
+  }
+  return true;
+}
+// Resolves when the stream ends. A line longer than the limit is forwarded
+// unfiltered as it arrives, so the wrapper never buffers without bound.
+function forwardCodexStderr(stream) {
+  let pending = "";
+  let passthrough = false;
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    pending += chunk;
+    let index;
+    while ((index = pending.indexOf("\n")) !== -1) {
+      const line = pending.slice(0, index);
+      pending = pending.slice(index + 1);
+      if (passthrough) {
+        process.stderr.write(line + "\n");
+        passthrough = false;
+      } else if (codexStderrLineKept(line)) {
+        process.stderr.write(line + "\n");
+      }
+    }
+    if (pending.length > CODEX_STDERR_LINE_LIMIT) {
+      process.stderr.write(pending);
+      pending = "";
+      passthrough = true;
+    }
+  });
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (pending !== "" && (passthrough || codexStderrLineKept(pending))) process.stderr.write(pending);
+      pending = "";
+      resolve();
+    };
+    stream.on("end", finish);
+    stream.on("close", finish);
+    stream.on("error", finish);
+  });
 }
 `;
 
@@ -2226,6 +2745,7 @@ const { performance } = require("node:perf_hooks");
 
 ${PLUGIN_RUNTIME_HELPERS}
 ${AUTH_PROBE_FAILURE_HELPER}
+${CODEX_STDERR_FILTER_HELPER}
 ${startupPhaseHelper("agent")}
 startPluginRuntimeStatusServer();
 const loginMode = process.env.CODEX_LOGIN_MODE;
@@ -2244,6 +2764,10 @@ if (loginMode === "api_key") {
 } else if (loginMode === "chatgpt_service_account") {
   if (!nonempty(accessToken) || !nonempty(workspaceId) || apiKey !== undefined) {
     throw new Error("Codex service-account authentication configuration is invalid.");
+  }
+} else if (loginMode === "oauth") {
+  if (apiKey !== undefined || accessToken !== undefined || workspaceId !== undefined) {
+    throw new Error("Codex OAuth authentication configuration is invalid.");
   }
 } else {
   throw new Error("Codex authentication mode is missing or unsupported.");
@@ -2270,6 +2794,11 @@ const loginArguments = loginMode === "api_key"
       "login",
       "--with-access-token",
     ];
+function codexChildEnvironment() {
+  const environment = { ...process.env };
+  delete environment.APP_SERVER_TOKEN;
+  return environment;
+}
 // Codex reports provider HTTP rejections as "status 401 Unauthorized" or
 // "unexpected status 403 Forbidden"; transport failures carry no status.
 function codexAuthenticationRejected(message) {
@@ -2277,16 +2806,36 @@ function codexAuthenticationRejected(message) {
 }
 const loginStartedAt = Date.now();
 let login;
-for (let attempt = 0; attempt < 3; attempt++) {
-  login = spawnSync("codex", loginArguments, {
-    input: loginMode === "api_key" ? apiKey : accessToken,
-    encoding: "utf8",
-    stdio: ["pipe", "ignore", "pipe"],
-    timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
-  });
-  // Access-token login validates the same credential remotely before saving it.
-  // A cold-node login timeout may recover; model probing has its own bounded retry.
-  if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") break;
+if (loginMode === "oauth") {
+  try {
+    const fs = require("node:fs");
+    const receipt = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/.oce-oauth.json", "utf8"));
+    const auth = JSON.parse(fs.readFileSync(process.env.CODEX_HOME + "/auth.json", "utf8"));
+    const valid = receipt.sourceUid === process.env.OCE_CODEX_OAUTH_SOURCE_UID &&
+      receipt.volumeUid === process.env.OCE_CODEX_OAUTH_VOLUME_UID &&
+      typeof receipt.sourceUid === "string" && typeof receipt.volumeUid === "string" &&
+      auth.auth_mode === "chatgpt" &&
+      [auth.tokens?.id_token, auth.tokens?.access_token, auth.tokens?.refresh_token]
+        .every((value) => typeof value === "string" && value.trim().length > 0);
+    login = { status: valid ? 0 : 1 };
+  } catch {
+    login = { status: 1 };
+  }
+} else {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    login = spawnSync("codex", loginArguments, {
+      input: loginMode === "api_key" ? apiKey : accessToken,
+      env: codexChildEnvironment(),
+      encoding: "utf8",
+      stdio: ["pipe", "ignore", "pipe"],
+      timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
+    });
+    // Access-token login validates the same credential remotely before saving it.
+    // A cold-node login timeout may recover; model probing has its own bounded retry.
+    if (loginMode === "api_key" || login.error?.code !== "ETIMEDOUT") {
+      break;
+    }
+  }
 }
 logStartupPhase("codex-login", loginStartedAt, login.status !== 0 || login.error ? "failed" : "ok");
 if (login.status !== 0 || login.error) {
@@ -2409,7 +2958,8 @@ function probeCodexAuthentication(timeout) {
 }
 
 // A single startup budget includes both process attempts and the retry delay.
-// No signal handler is installed during backoff, so termination exits promptly.
+// No signal handler is installed before app-server starts, so under tini
+// SIGTERM ends the probe, its backoff or a held failure at once.
 function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 61000) {
   const startedAt = performance.now();
   const timeout = Math.min(30000, Math.floor(deadline - startedAt));
@@ -2472,6 +3022,7 @@ const child = spawn(
     "shell_environment_policy.experimental_use_profile=false",
     "-c",
     "shell_environment_policy.set.PATH=" + JSON.stringify(process.env.PATH ?? ""),
+    ...(loginMode === "oauth" ? ["-c", "cli_auth_credentials_store=file"] : []),
     "app-server",
     "--listen",
     "ws://0.0.0.0:" + process.env.APP_SERVER_PORT,
@@ -2480,10 +3031,18 @@ const child = spawn(
     "--ws-token-sha256",
     digest,
   ],
-  { stdio: "inherit", cwd: "/home/node/workspace" },
+  // stdout is the protocol stream; stderr passes through the span-noise filter.
+  { stdio: ["inherit", "inherit", "pipe"], cwd: "/home/node/workspace", env: codexChildEnvironment() },
 );
 forwardTermination(child);
-child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));
+const codexStderrDone = child.stderr ? forwardCodexStderr(child.stderr) : Promise.resolve();
+child.on("exit", (code, signal) => {
+  const status = code ?? (signal === "SIGTERM" ? 0 : 1);
+  // Forward Codex's last lines; a descendant holding the pipe cannot delay exit
+  // by more than 2 s. The unref'd timer never keeps an otherwise idle wrapper alive.
+  setTimeout(() => process.exit(status), 2000).unref();
+  codexStderrDone.then(() => process.exit(status));
+});
 (async () => {
   try {
     if (pluginRuntime !== undefined) {
@@ -2571,7 +3130,14 @@ delete codexEnv.OPENCLAW_NODE_SETUP_PATH;
 delete codexEnv.OPENCLAW_NODE_CA_PEM;
 delete codexEnv.OPENCLAW_NODE_STATE_DIR;
 delete codexEnv.OPENCLAW_WORKSPACE_BOOTSTRAP;
-const nodeCommands = ["--commands", "file.fetch,file.stat,file.write,file.create,dir.list,workspace.memory,workspace.skills"];
+delete codexEnv.OPENCLAW_NODE_DISPLAY_NAME;
+// The node saves its first display name (the first Pod's host name) and reuses
+// it across revisions unless told otherwise; the controller names it after the Agent.
+const nodeDisplayName = process.env.OPENCLAW_NODE_DISPLAY_NAME;
+const nodeCommands = [
+  ...(nodeDisplayName ? ["--display-name", nodeDisplayName] : []),
+  "--commands", "file.fetch,file.stat,file.write,file.create,dir.list,workspace.memory,workspace.skills",
+];
 // The kubelet swaps Secret volume contents atomically, but an empty, truncated
 // or otherwise undecodable code is treated as absent and never started.
 function readSetupCode() {
@@ -2789,11 +3355,113 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 
 }
 `;
 
+// Kubelet puts an exec probe's output in the Pod's "Readiness probe failed:"
+// event. Each readiness program prints one line from a fixed vocabulary, never
+// a response body, so the event says why the container is unready.
+const READINESS_FAILURE_HELPER = String.raw`
+const { writeSync: readinessWriteSync } = require("node:fs");
+const readinessHttp = require("node:http");
+let readinessFailing = false;
+function readinessExit(reason) {
+  try {
+    readinessWriteSync(1, reason + "\n");
+  } catch {}
+  process.exit(1);
+}
+function readinessToken(value) {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(value)
+    ? value
+    : undefined;
+}
+function readinessErrorCode(error) {
+  return readinessToken(error?.code) ?? readinessToken(error?.error?.code) ?? "request failed";
+}
+// A wrapper that holds a failed startup check (a rejected model credential, for
+// example) publishes its fixed check name and code in runtime status: add them.
+function readinessFail(reason) {
+  if (readinessFailing) return;
+  readinessFailing = true;
+  const port = process.env.OPENCLAW_RUNTIME_STATUS_PORT;
+  if (port === undefined) readinessExit(reason);
+  const request = readinessHttp.get(
+    { host: "127.0.0.1", port, path: "/openclaw/runtime/status", timeout: 500 },
+    (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 65536) readinessExit(reason);
+      });
+      response.on("end", () => {
+        let failure;
+        try {
+          failure = JSON.parse(body).runtimeFailure;
+        } catch {}
+        const check = readinessToken(failure?.check);
+        const code = readinessToken(failure?.code);
+        readinessExit(
+          check === undefined || code === undefined
+            ? reason
+            : reason + "; startup check " + check + " failed with " + code,
+        );
+      });
+    },
+  );
+  request.on("timeout", () => request.destroy());
+  request.on("error", () => readinessExit(reason));
+}
+`;
+
+// Reads the plugin runtime status over Pod loopback, then calls ready(status).
+const READINESS_PLUGIN_STATUS_HELPER = String.raw`
+function checkPluginStatus(ready) {
+  const request = readinessHttp.get(
+    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
+    (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 65536) readinessExit("plugin runtime status response is too large");
+      });
+      response.on("end", () => {
+        let status;
+        try {
+          status = JSON.parse(body);
+        } catch {
+          readinessFail("plugin runtime status returned HTTP " + response.statusCode + " without JSON");
+          return;
+        }
+        if (response.statusCode !== 200) {
+          readinessFail("plugin runtime status returned HTTP " + response.statusCode);
+          return;
+        }
+        if (status?.phase !== "ready") {
+          readinessFail("plugin runtime phase is " + (readinessToken(status?.phase) ?? "unknown"));
+          return;
+        }
+        ready(status);
+      });
+    },
+  );
+  request.on("error", (error) =>
+    readinessFail("plugin runtime status unavailable: " + readinessErrorCode(error)),
+  );
+}
+`;
+
 export const NATIVE_WORKER_READINESS_ENTRYPOINT = String.raw`
 const { join } = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { writeSync } = require("node:fs");
+function fail(reason) {
+  try {
+    writeSync(1, reason + "\n");
+  } catch {}
+  process.exit(1);
+}
 const state = process.env.OPENCLAW_NODE_STATE_DIR;
-if (!state) process.exit(1);
+if (!state) fail("native node state directory is not configured");
 const identity = spawnSync(
   process.execPath,
   ["/app/openclaw.mjs", "node", "identity", "--json"],
@@ -2808,74 +3476,77 @@ const identity = spawnSync(
     timeout: 2_000,
   },
 );
-if (identity.status !== 0) process.exit(1);
-try {
-  process.exit(/^[a-f0-9]{64}$/u.test(JSON.parse(identity.stdout).deviceId) ? 0 : 1);
-} catch {
-  process.exit(1);
+if (identity.error !== undefined) {
+  fail("native node identity command failed: " + (identity.error.code ?? "error"));
 }
+if (identity.status !== 0) {
+  fail(
+    identity.signal === null
+      ? "native node identity command exited with " + identity.status
+      : "native node identity command was stopped by " + identity.signal,
+  );
+}
+let deviceId;
+try {
+  deviceId = JSON.parse(identity.stdout).deviceId;
+} catch {
+  fail("native node identity output is not JSON");
+}
+if (typeof deviceId !== "string" || !/^[a-f0-9]{64}$/u.test(deviceId)) {
+  fail("native node identity has no device ID");
+}
+process.exit(0);
 `;
 
 // Check native readiness over Pod loopback: kubelet's node source can also be
 // the trusted apiserver proxy source, but its probes have no forwarded headers.
 export const GATEWAY_READINESS_ENTRYPOINT = String.raw`
-const timeout = setTimeout(() => process.exit(1), 2_000);
-const http = require("node:http");
+${READINESS_FAILURE_HELPER}
+${READINESS_PLUGIN_STATUS_HELPER}
+let readinessWaitingFor = "plugin runtime status";
+const timeout = setTimeout(
+  () => readinessExit("no answer from " + readinessWaitingFor + " within 2s"),
+  2_000,
+);
 function nativeReady() {
-  const request = http.get(
+  readinessWaitingFor = "Gateway /readyz";
+  const request = readinessHttp.get(
     "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
     (response) => {
       response.resume();
-      clearTimeout(timeout);
-      process.exit(response.statusCode === 200 ? 0 : 1);
+      if (response.statusCode === 200) {
+        clearTimeout(timeout);
+        process.exit(0);
+      }
+      readinessFail("Gateway /readyz returned HTTP " + response.statusCode);
     },
   );
-  request.on("error", () => process.exit(1));
+  request.on("error", (error) =>
+    readinessFail("Gateway /readyz unavailable: " + readinessErrorCode(error)),
+  );
 }
 if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
   nativeReady();
 } else {
-  const request = http.get(
-    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
-    (response) => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => {
-        body += chunk;
-        if (body.length > 65536) process.exit(1);
-      });
-      response.on("end", () => {
-        try {
-          const status = JSON.parse(body);
-          if (response.statusCode !== 200 || status.phase !== "ready") process.exit(1);
-          nativeReady();
-        } catch {
-          process.exit(1);
-        }
-      });
-    },
-  );
-  request.on("error", () => process.exit(1));
+  checkPluginStatus(() => nativeReady());
 }
 `;
 
 export const AGENT_READINESS_ENTRYPOINT = String.raw`
-const timeout = setTimeout(() => process.exit(1), 2_000);
+${READINESS_FAILURE_HELPER}
+${READINESS_PLUGIN_STATUS_HELPER}
+let readinessWaitingFor = "plugin runtime status";
+const timeout = setTimeout(
+  () => readinessExit("no answer from " + readinessWaitingFor + " within 2s"),
+  2_000,
+);
 const { existsSync } = require("node:fs");
 const { createHmac } = require("node:crypto");
-const http = require("node:http");
 ${PLUGIN_APP_SERVER_TOKEN_DERIVATION_HELPER}
-if (
-  process.env.OPENCLAW_PLUGIN_READY_MARKER !== undefined &&
-  !existsSync(process.env.OPENCLAW_PLUGIN_READY_MARKER)
-) {
-  process.exit(1);
-}
 let ReadinessWebSocket;
 try {
   ReadinessWebSocket = require("ws");
 } catch {}
-if (ReadinessWebSocket === undefined) process.exit(1);
 function derivedToken(startupId) {
   try {
     return derivePluginAppServerTokenFromBase(
@@ -2884,10 +3555,11 @@ function derivedToken(startupId) {
       startupId,
     );
   } catch {
-    process.exit(1);
+    readinessExit("Codex app-server token inputs are invalid");
   }
 }
 function checkWebSocket(token) {
+  readinessWaitingFor = "the Codex app-server WebSocket";
   const socket = new ReadinessWebSocket("ws://127.0.0.1:" + process.env.APP_SERVER_PORT, {
     headers: { Authorization: "Bearer " + token },
   });
@@ -2900,31 +3572,20 @@ function checkWebSocket(token) {
     socket.close();
     process.exit(0);
   });
-  onSocket("error", () => process.exit(1));
+  onSocket("error", (error) =>
+    readinessFail("Codex app-server WebSocket unavailable: " + readinessErrorCode(error)),
+  );
 }
-if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
+if (
+  process.env.OPENCLAW_PLUGIN_READY_MARKER !== undefined &&
+  !existsSync(process.env.OPENCLAW_PLUGIN_READY_MARKER)
+) {
+  readinessFail("plugin ready marker is missing");
+} else if (ReadinessWebSocket === undefined) {
+  readinessExit("WebSocket client module is unavailable");
+} else if (process.env.OPENCLAW_PLUGIN_STATUS_PORT === undefined) {
   checkWebSocket(process.env.APP_SERVER_TOKEN);
 } else {
-  const request = http.get(
-    "http://127.0.0.1:" + process.env.OPENCLAW_PLUGIN_STATUS_PORT + "/openclaw/plugin-runtime/status",
-    (response) => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => {
-        body += chunk;
-        if (body.length > 65536) process.exit(1);
-      });
-      response.on("end", () => {
-        try {
-          const status = JSON.parse(body);
-          if (response.statusCode !== 200 || status.phase !== "ready") process.exit(1);
-          checkWebSocket(derivedToken(status.startupId));
-        } catch {
-          process.exit(1);
-        }
-      });
-    },
-  );
-  request.on("error", () => process.exit(1));
+  checkPluginStatus((status) => checkWebSocket(derivedToken(status.startupId)));
 }
 `;

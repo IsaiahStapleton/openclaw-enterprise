@@ -1,7 +1,8 @@
-// Minimal OpenShell v0.1.0 gateway surface used by OpenClaw Enterprise.
+// Minimal OpenShell v0.1.3-pre.1 gateway surface used by OpenClaw Enterprise.
 //
 // This intentionally models only the messages needed for lifecycle-safe
-// Workspace, Sandbox, and credential provider lifecycle. Field numbers and wire
+// Workspace, Sandbox, and credential provider lifecycle, plus the read-only
+// sandbox log read. Field numbers and wire
 // types match the OpenShell public protos so grpc-js can interoperate with the
 // real gateway. Messages from the upstream datamodel and sandbox packages are
 // declared here; package names do not affect their wire encoding.
@@ -10,6 +11,7 @@ syntax = "proto3";
 package openshell.v1;
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 
 service OpenShell {
   rpc Health(HealthRequest) returns (HealthResponse);
@@ -18,9 +20,14 @@ service OpenShell {
   rpc DeleteWorkspace(DeleteWorkspaceRequest) returns (DeleteWorkspaceResponse);
   rpc CreateSandbox(CreateSandboxRequest) returns (SandboxResponse);
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+  // Read-only. Upstream authorization: bearer, scope sandbox:read, workspace role user.
+  rpc GetSandboxLogs(GetSandboxLogsRequest) returns (GetSandboxLogsResponse);
   rpc GetSandboxProviderStatus(GetSandboxProviderStatusRequest)
       returns (GetSandboxProviderStatusResponse);
   rpc CreateProvider(CreateProviderRequest) returns (ProviderResponse);
+  rpc UpdateProvider(UpdateProviderRequest) returns (ProviderResponse);
+  rpc DetachSandboxProvider(DetachSandboxProviderRequest)
+      returns (DetachSandboxProviderResponse);
   rpc GetProvider(GetProviderRequest) returns (ProviderResponse);
   rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
   rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse);
@@ -313,6 +320,34 @@ message ProviderResponse {
   Provider provider = 1;
 }
 
+// Non-empty credential values merge into the existing provider; type and profile are fixed.
+message UpdateProviderRequest {
+  Provider provider = 1;
+  WorkspaceSelector workspace_scope = 3;
+  string request_id = 4;
+}
+
+message DetachSandboxProviderRequest {
+  string sandbox = 1;
+  string provider = 2;
+  uint64 expected_resource_version = 3;
+  WorkspaceSelector workspace_scope = 4;
+  string request_id = 5;
+}
+
+// Revocation is complete only when the receipt's readiness reaches REVOKED.
+message DetachSandboxProviderResponse {
+  bool detached = 2;
+  ProviderMutationReceipt receipt = 3;
+}
+
+message ProviderMutationReceipt {
+  string receipt_id = 1;
+  string mutation_id = 2;
+  string provider = 3;
+  string workspace = 4;
+}
+
 message GetProviderRequest {
   string name = 1;
   WorkspaceSelector workspace_scope = 2;
@@ -450,6 +485,7 @@ message GetSandboxProviderStatusResponse {
 }
 
 message ProviderReadinessStatus {
+  ProviderMutationReceipt receipt = 1;
   ProviderReadinessState state = 2;
   ProviderReadinessReason reason = 3;
 }
@@ -482,4 +518,34 @@ enum ProviderReadinessReason {
   PROVIDER_READINESS_REASON_CREDENTIAL_EXPIRED = 13;
   PROVIDER_READINESS_REASON_LOCAL_POLICY = 14;
   PROVIDER_READINESS_REASON_SNAPSHOT_MISMATCH = 15;
+}
+
+// Sandbox logs, from OpenShell proto/openshell.proto at dde8a9a (GetSandboxLogs,
+// SandboxLogLine). The gateway keeps the last 2000 lines per sandbox in memory.
+message GetSandboxLogsRequest {
+  WorkspaceSelector workspace_scope = 6;
+  reserved 3;
+  reserved "since_ms";
+  string sandbox = 1;
+  uint32 lines = 2;
+  google.protobuf.Timestamp since_time = 103;
+  repeated string sources = 4;
+  string min_level = 5;
+}
+
+message GetSandboxLogsResponse {
+  repeated SandboxLogLine logs = 1;
+  uint32 buffer_total = 2;
+}
+
+message SandboxLogLine {
+  reserved 2;
+  reserved "timestamp_ms";
+  string sandbox_id = 1;
+  google.protobuf.Timestamp event_time = 102;
+  string level = 3;
+  string target = 4;
+  string message = 5;
+  string source = 6;
+  map<string, string> fields = 7;
 }

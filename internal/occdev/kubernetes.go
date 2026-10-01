@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -126,6 +127,95 @@ func (r *runner) waitForDevelopmentKubernetesNamespace(ctx context.Context, time
 
 var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
+// engineImageReference reports the name the container engine recorded for a
+// local image.
+//
+// Docker can record a familiar Docker Hub name. Podman qualifies a local
+// build tagged `name:tag` as `localhost/name:tag`. Both `k3d image import`
+// and containerd match the recorded name, so later steps must use it.
+func (r *runner) engineImageReference(ctx context.Context, image string) (string, error) {
+	data, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{json .RepoTags}}", image)
+	if err != nil {
+		return "", err
+	}
+	var tags []string
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return "", fmt.Errorf("invalid tag inventory for image %s: %w", image, err)
+	}
+	// Engines record the implicit tag even when the request omits it. A colon
+	// in a registry port is not a tag; only inspect the final path component.
+	requested := image
+	last := image[strings.LastIndex(image, "/")+1:]
+	if !strings.Contains(image, "@") && !strings.Contains(last, ":") {
+		requested += ":latest"
+	}
+	// Prefer the requested spelling when the image has several tags.
+	for _, tag := range tags {
+		if tag == image {
+			return tag, nil
+		}
+	}
+	for _, tag := range tags {
+		if tag == requested {
+			return tag, nil
+		}
+	}
+	first, _, hasSlash := strings.Cut(image, "/")
+	qualified := hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost")
+	// Docker Hub spells one repository several ways: `postgres`,
+	// `library/postgres`, and `docker.io/library/postgres` all name the same
+	// image. Compare expanded names so any spelling finds the recorded one.
+	requestedHub, requestedOnHub := dockerHubReference(requested)
+	match := ""
+	for _, tag := range tags {
+		matched := false
+		if requestedOnHub {
+			recordedHub, recordedOnHub := dockerHubReference(tag)
+			matched = recordedOnHub && requestedHub == recordedHub
+		}
+		if !matched && !qualified {
+			registry, unqualified, found := strings.Cut(tag, "/")
+			matched = found && (registry == "localhost" || strings.ContainsAny(registry, ".:")) &&
+				(unqualified == image || unqualified == requested)
+		}
+		if !matched {
+			continue
+		}
+		if match != "" && match != tag {
+			return "", fmt.Errorf("container engine records ambiguous tags matching image %s", image)
+		}
+		match = tag
+	}
+	if match != "" {
+		return match, nil
+	}
+	return "", fmt.Errorf("container engine records no tag matching image %s", image)
+}
+
+// dockerHubReference expands Docker Hub's familiar names without changing
+// other registries, tags, or digests. The caller supplies any implicit tag.
+func dockerHubReference(reference string) (string, bool) {
+	if strings.Contains(reference, "@") {
+		return "", false
+	}
+	first, rest, hasSlash := strings.Cut(reference, "/")
+	if !hasSlash {
+		return "docker.io/library/" + reference, true
+	}
+	switch first {
+	case "docker.io", "index.docker.io":
+		if !strings.Contains(rest, "/") {
+			rest = "library/" + rest
+		}
+		return "docker.io/" + rest, true
+	default:
+		if first == "localhost" || strings.ContainsAny(first, ".:") || strings.ToLower(first) != first {
+			return "", false
+		}
+		return "docker.io/" + reference, true
+	}
+}
+
 func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string, error) {
 	image := r.setting("OCC_KUBERNETES_RUNTIME_IMAGE", "openclaw-enterprise-runtime:kubernetes-quickstart")
 	if r.env["OCC_KUBERNETES_RUNTIME_IMAGE"] != "" {
@@ -159,6 +249,15 @@ func (r *runner) importDevelopmentImage(ctx context.Context, s *developmentState
 			}
 		}()
 	}
+	// Use the name the engine actually recorded. Podman qualifies an
+	// unqualified local build as `localhost/<name>`, and both k3d and
+	// containerd match that recorded name exactly, so the requested name finds
+	// nothing to import or verify.
+	recorded, err := r.engineImageReference(ctx, selected)
+	if err != nil {
+		return "", err
+	}
+	selected = recorded
 	if staged {
 		platformData, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", selected)
 		if err != nil {
@@ -231,7 +330,11 @@ func (r *runner) importDevelopmentImage(ctx context.Context, s *developmentState
 
 // The local profile trusts only Pod loopback; first-agent verifies model access
 // with the separate loopback password. Routed installations supply Envoy source CIDRs.
-func writeInstallation(s *developmentState, reference string, openShell *openShellDevelopmentAssets, codexSeccompProfile string) error {
+// statusProxySource is the API server's Pod proxy source (developmentStatusProxySource).
+func writeInstallation(s *developmentState, reference string, openShell *openShellDevelopmentAssets, codexSeccompProfile string, statusProxySource string) error {
+	if statusProxySource == "" {
+		return fmt.Errorf("the development Installation requires the API server Pod proxy source")
+	}
 	auth := map[string]any{"mode": "kubeconfig", "kubeconfigPath": "/run/openclaw-development/kubeconfig", "context": "k3d-" + s.Cluster}
 	gatewayClientNamespace := "default"
 	if s.DeploymentMode == "k3d" {
@@ -248,7 +351,7 @@ func writeInstallation(s *developmentState, reference string, openShell *openShe
 			"compute": map[string]any{"id": "compute-kubernetes", "configuration": map[string]any{
 				"authentication": auth, "images": map[string]any{"gateway": reference, "agent": reference, "requireImmutableDigest": true},
 				"resources":                   map[string]any{"gateway": resources, "agent": resources, "namespace": map[string]any{"quota": map[string]string{"pods": "10"}, "containerDefaults": resources}},
-				"network":                     map[string]any{"dns": map[string]any{"namespace": "kube-system", "podLabels": map[string]string{"k8s-app": "kube-dns"}}, "gatewayPort": 8080, "gatewayTrustedProxyCidrs": []string{"127.0.0.1/32"}, "gatewayClients": []any{map[string]any{"namespace": gatewayClientNamespace, "podLabels": map[string]string{"app.kubernetes.io/name": "occ-kubernetes-dev-client"}}}},
+				"network":                     map[string]any{"dns": map[string]any{"namespace": "kube-system", "podLabels": map[string]string{"k8s-app": "kube-dns"}}, "gatewayPort": 8080, "gatewayTrustedProxyCidrs": []string{"127.0.0.1/32"}, "pluginStatusProxySourceCidrs": []string{statusProxySource}, "gatewayClients": []any{map[string]any{"namespace": gatewayClientNamespace, "podLabels": map[string]string{"app.kubernetes.io/name": "occ-kubernetes-dev-client"}}}},
 				"servicePrincipalCredentials": map[string]any{"mode": "projectedServiceAccountToken", "audience": "openclaw-enterprise", "expirationSeconds": 900},
 				"runtime":                     map[string]any{"gatewayStorageClassName": "local-path", "transportSecretPrefix": "openclaw-agent-transport", "gatewayNodeSelector": map[string]string{"kubernetes.io/hostname": "k3d-" + s.Cluster + "-server-0"}},
 			}},
@@ -258,7 +361,7 @@ func writeInstallation(s *developmentState, reference string, openShell *openShe
 		compute := config["drivers"].(map[string]any)["compute"].(map[string]any)["configuration"].(map[string]any)
 		compute["runtime"].(map[string]any)["codexSeccompProfile"] = codexSeccompProfile
 	}
-	if s.DeploymentMode == "k3d" && s.SandboxDriver == "none" {
+	if s.SandboxDriver == "none" {
 		config["presets"] = map[string]any{"includeDefaults": true}
 		config["drivers"].(map[string]any)["plugin"] = map[string]any{
 			"id": "codex-plugin", "configuration": map[string]any{"catalogSource": "openai-curated"},
@@ -358,4 +461,27 @@ func openShellInstallationConfiguration(s *developmentState, workspaceResources 
 			"sandboxNamePrefix": "os",
 		},
 	}
+}
+
+// prepareDevelopmentCodexSandbox verifies the owned node before either local
+// control-plane profile selects a dedicated Codex runtime.
+func (r *runner) prepareDevelopmentCodexSandbox(ctx context.Context, state *developmentState, runtimeImage string, timeoutSeconds int) (string, error) {
+	fmt.Fprintln(r.opts.Out, "Verifying the dedicated Codex sandbox on the owned k3d node...")
+	command := r.command(ctx, "node", "scripts/prepare-development-codex-seccomp.mjs", state.directory, runtimeImage, strconv.Itoa(timeoutSeconds))
+	command.Stderr = r.opts.Err
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("dedicated Codex sandbox preparation failed: %w", err)
+	}
+	var result struct {
+		Mode        string `json:"mode"`
+		ProfileName string `json:"profileName"`
+	}
+	if err := json.Unmarshal(output, &result, json.RejectUnknownMembers(true)); err != nil {
+		return "", fmt.Errorf("invalid dedicated Codex sandbox preparation result: %w", err)
+	}
+	if !validDevelopmentCodexSeccompResult(result.Mode, result.ProfileName) {
+		return "", fmt.Errorf("invalid dedicated Codex sandbox preparation result")
+	}
+	return result.ProfileName, nil
 }

@@ -29,7 +29,7 @@ import {
   type OpenClawController,
   type PostgresPlatformState,
 } from "@openclaw-enterprise/occ";
-import { Check } from "typebox/value";
+import { Check, Errors } from "typebox/value";
 import { validatePresetTemplate } from "@openclaw-enterprise/contracts";
 import {
   KubernetesComputeDriver,
@@ -616,7 +616,9 @@ function selected(
     // An unsupported schema must fail closed instead of skipping validation.
   }
   if (!validSchema) {
-    throw new Error(`${path}.configuration does not match its Driver configuration schema.`);
+    throw new Error(
+      `${path}.configuration does not match its Driver configuration schema${schemaMismatch(schema, configuration)}.`,
+    );
   }
   driver.validateConfiguration(configuration);
   return Object.freeze({
@@ -627,6 +629,19 @@ function selected(
       : {}),
     configuration,
   });
+}
+
+// Names the first mismatched field and the expected shape, never the value,
+// which may be a credential reference.
+function schemaMismatch(schema: Record<string, unknown>, configuration: unknown): string {
+  try {
+    for (const error of Errors(schema, configuration)) {
+      return ` at ${error.instancePath || "/"}: ${error.message}`;
+    }
+  } catch {
+    // The generic message still fails closed.
+  }
+  return "";
 }
 
 export async function loadInstallationConfiguration(options: {

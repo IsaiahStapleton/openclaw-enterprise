@@ -10,6 +10,7 @@ import {
 import { Check } from "typebox/value";
 import { PluginApproversSchema } from "./api/common.ts";
 import type {
+  RepositoryAccess,
   RepositoryBindingSelection,
   RepositoryCredentialMaterialRef,
   RepositoryCredentialRuntimeBinding,
@@ -25,12 +26,14 @@ export {
 } from "./logging.ts";
 
 export type {
+  RepositoryAccess,
   AdmittedRepositoryBinding,
   OpenRepositorySessionInput,
   OpenRepositorySessionResult,
   RepositoryBindingRequest,
   RepositoryBindingSelection,
   RepositoryOption,
+  RepositoryOptions,
   RepoDriver,
   RepositoryCredentialGrantIdentity,
   RepositoryCredentialMaterialRef,
@@ -310,9 +313,29 @@ export interface CredentialSourceMetadata {
   readonly ref: CredentialSourceReference;
 }
 
+/**
+ * An authorized request to revoke one credential source from one Agent revision. `revoked`
+ * is recorded only after the Credential Gateway confirms the revision's placeholders no
+ * longer resolve; the revision cannot re-attach the source.
+ */
+export interface CredentialWithdrawal {
+  readonly namespaceId: string;
+  readonly agentId: string;
+  readonly revisionId: string;
+  readonly credentialSourceId: string;
+  readonly state: "pending" | "revoked";
+  readonly requestedBy: string;
+  readonly requestedAt: string;
+  readonly completedAt?: string;
+  /** The worker's most recent outcome code, for example why the withdrawal is still pending. */
+  readonly lastReason?: string;
+  readonly lastAttemptAt?: string;
+}
+
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
   | { readonly method: "codex_pat"; readonly source: SecretReference }
+  | { readonly method: "oauth"; readonly source: SecretReference }
   | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
   | { readonly method: "credential_source"; readonly sourceId: string }
   | { readonly method: "runtime" };
@@ -327,6 +350,11 @@ export type HarnessAuthSnapshot =
     }
   | {
       readonly method: "codex_pat";
+      readonly source: SecretReference;
+      readonly secretDriverId: string;
+    }
+  | {
+      readonly method: "oauth";
       readonly source: SecretReference;
       readonly secretDriverId: string;
     }
@@ -351,7 +379,7 @@ export type HarnessAuthSnapshot =
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
-  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" }> & {
+  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" | "oauth" }> & {
       readonly backendRef: SecretBackendRef;
     })
   | (Extract<HarnessAuthSnapshot, { method: "credential_source" }> & {
@@ -589,6 +617,7 @@ export interface Agent extends Scope {
   readonly plugins?: PluginDesiredState;
   readonly pluginApprovers?: PluginApprovers;
   readonly repositoryBindings?: readonly RepositoryBindingSelection[];
+  readonly repositoryAccess?: RepositoryAccess;
   readonly servicePrincipalId: string;
   readonly activeRevisionId?: string;
   readonly createdAt: string;
@@ -601,6 +630,7 @@ export interface ConfigurationReadError {
     | "plugins"
     | "pluginApprovers"
     | "repositoryBindings"
+    | "repositoryAccess"
     | "harnessAuth"
     | "secretBindings"
     | "repositoryCredentials"
@@ -609,7 +639,7 @@ export interface ConfigurationReadError {
 
 export type AgentMetadata = Omit<
   Agent,
-  "plugins" | "pluginApprovers" | "repositoryBindings" | "harnessAuth"
+  "plugins" | "pluginApprovers" | "repositoryBindings" | "repositoryAccess" | "harnessAuth"
 >;
 
 export type AgentRead =
@@ -718,8 +748,22 @@ export interface ServicePrincipal extends Scope {
 
 export type Identity = Principal | ServicePrincipal;
 
-export type PermissionAction =
-  "create" | "read" | "update" | "delete" | "deploy" | "operate" | "administer";
+/**
+ * `read_logs` delegates reading an Agent's runtime log text without `administer`.
+ * No action implies another.
+ */
+export const PERMISSION_ACTIONS = Object.freeze([
+  "create",
+  "read",
+  "update",
+  "delete",
+  "deploy",
+  "operate",
+  "administer",
+  "read_logs",
+] as const);
+
+export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
 
 export interface Permission {
   readonly action: PermissionAction;
@@ -800,7 +844,8 @@ export type IdentityLookup = Scope &
     | { readonly servicePrincipalId: string; readonly issuer?: never; readonly subject?: never }
   );
 
-export type AuditEventKind = "bootstrap" | "mutation" | "authorization_denial";
+/** `access` records an audited read, such as viewing or downloading runtime log text. */
+export type AuditEventKind = "bootstrap" | "mutation" | "access" | "authorization_denial";
 
 export type AuditOutcome = "success" | "denied" | "failure";
 
@@ -1029,6 +1074,8 @@ export interface SecretDriver extends Driver {
   readonly capability: "secret";
   create(identity: SecretIdentity, value: string): Promise<SecretBackendRef>;
   update(secret: Secret, value: string): Promise<void>;
+  /** Replace an exact current value atomically; used to fence device authorization exchanges. */
+  compareAndSwap?(secret: Secret, expected: string, value: string): Promise<boolean>;
   delete(secret: Secret): Promise<void>;
   /** Verify live exact ownership and return only safe projection identity. */
   resolve(secret: Secret): Promise<SecretBackendRef>;
@@ -1066,6 +1113,16 @@ export interface CredentialRevisionContext extends CredentialGatewayContext {
   readonly sandbox?: SandboxResourceRef;
 }
 
+/** Names the one source to revoke from one provisioned revision Sandbox. */
+export interface CredentialWithdrawalContext extends CredentialGatewayContext {
+  /** Resolved by Compute: `name` is the runtime placement shared with the paired Sandbox. */
+  readonly namespace: Readonly<Namespace>;
+  readonly revision: Readonly<AgentRevision>;
+  /** The Sandbox provisioning created for `revision`. */
+  readonly sandbox: SandboxResourceRef;
+  readonly sourceId: string;
+}
+
 /** Opaque grant that only the paired SandboxDriver can consume. */
 export interface CredentialSourceAttachment {
   readonly sourceId: string;
@@ -1101,9 +1158,11 @@ export interface CredentialGatewayDriver extends Driver {
   attachmentStatus(
     context: CredentialRevisionContext,
   ): Promise<readonly CredentialAttachmentStatus[]>;
-  withdraw(
-    context: CredentialRevisionContext & { readonly sourceId: string },
-  ): Promise<CredentialAttachmentStatus>;
+  /**
+   * Returns `revoked` only on gateway evidence that the revision's placeholders no longer
+   * resolve, `absent` when the Sandbox no longer exists, and `pending` otherwise.
+   */
+  withdraw(context: CredentialWithdrawalContext): Promise<CredentialAttachmentStatus>;
 }
 
 export interface SandboxDriver extends Driver {
@@ -1116,10 +1175,26 @@ export interface SandboxDriver extends Driver {
   ): OpenClawConfigurationDocument;
   ensureNamespace?(context: SandboxNamespaceContext): Promise<void>;
   provisionHarness?(context: SandboxHarnessContext): Promise<SandboxResourceRef>;
+  /**
+   * The exact Sandbox `provisionHarness` creates for this revision, derived without effects.
+   * Required to revoke credentials from a running revision.
+   */
+  harnessResource?(
+    context: Pick<SandboxHarnessContext, "namespace" | "revision">,
+  ): SandboxResourceRef;
   /** Required for revision stop, retirement, and Namespace cleanup, independent of Harness ownership. */
   cleanup(
     context: SandboxNamespaceContext & { readonly revision?: Readonly<AgentRevision> },
   ): Promise<void>;
+  /**
+   * Bounded raw log lines of the revision's Sandbox. Read-only: an implementation must
+   * reach its runtime through a read-only interface. The Sandbox name is the Driver's own
+   * derivation from the revision; callers never name it.
+   */
+  readSandboxLogs?(
+    context: SandboxLogContext,
+    request: SandboxLogRequest,
+  ): Promise<SandboxLogChunk>;
 }
 
 export interface PluginDriverContext {
@@ -1128,6 +1203,12 @@ export interface PluginDriverContext {
   readonly harness: RevisionHarnessDescriptor;
   readonly configuration: Readonly<OpenClawConfigurationDocument>;
   readonly signal: AbortSignal;
+}
+
+export interface PluginDiscoveryAuthentication {
+  readonly accessToken?: string;
+  /** Server-owned native OAuth bundle; never accepted from public discovery requests. */
+  readonly credential?: { readonly kind: "oauth"; readonly value: string };
 }
 
 export interface PluginDriver extends Driver {
@@ -1139,11 +1220,11 @@ export interface PluginDriver extends Driver {
   /** Pre-Agent discovery defaults to requiring a transient credential. Results are not persisted. */
   readonly discoveryCredential?: "required" | "none";
   discoverCatalog?(
-    input: { readonly accessToken?: string; readonly cursor?: string; readonly q?: string },
+    input: PluginDiscoveryAuthentication & { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage>;
   getCatalogPlugin?(
-    input: { readonly accessToken?: string; readonly pluginId: string },
+    input: PluginDiscoveryAuthentication & { readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry>;
 }
@@ -1264,6 +1345,189 @@ export interface ComputeAgentRevisionBinding extends ComputeAgentBinding {
   readonly revision: Readonly<AgentRevision>;
 }
 
+/**
+ * Runtime log classes. OCC classifies every record; a source never sets the class.
+ * `content` (message text, prompts, tool output) is reserved and has no producer.
+ */
+export type RuntimeLogContentClass = "operational" | "activity" | "content";
+/** Container sources are Pods the Compute Driver lists; `sandbox` is the Sandbox Driver's log. */
+export type RuntimeLogContainerSourceId = "gateway" | "agent";
+export type RuntimeLogSourceId = RuntimeLogContainerSourceId | "sandbox";
+export type RuntimeLogLevel = "error" | "warn" | "info" | "debug" | "unknown";
+export type RuntimeLogKind = "wrapper" | "openclaw" | "codex" | "sandbox" | "text";
+export type RuntimeLogGapReason =
+  "stream_replaced" | "window_exceeded" | "cursor_expired" | "truncated" | "buffer_lost";
+export type RuntimeLogWithheldReason = "unrecognised_structured" | "oversized" | "malformed";
+
+/** One container instance or sandbox, keyed on server-observed identity only. */
+export interface RuntimeLogStream {
+  readonly source: RuntimeLogSourceId;
+  readonly pod?: string;
+  readonly podUid?: string;
+  readonly container?: string;
+  readonly restartCount?: number;
+  /** Sandbox source: the OCC-derived Sandbox name of this revision. */
+  readonly sandbox?: string;
+}
+
+export type RuntimeLogRecord =
+  | {
+      readonly type: "line";
+      readonly time: string | null;
+      readonly stream: RuntimeLogStream;
+      readonly contentClass: RuntimeLogContentClass;
+      readonly kind: RuntimeLogKind;
+      readonly level: RuntimeLogLevel;
+      readonly message: string;
+      readonly subsystem?: string;
+      readonly fields?: Readonly<Record<string, string | number | boolean>>;
+      readonly truncated?: true;
+    }
+  | {
+      readonly type: "gap";
+      readonly time: string | null;
+      readonly stream: RuntimeLogStream;
+      readonly reason: RuntimeLogGapReason;
+      readonly remedy: string;
+    }
+  | {
+      readonly type: "withheld";
+      readonly time: string | null;
+      readonly stream: RuntimeLogStream;
+      readonly count: number;
+      readonly reason: RuntimeLogWithheldReason;
+    };
+
+export interface AgentRuntimeContainerStatus {
+  readonly name: string;
+  readonly state: "waiting" | "running" | "terminated" | "unknown";
+  readonly reason: string | null;
+  readonly ready: boolean;
+  readonly restartCount: number;
+  readonly startedAt: string | null;
+  readonly lastTermination: {
+    readonly reason: string | null;
+    readonly exitCode: number | null;
+    readonly finishedAt: string | null;
+  } | null;
+}
+
+export interface AgentRuntimeEvent {
+  readonly type: "Normal" | "Warning";
+  /** Container the Event concerns (from `involvedObject.fieldPath`), or null for the Pod. */
+  readonly container: string | null;
+  readonly reason: string;
+  readonly message: string;
+  readonly count: number;
+  readonly lastObservedAt: string | null;
+}
+
+export interface AgentRuntimePodStatus {
+  readonly role: RuntimeLogContainerSourceId;
+  /** `execution` only when the Pod runs on a separately configured execution cluster. */
+  readonly cluster: "control" | "execution";
+  readonly name: string;
+  readonly uid: string;
+  readonly phase: string;
+  readonly ready: boolean;
+  readonly createdAt: string | null;
+  readonly containers: readonly AgentRuntimeContainerStatus[];
+  /** Pod-scoped Events, newest first, at most 100. */
+  readonly events: readonly AgentRuntimeEvent[];
+}
+
+export interface AgentRuntimeLogSource {
+  readonly id: RuntimeLogSourceId;
+  /** `sandbox` sources list no Pods; OCC derives the Sandbox from the revision. */
+  readonly kind: "container" | "sandbox";
+  readonly pods: readonly {
+    readonly name: string;
+    readonly uid: string;
+    readonly container: string;
+    readonly restartCount: number;
+  }[];
+  readonly available: boolean;
+  readonly unavailableCode?: "NO_POD";
+  /** Fixed notice for loss the API cannot observe. */
+  readonly retention: string;
+}
+
+export interface AgentRuntimeDescription {
+  readonly revisionId: string;
+  readonly observedAt: string;
+  readonly pods: readonly AgentRuntimePodStatus[];
+  readonly sources: readonly AgentRuntimeLogSource[];
+}
+
+/** Narrows a description for a log read, which needs one source's Pods and no Events. */
+export interface AgentRuntimeDescribeOptions {
+  /** Describe only this source's Pods; other sources are omitted. */
+  readonly source?: RuntimeLogContainerSourceId;
+  /** `false` skips Pod Event lists; each Pod then carries no Events. */
+  readonly events?: boolean;
+}
+
+export interface AgentRuntimeLogRequest {
+  readonly source: RuntimeLogContainerSourceId;
+  readonly pod: string;
+  readonly podUid: string;
+  readonly container: string;
+  readonly previous: boolean;
+  readonly tailLines: number;
+  readonly sinceSeconds?: number;
+  readonly limitBytes: number;
+  readonly signal: AbortSignal;
+}
+
+/** Raw lines as the runtime wrote them; OCC classifies and redacts every line. */
+export interface AgentRuntimeLogChunk {
+  /** Stream identity re-read after the log read. */
+  readonly stream: RuntimeLogStream;
+  readonly observedAt: string;
+  readonly lines: readonly { readonly time: string | null; readonly raw: string }[];
+  /** The byte limit cut the output; the final line may be partial. */
+  readonly truncated: boolean;
+}
+
+/** Where a Sandbox Driver finds one revision's Sandbox; the Namespace is Compute's placement. */
+export interface SandboxLogContext {
+  readonly namespace: Readonly<Namespace>;
+  readonly revision: Readonly<AgentRevision>;
+  readonly signal: AbortSignal;
+}
+
+export interface SandboxLogRequest {
+  /** Most recent lines to return, 1 to 1000. */
+  readonly lines: number;
+  /** Only lines at or after this RFC 3339 time. */
+  readonly sinceTime?: string;
+}
+
+/** One raw Sandbox log line as the Sandbox runtime reported it; OCC sanitizes every field. */
+export interface SandboxLogLine {
+  readonly time: string | null;
+  readonly sandboxId: string;
+  readonly level: string;
+  readonly target: string;
+  readonly message: string;
+  /** Where the line was produced, for example `gateway` or `sandbox`. */
+  readonly source: string;
+  readonly fields: Readonly<Record<string, string>>;
+}
+
+/** Raw, bounded Sandbox log lines in chronological order. */
+export interface SandboxLogChunk {
+  /** The Sandbox name the Driver read; OCC checks it against the revision. */
+  readonly sandbox: string;
+  readonly observedAt: string;
+  readonly lines: readonly SandboxLogLine[];
+  /**
+   * Lines the source examined before applying `sinceTime`: the requested line count
+   * when the buffer held at least that many, otherwise the whole buffer.
+   */
+  readonly bufferTotal: number;
+}
+
 /** Observed workload image identity; missing provenance must never be inferred from a tag. */
 export interface RuntimeImage {
   readonly workload: string;
@@ -1283,6 +1547,18 @@ export interface ComputePreflightResult {
   readonly warnings: readonly ComputePreflightWarning[];
 }
 
+export interface HarnessDeviceAuthorization {
+  readonly verificationUrl: string;
+  readonly userCode: string;
+  readonly expiresAt: string;
+  readonly intervalSeconds: number;
+  /** Provider authorization material; retain only in server-side Secret storage. */
+  readonly privateState: string;
+}
+
+export type HarnessDeviceAuthorizationResult =
+  { readonly status: "pending" } | { readonly status: "ready"; readonly credential: string };
+
 export interface ComputeDriver extends Driver {
   readonly supportsWorkspaceSetup?: true;
   readonly capability: "compute";
@@ -1301,6 +1577,15 @@ export interface ComputeDriver extends Driver {
    */
   requiresStoppedPredecessors?(revision: AgentRevision): boolean;
   getRuntimeImages?(revision: AgentRevision): Promise<readonly RuntimeImage[]>;
+  /** Provider protocol and native credential formatting belong to the selected Compute Driver. */
+  startHarnessDeviceAuthorization?(
+    harnessId: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessDeviceAuthorization>;
+  pollHarnessDeviceAuthorization?(
+    privateState: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessDeviceAuthorizationResult>;
   /** Read-only native model discovery; supplied credentials must never be persisted. */
   discoverHarnessModels?(input: {
     readonly authMethod: "api_key" | "codex_pat";
@@ -1335,6 +1620,17 @@ export interface ComputeDriver extends Driver {
   diagnoseAgentDeployment?(
     binding: ComputeAgentRevisionBinding,
   ): Promise<AgentDeploymentDiagnostics>;
+  /** Read-only runtime status and log sources for one exact revision. */
+  describeAgentRuntime?(
+    binding: ComputeAgentRevisionBinding,
+    signal: AbortSignal,
+    options?: AgentRuntimeDescribeOptions,
+  ): Promise<AgentRuntimeDescription>;
+  /** Bounded raw container output; `request.pod` was listed by `describeAgentRuntime`. */
+  readAgentRuntimeLogs?(
+    binding: ComputeAgentRevisionBinding,
+    request: AgentRuntimeLogRequest,
+  ): Promise<AgentRuntimeLogChunk>;
   deleteAgentRuntimeCredentials?(binding: ComputeAgentBinding): Promise<void>;
   getGatewayEndpoint?(revision: AgentRevision): string | undefined;
   ensureNamespace(namespace: Namespace): Promise<NamespaceEnsureResult>;
@@ -1344,6 +1640,16 @@ export interface ComputeDriver extends Driver {
    * Compute Driver's runtime placement. Required to register Credential Gateway sources.
    */
   resolveSandboxNamespace?(namespace: Readonly<Namespace>): Promise<Readonly<Namespace>>;
+  /**
+   * Revokes `source` from the revision's paired Sandbox through the selected Credential
+   * Gateway. Returns `revoked` only after the gateway confirms revocation, and `absent` when
+   * the revision has no Sandbox or attachment left to revoke. Required for withdrawal.
+   */
+  withdrawCredentialSource?(
+    revision: Readonly<AgentRevision>,
+    source: Readonly<CredentialSource>,
+    signal: AbortSignal,
+  ): Promise<CredentialAttachmentStatus>;
   prepareRevision(
     revision: AgentRevision,
     context?: ComputeRevisionContext,

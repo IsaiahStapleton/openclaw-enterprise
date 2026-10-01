@@ -1,6 +1,6 @@
 import type { Denied, RequestHead, RequestPlan } from "../../credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
-import type { GitHubProfile } from "./types.ts";
+import type { GitHubTokenProfile } from "./types.ts";
 import { createResponsePolicy } from "./response.ts";
 import { classifyRoute, nativeGraphqlAccept } from "./routes/classification.ts";
 import type { Route } from "./routes/classification.ts";
@@ -16,7 +16,7 @@ export interface RoutePolicy {
 interface RoutePolicyOptions {
   readonly repository: string;
   readonly repositoryId: string;
-  readonly profile: GitHubProfile;
+  readonly profile: GitHubTokenProfile;
   readonly gatewayOrigin: string;
   readonly gitOrigin: string;
   readonly apiOrigin: string;

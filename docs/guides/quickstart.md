@@ -7,7 +7,8 @@ machine. The OpenClaw Control Plane (OCC), PostgreSQL, and Agent workloads run
 in a local Kubernetes cluster created with k3d. This setup is for development
 and uses loopback addresses. This guide explicitly selects the Kubernetes-only
 profile; without a selection, startup uses a Compose control-plane preview that
-cannot deploy Agents. To install OCC itself in a cluster you already operate,
+cannot deploy Agents. A separate [Compose OCC with Kubernetes compute profile](deploy/local-kubernetes-development.md#run-occ-in-compose-with-kubernetes-compute)
+has fewer configured capabilities. To install OCC itself in a cluster you already operate,
 use [Kubernetes Setup](kubernetes-setup.md).
 
 ## Before you start
@@ -18,6 +19,10 @@ Run the commands below from the repository root on Linux or macOS. You need:
   check the [local Kubernetes requirements](deploy/local-kubernetes-development.md#start-the-profile).
 - The Go version in `go.mod`, Node.js 24 or later, and the pnpm version pinned
   in `package.json`.
+- About 20 GB of free container-engine storage for the first build. On macOS
+  that space is inside the Podman or Docker virtual machine rather than on your
+  host disk; check it with `podman machine ssh df -h /var`. Without it, startup
+  fails late with `no space left on device` and rolls back the cluster.
 - Free local ports `3000` for the API, `8443` for the browser console, and
   `6443` for Kubernetes. If a port is in use, override `OPENCLAW_DEV_PORT`,
   `OCC_DEVELOPMENT_BROWSER_PORT`, or `OCC_DEVELOPMENT_KUBERNETES_API_PORT`;
@@ -44,6 +49,8 @@ images. This can take several minutes. Wait for `OpenClaw Enterprise development
 command prints the API URL, Installation ID, local service-key file, kubeconfig,
 Kubernetes context, and cleanup command. Keep this output; the service-key file
 is an administrator credential and must remain on your machine.
+
+If startup stalls on cert-manager, follow [local startup troubleshooting](operate/troubleshooting.md#local-startup-stalls-on-cert-manager).
 
 ## Open the platform console
 

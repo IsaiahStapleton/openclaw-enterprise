@@ -30,11 +30,25 @@ Both profiles enable:
   private metrics, digest-pinned images, DNS policy, trusted proxy CIDRs, and
   plugin-status proxy CIDRs.
 
+Both profiles give Gateway Pods (embedded or dedicated), Harness Pods, and the
+tenant namespace container default a `100m` CPU request and a four-core (`"4"`)
+CPU limit, with `128Mi` memory requests and `2Gi` memory limits. The limit only
+permits bursts: an embedded OpenClaw Gateway runs a full agent turn as its
+startup model probe, about 16 CPU-seconds of local work, and was ready 24 to 30
+seconds after start at one core against 51 to 72 seconds at `500m`. The probe
+uses about one core, so cores beyond the first serve later work, not startup. The request
+sets the scheduling reservation, so the higher limit reserves no node capacity.
+The trade-off is overcommit: several busy runtimes on one node can each take up
+to four cores from their neighbors, and a `limits.cpu` namespace quota counts
+the whole limit. Profile input cannot change these values; for others, write
+the Installation from the production example (see
+[Images and resources](../../reference/drivers/kubernetes-compute.md#images-and-resources)).
+
 Seeding both Presets does not change the profile's PluginDriver. An Agent
 created from the other profile's Preset still needs a compatible driver,
 runtime, harness mode, credentials, and channel support.
 
-To seed additional Presets, add `"presets": { "files": ["/app/deploy/presets/devday.json"] }`
+To seed additional Presets, add `"presets": { "files": ["/app/deploy/presets/swe-preset.json"] }`
 to the input JSON and rerender. This example adds **SWE Agent** alongside the
 standard Presets. Both controller processes must be able to read the files at
 startup; the renderer validates the list but does not read container files. See
@@ -130,16 +144,22 @@ and rejects URLs the controller would reject at startup.
 
 ### External sign-in and trusted proxies
 
-Activation of GitHub or Google sign-in is one-way, so keep these inputs in every
+Activation of GitHub, Google or OIDC sign-in is one-way, so keep these inputs in every
 later rerender. Adding `controlPlane.github` or `controlPlane.google` (`{}` uses
-the chart's Secret defaults) renders `auth.github` or `auth.google` with
+the chart's Secret defaults), or `controlPlane.oidc` with its `issuer`,
+`authorizationUrl`, `tokenUrl` and `jwksUrl` ([OIDC sign-in](oidc-sign-in.md)), renders
+`auth.github`, `auth.google` or `auth.oidc` with
 `enabled: true` and `agentNativeAdmin.enabled: false`; remove
 `agentNativeAdminDomain` and `sharedCookieDomain`. `recoveryUserId` and an HTTPS
-`authBaseUrl` are required. Follow
+`authBaseUrl` are required. Optional `passwordSignIn: "recovery-only"` renders
+[`auth.passwordSignIn`](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in);
+preflight lists attaching every ordinary account's identity first. Follow
 [Enable GitHub browser sign-in](production-installation.md#enable-github-browser-sign-in).
 Behind a proxy that adds forwarded headers, such as ingress-nginx, set
 `trustedProxy` ([presets](../../reference/settings/production.md#github-sign-in-and-trusted-proxies));
-it works with or without external sign-in.
+it works with or without external sign-in. Without it, preflight warns (it does
+not fail), because an Installation whose API sees each client's own address, such
+as behind a source-preserving NLB, needs none.
 
 ```json
 {
@@ -155,7 +175,8 @@ it works with or without external sign-in.
 }
 ```
 
-`github` and `google` also accept `clientIdKey` and `clientSecretKey`;
+`github`, `google` and `oidc` also accept `secretName`, `clientIdKey`, `clientSecretKey`
+and `egressCidrs`; `oidc` also accepts `tokenAuth` and `displayName`;
 `trustedProxy` accepts `clientAddressHeader`, required for the `generic` preset.
 
 If you opt in to repositories, add the broker inputs:

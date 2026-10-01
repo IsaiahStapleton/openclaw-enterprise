@@ -9,8 +9,9 @@ Separate Agents receive separate service principals, even when they share a
 Namespace. The service principal is immutable, belongs to its exact Agent and
 Namespace, and remains the same across every revision of that Agent.
 
-An Agent service principal does not inherit your permissions, session cookie,
-provider credentials, or another Agent's identity. It has the same
+Inheriting the creator's identity, permissions, session cookie, or provider
+credentials is not yet supported. An Agent service principal cannot assume
+another Agent's identity. It has the same
 role-granted capabilities as a human Principal: an appropriately scoped Role
 and AccessBinding can grant any platform action, including administrative
 actions and access to another Agent in the same Namespace. Its Namespace scope,
@@ -53,8 +54,10 @@ Each Agent explicitly records how its selected Harness runs:
 The Agent's native Configuration selects a Harness through model/provider
 `agentRuntime.id` policy. The [Harness execution reference](../harness-execution.md)
 owns supported runtime selections, model catalogs, transport, and credential
-boundaries. OCC rejects conflicting, unknown, or mode-incompatible selections
-before admitting a revision. A selected SandboxDriver currently requires
+boundaries. OCC rejects conflicting, unknown, missing, or mode-incompatible
+selections before admitting a revision: deploy returns `400 INVALID_REQUEST`
+with the specific reason, such as "The configured Agent model requires an
+explicit supported Harness runtime." A selected SandboxDriver currently requires
 `dedicated` Codex execution; it does not support embedded OpenClaw.
 
 An Agent update may include `executionMode`, `harnessAuth`, and `backendId`
@@ -105,9 +108,9 @@ an account's selected credential reference affect only future deployments. A
 snapshot freezes a Secret reference, not the value stored at that reference.
 
 The separate PostgreSQL controller worker prepares the exact Agent gateway and
-revision, activates its route, retires its predecessor, and sets
-`activeRevisionId`. Each Agent owns its gateway; sibling Agents never share
-one. Kubernetes Compute supports managed authentication; SSH Compute supports
+revision, sets `activeRevisionId`, activates its route, and retires its
+predecessor; see [activation order](#the-active-revision-after-a-failed-deployment).
+Each Agent owns its gateway; sibling Agents never share one. Kubernetes Compute supports managed authentication; SSH Compute supports
 embedded OpenClaw with [operator-managed runtime credentials](../drivers/ssh-compute.md#credentials-and-supported-boundaries).
 Docker rejects authentication bindings. Each Driver rejects unsupported bindings
 and topologies before deployment. Kubernetes Compute starts either an Agent-owned gateway plus a dedicated
@@ -115,8 +118,10 @@ Codex workload with its separate ServiceAccount, or one embedded combined
 gateway/Harness. Without a SandboxDriver, Compute owns the Codex Deployment;
 with one selected, that Driver provisions the dedicated Harness workload.
 Both embedded and dedicated modes are supported in production, subject to the
-selected Drivers' mode constraints. A replacement must preserve
-its predecessor's Service selector until activation succeeds. Without an
+selected Drivers' mode constraints. Unless Compute requests
+[exclusive replacement](../drivers/compute.md#production-revision-stages), as
+Kubernetes does for dedicated Agents, a replacement must preserve its
+predecessor's Service selector until activation succeeds. Without an
 eligible worker, revision work remains queued.
 
 When creation included [initial workspace files](../agents.md#initial-contents-at-creation),
@@ -128,6 +133,37 @@ or Harness runs. A `202` deployment response does not establish that this gate
 has passed. After activation, OCC clears staged contents and retains setup
 identity and completion metadata. Later revisions check completion without
 reapplying the original text, preserving edits made in the live workspace.
+
+Deployment admission checks what the Installation supports before it checks
+the Agent service principal's grants. An unsupported topology, such as
+dedicated native OpenClaw without
+[native worker support](../harness-execution.md#native-worker-support), is
+refused with its capability error even when the Agent principal also lacks a
+grant. When only the Agent principal's grant is missing, the `403` names that
+`servicePrincipalId`, the action, and the exact Secret or credential source,
+for example `The Agent service principal <id> is not authorized to operate
+secret <id>`. Denials of your own permissions stay generic.
+
+### The active revision after a failed deployment
+
+`activeRevisionId` names the revision the worker last committed to run. Stop
+shuts it down first, coordinated runtime upgrades require it, and runtime
+inspection reads its containers. It is not a health result; each revision's [deployment status](../agents.md#deployment-status)
+is. Unless Compute activates before commit, the worker sets the pointer before
+activation finishes.
+
+If a revision fails before the worker sets the pointer, the pointer is
+unchanged. After a failed first deployment, the Agent has no active revision.
+With [exclusive replacement](../drivers/compute.md#production-revision-stages),
+the unchanged pointer names a predecessor that was already stopped.
+Kubernetes embedded replacement reports ready while the predecessor still
+serves, so the worker sets the pointer first. Activation then replaces the
+shared gateway, and the new gateway runs the startup model probe. If that
+probe rejects the credential, the deployment fails with
+`RUNTIME_AUTHENTICATION_FAILED`. The failed revision stays active because its
+workload is the only one left; the predecessor has already been replaced. OCC
+never rolls back to an earlier revision. To recover, correct the cause and
+deploy a new revision, or stop the Agent.
 
 Revision list and read operations are scoped beneath the exact Namespace and
 Agent. Each returned revision requires its own authorized read; substituting a

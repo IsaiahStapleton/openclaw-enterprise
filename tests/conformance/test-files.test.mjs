@@ -1,19 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { setTimeout } from "node:timers/promises";
 import test from "node:test";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -165,24 +157,26 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     { timeout: 15000 },
     async (t) => {
       const f = fixture(t);
-      const marker = join(f.dir, "pid");
       // A passing assertion with a live handle must remain live until explicitly cancelled.
       const file = f.put(
         "live.test.mjs",
-        `import test from 'node:test'; import { writeFileSync } from 'node:fs';
-      test('assertion passes', () => {}); setInterval(() => {}, 1000);
-      writeFileSync(${JSON.stringify(marker)}, String(process.pid));`,
+        `import test, { after } from 'node:test';
+      test('assertion passes', () => {});
+      after(() => {
+        setInterval(() => console.log('test-child-pid:', process.pid), 10);
+      });`,
       );
       const child = spawn(process.execPath, [runner, "--", file], {
         cwd: root,
         env,
         stdio: "pipe",
       });
-      child.stdout.resume();
+      const output = createInterface({ input: child.stdout });
       child.stderr.resume();
       const closed = once(child, "close");
       let testPid;
       t.after(() => {
+        output.close();
         if (child.exitCode === null && child.signalCode === null) {
           child.kill("SIGKILL");
         }
@@ -192,13 +186,25 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
           } catch {}
         }
       });
-      const deadline = Date.now() + 5000;
-      while (!existsSync(marker) && Date.now() < deadline) {
-        await setTimeout(20);
+      // Wait for the passing result and output from the leaked interval itself.
+      // Hook output alone can race natural shutdown without a live handle.
+      // Complete PID lines also avoid reading an empty, newly created PID file.
+      let passed = false;
+      for await (const line of output) {
+        const match = /^# test-child-pid: ([1-9]\d*)$/.exec(line);
+        if (match) {
+          testPid = Number(match[1]);
+        }
+        if (line === "ok 1 - assertion passes") {
+          passed = true;
+        }
+        if (testPid && passed) {
+          break;
+        }
       }
-      assert.ok(existsSync(marker), "real test child started");
-      testPid = Number(readFileSync(marker, "utf8"));
-      await setTimeout(100);
+      child.stdout.resume();
+      assert.ok(testPid, "real test child remains live through its leaked interval");
+      assert.ok(passed, "the passing assertion was reported before cancellation");
       assert.equal(child.exitCode, null);
       assert.equal(child.signalCode, null);
       child.kill(signal);

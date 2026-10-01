@@ -6,7 +6,9 @@ Namespaces, Agents, revision history, Secrets, and Agent workspace and gateway
 PersistentVolumeClaims (PVCs). Take verified backups first: retaining a volume is
 not a backup, and migrations or runtime changes can make rollback unsafe.
 Complete the [upgrade migration checklist](upgrade-checklist.md) before using
-this procedure.
+this procedure. Its [legacy RWX prerequisite](upgrade-checklist.md#remove-legacy-rwx-workspaces)
+is an exception: explicitly discarded Agents lose their workspace and Gateway
+state and must be recreated if needed. Retention checks apply to the remaining Agents.
 
 This path requires the production Helm chart, Kubernetes Compute, and a trusted
 HTTPS OCC endpoint. The [production image upgrade](production-upgrade.md) owns
@@ -50,6 +52,10 @@ upgrade or preserve a demo. See the [demo lifecycle](../../testing/kubernetes.md
   operator host or container with protected access to the existing cluster and
   Docker daemon. Do not bypass the probe. Repository-disabled installations do
   not have this host requirement.
+- If the bundled Collector is enabled, including the [observability demo](../observability/demo.md)'s
+  `occ-demo-collector-config`, [refresh the Secret named by `logging.collector.configSecretName`](../observability.md#refresh-the-collector-configuration-on-upgrade)
+  from the `RELEASE_SOURCE_SHA` checkout and restart the Collector. Helm does not
+  update it, and the script stops while it differs from that checkout.
 
 From a secure operator shell, replace placeholders with the existing paths and
 names. The evidence parent must exist; the final directory must be new.
@@ -103,6 +109,40 @@ before and after the change; that operation requires the runtime upgrade permiss
 Keep inventories private. Check data and backups with the database and storage
 owners; object names alone do not prove retention.
 
+### Add launcher-only Installation fields
+
+This procedure keeps the existing Installation, so it never adds fields that
+`scripts/dev-up` writes only at bring-up. An installation created by `dev-up`
+before `network.pluginStatusProxySourceCidrs` existed still lacks it after an
+upgrade: plugin status and diagnostics stay unavailable, and each dedicated Codex
+first deploy starts its Gateway twice. Check the live Installation:
+
+```bash
+yq -er '.drivers.compute.configuration.network.pluginStatusProxySourceCidrs' "$INSTALLATION"
+```
+
+If it is missing, find the address the API server proxies from: the k3d server
+node's `cni0` bridge. Use the node's Pod CIDR plus 2 (`10.42.0.2` for
+`10.42.0.0/24`), and `podman exec` for a Podman-backed cluster:
+
+```bash
+export K3D_SERVER='<existing-k3d-server-0-container>'
+kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
+  get node "$K3D_SERVER" -o jsonpath='{.spec.podCIDR}{"\n"}'
+docker exec "$K3D_SERVER" ip route get 10.42.0.2
+```
+
+The route must name `dev cni0`; another device means no Pod runs on the node
+yet. Add its `src` address as a single `/32` entry, for example `10.42.0.1/32`,
+under `drivers.compute.configuration.network.pluginStatusProxySourceCidrs` in the
+launcher state's `installation.yaml`. Apply it as described in
+[require both proxies before enabling Slack](local-kubernetes-development.md#require-both-proxies-before-enabling-slack):
+replace the Installation Secret, refresh `controlPlane.installationChecksum`, and
+run Helm. Then recover `INSTALLATION` and `VALUES` again before upgrading, because the
+script stops while they differ from live state. Agents deployed afterward get the
+API-proxy rule. Recreating with `occ dev down` and `scripts/dev-up` also adds the
+field, but discards the database, Agents, and volumes.
+
 ## Select and make the published images available
 
 In GitHub Actions, inspect **Enterprise Containers** runs on `main` in newest
@@ -141,10 +181,11 @@ repository-enabled release also needs separate provenance and review evidence fo
 uses the live controller digest because restarting the worker also restarts its
 broker. A controller or combined release uses the selected candidate controller.
 
-Authenticate a local registry client with an authorized GitHub credential; the
-[GHCR instructions](production-installation.md#use-published-images) describe
-the required package access. For example, `skopeo login ghcr.io` prompts for
-credentials. Verify the registry's raw index bytes for each receipt digest:
+Public GHCR controller and runtime pulls do not require a registry login. If
+`BROKER_IMAGE` points at a private broker package, or if you selected a private
+mirror instead of public GHCR, authenticate the local registry client for that
+registry before checking digests. Verify the registry's raw index bytes for each
+receipt digest:
 
 ```bash
 IMAGES=("$CONTROLLER_IMAGE" "$RUNTIME_IMAGE")
@@ -156,16 +197,18 @@ for image in "${IMAGES[@]}"; do
 done
 ```
 
-Configure approved private GHCR pull credentials on **every existing k3d node**
-that may run OCC initialization, API, worker, gateway, or Agent Pods. Host
-`docker login` alone does not authenticate those nodes. Use the existing node
-credential mechanism or [K3s private registry configuration](https://docs.k3s.io/installation/private-registry);
+Public GHCR controller and runtime pulls need no node pull credentials. Configure
+approved pull credentials on **every existing k3d node** only for a private
+broker image or private mirror that may run OCC initialization, API, worker,
+gateway, or Agent Pods. Host `docker login` alone does not authenticate those
+nodes. Use the existing node credential mechanism or
+[K3s private registry configuration](https://docs.k3s.io/installation/private-registry);
 protect credential files and avoid putting tokens in commands, logs, or shell
 history. K3s reads its registry configuration at startup: coordinate any
 required node restart with the interruption window and preserve the existing
-cluster and volumes. Check each node can pull both exact references before
-upgrading. For Docker-backed k3d, repeat with each existing node container
-name; use `podman exec` for a Podman-backed cluster:
+cluster and volumes. Check each node can pull the exact references before
+upgrading. For Docker-backed k3d, repeat with each existing node container name;
+use `podman exec` for a Podman-backed cluster:
 
 ```bash
 export K3D_NODE='<existing-k3d-node-container>'
@@ -277,6 +320,6 @@ database migrations. If OCC succeeds but a runtime deployment fails, the fleet
 can be mixed: runtime rollout is **not transactional**. Inspect each dispatch,
 deployment status, and revision before retrying; an uncertain request may have
 already created a revision. Check compatibility before selecting an older image
-or restoring state, and follow [partial-failure recovery](production-upgrade.md#recover-from-a-partial-failure).
+or restoring state, and follow [partial-failure recovery](production-upgrade-recovery.md).
 Do not delete the cluster, database volume, Namespaces, Agents, revisions,
 Secrets, bootstrap volume, or Agent PVCs to force an upgrade or recovery.

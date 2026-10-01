@@ -9,6 +9,8 @@ const candidateVersion =
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
 const form = [click("Start with default Preset")];
+const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
+const startOAuthLogin = [...oauthForm, click("Sign in with ChatGPT")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
   { selector: "#create-provider-credential-secret-value", value },
@@ -58,7 +60,7 @@ const pluginCapabilities = {
 };
 const pluginSetup = {
   message:
-    "App connection status is not verified. Catalog availability does not confirm linked credentials. In ChatGPT admin, select the same workspace as this PAT and enable plugin and app access for its user or service account. For service-account plugin credentials, open Service accounts, choose the account, and configure its app connections. Workspace administrator access is required. OCE policies do not grant access or configure credentials. Reload plugins after changes.",
+    "App connection status is not verified. Catalog availability does not confirm linked credentials. In ChatGPT admin, select the same workspace as this credential and enable plugin and app access for its user or service account. For service-account plugin credentials, open Service accounts, choose the account, and configure its app connections. Workspace administrator access is required. OCE policies do not grant access or configure credentials. Reload plugins after changes.",
   links: [
     { label: "Manage workspace plugins", url: "https://chatgpt.com/admin/plugins?catalog=GLOBAL" },
     { label: "Service account credentials", url: "https://admin.openai.com/" },
@@ -292,7 +294,7 @@ const pluginDiscoveryGap =
 const repositoryOptionsPath =
   "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/repository-options";
 const account = [{ selector: ".account-toggle", click: true }];
-const devdayRepositorySelector = 'input[value="openclaw/openclaw-enterprise"]';
+const devdayRepositorySelector = 'input[data-repository-ref="openclaw/openclaw-enterprise"]';
 const createSlackBotSecret = [
   { selector: "#slack-secret-slack-bot-token", value: "__openclaw_create_secret__" },
   { selector: "#create-slack-secret-slack-bot-token-value", value: "simulated-bot-token" },
@@ -325,7 +327,7 @@ const createProvisioningSecrets = [
 ];
 const devdayCreateCheckpoint = [
   click("Create Agent"),
-  { selector: "#agent-preset", value: "pre_devday_codex" },
+  { selector: "#agent-preset", value: "pre_swe_codex" },
   { selector: "#preset-variable-name", value: "devday claw" },
   click("Use Preset"),
   { selector: "#provider-credential-secret", value: "sec_devday_model_token" },
@@ -341,8 +343,11 @@ const devdayCreateCheckpoint = [
   { selector: 'select[aria-label="Create issue require approval for"]', value: "all_actions" },
   click("Done"),
   { selector: devdayRepositorySelector, click: true },
-  { selector: "#repository-profile-git-write", click: true },
+  { selector: "#repository-default-git-full", click: true },
+  { selector: ".repository-customize summary", click: true },
+  { selector: "#repository-default-issues", click: true },
   click("Edit Slack"),
+  { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
   { selector: "#slack-channel-access", value: "selected" },
   { selector: "#slack-allowed-user-ids-search", value: "UDEMO123", key: "Enter" },
   { selector: "#slack-secret-slack-app-token", value: "sec_devday_slack_app_token" },
@@ -448,6 +453,44 @@ export const scenarios = {
     rules: [{ path: "/api/auth/providers/github/start", method: "POST", status: 429 }],
     actions: [click("Continue with GitHub")],
     description: "Admission refusal asks the user to wait without automatically retrying.",
+  },
+  recoveryOnlyLogin: {
+    group: "Pages/Sign in",
+    name: "Recovery-only password",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    googleEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "With OCC_AUTH_PASSWORD_SIGN_IN=recovery-only, ordinary accounts continue with GitHub or Google. The password form stays behind Recovery sign-in for the recovery account.",
+  },
+  recoveryOnlyForm: {
+    group: "Pages/Sign in",
+    name: "Recovery sign-in form",
+    path: "/console/login",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    rules: [{ path: "/api/auth/sign-in/email", method: "POST", status: 401 }],
+    actions: [
+      click("Recovery sign-in"),
+      { selector: "#username", value: "member@example.com" },
+      { selector: "#password", value: "demo-only" },
+      click("Login"),
+    ],
+    description:
+      "Recovery sign-in reveals the password form. A refused password explains that only the recovery account can use one.",
+  },
+  recoveryOnlyCallbackRejected: {
+    group: "Pages/Sign in",
+    name: "Recovery-only GitHub callback rejected",
+    path: "/console/?authError=github",
+    signedOut: true,
+    githubEnabled: true,
+    passwordRecoveryOnly: true,
+    description:
+      "Without a password to fall back on, a rejected callback points the user to an administrator.",
   },
   githubCallbackRejected: {
     group: "Pages/Sign in",
@@ -810,7 +853,7 @@ export const scenarios = {
     path: create,
     actions: form,
     description:
-      "OpenAI defaults to Codex. Choose the harness before entering its supported credential; execution mode follows the harness. No model is selected by default.",
+      "OpenAI defaults to Codex with Dedicated execution. Selecting OpenClaw starts in Embedded mode; supported Installations also offer Dedicated under Runtime details. No model is selected by default.",
     steps: [
       "Keep OpenAI and the Codex harness, enter a dummy API key, and select a listed model.",
       'In Configuration JSON, edit plugins.entries.codex.config.appServer: set sandbox to "workspace-write", approvalPolicy to "never", and remoteWorkspaceRoot to "/workspace/custom".',
@@ -1539,18 +1582,43 @@ export const scenarios = {
     description:
       "The creation form seeds AGENTS.md, SOUL.md, IDENTITY.md, and USER.md before the Agent's first deployment. Clearing a field creates an empty file.",
   },
+  createDedicatedOpenclaw: {
+    group: "Pages/Create Agent",
+    name: "OpenAI with dedicated OpenClaw",
+    path: create,
+    nativeWorkerSupport: "custom-image",
+    actions: [
+      ...readyForm,
+      { selector: "#agent-harness", value: "openclaw" },
+      { selector: ".launch-runtime summary", click: true },
+      { selector: "#execution-mode", value: "dedicated" },
+    ],
+    description:
+      "Experimental Dedicated OpenClaw uses the same Agent creation form as Codex. The simulated Installation declares custom-image native worker support. A model and dummy API-key Secret are selected; channel controls remain available.",
+    steps: [
+      "Confirm the Harness is OpenClaw and Execution mode is Dedicated.",
+      "Open the Slack editor, then cancel it. Channel controls remain available for dedicated OpenClaw.",
+      "Select Embedded, then return to Dedicated. Confirm the Harness remains OpenClaw.",
+      "Create the Agent and follow simulated provisioning to Agent details. Open Configuration and confirm the snapshot shows Dedicated execution and the OpenClaw Harness.",
+    ],
+  },
   createEmbedded: {
     group: "Pages/Create Agent",
-    name: "OpenAI with OpenClaw harness",
+    name: "Embedded OpenClaw",
     path: create,
-    actions: [...form, { selector: "#agent-harness", value: "openclaw" }],
+    actions: [
+      ...form,
+      { selector: "#agent-harness", value: "openclaw" },
+      { selector: ".launch-runtime summary", click: true },
+    ],
     description:
-      "OpenClaw remains available for OpenAI with an API key. It uses Embedded execution and disables unsupported channel editing.",
+      "Selecting OpenClaw defaults to Embedded, keeping OpenClaw and its model credential together in the Gateway. Unsupported channel editing remains disabled.",
   },
   createDedicatedOpenclawExperimental: {
     group: "Pages/Create Agent",
     name: "Experimental Dedicated OpenClaw",
     path: create,
+    nativeWorkerSupport: "custom-image",
     actions: [
       ...form,
       { selector: "#agent-harness", value: "openclaw" },
@@ -1558,22 +1626,74 @@ export const scenarios = {
       { selector: "#execution-mode", value: "dedicated" },
     ],
     description:
-      "Dedicated OpenClaw displays its experimental status and runtime-build compatibility requirement before deployment.",
+      "The simulated Installation declares custom-image native worker support. Dedicated OpenClaw displays its experimental status and runtime-build compatibility requirement before deployment.",
     gap: "This simulated form does not verify that a selected OpenClaw runtime image includes native worker-inference support.",
   },
   createRepositoriesSelected: {
     group: "Pages/Create Agent",
-    name: "Approved repositories and shared access",
+    name: "Repositories using the Agent default",
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-handbook", click: true },
-      { selector: "#repository-profile-git-read", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+      { selector: "#repository-default-git-read", click: true },
     ],
     description:
-      "Two approved repositories share Read-only access to code, issues, pull requests, and checks. The real form offers only their common levels and requires an explicit choice.",
+      "Two approved repositories inherit Read-only access. Expand a repository header to customize its access; an explicit override stays fixed when the Agent default changes.",
     gap: "An operator supplies Namespace approvals, GitHub App configuration, credential service, compatible runtime images, and network policy. Repository grants do not change Harness filesystem or approval policy.",
+  },
+  createRepositoriesDetails: {
+    group: "Pages/Create Agent",
+    name: "Repository descriptions and selection",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: 'input[data-repository-ref="design-system"]', click: true },
+    ],
+    repositoryOptions: [
+      {
+        repositoryRef: "application",
+        displayName: "example/application",
+        description: "The application and services used by the team.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "design-system",
+        displayName: "example/design-system",
+        description: "Shared components and styles for product interfaces.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "handbook",
+        displayName: "example/handbook",
+        description: "Guides and operating practices for the team.",
+        allowedProfiles: ["git-read"],
+      },
+      {
+        repositoryRef: "prod-infra",
+        displayName: "example/infrastructure",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+      {
+        repositoryRef: "web",
+        displayName: "example/web",
+        description: "The public website and documentation.",
+        allowedProfiles: ["git-read", "git-write", "git-full"],
+      },
+    ],
+    description:
+      "Adjacent selected repositories share a highlighted surface. Descriptions are optional; select or clear a repository with its checkbox or row.",
+  },
+  createRepositoriesDescriptionsPending: {
+    group: "Pages/Create Agent",
+    name: "Repository descriptions loading",
+    path: create,
+    actions: repositoryForm,
+    repositoryDescriptionsPending: true,
+    description:
+      "Repository choices are usable while descriptions load. Descriptions appear without changing selections or moving focus.",
   },
   createRepositoriesContributor: {
     group: "Pages/Create Agent",
@@ -1581,13 +1701,13 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
-      { selector: "#repository-issue-access", click: true },
+      { selector: "#repository-default-issues", click: true },
     ],
     description:
-      "Customize Contributor access to turn off issue management while keeping push and pull request access. The collapsed summary retains that restriction.",
+      "Customize Contributor access to turn off issue management while keeping push and pull request access. The Contributor description and collapsed summary retain that restriction.",
   },
   createRepositoriesCollaborator: {
     group: "Pages/Create Agent",
@@ -1595,11 +1715,78 @@ export const scenarios = {
     path: create,
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: "#repository-default-git-full", click: true },
     ],
     description:
       "Contributor also creates and manages issues. GraphQL can permit merges and branch changes within the installation token grant; the Git push allowlist does not constrain GraphQL.",
+  },
+  ...Object.fromEntries(
+    [1, 5, 25, 140].map((count) => [
+      `createRepositories${count}`,
+      {
+        group: "Pages/Create Agent",
+        name: `${count} approved repositories`,
+        path: create,
+        actions: repositoryForm,
+        repositoryOptions: Array.from({ length: count }, (_, index) => ({
+          repositoryRef: `repository-${String(index + 1).padStart(3, "0")}`,
+          displayName: `example/${index === count - 1 && count > 1 ? "a-long-repository-name-for-mobile-review" : `repository-${String(index + 1).padStart(3, "0")}`}`,
+          allowedProfiles: ["git-read", "git-write", "git-full"],
+        })),
+        description:
+          count <= 5
+            ? "A small catalog shows selectable approved repositories and their references. Access inherits the Agent default."
+            : "Search and six initial repository choices keep a large catalog bounded. Browse all uses pages of twenty; selected repositories have their own access settings.",
+      },
+    ]),
+  ),
+  createRepositoriesExactSearch: {
+    group: "Pages/Create Agent",
+    name: "Exact repository names before prefix matches",
+    path: create,
+    actions: [...repositoryForm, { selector: "#repository-search", value: "application" }],
+    repositoryOptions: [
+      "alpha/application-api",
+      "beta/my-application",
+      "omega/application",
+      "zeta/application",
+      "tools/cli",
+      "docs/handbook",
+      "ops/infrastructure",
+    ].map((displayName, index) => ({
+      repositoryRef: `catalog-${index}`,
+      displayName,
+      allowedProfiles: ["git-read", "git-write", "git-full"],
+    })),
+    description:
+      "Search a short repository name. Exact names appear first with their owners visible, followed by prefixes and substrings. Press Enter to add the first match; the query stays available for another addition.",
+  },
+  createRepositoriesCustom: {
+    group: "Pages/Create Agent",
+    name: "Custom access survives default changes",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: '[aria-label="Access for example/application"]', click: true },
+      { selector: "#repository-inherit-application", click: true },
+      { selector: "#repository-default-git-read", click: true },
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+    ],
+    description:
+      "The application keeps custom Contributor access while the handbook inherits Read-only. The broader exception remains explicit beside the default.",
+  },
+  createRepositoriesPolicyConflict: {
+    group: "Pages/Create Agent",
+    name: "Repair a restricted repository",
+    path: create,
+    actions: [
+      ...repositoryForm,
+      { selector: 'input[data-repository-ref="handbook"]', click: true },
+    ],
+    description:
+      "A repository restricted to Read-only remains expanded. The operator must explicitly repair the selection before saving.",
   },
   createRepositoriesEmpty: {
     group: "Pages/Create Agent",
@@ -1696,10 +1883,10 @@ export const scenarios = {
     ],
     actions: [
       ...repositoryForm,
-      { selector: "#repository-application", click: true },
-      { selector: "#repository-profile-git-full", click: true },
+      { selector: 'input[data-repository-ref="application"]', click: true },
+      { selector: "#repository-default-git-full", click: true },
       { selector: ".repository-customize summary", click: true },
-      { selector: "#repository-issue-access", click: true },
+      { selector: "#repository-default-issues", click: true },
       click("Create Agent"),
       click("Reload repository choices"),
     ],
@@ -1909,6 +2096,98 @@ export const scenarios = {
     description:
       "Service Accounts authentication is available with the Codex harness and uses the same fixed OpenAI model list. Switching to OpenClaw selects API-key authentication and clears the credential and model selection.",
   },
+  createOAuth: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT OAuth before sign-in (Experimental)",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: oauthForm,
+    description:
+      "Experimental first-deploy login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
+  },
+  createOAuthPending: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT device login pending (Experimental)",
+    path: create,
+    oauthPending: true,
+    actions: startOAuthLogin,
+    description:
+      "The user code and provider link are visible while authorization is pending. Cancel login removes this staged login locally.",
+  },
+  createOAuthReady: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login ready for plugin discovery (Experimental)",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: startOAuthLogin,
+    description:
+      "The fixture completes login after one poll. Configure plugins uses the server-owned login reference. No access or refresh token appears in this preview.",
+    steps: [
+      "Wait for ChatGPT login ready, then open Configure plugins and add Calendar.",
+      "Choose a model and create the Agent. Deployment is simulated; the runtime token handoff is not proved here.",
+    ],
+  },
+  createOAuthDenied: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login permission denied (Experimental)",
+    path: create,
+    rules: [{ suffix: "/device-authorizations", method: "POST", status: 403 }],
+    actions: startOAuthLogin,
+    description:
+      "A denied authorization request leaves the form usable and does not create a browser credential.",
+  },
+  createOAuthUnavailable: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login unavailable (Experimental)",
+    path: create,
+    rules: [{ suffix: "/device-authorizations", method: "POST", status: 501 }],
+    actions: startOAuthLogin,
+    description:
+      "An Installation whose selected Drivers do not support device login reports it as unavailable. Choose another authentication method; no device code or sign-in link appears.",
+  },
+  createOAuthError: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login exchange failed (Experimental)",
+    path: create,
+    rules: [{ suffix: "/poll", method: "POST", status: 503 }],
+    actions: startOAuthLogin,
+    description:
+      "A failed poll stops polling. Cancel the staged login and connect again; the console does not retry an uncertain exchange.",
+  },
+  createOAuthExpired: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT device login expired (Experimental)",
+    path: create,
+    oauthExpired: true,
+    actions: startOAuthLogin,
+    description:
+      "An expired device code cannot be used to create the Agent. Cancel it and sign in again.",
+  },
+  pluginsOAuthRevision: {
+    group: "Pages/Agent detail",
+    name: "Separate ChatGPT login for plugin editing (Experimental)",
+    path: `${draft}&tab=plugins`,
+    deployed: true,
+    auth: "oauth",
+    agentPlugins: JSON.parse(pluginSelections),
+    pluginCapabilities,
+    pluginDiscovery,
+    actions: [click("Sign in with ChatGPT")],
+    description:
+      "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
+  },
+  authOAuthReconnect: {
+    group: "Components/Credentials",
+    name: "Explicit ChatGPT credential replacement (Experimental)",
+    path: `${draft}&tab=credentials`,
+    deployed: true,
+    auth: "oauth",
+    actions: [click("Sign in with ChatGPT")],
+    description:
+      "The current Agent login is preserved by default. A completed new login only replaces the saved source when Save authentication source is chosen; deployment remains separate.",
+  },
   createPatToOpenClaw: {
     group: "Pages/Create Agent",
     name: "Switch from Service Accounts to OpenClaw",
@@ -1921,7 +2200,7 @@ export const scenarios = {
       { selector: "#agent-harness", value: "openclaw" },
     ],
     description:
-      "Switching an unsaved service account form to OpenClaw clears the token and model, selects API-key authentication, and uses Embedded execution. Choose or create a simulated API key Secret to continue.",
+      "Switching an unsaved service account form to OpenClaw clears the token and model, selects API-key authentication, and defaults to Embedded execution. Review the selected authentication before continuing.",
   },
   createBoundPatPreset: {
     group: "Pages/Create Agent",
@@ -2354,6 +2633,24 @@ export const scenarios = {
     description:
       "The new version draft names Contributor and Read-only access and shows write limits.",
   },
+  repositoryEditor: {
+    group: "Pages/Agent detail",
+    name: "Edit inherited and custom repository access",
+    path: `${draft}&tab=repositories`,
+    repositoryAccess: {
+      defaultProfile: "git-full",
+      repositories: [
+        { repositoryRef: "application" },
+        { repositoryRef: "handbook", profile: "git-read" },
+      ],
+    },
+    repositoryBindings: [
+      { repositoryRef: "application", profile: "git-full" },
+      { repositoryRef: "handbook", profile: "git-read" },
+    ],
+    description:
+      "Reopening the desired configuration keeps the Agent default and each explicit override. Saving changes updates the draft; admitted revisions retain their prior access.",
+  },
   repositoryAdmitted: {
     group: "Pages/Agent detail",
     name: "Repository access in current version",
@@ -2507,6 +2804,61 @@ export const scenarios = {
     actions: [click("Run diagnostics for this version")],
     description:
       "A failed on-demand check reports its own error. The viewed v7 deployment record remains succeeded.",
+  },
+  runtimeLogs: {
+    group: "Pages/Agent detail",
+    name: "Runtime status and logs for v7",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    description:
+      "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsFilteredDownload: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs filtered and downloaded",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    actions: [
+      click("Download"),
+      { selector: ".log-chip.log-level-info", click: true },
+      { selector: "#runtime-log-filter", value: "slack" },
+    ],
+    description:
+      "Download saves the redacted text tail as a .log file through its own audited read. Hiding info and filtering for slack narrows the loaded window to the redacted reconnect warning; the status line counts the hidden rows.",
+  },
+  runtimeLogsDenied: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs without administer",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/runtime/logs",
+        status: 403,
+        code: "FORBIDDEN",
+      },
+    ],
+    description:
+      "An Agent operator sees Pod status and Events but no log text. The page names the missing grants and does not request the log view again.",
+  },
+  runtimeLogsClusterRbac: {
+    group: "Pages/Agent detail",
+    name: "Runtime logs blocked by cluster RBAC",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/agents/agt_00000000-0000-4000-8000-000000000001/deployments/rev_00000000-0000-4000-8000-000000000007/runtime/logs",
+        status: 503,
+        code: "RUNTIME_LOGS_CLUSTER_RBAC",
+      },
+    ],
+    description:
+      "The cluster denied pods/log. The page asks the platform operator to enable agentRuntimeLogs in the Helm chart.",
   },
   agentMissing: {
     group: "Pages/Agent detail",
@@ -3073,6 +3425,40 @@ export const scenarios = {
     actions: [click("Edit Slack"), click("Save configuration")],
     description: "A rejected Configuration write keeps the drawer and feedback visible.",
   },
+  channelSavePending: {
+    group: "Components/Channels",
+    name: "Channel save pending",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    auth: "runtime",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        method: "PATCH",
+        hold: true,
+      },
+    ],
+    actions: [click("Disable Slack")],
+    description:
+      "A pending channel save disables deployment and revision navigation. The real client times out after 15 seconds; reset the story to replay it.",
+  },
+  channelSaveUnknown: {
+    group: "Components/Channels",
+    name: "Channel save outcome unknown",
+    path: `${draft}&tab=channels`,
+    slack: true,
+    auth: "runtime",
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/configurations/cfg_00000000-0000-4000-8000-000000000001",
+        method: "PATCH",
+        status: 503,
+        once: true,
+      },
+    ],
+    description:
+      "Disable Slack to simulate an uncertain save. Deployment and navigation stay blocked until Reload draft; inspect the saved state before retrying.",
+  },
   credentials: {
     group: "Components/Credentials",
     name: "Model authentication",
@@ -3139,6 +3525,42 @@ export const scenarios = {
     ],
     description:
       "A saved Secret reference remains visible when the follow-up exact Secret access grant is denied.",
+  },
+  credentialsSavePending: {
+    group: "Components/Credentials",
+    name: "Channel Secret save pending",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets/sec_demo_slack_app_token",
+        method: "PATCH",
+        hold: true,
+      },
+    ],
+    actions: [
+      { selector: "#runtime-slack-app-token", value: "simulated-token" },
+      click("Save channel Secrets"),
+    ],
+    description:
+      "A pending Secret save disables deployment. The real client times out after 15 seconds; reset the story to replay it.",
+  },
+  credentialsSaveUnknown: {
+    group: "Components/Credentials",
+    name: "Channel Secret save outcome unknown",
+    path: `${draft}&tab=credentials`,
+    slack: true,
+    rules: [
+      {
+        path: "/namespaces/ns_00000000-0000-4000-8000-000000000001/secrets/sec_demo_slack_app_token",
+        method: "PATCH",
+        status: 503,
+        once: true,
+      },
+    ],
+    actions: [{ selector: "#runtime-slack-app-token", value: "simulated-token" }],
+    description:
+      "Save the simulated replacement to see an uncertain Secret save. Reload the draft and inspect saved state before deploying or retrying.",
   },
   credentialsSlackPartial: {
     group: "Components/Credentials",
@@ -3426,7 +3848,7 @@ export const scenarios = {
     steps: [
       "Choose Research assistant, fill Name, then Use Preset.",
       "Review the Configuration, masked pre-existing model Secret reference, and four seeded workspace files; click Create Agent.",
-      "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Refresh deployment to finish simulated activation, then open Workspace files.",
+      "Wait for provisioning to finish; the Console opens Agent details with the queued deployment. Wait a few seconds or use Refresh deployment to finish simulated activation, then open Workspace files.",
       "Use Versions to inspect the immutable snapshot and Workspace files to inspect runtime files seeded during creation.",
     ],
     gap: "The fixture supplies a ready Namespace, Preset, and model Secret. Set those up outside the console. Verify actual serving health and a model response outside this walkthrough.",
@@ -3440,7 +3862,7 @@ export const scenarios = {
       "Choose the provider first, then a compatible harness. The production form updates native Configuration and execution mode; credentials and deployment remain simulated.",
     steps: [
       "Check the inset arrows on the Namespace, Provider, Harness, and Authentication method controls. Use the controls with a mouse and keyboard.",
-      "OpenAI starts with Codex and Dedicated execution. Select OpenClaw: execution becomes Embedded and the API key and selected model remain available.",
+      "OpenAI starts with Codex and Dedicated execution. Select OpenClaw: Embedded is selected and channel controls are disabled. Dedicated requires an Installation with native worker support; the separate Dedicated OpenClaw stories simulate that prerequisite.",
       "Select Anthropic: only OpenClaw is available, and the previous provider's credential and model are cleared. Enter a dummy API key and choose a listed model.",
       "Select OpenAI again: Codex is selected by default. Choose Service Accounts, enter a dummy token, and choose a listed model.",
       "Select OpenClaw: authentication changes to API key and the token and model are cleared. Enter a dummy API key and select a model to continue creation.",
@@ -3512,7 +3934,7 @@ export const scenarios = {
     slackChannels: { COPENCLAWFEEDBACK: { requireMention: true, users: ["UDEMO123"] } },
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
-    devdayPreset: true,
+    swePreset: true,
     pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
     fixturePluginCatalog: true,
@@ -3549,12 +3971,12 @@ export const scenarios = {
       "DevDay create-flow rehearsal using real Console controls with fake service-account and Slack Secret data. Provisioning and deployment progress are simulated in the Storybook fixture.",
     steps: [
       "Start on the Agents list with the already deployed oceclaw seed, then click Create Agent.",
-      "The picker includes SWE Agent, Community Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
+      "The picker includes SWE Agent, Standard Codex, and Standard OpenClaw. Select SWE Agent and enter devday claw for its name.",
       "Keep the default gpt-6-astra model and click Use Preset. Choose the existing DevDay Codex service account (simulated) Secret, or explicitly create a new simulated Secret. No credential is preselected. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
       "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
-      "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
-      "Open Edit Slack. Confirm the six prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), oce-team-test (C0C4A0JH2BG), oce-community (C0C5KF0JLSC), and oce-community-test (C0C5KF0DWLQ); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
-      "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity and use Refresh deployment to finish simulated activation.",
+      "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access, then turn off issue management to match the approved profiles.",
+      "Open Edit Slack. Confirm no channels are prefilled. Add the simulated channel CDEMO123. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
+      "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity; it finishes simulated activation after a few seconds, or use Refresh deployment.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
     gap: "This Storybook flow proves only the UI sequence and fixture state. It does not store a real credential, deploy a workload, prove GitHub authorization, or prove Slack delivery.",
@@ -3569,7 +3991,7 @@ export const scenarios = {
     slackChannels: { COPENCLAWFEEDBACK: { requireMention: true, users: ["UDEMO123"] } },
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
-    devdayPreset: true,
+    swePreset: true,
     pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
     fixturePluginCatalog: true,

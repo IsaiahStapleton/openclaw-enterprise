@@ -20,6 +20,14 @@ export const CredentialsSlackGrantDenied = {
   ...story("credentialsSlackGrantDenied"),
   name: "Slack grant denied",
 };
+export const CredentialsSavePending = {
+  ...story("credentialsSavePending"),
+  name: "Channel Secret save pending",
+};
+export const CredentialsSaveUnknown = {
+  ...story("credentialsSaveUnknown"),
+  name: "Channel Secret save outcome unknown",
+};
 export const CredentialsSlackPartial = {
   ...story("credentialsSlackPartial"),
   name: "One Slack token missing",
@@ -31,6 +39,7 @@ export const AuthApiKeySwitch = {
 };
 export const AuthRuntime = { ...story("authRuntime"), name: "Operator-managed authentication" };
 export const AuthService = { ...story("authService"), name: "ChatGPT service account" };
+export const AuthOAuthReconnect = story("authOAuthReconnect");
 
 export const AuthSecretReplacement = {
   ...story("authSecretReplacement"),

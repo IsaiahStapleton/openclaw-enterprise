@@ -237,9 +237,33 @@ spec:
               value: {{ join "," $.Values.auth.google.allowedDomains | quote }}
             {{- end }}
             {{- end }}
+            {{- if and $.Values.auth.oidc $.Values.auth.oidc.enabled }}
+            - name: OCC_AUTH_OIDC_ISSUER
+              value: {{ $.Values.auth.oidc.issuer | quote }}
+            - name: OCC_AUTH_OIDC_AUTHORIZATION_URL
+              value: {{ $.Values.auth.oidc.authorizationUrl | quote }}
+            - name: OCC_AUTH_OIDC_TOKEN_URL
+              value: {{ $.Values.auth.oidc.tokenUrl | quote }}
+            - name: OCC_AUTH_OIDC_JWKS_URL
+              value: {{ $.Values.auth.oidc.jwksUrl | quote }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_OIDC_CLIENT_ID" "secretName" $.Values.auth.oidc.secretName "key" $.Values.auth.oidc.clientIdKey) | nindent 12 }}
+            {{- include "openclaw.secretEnv" (dict "name" "OCC_AUTH_OIDC_CLIENT_SECRET" "secretName" $.Values.auth.oidc.secretName "key" $.Values.auth.oidc.clientSecretKey) | nindent 12 }}
+            {{- if and $.Values.auth.oidc.tokenAuth (ne $.Values.auth.oidc.tokenAuth "client_secret_post") }}
+            - name: OCC_AUTH_OIDC_TOKEN_AUTH
+              value: {{ $.Values.auth.oidc.tokenAuth | quote }}
+            {{- end }}
+            {{- if $.Values.auth.oidc.displayName }}
+            - name: OCC_AUTH_OIDC_DISPLAY_NAME
+              value: {{ $.Values.auth.oidc.displayName | quote }}
+            {{- end }}
+            {{- end }}
             {{- if $.Values.auth.recoveryUserId }}
             - name: OCC_AUTH_GITHUB_RECOVERY_USER_ID
               value: {{ $.Values.auth.recoveryUserId | quote }}
+            {{- end }}
+            {{- if eq (toString (default "all" $.Values.auth.passwordSignIn)) "recovery-only" }}
+            - name: OCC_AUTH_PASSWORD_SIGN_IN
+              value: recovery-only
             {{- end }}
             {{- if $.Values.api.trustedProxy.preset }}
             - name: OCC_AUTH_TRUSTED_PROXY_CIDRS
@@ -262,6 +286,8 @@ spec:
             {{- end }}
             - name: OCC_AGENT_NATIVE_ADMIN_ENABLED
               value: {{ ternary "true" "false" $.Values.agentNativeAdmin.enabled | quote }}
+            - name: OCC_AGENT_RUNTIME_LOGS_ENABLED
+              value: {{ ternary "true" "false" $.Values.agentRuntimeLogs.enabled | quote }}
             {{- if $.Values.agentNativeAdmin.enabled }}
             - name: OCC_AGENT_NATIVE_ADMIN_DOMAIN
               value: {{ $.Values.agentNativeAdmin.domain | quote }}

@@ -29,7 +29,8 @@ Prefer individual `/32` or `/128` addresses. On an
 overlay network, the observed source may be the control-plane node's overlay
 address rather than its node IP. Verify it across nodes with enforced policies.
 An omitted list adds no API-proxy ingress rule and leaves status unavailable
-where the cluster blocks that traffic. This setting does not expose the native
+where the cluster blocks that traffic. It also restarts the Gateway once on each
+dedicated Codex first deploy. This setting does not expose the native
 gateway or grant workloads Kubernetes API access.
 
 When private Agent routing is enabled, Compute derives the only allowed peer
@@ -266,8 +267,8 @@ Services and HTTPRoutes live only in the Gateway target; Harness resources and
 model credentials remain in the data target. Explicit namespace **and** Pod
 selectors allow only the same Agent's selected Harness revision on app-server
 and private plugin-status ports. DNS uses `agent-<hash>.<harness-namespace>.svc`.
-The stable dedicated Harness Service keeps the same Namespace, Agent, revision,
-and workload-role labels as the gateway egress and Harness ingress policies
+The stable dedicated Harness Service keeps the same network-profile, Namespace,
+Agent, revision, and workload-role labels as the gateway egress and Harness ingress policies
 while a revision is active. A prepared successor does not change that Service
 selector until activation; deactivation moves the Service back to an inactive
 selector. Active Gateway Services include Namespace, Agent, and gateway-role

@@ -281,6 +281,34 @@
       "when": 1787000000039,
       "tag": "0039_namespace_deletion_takeover",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1787000000040,
+      "tag": "0040_repository_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787000000041,
+      "tag": "0041_restriction_read_logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1787000000042,
+      "tag": "0042_oauth_harness_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1787000000043,
+      "tag": "0043_credential_withdrawals",
+      "breakpoints": true
     }
   ]
 }

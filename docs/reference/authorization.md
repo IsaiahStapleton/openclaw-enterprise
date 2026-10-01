@@ -37,12 +37,16 @@ to the same administrator Role, with no Namespace or resource filter:
 | `namespace`                                  | `create`, `read`, `delete`                                              |
 | `configuration`, `preset`, `service_account` | `create`, `read`, `update`, `delete`                                    |
 | `secret`                                     | `create`, `read`, `update`, `delete`, `operate`                         |
+| `credential_source`                          | `create`, `read`, `update`, `delete`, `operate`                         |
 | `agent`                                      | `create`, `read`, `update`, `delete`, `deploy`, `operate`, `administer` |
 | `agent_revision`                             | `read`                                                                  |
 
 These grants cover existing and future Namespaces in this Installation, subject
 to exact authorization and matching Restrictions. They confer no Kubernetes or
-provider authority. Rerunning bootstrap does not rewrite stored grants. The
+provider authority. Rerunning bootstrap does not rewrite stored grants, so an
+Installation bootstrapped before an action was added to this seed lacks it until
+an administrator grants it; `credential_source:update` is one such action.
+Custom Roles never gain permissions automatically. The
 Preset upgrade extends only the unchanged built-in administrator Role; see
 [Preset upgrade eligibility](presets.md#crud-and-permissions). Removing the original human account does not
 remove the service identity. See
@@ -96,8 +100,10 @@ identity headers, or membership in another Namespace do not grant access.
 ## Permissions and Roles
 
 A Permission allows one action on one resource kind. Supported permission
-actions are `create`, `read`, `update`, `delete`, `deploy`, `operate`, and
-`administer`; not every action has a corresponding public endpoint yet. Any of
+actions are `create`, `read`, `update`, `delete`, `deploy`, `operate`,
+`administer`, and `read_logs`; not every action has a corresponding public
+endpoint yet. `read_logs` on an Agent delegates reading its runtime log text
+without `administer`; fresh bootstrap does not grant it. Any of
 these actions can be granted to either a human Principal or an Agent-owned
 ServicePrincipal through an appropriately scoped Role and AccessBinding.
 
@@ -209,7 +215,9 @@ The Role and target must exist in the path Namespace. Exact targets and Role
 permission kinds are `namespace`, `agent`, `agent_revision`, `configuration`,
 `credential_source`, `preset`, `secret`, or `service_account`. `namespace`
 permissions support only `read`, and for a `namespace` target, `resourceId` must
-equal the Namespace ID in the path. A ServiceAccount
+equal the Namespace ID in the path. A binding applies only the Role permissions
+whose kind equals its target kind: an `agent_revision` permission bound to an
+Agent target grants nothing, so revision `read` is bound per AgentRevision. A ServiceAccount
 resource is not an IAM identity. Caller IDs, scope, wildcard targets, Groups, unknown permissions,
 and extra fields are rejected. Native IAM commits validated policy and its
 attributable audit event together; later requests on other replicas see it
@@ -270,6 +278,14 @@ automatically grant permission to read it, and permission to read one Agent
 does not expose every Agent in the Namespace. First deployment additionally
 checks Agent `read` and `operate` if Compute must generate missing transport
 credentials.
+
+[Agent runtime reads](../guides/topics/agent-logs.md#who-can-see-what) use two
+tiers on the exact Agent and revision: Pod status and Events need Agent
+`operate` and `read` plus revision `read`; container log text needs Agent
+`read_logs` or `administer` and Agent `read`, which cover every revision of that
+Agent, including later deployments. A matching
+`read_logs` Restriction denies log text even to a holder of `administer`. Each
+follow poll is authorized again, so revoking a grant stops the next poll.
 
 The selected IAM Driver loads current authoritative policy for each identity
 lookup and authorization decision. Account and permission changes become

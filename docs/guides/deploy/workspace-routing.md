@@ -6,10 +6,8 @@ retaining its protected Helm values, Installation YAML, and Kubernetes context.
 On EKS, complete the [strict-mode prerequisites](eks.md#enable-console-workspace-files).
 
 This procedure assumes OCC API and worker Pods run in the same Kubernetes
-cluster as the private Envoy Service. The local Compose + k3d helper does not
-configure this topology. Use [Kubernetes setup](../kubernetes-setup.md) for
-workspace access; enabling a Helm value alone does not connect a Compose API
-to the private Service.
+cluster as the private Envoy Service. For OCC in Compose, use the separate [local hybrid routing procedure](local-compose-kubernetes.md).
+Enabling a Helm value alone does not connect a Compose API to the private Service.
 
 Production examples enable routing; the chart defaults to
 `gatewayRouting.enabled: false`. Install routing controllers, create the
@@ -361,6 +359,11 @@ native client does not expose mTLS client-certificate options.
 | HTTPRoute is accepted but the backend is unreachable              | Check the Envoy and tenant NetworkPolicies together, including their selectors and translated ports.                                                                                                     |
 | `404 NOT_FOUND` and `The requested workspace file was not found.` | The native file is missing. Do not create or overwrite it just to clear the Console notice.                                                                                                              |
 | `503 UNKNOWN_OUTCOME` after a write                               | Read the file before deciding whether to repeat the write. OCC does not automatically replay it.                                                                                                         |
+
+After `UNKNOWN_OUTCOME`, read the same file and compare its content with the
+intended write. If it matches, do not retry. If you cannot read the file yet,
+wait or ask someone with `read` permission on the Agent to check before deciding
+whether to retry.
 
 The [Agents reference](../../reference/agents.md#workspace-files) lists file
 limits and permissions. The [Kubernetes testing guide](../../testing/kubernetes.md#kubernetes-model-turns-and-secrets)

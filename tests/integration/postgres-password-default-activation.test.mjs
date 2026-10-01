@@ -114,7 +114,19 @@ test(
     assert.deepEqual((await app.inject({ url: "/api/auth/providers" })).json().data, {
       github: true,
       google: false,
+      oidc: false,
+      password: true,
       sessionBinding: true,
+    });
+
+    await t.test("the guarded profile warns at startup when no trusted proxy is set", () => {
+      const warnings = log.events.filter(
+        ({ event }) => event === "authentication.sign-in-limit-warning",
+      );
+      assert.deepEqual(
+        warnings.map(({ code, severity }) => ({ code, severity })),
+        [{ code: "TRUSTED_PROXY_NOT_CONFIGURED", severity: "WARN" }],
+      );
     });
 
     await t.test("activation enrols qualifying accounts and reports the rest", async () => {

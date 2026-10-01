@@ -18,13 +18,10 @@ backend: []
 # Omitted or false disables seeding; existing Presets are retained.
 presets:
   includeDefaults: true
-  # Optional: load custom DevDay presets, or mount your own JSON beside this YAML.
+  # Optional: load the SWE Agent preset, or mount your own JSON beside this YAML.
   # Relative paths resolve beside installation.yaml; mount files for API and worker.
   # files:
-  #   - /app/deploy/presets/devday.json # SWE Agent
-  #   - /app/deploy/presets/devday-partners.json # Community Agent
-  #   - /app/deploy/presets/devday-qa.json # Q&A Agent
-  #   - /app/deploy/presets/devday-oncall.json # Oncall Agent
+  #   - /app/deploy/presets/swe-preset.json # SWE Agent
 
 # Bundled Drivers omit `package`; selection IDs and options are trusted startup inputs.
 # See [Driver selections](../../../docs/reference/drivers/selection.md#supported-selections).
@@ -67,6 +64,8 @@ drivers:
         # See [Images and resources](../../../docs/reference/drivers/kubernetes-compute.md#images-and-resources).
         requireImmutableDigest: true
       # Requests reserve capacity; limits bound both workload roles.
+      # Limits let tenant runtimes burst to four cores; the 100m requests set
+      # the scheduling reservation. Quote whole cores: cpu: "4", not cpu: 4.
       # See [Images and resources](../../../docs/reference/drivers/kubernetes-compute.md#images-and-resources).
       resources:
         gateway:
@@ -74,14 +73,14 @@ drivers:
             cpu: 100m
             memory: 128Mi
           limits:
-            cpu: 500m
+            cpu: "4"
             memory: 2Gi
         agent:
           requests:
             cpu: 100m
             memory: 128Mi
           limits:
-            cpu: 500m
+            cpu: "4"
             memory: 2Gi
         # Each tenant namespace receives a Pod quota and default container bounds.
         # See [Namespace isolation](../../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#namespaces-and-isolation).
@@ -93,7 +92,7 @@ drivers:
               cpu: 100m
               memory: 128Mi
             limits:
-              cpu: 500m
+              cpu: "4"
               memory: 2Gi
       network:
         # With repositoryCredentials.enabled, add this exact service endpoint peer.

@@ -733,6 +733,38 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   }
 }
 
+function imageBuildArgs(state, role, localStore) {
+  if (process.env.OCC_CI_IMAGE_CACHE === "1") {
+    if (
+      process.env.GITHUB_ACTIONS !== "true" ||
+      !["images-packaging", "images-model-probes"].includes(state.lane) ||
+      !process.env.ACTIONS_RUNTIME_TOKEN ||
+      !process.env.ACTIONS_RESULTS_URL ||
+      localStore
+    ) {
+      throw new Error("Image caching requires the hosted image lane and its cache credentials.");
+    }
+    const cache = `type=gha,version=2,scope=oce-ci-${role}-${process.platform}-${process.arch}-v1`;
+    return [
+      "buildx",
+      "build",
+      "--load",
+      "--cache-from",
+      `${cache},timeout=60s`,
+      // One writer per image avoids competing exports from the parallel probe lane.
+      ...(state.lane === "images-packaging"
+        ? ["--cache-to", `${cache},mode=max,ignore-error=true,timeout=60s`]
+        : []),
+    ];
+  }
+  return [
+    "build",
+    ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
+      ? ["--builder", "default", "--load"]
+      : []),
+  ];
+}
+
 async function buildRuntimeImages(
   statePath,
   state,
@@ -765,10 +797,7 @@ async function buildRuntimeImages(
     resources.push(resource);
     await writeState(statePath, state);
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      "build",
-      ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-        ? ["--builder", "default", "--load"]
-        : []),
+      ...imageBuildArgs(state, "controller", localStore),
       "--pull=false",
       "--target",
       "runtime",
@@ -803,10 +832,7 @@ async function buildRuntimeImages(
       process.env.OCC_DOCKER_BIN ?? "docker",
       openclawSource === undefined
         ? [
-            "build",
-            ...(localStore && basename(process.env.OCC_DOCKER_BIN ?? "docker") !== "podman"
-              ? ["--builder", "default", "--load"]
-              : []),
+            ...imageBuildArgs(state, "runtime", localStore),
             "--pull=false",
             "-f",
             runtimeDockerfile,
@@ -1832,6 +1858,7 @@ async function prepareLane({ lane, statePath }) {
   switch (name) {
     case "postgres":
     case "postgres-application":
+    case "postgres-auth":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "runtime-image-fixture":
@@ -1840,6 +1867,21 @@ async function prepareLane({ lane, statePath }) {
       env.OCC_RUNTIME_IMAGE_RECEIPT = join(
         dirname(resolvedStatePath),
         "runtime-image-fixture-receipt.json",
+      );
+      break;
+    case "images-model-probes":
+      Object.assign(
+        env,
+        (
+          await timedPreparation(name, "runtime-image-build", () =>
+            buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
+          )
+        ).env,
+      );
+      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
+        state,
+        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
+        "NODE_BASE_IMAGE",
       );
       break;
     case "images-packaging":

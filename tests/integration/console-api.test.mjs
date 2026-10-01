@@ -281,6 +281,8 @@ test("console auth routes reject untrusted browser origins and issue production 
   assert.deepEqual(JSON.parse(providers.text).data, {
     github: false,
     google: false,
+    oidc: false,
+    password: true,
     sessionBinding: false,
   });
   const sessionKey = JSON.parse(retainedSession.text).data.sessionKey;

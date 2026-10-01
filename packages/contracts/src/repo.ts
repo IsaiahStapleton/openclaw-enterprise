@@ -24,10 +24,23 @@ export interface RepositoryBindingSelection {
   readonly profile: string;
 }
 
+/** Desired editing intent; admission always resolves concrete binding profiles. */
+export interface RepositoryAccess {
+  readonly defaultProfile: string;
+  readonly repositories: readonly RepositoryBindingRequest[];
+}
+
 export interface RepositoryOption {
   readonly repositoryRef: string;
   readonly displayName: string;
   readonly allowedProfiles: readonly string[];
+  /** Optional provider-supplied plain text; selection never depends on its availability. */
+  readonly description?: string;
+}
+
+export interface RepositoryOptions {
+  readonly options: readonly RepositoryOption[];
+  readonly descriptionsPending: boolean;
 }
 
 export interface AdmittedRepositoryBinding extends RepositoryBindingSelection {
@@ -73,7 +86,10 @@ export interface RepoDriver extends Driver {
   readonly durableBrokerReceipts?: true;
   /** Check whether fresh credential admission is currently supported. */
   checkAdmissionReady?(signal: AbortSignal): Promise<void>;
-  listOptions(input: { readonly namespaceId: string }): readonly RepositoryOption[];
+  listOptions(input: {
+    readonly namespaceId: string;
+    readonly descriptionRefs?: readonly string[];
+  }): Promise<RepositoryOptions>;
   resolve(input: {
     readonly namespaceId: string;
     readonly bindings: readonly RepositoryBindingRequest[];

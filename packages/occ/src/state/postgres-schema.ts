@@ -9,6 +9,7 @@ import type {
   PluginApprovers,
   PresetTemplate,
   RepositoryBindingSelection,
+  RepositoryAccess,
   SecretBindings,
   ServiceAccountCredential,
 } from "@openclaw-enterprise/contracts";
@@ -263,10 +264,11 @@ export const agents = occSchema.table(
     plugins: jsonb("plugins").$type<PluginDesiredState>(),
     pluginApprovers: jsonb("plugin_approvers").$type<PluginApprovers>(),
     repositoryBindings: jsonb("repository_bindings").$type<readonly RepositoryBindingSelection[]>(),
+    repositoryAccess: jsonb("repository_access").$type<RepositoryAccess>(),
     servicePrincipalId: text("service_principal_id").notNull(),
     harnessAuth: jsonb("harness_auth").$type<HarnessAuthBinding>(),
     harnessAuthSecretId: text("harness_auth_secret_id").generatedAlwaysAs(
-      sql`CASE WHEN harness_auth->>'method' IN ('api_key', 'codex_pat') THEN harness_auth #>> '{source,id}' END`,
+      sql`CASE WHEN harness_auth->>'method' IN ('api_key', 'codex_pat', 'oauth') THEN harness_auth #>> '{source,id}' END`,
     ),
     harnessAuthServiceAccountId: text("harness_auth_service_account_id").generatedAlwaysAs(
       sql`CASE WHEN harness_auth->>'method' = 'chatgpt_service_account' THEN harness_auth->>'serviceAccountId' END`,
@@ -309,6 +311,10 @@ export const agents = occSchema.table(
     check(
       "agents_plugins_object",
       sql`${table.plugins} IS NULL OR jsonb_typeof(${table.plugins}) = 'object'`,
+    ),
+    check(
+      "agents_repository_access_valid",
+      sql`occ.repository_access_is_valid(${table.repositoryAccess}, ${table.repositoryBindings})`,
     ),
     check(
       "agents_repository_bindings_valid",
@@ -519,6 +525,56 @@ export const credentialSourceSecrets = occSchema.table(
       .onDelete("restrict"),
     check("credential_source_secrets_field_format", sql`${table.field} ~ '^[a-z][a-z0-9_]{0,63}$'`),
     index("credential_source_secrets_secret_idx").on(table.namespaceId, table.secretId),
+  ],
+);
+
+export const credentialWithdrawals = occSchema.table(
+  "credential_withdrawals",
+  {
+    namespaceId: text("namespace_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    revisionId: text("revision_id").notNull(),
+    credentialSourceId: text("credential_source_id").notNull(),
+    state: text("state").$type<"pending" | "revoked">().notNull(),
+    requestedBy: text("requested_by").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    lastReason: text("last_reason"),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+  },
+  (table): PgTableExtraConfigValue[] => [
+    primaryKey({
+      name: "credential_withdrawals_pkey",
+      columns: [table.namespaceId, table.revisionId, table.credentialSourceId],
+    }),
+    foreignKey({
+      name: "credential_withdrawals_revision_owner",
+      columns: [table.namespaceId, table.agentId, table.revisionId],
+      foreignColumns: [agentRevisions.namespaceId, agentRevisions.agentId, agentRevisions.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("cascade"),
+    foreignKey({
+      name: "credential_withdrawals_source_owner",
+      columns: [table.namespaceId, table.credentialSourceId],
+      foreignColumns: [credentialSources.namespaceId, credentialSources.id],
+    })
+      .onUpdate("restrict")
+      .onDelete("cascade"),
+    check("credential_withdrawals_state_valid", sql`${table.state} IN ('pending', 'revoked')`),
+    check(
+      "credential_withdrawals_completion",
+      sql`(${table.state} = 'revoked') = (${table.completedAt} IS NOT NULL)`,
+    ),
+    check(
+      "credential_withdrawals_requested_by_valid",
+      sql`char_length(${table.requestedBy}) BETWEEN 1 AND 256 AND ${table.requestedBy} = btrim(${table.requestedBy})`,
+    ),
+    check(
+      "credential_withdrawals_last_attempt",
+      sql`(${table.lastReason} IS NULL) = (${table.lastAttemptAt} IS NULL) AND (${table.lastReason} IS NULL OR ${table.lastReason} ~ '^[A-Z0-9_]{1,64}$')`,
+    ),
+    index("credential_withdrawals_source_idx").on(table.namespaceId, table.credentialSourceId),
   ],
 );
 
@@ -901,7 +957,7 @@ export const iamRestrictions = occSchema.table(
   (table) => [
     check(
       "iam_restrictions_action_valid",
-      sql`${table.action} IN ('create', 'read', 'update', 'delete', 'deploy', 'operate', 'administer')`,
+      sql`${table.action} IN ('create', 'read', 'update', 'delete', 'deploy', 'operate', 'administer', 'read_logs')`,
     ),
     check(
       "iam_restrictions_resource_kind_valid",
@@ -1011,7 +1067,8 @@ export const controllerWork = occSchema.table(
           AND ${table.agentTarget} IS NOT NULL
           AND ${table.agentTarget} IN ('stopped', 'deleted'))
         OR (${table.workKind} = 'lifecycle' AND ${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL
-          AND ${table.namespaceTarget} IS NULL AND ${table.agentTarget} IS NULL)
+          AND ${table.namespaceTarget} IS NULL
+          AND (${table.agentTarget} IS NULL OR ${table.agentTarget} = 'credentials_withdrawn'))
         OR (${table.workKind} = 'provisioning' AND ${table.agentId} IS NULL
           AND ${table.revisionId} IS NULL AND ${table.namespaceTarget} IS NULL
           AND ${table.agentTarget} IS NULL)

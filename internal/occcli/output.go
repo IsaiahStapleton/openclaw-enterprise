@@ -22,7 +22,7 @@ func (app *application) printNamespace(value any, collection bool) error {
 		{title: "ID", key: "id"},
 		{title: "NAME", key: "name"},
 		{title: "STATUS", key: "status"},
-		{title: "KUBERNETES NAMESPACE", key: "existingNamespace"},
+		{title: "ADOPTED NAMESPACE", key: "existingNamespace"},
 	})
 }
 
@@ -35,8 +35,8 @@ func (app *application) printConfiguration(value any) error {
 	})
 }
 
-func (app *application) printSecret(value any) error {
-	return app.printItems(value, false, []column{
+func (app *application) printSecret(value any, collection bool) error {
+	return app.printItems(value, collection, []column{
 		{title: "ID", key: "id"},
 		{title: "NAME", key: "name"},
 	})
@@ -59,6 +59,17 @@ func (app *application) printCredentialSource(value any, collection bool) error 
 		{title: "TYPE", key: "type"},
 		{title: "STATE", key: "state"},
 		{title: "GATEWAY STATUS", key: "gatewayStatus"},
+	})
+}
+
+func (app *application) printCredentialWithdrawal(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "AGENT", key: "agentId"},
+		{title: "REVISION", key: "revisionId"},
+		{title: "CREDENTIAL SOURCE", key: "credentialSourceId"},
+		{title: "STATE", key: "state"},
+		{title: "REQUESTED BY", key: "requestedBy"},
+		{title: "REASON", key: "reason"},
 	})
 }
 
@@ -88,8 +99,36 @@ func (app *application) printAgent(value any, collection bool) error {
 		{title: "CONFIGURATION", key: "configurationId"},
 		{title: "MODE", key: "executionMode"},
 		{title: "DESIRED STATE", key: "desiredRuntimeState"},
-		{title: "STATUS", key: "status"},
+		// Lifecycle is active or deleting; deployment health comes from deployment-status.
+		{title: "LIFECYCLE", key: "status"},
 		{title: "ACTIVE REVISION", key: "activeRevisionId"},
+	})
+}
+
+// printAgentRevisionList prints rows from describeAgentRevisions. Structured
+// output keeps every field, including active and deploymentStatus.
+func (app *application) printAgentRevisionList(rows []any) error {
+	if app.output != "table" {
+		return app.printStructured(rows)
+	}
+	table := make([]any, 0, len(rows))
+	for _, item := range rows {
+		row := maps.Clone(item.(map[string]any))
+		if active, _ := row["active"].(bool); active {
+			row["active"] = "*"
+		} else {
+			row["active"] = ""
+		}
+		table = append(table, row)
+	}
+	return printTable(app.out, table, []column{
+		{title: "ACTIVE", key: "active"},
+		{title: "ID", key: "id"},
+		{title: "REVISION", key: "revision"},
+		{title: "GENERATION", key: "configurationGeneration"},
+		{title: "STATUS", key: "deploymentStatus"},
+		{title: "CONFIGURATION", key: "configurationId"},
+		{title: "CREATED", key: "createdAt"},
 	})
 }
 

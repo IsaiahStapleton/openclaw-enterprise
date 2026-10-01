@@ -192,7 +192,11 @@ its own limit: `OCC_WORKER_CONVERGENCE_TIMEOUT_MS`, measured from the original
 operation creation time. Exceeding it fails the operation with
 `CONVERGENCE_DEADLINE_EXCEEDED`. A runtime that reports a deterministic
 credential rejection fails the deployment earlier with
-`RUNTIME_AUTHENTICATION_FAILED`. See the
+`RUNTIME_AUTHENTICATION_FAILED`, and one whose startup model probe ran out of
+CPU at its limit with `RUNTIME_CPU_STARVED`. A Sandbox Driver that cannot run
+the revision fails it on the first attempt with its
+[closed code](../drivers/sandbox.md), such as
+`SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED`. See the
 [worker configuration reference](../settings/operations.md#controller-worker-environment) for
 defaults and supported overrides.
 

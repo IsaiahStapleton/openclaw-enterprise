@@ -8,7 +8,7 @@ OpenShell keeps its own copy of the key and substitutes it on requests to
 [credential source reference](../../reference/credential-sources.md) defines the
 API behavior.
 
-Stock OpenShell `v0.1.0` still rejects the Agent's app-server token projection,
+Stock OpenShell `v0.1.3-pre.1` still rejects the Agent's app-server token projection,
 so the deployment in this profile fails closed before a Sandbox starts. The
 procedure proves registration, authorization, and admission. For a real model
 turn with the injected key, run the
@@ -122,6 +122,12 @@ JSON
 CONFIGURATION_ID="$(./bin/occ configuration create --file configuration.json -o json | jq -r .id)"
 ```
 
+The Configuration keeps `"sandbox": "read-only"`, but each deployed revision
+freezes `"sandbox": "danger-full-access"`. The OpenShell Sandbox Driver
+overrides this value for every dedicated Codex revision so that Codex's own
+sandbox does not run inside OpenShell's; OpenShell is the containment boundary.
+See [OpenShell Sandbox configuration](../../reference/drivers/openshell-sandbox.md#configuration).
+
 Create the Agent with the source as its Harness authentication:
 
 ```bash
@@ -155,10 +161,10 @@ DEPLOYMENT_ID="$(./bin/occ agent deploy "$AGENT_ID" -o json | jq -r .id)"
 
 Expected result: OCC accepts the deployment and freezes
 `{"method": "credential_source", "sourceId": "cs_…"}` in the revision. The
-status then reaches `failed` with `DEPENDENCY_UNAVAILABLE`, because stock
-OpenShell cannot project the app-server token. No Sandbox is created, and the
-Agent's `oce-*` Harness namespace contains no Secret. Without the access
-binding, the deploy request fails with `403`.
+status then reaches `failed` with `SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED`
+after one attempt, because stock OpenShell cannot project the app-server token.
+No Sandbox is created, and the Agent's `oce-*` Harness namespace contains no
+Secret. Without the access binding, the deploy request fails with `403`.
 
 ## Clean up
 

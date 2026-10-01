@@ -117,22 +117,21 @@ a separate credential action. Its initial state is not a Stop request; OCC
 generation is simulated.
 
 Choose a Preset, fill its variables, review seeded workspace files, and create
-an Agent with the Codex harness. The Console submits its inline Configuration
-and saved Secret references, follows simulated provisioning and deployment
-activation, and opens Workspace files for the returned revision. A separate flow
+an Agent with the Codex harness. The Console submits inline Configuration and
+Secret references, then follows simulated provisioning. A separate flow
 loads the default Preset, selects OpenAI with Codex, creates or selects a model
 Secret, selects a model, edits IDENTITY.md, and clears USER.md before creation.
 OpenClaw and unsupported-runtime stories retain the draft workflow: provision
 credentials and deploy from Agent detail.
 
-DevDay previews default-codex, SWE, Community, Q&A, Oncall, and standard presets
-with models, workspace templates, six Slack channels, model Secrets, Linear, and
-repository choices. The simulated catalog works with any Preset or Secret choice. **Plugins Curated** exercises
-token-free discovery with simulated Driver responses; actual access is unverified.
-Hosted discovery requires an eligible Codex service-account token. Workspace and
-Standard OpenClaw stories preview file and harness settings. Preset Secret stories
-cover existing, pending, denied, and empty results and new-token entry. Community,
-Q&A, and Oncall Agents remain disabled in the example Installation YAML.
+DevDay previews default-codex, SWE Agent, and standard presets with models, workspace templates,
+model Secrets, Linear, and repository choices. SWE Agent starts without configured
+Slack channels; the rehearsal adds a simulated channel explicitly. The simulated catalog works with any Preset or Secret choice.
+**Plugins Curated** exercises token-free discovery with simulated Driver responses;
+actual access remains unverified. Hosted discovery requires an eligible Codex
+service-account token. Workspace and Standard OpenClaw stories preview file and
+harness settings. Preset Secret stories cover existing, pending, denied, and
+empty results while retaining new-token entry.
 
 Use the [DevDay storyboard](../../scripts/console-storybook/devday-storyboard.md)
 for presenter actions, expected visible states, and fallbacks.
@@ -264,9 +263,11 @@ banner scope and navigation. No story proves live serving.
 
 **Current observations** starts unrequested. Compare
 **Current observations for v7**, **Unknown observation for v6**, and
-**Current observation unavailable**. Clicking requests that version's diagnostics
-through a bodyless POST, returning timestamped checks or an error; the recorded
-deployment result stays unchanged.
+**Current observation unavailable**. Clicking requests that version's timestamped
+diagnostics without changing the recorded deployment result.
+
+Outcome-unknown stories in **Components/Channels** and **Components/Credentials**
+disable deployment until **Reload draft**; they cannot prove a write committed.
 
 **Create new version** opens saved settings. Save edits, then **Deploy new version**
 to admit an immutable snapshot. Browsing does not deploy. Credentials need deployment;

@@ -201,9 +201,10 @@ The same composition covers the GitHub profile against the fixture provider:
 - `postgres-github-admin-scope.test.mjs`: a created administrator cannot attach
   an identity to, or revoke, the broader bootstrap administrator's account, or
   take its recovery designation.
-- `postgres-github-tab-binding.test.mjs`: Playwright over the HTTPS Origin. A tab
-  signed in with GitHub signs out after another tab's password sign-in, and the
-  login receipt is one-use and needs the exact Origin.
+- `postgres-github-tab-binding.test.mjs`, `postgres-oidc-tab-binding.test.mjs`:
+  Playwright over the HTTPS Origin. A tab signed in with GitHub, or OIDC alone, signs
+  out after another tab's password sign-in; the login receipt is one-use and needs the
+  exact Origin.
 - `postgres-github-recovery-replacement.test.mjs`: online recovery replacement
   moves the reserved password lane and survives a restart with the original seed.
 - `postgres-google-sign-in.test.mjs`: Google sign-in against a fixture OpenID
@@ -216,8 +217,7 @@ The same composition covers the GitHub profile against the fixture provider:
   `OCC_AUTH_MAINTAIN_MIGRATION_DATABASE_URL`. With the API stopped,
   `auth:maintain` resets the recovery password and deactivates GitHub sign-in.
 
-`tests/integration/password-default-chart.test.mjs` and
-`sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) check
+`tests/integration/sign-in-chart-parity.test.mjs` (Images and Packaging lane, Helm and yq) checks
 that the chart renders exactly those settings, and that the API entrypoint
 accepts the rendered settings for every trusted-proxy preset, with and without
 GitHub, and refuses what the chart refuses. Accepted settings get as far as the
@@ -381,3 +381,27 @@ through its loopback proxy. It rejects nonloopback targets and TLS connections
 before mutation: inspecting encrypted protocol completion is unsupported, and
 TLS intent is never silently downgraded. Use the ordinary disposable non-TLS
 loopback setup above for this test.
+
+## Authentication binding
+
+With matching dependencies, check construction, public type contracts, and sanitized failures:
+
+```sh
+node --test tests/conformance/postgres-auth-binding.test.mjs tests/conformance/postgres-controller-auth-binding.test.mjs tests/conformance/schema-auth-boundary-v1.test.mjs
+```
+
+These checks do not prove SQL persistence. `pnpm typecheck` checks Controller composition.
+With a migrated disposable database and `OCC_TEST_DATABASE_URL` (setup above), run:
+
+```sh
+node --test --test-concurrency=1 tests/integration/postgres-auth-binding.test.mjs tests/integration/postgres-auth-accounts.test.mjs tests/integration/postgres-service-api-keys.test.mjs
+```
+
+These cover isolation, rollback, pool reuse, account provisioning, and service-key
+persistence. Fresh bootstrap requires no Installation; missing database
+configuration explicitly skips PostgreSQL coverage.
+
+Construction errors require checking OCC/Drizzle dependencies. Later dependency
+errors require checking connectivity and application-role permissions; successful
+construction does not establish connectivity. See the
+[binding reference](../reference/postgres-auth-binding.md) for ownership and transaction boundaries.

@@ -1,8 +1,9 @@
 # Local Kubernetes development
 
 Run OpenClaw Enterprise (OCE) against a disposable, loopback-only k3d cluster.
-This guide covers the Kubernetes-only profile, which runs PostgreSQL, the
-OpenClaw Control Plane (OCC), and Agent workloads in the owned cluster.
+Start with the Kubernetes-only profile below, which runs PostgreSQL, the
+OpenClaw Control Plane (OCC), and Agent workloads in the owned cluster. The
+Compose alternative has fewer configured capabilities.
 
 ## Start the profile
 
@@ -12,8 +13,8 @@ mode, the container engine hosts k3d and builds or imports images without
 running OCE application services.
 
 K3s requires the `cpuset` cgroup controller, which systemd does not delegate to
-a rootless session. On Podman, select a rootful engine before starting. On
-macOS:
+a rootless session. On Podman, run as root, delegate `cpuset` to your user
+session, or use a rootful Podman machine. On macOS:
 
 ```bash
 podman machine stop
@@ -23,8 +24,25 @@ podman machine start
 
 Rootful describes the virtual machine; keep running `podman` as your normal
 host user. Rootful and rootless keep separate container storage, so the first
-start after switching rebuilds the images. On Linux, run Podman as root or
-delegate `cpuset` to your user session.
+start after switching rebuilds the images.
+
+On Linux without root, use a rootful machine for the Kubernetes-only profile.
+It needs `/dev/kvm`, `gvproxy`, and `virtiofsd`. List a helper directory outside
+Podman's defaults, plus those defaults, in `[engine] helper_binaries_dir` of a
+`CONTAINERS_CONF_OVERRIDE` file exported for startup and cleanup:
+
+```bash
+podman machine init oce-dev --rootful --cpus 8 --memory 16384
+podman machine start oce-dev
+export CONTAINER_CONNECTION=oce-dev-root
+```
+
+The machine shares only `$HOME` by default, so set
+`OCC_DEVELOPMENT_STATE_DIRECTORY` beneath it.
+
+Docker inside a containerized development host also needs `cpuset` delegated
+by the outer host. For `failed to find cpuset cgroup (v2)`, follow
+[local cgroup troubleshooting](../operate/troubleshooting.md#local-k3s-cannot-find-the-cpuset-controller).
 
 Startup resolves the engine's host API socket itself. Do not export
 `DOCKER_HOST` or `CONTAINER_HOST` from the path `podman info` reports: on a
@@ -61,6 +79,29 @@ To enable GitHub repository credentials during a fresh start, prepare the
 [local repository inputs](local-repository-credentials.md) before running the
 launcher. This requires an approved App key, repository policy, and egress CIDRs.
 
+### Run OCC in Compose with Kubernetes compute
+
+To select the hybrid profile on a fresh state directory:
+
+```bash
+export OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes
+export OCC_DEVELOPMENT_CONTROL_PLANE=compose
+export OCC_DEVELOPMENT_SANDBOX_DRIVER=none
+./scripts/dev-up
+```
+
+Expect `Control plane: Compose` and `Compute Driver: Kubernetes`. PostgreSQL,
+OCC, and its worker run in Compose; Agents run in k3d. Keep these exports for
+cleanup. This profile does not configure the Kubernetes-only browser endpoint,
+private workspace routing or repository service. It includes both default Presets,
+the Codex Plugin Driver, and the same Codex seccomp preparation. Dedicated Codex
+requires [hybrid private routing](local-compose-kubernetes.md) before deployment.
+Follow that procedure before creating Agent Namespaces; it also describes the
+Compose repository and Slack service connections.
+
+If the K3s channel lookup times out, follow
+[local image-lookup troubleshooting](../operate/troubleshooting.md#local-k3s-image-lookup-times-out).
+
 ### Start the OpenShell fail-closed profile
 
 For an OpenShell environment, use the owned launcher:
@@ -76,7 +117,7 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
 The checkout-local CLI creates one k3d cluster and then:
 
 1. installs the pinned Agent Sandbox controller and OpenShell
-   `v0.1.0` assets;
+   `v0.1.3-pre.1` assets;
 2. imports digest-resolved OpenShell, OCE controller, Agent runtime, and
    PostgreSQL images;
 3. creates `oce-system` and installs PostgreSQL, OpenShell Gateway, and the OCE
@@ -91,7 +132,7 @@ OpenShell's Agent Sandbox controller remains in its upstream
 `agent-sandbox-system` Namespace. Tenant Workspaces, Sandbox resources, and
 Agent Pods live in the OCC-owned `oce-*` Namespaces.
 
-The first start requires Helm and network access. To use reviewed local assets
+The first start requires network access. To use reviewed local assets
 instead, set both `OCC_DEVELOPMENT_OPENSHELL_HELM_CHART` and
 `OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART`, plus
 `OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST` to absolute paths.
@@ -111,15 +152,19 @@ startup uses the Compose control-plane preview with Docker Compute.
 State and credentials are written to the private
 `/tmp/openclaw-development` directory by default. Set the absolute
 `OCC_DEVELOPMENT_STATE_DIRECTORY` before both startup and cleanup to use
-another location. Startup refuses an existing state directory or cluster. To pick up source changes, [rebuild the running services](#rebuild-after-a-source-edit);
+another location. `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` bounds k3d readiness as well as each
+subsequent startup wait. A cluster timeout triggers owned-resource rollback;
+follow the printed cleanup instruction if state is retained.
+Startup refuses an existing state directory or cluster. To pick up source changes, [rebuild the running services](#rebuild-after-a-source-edit);
 cleanup is for discarding the Installation. The state directory remains mode
 `0700`; the generated files
 mounted into the non-root controller and worker are container-readable but
 remain inaccessible to other host users through that private directory. The
 helper does not modify the default kubeconfig or current kubectl context.
 
-For separate stacks, select distinct state directories, cluster names, and
-published API ports. Generated runtime workloads have a 2 GiB memory limit
+For separate stacks, select distinct state directories, cluster names, bridge
+subnets and published ports. Compose also needs a distinct `OCC_POSTGRES_PORT`;
+changing the API port alone leaves PostgreSQL on port 55432. Generated runtime workloads have a 2 GiB memory limit
 each; size the local engine VM for OCC plus the Agents you run. Keep each
 stack's resources under the helper's lifecycle until cleanup.
 
@@ -201,8 +246,7 @@ cookie uses a per-installation parent domain; its matching subdomains are part o
 the [shared session boundary](../../reference/agent-native-admin.md#shared-session-boundary).
 The OpenShell profile does not configure that browser endpoint.
 
-Use the printed paths with other tools without changing the default kubeconfig or
-context:
+Use the printed paths with other tools:
 
 ```bash
 export KUBECONFIG="<Kubeconfig path printed by scripts/dev-up>"
@@ -220,6 +264,11 @@ OCE API itself remains a ClusterIP Service. OCE's worker authenticates to
 Kubernetes in-cluster. When OpenShell is selected, the API, which registers
 credential sources, and the worker reach OpenShell Gateway through a narrow
 development NetworkPolicy in `oce-system`.
+
+The launcher sets `network.pluginStatusProxySourceCidrs` to the k3d node's Pod
+bridge address, the source the API server uses to proxy to Pods. That enables
+plugin status and diagnostics and lets a dedicated Codex Gateway start once on
+a first deploy.
 
 The OpenShell profile declares an `openshell` Backend for the Gateway
 endpoint and selects both the OpenShell Sandbox and the
@@ -258,13 +307,13 @@ for that separate credentialed proof.
 
 ## Configure workspace storage on single-node k3d
 
-Dedicated Agents use a `40Gi` RWO workspace claim. Stock k3d `local-path`
-storage supports this mode without a shared-filesystem ConfigMap patch. Gateway
-state uses a separate RWO claim. The worker stops the previous revision before
-starting its replacement; expect a downtime window during deployment.
+Dedicated Agents use a `40Gi` RWO workspace claim on stock k3d `local-path`
+storage. Gateway state uses a separate RWO claim. The worker stops the previous
+revision before starting its replacement; expect a downtime window during
+deployment.
 See [storage ownership and recovery](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage).
 
-Use the kubeconfig and context printed by startup to check the Agent namespace:
+Check the Agent namespace with the printed kubeconfig and context:
 
 ```bash
 kubectl --kubeconfig '<profile-kubeconfig>' --context '<profile-context>' \
@@ -273,21 +322,24 @@ kubectl --kubeconfig '<profile-kubeconfig>' --context '<profile-context>' \
 
 Expect the workspace to become `Bound` with access mode `RWO`, followed by a
 running Harness Pod. With `WaitForFirstConsumer`, a pending claim before Pod
-creation is normal. Existing owned RWX claims are retained; do not delete a claim
-or change its access mode to adopt the new default.
+creation is normal. Legacy RWX claims are unsupported; before upgrading an older
+installation, follow the [storage transition prerequisite](upgrade-checklist.md#remove-legacy-rwx-workspaces).
+Do not change a PVC's access mode in place.
 
 ### Preserve storage across restarts
 
-Keep the node's `/var/lib/rancher/k3s` volume, which contains workspace files and
-K3s state. Normal container restarts retain that volume; cluster deletion, volume
-deletion, and profile cleanup can destroy the data. Local-path storage is bound
-to its node; adding another node does not replicate existing workspace data.
-Use a portable StorageClass if workloads must move between nodes.
+Keep the node's `/var/lib/rancher/k3s` volume (workspace files and K3s state).
+Restarts keep it; deleting the cluster, volume, or profile destroys it.
+Local-path storage is node-bound; use a portable StorageClass for workloads that
+move between nodes.
 
-The `local-path` StorageClass uses reclaim policy `Delete`, so deleting a claim
-also permits deletion of its backing directory. PostgreSQL lives in the owned
-cluster; this does not back up Agent workspaces. Use a durable private
-state directory instead of `/tmp` for a long-lived demo.
+PostgreSQL is a StatefulSet, and a launcher NetworkPolicy allows egress by its
+Pod label and the k3d subnet, so the profile survives `k3d cluster stop`/`start`.
+
+The `local-path` reclaim policy is `Delete`: deleting a claim may delete its
+backing directory. PostgreSQL lives in the owned cluster; this does not back up
+Agent workspaces. Long-lived demos need a durable private state directory, not
+`/tmp`.
 
 ## Rebuild after a source edit
 
@@ -308,11 +360,6 @@ upgrade. If repository access was enabled, check the
 removing the cluster. For a persistent Helm-installed k3d environment, complete the
 [upgrade migration checklist](upgrade-checklist.md) and then follow the
 [local k3d image upgrade procedure](local-k3d-image-upgrade.md).
-
-Use a different `OCC_DEVELOPMENT_STATE_DIRECTORY`, `OPENCLAW_DEV_PORT`,
-`OCC_DEVELOPMENT_KUBERNETES_API_PORT`, `OCC_DEVELOPMENT_BROWSER_PORT`, and
-`OCC_DEVELOPMENT_KUBERNETES_CLUSTER` for each concurrent environment. Startup
-refuses an existing state directory or cluster instead of adopting it.
 
 ## Resolve node DNS failures
 
@@ -345,17 +392,16 @@ discovering or deleting an unrelated cluster.
 
 ## Limits
 
-The Kubernetes-only node uses K3s legacy iptables mode. Without OpenShell,
-startup checks policy traffic before configuring gateway proxy trust and again
+Both local k3d profiles use K3s legacy iptables mode. Kubernetes-only startup
+without OpenShell checks policy traffic before configuring gateway proxy trust and again
 against the initial Gateway Namespace. These checks establish only the tested
 single-node traffic at startup; they do not monitor later policy failures.
 
 Development startup readiness does not prove Agent deployment, model execution,
 provider authentication, or dedicated Codex WebSocket execution. OpenShell
 startup deliberately proves only its infrastructure and fail-closed boundary.
-Other checks require the real-cluster procedures, approved digest-pinned runtime
-images, and existing authorized credentials described in the [Kubernetes
-testing guide](../../testing/kubernetes.md).
+The [Kubernetes testing guide](../../testing/kubernetes.md) covers those
+credentialed real-cluster checks.
 
 ## Gateway placement boundary
 
@@ -370,7 +416,7 @@ for both scoped RoleBindings.
 - This is a development environment, not a production deployment recipe.
 - The OpenShell profile installs one central Gateway per cluster. OCC runs in
   the cluster and creates tenant resources in separate `oce-*` Namespaces.
-- Stock OpenShell `v0.1.0` remains fail-closed for unsupported Secret and
+- Stock OpenShell `v0.1.3-pre.1` remains fail-closed for unsupported Secret and
   workload-identity projections. Workspace readiness does not prove that an
   Agent Sandbox can start or complete a model turn.
 - OpenShell Gateway permits unauthenticated users only inside this disposable,

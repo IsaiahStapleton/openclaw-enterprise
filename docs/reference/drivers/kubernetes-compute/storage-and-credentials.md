@@ -17,8 +17,8 @@ its launcher and filesystem layout are concrete Kubernetes implementation choice
 | Execution        | The selected Harness owns execution and its workspace lifecycle.                          | Codex app-server executes turns; a separate node serves file, Memory and Skills operations.                                 |
 | Startup          | Compute delivers the selected workload and observes readiness.                            | The launcher supervises Codex and the file node separately, separates their credentials, and sets Codex shell/PATH options. |
 
-These Codex details belong in OCE because OCE deploys this Harness. They are not
-requirements for every Harness or additions to the public Compute contract.
+These deployment details are specific to Codex, not requirements for every
+Harness or additions to the public Compute contract.
 The file node's explicit command allowlist disables OpenClaw worker hosting;
 this launcher is not an OpenClaw remote worker launcher.
 
@@ -102,14 +102,16 @@ node; runtime upgrades use the operator-selected image and ordinary redeployment
 
 ## Harness storage
 
-Each dedicated Agent receives a `40Gi` `ReadWriteOnce` (RWO) filesystem claim
+Each dedicated Agent receives a `40Gi` `ReadWriteOnce` filesystem claim
 from the default StorageClass, mounted only by its Harness:
 
-| Subpath                                      | Harness mount                        |
-| -------------------------------------------- | ------------------------------------ |
-| `workspace`                                  | `/home/node/workspace`               |
-| `generated-images`                           | `/home/node/.codex/generated_images` |
-| `workspace-node-<agent-hash>-<harness-hash>` | `/home/node/.openclaw-node`          |
+| Subpath                                        | Harness mount                        |
+| ---------------------------------------------- | ------------------------------------ |
+| `codex-home` ([OAuth](codex-oauth-storage.md)) | `/home/node/.codex`                  |
+| `workspace`                                    | `/home/node/workspace`               |
+| `generated-images`                             | `/home/node/.codex/generated_images` |
+| `codex-sessions`                               | `/home/node/.codex/sessions`         |
+| `workspace-node-<agent-hash>-<harness-hash>`   | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
 The node Secret's setup code expires ten minutes after preparation mints it. A
@@ -154,9 +156,10 @@ OCC does not restart a lower revision automatically or roll back filesystem writ
 made by a failed candidate. The last committed active
 revision is not proof that its Pod still runs during replacement.
 
-Existing owned `ReadWriteMany` workspace claims remain usable without changing
-their spec, identity, or data. New claims use RWO; Gateway private claims still
-require RWO. No revision stop or retirement replaces a PVC with ephemeral storage.
+Harness and Gateway claims must use `ReadWriteOnce`; existing RWX claims are
+rejected during reconciliation and final Agent deletion. Follow the
+[upgrade prerequisite](../../../guides/deploy/upgrade-checklist.md#remove-legacy-rwx-workspaces).
+Revision stop and retirement retain PVCs.
 
 RWO does not fence writers on a partitioned node. Pod termination and the storage
 provider's safe detach/attach behavior remain required; the Driver never force
@@ -220,10 +223,10 @@ have exact Namespace, Agent, service-principal and revision ownership.
 Preparation checks admitted source identities before writing runtime material.
 Repeated preparation repairs absent or changed projections. Activation validates
 Gateway sources and selects the prepared revision; it does not issue credentials.
-Retirement waits for the old workload to stop before deleting its projection by
-UID. Gateway and account canonical sources survive revision retirement; final
-Agent deletion removes its transport/password, while account and OCC Secret
-storage retain their separate lifecycles.
+Stop and retirement wait for the workload to stop, then delete its projection
+and revision ConfigMaps by UID. Gateway and account canonical sources survive
+revision retirement; final Agent deletion removes its transport/password, while
+account and OCC Secret storage retain their separate lifecycles.
 
 Source updates do not restart running processes. The supported model-key update
 sequence is: update the OCC Secret, redeploy each consuming Agent through OCE,
@@ -232,10 +235,10 @@ new credential. Preparation delivers current source values to the new revision's
 runtime Secret. Merely recreating a Harness Pod or restarting its Deployment
 reads the existing projection and does not refresh it from CP. See
 [update and redeploy](../kubernetes-secret.md#update-and-redeploy).
-Deleting a source or runtime Secret
-does not revoke bytes already loaded into a process or accepted by a provider.
+Deleting a source or runtime Secret does not revoke bytes a process loaded or a
+provider accepted.
 Transport rotation, finite token TTL and immediate revocation remain open; see
-[follow-up tracking](../../../../specs/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
+[follow-up tracking](../../../../specs/plans/36-control-plane-gateways-plan.md#open-work-and-release-boundaries).
 Embedded execution retains its combined workload and transport bundle; CP-backed
 model/configuration sources are delivered to that workload as needed. It is
 outside the dedicated trust-boundary acceptance scope.

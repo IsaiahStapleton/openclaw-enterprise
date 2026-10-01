@@ -1,8 +1,7 @@
 # Contributing to OpenClaw Enterprise
 
-Keep contributions in this private repository. Do not copy source, logs, test
-artifacts, or implementation details into public issues, forks, or paste sites.
-Report suspected vulnerabilities privately to
+Do not post unpatched vulnerabilities, exploits, credentials, or tenant data in
+issues, pull requests, or paste sites. Report suspected vulnerabilities privately to
 [security@openclaw.ai](mailto:security@openclaw.ai), identifying OpenClaw Enterprise.
 
 For a practical introduction, use [Contribute](docs/contributing/README.md)
@@ -20,6 +19,10 @@ architectural change that the team needs to understand, open an
 [RFC](docs/contributing/rfcs.md) early and request human feedback. Implementation
 can proceed while the RFC is reviewed and revised. Changes outside approved
 milestones still need a decision from the responsible maintainers.
+
+Use [RFCs and implementation plans](docs/contributing/specifications.md) to
+choose the document, number it, and track delivery. Larger features with an RFC
+need an implementation plan; standalone plans can build on existing architecture.
 
 Use a focused branch or worktree. Preserve other contributors' changes, local
 configuration, dependency trees, and running services. Never use a shared or
@@ -109,6 +112,11 @@ proof selection, diff cleanup, and requested independent review.
   Preserve historical implementation specifications and their Manual Notes.
 - Request relevant maintainers' feedback. Resolve substantive findings and
   required checks before merging.
+- Before merging Console UI changes, upload screenshots and a short video of
+  the final UI as native GitHub attachments in the PR's Verification section.
+  Missing or stale media blocks merging even when CI passes. Follow the
+  [Console evidence requirements](AGENTS.md#console-storybook) for capture,
+  review, and reporting.
 - Inspect the entire diff and attachments for credentials, tenant data, private
   hostnames, and personal paths. Use synthetic fixtures and redacted evidence.
 

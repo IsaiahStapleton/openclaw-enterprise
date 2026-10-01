@@ -1,5 +1,6 @@
 import type {
   AdmittedRepositoryBinding,
+  RepositoryAccess,
   RepositoryBindingSelection,
   RepositoryRevisionState,
 } from "@openclaw-enterprise/contracts";
@@ -83,6 +84,58 @@ export function validRepositoryBindingSelections(
   value: unknown,
 ): value is readonly RepositoryBindingSelection[] {
   return bindingArray(value, false);
+}
+
+export function validRepositoryAccess(value: unknown): value is RepositoryAccess {
+  if (
+    !exactObject(value, ["defaultProfile", "repositories"]) ||
+    !boundedToken(value.defaultProfile) ||
+    !Array.isArray(value.repositories) ||
+    value.repositories.length > 16
+  ) {
+    return false;
+  }
+  const seen = new Set<string>();
+  return value.repositories.every((entry: unknown) => {
+    if (entry === null || typeof entry !== "object") {
+      return false;
+    }
+    const keys = Object.hasOwn(entry, "profile") ? ["repositoryRef", "profile"] : ["repositoryRef"];
+    if (
+      !exactObject(entry, keys) ||
+      !boundedToken(entry.repositoryRef) ||
+      (keys.length === 2 && !boundedToken(entry.profile)) ||
+      seen.has(entry.repositoryRef)
+    ) {
+      return false;
+    }
+    seen.add(entry.repositoryRef);
+    return true;
+  });
+}
+
+/** Persist intent only alongside the exact profiles it resolves to. */
+export function normalizedRepositoryAccess(
+  value: unknown,
+  bindings: readonly RepositoryBindingSelection[] | undefined,
+): RepositoryAccess | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (
+    !validRepositoryAccess(value) ||
+    value.repositories.length !== (bindings?.length ?? 0) ||
+    value.repositories.some(
+      (entry, index) =>
+        entry.repositoryRef !== bindings?.[index]?.repositoryRef ||
+        (entry.profile ?? value.defaultProfile) !== bindings?.[index]?.profile,
+    )
+  ) {
+    throw new ScopeViolationError(
+      "The Agent repository access intent does not match its bindings.",
+    );
+  }
+  return immutableCopy(value);
 }
 
 export function validAdmittedRepositoryBindings(

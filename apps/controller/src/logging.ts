@@ -38,6 +38,7 @@ const ALLOWED_FIELDS = new Set([
   "activationMs",
   "agentId",
   "attempt",
+  "cause",
   "code",
   "computeDriverId",
   "deployPasses",
@@ -45,6 +46,8 @@ const ALLOWED_FIELDS = new Set([
   "elapsedMs",
   "event",
   "host",
+  "keyHash",
+  "lane",
   "message",
   "method",
   "namespaceId",
@@ -53,6 +56,8 @@ const ALLOWED_FIELDS = new Set([
   "pending",
   "port",
   "prepareMs",
+  "provider",
+  "providerId",
   "readinessWaitMs",
   "requestId",
   "result",
@@ -63,6 +68,7 @@ const ALLOWED_FIELDS = new Set([
   "skippedUserIds",
   "skippedUserIdsTruncated",
   "status",
+  "step",
   "workId",
 ]);
 
@@ -235,6 +241,9 @@ function sanitizedEvent(
   return Object.freeze(result);
 }
 
+// Events that warn although their names carry no warning suffix.
+const WARNING_EVENTS = new Set(["authentication.sign-in-limited"]);
+
 export function emitOccLogEvent(logger: OccLogger, event: Readonly<Record<string, unknown>>): void {
   const record = sanitizedEvent(event);
   const eventName = String(record.event);
@@ -247,7 +256,11 @@ export function emitOccLogEvent(logger: OccLogger, event: Readonly<Record<string
     logger.error(record);
     return;
   }
-  if (eventName.endsWith(".warning") || eventName.endsWith("-warning")) {
+  if (
+    eventName.endsWith(".warning") ||
+    eventName.endsWith("-warning") ||
+    WARNING_EVENTS.has(eventName)
+  ) {
     logger.warn(record);
     return;
   }

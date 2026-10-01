@@ -1,4 +1,5 @@
 import { GatewayClient, type GatewayClientOptions } from "@openclaw/gateway-client";
+import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
 
 export interface NodeSetup {
@@ -9,13 +10,34 @@ export interface NodeSetup {
 
 export interface GatewayNodeEnrollment {
   createSetup(url: string, nodeUrl: string, signal: AbortSignal): Promise<NodeSetup>;
+  /**
+   * Reads the setup's completion and whether its node is connected. With
+   * `waitMs`, keeps one connection and re-reads until the node is connected or
+   * the time is up, so a node that pairs a moment later is seen at once.
+   */
   observeSetup(
     url: string,
     setupId: string,
     signal: AbortSignal,
-  ): Promise<{ readonly deviceId: string; readonly connected: boolean } | undefined>;
+    options?: { readonly waitMs?: number },
+  ): Promise<NodeSetupObservation | undefined>;
   isConnected(url: string, deviceId: string, signal: AbortSignal): Promise<boolean>;
 }
+
+export interface NodeSetupObservation {
+  readonly deviceId: string;
+  readonly connected: boolean;
+}
+
+type GatewayRequest = (
+  method: string,
+  params: Readonly<Record<string, unknown>>,
+  options: { readonly signal: AbortSignal },
+) => Promise<unknown>;
+
+// One status read per interval while a caller waits for a node to pair.
+export const NODE_SETUP_POLL_MS = 250;
+const GATEWAY_CONNECT_BUDGET_MS = 10_000;
 
 type GatewayHello = Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0];
 
@@ -50,20 +72,58 @@ export function createGatewayNodeEnrollment(
           expiresAtMs: setup.expiresAtMs,
         };
       }),
-    observeSetup: (url, setupId, signal) =>
-      withGateway(url, readApiKey, signal, async (client, requestSignal) => {
-        const status = asRecord(
-          await client.request("device.pair.setupStatus", { setupId }, { signal: requestSignal }),
-        );
-        if (status === undefined) {
-          throw new Error("The Gateway returned an invalid setup status.");
-        }
-        // A delivery-uncertain handoff may still have reached the node. Live
-        // presence is observed separately; setup status alone is not readiness.
-        const completion = asRecord(status.completion ?? status.deliveryUncertain);
-        if (completion === undefined) {
-          return undefined;
-        }
+    observeSetup: (url, setupId, signal, options = {}) => {
+      const waitMs = Math.max(0, options.waitMs ?? 0);
+      return withGateway(
+        url,
+        readApiKey,
+        signal,
+        (client, requestSignal) =>
+          observeNodeSetup(
+            (method, params, request) => client.request(method, params, request),
+            setupId,
+            requestSignal,
+            waitMs,
+          ),
+        waitMs,
+      );
+    },
+    isConnected: (url, deviceId, signal) =>
+      withGateway(url, readApiKey, signal, (client, requestSignal) =>
+        isConnected(
+          (method, params, request) => client.request(method, params, request),
+          deviceId,
+          requestSignal,
+        ),
+      ),
+  };
+}
+
+/**
+ * Setup status and node presence over one Gateway connection. Without a wait
+ * this is a single read. With one, it re-reads every NODE_SETUP_POLL_MS until
+ * the node is connected or `waitMs` has passed, and returns the last reading.
+ * Every reading gets the same validation; waiting never relaxes it.
+ */
+export async function observeNodeSetup(
+  request: GatewayRequest,
+  setupId: string,
+  signal: AbortSignal,
+  waitMs = 0,
+): Promise<NodeSetupObservation | undefined> {
+  const deadline = Date.now() + waitMs;
+  let deviceId: string | undefined;
+  for (;;) {
+    signal.throwIfAborted();
+    if (deviceId === undefined) {
+      const status = asRecord(await request("device.pair.setupStatus", { setupId }, { signal }));
+      if (status === undefined) {
+        throw new Error("The Gateway returned an invalid setup status.");
+      }
+      // A delivery-uncertain handoff may still have reached the node. Live
+      // presence is observed separately; setup status alone is not readiness.
+      const completion = asRecord(status.completion ?? status.deliveryUncertain);
+      if (completion !== undefined) {
         if (
           completion.setupId !== setupId ||
           completion.access !== "node" ||
@@ -71,24 +131,32 @@ export function createGatewayNodeEnrollment(
         ) {
           throw new Error("The Gateway returned an invalid node setup completion.");
         }
-        return {
-          deviceId: completion.deviceId,
-          connected: await isConnected(client, completion.deviceId, requestSignal),
-        };
-      }),
-    isConnected: (url, deviceId, signal) =>
-      withGateway(url, readApiKey, signal, (client, requestSignal) =>
-        isConnected(client, deviceId, requestSignal),
-      ),
-  };
+        deviceId = completion.deviceId;
+      }
+    }
+    const observation =
+      deviceId === undefined
+        ? undefined
+        : { deviceId, connected: await isConnected(request, deviceId, signal) };
+    if (observation?.connected === true || Date.now() + NODE_SETUP_POLL_MS > deadline) {
+      return observation;
+    }
+    try {
+      await delay(NODE_SETUP_POLL_MS, undefined, { signal });
+    } catch (error) {
+      // Surface the owner's reason (a lost claim, a timeout), not a bare AbortError.
+      signal.throwIfAborted();
+      throw error;
+    }
+  }
 }
 
 async function isConnected(
-  client: GatewayClient,
+  request: GatewayRequest,
   deviceId: string,
   signal: AbortSignal,
 ): Promise<boolean> {
-  const node = asRecord(await client.request("node.describe", { nodeId: deviceId }, { signal }));
+  const node = asRecord(await request("node.describe", { nodeId: deviceId }, { signal }));
   if (node?.nodeId !== deviceId || typeof node.connected !== "boolean") {
     throw new Error("The Gateway returned an invalid node observation.");
   }
@@ -112,6 +180,7 @@ async function withGateway<T>(
   readApiKey: () => Promise<string>,
   ownerSignal: AbortSignal,
   operation: (client: GatewayClient, signal: AbortSignal) => Promise<T>,
+  waitMs = 0,
 ): Promise<T> {
   const endpoint = new URL(url);
   if (
@@ -124,7 +193,10 @@ async function withGateway<T>(
     throw new Error("Node enrollment requires a private WSS Gateway endpoint.");
   }
   const apiKey = await readApiKey();
-  const signal = AbortSignal.any([ownerSignal, AbortSignal.timeout(10_000)]);
+  const signal = AbortSignal.any([
+    ownerSignal,
+    AbortSignal.timeout(GATEWAY_CONNECT_BUDGET_MS + waitMs),
+  ]);
   signal.throwIfAborted();
   let resolveHello!: (hello: GatewayHello) => void;
   let rejectHello!: (error: unknown) => void;

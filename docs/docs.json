@@ -99,12 +99,20 @@
                     "label": "Workspace Files"
                   },
                   {
+                    "page": "guides/topics/agent-logs",
+                    "label": "Runtime Logs"
+                  },
+                  {
                     "page": "reference/console",
                     "label": "Console"
                   },
                   {
                     "page": "guides/console/agent-details",
                     "label": "Console Walkthrough"
+                  },
+                  {
+                    "page": "guides/console/channels-and-credentials",
+                    "label": "Channels and Credentials"
                   },
                   {
                     "page": "guides/console/agent-sharing",
@@ -272,6 +280,10 @@
                           {
                             "page": "reference/drivers/kubernetes-compute/storage-and-credentials",
                             "label": "Storage and Credentials"
+                          },
+                          {
+                            "page": "reference/drivers/kubernetes-compute/codex-oauth-storage",
+                            "label": "Codex OAuth Storage"
                           }
                         ]
                       },
@@ -439,12 +451,20 @@
                     "label": "Image Upgrades"
                   },
                   {
+                    "page": "guides/deploy/production-upgrade-recovery",
+                    "label": "Upgrade Recovery"
+                  },
+                  {
                     "page": "guides/deploy/auth-maintenance",
                     "label": "Sign-in Maintenance"
                   },
                   {
                     "page": "guides/deploy/google-sign-in",
                     "label": "Google Sign-in"
+                  },
+                  {
+                    "page": "guides/deploy/oidc-sign-in",
+                    "label": "OIDC Sign-in"
                   },
                   {
                     "page": "guides/deploy/local-k3d-image-upgrade",
@@ -529,6 +549,10 @@
                   {
                     "page": "guides/observability/demo",
                     "label": "Demo Stack"
+                  },
+                  {
+                    "page": "guides/observability/demo-cleanup",
+                    "label": "Demo Cleanup"
                   },
                   {
                     "page": "reference/metrics",
@@ -617,7 +641,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "hidden": ["reference/postgres-auth-binding"]
           },
           {
             "tab": "Contribute",
@@ -628,6 +653,10 @@
                   {
                     "page": "contributing/README",
                     "label": "Overview"
+                  },
+                  {
+                    "page": "contributing/sprints",
+                    "label": "Sprint Planning"
                   }
                 ]
               },
@@ -639,8 +668,12 @@
                     "label": "Overview"
                   },
                   {
+                    "page": "contributing/specifications",
+                    "label": "RFCs and Plans"
+                  },
+                  {
                     "page": "contributing/rfcs",
-                    "label": "RFCs"
+                    "label": "RFC Review"
                   },
                   {
                     "page": "contributing/design-philosophy",
@@ -776,6 +809,10 @@
                         "label": "CI"
                       },
                       {
+                        "page": "testing/ci-manual-integration",
+                        "label": "Manual Integration Lanes"
+                      },
+                      {
                         "page": "testing/metrics",
                         "label": "Metrics Dashboard"
                       }
@@ -810,10 +847,6 @@
                   {
                     "page": "base-driver-docs-template",
                     "label": "Driver Docs"
-                  },
-                  {
-                    "page": "documentation-inventory",
-                    "label": "Historical Inventory"
                   }
                 ]
               }
@@ -821,6 +854,7 @@
             "hidden": [
               "contributing/rfc-template",
               "guides/deploy/local-repository-credentials",
+              "guides/deploy/local-compose-kubernetes",
               "guides/deploy/openshell-credential-sources",
               "reference/settings/development",
               "design/resources",
@@ -838,6 +872,7 @@
               "flows/audit-ledger",
               "flows/controller-worker",
               "flows/agent-deployment-diagnostics",
+              "flows/agent-runtime-logs",
               "flows/platform-console",
               "flows/platform-console/agent-editing",
               "flows/platform-console/agent-sharing",
@@ -866,6 +901,7 @@
               "flows/workspace-files",
               "flows/pr-24-ssh-compute",
               "flows/github-actions-testing",
+              "flows/clawsweeper-dispatch",
               "flows/container-package-bootstrap",
               "flows/container-publication",
               "flows/cli-publication",
@@ -884,23 +920,11 @@
               "testing/plugins",
               "testing/openshell",
               "testing/openshell-pre5-local-experiment",
-              "driver-docs-inventory",
-              "documentation-inventory/quality-audit-2026-09-29",
-              "documentation-inventory/gaps",
-              "documentation-inventory/getting-started",
-              "documentation-inventory/topics",
-              "documentation-inventory/integrations-reference",
-              "documentation-inventory/contribute-design",
-              "documentation-inventory/contribute-flows",
-              "documentation-inventory/contribute-development",
-              "documentation-inventory/repository-guidance",
-              "documentation-inventory/repository-specs-1",
-              "documentation-inventory/repository-specs-2",
-              "documentation-inventory/repository-specs-3",
               "flows/agent-repository-credentials",
               "flows/repository-credentials",
               "flows/repository-credential-configuration",
               "testing/repository-credentials",
+              "testing/repository-credentials-artifacts",
               "testing/repository-credentials-platform",
               "flows/agent-presets"
             ]

@@ -1,6 +1,7 @@
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import {
+  PERMISSION_ACTIONS,
   RESOURCE_KINDS,
   type AccessBinding,
   type AuthorizationDecision,
@@ -171,7 +172,7 @@ export function createAuthPrincipalSeed(
           })),
       ),
       { action: "operate", resourceKind: "secret" },
-      ...(["create", "read", "delete", "operate"] as const).map((action) => ({
+      ...(["create", "read", "update", "delete", "operate"] as const).map((action) => ({
         action,
         resourceKind: "credential_source" as const,
       })),
@@ -235,15 +236,7 @@ export function validateAuthAccountPrincipalSeed(
   }
 }
 
-const ACTIONS: readonly PermissionAction[] = [
-  "create",
-  "read",
-  "update",
-  "delete",
-  "deploy",
-  "operate",
-  "administer",
-];
+const ACTIONS: readonly PermissionAction[] = PERMISSION_ACTIONS;
 
 const MANAGED_RESOURCE_KINDS: readonly ManagedIAMResourceKind[] = [
   "namespace",

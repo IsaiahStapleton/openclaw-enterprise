@@ -305,6 +305,13 @@ async function createProvisioningApiFixture(context, computeDriver, authenticati
 
   return {
     bootstrapNamespaceIds,
+    async readWork(idempotencyKey) {
+      const result = await pool.query(
+        "SELECT state, reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+        [idempotencyKey],
+      );
+      return result.rows[0];
+    },
     request,
     startWorker,
     stopWorker,
@@ -2047,6 +2054,15 @@ test(
             verbs: ["get", "list", "create", "patch", "update", "delete"],
           },
         },
+        // Final deletion checks routes even when deployment failed before creating them.
+        ...[
+          ["gateway.networking.k8s.io", "httproutes"],
+          ["gateway.envoyproxy.io", "securitypolicies"],
+        ].map(([group, resource]) => ({
+          op: "add",
+          path: "/rules/-",
+          value: { apiGroups: [group], resources: [resource], verbs: ["get", "delete"] },
+        })),
       ]),
     );
     const gatewayRouting = {
@@ -2323,6 +2339,182 @@ test(
         "canonical credentials must not be stored in the Harness namespace",
       );
     }
+
+    // Seed an owned pre-upgrade RWX workspace without altering any supported Agent.
+    // No RWX provisioner is needed: rejection must happen before mounting the claim.
+    const legacyConfiguration = await fixture.request(
+      "POST",
+      `/namespaces/${namespaceOwner.id}/configurations`,
+      {
+        kind: "agent",
+        values: {
+          gateway: body.configuration.values.gateway,
+          agents: body.configuration.values.agents,
+        },
+      },
+    );
+    assert.equal(legacyConfiguration.status, 201, JSON.stringify(legacyConfiguration.body));
+    const legacy = await fixture.request("POST", `/namespaces/${namespaceOwner.id}/agents`, {
+      name: `legacy-rwx-${randomUUID()}`,
+      configurationId: legacyConfiguration.data.id,
+      executionMode: "dedicated",
+      harnessAuth: body.harnessAuth,
+    });
+    assert.equal(legacy.status, 201, JSON.stringify(legacy.body));
+    const legacyPath = `/namespaces/${namespaceOwner.id}/agents/${legacy.data.id}`;
+    const role = await fixture.request("POST", `/namespaces/${namespaceOwner.id}/iam/roles`, {
+      name: `legacy-rwx-secrets-${randomUUID()}`,
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    for (const secret of [modelSecret]) {
+      const grant = await fixture.request(
+        "POST",
+        `/namespaces/${namespaceOwner.id}/iam/access-bindings`,
+        {
+          subjectKind: "identity",
+          subjectId: legacy.data.servicePrincipalId,
+          roleId: role.data.id,
+          resourceKind: "secret",
+          resourceId: secret.data.id,
+        },
+      );
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+    }
+    const credentials = await fixture.request("POST", `${legacyPath}/runtime-credentials`, {});
+    assert.equal(credentials.status, 200, JSON.stringify(credentials.body));
+    const workspaceName = harnessWorkspaceClaimName(legacy.data.id);
+    const gatewayStateName = `gateway-state-${hash(legacy.data.id)}`;
+    const claimDirectory = await mkdtemp(join(tmpdir(), "openclaw-legacy-rwx-"));
+    context.after(() => rm(claimDirectory, { recursive: true, force: true }));
+    for (const [name, namespace, accessMode, storage] of [
+      [workspaceName, placement, "ReadWriteMany", "40Gi"],
+      [gatewayStateName, gatewayPlacement, "ReadWriteOnce", "10Gi"],
+    ]) {
+      const claimPath = join(claimDirectory, `${name}.json`);
+      await writeFile(
+        claimPath,
+        JSON.stringify({
+          apiVersion: "v1",
+          kind: "PersistentVolumeClaim",
+          metadata: {
+            name,
+            namespace,
+            labels: {
+              "app.kubernetes.io/managed-by": "openclaw-enterprise",
+              "openclaw.dev/namespace": namespaceOwner.id,
+              "openclaw.dev/agent": legacy.data.id,
+            },
+            annotations: {
+              "openclaw.dev/namespace-id": namespaceOwner.id,
+              "openclaw.dev/agent-id": legacy.data.id,
+            },
+          },
+          spec: {
+            accessModes: [accessMode],
+            volumeMode: "Filesystem",
+            storageClassName: "local-path",
+            resources: { requests: { storage } },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      await kubectl("apply", "--filename", claimPath);
+    }
+    const originalWorkspace = await resource("persistentvolumeclaim", workspaceName, placement);
+    const originalGatewayState = await resource(
+      "persistentvolumeclaim",
+      gatewayStateName,
+      gatewayPlacement,
+    );
+    // Observe the real Driver failure without replacing its Kubernetes client or behavior.
+    // A generic worker failure alone could otherwise pass for an unrelated configuration error.
+    const prepareRevision = driver.prepareRevision.bind(driver);
+    const preparationFailures = [];
+    const preparation = context.mock.method(driver, "prepareRevision", async (...args) => {
+      try {
+        return await prepareRevision(...args);
+      } catch (error) {
+        if (args[0].agentId === legacy.data.id) {
+          preparationFailures.push(error.message);
+        }
+        throw error;
+      }
+    });
+    const deployment = await fixture.request("POST", `${legacyPath}/deploy`);
+    assert.equal(deployment.status, 202, JSON.stringify(deployment.body));
+    await fixture.startWorker();
+    const failedDeployment = await waitFor("legacy RWX deployment to fail", async () => {
+      const work = await fixture.readWork(`agent_revision:${deployment.data.id}:reconcile`);
+      return work?.state === "failed_permanent" ? work : undefined;
+    });
+    preparation.mock.restore();
+    assert.deepEqual(
+      new Set(preparationFailures),
+      new Set([`Refusing invalid PersistentVolumeClaim ${workspaceName}.`]),
+    );
+    assert.equal(failedDeployment.reason_code, "DEPENDENCY_UNAVAILABLE");
+    const undeployed = await fixture.request("GET", legacyPath);
+    assert.equal(undeployed.status, 200, JSON.stringify(undeployed.body));
+    assert.equal(undeployed.data.activeRevisionId, undefined);
+    assert.equal(await missing("deployment", revisionName(deployment.data), placement), true);
+    assert.equal(await missing("deployment", gatewayName(legacy.data.id), gatewayPlacement), true);
+    assert.equal(
+      (await resource("persistentvolumeclaim", gatewayStateName, gatewayPlacement)).metadata.uid,
+      originalGatewayState.metadata.uid,
+    );
+    const beforeDelete = await resource("persistentvolumeclaim", workspaceName, placement);
+    assert.equal(beforeDelete.metadata.uid, originalWorkspace.metadata.uid);
+    assert.deepEqual(beforeDelete.spec, originalWorkspace.spec);
+
+    const deleting = await fixture.request("DELETE", legacyPath);
+    assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
+    const failedDeletion = await waitFor(
+      "legacy RWX deletion to exhaust its retry budget",
+      async () => {
+        const work = await fixture.readWork(`agent:${legacy.data.id}:reconcile:deleted`);
+        return work?.state === "failed_permanent" ? work : undefined;
+      },
+    );
+    assert.equal(failedDeletion.reason_code, "DEPENDENCY_UNAVAILABLE");
+    await fixture.stopWorker();
+    const retained = await fixture.request("GET", legacyPath);
+    assert.equal(retained.status, 200, JSON.stringify(retained.body));
+    assert.equal(retained.data.status, "deleting");
+    assert.equal(retained.data.desiredRuntimeState, "stopped");
+    const rejectedWorkspace = await resource("persistentvolumeclaim", workspaceName, placement);
+    assert.equal(rejectedWorkspace.metadata.uid, originalWorkspace.metadata.uid);
+    assert.deepEqual(rejectedWorkspace.spec, originalWorkspace.spec);
+    assert.equal(rejectedWorkspace.metadata.deletionTimestamp, undefined);
+    // Final deletion is not atomic: CP state is removed before Harness validation.
+    // This is why the legacy Agent must be discarded with a compatible release.
+    assert.equal(
+      await missing("persistentvolumeclaim", gatewayStateName, gatewayPlacement),
+      true,
+      "Gateway state is removed before final deletion rejects the RWX claim",
+    );
+    assert.equal(
+      await missing("secret", `transport-${hash(legacy.data.id)}`, gatewayPlacement),
+      true,
+    );
+    assert.equal(
+      await missing("secret", `gateway-password-${hash(legacy.data.id)}`, gatewayPlacement),
+      true,
+    );
+    // The unrelated Agent and its canonical credentials are not deleted.
+    assert.equal(
+      (
+        await fixture.request(
+          "GET",
+          `/namespaces/${namespaceOwner.id}/agents/${provisioned.agentId}`,
+        )
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await resource("secret", transportName, gatewayPlacement)).metadata.uid,
+      transport.metadata.uid,
+    );
   },
 );
 
@@ -3110,6 +3302,86 @@ test(
     const persistedAfter = await request("GET", deploymentPath);
     assert.equal(persistedAfter.status, 200, JSON.stringify(persistedAfter.error));
     assert.deepEqual(persistedAfter.data, persistedBefore);
+
+    // Runtime status and container logs for the same exact revision, read through the
+    // regular API with the Installation's Kubernetes credentials. Only Pods carrying
+    // this Agent's and revision's labels are listed and read.
+    const runtimePath = `${deploymentPath}/runtime`;
+    const runningGateway = (observed) => {
+      const source = observed.data?.sources.find(({ id }) => id === "gateway");
+      return source?.pods.find(({ uid }) =>
+        observed.data.pods.some(
+          (pod) =>
+            pod.uid === uid &&
+            pod.containers.some(({ name, state }) => name === "gateway" && state === "running"),
+        ),
+      );
+    };
+    const gatewayPod = await waitFor("a running Gateway container in runtime status", async () => {
+      const observed = await request("GET", runtimePath);
+      return observed.status === 200 ? runningGateway(observed) : undefined;
+    });
+    const runtimeStatus = await request("GET", runtimePath);
+    assert.equal(runtimeStatus.data.revisionId, admitted[0].id);
+    assert.ok(runtimeStatus.data.pods.every(({ name }) => name.length > 0));
+    const logsPath = `${runtimePath}/logs?source=gateway&tailLines=100`;
+    const firstPage = await request("GET", logsPath);
+    assert.equal(firstPage.status, 200, JSON.stringify(firstPage.error));
+    assert.equal(firstPage.data.stream.pod, gatewayPod.name);
+    assert.equal(typeof firstPage.data.cursor, "string");
+    assert.ok(
+      firstPage.data.records.every(
+        (record) => record.type !== "line" || record.contentClass === "operational",
+      ),
+    );
+    const followPage = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&cursor=${encodeURIComponent(firstPage.data.cursor)}`,
+    );
+    assert.equal(followPage.status, 200, JSON.stringify(followPage.error));
+    // One audited view for the first page; the cursor poll is not re-audited.
+    const views = await observerPool.query(
+      `SELECT count(*)::integer AS count FROM occ.audit_events
+       WHERE action = 'openclaw.agents.runtime_logs.view' AND resource_id = $1`,
+      [first.id],
+    );
+    assert.equal(views.rows[0].count, 1);
+    // Replacing the Pod ends the cursor's instance; the next poll labels it.
+    const gatewayNamespace = JSON.parse(
+      await kubectl(
+        "get",
+        "pods",
+        "--all-namespaces",
+        "-l",
+        `openclaw.dev/revision=${admitted[0].id},openclaw.dev/workload-role=gateway`,
+        "-o",
+        "json",
+      ),
+    ).items.find(({ metadata }) => metadata.uid === gatewayPod.uid).metadata.namespace;
+    await kubectl("delete", "pod", gatewayPod.name, "-n", gatewayNamespace, "--wait=false");
+    const replacementGateway = await waitFor(
+      "a replacement Gateway Pod in runtime status",
+      async () => {
+        const observed = await request("GET", runtimePath);
+        const pod = observed.status === 200 ? runningGateway(observed) : undefined;
+        return pod !== undefined && pod.uid !== gatewayPod.uid ? pod : undefined;
+      },
+      180_000,
+    );
+    const replaced = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&cursor=${encodeURIComponent(followPage.data.cursor)}`,
+    );
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.error));
+    assert.equal(replaced.data.records[0].type, "gap");
+    assert.equal(replaced.data.records[0].reason, "stream_replaced");
+    assert.equal(replaced.data.stream.pod, replacementGateway.name);
+    const previousInstance = await request(
+      "GET",
+      `${runtimePath}/logs?source=gateway&pod=${replacementGateway.name}&previous=true`,
+    );
+    assert.equal(previousInstance.status, 200, JSON.stringify(previousInstance.error));
+    assert.equal((await request("GET", runtimePath, undefined, { session: false })).status, 401);
 
     if (runtimeImage !== undefined) {
       const gatewayTarget = kubernetesGatewayNamespaceName(namespaceIds[0]);

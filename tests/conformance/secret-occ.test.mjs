@@ -631,7 +631,8 @@ test("deploying a bound Secret requires both the caller and Agent service princi
       resolveApprovedDevelopmentHarness,
     ),
     {
-      name: "AuthorizationDeniedError",
+      name: "AgentPrincipalAuthorizationError",
+      principalId: agent.servicePrincipalId,
       authorization: { action: "operate", resource: secret.ref },
     },
   );

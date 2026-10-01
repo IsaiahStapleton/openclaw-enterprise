@@ -2,6 +2,9 @@ import { Type } from "typebox";
 
 import {
   AgentParams,
+  AgentId,
+  NamespaceId,
+  SecretId,
   AgentProvisioningParams,
   PresetParams,
   CreatePresetBody,
@@ -21,10 +24,13 @@ import {
   CreateNamespaceBody,
   ProvisionAgentBody,
   CreateSecretBody,
+  AgentCredentialSourceParams,
   CreateCredentialSourceBody,
   CredentialSourceParams,
+  UpdateCredentialSourceBody,
   CreateServiceAccountBody,
   CreateServiceAccountCredentialBody,
+  AgentRuntimeLogsQuery,
   DeploymentParams,
   EmptyQuery,
   IAMAccessBindingParams,
@@ -43,6 +49,7 @@ import {
 } from "./common.ts";
 import {
   AgentListResponse,
+  AgentDeviceAuthorizationResponse,
   AgentModelListResponse,
   AgentPluginCatalogResponse,
   AgentPluginDetailsResponse,
@@ -52,6 +59,8 @@ import {
   PresetListResponse,
   AgentDeploymentStatusResponse,
   AgentDeploymentDiagnosticsResponse,
+  AgentRuntimeResponse,
+  AgentRuntimeLogsResponse,
   AgentProvisioningResponse,
   AgentProvisioningStatusResponse,
   AgentRuntimeCredentialResponse,
@@ -75,6 +84,7 @@ import {
   RepositoryOptionListResponse,
   SecretListResponse,
   CredentialSourceListResponse,
+  CredentialWithdrawalResponse,
   ServiceAccountListResponse,
   ServiceAccountResponse,
   WorkspaceFileResponse,
@@ -83,6 +93,18 @@ import {
 
 const ErrorResponseRef = Type.Ref("ErrorResponse");
 const SecretResponseRef = Type.Ref("SecretResponse");
+const RepositoryOptionsQuery = Type.Object(
+  {
+    descriptionRefs: Type.Optional(
+      Type.String({
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(,[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,19}$",
+        maxLength: 2579,
+        description: "Up to 20 visible repository references to enrich with provider descriptions.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 const CredentialSourceResponseRef = Type.Ref("CredentialSourceResponse");
 
 const readErrors = {
@@ -106,7 +128,136 @@ const mutationErrors = {
   409: ErrorResponseRef,
 } as const;
 
+const runtimeReadErrors = {
+  ...readErrors,
+  429: ErrorResponseRef,
+  501: ErrorResponseRef,
+  504: ErrorResponseRef,
+} as const;
+
 export const occApiRoutes = [
+  {
+    operationId: "startAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/device-authorizations",
+    action: "openclaw.agents.device_authorization.start",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "Experimental: Start a private device login for Agent configuration",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object({ namespaceId: NamespaceId }, { additionalProperties: false }),
+      body: Type.Object(
+        { harnessId: Type.String({ minLength: 1, maxLength: 100 }) },
+        { additionalProperties: false },
+      ),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "pollAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/device-authorizations/:secretId/poll",
+    action: "openclaw.agents.device_authorization.poll",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "Experimental: Complete device login without returning credential material",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      body: Type.Object({}, { additionalProperties: false }),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "cancelAgentDeviceAuthorization",
+    method: "DELETE",
+    path: "/namespaces/:namespaceId/agents/device-authorizations/:secretId",
+    action: "openclaw.agents.device_authorization.cancel",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "Experimental: Discard a local device login without upstream revocation",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      response: { 204: Type.Null(), 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "startSavedAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/device-authorizations",
+    action: "openclaw.agents.device_authorization.start",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Experimental: Start a private device login for Agent configuration",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, agentId: AgentId },
+        { additionalProperties: false },
+      ),
+      body: Type.Object(
+        { harnessId: Type.String({ minLength: 1, maxLength: 100 }) },
+        { additionalProperties: false },
+      ),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "pollSavedAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/device-authorizations/:secretId/poll",
+    action: "openclaw.agents.device_authorization.poll",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Experimental: Complete device login without returning credential material",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, agentId: AgentId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      body: Type.Object({}, { additionalProperties: false }),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "cancelSavedAgentDeviceAuthorization",
+    method: "DELETE",
+    path: "/namespaces/:namespaceId/agents/:agentId/device-authorizations/:secretId",
+    action: "openclaw.agents.device_authorization.cancel",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Experimental: Discard a local device login without upstream revocation",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, agentId: AgentId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      response: { 204: Type.Null(), 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+
   {
     operationId: "createPreset",
     method: "POST",
@@ -667,6 +818,23 @@ export const occApiRoutes = [
     },
   },
   {
+    operationId: "updateCredentialSource",
+    method: "PATCH",
+    path: "/namespaces/:namespaceId/credential-sources/:credentialSourceId",
+    action: "openclaw.credential_sources.update",
+    iamAction: "update",
+    resourceKind: "credential_source",
+    authorizationTarget: "credential_source",
+    summary: "Push current or replacement Secret values to the Credential Gateway copy",
+    tags: ["Credential sources"],
+    schema: {
+      querystring: EmptyQuery,
+      params: CredentialSourceParams,
+      body: UpdateCredentialSourceBody,
+      response: { 200: CredentialSourceResponseRef, ...mutationErrors },
+    },
+  },
+  {
     operationId: "deleteCredentialSource",
     method: "DELETE",
     path: "/namespaces/:namespaceId/credential-sources/:credentialSourceId",
@@ -680,6 +848,38 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: CredentialSourceParams,
       response: { 204: Type.Null(), ...mutationErrors },
+    },
+  },
+  {
+    operationId: "withdrawAgentCredentialSource",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/credential-sources/:credentialSourceId/withdraw",
+    action: "openclaw.agents.credential_sources.withdraw",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Revoke one credential source from an Agent's active revision",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentCredentialSourceParams,
+      response: { 202: CredentialWithdrawalResponse, ...mutationErrors },
+    },
+  },
+  {
+    operationId: "getAgentCredentialWithdrawal",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/credential-sources/:credentialSourceId/withdrawal",
+    action: "openclaw.agents.credential_sources.read",
+    iamAction: "read",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Get the withdrawal state of a credential source for an Agent's active revision",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: AgentCredentialSourceParams,
+      response: { 200: CredentialWithdrawalResponse, ...readErrors },
     },
   },
   {
@@ -964,7 +1164,7 @@ export const occApiRoutes = [
     summary: "List approved repository choices for Agent creation in one Namespace",
     tags: ["Agents"],
     schema: {
-      querystring: EmptyQuery,
+      querystring: RepositoryOptionsQuery,
       params: NamespaceParams,
       response: {
         200: RepositoryOptionListResponse,
@@ -974,6 +1174,27 @@ export const occApiRoutes = [
           description:
             "Check `error.code`: `REPOSITORY_OPTIONS_UNAVAILABLE` means optional repository discovery is unavailable after Namespace lifecycle and Agent create authorization checks. Creation without repository bindings remains available subject to fresh authorization. `DEPENDENCY_UNAVAILABLE` includes IAM and other required dependency failures and does not permit proceeding. Successful discovery returns a data array, including an empty array when no repositories are approved.",
         }),
+      },
+    },
+  },
+  {
+    operationId: "listAgentRepositoryOptions",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/repository-options",
+    action: "openclaw.agents.repository_options.list",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "List approved repository choices for updating one Agent",
+    tags: ["Agents"],
+    schema: {
+      querystring: RepositoryOptionsQuery,
+      params: AgentParams,
+      response: {
+        200: RepositoryOptionListResponse,
+        ...readErrors,
+        409: ErrorResponseRef,
+        503: ErrorResponseRef,
       },
     },
   },
@@ -1274,6 +1495,52 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: DeploymentParams,
       response: { 200: AgentDeploymentDiagnosticsResponse, ...mutationErrors },
+    },
+  },
+  {
+    operationId: "getAgentDeploymentRuntime",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime",
+    action: "openclaw.agent_deployments.runtime.read",
+    iamAction: "operate",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_runtime",
+    summary: "Read Pod status, restarts, Events and log sources for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: EmptyQuery,
+      params: DeploymentParams,
+      response: { 200: AgentRuntimeResponse, ...runtimeReadErrors },
+    },
+  },
+  {
+    operationId: "getAgentDeploymentRuntimeLogs",
+    method: "GET",
+    path: "/namespaces/:namespaceId/agents/:agentId/deployments/:deploymentId/runtime/logs",
+    action: "openclaw.agents.runtime_logs.view",
+    iamAction: "read_logs",
+    resourceKind: "agent",
+    authorizationTarget: "agent_deployment_runtime_logs",
+    summary: "Read one bounded, redacted page of container output for one exact Agent revision",
+    tags: ["Agent deployments"],
+    schema: {
+      querystring: AgentRuntimeLogsQuery,
+      params: DeploymentParams,
+      response: {
+        200: {
+          description: "One page of records, or a text/plain attachment when `download=true`",
+          content: {
+            "application/json": { schema: AgentRuntimeLogsResponse },
+            "text/plain": {
+              schema: Type.String({
+                description:
+                  "The same sanitized records as the JSON page, one per line, for `download=true`.",
+              }),
+            },
+          },
+        },
+        ...runtimeReadErrors,
+      },
     },
   },
 ] as const;

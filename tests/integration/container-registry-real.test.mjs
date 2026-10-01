@@ -171,7 +171,7 @@ test(
     await writeFile(
       preload,
       `
-const repo = { full_name: "openclaw/openclaw-enterprise", private: true, default_branch: "main" };
+const repo = { full_name: "openclaw/openclaw-enterprise", private: false, default_branch: "main" };
 const sha = ${JSON.stringify(sourceSha)};
 globalThis.fetch = async (url) => {
   const path = new URL(url).pathname;
@@ -183,7 +183,7 @@ globalThis.fetch = async (url) => {
   if (path.endsWith("/environments/container-publish")) return Response.json({ name: "container-publish", can_admins_bypass: false, deployment_branch_policy: { custom_branch_policies: true, protected_branches: false } });
   if (path.endsWith("/deployment-branch-policies")) return Response.json({ branch_policies: [{ name: "main", type: "branch" }] });
   if (path.endsWith("/versions")) return Response.json([]);
-  if (path.includes("/packages/container/")) return Response.json({ name: path.split("/").at(-1), package_type: "container", visibility: "private" });
+  if (path.includes("/packages/container/")) return Response.json({ name: path.split("/").at(-1), package_type: "container", visibility: "public" });
   throw new Error("Unexpected metadata request " + path);
 };\n`,
     );

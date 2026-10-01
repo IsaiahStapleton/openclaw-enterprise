@@ -1,7 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
@@ -91,7 +90,7 @@ const secretRef = (name, key) => ({ secretKeyRef: { name, key } });
 
 /**
  * The API Pod's sign-in environment rendered from deploy/examples/production/values.yaml:
- * no OCC_AUTH_GITHUB_*, no trusted proxy. password-default-chart.test.mjs asserts the
+ * no OCC_AUTH_GITHUB_*, no trusted proxy. sign-in-chart-parity.test.mjs asserts the
  * chart renders exactly these OCC_AUTH_* and OCC_AGENT_NATIVE_ADMIN_* entries.
  */
 export const defaultInstallSettings = Object.freeze({
@@ -148,6 +147,50 @@ export function googleUpgradeSettings(recoveryUserId, allowedDomains = []) {
     ...(allowedDomains.length === 0
       ? {}
       : { OCC_AUTH_GOOGLE_ALLOWED_DOMAINS: allowedDomains.join(",") }),
+    OCC_AUTH_GITHUB_RECOVERY_USER_ID: recoveryUserId,
+    OCC_AGENT_NATIVE_ADMIN_ENABLED: "false",
+    OCC_GATEWAY_API_KEY_PATH: gatewayApiKeyPath,
+  });
+}
+
+/**
+ * An Auth0-shaped OIDC issuer for the fixtures: the trailing slash is part of `iss`, and all
+ * four URLs share its host, as the parser and chart require.
+ */
+export const fixtureOidcIssuer = Object.freeze({
+  issuer: "https://tenant.idp.example.test/",
+  authorizationUrl: "https://tenant.idp.example.test/authorize",
+  tokenUrl: "https://tenant.idp.example.test/oauth/token",
+  jwksUrl: "https://tenant.idp.example.test/.well-known/jwks.json",
+});
+
+/** The example values plus generic OIDC sign-in, the OIDC counterpart of googleUpgradeValues. */
+export function oidcUpgradeValues(recoveryUserId, issuer = fixtureOidcIssuer, extra = {}) {
+  return {
+    "auth.oidc.enabled": "true",
+    "auth.oidc.issuer": issuer.issuer,
+    "auth.oidc.authorizationUrl": issuer.authorizationUrl,
+    "auth.oidc.tokenUrl": issuer.tokenUrl,
+    "auth.oidc.jwksUrl": issuer.jwksUrl,
+    ...Object.fromEntries(Object.entries(extra).map(([key, value]) => [`auth.oidc.${key}`, value])),
+    "auth.recoveryUserId": recoveryUserId,
+    "agentNativeAdmin.enabled": "false",
+  };
+}
+
+/** The API Pod's settings for oidcUpgradeValues. The recovery name is shared with GitHub. */
+export function oidcUpgradeSettings(recoveryUserId, issuer = fixtureOidcIssuer, extra = {}) {
+  return Object.freeze({
+    OCC_AUTH_SECRET: secretRef("occ-auth", "secret"),
+    OCC_AUTH_BASE_URL: consoleOrigin,
+    OCC_AUTH_OIDC_ISSUER: issuer.issuer,
+    OCC_AUTH_OIDC_AUTHORIZATION_URL: issuer.authorizationUrl,
+    OCC_AUTH_OIDC_TOKEN_URL: issuer.tokenUrl,
+    OCC_AUTH_OIDC_JWKS_URL: issuer.jwksUrl,
+    OCC_AUTH_OIDC_CLIENT_ID: secretRef("occ-oidc-login", "client-id"),
+    OCC_AUTH_OIDC_CLIENT_SECRET: secretRef("occ-oidc-login", "client-secret"),
+    ...(extra.tokenAuth === undefined ? {} : { OCC_AUTH_OIDC_TOKEN_AUTH: extra.tokenAuth }),
+    ...(extra.displayName === undefined ? {} : { OCC_AUTH_OIDC_DISPLAY_NAME: extra.displayName }),
     OCC_AUTH_GITHUB_RECOVERY_USER_ID: recoveryUserId,
     OCC_AGENT_NATIVE_ADMIN_ENABLED: "false",
     OCC_GATEWAY_API_KEY_PATH: gatewayApiKeyPath,
@@ -527,6 +570,160 @@ export async function googleSignIn(
   return { start, callback, attemptId, url, state, bindingCookie };
 }
 
+/**
+ * A local stand-in for one OIDC issuer's token and JWKS URLs (`fixtureOidcIssuer` by
+ * default). Only fetches to the issuer's origin are answered here. It plays the IdP the
+ * way fakeGoogle plays Google: `authorize(url, options)` captures the authorization
+ * request and returns a one-use code for `subject` (`codeLength` pads it, as Entra's long
+ * codes do); /token checks the client credentials (post or basic, per `tokenAuth`), code,
+ * redirect URI and S256 verifier, then returns an RS256 ID token for `issuer.issuer`
+ * echoing the nonce. Per-code `claims` override ID-token claims; `key: "foreign"` signs
+ * with an unpublished key. `rotate()` replaces the published key. `issuer` may be
+ * reassigned to model an issuer change, and `tokenAuth`
+ * to switch the credential method. Modes: "up" and "error" (503). It proves OCE
+ * against its own reading of OIDC, not any IdP's behaviour.
+ */
+export function fakeOidc(
+  t,
+  { clientId, clientSecret, issuer = fixtureOidcIssuer, tokenAuth = "client_secret_post" } = {},
+) {
+  const keyPair = (kid) => {
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const { n, e } = publicKey.export({ format: "jwk" });
+    return { kid, privateKey, jwk: { kid, kty: "RSA", alg: "RS256", use: "sig", n, e } };
+  };
+  let generation = 0;
+  let key = keyPair(`fixture-oidc-kid-${generation}`);
+  const foreign = keyPair("fixture-oidc-foreign");
+  const codes = new Map();
+  const fixture = {
+    mode: "up",
+    requests: 0,
+    issuer,
+    tokenAuth,
+    authorizations: [],
+    tokens: [],
+    get jwks() {
+      return { keys: [key.jwk] };
+    },
+    rotate() {
+      generation += 1;
+      key = keyPair(`fixture-oidc-kid-${generation}`);
+    },
+    authorize(url, { subject, claims = {}, key: signer = "published", codeLength = 0 }) {
+      const request = Object.fromEntries(new URL(url).searchParams);
+      fixture.authorizations.push(request);
+      const prefix = `fixture-oidc-code-${randomBytes(12).toString("base64url")}`;
+      const code = prefix.padEnd(codeLength, "c");
+      codes.set(code, { request, subject, claims, signer, key });
+      return code;
+    },
+  };
+  function idToken({ request, subject, claims, signer, key: issuedWith }) {
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iss: fixture.issuer.issuer,
+      aud: clientId,
+      sub: subject,
+      nonce: request.nonce,
+      iat: now - 5,
+      exp: now + 3600,
+      ...claims,
+    };
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const used = signer === "foreign" ? foreign : issuedWith;
+    const input = `${encode({ alg: "RS256", kid: used.kid, typ: "JWT" })}.${encode(payload)}`;
+    return `${input}.${sign("sha256", Buffer.from(input), used.privateKey).toString("base64url")}`;
+  }
+  const json = (status, body) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  async function answer(request) {
+    fixture.requests += 1;
+    if (fixture.mode === "error") {
+      return json(503, {});
+    }
+    const url = new URL(request.url).href;
+    if (url === fixture.issuer.jwksUrl) {
+      return request.method === "GET" ? json(200, fixture.jwks) : json(405, {});
+    }
+    if (url !== fixture.issuer.tokenUrl) {
+      return json(404, {});
+    }
+    const form = new URLSearchParams(await request.text());
+    const basic = /^Basic (.+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
+    const [basicId, basicSecret] =
+      basic === undefined
+        ? []
+        : Buffer.from(basic, "base64").toString("utf8").split(":").map(decodeURIComponent);
+    const credentials =
+      fixture.tokenAuth === "client_secret_basic"
+        ? !form.has("client_secret") && basicId === clientId && basicSecret === clientSecret
+        : basic === undefined &&
+          form.get("client_id") === clientId &&
+          form.get("client_secret") === clientSecret;
+    const grant = codes.get(form.get("code") ?? "");
+    codes.delete(form.get("code") ?? "");
+    const challenge = createHash("sha256")
+      .update(form.get("code_verifier") ?? "")
+      .digest("base64url");
+    fixture.tokens.push(Object.fromEntries(form));
+    if (
+      request.method !== "POST" ||
+      form.get("grant_type") !== "authorization_code" ||
+      !credentials ||
+      grant === undefined ||
+      grant.request.client_id !== clientId ||
+      grant.request.scope !== "openid" ||
+      grant.request.code_challenge_method !== "S256" ||
+      grant.request.code_challenge !== challenge ||
+      form.get("redirect_uri") !== grant.request.redirect_uri
+    ) {
+      return json(400, { error: "invalid_grant" });
+    }
+    return json(200, {
+      access_token: `fixture-oidc-access-${randomBytes(12).toString("base64url")}`,
+      token_type: "Bearer",
+      expires_in: 3600,
+      id_token: idToken(grant),
+    });
+  }
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === new URL(fixture.issuer.issuer).origin) {
+      return answer(new Request(input, init));
+    }
+    return originalFetch(input, init);
+  });
+  return fixture;
+}
+
+/** Starts OIDC sign-in, visits the fake IdP and completes the callback, from one address. */
+export async function oidcSignIn(app, origin, idp, authorization, remoteAddress = "192.0.2.70") {
+  const start = await app.inject({
+    method: "POST",
+    url: "/api/auth/providers/oidc/start",
+    remoteAddress,
+    headers: { origin },
+  });
+  if (start.statusCode !== 200) {
+    throw new Error(`OIDC start failed with ${start.statusCode}: ${start.body}`);
+  }
+  const { url, attemptId } = start.json().data;
+  const state = new URL(url).searchParams.get("state");
+  const code = idp.authorize(url, authorization);
+  const bindingCookie = cookieHeaderFromSetCookie(start.headers["set-cookie"]);
+  const callback = await app.inject({
+    url: `/api/auth/providers/oidc/callback?state=${state}&code=${code}`,
+    remoteAddress,
+    headers: { cookie: bindingCookie },
+  });
+  return { start, callback, attemptId, url, state, bindingCookie };
+}
+
 /** The guarded account read an administrator uses for expectedVersion. */
 export async function readAccount(app, headers, userId) {
   const response = await app.inject({ url: `/api/auth/accounts/${userId}`, headers });
@@ -536,83 +733,45 @@ export async function readAccount(app, headers, userId) {
   return response.json().data;
 }
 
-async function lockWaiters(pool) {
-  return (
-    await pool.query(
-      `SELECT count(*)::int AS count FROM pg_stat_activity
-       WHERE datname = current_database() AND wait_event_type = 'Lock'`,
-    )
-  ).rows[0].count;
-}
-
 /**
- * Proves which account holds the reserved password lane on one controller: four password
- * checks held on locked user rows fill the shared lane, so a fresh account and `former`
- * are refused with 429 while `holder` is still admitted and signs in once the rows unlock.
+ * Proves which accounts keep a checkable password once strangers spend their email's budget.
+ * Wrong passwords spend `holder`'s, `former`'s and a fresh email's budget until each is
+ * refused with 429 and Retry-After. Then the correct password of `holder` (the recovery
+ * account) still signs in, slowed; `former` does too only while it administers the
+ * Installation; and the fresh email is refused like any other spent email, account or not.
  */
-export async function assertReservedLane(app, pool, { origin, holder, former, label }) {
-  const fillers = (
-    await pool.query(
-      `INSERT INTO occ."user" (id, name, email, email_verified, created_at, updated_at)
-       SELECT 'lane-' || $1 || '-' || n, 'Lane filler', 'lane-' || $1 || '-' || n || '@example.test',
-              true, now(), now()
-       FROM generate_series(1, 2) AS n RETURNING id, email`,
-      [label],
-    )
-  ).rows;
+export async function assertReservedLane(app, { origin, holder, former, label }) {
   const address = clientAddresses("10.77");
-  const blocker = await pool.connect();
-  let open = false;
-  async function waitForLockWaiters(count, settled = () => false) {
-    const deadline = performance.now() + 10_000;
-    while (!settled() && (await lockWaiters(pool)) < count) {
-      if (performance.now() > deadline) {
-        throw new Error(`Expected ${count} password checks to be held.`);
+  const fresh = { email: `lane-${label}-fresh@example.test`, password: holder.password };
+  async function spend(account) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await passwordSignIn(
+        app,
+        origin,
+        { email: account.email, password: `${label}-lane-wrong-password` },
+        address(),
+      );
+      if (response.statusCode === 429) {
+        if (!(Number(response.headers["retry-after"]) >= 1)) {
+          throw new Error("A refused password sign-in must carry Retry-After.");
+        }
+        return;
       }
-      await delay(20);
+      if (response.statusCode !== 401) {
+        throw new Error(`Expected 401 or 429, got ${response.statusCode}: ${response.body}`);
+      }
     }
+    throw new Error(`The ${account.email} budget was never spent.`);
   }
-  try {
-    await blocker.query("BEGIN");
-    open = true;
-    await blocker.query('SELECT id FROM occ."user" WHERE id = ANY($1) FOR UPDATE', [
-      [...fillers.map((filler) => filler.id), holder.id],
-    ]);
-    // Two per filler email and one per address stay inside every per-key budget.
-    const held = fillers.flatMap((filler) => [
-      passwordSignIn(app, origin, { email: filler.email, password: holder.password }, address()),
-      passwordSignIn(app, origin, { email: filler.email, password: holder.password }, address()),
-    ]);
-    await waitForLockWaiters(4);
-    const fresh = await passwordSignIn(
-      app,
-      origin,
-      { email: `lane-${label}-fresh@example.test`, password: holder.password },
-      address(),
-    );
-    const refusedFormer = await passwordSignIn(app, origin, former, address());
-    let holderSettled = false;
-    const admitted = passwordSignIn(app, origin, holder, address()).finally(() => {
-      holderSettled = true;
-    });
-    // An admitted holder waits on its locked row; a refused one settles at once.
-    await waitForLockWaiters(5, () => holderSettled);
-    await blocker.query("COMMIT");
-    open = false;
-    const heldStatuses = (await Promise.all(held)).map(({ statusCode }) => statusCode);
-    return {
-      fresh: fresh.statusCode,
-      former: refusedFormer.statusCode,
-      holder: (await admitted).statusCode,
-      held: heldStatuses,
-    };
-  } finally {
-    if (open) {
-      await blocker.query("ROLLBACK");
-    }
-    blocker.release();
-    await pool.query('DELETE FROM occ."user" WHERE id = ANY($1)', [
-      fillers.map((filler) => filler.id),
-    ]);
+  for (const account of [holder, former, fresh]) {
+    await spend(account);
   }
+  const [holderResponse, formerResponse, freshResponse] = await Promise.all(
+    [holder, former, fresh].map((account) => passwordSignIn(app, origin, account, address())),
+  );
+  return {
+    fresh: freshResponse.statusCode,
+    former: formerResponse.statusCode,
+    holder: holderResponse.statusCode,
+  };
 }

@@ -168,7 +168,7 @@ async function waitForRoutePhase(promise, description, release, signal, describe
   }
 }
 
-async function holdRoute(t, page, pattern, continueRoute) {
+async function holdRoute(t, page, pattern, continueRoute, { fetchBeforeHold = true } = {}) {
   const releaseGate = deferred();
   const captured = deferred();
   const completed = deferred();
@@ -198,12 +198,14 @@ async function holdRoute(t, page, pattern, continueRoute) {
   await page.route(pattern, async (route) => {
     intercepted += 1;
     let response;
-    try {
-      response = await route.fetch();
-      noteBrowserEvent(page, `held route ${pattern} upstream status ${response.status()}`);
-    } catch (error) {
-      response = undefined;
-      noteBrowserEvent(page, `held route ${pattern} upstream fetch failed: ${error.message}`);
+    if (fetchBeforeHold) {
+      try {
+        response = await route.fetch();
+        noteBrowserEvent(page, `held route ${pattern} upstream status ${response.status()}`);
+      } catch (error) {
+        response = undefined;
+        noteBrowserEvent(page, `held route ${pattern} upstream fetch failed: ${error.message}`);
+      }
     }
     captured.resolve();
     if (!released && releaseWatchdog === undefined) {
@@ -421,6 +423,10 @@ test("console shows the external observability link only to Installation adminis
   await page.getByRole("list", { name: "Namespaces" }).getByText("Observability access").waitFor();
   await link.waitFor();
   assert.equal(probes, 1);
+  await page.reload();
+  await link.waitFor();
+  assert.equal(await link.getAttribute("href"), url);
+  assert.equal(probes, 1);
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Logout" }).click();
@@ -435,6 +441,11 @@ test("console shows the external observability link only to Installation adminis
   );
   await page.getByRole("link", { name: "Agents" }).click();
   await namespacesRead;
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(probes, 2);
+  // A reload in the same tab reuses the settled answer for this session owner.
+  await page.reload();
   await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   assert.equal(probes, 2);
@@ -645,9 +656,9 @@ test("Refresh and focus restoration retain rows until fresh data arrives", async
   await login(page, fixture, `/console/agents?namespace=${namespace.id}`);
   await page.getByText("Existing background Agent").waitFor();
   for (const trigger of ["Refresh", "focus", "visibilitychange"]) {
-    const pending = await holdRoute(t, page, "**/api/auth/session", (route, response) =>
-      response ? route.fulfill({ response }) : route.continue(),
-    );
+    const pending = await holdRoute(t, page, "**/api/auth/session", (route) => route.continue(), {
+      fetchBeforeHold: false,
+    });
     t.after(() => pending.release());
     await fixture.createAgent(namespace.id, `Added during ${trigger}`);
     if (trigger === "Refresh") {
@@ -858,6 +869,136 @@ test("Google sign-in accepts only a Google authorization URL and confirms throug
 
   await page.goto(`${fixture.origin}/console/?authError=google`);
   await page.getByText("Could not sign in with Google. Try again or use your password.").waitFor();
+});
+
+test("OIDC sign-in uses the discovered label and accepts only the discovered endpoint", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  const requests = [];
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  const envelope = (data) => ({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ data, meta: { requestId: "browser-oidc" } }),
+  });
+  const endpoint = "https://sso.example.test/realms/acme/protocol/openid-connect/auth";
+  let discovery = {
+    github: false,
+    google: false,
+    oidc: true,
+    oidcSignIn: { label: "Acme SSO", authorizationUrl: endpoint },
+    sessionBinding: true,
+  };
+  // This controller has no OIDC configuration; discovery and start are modelled here.
+  await page.route("**/api/auth/providers", (route) => route.fulfill(envelope(discovery)));
+  const attemptId = "c".repeat(43);
+  const starts = [
+    "https://sso.example.test/realms/other/protocol/openid-connect/auth",
+    `${endpoint}?client_id=fixture&state=s`,
+  ];
+  await page.route("**/api/auth/providers/oidc/start", (route) =>
+    route.fulfill(envelope({ url: starts.shift(), attemptId })),
+  );
+  // Models the IdP redirecting back to Console after the callback set its cookies.
+  await page.route("https://sso.example.test/**", (route) =>
+    route.fulfill({ status: 302, headers: { location: `${fixture.origin}/console/` } }),
+  );
+  await page.goto(`${fixture.origin}/console/login`);
+  const oidc = page.getByRole("button", { name: "Continue with Acme SSO" });
+  await oidc.click();
+  await page
+    .getByText("Acme SSO sign-in is unavailable. Try again or use your password.")
+    .waitFor();
+  assert.equal(await page.getByRole("button", { name: "Continue with Google" }).count(), 0);
+
+  const result = page.waitForResponse(
+    (candidate) => new URL(candidate.url()).pathname === "/api/auth/providers/oidc/result",
+  );
+  await oidc.click();
+  const refused = await result;
+  assert.equal(refused.request().postDataJSON().attemptId, attemptId);
+  assert.equal(refused.status(), 403);
+  await page
+    .getByText("Could not sign in with Acme SSO. Try again or use your password.")
+    .waitFor();
+  assert.equal(requests.includes("/api/auth/providers/google/result"), false);
+
+  // A non-HTTPS discovered endpoint offers no OIDC button at all.
+  discovery = {
+    ...discovery,
+    oidcSignIn: { label: "Acme SSO", authorizationUrl: "http://sso.example.test/auth" },
+  };
+  await page.goto(`${fixture.origin}/console/login`);
+  await page.getByLabel("Username").waitFor();
+  await expectNoText(page, /Continue with Acme SSO/);
+});
+
+test("recovery-only password sign-in keeps the form behind Recovery sign-in", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  // This controller admits every password; discovery models OCC_AUTH_PASSWORD_SIGN_IN.
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { github: true, google: false, password: false, sessionBinding: true },
+        meta: { requestId: "browser-recovery-only" },
+      }),
+    }),
+  );
+  await page.route("**/api/auth/providers/github/start", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+  await page.goto(`${fixture.origin}/console/?authError=github`);
+  const recovery = page.getByRole("button", { name: "Recovery sign-in" });
+  await recovery.waitFor();
+  // Without a password to fall back on, the provider error points to an administrator.
+  await page
+    .getByText(
+      "Could not sign in with GitHub. Try again, or ask an administrator to attach your GitHub identity to your account.",
+    )
+    .waitFor();
+  assert.equal(await page.getByLabel("Password").isVisible(), false);
+  await page.getByRole("button", { name: "Continue with GitHub" }).click();
+  await page.getByText("GitHub sign-in is unavailable. Please try again later.").waitFor();
+
+  await recovery.click();
+  assert.equal(await recovery.isVisible(), false);
+  await page.getByText("Use the recovery account's email").waitFor();
+  await page.getByLabel("Username").fill(fixture.credentials.email);
+  await page.getByLabel("Password").fill("not-the-recovery-password");
+  await page.getByRole("button", { name: "Login" }).click();
+  await page
+    .getByText(
+      "Could not sign in. Only the recovery account can use a password; other accounts continue with their external sign-in.",
+    )
+    .waitFor();
+  await page.getByLabel("Password").fill(fixture.credentials.password);
+  await page.getByRole("button", { name: "Login" }).click();
+  await page.waitForURL(/\/console\/agents/);
+});
+
+test("password sign-in stays visible unless discovery reports it recovery-only", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { github: true, google: false, sessionBinding: true },
+        meta: { requestId: "browser-password-default" },
+      }),
+    }),
+  );
+  await page.goto(`${fixture.origin}/console/login`);
+  await page.getByRole("button", { name: "Continue with GitHub" }).waitFor();
+  assert.equal(await page.getByLabel("Password").isVisible(), true);
+  assert.equal(await page.getByRole("button", { name: "Recovery sign-in" }).isVisible(), false);
 });
 
 test("known Namespace revocation invalidates a cached global collection with another selection", async (t) => {

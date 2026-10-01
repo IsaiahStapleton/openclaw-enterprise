@@ -18,8 +18,7 @@ The trusted Installation YAML can include bundled Presets and JSON files:
 presets:
   includeDefaults: true
   files:
-    - presets/devday.json
-    - presets/devday-partners.json
+    - presets/swe-preset.json
 ```
 
 `includeDefaults: true` seeds `default-codex`, **Standard Codex**, and **Standard OpenClaw**.
@@ -32,12 +31,14 @@ not watched. API startup adds missing defaults to ready or provisioning Namespac
 including the bootstrap Namespace; new Namespaces receive them atomically. Startup
 skips failed or deleting Namespaces.
 
-Each copy is a Namespace-owned Preset with its own ID and normal permissions.
-Matching names are preserved without comparing or overwriting templates. Startup
-can restore a deleted or renamed default while enabled; bundle updates do not
-replace existing copies. Removing the files and disabling `includeDefaults` stops
-seeding without changing saved Presets or Agents. Restart the API after changing
-the YAML, keeping the worker configuration in sync.
+Each copy is an ordinary Namespace-owned Preset with its own ID and normal
+read/update/delete permissions. Matching names are preserved without comparing
+or overwriting their templates. Startup can restore a deleted or renamed
+default while enabled; bundle updates do not replace existing copies. Removing the files and disabling
+`includeDefaults` stops seeding and leaves saved Presets and Agents unchanged.
+Namespace deletion removes copies that still match the current default by name
+and template; edited copies block it with `409 NAMESPACE_NOT_EMPTY`.
+Restart the API after changing the YAML, keeping the worker configuration in sync.
 
 Startup selects a persisted Principal authorized to administer the Installation
 and requires `preset:create` wherever defaults are missing. Namespace
@@ -48,7 +49,7 @@ values; seeding does not create workloads or credentials.
 
 ## Configuration inventory
 
-These are the seven shipped JSON definitions in `deploy/presets/`. Installed
+These are the four shipped JSON definitions in `deploy/presets/`. Installed
 same-name copies can differ; read the Namespace Preset and the Agent's saved
 Configuration to inspect actual settings. Presets contain OpenClaw configuration,
 including the Codex plugin's app-server options; none supplies a standalone
@@ -59,10 +60,7 @@ Codex `config.toml` or a reasoning-effort override.
 | [`default-codex`](../../deploy/presets/default-codex.json)                              | Dedicated; choose name, model, and API key or service account token in the form | Local/LAN; Control UI enabled for loopback origins; Chat Completions enabled; browser/web/elevated settings omitted | Guardian WebSocket; `on-request`; `read-only`; reviewer and network proxy omitted                     |
 | [**Standard Codex**](../../deploy/presets/standard-codex.json)                          | Dedicated; name/model variables and masked API key                              | Standard gateway/tool policy below; cached Codex search                                                             | Guardian WebSocket; `on-request`; `workspace-write`; reviewer `user`; limited workspace network proxy |
 | [**Standard OpenClaw**](../../deploy/presets/standard-openclaw.json)                    | Embedded; name/model variables and masked API key                               | Standard gateway/tool policy; web search enabled without the Codex override                                         | None: native OpenClaw, no Codex plugin                                                                |
-| [`SWE Agent` / `devday.json`](../../deploy/presets/devday.json)                         | Dedicated; name/model variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
-| [`Q&A Agent` / `devday-qa.json`](../../deploy/presets/devday-qa.json)                   | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
-| [`Oncall Agent` / `devday-oncall.json`](../../deploy/presets/devday-oncall.json)        | Same as SWE Agent                                                               | Same as SWE Agent, including its instructions                                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
-| [`Community Agent` / `devday-partners.json`](../../deploy/presets/devday-partners.json) | Same model/auth defaults as SWE Agent                                           | Codex; Control UI enabled; community Slack channels and instructions; DMs disabled                                  | Same as Standard Codex, except `approvalPolicy: never`                                                |
+| [`SWE Agent` / `swe-preset.json`](../../deploy/presets/swe-preset.json)                 | Dedicated; name/model variables; model defaults to `gpt-6-astra`; `codex_pat`   | Standard Codex settings plus Slack and workspace instructions                                                       | Same as Standard Codex, except `approvalPolicy: never`                                                |
 
 ### Plain console default
 
@@ -109,54 +107,31 @@ The [Harness contract](harness-execution.md) and
 [standard policy boundary](../guides/topics/standard-codex-preset.md) explain those
 limits. A saved template does not prove live Codex policy enforcement.
 
-## DevDay custom presets
+## SWE Agent preset
 
-[`SWE Agent`](../../deploy/presets/devday.json) is based on **Standard Codex**,
-uses `approvalPolicy: never`, and adds Slack Socket Mode.
+[`SWE Agent`](../../deploy/presets/swe-preset.json) copies **Standard Codex**
+and adds Slack Socket Mode and workspace instructions for software engineering.
 It uses the Codex harness with **Service Accounts** authentication (`codex_pat`).
-All four DevDay presets expose only `name` and `model` variables; `model` defaults
-to `gpt-6-astra` and remains editable. After **Use Preset**, choose an existing service account Secret or
+The `model` variable defaults to `gpt-6-astra` and remains editable; its rendered
+model reference is `codex/gpt-6-astra`. The preset exposes only `name` and `model`
+variables. After **Use Preset**, choose an existing service account Secret or
 **Create new Secret...** before creating the Agent.
-DevDay files are opt-in through `presets.files`; `includeDefaults` does not load them.
 
-[`Community Agent`](../../deploy/presets/devday-partners.json) uses the SWE
-runtime with Control UI enabled and community instructions. It checks Linear
-when available and uses other sources if access fails. Direct messages are disabled.
+Load a copy beside your YAML as in the example above, or reference the shipped
+container file at `/app/deploy/presets/swe-preset.json`. It is opt-in and is not
+added by `includeDefaults` alone.
 
-[`Q&A Agent`](../../deploy/presets/devday-qa.json) and
-[`Oncall Agent`](../../deploy/presets/devday-oncall.json) copy the SWE Agent
-template, including Slack and workspace instructions. Uncomment desired files in
-the example Installation YAML.
+In the Console, choose **SWE Agent**, fill its variables, then use **Edit Slack**
+to configure channels, allowed senders, and Slack app/bot Secrets. No channels or
+credentials are stored in the preset.
 
-SWE Agent, Q&A Agent, and Oncall Agent prefill these channels:
-
-| Channel            | ID            |
-| ------------------ | ------------- |
-| oce-feedback       | `C0C49E7CS4A` |
-| oce-team           | `C0C43A2QA11` |
-| oce-feedback-test  | `C0C569NN9ME` |
-| oce-team-test      | `C0C4A0JH2BG` |
-| oce-community      | `C0C5KF0JLSC` |
-| oce-community-test | `C0C5KF0DWLQ` |
-
-Community Agent prefills its own channel list:
-
-| Channel            | ID            |
-| ------------------ | ------------- |
-| oce-team           | `C0C43A2QA11` |
-| oce-team-test      | `C0C4A0JH2BG` |
-| oce-community      | `C0C5KF0JLSC` |
-| oce-community-test | `C0C5KF0DWLQ` |
-
-In the Console, choose **SWE Agent**, fill its variables, and use **Edit Slack** to
-choose allowed senders and bind Slack app/bot Secrets. Presets allow all channel
-members (`users: ["*"]`) without requiring mentions. Narrow the sender list if needed.
-Files contain no credentials. Workspace instructions in
-`template.agent.initialWorkspaceFiles.AGENTS.md` include draft decisions.
-`{{vars.name}}` expands in workspace-instruction self-references when applying the
-Preset; later name edits do not re-render the copied file. To revise them, update
-that content and the existing Namespace Preset through the API. Restarting with a
-changed JSON file preserves installed same-name copies.
+The preset includes the supplied instructions in
+`template.agent.initialWorkspaceFiles.AGENTS.md`, including their draft decisions.
+It uses `{{vars.name}}` in the heading, opening sentence, and other self-references,
+filled from the entered `name` when applying the Preset. Later name edits do not
+re-render the copied file. To revise the instructions, update that content and the
+existing Namespace Preset through the API. Restarting with a changed JSON file
+preserves already-installed same-name copies.
 
 ## Contents
 
