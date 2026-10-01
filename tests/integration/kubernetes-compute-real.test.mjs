@@ -2,7 +2,7 @@ import { sha256Hex } from "../../packages/utils/src/index.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -700,6 +700,126 @@ async function assertDeniedTraffic(description, namespaceName, podName, operatio
     }
     assert.equal(error.code, 1, `${description} must be denied by enforced NetworkPolicies`);
   }
+}
+
+async function createDnsTrafficFixture(context, peer) {
+  const namespace = peer.namespace;
+  const name = `dns-traffic-${hash(randomUUID())}`;
+  const directory = await mkdtemp(join(tmpdir(), "oce-dns-traffic-"));
+  const manifestPath = join(directory, "resources.json");
+  const image = (await resource("deployment", "coredns", "kube-system")).spec.template.spec
+    .containers[0].image;
+  const dnsService = await resource("service", "kube-dns", namespace);
+  assert.equal(dnsService.spec.publishNotReadyAddresses ?? false, false);
+  const items = [
+    {
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: { name, namespace },
+      data: {
+        Corefile: [5353, 5354]
+          .map(
+            (port) => `.:${port} {\n  hosts {\n    192.0.2.53 openshift-dns.example.test\n  }\n}`,
+          )
+          .join("\n"),
+      },
+    },
+    ...["selected", "unselected", "control"].map((role) => ({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name: `${name}-${role}`,
+        namespace,
+        labels: role === "selected" ? peer.podLabels : { "app.kubernetes.io/name": name },
+      },
+      spec: {
+        automountServiceAccountToken: false,
+        securityContext: {
+          runAsNonRoot: true,
+          runAsUser: 1000,
+          seccompProfile: { type: "RuntimeDefault" },
+        },
+        ...(role === "control"
+          ? {}
+          : {
+              // Keep these selected DNS peers out of the cluster DNS Service's ready endpoints.
+              // Their container readiness still verifies that the DNS listener is available.
+              readinessGates: [{ conditionType: "openclaw.dev/dns-fixture" }],
+              volumes: [{ name: "config", configMap: { name } }],
+            }),
+        containers: [
+          {
+            name: role,
+            image: role === "control" ? fixtureImage : image,
+            command:
+              role === "control"
+                ? ["node", "-e", "setInterval(() => {}, 1000)"]
+                : ["/coredns", "-conf", "/config/Corefile"],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: true,
+              capabilities: {
+                drop: ["ALL"],
+                // CoreDNS's binary has this file capability even when listening above port 1024.
+                ...(role === "control" ? {} : { add: ["NET_BIND_SERVICE"] }),
+              },
+            },
+            resources: {
+              requests: { cpu: "10m", memory: "32Mi" },
+              limits: { cpu: "100m", memory: "64Mi" },
+            },
+            ...(role === "control"
+              ? {}
+              : {
+                  volumeMounts: [{ name: "config", mountPath: "/config", readOnly: true }],
+                  readinessProbe: { tcpSocket: { port: 5353 }, periodSeconds: 1 },
+                }),
+          },
+        ],
+      },
+    })),
+  ];
+  await writeFile(manifestPath, JSON.stringify({ apiVersion: "v1", kind: "List", items }));
+  context.after(async () => {
+    try {
+      await kubectl("delete", "-f", manifestPath, "--ignore-not-found=true", "--wait=true");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  await kubectl("create", "-f", manifestPath);
+  const [selected, unselected, control] = await Promise.all(
+    ["selected", "unselected", "control"].map((role) =>
+      waitFor(`DNS ${role} fixture listener`, async () => {
+        const pod = await resource("pod", `${name}-${role}`, namespace);
+        return pod.status.podIP !== undefined && pod.status.containerStatuses?.[0].ready
+          ? pod
+          : undefined;
+      }),
+    ),
+  );
+  const script = await readFile(
+    new URL("../fixtures/kubernetes/probe.mjs", import.meta.url),
+    "utf8",
+  );
+  const query = (source, target, protocol, port) =>
+    kubectl(
+      "exec",
+      source.metadata.name,
+      "-n",
+      source.metadata.namespace,
+      "--",
+      "node",
+      "--input-type=module",
+      "-e",
+      script,
+      "probe.mjs",
+      `dns-${protocol}`,
+      target.status.podIP,
+      String(port),
+      "openshift-dns.example.test",
+    );
+  return { selected, unselected, control, query };
 }
 
 async function assertExplicitNetworkProfile(context, namespaceName, sourcePod) {
@@ -2794,15 +2914,6 @@ test(
       ),
     );
     for (const id of namespaceIds) {
-      // Worker provisioning must admit both DNS ports for managed and adopted namespaces.
-      const dnsPolicy = await resource("networkpolicy", "allow-dns", placements.get(id));
-      assert.deepEqual(dnsPolicy.spec.egress[0].ports, [
-        { protocol: "UDP", port: 53 },
-        { protocol: "TCP", port: 53 },
-        // OpenShift DNS compatibility requires both protocols on port 5353.
-        { protocol: "UDP", port: 5353 },
-        { protocol: "TCP", port: 5353 },
-      ]);
       assert.equal(
         (await resources("deployments", placements.get(id))).length,
         0,
@@ -3269,6 +3380,68 @@ test(
         }
       }),
     );
+
+    // Use the API-deployed embedded runtime, dedicated Harness, and dedicated Gateway.
+    // Reachable CoreDNS listeners outside the peer/port grant distinguish CNI denial from an absent server.
+    const dns = await createDnsTrafficFixture(
+      context,
+      configuration.drivers.compute.configuration.network.dns,
+    );
+    const dnsSources = await Promise.all([
+      workloadPod(
+        placements.get(namespaceIds[0]),
+        `app.kubernetes.io/name=${revisionName(admitted[0])}`,
+      ),
+      workloadPod(
+        kubernetesGatewayNamespaceName(namespaceIds[0]),
+        `app.kubernetes.io/name=${gatewayName(first.id)}`,
+      ),
+      workloadPod(
+        placements.get(namespaceIds[1]),
+        `app.kubernetes.io/name=${gatewayName(embeddedDelete.id)}`,
+      ),
+    ]);
+    assert.ok(dnsSources.every(Boolean), "all API-deployed DNS source Pods must be running");
+    for (const protocol of ["udp", "tcp"]) {
+      for (const [target, port] of [
+        [dns.selected, 5353],
+        [dns.selected, 5354],
+        [dns.unselected, 5353],
+      ]) {
+        assert.equal(
+          JSON.parse(await dns.query(dns.control, target, protocol, port)).address,
+          "192.0.2.53",
+        );
+      }
+    }
+    for (const protocol of ["udp", "tcp"]) {
+      for (const source of dnsSources) {
+        assert.equal(
+          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+          "192.0.2.53",
+          `${source.metadata.name} must resolve over ${protocol} port 5353`,
+        );
+        for (const [target, port] of [
+          [dns.selected, 5354],
+          [dns.unselected, 5353],
+        ]) {
+          await assert.rejects(
+            dns.query(source, target, protocol, port),
+            (error) => {
+              assert.equal(error.code, 1);
+              assert.match(error.stderr, /ETIMEOUT|ETIMEDOUT|timed out|ECONNREFUSED/);
+              return true;
+            },
+            `${source.metadata.name} must not reach ${target.metadata.name} over ${protocol} port ${port}`,
+          );
+        }
+        assert.equal(
+          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+          "192.0.2.53",
+          "the allowed DNS control must still work after denied queries",
+        );
+      }
+    }
 
     const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;
     const persistedBefore = await waitFor("first revision deployment to settle", async () => {
