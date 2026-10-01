@@ -7929,7 +7929,8 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   assert.equal(JSON.stringify(harness).includes("openclaw-gateway-state"), false);
   assert.equal(harness.spec.template.spec.securityContext.fsGroup, 1000);
   assert.equal(harness.spec.template.spec.securityContext.fsGroupChangePolicy, "OnRootMismatch");
-  // The Harness retains task files and generated images; it cannot mount Gateway transcripts.
+  // The Harness retains task files, generated images and Codex thread rollouts, so
+  // the Gateway's bound thread resumes after stop/start; it cannot mount Gateway transcripts.
   const workspaceMounts = harness.spec.template.spec.containers[0].volumeMounts.filter(
     ({ name }) => name === "openclaw-workspace",
   );
@@ -7944,6 +7945,12 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
       name: "openclaw-workspace",
       mountPath: "/home/node/.codex/generated_images",
       subPath: "generated-images",
+      readOnly: false,
+    },
+    {
+      name: "openclaw-workspace",
+      mountPath: "/home/node/.codex/sessions",
+      subPath: "codex-sessions",
       readOnly: false,
     },
   ]);
@@ -7968,7 +7975,7 @@ test("Gateway and Harness storage are separate and preserve ephemeral Codex cred
   assert.equal(initialState.args[0].includes("/runtime-state/home"), true);
   assert.equal(initialState.args[0].includes("/runtime-temporary/tmp"), true);
   assert.match(initialState.args[0], /chmodSync\(path, 0o700\)/);
-  for (const directory of ["workspace", "generated-images"]) {
+  for (const directory of ["workspace", "generated-images", "codex-sessions"]) {
     assert.equal(initialState.args[0].includes(`/harness-workspace-state/${directory}`), true);
   }
   // Pod and AgentRevision replacement keep node credentials in one Agent
@@ -10095,6 +10102,16 @@ for (const dualCluster of [false, true]) {
       ({ mountPath }) => mountPath === "/home/node/.codex",
     );
     assert.equal(authMount.subPath, "codex-home");
+    // OAuth keeps thread rollouts inside codex-home, which a new OAuth source empties;
+    // a separate rollout directory would outlive that reset, so it is neither mounted nor kept.
+    assert.equal(
+      native.volumeMounts.some(({ subPath }) => subPath === "codex-sessions"),
+      false,
+    );
+    assert.match(
+      pod.initContainers.find(({ name }) => name === "prepare-private-state").args[0],
+      /rmSync\("\/harness-workspace-state\/codex-sessions", \{ recursive: true, force: true \}\)/,
+    );
     const claimName = pod.volumes.find(({ name }) => name === authMount.name).persistentVolumeClaim
       .claimName;
     assert.equal(

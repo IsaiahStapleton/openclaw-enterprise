@@ -110,6 +110,7 @@ from the default StorageClass, mounted only by its Harness:
 | `codex-home` ([OAuth](codex-oauth-storage.md)) | `/home/node/.codex`                  |
 | `workspace`                                    | `/home/node/workspace`               |
 | `generated-images`                             | `/home/node/.codex/generated_images` |
+| `codex-sessions`                               | `/home/node/.codex/sessions`         |
 | `workspace-node-<agent-hash>-<harness-hash>`   | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
