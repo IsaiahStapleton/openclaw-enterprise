@@ -121,6 +121,8 @@ import {
   PluginDiscoveryError,
   ChannelDirectoryError,
   ChannelCredentialError,
+  CredentialGatewayNotConfiguredError,
+  IAMAccessBindingRoleError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -213,6 +215,8 @@ export {
   ChannelDirectoryError,
   ChannelCredentialError,
   ConfigurationHarnessError,
+  CredentialGatewayNotConfiguredError,
+  IAMAccessBindingRoleError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -792,6 +796,32 @@ function discoveryLoginCredential(value: string): string {
     return "{}";
   }
 }
+
+/**
+ * Refuses an AccessBinding whose Role cannot take effect on the binding's target, so a
+ * policy write never reports success for a grant that IAM evaluation drops. `create` is
+ * authorized against the Namespace, never an existing resource, so no exact-resource
+ * binding grants it; a Role with no Permission for the target's kind grants nothing there.
+ * Roles that also name other kinds stay valid: one Role may be bound to several targets.
+ */
+function assertAccessBindingRoleApplies(role: Readonly<Role>, resourceKind: ResourceKind): void {
+  const label = (permission: Readonly<Permission>) =>
+    `${permission.resourceKind}:${permission.action}`;
+  const creates = role.permissions.filter((permission) => permission.action === "create");
+  if (creates.length > 0) {
+    throw new IAMAccessBindingRoleError(
+      `Role ${role.id} has Permissions that no AccessBinding can grant: ${creates.map(label).join(", ")}. ` +
+        "Create is authorized on the Namespace, not on an existing resource. Remove them from the Role.",
+    );
+  }
+  if (!role.permissions.some((permission) => permission.resourceKind === resourceKind)) {
+    throw new IAMAccessBindingRoleError(
+      `Role ${role.id} grants nothing on the ${resourceKind} target: its Permissions (${role.permissions.map(label).join(", ")}) ` +
+        `apply only to other resource kinds. Bind it to a resource of one of those kinds, or add ${resourceKind} Permissions.`,
+    );
+  }
+}
+
 export class OpenClawController {
   readonly installation: Readonly<Installation>;
 
@@ -1210,12 +1240,19 @@ export class OpenClawController {
     });
     await this.verifyNamespacePolicyResource(namespace.id, input.resourceKind, input.resourceId);
     const driver = this.iamPolicyDriver("createNamespaceAccessBinding");
+    const roles = this.iamPolicyDriver("getNamespaceRole");
     return this.mutate(async (state) => {
       await this.holdIAMPolicyAuthority(state, principalId, namespace.id, {
         kind: input.resourceKind,
         id: input.resourceId,
         namespaceId: namespace.id,
       });
+      const role = await this.iamPolicyOperation(() =>
+        roles.getNamespaceRole!({ policy: state.iamPolicy }, namespace.id, input.roleId),
+      );
+      if (role !== undefined) {
+        assertAccessBindingRoleApplies(role, input.resourceKind);
+      }
       return this.iamPolicyOperation(() =>
         driver.createNamespaceAccessBinding!(
           { policy: state.iamPolicy },
@@ -3152,6 +3189,10 @@ export class OpenClawController {
         id: locked.id,
         namespaceId: locked.id,
       });
+      // An Installation property, so it is reported before any Namespace state.
+      if (!this.selections.has("credential_gateway")) {
+        throw new CredentialGatewayNotConfiguredError();
+      }
       if (locked.status !== "ready") {
         throw new NamespaceNotReadyError();
       }

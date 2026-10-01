@@ -189,6 +189,28 @@ export class SandboxRevisionUnsupportedError extends Error {
   }
 }
 
+/**
+ * An AccessBinding Role carries Permissions that can never take effect through the
+ * binding: `create` is checked against the Namespace, not an existing resource, and a
+ * binding to an exact resource applies only Permissions of that resource's kind.
+ */
+export class IAMAccessBindingRoleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IAMAccessBindingRoleError";
+  }
+}
+
+/** The Installation selects no Credential Gateway, so credential sources are unavailable. */
+export class CredentialGatewayNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "This Installation has no Credential Gateway, so credential sources are unavailable. An administrator must select the OpenShell Credential Gateway Driver; see docs/reference/credential-sources.md.",
+    );
+    this.name = "CredentialGatewayNotConfiguredError";
+  }
+}
+
 export class DriverSelectionError extends Error {
   constructor(message: string) {
     super(message);
