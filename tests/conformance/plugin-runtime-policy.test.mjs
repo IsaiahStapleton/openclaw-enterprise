@@ -585,7 +585,8 @@ function workspaceNodeState(sandbox) {
   return { nodeId, failure };
 }
 
-// OpenClaw dynamic tools that execute against the Gateway Pod's local disk or shell.
+// OpenClaw dynamic tools that execute against the Gateway Pod's local disk or shell,
+// type into its terminals, or change its configuration.
 const GATEWAY_LOCAL_CODEX_TOOLS = [
   "ls",
   "read",
@@ -596,6 +597,8 @@ const GATEWAY_LOCAL_CODEX_TOOLS = [
   "process",
   "gateway_exec",
   "gateway_process",
+  "terminal",
+  "openclaw",
 ];
 
 const codexGatewayConfig = () => ({
@@ -637,6 +640,8 @@ test("a running Gateway hot-applies its workspace node under plugins.* and acks 
     atStart.plugins.entries.codex.config.codexDynamicToolsExclude,
     GATEWAY_LOCAL_CODEX_TOOLS,
   );
+  // Automation triggers would run model-written commands in the Gateway Pod.
+  assert.deepEqual(atStart.cron, { triggers: { enabled: false } });
   // gateway.* is final at start: the command grant precedes any node ID.
   assert.equal(atStart.gateway.nodes.commands.allow.includes("file.fetch"), true);
   const gatewayAtStart = JSON.stringify(atStart.gateway);
@@ -896,17 +901,21 @@ test("a workspace-node Gateway keeps owner Codex tool excludes and refuses a mal
     config.plugins.entries.codex.config.codexDynamicToolsExclude = codexDynamicToolsExclude;
     return config;
   };
+  const ownerConfig = withExcludes(["web_search", "ls"]);
+  ownerConfig.cron = { enabled: true, triggers: { enabled: true } };
   const { files } = await runOpenClawRuntimeHelper(undefined, [], {
-    baseConfig: withExcludes(["web_search", "ls"]),
+    baseConfig: ownerConfig,
     env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
     workspaceNodeId: "enrolled-node",
   });
+  const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   // Owner exclusions stay first and are not duplicated.
-  assert.deepEqual(
-    JSON.parse(files.get("/home/node/.openclaw/openclaw.json")).plugins.entries.codex.config
-      .codexDynamicToolsExclude,
-    ["web_search", ...GATEWAY_LOCAL_CODEX_TOOLS],
-  );
+  assert.deepEqual(effective.plugins.entries.codex.config.codexDynamicToolsExclude, [
+    "web_search",
+    ...GATEWAY_LOCAL_CODEX_TOOLS,
+  ]);
+  // Timed automations stay; an owner cannot turn triggers back on in the Gateway Pod.
+  assert.deepEqual(effective.cron, { enabled: true, triggers: { enabled: false } });
   // A malformed setting fails the Gateway start instead of being replaced silently.
   await assert.rejects(
     () =>
@@ -917,6 +926,22 @@ test("a workspace-node Gateway keeps owner Codex tool excludes and refuses a mal
       }),
     /codexDynamicToolsExclude setting must be a list/,
   );
+  for (const [cron, message] of [
+    ["off", /cron setting must be an object/],
+    [{ triggers: true }, /cron\.triggers setting must be an object/],
+  ]) {
+    const malformed = codexGatewayConfig();
+    malformed.cron = cron;
+    await assert.rejects(
+      () =>
+        runOpenClawRuntimeHelper(undefined, [], {
+          baseConfig: malformed,
+          env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+          workspaceNodeId: "enrolled-node",
+        }),
+      message,
+    );
+  }
   // Without a workspace node the Gateway's workspace is its own, so nothing is withheld.
   const local = await runOpenClawRuntimeHelper(undefined, [], {
     baseConfig: codexGatewayConfig(),
@@ -927,6 +952,7 @@ test("a workspace-node Gateway keeps owner Codex tool excludes and refuses a mal
       local.files.get("/etc/openclaw/openclaw.json"),
   );
   assert.equal(localConfig.plugins.entries.codex.config.codexDynamicToolsExclude, undefined);
+  assert.equal(localConfig.cron, undefined);
 });
 
 test("Gateway launch binds the enrolled node without expanding owner writes or changing its snapshot", async () => {
