@@ -1,6 +1,6 @@
 # External sign-in and account controls
 
-This page covers GitHub and Google browser sign-in for existing OpenClaw Control
+This page covers GitHub, Google and generic OIDC browser sign-in for existing OpenClaw Control
 Plane (OCC) accounts, and the session, recovery, and account controls that apply
 once an external provider is enabled. The [authentication reference](../authentication.md)
 covers bootstrap, password sessions, request origin, provisioning, and failures.
@@ -15,7 +15,8 @@ mutable Installation policy are unsupported. Keep bootstrap, seeding, external
 policy writers, and recovery-affecting changes stopped.
 Native IAM's policy read remains separate from State's actor guard. Loopback
 development does not qualify deployed HTTPS.
-[Google sign-in](../../guides/deploy/google-sign-in.md) uses this profile and its
+[Google sign-in](../../guides/deploy/google-sign-in.md) and
+[OIDC sign-in](../../guides/deploy/oidc-sign-in.md) use this profile and its
 controls.
 
 HTTPS sessions use `__Host-openclaw_occ.session_token`, `Secure`, `HttpOnly`,
@@ -65,7 +66,8 @@ user, email association, signup, identity transfer, and self-service linking are
 rejected. For unknown identities, follow the
 [enrollment procedure](../../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
-`GET /api/auth/providers` returns `github`, `google`, and `sessionBinding` as `true` when enabled,
+`GET /api/auth/providers` returns `github`, `google`, `oidc`, and `sessionBinding` as `true` when enabled,
+with `oidcSignIn` (`label`, `authorizationUrl`) while OIDC is configured,
 and `password` as `false` only when [password sign-in is recovery-only](#recovery-only-password-sign-in). A
 same-origin `POST /api/auth/providers/github/start` returns `data.url` and a public
 `data.attemptId`, and sets a browser-binding cookie. Other provider names return `404`; callers cannot select
@@ -88,7 +90,7 @@ provider is enabled, so strangers who know an email can spend that account's
 password sign-in budget. `OCC_AUTH_PASSWORD_SIGN_IN=recovery-only` (Helm
 `auth.passwordSignIn: recovery-only`; default `all`) removes that surface:
 only the recovery account signs in with a password, and every other account uses
-its attached GitHub or Google identity. It is the target posture once every
+its attached GitHub, Google or OIDC identity. It is the target posture once every
 ordinary account has an external identity. It requires a configured provider;
 startup and Helm refuse it otherwise, and any other value.
 
@@ -159,7 +161,7 @@ account read shows present state, **not a receipt**: the original transaction ma
 still be running. Resolve uncertainty before choosing a new action and version.
 Password reset and deletion remain deferred.
 
-These account and recovery routes need GitHub or Google sign-in. In the
+These account and recovery routes need GitHub, Google or OIDC sign-in. In the
 password-only profile an authorized administrator receives
 `409 RESOURCE_CONFLICT` naming that requirement; the profile has no account
 version, disabled state, or session binding, so it cannot disable an account or
@@ -171,7 +173,7 @@ spend it, and a spent email is slowed and answered with `429` and `Retry-After`.
 recovery account and Installation administrators are slowed, never refused: their
 correct password still signs in. A browser with a valid
 [known-device cookie](../authentication.md#known-devices) for the email spends its own
-budget instead. GitHub and Google start, callback, and result each allow 30
+budget instead. GitHub, Google and OIDC start, callback, and result each allow 30
 requests/minute and four active per client address, eight active in all; a sign-in
 spends one of each. Without
 [trusted proxies](../cheatsheets/environment-variables.md#controller-and-authentication)

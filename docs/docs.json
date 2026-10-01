@@ -459,6 +459,10 @@
                     "label": "Google Sign-in"
                   },
                   {
+                    "page": "guides/deploy/oidc-sign-in",
+                    "label": "OIDC Sign-in"
+                  },
+                  {
                     "page": "guides/deploy/local-k3d-image-upgrade",
                     "label": "Local k3d Upgrades"
                   },

@@ -2,7 +2,7 @@
 
 OpenClaw Control Plane (OCC) authenticates human controller API clients with
 user sessions established through email/password sign-in or an administrator-enrolled
-GitHub or Google identity. Programmatic non-Agent automation authenticates with service
+GitHub, Google or OIDC identity. Programmatic non-Agent automation authenticates with service
 API keys. Better Auth owns
 password verification, revocable session cookies, and hashed API-key storage.
 The selected IAM Driver resolves the authenticated account or service identity
@@ -12,8 +12,9 @@ to an explicitly provisioned Principal or ServicePrincipal and owns
 For a sign-in procedure, see
 [human administrator sign-in](authentication/service-api-keys.md#sign-in-as-a-human-administrator).
 For non-Agent automation, see the [service-key procedure](authentication/service-api-keys.md).
-The [platform console](console.md) at `/console/` uses these session endpoints. Public signup, generic OIDC, and bearer
-credentials are unsupported.
+The [platform console](console.md) at `/console/` uses these session endpoints. Public signup, OIDC
+provisioning or claim mapping, and bearer credentials are unsupported; generic OIDC
+sign-in for enrolled accounts is in [OIDC sign-in](../guides/deploy/oidc-sign-in.md).
 
 ## Installation and account ownership
 
@@ -169,7 +170,7 @@ attempt to the shared lane with the same answer a new browser gets. Resetting an
 account's password, or deleting and recreating the account, revokes every entry
 issued before, including a reset that commits while a sign-in with the old password
 is in flight: that sign-in's entry is bound to the state read before its password
-check. With GitHub or Google sign-in, a disabled account's entries verify
+check. With external sign-in, a disabled account's entries verify
 nothing until it is enabled again; reset the password as well to revoke them for
 good. The controller reads the account only for an entry issued for the attempted
 email, so forged or foreign cookies add no timing signal about which emails exist,
@@ -194,7 +195,8 @@ disabled. A missing, expired, revoked, or forged session is rejected, as is an
 
 ## GitHub sign-in for existing accounts
 
-An Installation can let enrolled existing accounts sign in with GitHub or Google.
+An Installation can let enrolled existing accounts sign in with GitHub, Google or one
+generic OIDC issuer.
 [External sign-in and account controls](authentication/external-sign-in.md)
 defines the single-controller profile, provider flow, session binding, the
 recovery user, the administrator account API, and sign-in limits.

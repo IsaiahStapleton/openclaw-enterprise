@@ -12,8 +12,8 @@ overrides a grant.
 - **People** sign in with an administrator-provisioned email and password. See
   [Authentication](../../reference/authentication.md) for sign-in and account
   provisioning, and [external sign-in](../../reference/authentication/external-sign-in.md)
-  for GitHub or Google sign-in of enrolled accounts. Public signup and generic
-  OIDC are not supported.
+  for GitHub, Google or OIDC sign-in of enrolled accounts. Public signup and OIDC
+  provisioning are not supported.
 - **Non-Agent automation** authenticates as an existing ServicePrincipal with a
   [service API key](../../reference/authentication/service-api-keys.md). Issuing
   a key does not give that identity new permissions.
@@ -78,7 +78,7 @@ A new account starts with no access. As a human Installation administrator:
    ```
 
 4. Give the person the password from `account.json` through your own secure
-   channel, then delete the file. With GitHub or Google sign-in, also
+   channel, then delete the file. With GitHub, Google or OIDC sign-in, also
    [attach their identity](../../reference/authentication/external-sign-in.md).
 
 Add actions such as `update` or `deploy` to the Role for more access; see
