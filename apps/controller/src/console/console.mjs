@@ -47,11 +47,23 @@ const externalProviders = {
   // The operator configures the IdP: discovery supplies its label and authorization
   // endpoint, and the start URL must use exactly that HTTPS endpoint.
   oidc: {
-    label: "single sign-on",
+    label: rememberedOidcLabel() ?? "single sign-on",
     origin: null,
     pathname: null,
   },
 };
+
+// The last discovered OIDC label, kept per tab so messages after the IdP round trip, which
+// reloads the Console before discovery answers, name the provider the person chose.
+const oidcLabelStorageKey = "occ.console.oidcLabel";
+function rememberedOidcLabel() {
+  try {
+    const label = sessionStorage.getItem("occ.console.oidcLabel");
+    return typeof label === "string" && label.length > 0 && label.length <= 40 ? label : null;
+  } catch {
+    return null;
+  }
+}
 
 // Adopts discovery's OIDC settings; false when they are missing or malformed.
 function configureOidc(signIn) {
@@ -67,6 +79,11 @@ function configureOidc(signIn) {
       return false;
     }
     externalProviders.oidc = { label, origin: endpoint.origin, pathname: endpoint.pathname };
+    try {
+      sessionStorage.setItem(oidcLabelStorageKey, label);
+    } catch {
+      // Without tab storage, post-redirect messages use the default label.
+    }
     return true;
   } catch {
     return false;
