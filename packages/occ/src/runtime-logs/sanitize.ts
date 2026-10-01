@@ -358,7 +358,11 @@ export interface SanitizedRuntimeLogChunk {
  */
 export function sanitizeRuntimeLogChunk(
   chunk: Pick<AgentRuntimeLogChunk, "stream" | "lines" | "truncated">,
-): SanitizedRuntimeLogChunk {
+  pemContext?: {
+    readonly open: boolean | undefined;
+    readonly canClose?: readonly boolean[] | undefined;
+  },
+): SanitizedRuntimeLogChunk & { readonly pemOpen?: boolean } {
   const stream = cleanStream(chunk.stream);
   let lines = chunk.lines;
   // The byte limit cuts the final line; a partial line may end inside a token.
@@ -372,10 +376,12 @@ export function sanitizeRuntimeLogChunk(
   // Classify in order: an open pretty-printed JSON block carries across lines.
   const classifiedLines = lines.map((line) => classify(line.raw, block));
   // A key printed over several lines is split across records; mask the whole block.
+  const pemState = { open: pemContext?.open, canClose: pemContext?.canClose };
   const pem = maskPemBlockLines(
     classifiedLines.map((classified) =>
       classified.type === "line" && classified.kind === "text" ? classified.message : undefined,
     ),
+    pemState,
   );
   for (const [index, line] of lines.entries()) {
     const classified = classifiedLines[index]!;
@@ -419,7 +425,11 @@ export function sanitizeRuntimeLogChunk(
   if (run !== undefined) {
     records.push(brand(run));
   }
-  return Object.freeze({ records: Object.freeze(records), withheld });
+  return Object.freeze({
+    records: Object.freeze(records),
+    withheld,
+    ...(pemState.open === undefined ? {} : { pemOpen: pemState.open }),
+  });
 }
 
 // Sandbox policy and supervisor records (OpenShell OCSF shorthand and tracing fields).
