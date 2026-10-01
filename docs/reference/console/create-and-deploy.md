@@ -28,8 +28,8 @@ still block initial workspace files and Secret-backed environment projection.
    **Create Agent**.
 2. Choose a [Preset](../presets.md), fill its variables, and select **Use Preset**.
    Review defaults and choose an existing or new model Secret.
-   **Start with default Preset** loads the installed `default-codex` copy;
-   **Start without Preset** starts independently of installed Presets.
+   **Start with default Preset** loads `default-codex`; **Start without Preset**
+   skips Presets.
 3. Enter a unique name within the Namespace. Choose **Provider**, then
    **Harness**. OpenAI offers **Codex** by default and **OpenClaw**;
    Anthropic offers only **OpenClaw**. **Execution mode** is Dedicated for Codex,
@@ -79,10 +79,8 @@ still block initial workspace files and Secret-backed environment projection.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, explicitly selected Preset forms retain variables across Back/Forward;
-passwords clear. Leaving a form started with the default shortcut or without a
-Preset discards unsaved state and returns to the initial choices. Saved Agents and
-Secrets remain. **Start over** confirms discard.
+Before saving, selected Preset forms keep variables across Back/Forward; passwords
+clear. Leaving a default or no-Preset form discards unsaved state. Saved Agents and Secrets remain. **Start over** confirms discard.
 Reload, page exit, and sign-out clear local drafts. Once saving begins, navigation
 does not retain partial-save or uncertain-outcome state; follow save recovery below.
 
