@@ -20,6 +20,7 @@ export class PostgresMetricsSnapshot {
     const client = await this.pool.connect();
     let failed = false;
     let transportError: Error | undefined;
+    let snapshot: PlatformMetricsSnapshot;
     const onTransportError = (error: Error) => {
       transportError ??= error;
     };
@@ -95,7 +96,7 @@ export class PostgresMetricsSnapshot {
       if (row === undefined) {
         throw new Error("Metrics require the singleton Installation.");
       }
-      return row;
+      snapshot = row;
     } catch (error) {
       failed = true;
       throw error;
@@ -111,9 +112,10 @@ export class PostgresMetricsSnapshot {
           client.removeListener?.("error", onTransportError);
         }
       }
-      if (!failed && transportError !== undefined) {
-        throw transportError;
-      }
     }
+    if (transportError !== undefined) {
+      throw transportError;
+    }
+    return snapshot;
   }
 }

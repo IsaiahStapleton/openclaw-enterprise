@@ -379,3 +379,25 @@ test("metrics preserves a release failure and keeps error ownership when transfe
   assert.doesNotThrow(() => client.emit("error", new Error("late client transport event")));
   client.removeAllListeners();
 });
+
+test("metrics preserves release error precedence when query and release both fail", async () => {
+  const client = new EventEmitter();
+  const queryFailure = new Error("controlled query failure");
+  const releaseFailure = new Error("controlled release failure");
+  client.query = async () => {
+    throw queryFailure;
+  };
+  client.release = () => {
+    throw releaseFailure;
+  };
+  const collector = new PostgresMetricsSnapshot({
+    async connect() {
+      return client;
+    },
+    async end() {},
+  });
+  await assert.rejects(collector.collect(), (error) => error === releaseFailure);
+  assert.equal(client.listenerCount("error"), 1);
+  assert.doesNotThrow(() => client.emit("error", new Error("late client transport event")));
+  client.removeAllListeners();
+});
