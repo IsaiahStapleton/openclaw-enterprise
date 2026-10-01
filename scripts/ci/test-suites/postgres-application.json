@@ -273,9 +273,7 @@
     },
     {
       "path": "tests/integration/postgres-oidc-sign-in.test.mjs",
-      "expectedTests": [
-        "PostgreSQL OIDC sign-in admits only attached (issuer, subject) pairs"
-      ]
+      "expectedTests": ["PostgreSQL OIDC sign-in admits only attached (issuer, subject) pairs"]
     },
     {
       "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
