@@ -865,6 +865,10 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
     gatewayWorkspaceNodeId: undefined,
     gatewayWorkspaceNodeFailure: undefined,
     gatewayAppliesBinding: true,
+    // When set, the node host pairs this long after its setup reaches the Harness.
+    pairAfterSetupMs: undefined,
+    // The wait each setup observation was given.
+    observeWaits: [],
   };
   const driver = new KubernetesComputeDriver(
     routedOptions({
@@ -879,9 +883,16 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
           state.setupCalls++;
           return { setupId: "setup-1", setupCode: "setup-code", expiresAtMs: Date.now() + 60000 };
         },
-        async observeSetup() {
+        async observeSetup(_url, _setupId, signal, options) {
           if (!state.enrollmentAvailable) {
             throw new Error("Gateway is restarting after the Harness replacement");
+          }
+          // Like the client: one connection, re-read until connected or the wait ends.
+          state.observeWaits.push(options?.waitMs ?? 0);
+          const deadline = Date.now() + (options?.waitMs ?? 0);
+          while (!state.connected && Date.now() < deadline) {
+            signal.throwIfAborted();
+            await new Promise((resolve) => setTimeout(resolve, 2));
           }
           return state.connected ? { deviceId: "node-1", connected: true } : undefined;
         },
@@ -891,6 +902,8 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
       },
     },
   );
+  // Short enough for tests; long enough that a pass sees a node pairing within it.
+  driver.workspaceNodePairingWaitMs = 60;
   const revision = routedRevision(driver, {
     plugins: {
       driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
@@ -1071,6 +1084,16 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
   const podPatches = [];
   clients.core.patchNamespacedPod = async ({ name, namespace: target, body }) => {
     podPatches.push({ name, namespace: target, body: structuredClone(body) });
+    if (
+      name === "agent-pod" &&
+      state.pairAfterSetupMs !== undefined &&
+      body.metadata.annotations["openclaw.dev/workspace-node-setup"] !== undefined
+    ) {
+      // The setup file reaches the running Harness; its node host boots and pairs.
+      setTimeout(() => {
+        state.connected = true;
+      }, state.pairAfterSetupMs);
+    }
     const binding = objects.get(
       key("ConfigMap", `${gatewayName}-workspace-node`, kubernetesGatewayNamespaceName(tenant.id)),
     );
@@ -1278,6 +1301,10 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     "setupCode",
     "setupId",
   ]);
+  // The recorded node id reaches the candidate Gateway through its Agent-scoped
+  // binding and a Pod nudge in the same pass; its pod template does not change.
+  const gatewayNamespace = kubernetesGatewayNamespaceName(tenant.id);
+  const gatewayBeforeBinding = read("Deployment", gatewayName, gatewayNamespace);
   state.connected = true;
   assert.equal((await prepare()).ready, true);
   assert.equal(state.setupCalls, 1);
@@ -1290,22 +1317,12 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   ]);
   // The removal nudges the running Harness Pod again, with a new value, so the
   // kubelet removes the file now instead of on its periodic resync.
-  assert.equal(podPatches.length, 2);
-  const [minted, removed] = podPatches.map(
-    ({ body }) => body.metadata.annotations["openclaw.dev/workspace-node-setup"],
-  );
+  assert.equal(podPatches.length, 3);
+  const [minted, removed] = podPatches
+    .slice(0, 2)
+    .map(({ body }) => body.metadata.annotations["openclaw.dev/workspace-node-setup"]);
   assert.notEqual(minted, removed);
   assert.equal(podPatches[1].name, "agent-pod");
-  // A paired file-delivered node reconnects with its saved device token, so an
-  // expired setup is not re-minted and the code does not come back.
-  const paired = objects.get(nodeSecretKey);
-  paired.data.expiresAtMs = Buffer.from(String(Date.now() - 1)).toString("base64");
-  objects.set(nodeSecretKey, paired);
-  // The recorded node id reaches the candidate Gateway through its Agent-scoped
-  // binding and a Pod nudge; its pod template does not change.
-  const gatewayNamespace = kubernetesGatewayNamespaceName(tenant.id);
-  const gatewayBeforeBinding = read("Deployment", gatewayName, gatewayNamespace);
-  assert.equal((await prepare()).ready, true);
   const gatewayAfterBinding = read("Deployment", gatewayName, gatewayNamespace);
   assert.deepEqual(gatewayAfterBinding.spec.template, gatewayBeforeBinding.spec.template);
   assert.equal(gatewayAfterBinding.metadata.generation, gatewayBeforeBinding.metadata.generation);
@@ -1316,8 +1333,6 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
   });
   assert.equal(binding.immutable, undefined);
   assert.equal(binding.metadata.labels["openclaw.dev/agent"], revision.agentId);
-  assert.equal(objects.get(nodeSecretKey).data.setupCode, undefined);
-  assert.equal(state.setupCalls, 1, "a paired node needs no new setup");
   assert.deepEqual(
     podPatches.slice(2).map(({ name, namespace: target, body }) => ({
       name,
@@ -1332,8 +1347,15 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
       },
     ],
   );
+  // A paired file-delivered node reconnects with its saved device token, so an
+  // expired setup is not re-minted and the code does not come back.
+  const paired = objects.get(nodeSecretKey);
+  paired.data.expiresAtMs = Buffer.from(String(Date.now() - 1)).toString("base64");
+  objects.set(nodeSecretKey, paired);
   // An unchanged binding is neither rewritten nor nudged again.
   assert.equal((await prepare()).ready, true);
+  assert.equal(objects.get(nodeSecretKey).data.setupCode, undefined);
+  assert.equal(state.setupCalls, 1, "a paired node needs no new setup");
   assert.equal(podPatches.length, 3);
   // The node supervisor embeds Codex; neither it nor an OpenShell Sandbox, which
   // carries the whole command in one environment variable, nears the exec limit.
@@ -1466,33 +1488,31 @@ test("a first dedicated deploy pins its workload starts through activation", asy
   );
   markReady(agentName);
   markReady(gatewayName);
-  // The setup reaches the running Harness through its volume; the node pairs
-  // without a workload start, so this pass completes.
-  state.connected = true;
+  // The setup reaches the running Harness through its volume and the node pairs
+  // a moment later, without a workload start. The pass that delivered the setup
+  // sees the pairing and completes: no pending pass once the workloads are ready.
+  state.pairAfterSetupMs = 10;
   assert.equal(await pass(), true);
   assert.equal(pendingPasses, 1);
-  // The Gateway wrapper reports the node a moment after the nudge: activation
-  // waits for that report instead of replacing the serving Gateway.
-  state.gatewayAppliesBinding = false;
+  // That pass also handed the node to the Gateway (binding plus one Pod nudge),
+  // so the hot-apply overlaps the worker's commit and activation's own work.
+  assert.equal(state.gatewayWorkspaceNodeId, "node-1");
   let statusReads = 0;
   const clients = await driver.apiClients;
   const proxy = clients.core.connectGetNamespacedPodProxyWithPath;
   clients.core.connectGetNamespacedPodProxyWithPath = async (request) => {
     if (request.path === "openclaw/runtime/status" && request.name.startsWith("gateway-")) {
       statusReads++;
-      if (statusReads === 2) {
-        state.gatewayWorkspaceNodeId = "node-1";
-      }
     }
     return proxy(request);
   };
   await driver.activateRevision(revision, authContext(revision));
-  assert.equal(statusReads, 2);
+  assert.equal(statusReads, 1, "activation finds the Gateway's ack on its first read");
   assert.equal(state.setupCalls, 1);
   assert.equal(
     podPatches.filter(({ name }) => name === "gateway-pod").length,
     1,
-    "activation nudges the running Gateway Pod once",
+    "the running Gateway Pod is nudged once, by preparation",
   );
 
   assert.deepEqual(
@@ -1531,6 +1551,61 @@ test("a first dedicated deploy pins its workload starts through activation", asy
   assert.equal(templates.length + inPodGatewayRestarts, 2, "Harness 1 + Gateway 1");
 });
 
+// The pass that sees the node pair hands it to the Gateway. Activation still
+// waits for the Gateway's own report of that node, and does not nudge again.
+test("activation waits for the Gateway to report the node preparation handed it", async () => {
+  const { state, driver, revision, gatewayName, agentName, podPatches, prepare, markReady } =
+    dedicatedFirstDeployFixture();
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  markReady(gatewayName);
+  state.connected = true;
+  // The kubelet has not refreshed the binding volume yet.
+  state.gatewayAppliesBinding = false;
+  assert.equal((await prepare()).ready, true);
+  assert.equal(state.gatewayWorkspaceNodeId, undefined);
+  let statusReads = 0;
+  const clients = await driver.apiClients;
+  const proxy = clients.core.connectGetNamespacedPodProxyWithPath;
+  clients.core.connectGetNamespacedPodProxyWithPath = async (request) => {
+    if (request.path === "openclaw/runtime/status" && request.name.startsWith("gateway-")) {
+      statusReads++;
+      if (statusReads === 2) {
+        state.gatewayWorkspaceNodeId = "node-1";
+      }
+    }
+    return proxy(request);
+  };
+  await driver.activateRevision(revision, authContext(revision));
+  assert.equal(statusReads, 2);
+  assert.equal(podPatches.filter(({ name }) => name === "gateway-pod").length, 1);
+});
+
+// A node that has not paired within the pass's wait leaves the pass pending; the
+// wait starts only once the setup exists and the Gateway is ready.
+test("a first dedicated deploy pass waits a bounded time for its node to pair", async () => {
+  const { state, driver, gatewayName, agentName, objects, prepare, markReady } =
+    dedicatedFirstDeployFixture();
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  assert.equal((await prepare()).ready, false);
+  assert.deepEqual(state.observeWaits, [], "no enrollment call before the Gateway is ready");
+  markReady(gatewayName);
+  const started = Date.now();
+  assert.equal((await prepare()).ready, false);
+  assert.ok(Date.now() - started >= driver.workspaceNodePairingWaitMs);
+  assert.deepEqual(state.observeWaits, [driver.workspaceNodePairingWaitMs]);
+  assert.equal(
+    [...objects.values()].some(
+      (object) => object.kind === "ConfigMap" && object.metadata.name.endsWith("-workspace-node"),
+    ),
+    false,
+    "no node is handed to the Gateway before it pairs",
+  );
+  state.connected = true;
+  assert.equal((await prepare()).ready, true);
+});
+
 test("activation fails with OpenClaw's reason when the Gateway cannot apply its workspace node", async () => {
   const { state, driver, revision, gatewayName, agentName, templates, prepare, markReady } =
     dedicatedFirstDeployFixture();
@@ -1539,9 +1614,10 @@ test("activation fails with OpenClaw's reason when the Gateway cannot apply its 
   assert.equal((await prepare()).ready, false);
   markReady(gatewayName);
   state.connected = true;
-  assert.equal((await prepare()).ready, true);
-  // The wrapper wrote the node, but OpenClaw never reported file-transfer loaded.
+  // The wrapper writes the node it is handed in this pass, but OpenClaw never
+  // reports file-transfer loaded.
   state.gatewayAppliesBinding = false;
+  assert.equal((await prepare()).ready, true);
   state.gatewayWorkspaceNodeFailure = {
     code: "RELOAD_NOT_CONFIRMED",
     checkedAt: "2026-09-29T12:00:00.000Z",
