@@ -68,6 +68,15 @@ const lines = {
       error: "remote control requires ChatGPT authentication",
     },
   ),
+  // Codex 0.158 prints this once per start; the image runs Codex's bundled bubblewrap.
+  missingBwrap: record("ERROR", "codex_app_server", {
+    message:
+      "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.",
+  }),
+  // Other bubblewrap errors still pass.
+  bwrapNamespaces: record("ERROR", "codex_app_server", {
+    message: "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.",
+  }),
   // Codex 0.158 prints this at each session's network-proxy start on Linux,
   // whatever the Unix-socket policy says.
   unixSocketsPlatform: record(
@@ -125,6 +134,8 @@ test("the Codex stderr filter drops span lifecycle records except the turn's sta
     gatewayClient: true,
     // The first retry line is kept, so the reason stays visible.
     remoteControlWait: true,
+    missingBwrap: false,
+    bwrapNamespaces: true,
     // The first platform warning per app-server is kept.
     unixSocketsPlatform: true,
     unixSocketsOtherTarget: true,

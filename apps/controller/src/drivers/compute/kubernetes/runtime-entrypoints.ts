@@ -2553,11 +2553,15 @@ if (receipt?.sourceUid === expected.sourceUid) {
 // remote-control preference retry (every 1 s while Codex has no ChatGPT login),
 // which is kept once per 10 minutes. On Linux, Codex warns at every session's
 // network-proxy start that Unix-socket proxying is macOS-only, whatever the
-// policy says; only the first such warning per app-server is kept. Everything
-// else is forwarded unchanged.
+// policy says; only the first such warning per app-server is kept. Codex's
+// startup ERROR that no bubblewrap is on PATH is dropped: the image runs the
+// bubblewrap Codex ships on purpose, because a bwrap on PATH makes Codex run a
+// namespace probe that the reviewed seccomp profile denies. Everything else is
+// forwarded unchanged.
 export const CODEX_STDERR_FILTER_HELPER = String.raw`
 const codexVerboseLog = /^(?:debug|trace)(?:,|$)/i.test(process.env.RUST_LOG ?? "");
 const CODEX_REMOTE_CONTROL_WAIT = "waiting to resolve remote control preference until authentication is available";
+const CODEX_MISSING_BWRAP_WARNING = "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.";
 const CODEX_UNIX_SOCKETS_PLATFORM_WARNING = "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform";
 const CODEX_STDERR_LINE_LIMIT = 65536;
 let codexRemoteControlWaitAt = -Infinity;
@@ -2571,7 +2575,8 @@ function codexStderrLineKept(line, now = Date.now()) {
     !line.includes('"message":"exit"') &&
     !line.includes('"message":"websocket client connected"') &&
     !line.includes(CODEX_REMOTE_CONTROL_WAIT) &&
-    !line.includes(CODEX_UNIX_SOCKETS_PLATFORM_WARNING)
+    !line.includes(CODEX_UNIX_SOCKETS_PLATFORM_WARNING) &&
+    !line.includes(CODEX_MISSING_BWRAP_WARNING)
   ) return true;
   let record;
   try { record = JSON.parse(line); } catch { return true; }
@@ -2603,6 +2608,7 @@ function codexStderrLineKept(line, now = Date.now()) {
     if (now - codexRemoteControlWaitAt < 600000) return false;
     codexRemoteControlWaitAt = now;
   }
+  if (record.target === "codex_app_server" && message === CODEX_MISSING_BWRAP_WARNING) return false;
   if (record.target === "codex_network_proxy::proxy" && message === CODEX_UNIX_SOCKETS_PLATFORM_WARNING) {
     if (codexUnixSocketsPlatformWarned) return false;
     codexUnixSocketsPlatformWarned = true;

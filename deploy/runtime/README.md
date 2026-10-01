@@ -109,9 +109,7 @@ The Dedicated command and bundled plugin both resolve the same
 [Codex 0.158.0](https://github.com/openai/codex/releases/tag/rust-v0.158.0) installation.
 For multi-architecture builds, the frozen npm install selects the stock
 `@openai/codex-linux-x64` or `@openai/codex-linux-arm64` package for the target
-architecture. The image copies that package's bundled bubblewrap to
-`/usr/local/bin/bwrap`, so Codex finds the same binary on `PATH` and does not log a
-missing-bubblewrap error at each start. The image rebuilds `/opt/oce/runtime/contents.json` from
+architecture. The image rebuilds `/opt/oce/runtime/contents.json` from
 `/app/node_modules/openclaw` and updates
 `/opt/oce/runtime/provenance.json#runtimeContentsSha256` after final permission
 normalization. Its `codex` provenance records the stock package source, version,

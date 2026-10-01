@@ -210,24 +210,6 @@ RUN mkdir -p node_modules/openclaw/dist/extensions ./plugin-skills /etc/openclaw
   && node /tmp/build-runtime-assets.mjs inventory /app/node_modules/openclaw /opt/oce/runtime \
   && rm /tmp/build-runtime-assets.mjs
 
-# Codex prefers bubblewrap on PATH and logs an error at every start when it is
-# missing. Install the copy Codex already ships so it finds the same binary;
-# the sandbox does not change. A copy, not a link: Codex skips a PATH entry
-# that resolves under its working directory.
-RUN set -eu; \
-    case "$(node -p process.arch)" in \
-      x64) platform=codex-linux-x64; triple=x86_64-unknown-linux-musl ;; \
-      arm64) platform=codex-linux-arm64; triple=aarch64-unknown-linux-musl ;; \
-      *) exit 1 ;; \
-    esac; \
-    codex_package="$(dirname "$(dirname "$(readlink -f node_modules/.bin/codex)")")"; \
-    bundled_bwrap="$(readlink -f "$codex_package/../$platform/vendor/$triple/codex-resources/bwrap")"; \
-    install -m 0755 "$bundled_bwrap" /usr/local/bin/bwrap; \
-    cmp "$bundled_bwrap" /usr/local/bin/bwrap; \
-    test "$(command -v bwrap)" = /usr/local/bin/bwrap; \
-    test "$(bwrap --version)" = "bubblewrap built for Codex"; \
-    bwrap --help | grep -q -- --ro-bind-fd
-
 COPY --from=repository-client-build /build/.build/repository-credentials/client/package.json /opt/oce/repository-credentials/package.json
 COPY --from=repository-client-build /build/.build/repository-credentials/client/dist /opt/oce/repository-credentials/dist
 COPY deploy/runtime/bin /opt/oce/repository-credentials/bin
