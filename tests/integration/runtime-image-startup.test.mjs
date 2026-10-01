@@ -15,7 +15,6 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -634,19 +633,6 @@ process.exit(material.status ?? 1);
     "-e",
     probe,
   ]);
-}
-
-async function reserveTcpPort() {
-  const server = createTcpServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "0.0.0.0", resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
 }
 
 async function createRuntimeBrokerTlsMaterial(t) {
@@ -1998,11 +1984,10 @@ test(
     const deniedMaterialVolumeName = `oce-runtime-broker-material-denied-${suffix}`;
     const workspaceBranch = "native-feature";
     const tls = await createRuntimeBrokerTlsMaterial(t);
-    const listenPort = await reserveTcpPort();
     const fixture = await startRegistryCredentialServiceFixture(t, {
       tls,
       autoOpen: false,
-      gateway: { publicOrigin: "https://git.oce.svc", listen: `0.0.0.0:${listenPort}` },
+      gateway: { publicOrigin: "https://git.oce.svc", listen: "0.0.0.0:0" },
       repositories: [
         {
           repositoryRef: "guarded",
@@ -2149,7 +2134,7 @@ server.listen(443, "0.0.0.0", () => console.log("broker-forwarder-ready"));
       "-e",
       forwarder,
       "host.docker.internal",
-      String(listenPort),
+      String(fixture.listeners.address.port),
     ]);
     await waitForDockerLog(proxyName, /broker-forwarder-ready/);
 

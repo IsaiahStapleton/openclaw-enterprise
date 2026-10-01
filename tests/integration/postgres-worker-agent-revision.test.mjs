@@ -935,7 +935,6 @@ test(
       { startRepositoryReceiptServer },
       { startControlResponseRelay },
       { createResourceScope },
-      { createServer },
       { dirname },
     ] = await Promise.all([
       import("../../apps/controller/src/drivers/repo/github/driver.ts"),
@@ -944,21 +943,13 @@ test(
       import("../../apps/controller/src/backends/repository-credentials/receipt-server.ts"),
       import("../fixtures/repository-credentials/control-relay.mjs"),
       import("../fixtures/repository-credentials/resources.mjs"),
-      import("node:net"),
       import("node:path"),
     ]);
-    const reservation = createServer();
-    await new Promise((resolve, reject) => {
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", resolve);
-    });
-    const port = reservation.address().port;
-    await new Promise((resolve) => reservation.close(resolve));
     const credentials = await startRegistryCredentialServiceFixture(context, {
       namespaceId: fixture.namespace.id,
       autoOpen: false,
       clock: { ...createControlledClock(), wallNow: Date.now },
-      gateway: { listen: `127.0.0.1:${port}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const scope = createResourceScope();
     context.after(() => scope.close());
@@ -1072,20 +1063,11 @@ test(
       { GitHubRepoDriver },
       { UnixRepositoryCredentialControlClient },
       { startRegistryCredentialServiceFixture },
-      { createServer },
     ] = await Promise.all([
       import("../../apps/controller/src/drivers/repo/github/driver.ts"),
       import("../../apps/controller/src/backends/repository-credentials/control-client.ts"),
       import("../fixtures/repository-credentials/registry.mjs"),
-      import("node:net"),
     ]);
-    const reservation = createServer();
-    await new Promise((resolve, reject) => {
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", resolve);
-    });
-    const port = reservation.address().port;
-    await new Promise((resolve) => reservation.close(resolve));
     const clock = createControlledClock();
     const startedWall = clock.wallNow();
     const credentials = await startRegistryCredentialServiceFixture(context, {
@@ -1094,7 +1076,7 @@ test(
       // Worker admission IDs use real wall time. Preserve that progress while
       // allowing this fixture's provider-retirement expiry to advance explicitly.
       clock: { ...clock, wallNow: () => Date.now() + clock.wallNow() - startedWall },
-      gateway: { listen: `127.0.0.1:${port}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const driver = new GitHubRepoDriver(
       {
