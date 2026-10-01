@@ -56,10 +56,15 @@ const externalProviders = {
 // The last discovered OIDC label, kept per tab so messages after the IdP round trip, which
 // reloads the Console before discovery answers, name the provider the person chose.
 const oidcLabelStorageKey = "occ.console.oidcLabel";
+// 1 to 40 code points, as the server's discovery schema allows.
+function validOidcLabel(label) {
+  const length = [...label].length;
+  return length > 0 && length <= 40;
+}
 function rememberedOidcLabel() {
   try {
     const label = sessionStorage.getItem("occ.console.oidcLabel");
-    return typeof label === "string" && label.length > 0 && label.length <= 40 ? label : null;
+    return typeof label === "string" && validOidcLabel(label) ? label : null;
   } catch {
     return null;
   }
@@ -70,12 +75,7 @@ function configureOidc(signIn) {
   try {
     const endpoint = new URL(signIn?.authorizationUrl);
     const label = signIn?.label;
-    if (
-      endpoint.protocol !== "https:" ||
-      typeof label !== "string" ||
-      label.length === 0 ||
-      label.length > 40
-    ) {
+    if (endpoint.protocol !== "https:" || typeof label !== "string" || !validOidcLabel(label)) {
       return false;
     }
     externalProviders.oidc = { label, origin: endpoint.origin, pathname: endpoint.pathname };
