@@ -187,8 +187,17 @@ stdin; managed account login forces the admitted workspace. Direct service accou
 inputs and failed login prevent app-server startup. A bounded native turn against
 the primary model must then complete successfully. The probe ignores user rules
 and configuration, disables execution and external tools, and applies read-only
-filesystem policy without approval grants. Tool events fail the probe. Login
-state remains in the bounded ephemeral home.
+filesystem policy without approval grants. Tool events fail the probe. API-key and service-account login
+state remains in the bounded ephemeral home; OAuth reuses the persistent bundle
+described below.
+
+The dedicated wrapper retains `APP_SERVER_TOKEN` for local plugin
+authentication, but omits it from the environments of `codex login` and
+`codex app-server`. The app-server listener receives the current token's
+SHA-256 digest. When plugin status is enabled, the wrapper derives that token
+from the Agent revision and startup identity before hashing it. The token
+remains in the Pod; filtering child environments does not isolate same-UID
+processes.
 
 `startAuthenticatedCodex` gives `probeCodexAuthentication` a maximum of two
 attempts within one monotonic 61-second budget. Only the subprocess's
@@ -254,6 +263,10 @@ The source seal prevents ordinary Secret updates from resetting custody.
 
 ## Debugging and Verification
 
+- `node --test tests/conformance/plugin-compute.test.mjs` checks the filtered
+  Codex child environments, the startup-derived listener hash, and the wrapper's
+  retained token. The runtime-image startup test checks the native Codex shell
+  without a provider turn.
 - [Container launcher tests](../testing/docker.md#verify-codex-startup-probe-recovery)
   execute the generated launcher with a fixture CLI, real process timeouts,
   termination, and status reads. They prove recovery control flow, not provider
@@ -287,6 +300,10 @@ The source seal prevents ordinary Secret updates from resetting custody.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 17:30: Preserve persistent OAuth startup alongside filtered Codex child environments in the merge integration. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - c724fb7fee3790d9c122eb7dc2563869bad4a56e)
+
+- 2026-09-30 23:49: Document the dedicated Codex transport-token child boundary in the accompanying change. (authoring-run/134e3f48-c97b-43d0-93ea-84497c29c940 - 704da0b47ea1973e4a9e7d18ef13d44414691eda)
 
 - 2026-09-30 17:23: Remove the Installation opt-in for Codex device login while retaining Experimental status and topology checks in the accompanying change. (codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - 9ae40ce59eadfd03d52c78086de92f0034dd9974)
 

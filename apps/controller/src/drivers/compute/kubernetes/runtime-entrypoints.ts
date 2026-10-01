@@ -2576,6 +2576,11 @@ const loginArguments = loginMode === "api_key"
       "login",
       "--with-access-token",
     ];
+function codexChildEnvironment() {
+  const environment = { ...process.env };
+  delete environment.APP_SERVER_TOKEN;
+  return environment;
+}
 // Codex reports provider HTTP rejections as "status 401 Unauthorized" or
 // "unexpected status 403 Forbidden"; transport failures carry no status.
 function codexAuthenticationRejected(message) {
@@ -2602,6 +2607,7 @@ if (loginMode === "oauth") {
   for (let attempt = 0; attempt < 3; attempt++) {
     login = spawnSync("codex", loginArguments, {
       input: loginMode === "api_key" ? apiKey : accessToken,
+      env: codexChildEnvironment(),
       encoding: "utf8",
       stdio: ["pipe", "ignore", "pipe"],
       timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144,
@@ -2807,7 +2813,7 @@ const child = spawn(
     "--ws-token-sha256",
     digest,
   ],
-  { stdio: "inherit", cwd: "/home/node/workspace" },
+  { stdio: "inherit", cwd: "/home/node/workspace", env: codexChildEnvironment() },
 );
 forwardTermination(child);
 child.on("exit", (code, signal) => process.exit(code ?? (signal === "SIGTERM" ? 0 : 1)));

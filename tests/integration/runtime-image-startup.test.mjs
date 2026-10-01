@@ -1248,8 +1248,10 @@ vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
       spawn(command, args, options) {
         const appServer = args.indexOf("app-server");
         assert.ok(appServer > 0);
+        const appServerEnvironment = options.env ?? environment;
+        assert.equal(Object.hasOwn(appServerEnvironment, "APP_SERVER_TOKEN"), false);
         native = cp.spawn(command, [...args.slice(0, appServer + 1), "--listen", "stdio://"], {
-          ...options, env: environment, stdio: ["pipe", "pipe", "pipe"],
+          ...options, env: appServerEnvironment, stdio: ["pipe", "pipe", "pipe"],
         });
         return native;
       },
@@ -1283,7 +1285,7 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
     assert.equal(config.allow_login_shell, false);
     assert.equal(config.shell_environment_policy.set.PATH, environment.PATH);
     const result = await rpc("command/exec", {
-      command: ["/bin/bash", "-c", "command -v gh; command -v git; git config --system --get-all include.path"],
+      command: ["/bin/bash", "-c", 'test -z "$APP_SERVER_TOKEN" || exit 1; command -v gh; command -v git; git config --system --get-all include.path'],
       sandboxPolicy: { type: "externalSandbox", networkAccess: "restricted" },
       timeoutMs: 5000,
     });
