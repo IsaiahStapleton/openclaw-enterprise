@@ -122,6 +122,12 @@ async function startNativeHttpsUpstream(t) {
       headers: { ...request.headers },
       body: Buffer.concat(chunks).toString("utf8"),
     });
+    if (request.url?.includes("/upstream-unavailable")) {
+      // OpenClaw's answer when a Gravatar fallback cannot be fetched.
+      response.writeHead(502, { "content-type": "application/json" });
+      response.end('{"ok":false,"error":{"type":"avatar_upstream_unavailable"}}');
+      return;
+    }
     if (request.url?.endsWith("/redirect-root")) {
       response.writeHead(302, {
         "content-security-policy": "default-src 'self'",
@@ -624,6 +630,24 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
   assert.equal(collision.body, "native admin upstream\n");
   assert.equal(context.upstream.requests.length, 2);
 
+  // A user photo the Gateway cannot fetch is a missing photo, not a Gateway failure.
+  const avatar = await injectJson(
+    context.fixture,
+    "GET",
+    "/api/users/upstream-unavailable/avatar?v=1",
+    { headers: nativeHeaders },
+  );
+  assert.equal(avatar.statusCode, 404, avatar.body);
+  assert.equal(avatar.body, "");
+  assert.equal(avatar.headers["cache-control"], "no-store");
+  assert.equal(context.upstream.requests.length, 3);
+  const otherFailure = await injectJson(context.fixture, "GET", "/upstream-unavailable", {
+    headers: nativeHeaders,
+  });
+  assert.equal(otherFailure.statusCode, 502, otherFailure.body);
+  assert.match(otherFailure.body, /avatar_upstream_unavailable/);
+  assert.equal(context.upstream.requests.length, 4);
+
   const rootRedirect = await injectJson(context.fixture, "GET", "/redirect-root", {
     headers: nativeHeaders,
   });
@@ -634,21 +658,21 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
   );
   assert.match(String(rootRedirect.headers["content-security-policy"]), /default-src 'self'/);
   assert.match(String(rootRedirect.headers["content-security-policy"]), /worker-src 'none'/);
-  assert.equal(context.upstream.requests.length, 3);
+  assert.equal(context.upstream.requests.length, 5);
 
   const externalRedirect = await injectJson(context.fixture, "GET", "/redirect-external", {
     headers: nativeHeaders,
   });
   assert.equal(externalRedirect.statusCode, 502, externalRedirect.body);
   assert.equal(externalRedirect.headers.location, undefined);
-  assert.equal(context.upstream.requests.length, 4);
+  assert.equal(context.upstream.requests.length, 6);
 
   const reservedRedirect = await injectJson(context.fixture, "GET", "/redirect-reserved", {
     headers: nativeHeaders,
   });
   assert.equal(reservedRedirect.statusCode, 502, reservedRedirect.body);
   assert.equal(reservedRedirect.headers.location, undefined);
-  assert.equal(context.upstream.requests.length, 5);
+  assert.equal(context.upstream.requests.length, 7);
 
   context.fixture.policy.restrictions.push({
     id: `restriction-native-admin-proxy-${randomUUID()}`,
@@ -665,7 +689,7 @@ test("native admin proxy strips browser credentials and preserves the Agent gate
   assert.equal(iamDenied.headers["set-cookie"], undefined);
   assert.equal(
     context.upstream.requests.length,
-    5,
+    7,
     "authorization-denied proxy requests must not reach native gateway",
   );
 });
