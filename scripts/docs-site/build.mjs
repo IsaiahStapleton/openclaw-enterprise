@@ -332,19 +332,21 @@ function resolveLink(page, href) {
 
 let linkCount = 0;
 for (const page of pages.values()) {
+  // Reuse validated targets while rendering this page from the same build inputs.
+  const resolvedLinks = new Map();
   for (const href of page.parsed.links) {
-    resolveLink(page, href);
+    resolvedLinks.set(href, resolveLink(page, href));
     linkCount++;
   }
   const text = renderComputeMatrixBlocks(page.text, { sourceFile: page.file, root: docs });
   page.html = renderMdxish(text, md, { sourceFile: page.file, root: docs }).replace(
     /<(?:a|img|source|span)\b[^>]*>/g,
     (tag) =>
-      tag.replace(
-        /\b(href|src|data-href)=(['"])(.*?)\2/g,
-        (_, name, quote, href) =>
-          name + "=" + quote + escape(resolveLink(page, md.utils.unescapeAll(href))) + quote,
-      ),
+      tag.replace(/\b(href|src|data-href)=(['"])(.*?)\2/g, (_, name, quote, href) => {
+        const sourceHref = md.utils.unescapeAll(href);
+        const resolved = resolvedLinks.get(sourceHref) ?? resolveLink(page, sourceHref);
+        return name + "=" + quote + escape(resolved) + quote;
+      }),
   );
 }
 const deploymentExamples = path.join(root, "deploy/examples");
