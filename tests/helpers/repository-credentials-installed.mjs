@@ -966,7 +966,7 @@ export const submitRepositoryTaskScript = String.raw`
 
 // Read-only private control observation. The production worker remains the only
 // session opener/closer, and bearer material never leaves the workload.
-export async function readInstalledCredentialSession(fixture, workerPod, sessionId) {
+export async function readInstalledCredentialSession(executeWorker, sessionId) {
   const code = String.raw`
     const http = require("node:http");
     const id = process.argv[1];
@@ -984,24 +984,5 @@ export async function readInstalledCredentialSession(fixture, workerPod, session
     request.on("error", () => { process.stderr.write("session observation failed\n"); process.exitCode = 1; });
     request.end();
   `;
-  return JSON.parse(
-    await fixture.run(
-      "kubectl",
-      [
-        ...fixture.kubernetes.kubectlArguments([]),
-        "-n",
-        fixture.system,
-        "exec",
-        workerPod.metadata.name,
-        "-c",
-        "worker",
-        "--",
-        "node",
-        "-e",
-        code,
-        sessionId,
-      ],
-      { timeout: 10000 },
-    ),
-  );
+  return JSON.parse(await executeWorker(code, [sessionId], 10000));
 }

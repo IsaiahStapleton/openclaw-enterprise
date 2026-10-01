@@ -7,7 +7,8 @@ import {
   createRepositoryObserver,
   readInstalledCredentialSession,
 } from "./repository-credentials-installed.mjs";
-import { loadYaml, dumpYaml, protectedText, waitFor } from "./qa-installation.mjs";
+import { loadYaml, dumpYaml, waitFor } from "./qa-utils.mjs";
+import { protectedText } from "./qa-secrets.mjs";
 
 export async function prepareQaRepository(f) {
   const input = f.repositoryInput;
@@ -433,45 +434,48 @@ export async function verifyQaRepository(f, agent, profile = "git-full") {
         !p.metadata.deletionTimestamp &&
         p.status.conditions?.some((c) => c.type === "Ready" && c.status === "True"),
     );
-    const adapter = {
-      ...f,
-      system: f.state.platformNamespace,
-      kubernetes: {
-        kubectlArguments: () => [
-          "--kubeconfig",
-          join(f.stateDirectory, "kubeconfig"),
-          "--context",
-          `k3d-${f.cluster}`,
-        ],
-      },
-    };
-    // Reuse the read-only control observer on either shipped worker placement.
-    if (f.controlPlane === "compose") {
-      adapter.run = (_cmd, args, options) => {
-        const start = args.indexOf("--");
-        return f.run(
-          "docker",
-          [
-            "compose",
-            "-p",
-            f.cluster,
-            "-f",
-            join(f.stateDirectory, "compose.yaml"),
-            "exec",
-            "-T",
-            "worker-kubernetes",
-            ...args.slice(start + 1),
-          ],
-          options,
-        );
-      };
-    }
-    readSession = (id) =>
-      readInstalledCredentialSession(
-        adapter,
-        workerPod ?? { metadata: { name: "compose-worker" } },
-        id,
-      );
+    const executeWorker = (script, args, timeout) =>
+      f.controlPlane === "compose"
+        ? f.run(
+            "docker",
+            [
+              "compose",
+              "-p",
+              f.cluster,
+              "-f",
+              join(f.stateDirectory, "compose.yaml"),
+              "exec",
+              "-T",
+              "worker-kubernetes",
+              "node",
+              "-e",
+              script,
+              ...args,
+            ],
+            { timeout },
+          )
+        : f.run(
+            "kubectl",
+            [
+              "--kubeconfig",
+              join(f.stateDirectory, "kubeconfig"),
+              "--context",
+              `k3d-${f.cluster}`,
+              "-n",
+              f.state.platformNamespace,
+              "exec",
+              workerPod.metadata.name,
+              "-c",
+              "worker",
+              "--",
+              "node",
+              "-e",
+              script,
+              ...args,
+            ],
+            { timeout },
+          );
+    readSession = (id) => readInstalledCredentialSession(executeWorker, id);
     assert.equal((await readSession(attempt.sessionId)).state, "OPEN");
     for (const pod of [gateway, consumer]) {
       assert.ok(
@@ -486,10 +490,7 @@ export async function verifyQaRepository(f, agent, profile = "git-full") {
       );
     }
     // Submit through the actual gateway's supported authenticated HTTP endpoint.
-    // The shared scenario's worker submission adapter uses this same endpoint,
-    // leaving execution and Git/gh entirely in the native Agent.
-    const submitExec = async (_pod, _container, script, args, input, timeout) =>
-      exec(script, args, input, timeout);
+    // Execution and Git/gh remain entirely in the native Agent.
     const scenarioFixture = {
       ...f,
       suffix,
@@ -514,10 +515,9 @@ export async function verifyQaRepository(f, agent, profile = "git-full") {
       consumer,
       agent,
       revision: agent.revision,
-      workerPod,
       attempt,
       exec,
-      execIn: submitExec,
+      submitTask: exec,
       consumerExec,
       observe,
       app: { repositoryId: String(entry.repositoryId) },

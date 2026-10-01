@@ -16,8 +16,8 @@ test(
     timeout: 14_400_000,
   },
   async (context) => {
-    const { createQaInstallation, createQaAgent, protectedText, redactQaError } =
-      await import("../helpers/qa-installation.mjs");
+    const { createQaInstallation, createQaAgent } = await import("../helpers/qa-installation.mjs");
+    const { protectedText, redactQaError } = await import("../helpers/qa-secrets.mjs");
     const { createQaBrowser } = await import("../helpers/qa-browser.mjs");
     const { prepareQaRepository, verifyQaRepository, stopQaAgent } =
       await import("../helpers/qa-repository.mjs");

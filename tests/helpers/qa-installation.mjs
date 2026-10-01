@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { mkdtemp, mkdir, copyFile, chmod, open, readFile, writeFile, stat } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { createServer } from "node:net";
+import { mkdtemp, mkdir, copyFile, chmod, readFile, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { allowsPushRef } from "../../apps/controller/src/drivers/repo/credentials/client-contracts.ts";
 import { nativeAdminTarget } from "../../apps/controller/src/gateway/native-admin.ts";
 import { renderPresetTemplate } from "../../packages/contracts/src/index.ts";
 import { createNativePluginAssertions } from "./plugin-driver-real.mjs";
 import { prepareHybridInstallation } from "./qa-hybrid.mjs";
+import { loadYaml, dumpYaml, unusedPort, waitFor } from "./qa-utils.mjs";
+import { protectedText, registerQaSecret, grantQaSecret } from "./qa-secrets.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 
 function execute(command, args, options) {
@@ -29,72 +27,6 @@ function execute(command, args, options) {
   });
 }
 const repository = resolve(import.meta.dirname, "../..");
-const { loadYaml, dumpYaml } = createRequire(
-  new URL("../../apps/controller/package.json", import.meta.url),
-)("@kubernetes/client-node");
-
-export function yamlDocuments(text) {
-  return text
-    .split(/^---\s*$/m)
-    .filter((document) =>
-      document.split("\n").some((line) => line.trim() && !line.trim().startsWith("#")),
-    );
-}
-
-export async function waitFor(description, observe, timeout = 300_000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const result = await observe();
-    if (result) {
-      return result;
-    }
-    await delay(1000);
-  }
-  throw new Error(`Timed out: ${description}`);
-}
-
-export async function unusedPort() {
-  const server = createServer();
-  await new Promise((accept, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", accept);
-  });
-  const port = server.address().port;
-  await new Promise((accept) => server.close(accept));
-  return port;
-}
-
-const protectedValues = new Set();
-export function redactQaError(error) {
-  for (const field of ["message", "stack"]) {
-    if (typeof error[field] === "string") {
-      for (const secret of protectedValues) {
-        error[field] = error[field].replaceAll(secret, "[REDACTED]");
-      }
-    }
-  }
-  return error;
-}
-
-export async function protectedText(path, label) {
-  assert.ok(path, `${label} path is required`);
-  // Check and read the same opened file; never follow a substituted symlink.
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const info = await file.stat();
-    assert.ok(
-      info.isFile() && (info.mode & 0o077) === 0,
-      `${label} must be a private regular file`,
-    );
-    const value = (await file.readFile("utf8")).trim();
-    assert.ok(value.length > 0, `${label} must not be empty`);
-    protectedValues.add(value);
-    return value;
-  } finally {
-    await file.close();
-  }
-}
-
 export function launcherEnvironment() {
   // Runtime credentials are delivered later through the Secret API. Never pass
   // the matrix's model, sender, or GitHub observer credentials to the launcher.
@@ -415,7 +347,7 @@ export async function createQaInstallation(context, controlPlane, artifacts) {
         .env.find((item) => item.name === "OPENCLAW_GATEWAY_PASSWORD").valueFrom.secretKeyRef;
       const secret = await f.resource("secret", secretName.name, pod.metadata.namespace);
       const gatewayPassword = Buffer.from(secret.data[secretName.key], "base64").toString();
-      protectedValues.add(gatewayPassword);
+      registerQaSecret(gatewayPassword);
       return {
         url: `http://127.0.0.1:${port}`,
         gatewayPassword,
@@ -557,7 +489,7 @@ export async function createQaInstallation(context, controlPlane, artifacts) {
   f.serviceKey = JSON.parse(
     await protectedText(join(stateDirectory, "initial-admin-service-key.json"), "bootstrap key"),
   ).data.key;
-  protectedValues.add(f.serviceKey);
+  registerQaSecret(f.serviceKey);
   f.installation = await f.api("GET", "/installation");
   f.defaultNamespace = await waitFor("default Namespace ready after shipped startup", async () => {
     const namespace = (await f.api("GET", "/namespaces")).find((ns) => ns.name === "default");
@@ -580,7 +512,7 @@ export async function createQaInstallation(context, controlPlane, artifacts) {
       ),
     };
   }
-  protectedValues.add(f.credentials.password);
+  registerQaSecret(f.credentials.password);
   await f.record("startup", {
     installationId: f.installation.id,
     defaultNamespaceId: f.defaultNamespace.id,
@@ -682,17 +614,7 @@ export async function createQaAgent(f, presetName, browserOrigin, nameSuffix = "
     });
   }
   f.agents.push(agent);
-  const role = await f.api("POST", `/namespaces/${f.namespace.id}/iam/roles`, {
-    name: `${agent.name}-model`,
-    permissions: [{ action: "operate", resourceKind: "secret" }],
-  });
-  await f.api("POST", `/namespaces/${f.namespace.id}/iam/access-bindings`, {
-    subjectKind: "identity",
-    subjectId: agent.servicePrincipalId,
-    roleId: role.id,
-    resourceKind: "secret",
-    resourceId: secret.id,
-  });
+  await grantQaSecret(f, agent, secret.id, `${agent.name}-model`);
   await f.api("POST", `/namespaces/${f.namespace.id}/agents/${agent.id}/runtime-credentials`, {});
   await f.deployAndWait(agent);
   agent.native = createNativePluginAssertions({
@@ -705,4 +627,4 @@ export async function createQaAgent(f, presetName, browserOrigin, nameSuffix = "
   return agent;
 }
 
-export { repository, loadYaml, dumpYaml };
+export { repository };

@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { protectedText } from "../helpers/qa-installation.mjs";
+import { protectedText } from "../helpers/qa-secrets.mjs";
 
 test("QA credentials require a private regular file and reject symlink substitution", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "qa-credential-"));

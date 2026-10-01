@@ -257,6 +257,27 @@ function installedRepositoryJourney(mode, profile = "git-full") {
     let workFailure;
     let remoteEvidence;
     const cleanupFailures = [];
+    const executeWorker = (script, args, timeout) =>
+      f.run(
+        "kubectl",
+        [
+          ...f.kubernetes.kubectlArguments([]),
+          "-n",
+          f.system,
+          "exec",
+          workerPod.metadata.name,
+          "-c",
+          "worker",
+          "--",
+          "node",
+          "-e",
+          script,
+          ...args,
+        ],
+        { timeout },
+      );
+    const readSession = (id) => readInstalledCredentialSession(executeWorker, id);
+
     try {
       const backendId = "repository-proof";
       const repositoryRef = "authorized-repository";
@@ -837,7 +858,7 @@ function installedRepositoryJourney(mode, profile = "git-full") {
       assert.equal(attempt.phase, "open");
       assert.equal(attempt.repositoryRef, repositoryRef);
       assert.ok(attempt.sessionId);
-      const openedSession = await readInstalledCredentialSession(f, workerPod, attempt.sessionId);
+      const openedSession = await readSession(attempt.sessionId);
       assert.equal(openedSession.sessionId, attempt.sessionId);
       assert.equal(openedSession.state, "OPEN");
       const material = JSON.parse(
@@ -909,15 +930,16 @@ function installedRepositoryJourney(mode, profile = "git-full") {
           consumer,
           agent,
           revision,
-          workerPod,
           attempt,
           exec,
-          execIn,
+          // The worker holds the scoped Gateway key and CA for dedicated
+          // submission; neither credential is copied to the test runner.
+          submitTask: dedicated ? (...args) => execIn(workerPod, "worker", ...args) : exec,
           consumerExec,
           observe,
           app,
           remote,
-          readSession: (id) => readInstalledCredentialSession(f, workerPod, id),
+          readSession,
         });
       }
     } catch (error) {
@@ -963,7 +985,7 @@ function installedRepositoryJourney(mode, profile = "git-full") {
             );
           });
           if (attempt) {
-            const disposed = await readInstalledCredentialSession(f, workerPod, attempt.sessionId);
+            const disposed = await readSession(attempt.sessionId);
             assert.equal(disposed.sessionId, attempt.sessionId);
             assert.equal(disposed.state, "DISPOSED");
             assert.equal(disposed.activeUses, 0);

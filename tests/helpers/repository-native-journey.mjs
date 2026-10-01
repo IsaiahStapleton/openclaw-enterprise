@@ -79,10 +79,9 @@ export async function verifyNativeRepositoryJourney({
   consumer,
   agent,
   revision,
-  workerPod,
   attempt,
   exec,
-  execIn,
+  submitTask,
   consumerExec,
   observe,
   app,
@@ -194,11 +193,8 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
   let taskFailure;
   let taskTransport = { outcome: "unresolved" };
   try {
-    // The installed worker already holds the scoped Gateway key and CA for
-    // node enrollment; neither credential is copied to the test runner.
-    const submit = dedicated ? (...args) => execIn(workerPod, "worker", ...args) : exec;
     const response = JSON.parse(
-      await submit(
+      await submitTask(
         submitRepositoryTaskScript,
         [],
         JSON.stringify({

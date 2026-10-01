@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { loadYaml, dumpYaml, protectedText, waitFor, yamlDocuments } from "./qa-installation.mjs";
+import { loadYaml, dumpYaml, waitFor, yamlDocuments } from "./qa-utils.mjs";
+import { protectedText, grantQaSecret } from "./qa-secrets.mjs";
 import { slackApi } from "./harness-topology-k3d-real.mjs";
 import { allMessages, verifySingleSlackDelivery } from "./slack-delivery.mjs";
 import { sessionEvidenceScript } from "./normal-agent-tools.mjs";
@@ -119,17 +120,7 @@ export async function verifyQaSlack(f, agent) {
       name: `${agent.name}-${name.toLowerCase()}`,
       value,
     });
-    const role = await f.api("POST", `${base}/iam/roles`, {
-      name: `${agent.name}-${name.toLowerCase()}`,
-      permissions: [{ action: "operate", resourceKind: "secret" }],
-    });
-    await f.api("POST", `${base}/iam/access-bindings`, {
-      subjectKind: "identity",
-      subjectId: agent.servicePrincipalId,
-      roleId: role.id,
-      resourceKind: "secret",
-      resourceId: secret.id,
-    });
+    await grantQaSecret(f, agent, secret.id, `${agent.name}-${name.toLowerCase()}`);
     bindings[name] = {
       source: { kind: "secret", namespaceId: agent.namespaceId, id: secret.id },
       delivery: { type: "env" },

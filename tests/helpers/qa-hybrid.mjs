@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gatewayRoutingPins } from "../../scripts/ci/routing.mjs";
-import { loadYaml, dumpYaml, waitFor, yamlDocuments } from "./qa-installation.mjs";
+import { loadYaml, dumpYaml, waitFor, yamlDocuments } from "./qa-utils.mjs";
 
 export async function verifyNetworkPolicy(f) {
   const namespace = `qa-policy-${f.suffix}`;
