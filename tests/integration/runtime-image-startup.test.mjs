@@ -1801,6 +1801,40 @@ test(
     );
     const output = `${logs.stdout}\n${logs.stderr}`;
     assert.doesNotMatch(output, /config reload failed|config restart|workspace-node-changed/);
+    // The Gateway's own workspace is empty, so Codex gets no OpenClaw tool that would
+    // act on it or run commands in the Gateway; the pinned OpenClaw accepts the setting.
+    const effective = await runDocker([
+      "exec",
+      containerName,
+      "node",
+      "-e",
+      `const fs = require("node:fs");
+const cp = require("node:child_process");
+// The wrapper writes the effective configuration it starts OpenClaw with here.
+const path = "/home/node/.openclaw/openclaw.json";
+const config = JSON.parse(fs.readFileSync(path, "utf8"));
+const validation = cp.spawnSync("node", ["/app/openclaw.mjs", "config", "validate", "--json"], {
+  env: { ...process.env, OPENCLAW_CONFIG_PATH: path }, encoding: "utf8", timeout: 60000,
+});
+process.stdout.write(JSON.stringify({
+  excluded: config.plugins.entries.codex.config.codexDynamicToolsExclude,
+  valid: JSON.parse(validation.stdout).valid,
+}));`,
+    ]);
+    assert.deepEqual(JSON.parse(effective.stdout), {
+      excluded: [
+        "ls",
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "process",
+        "gateway_exec",
+        "gateway_process",
+      ],
+      valid: true,
+    });
     t.diagnostic(`workspace node ack after ${result.ackMs} ms: ${JSON.stringify(result)}`);
   },
 );

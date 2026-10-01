@@ -207,6 +207,12 @@ Other Harnesses are replaced, restarting their Gateway.
   Agent-owned ConfigMap (replacing the Codex plugin runtime); activation awaits
   OpenClaw's report or fails with its cause. Otherwise the ID is set at Gateway
   start. Losing it fails.
+- The Gateway's own `/home/node/workspace` stays empty. It withholds from Codex
+  the OpenClaw tools that would act on it or run commands in the Gateway Pod
+  (`ls`, `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
+  `gateway_exec`, `gateway_process`) through `codexDynamicToolsExclude`, keeping
+  owner entries. Codex's native tools act in the Harness; the file-transfer tools
+  reach it through the node.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots. Symlinks are not followed; explicit policies remain authoritative. This
   serves previews, browsing, bootstrap and outputs.
@@ -222,7 +228,10 @@ image assets; Gateway-provided Skills stay local. See the
 [ownership table](../../specs/plans/30-storage-split-integration.md#where-data-lives).
 Remote channel menus remain deferred to [#241](https://github.com/openclaw/openclaw-enterprise/issues/241).
 
-Only Harness mounts dedicated workspace/generated-image storage. Gateway sessions
+Only Harness mounts dedicated workspace, generated-image and Codex rollout
+storage. The rollouts let the Gateway resume its bound Codex thread after
+stop/start or Pod replacement; the rest of `CODEX_HOME` stays Pod-local unless
+OAuth keeps it on the claim. Gateway sessions
 use its private PVC; Codex's existing remote-media reader transfers reply artifacts
 before cleanup. Embedded storage is unchanged. New and reused Harness PVCs require
 RWO. `KubernetesComputeDriver.verifyPersistentVolumeClaim` rejects RWX during

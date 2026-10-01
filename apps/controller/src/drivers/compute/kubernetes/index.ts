@@ -699,6 +699,20 @@ const HARNESS_WORKSPACE_CATEGORIES = Object.freeze([
   ["workspace", "/home/node/workspace"],
   ["generated-images", "/home/node/.codex/generated_images"],
 ] as const);
+// Codex thread rollouts. The Gateway resumes its bound thread by ID after a
+// restart; without its rollout the Harness starts a new thread. The rest of
+// CODEX_HOME (login, config) stays Pod-local. OAuth keeps all of CODEX_HOME,
+// sessions included, in `codex-home`, which a new OAuth source empties.
+const HARNESS_CODEX_SESSIONS_CATEGORY = Object.freeze([
+  "codex-sessions",
+  "/home/node/.codex/sessions",
+] as const);
+
+function harnessWorkspaceCategories(oauth: boolean) {
+  return oauth
+    ? HARNESS_WORKSPACE_CATEGORIES
+    : [...HARNESS_WORKSPACE_CATEGORIES, HARNESS_CODEX_SESSIONS_CATEGORY];
+}
 const GATEWAY_SESSION_DIRECTORY = "/home/node/.openclaw/agents/main/sessions";
 const RESOURCE_REQUIREMENTS_SCHEMA = Object.freeze({
   type: "object",
@@ -6690,7 +6704,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       );
     }
     const environment = this.sandboxEnvironmentVariables(container?.env);
-    const workspaceMounts = this.sandboxWorkspaceMounts(spec?.volumes, container?.volumeMounts);
+    const workspaceMounts = this.sandboxWorkspaceMounts(
+      spec?.volumes,
+      container?.volumeMounts,
+      loginMode === "oauth",
+    );
     const serviceAccountToken = this.sandboxServiceAccountToken(
       spec?.volumes,
       container?.volumeMounts,
@@ -7519,6 +7537,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
   private sandboxWorkspaceMounts(
     volumes: unknown,
     volumeMounts: unknown,
+    oauth: boolean,
   ): readonly SandboxWorkspaceMount[] {
     const observedVolumes = Array.isArray(volumes) ? volumes : [];
     const workspaceVolume = observedVolumes.find(
@@ -7540,7 +7559,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
           readOnly: mount?.readOnly === true,
         };
       });
-    const expected = this.harnessWorkspaceVolumeMounts();
+    const expected = this.harnessWorkspaceVolumeMounts(oauth);
     if (workspaceMounts.length !== expected.length) {
       throw new ConfigurationFailure("Dedicated Harness must mount every approved workspace path.");
     }
@@ -8943,8 +8962,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     }
   }
 
-  private harnessWorkspaceVolumeMounts(): V1VolumeMount[] {
-    return HARNESS_WORKSPACE_CATEGORIES.map(([subPath, mountPath]) => ({
+  private harnessWorkspaceVolumeMounts(oauth: boolean): V1VolumeMount[] {
+    return harnessWorkspaceCategories(oauth).map(([subPath, mountPath]) => ({
       name: HARNESS_WORKSPACE_VOLUME,
       mountPath,
       subPath,
@@ -10641,8 +10660,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         name: HARNESS_WORKSPACE_VOLUME,
         persistentVolumeClaim: { claimName: this.harnessWorkspaceClaimName(agentId) },
       });
-      volumeMounts.push(...this.harnessWorkspaceVolumeMounts());
-      if (harnessAuth?.loginMode === "oauth") {
+      const oauth = harnessAuth?.loginMode === "oauth";
+      volumeMounts.push(...this.harnessWorkspaceVolumeMounts(oauth));
+      if (oauth) {
         // Deliberate P0 scope: native Codex owns refresh on this private disk;
         // OCE cannot refresh, recover a lost bundle, or share it after handoff.
         // TODO(token-broker): Replace this handoff with broker-managed custody.
@@ -10664,12 +10684,16 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       });
       (initialization.args as string[])[0] += `
 for (const path of ${JSON.stringify(
-        HARNESS_WORKSPACE_CATEGORIES.map(([subPath]) => `/harness-workspace-state/${subPath}`),
+        harnessWorkspaceCategories(oauth).map(([subPath]) => `/harness-workspace-state/${subPath}`),
       )}) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   chmodSync(path, 0o700);
 }`;
-      if (harnessAuth?.loginMode !== "oauth") {
+      if (oauth) {
+        // An OAuth home starts without earlier history, as a new OAuth source does.
+        (initialization.args as string[])[0] += `
+require("node:fs").rmSync("/harness-workspace-state/codex-sessions", { recursive: true, force: true });`;
+      } else {
         // A revision without OAuth must not leave a personal login refreshing on the volume.
         (initialization.args as string[])[0] += `
 require("node:fs").rmSync("/harness-workspace-state/codex-home", { recursive: true, force: true });`;

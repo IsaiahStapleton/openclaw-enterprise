@@ -2006,6 +2006,27 @@ function configureWorkspaceNodePlugins(config, workspaceNodeId) {
   (fileConfig.workspaces ??= {}).main = { nodeId: workspaceNodeId, remoteRoot };
 }
 
+// A Gateway with a workspace node serves no workspace: its /home/node/workspace
+// is an empty local directory, while Codex runs in the Harness Pod. OpenClaw executes
+// its dynamic tools in the Gateway process, so these would list, read, write or
+// run commands in the Gateway Pod instead. Codex's native tools cover them in
+// the Harness, and the file-transfer tools reach its workspace through the node.
+const GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS = [
+  "ls", "read", "write", "edit", "apply_patch",
+  "exec", "process", "gateway_exec", "gateway_process",
+];
+
+function excludeGatewayLocalCodexTools(config) {
+  const codex = config.plugins?.entries?.codex;
+  if (!isPlainObject(codex)) return;
+  const codexConfig = codex.config ??= {};
+  const configured = codexConfig.codexDynamicToolsExclude ?? [];
+  if (!Array.isArray(configured)) {
+    throw new Error("The Codex plugin codexDynamicToolsExclude setting must be a list.");
+  }
+  codexConfig.codexDynamicToolsExclude = [...new Set([...configured, ...GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS])];
+}
+
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const workspaceNodeBindingPath = process.env.OPENCLAW_WORKSPACE_NODE_PATH;
 
@@ -2152,6 +2173,7 @@ function configureGateway(peerStatus) {
     if (environmentWorkspaceNodeId !== undefined || workspaceNodeBindingPath !== undefined) {
       // Refuse a revision that cannot host its node now, not when the node arrives.
       requireWorkspaceNodePlugins(config);
+      excludeGatewayLocalCodexTools(config);
     }
     workspaceNodeId = environmentWorkspaceNodeId ?? readWorkspaceNodeBinding();
     if (workspaceNodeId !== undefined) {

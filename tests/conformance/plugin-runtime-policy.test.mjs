@@ -585,6 +585,19 @@ function workspaceNodeState(sandbox) {
   return { nodeId, failure };
 }
 
+// OpenClaw dynamic tools that execute against the Gateway Pod's local disk or shell.
+const GATEWAY_LOCAL_CODEX_TOOLS = [
+  "ls",
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "gateway_exec",
+  "gateway_process",
+];
+
 const codexGatewayConfig = () => ({
   gateway: { port: 8080, nodes: { commands: { allow: ["existing.command"] } } },
   plugins: {
@@ -618,6 +631,12 @@ test("a running Gateway hot-applies its workspace node under plugins.* and acks 
   const configPath = "/home/node/.openclaw/openclaw.json";
   const atStart = JSON.parse(files.get(configPath));
   assert.equal(atStart.plugins.entries["file-transfer"], undefined);
+  // Before the node pairs, Codex already gets no tool that would act on the
+  // Gateway Pod's empty workspace or run commands there.
+  assert.deepEqual(
+    atStart.plugins.entries.codex.config.codexDynamicToolsExclude,
+    GATEWAY_LOCAL_CODEX_TOOLS,
+  );
   // gateway.* is final at start: the command grant precedes any node ID.
   assert.equal(atStart.gateway.nodes.commands.allow.includes("file.fetch"), true);
   const gatewayAtStart = JSON.stringify(atStart.gateway);
@@ -871,6 +890,45 @@ test("a Gateway given its node in the environment configures it at start and arm
   assert.deepEqual(kills, []);
 });
 
+test("a workspace-node Gateway keeps owner Codex tool excludes and refuses a malformed list", async () => {
+  const withExcludes = (codexDynamicToolsExclude) => {
+    const config = codexGatewayConfig();
+    config.plugins.entries.codex.config.codexDynamicToolsExclude = codexDynamicToolsExclude;
+    return config;
+  };
+  const { files } = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: withExcludes(["web_search", "ls"]),
+    env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+    workspaceNodeId: "enrolled-node",
+  });
+  // Owner exclusions stay first and are not duplicated.
+  assert.deepEqual(
+    JSON.parse(files.get("/home/node/.openclaw/openclaw.json")).plugins.entries.codex.config
+      .codexDynamicToolsExclude,
+    ["web_search", ...GATEWAY_LOCAL_CODEX_TOOLS],
+  );
+  // A malformed setting fails the Gateway start instead of being replaced silently.
+  await assert.rejects(
+    () =>
+      runOpenClawRuntimeHelper(undefined, [], {
+        baseConfig: withExcludes("ls"),
+        env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+        workspaceNodeId: "enrolled-node",
+      }),
+    /codexDynamicToolsExclude setting must be a list/,
+  );
+  // Without a workspace node the Gateway's workspace is its own, so nothing is withheld.
+  const local = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: codexGatewayConfig(),
+    env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+  });
+  const localConfig = JSON.parse(
+    local.files.get("/home/node/.openclaw/openclaw.json") ??
+      local.files.get("/etc/openclaw/openclaw.json"),
+  );
+  assert.equal(localConfig.plugins.entries.codex.config.codexDynamicToolsExclude, undefined);
+});
+
 test("Gateway launch binds the enrolled node without expanding owner writes or changing its snapshot", async () => {
   const baseConfig = {
     gateway: { nodes: { commands: { allow: ["existing.command"] } } },
@@ -923,6 +981,8 @@ test("Gateway launch binds the enrolled node without expanding owner writes or c
   });
   const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
   assert.equal(files.get("/etc/openclaw/openclaw.json"), original);
+  // The Gateway's own workspace is empty: OpenClaw tools that would run in it
+  // are withheld from Codex, which lists and runs files in the Harness.
   assert.deepEqual(effective.plugins.entries.codex, {
     enabled: true,
     config: {
@@ -930,6 +990,7 @@ test("Gateway launch binds the enrolled node without expanding owner writes or c
         ...baseConfig.plugins.entries.codex.config.appServer,
         remoteWorkspaceRoot: "/home/node/workspace",
       },
+      codexDynamicToolsExclude: GATEWAY_LOCAL_CODEX_TOOLS,
     },
   });
   assert.deepEqual(effective.plugins.allow, ["codex", "file-transfer"]);
