@@ -93,7 +93,7 @@ API logs one `authentication.provider-unavailable-warning` at WARN. It carries
 `dns`, `timeout`, `tls`, `connection_reset`, `network`, `redirect`, `http_status`,
 `oversized_response`, `malformed_response`, or `provider_error`), and, when present, the
 HTTP `status` or transport `code` such as `ECONNREFUSED`. It never carries URLs,
-codes, tokens, response bodies, or user data. A rejected identity logs nothing.
+authorization codes, tokens, response bodies, or user data. A rejected identity logs nothing.
 
 ## Recovery-only password sign-in
 
