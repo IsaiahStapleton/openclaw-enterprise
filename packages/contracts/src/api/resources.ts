@@ -668,6 +668,41 @@ export const CredentialSourceResponse = Type.Object(
   },
 );
 
+export const CredentialWithdrawalSchema = Type.Object(
+  {
+    namespaceId: NamespaceId,
+    agentId: AgentId,
+    revisionId: RevisionId,
+    credentialSourceId: CredentialSourceId,
+    state: Type.Union([Type.Literal("pending"), Type.Literal("revoked")], {
+      description:
+        "`revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve.",
+    }),
+    requestedBy: Type.String({
+      minLength: 1,
+      maxLength: 256,
+      description:
+        "Principal whose `agent:operate` permission the worker re-checks before revoking.",
+    }),
+    requestedAt: Type.String({ format: "date-time" }),
+    completedAt: Type.Optional(Type.String({ format: "date-time" })),
+    reason: Type.Optional(
+      Type.String({
+        pattern: "^[A-Z0-9_]{1,64}$",
+        description:
+          "Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation.",
+      }),
+    ),
+    lastAttemptAt: Type.Optional(Type.String({ format: "date-time" })),
+  },
+  { additionalProperties: false },
+);
+
+export const CredentialWithdrawalResponse = Type.Object(
+  { data: CredentialWithdrawalSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
 export const CredentialSourceListResponse = Type.Object(
   { data: Type.Array(CredentialSourceSchema), meta: Meta },
   { additionalProperties: false },
@@ -1302,6 +1337,8 @@ export type SecretResponse = Type.Static<typeof SecretResponse>;
 export type CredentialSourceWire = Type.Static<typeof CredentialSourceSchema>;
 export type CredentialSourceResponse = Type.Static<typeof CredentialSourceResponse>;
 export type CredentialSourceListResponse = Type.Static<typeof CredentialSourceListResponse>;
+export type CredentialWithdrawalWire = Type.Static<typeof CredentialWithdrawalSchema>;
+export type CredentialWithdrawalResponse = Type.Static<typeof CredentialWithdrawalResponse>;
 export type SecretListResponse = Type.Static<typeof SecretListResponse>;
 export type ServiceAccountResponse = Type.Static<typeof ServiceAccountResponse>;
 export type ServiceAccountListResponse = Type.Static<typeof ServiceAccountListResponse>;
