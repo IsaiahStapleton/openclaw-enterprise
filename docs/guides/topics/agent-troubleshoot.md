@@ -90,6 +90,7 @@ supervisor Pod, labeled `openshell.ai/boundary-role=supervisor`:
 
 ```bash
 NS=<agent-kubernetes-namespace>
+REVISION_ID=<revision-id>
 HARNESS_SELECTOR="openclaw.dev/workload-role=agent,openclaw.dev/revision=$REVISION_ID"
 SANDBOX_ID="$(kubectl -n "$NS" get pod -l "$HARNESS_SELECTOR" \
   -o jsonpath='{.items[0].metadata.annotations.openshell\.ai/sandbox-id}')"
@@ -99,5 +100,5 @@ kubectl -n "$NS" logs --all-containers --tail=200 \
 ```
 
 `kubectl -n "$NS" get sandbox,pod -l "openshell.ai/sandbox-id=$SANDBOX_ID"`
-shows the Sandbox and both Pods. This output bypasses OCC's log redaction, so
-handle it as sensitive.
+shows the Sandbox and its supervisor Pod. This output bypasses OCC's log
+redaction, so handle it as sensitive.
