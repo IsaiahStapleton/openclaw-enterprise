@@ -31,20 +31,26 @@ Run the commands below from the repository root on Linux or macOS. You need:
 On some Linux hosts, especially Ubuntu with Docker 29, the k3d node cannot
 resolve container registries. Startup then waits on the cert-manager rollout
 while its pods stay in `ContainerCreating`. The launcher does not print those
-Pod events, and it prints the kubeconfig path only after startup succeeds. In
-a second terminal, while that wait is still running, read the events from the
-private kubeconfig. The context is `k3d-` plus the cluster name from the first
-startup line, `Creating Kubernetes-only k3d cluster ...`:
+Pod events, and it prints the kubeconfig path only after startup succeeds.
+
+In a second terminal, while that wait is still running, describe the
+cert-manager Pods. The context is `k3d-` plus the cluster name from the first
+startup line, `Creating Kubernetes-only k3d cluster ...`. `<state-directory>`
+belongs to the process that started OCC, not to this second terminal. Use
+`OCC_DEVELOPMENT_STATE_DIRECTORY` when that process set it. Otherwise use that
+process's temporary directory plus `openclaw-development`: its `TMPDIR` when
+set, and `/tmp` on Linux when `TMPDIR` is unset. Do not substitute this
+terminal's `TMPDIR`. The
+[development settings](../reference/settings/development.md#required-development-controller-environment)
+define that directory.
 
 ```bash
-kubectl --kubeconfig /tmp/openclaw-development/kubeconfig \
+kubectl --kubeconfig '<state-directory>/kubeconfig' \
   --context 'k3d-<cluster>' \
   -n cert-manager describe pods
 ```
 
-If you set `OCC_DEVELOPMENT_STATE_DIRECTORY`, use that directory instead of
-`/tmp/openclaw-development`. A registry DNS failure shows up as a lookup error
-in the Pod events. Follow
+A registry DNS failure shows up as a lookup error in the Pod events. Follow
 [Resolve node DNS failures](deploy/local-kubernetes-development.md#resolve-node-dns-failures)
 and set a reachable resolver for a fresh start. That recovery changes only the
 owned node's resolver. If startup rolls the cluster back, wait until that
