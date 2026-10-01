@@ -3528,31 +3528,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         };
       },
     );
+    // Handlers resolve on each request, as before: options.auth is read lazily.
     const externalSignInProviders = [
-      {
-        name: "github",
-        label: "GitHub",
-        operation: "GitHub",
-        start: options.auth.githubStart,
-        callback: options.auth.githubCallback,
-        result: options.auth.githubResult,
-      },
-      {
-        name: "google",
-        label: "Google",
-        operation: "Google",
-        start: options.auth.googleStart,
-        callback: options.auth.googleCallback,
-        result: options.auth.googleResult,
-      },
-      {
-        name: "oidc",
-        label: "OIDC",
-        operation: "Oidc",
-        start: options.auth.oidcStart,
-        callback: options.auth.oidcCallback,
-        result: options.auth.oidcResult,
-      },
+      { name: "github", label: "GitHub", article: "a", operation: "GitHub" },
+      { name: "google", label: "Google", article: "a", operation: "Google" },
+      { name: "oidc", label: "OIDC", article: "an", operation: "Oidc" },
     ] as const;
     for (const provider of externalSignInProviders) {
       routes.post(
@@ -3579,7 +3559,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             },
           },
         },
-        async (request, reply) => provider.start(request, reply),
+        async (request, reply) => options.auth[`${provider.name}Start`](request, reply),
       );
       routes.get(
         `/api/auth/providers/${provider.name}/callback`,
@@ -3594,14 +3574,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             response: { 302: { description: "Redirect to Console", type: "null" } },
           },
         },
-        async (request, reply) => provider.callback(request, reply),
+        async (request, reply) => options.auth[`${provider.name}Callback`](request, reply),
       );
       routes.post(
         `/api/auth/providers/${provider.name}/result`,
         {
           schema: {
             operationId: `confirm${provider.operation}SignIn`,
-            summary: `Confirm which session a ${provider.label} sign-in created`,
+            summary: `Confirm which session ${provider.article} ${provider.label} sign-in created`,
             description:
               "Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.",
             tags: ["Authentication"],
@@ -3623,7 +3603,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             },
           },
         },
-        async (request, reply) => provider.result(request, reply),
+        async (request, reply) => options.auth[`${provider.name}Result`](request, reply),
       );
     }
 
