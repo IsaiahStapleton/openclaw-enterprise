@@ -196,7 +196,8 @@ the **Sandbox** source shows what the OpenShell gateway recorded for that
 sandbox: network and HTTP policy decisions (allowed or denied, destination,
 method, binary, policy name and engine, denial reason), process launches, and
 supervisor tracing. The Harness's own output inside the sandbox is not
-available; OpenShell has no read-only API for it.
+available here; operators can read it and the supervisor log with
+[kubectl](agent-troubleshoot.md#read-openshell-sandbox-and-supervisor-logs).
 
 - OCC derives the sandbox from the version. The source has no Pods and no
   previous instance (`pod` or `previous=true` answers `400

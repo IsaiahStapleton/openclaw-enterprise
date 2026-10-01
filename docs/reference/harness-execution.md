@@ -87,16 +87,12 @@ contains `logging.level`, matching `logging.consoleLevel`, JSON console style,
 and disabled native OTLP log export. Runtime-owned console and tool redaction
 remain enabled by the gateway and Codex runtime; the admitted native
 Configuration does not carry the retired `logging.redactSensitive` key. Later
-edits to the source Configuration or to OCC startup `logging.level` cannot mutate
-that snapshot; deploy the Agent again to create a new revision with a changed
-runtime level.
+edits cannot mutate that snapshot; redeploy to change the level.
 
 Later edits affect a future explicit deployment. The worker checks the admitted
 combination and exact ownership before runtime effects. Unsupported combinations,
-revoked authority, or a missing required Driver fail closed. See
-[Agents](agents.md), [Configuration](configuration.md), and
-[controller reconciliation](controller.md) for their respective ownership and
-queue guarantees.
+revoked authority, or a missing required Driver fail closed; see
+[controller reconciliation](controller.md).
 
 ## Harness authentication
 
@@ -154,7 +150,10 @@ and model fallback. Codex ignores user configuration and rules, disables executi
 and external tools, and uses read-only filesystem policy without approval grants;
 a tool event cannot satisfy its success check. The Codex probe runs with a minimal
 environment that keeps only the runtime's TLS trust variables (`SSL_CERT_FILE`,
-`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Probes never log native output. Dedicated Codex retries a confirmed
+`SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Dedicated Codex
+reaches its model over Responses WebSocket by default (embedded OpenClaw uses
+HTTP streaming), so an egress proxy or firewall in front of the model host must
+allow the WebSocket upgrade. Probes never log native output. Dedicated Codex retries a confirmed
 subprocess timeout once after one second. Each attempt has a 30-second cap within
 one 61-second budget, including the delay. Authentication rejection, malformed
 output, tool events, and external signals without timeout evidence do not retry.
