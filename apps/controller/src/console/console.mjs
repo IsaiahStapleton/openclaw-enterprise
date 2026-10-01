@@ -1060,6 +1060,31 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       }
     }
     shell = renderShell(current.feature);
+    if (current.agentId && error.status === 404 && current.namespace === null) {
+      // A typed or shared link has no Namespace, so the console read the Agent in
+      // the default selection. Agent IDs are unique: look in the others.
+      panel(shell.view, "Loading…", "Looking for this Agent in your other Namespaces.");
+      const located = await locateAgentNamespace(current.agentId, namespaceId);
+      if (!lifetime.isCurrent(active)) {
+        return;
+      }
+      if (located.namespaceId) {
+        navigate(current.target, located.namespaceId, true);
+        return;
+      }
+      const selected = namespaces.find((item) => item.id === namespaceId);
+      panel(
+        shell.view,
+        located.complete ? "Agent unavailable" : "Agent not in this Namespace",
+        located.complete
+          ? "None of your Namespaces has this Agent. It may have been deleted, or you no longer have access to it."
+          : `This Agent is not in ${selected ? `the ${selected.name} Namespace` : "the selected Namespace"}. Choose the Namespace that contains it.`,
+        located.complete ? "Back to Agents" : "Switch Namespace",
+        () => (located.complete ? navigate("agents") : switchNamespace()),
+        error.requestId,
+      );
+      return;
+    }
     if (current.agentId && error.status === 404) {
       panel(
         shell.view,
@@ -1099,6 +1124,34 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       shell.view.setAttribute("aria-busy", "false");
     }
   }
+}
+
+// Bounds the reads one Namespace-less Agent link can cause.
+const agentLookupNamespaceLimit = 20;
+
+// Finds the readable Namespace that holds agentId, other than the one already
+// read. complete is true when every other readable Namespace answered that it
+// has no such Agent.
+async function locateAgentNamespace(agentId, excluded) {
+  const candidates = namespaces.filter((item) => item.id !== excluded);
+  const probed = candidates.slice(0, agentLookupNamespaceLimit);
+  const results = await Promise.allSettled(
+    probed.map((item) =>
+      request(`/namespaces/${encodeURIComponent(item.id)}/agents/${encodeURIComponent(agentId)}`),
+    ),
+  );
+  const found = probed.filter(
+    (_, index) => results[index].status === "fulfilled" && results[index].value?.id === agentId,
+  );
+  if (found.length === 1) {
+    return { namespaceId: found[0].id, complete: true };
+  }
+  const complete =
+    candidates.length === probed.length &&
+    results.every(
+      (result) => result.status === "rejected" && [403, 404].includes(result.reason?.status),
+    );
+  return { namespaceId: null, complete };
 }
 
 async function revalidateMountedAgent(current) {
