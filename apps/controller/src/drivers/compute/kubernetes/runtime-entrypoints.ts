@@ -27,19 +27,22 @@ const STARTUP_PHASE_EVENT = "runtime.startup_phase";
 
 // One stderr JSON line per startup phase, for deploy-time measurement. Callers
 // pass fixed phase names only: never provider, model, credential or path values.
+// A failed phase may add a fixed upper-case cause code, which the Collector exports.
 // Date.now() keeps this usable in every wrapper, including stubbed test contexts.
-function startupPhaseHelper(container: "gateway" | "agent"): string {
+export function startupPhaseHelper(container: "gateway" | "agent"): string {
   return String.raw`
 const startupPhaseOrigin = Date.now();
-function logStartupPhase(phase, startedAt, outcome = "ok") {
+function logStartupPhase(phase, startedAt, outcome = "ok", code) {
   const now = Date.now();
+  const failed = outcome !== "ok";
   console.error(JSON.stringify({
     event: ${JSON.stringify(STARTUP_PHASE_EVENT)},
     container: ${JSON.stringify(container)},
     phase,
-    outcome: outcome === "ok" ? "ok" : "failed",
+    outcome: failed ? "failed" : "ok",
     ms: now - startedAt,
     sinceStartMs: now - startupPhaseOrigin,
+    ...(failed && typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? { code } : {}),
   }));
 }
 async function timeStartupPhase(phase, run) {
@@ -1716,9 +1719,24 @@ async function installCodexPlugins(runtime, failures = []) {
     }
   }
   if (lastError !== undefined) {
-    throw new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+    const failure = new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+    failure.startupCode = codexPluginStartupFailureCode(lastError);
+    throw failure;
   }
   return result;
+}
+
+// A fixed cause code for remote logs; the message, which can carry native
+// Codex error text, stays in local container output.
+function codexPluginStartupFailureCode(error) {
+  switch (pluginRuntimeErrorMessage(error)) {
+    case "Codex plugin catalog did not contain the selected plugin.":
+      return "PLUGIN_NOT_IN_CATALOG";
+    case "Codex plugin detail did not contain the selected plugin.":
+      return "PLUGIN_DETAIL_MISSING";
+    default:
+      return "PLUGIN_NOT_READY";
+  }
 }
 `;
 
@@ -3088,9 +3106,9 @@ child.on("exit", (code, signal) => {
   codexStderrDone.then(() => process.exit(status));
 });
 (async () => {
+  const pluginInstallStartedAt = Date.now();
   try {
     if (pluginRuntime !== undefined) {
-      const pluginInstallStartedAt = Date.now();
       const result = await installCodexPlugins(pluginRuntime);
       logStartupPhase("plugin-install", pluginInstallStartedAt);
       publishPluginRuntimeStatus({ phase: "ready", ...result });
@@ -3099,6 +3117,10 @@ child.on("exit", (code, signal) => {
     }
     pluginRuntimeReady();
   } catch (error) {
+    // The phase line (with a fixed code) reaches the log backend; the message stays local.
+    if (pluginRuntime !== undefined) {
+      logStartupPhase("plugin-install", pluginInstallStartedAt, "failed", error?.startupCode ?? "PLUGIN_NOT_READY");
+    }
     console.error("Codex plugin runtime initialization failed: " + pluginRuntimeErrorMessage(error));
     child.kill("SIGTERM");
     process.exit(1);

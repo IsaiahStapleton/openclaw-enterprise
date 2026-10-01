@@ -16,6 +16,7 @@ import {
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
   PLUGIN_RUNTIME_HELPERS,
+  startupPhaseHelper,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import {
   PLUGIN_RUNTIME_CODEX_CONFIG,
@@ -1338,6 +1339,7 @@ test("Codex runtime helper keeps pre-install native uncertainty generic", async 
 
   assert.match(result.error.message, /did not reach readiness/);
   assert.equal(result.error.diagnostic, undefined);
+  assert.equal(result.error.startupCode, "PLUGIN_NOT_READY");
 });
 
 test("Codex runtime keeps disabled selected plugins default-denied while preserving install identity", async () => {
@@ -1569,6 +1571,27 @@ test("Codex gateway bridge config writes through the runtime state directory wit
   });
 });
 
+test("a failed startup phase line carries only a fixed upper-case cause code", () => {
+  const lines = [];
+  vm.runInNewContext(
+    `${startupPhaseHelper("agent")}
+logStartupPhase("plugin-install", Date.now(), "failed", "PLUGIN_NOT_IN_CATALOG");
+logStartupPhase("plugin-install", Date.now(), "failed", "catalog lacks linear");
+logStartupPhase("plugin-install", Date.now(), "failed");
+logStartupPhase("native-spawn", Date.now(), "ok", "PLUGIN_NOT_IN_CATALOG");`,
+    { Date, JSON, console: { error: (line) => lines.push(JSON.parse(line)) } },
+  );
+  assert.deepEqual(
+    lines.map(({ phase, outcome, code }) => [phase, outcome, code]),
+    [
+      ["plugin-install", "failed", "PLUGIN_NOT_IN_CATALOG"],
+      ["plugin-install", "failed", undefined],
+      ["plugin-install", "failed", undefined],
+      ["native-spawn", "ok", undefined],
+    ],
+  );
+});
+
 test("Codex runtime helper fails before readiness when catalog identity is absent", async () => {
   const state = codexLinearPluginState();
   const runtime = {
@@ -1589,7 +1612,12 @@ test("Codex runtime helper fails before readiness when catalog identity is absen
         }
         throw new Error(`unexpected request ${method}`);
       }),
-    /catalog did not contain the selected plugin/,
+    (error) => {
+      assert.match(error.message, /catalog did not contain the selected plugin/);
+      // The fixed code, not the message, is what the wrapper exports remotely.
+      assert.equal(error.startupCode, "PLUGIN_NOT_IN_CATALOG");
+      return true;
+    },
   );
 });
 
