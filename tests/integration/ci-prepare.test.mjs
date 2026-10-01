@@ -1094,13 +1094,43 @@ test("installed repository preparation requires explicit authorization and prote
     await assert.rejects(() => stat(statePath), { code: "ENOENT" });
   }
 
-  // A complete release selection reaches tool discovery without a build base;
-  // no cluster or image is created by this preflight check.
-  const admitted = runPrepare(args, { ...releaseEnv, OCC_HELM_BIN: join(root, "missing-helm") });
-  assert.equal(admitted.status, 1);
-  assert.match(admitted.stderr, /missing-helm/);
-  const state = JSON.parse(await readFile(statePath, "utf8"));
-  assert.deepEqual(state.resources, []);
+  // Even valid inputs cannot create a preparation state while remote cleanup
+  // lacks a safe ownership boundary.
+  const blocked = runPrepare(args, releaseEnv);
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /Installed repository qualification is temporarily unavailable/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+});
+
+test("the installed repository journey refuses direct execution before fixture setup", async (t) => {
+  const root = await fixture(t);
+  // Direct execution must fail at the safety guard even without credentials or
+  // a cluster, before any setup or provider operation can be attempted.
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--test",
+      "--test-name-pattern=^installed ",
+      "tests/integration/repository-credentials-k3d-real.test.mjs",
+    ],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        PATH: process.env.PATH,
+        OCC_TEST_REPOSITORY_CREDENTIALS_REAL: "1",
+      },
+      timeout: 15000,
+    },
+  );
+  assert.equal(result.status, 1);
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.match(output, /tests 3/);
+  assert.equal(
+    (output.match(/Installed repository qualification is temporarily unavailable/g) ?? []).length,
+    3,
+  );
 });
 
 test("production upgrade preparation requires two distinct immutable image pairs before creating resources", async (t) => {

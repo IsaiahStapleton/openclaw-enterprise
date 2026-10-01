@@ -730,6 +730,9 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
     if (gh && !isAbsolute(gh)) {
       throw new Error("OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY must be absolute when supplied.");
     }
+    throw new Error(
+      "Installed repository qualification is temporarily unavailable until safe remote cleanup is supported.",
+    );
   }
 }
 
