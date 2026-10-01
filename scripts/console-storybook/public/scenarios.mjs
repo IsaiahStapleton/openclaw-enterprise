@@ -9,6 +9,8 @@ const candidateVersion =
 const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-000000000001";
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
+const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
+const startOAuthLogin = [...oauthForm, click("Sign in with ChatGPT")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
   { selector: "#create-provider-credential-secret-value", value },
@@ -58,7 +60,7 @@ const pluginCapabilities = {
 };
 const pluginSetup = {
   message:
-    "App connection status is not verified. Catalog availability does not confirm linked credentials. In ChatGPT admin, select the same workspace as this PAT and enable plugin and app access for its user or service account. For service-account plugin credentials, open Service accounts, choose the account, and configure its app connections. Workspace administrator access is required. OCE policies do not grant access or configure credentials. Reload plugins after changes.",
+    "App connection status is not verified. Catalog availability does not confirm linked credentials. In ChatGPT admin, select the same workspace as this credential and enable plugin and app access for its user or service account. For service-account plugin credentials, open Service accounts, choose the account, and configure its app connections. Workspace administrator access is required. OCE policies do not grant access or configure credentials. Reload plugins after changes.",
   links: [
     { label: "Manage workspace plugins", url: "https://chatgpt.com/admin/plugins?catalog=GLOBAL" },
     { label: "Service account credentials", url: "https://admin.openai.com/" },
@@ -325,7 +327,7 @@ const createProvisioningSecrets = [
 ];
 const devdayCreateCheckpoint = [
   click("Create Agent"),
-  { selector: "#agent-preset", value: "pre_devday_codex" },
+  { selector: "#agent-preset", value: "pre_swe_codex" },
   { selector: "#preset-variable-name", value: "devday claw" },
   click("Use Preset"),
   { selector: "#provider-credential-secret", value: "sec_devday_model_token" },
@@ -341,8 +343,11 @@ const devdayCreateCheckpoint = [
   { selector: 'select[aria-label="Create issue require approval for"]', value: "all_actions" },
   click("Done"),
   { selector: devdayRepositorySelector, click: true },
-  { selector: "#repository-profile-git-write", click: true },
+  { selector: "#repository-default-git-full", click: true },
+  { selector: ".repository-customize summary", click: true },
+  { selector: "#repository-default-issues", click: true },
   click("Edit Slack"),
+  { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
   { selector: "#slack-channel-access", value: "selected" },
   { selector: "#slack-allowed-user-ids-search", value: "UDEMO123", key: "Enter" },
   { selector: "#slack-secret-slack-app-token", value: "sec_devday_slack_app_token" },
@@ -2064,6 +2069,98 @@ export const scenarios = {
     ],
     description:
       "Service Accounts authentication is available with the Codex harness and uses the same fixed OpenAI model list. Switching to OpenClaw selects API-key authentication and clears the credential and model selection.",
+  },
+  createOAuth: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT OAuth before sign-in (Experimental)",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: oauthForm,
+    description:
+      "Experimental first-deploy login for a dedicated Codex Agent. The limitations notice stays visible throughout login and recovery. The model picker remains available; credentials never enter the browser.",
+  },
+  createOAuthPending: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT device login pending (Experimental)",
+    path: create,
+    oauthPending: true,
+    actions: startOAuthLogin,
+    description:
+      "The user code and provider link are visible while authorization is pending. Cancel login removes this staged login locally.",
+  },
+  createOAuthReady: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login ready for plugin discovery (Experimental)",
+    path: create,
+    pluginDiscovery,
+    pluginCapabilities,
+    actions: startOAuthLogin,
+    description:
+      "The fixture completes login after one poll. Configure plugins uses the server-owned login reference. No access or refresh token appears in this preview.",
+    steps: [
+      "Wait for ChatGPT login ready, then open Configure plugins and add Calendar.",
+      "Choose a model and create the Agent. Deployment is simulated; the runtime token handoff is not proved here.",
+    ],
+  },
+  createOAuthDenied: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login permission denied (Experimental)",
+    path: create,
+    rules: [{ suffix: "/device-authorizations", method: "POST", status: 403 }],
+    actions: startOAuthLogin,
+    description:
+      "A denied authorization request leaves the form usable and does not create a browser credential.",
+  },
+  createOAuthUnavailable: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login unavailable (Experimental)",
+    path: create,
+    rules: [{ suffix: "/device-authorizations", method: "POST", status: 501 }],
+    actions: startOAuthLogin,
+    description:
+      "An Installation whose selected Drivers do not support device login reports it as unavailable. Choose another authentication method; no device code or sign-in link appears.",
+  },
+  createOAuthError: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT login exchange failed (Experimental)",
+    path: create,
+    rules: [{ suffix: "/poll", method: "POST", status: 503 }],
+    actions: startOAuthLogin,
+    description:
+      "A failed poll stops polling. Cancel the staged login and connect again; the console does not retry an uncertain exchange.",
+  },
+  createOAuthExpired: {
+    group: "Pages/Create Agent",
+    name: "ChatGPT device login expired (Experimental)",
+    path: create,
+    oauthExpired: true,
+    actions: startOAuthLogin,
+    description:
+      "An expired device code cannot be used to create the Agent. Cancel it and sign in again.",
+  },
+  pluginsOAuthRevision: {
+    group: "Pages/Agent detail",
+    name: "Separate ChatGPT login for plugin editing (Experimental)",
+    path: `${draft}&tab=plugins`,
+    deployed: true,
+    auth: "oauth",
+    agentPlugins: JSON.parse(pluginSelections),
+    pluginCapabilities,
+    pluginDiscovery,
+    actions: [click("Sign in with ChatGPT")],
+    description:
+      "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
+  },
+  authOAuthReconnect: {
+    group: "Components/Credentials",
+    name: "Explicit ChatGPT credential replacement (Experimental)",
+    path: `${draft}&tab=credentials`,
+    deployed: true,
+    auth: "oauth",
+    actions: [click("Sign in with ChatGPT")],
+    description:
+      "The current Agent login is preserved by default. A completed new login only replaces the saved source when Save authentication source is chosen; deployment remains separate.",
   },
   createPatToOpenClaw: {
     group: "Pages/Create Agent",
@@ -3811,7 +3908,7 @@ export const scenarios = {
     slackChannels: { COPENCLAWFEEDBACK: { requireMention: true, users: ["UDEMO123"] } },
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
-    devdayPreset: true,
+    swePreset: true,
     pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
     fixturePluginCatalog: true,
@@ -3848,11 +3945,11 @@ export const scenarios = {
       "DevDay create-flow rehearsal using real Console controls with fake service-account and Slack Secret data. Provisioning and deployment progress are simulated in the Storybook fixture.",
     steps: [
       "Start on the Agents list with the already deployed oceclaw seed, then click Create Agent.",
-      "The picker includes SWE Agent, Community Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
+      "The picker includes SWE Agent, Standard Codex, and Standard OpenClaw. Select SWE Agent and enter devday claw for its name.",
       "Keep the default gpt-6-astra model and click Use Preset. Choose the existing DevDay Codex service account (simulated) Secret, or explicitly create a new simulated Secret. No credential is preselected. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
       "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
-      "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
-      "Open Edit Slack. Confirm the six prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), oce-team-test (C0C4A0JH2BG), oce-community (C0C5KF0JLSC), and oce-community-test (C0C5KF0DWLQ); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
+      "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access, then turn off issue management to match the approved profiles.",
+      "Open Edit Slack. Confirm no channels are prefilled. Add the simulated channel CDEMO123. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
       "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity; it finishes simulated activation after a few seconds, or use Refresh deployment.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
@@ -3868,7 +3965,7 @@ export const scenarios = {
     slackChannels: { COPENCLAWFEEDBACK: { requireMention: true, users: ["UDEMO123"] } },
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
-    devdayPreset: true,
+    swePreset: true,
     pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
     fixturePluginCatalog: true,

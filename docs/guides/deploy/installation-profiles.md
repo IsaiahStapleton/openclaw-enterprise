@@ -48,7 +48,7 @@ Seeding both Presets does not change the profile's PluginDriver. An Agent
 created from the other profile's Preset still needs a compatible driver,
 runtime, harness mode, credentials, and channel support.
 
-To seed additional Presets, add `"presets": { "files": ["/app/deploy/presets/devday.json"] }`
+To seed additional Presets, add `"presets": { "files": ["/app/deploy/presets/swe-preset.json"] }`
 to the input JSON and rerender. This example adds **SWE Agent** alongside the
 standard Presets. Both controller processes must be able to read the files at
 startup; the renderer validates the list but does not read container files. See
