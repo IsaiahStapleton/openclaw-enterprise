@@ -9,9 +9,9 @@ const require = createRequire(new URL("../../apps/controller/package.json", impo
 const grpc = require("@grpc/grpc-js");
 const loader = require("@grpc/proto-loader");
 
-test("OpenShell client serializes v0.1.0 create-time service exposure", async () => {
+test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -102,6 +102,7 @@ test("OpenShell client serializes v0.1.0 create-time service exposure", async ()
       selection: "workspace",
     });
     assert.equal(createRequests[0].request_id, request.requestId);
+    // Omission keeps upstream's STRIP default; this upgrade does not enable bearer passthrough.
     assert.deepEqual(createRequests[0].service_exposures, [{ service: "", target_port: 18_790 }]);
     assert.deepEqual(createRequests[0].spec.policy.network_policies.model.endpoints[0], {
       host: "api.openai.com",
@@ -134,9 +135,9 @@ test("OpenShell client serializes v0.1.0 create-time service exposure", async ()
   }
 });
 
-test("OpenShell client serializes v0.1.0 credential providers, profiles, and attachment status", async () => {
+test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, and attachment status", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -306,7 +307,7 @@ test("OpenShell client serializes v0.1.0 credential providers, profiles, and att
 
 test("OpenShell client cancels an in-flight provider request", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -461,9 +462,9 @@ test("OpenShell client closes cancellation races around provider dispatch", asyn
   });
 });
 
-test("OpenShell client reads v0.1.0 sandbox logs with nanosecond times", async () => {
+test("OpenShell client reads v0.1.3-pre.1 sandbox logs with nanosecond times", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -551,9 +552,9 @@ test("OpenShell client reads v0.1.0 sandbox logs with nanosecond times", async (
   }
 });
 
-test("OpenShell client serializes v0.1.0 provider updates and detach receipts", async () => {
+test("OpenShell client serializes v0.1.3-pre.1 provider updates and detach receipts", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.0-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
