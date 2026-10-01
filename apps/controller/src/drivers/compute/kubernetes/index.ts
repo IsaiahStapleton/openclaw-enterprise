@@ -104,7 +104,10 @@ import {
 } from "../../kubernetes/oauth-seal.ts";
 import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
-import type { GatewayNodeEnrollment } from "../../../gateway/node-enrollment-client.ts";
+import type {
+  GatewayNodeEnrollment,
+  NodeSetupObservation,
+} from "../../../gateway/node-enrollment-client.ts";
 import {
   PLUGIN_RUNTIME_DIRECTORY,
   PLUGIN_RUNTIME_CODEX_CONFIG,
@@ -689,9 +692,14 @@ const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
 // boots and pairs (7-12 s on a loaded dogfood k3d host, D25). The
 // preparation pass that delivered it watches for the pairing on one Gateway
 // connection for this long instead of ending pending and paying a full pass
-// (about 1-3 s of reconciliation) per check. The worker is serial, so keep it
-// short: a node that has not paired by then is checked again on the next pass.
+// (about 1-3 s of reconciliation) per check. The worker is serial, so this is
+// a budget per setup, not per pass: once a setup has spent it, later passes read
+// the setup once and end pending, so a node that never pairs cannot hold the
+// worker on every pass and delay other Agents' deploys (D88).
 const WORKSPACE_NODE_PAIRING_WAIT_MS = 8_000;
+// Remembered setups whose pairing budget is partly or fully spent. Forgetting
+// one (a full map, or a controller restart) only grants that setup one more wait.
+const MAX_WORKSPACE_NODE_PAIRING_BUDGETS = 1_024;
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const GATEWAY_PRIVATE_STATE_CATEGORIES = Object.freeze([
   ["state", "/home/node/.openclaw/state"],
@@ -1650,8 +1658,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private readonly sandboxDriver: SandboxDriver | undefined;
   private readonly credentialGatewayDriver: CredentialGatewayDriver | undefined;
   private readonly nodeEnrollment: GatewayNodeEnrollment | undefined;
-  // How long a first-deploy preparation pass waits for its node to pair.
+  // How long, in total across passes, preparation may wait for one setup's node to pair.
   private workspaceNodePairingWaitMs = WORKSPACE_NODE_PAIRING_WAIT_MS;
+  // Pairing wait already spent per workspace node setup ID.
+  private readonly workspaceNodePairingSpentMs = new Map<string, number>();
+  private now: () => number = () => Date.now();
   private readonly readNodeCa: (() => Promise<string | undefined>) | undefined;
   private lifecycle: ComputeLifecycleDispatcher;
   private lifecycleOwners: readonly LifecycleOwnerSelection[];
@@ -7403,6 +7414,18 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     return deviceId || undefined;
   }
 
+  private recordWorkspaceNodePairingWait(setupId: string, spentMs: number): void {
+    // Re-insert so the map stays in least-recently-waited order.
+    this.workspaceNodePairingSpentMs.delete(setupId);
+    this.workspaceNodePairingSpentMs.set(setupId, spentMs);
+    if (this.workspaceNodePairingSpentMs.size > MAX_WORKSPACE_NODE_PAIRING_BUDGETS) {
+      const oldest = this.workspaceNodePairingSpentMs.keys().next().value;
+      if (oldest !== undefined) {
+        this.workspaceNodePairingSpentMs.delete(oldest);
+      }
+    }
+  }
+
   private async workspaceNodeReady(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
@@ -7467,12 +7490,22 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       return enrollment.isConnected(url, deviceId, this.operationSignal());
     }
     const setupId = required(read("setupId"), "Workspace node setup ID");
-    const observation = await enrollment.observeSetup(
-      url,
-      setupId,
-      this.operationSignal(),
-      pairingWaitMs > 0 ? { waitMs: pairingWaitMs } : undefined,
-    );
+    const spentMs = this.workspaceNodePairingSpentMs.get(setupId) ?? 0;
+    const waitMs = Math.max(0, Math.min(pairingWaitMs, this.workspaceNodePairingWaitMs - spentMs));
+    const started = this.now();
+    let observation: NodeSetupObservation | undefined;
+    try {
+      observation = await enrollment.observeSetup(
+        url,
+        setupId,
+        this.operationSignal(),
+        waitMs > 0 ? { waitMs } : undefined,
+      );
+    } finally {
+      if (waitMs > 0) {
+        this.recordWorkspaceNodePairingWait(setupId, spentMs + Math.max(0, this.now() - started));
+      }
+    }
     if (observation === undefined) {
       // No completion is visible: the setup was never redeemed, or its
       // completion aged out of native status retention. Preparation renews an
@@ -7490,6 +7523,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         deviceId: Buffer.from(observation.deviceId, "utf8").toString("base64"),
       }),
     );
+    // With the device recorded, later passes check its presence, not the setup.
+    this.workspaceNodePairingSpentMs.delete(setupId);
     await setupCodeRemoved();
     return observation.connected;
   }
