@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, writeSync } from "node:fs";
 import { TextDecoder } from "node:util";
 
-const decoder = new TextDecoder("utf-8", { fatal: true });
+// A BOM in a Git path is filename data, not an encoding marker.
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const oid = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 class InspectionError extends Error {}

@@ -84,6 +84,41 @@ function fixture(t, change, initial = {}, initialModes = {}) {
   return { dir, repo, git, event, eventPath, base, head, tested, run, expect };
 }
 
+// Preserve raw path identity so out-of-scope BOM names select full coverage.
+for (const [name, pathBytes, expected] of [
+  ["root BOM docs", Buffer.from("\uFEFFdocs/example.md"), "full"],
+  ["root BOM README", Buffer.from("\uFEFFREADME.md"), "full"],
+  ["ordinary docs", Buffer.from("docs/example.md"), "docs"],
+  ["nested BOM docs", Buffer.from("docs/\uFEFFexample.md"), "docs"],
+  ["unknown path", Buffer.from("src/example.md"), "full"],
+  [
+    "invalid UTF-8",
+    Buffer.concat([Buffer.from("docs/"), Buffer.from([0xff]), Buffer.from(".md")]),
+    "full",
+  ],
+]) {
+  test(`raw filename bytes: ${name}`, (t) => {
+    const f = fixture(t, ({ repo }) => {
+      mkdirSync(join(repo, "docs"), { recursive: true });
+      mkdirSync(join(repo, "src"), { recursive: true });
+      mkdirSync(join(repo, "\uFEFFdocs"), { recursive: true });
+      writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), pathBytes]), "text\n");
+    });
+    const raw = spawnSync("git", ["diff", "--raw", "-z", "--no-renames", f.base, f.tested, "--"], {
+      cwd: f.repo,
+      encoding: null,
+    });
+    assert.equal(raw.status, 0);
+    const firstNul = raw.stdout.indexOf(0);
+    assert.notEqual(firstNul, -1);
+    assert.deepEqual(
+      raw.stdout.subarray(firstNul + 1),
+      Buffer.concat([pathBytes, Buffer.from([0])]),
+    );
+    f.expect(expected);
+  });
+}
+
 test("verified merge selects documentation and handles unusual names and deletions", (t) => {
   const f = fixture(
     t,
