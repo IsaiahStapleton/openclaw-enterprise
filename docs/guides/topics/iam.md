@@ -69,9 +69,9 @@ A new account starts with no access. As a human Installation administrator:
    ```bash
    echo '{"name":"Read Namespace and Agent","permissions":[{"action":"read","resourceKind":"namespace"},{"action":"read","resourceKind":"agent"}]}' > role.json
    ROLE_ID="$(occ iam role create --file role.json -o json | jq -r .id)"
-   for target in "namespace $OCC_NAMESPACE" "agent <agent-id>"; do
-     set -- $target
-     jq -n --arg p "$PRINCIPAL_ID" --arg r "$ROLE_ID" --arg k "$1" --arg i "$2" \
+   for target in "namespace:$OCC_NAMESPACE" "agent:<agent-id>"; do
+     jq -n --arg p "$PRINCIPAL_ID" --arg r "$ROLE_ID" \
+       --arg k "${target%%:*}" --arg i "${target#*:}" \
        '{subjectKind:"identity",subjectId:$p,roleId:$r,resourceKind:$k,resourceId:$i}' > binding.json
      occ iam access-binding create --file binding.json
    done

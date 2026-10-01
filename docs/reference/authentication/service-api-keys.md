@@ -82,12 +82,19 @@ Use a human session for recovery, human-issued keys, and account-only APIs. For
 production, obtain the first administrator’s password through the protected
 bootstrap storage procedure. The following sends it from a file and keeps the
 session cookie in a private directory. Set `OCC_URL` to the approved HTTPS
-endpoint or, for local development, the Installation's loopback URL:
+endpoint.
+
+When local startup printed an HTTPS browser console URL, set `OCC_URL` to its
+origin (`https://console.<cluster>.oce.localhost:<port>`, without `/console/`)
+and export `CURL_CA_BUNDLE` as the printed browser CA certificate file; unset it
+when finished. Do not use the loopback API URL there: sign-in returns `200`, but
+the session cookie is `Secure` and scoped to the console's domain, so curl never
+sends it to `http://127.0.0.1` and the next request returns `401`.
 
 ```bash
 set -o pipefail
 umask 077
-: "${OCC_URL:?Set OCC_URL to the approved HTTPS endpoint or local loopback URL}"
+: "${OCC_URL:?Set OCC_URL to the approved HTTPS endpoint or local console origin}"
 export OCC_ADMIN_EMAIL='<first-admin@example.com>'
 export OCC_ADMIN_PASSWORD_FILE='/secure/occ/initial-admin-password'
 OCC_SESSION_DIRECTORY="$(mktemp -d)"
