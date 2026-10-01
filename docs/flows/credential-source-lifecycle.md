@@ -225,10 +225,13 @@ revision-scoped work with target `credentials_withdrawn`
 work has its own idempotency key, never deploys the revision, and owns no
 repository cleanup.
 
-The worker loads every pending withdrawal of the revision's sources, rechecks
-`agent:operate` for the requester, and calls Compute's
-`withdrawCredentialSource` for each in admission order. The work completes only
-when all of them are revoked. Compute derives the Sandbox with the Sandbox Driver's
+The worker loads every pending withdrawal of the revision's sources and rechecks
+`agent:operate` for each withdrawal's own `requested_by`, never only the claim's
+actor. It calls Compute's `withdrawCredentialSource` for each authorized one in
+admission order. The work retries while an authorized withdrawal is unconfirmed;
+otherwise a denied requester fails it after the others are revoked. Each
+revocation is audited for its requester in the pass that confirms it, and each
+denial once when the claim ends. Compute derives the Sandbox with the Sandbox Driver's
 `harnessResource` and passes it to the gateway's `withdraw`; the OpenShell
 Driver calls `DetachSandboxProvider` and reads the receipt's status. Each
 attempt records its reason code in `last_reason` and `last_attempt_at`, in the
@@ -251,7 +254,10 @@ none is outstanding, completes, and keeps the maintenance chain. Once it is
 `revoked`, the pass completes without scheduling more maintenance. Deploy and
 repair work that reaches the revision fails with `CREDENTIAL_WITHDRAWN` rather
 than re-attach the source. This applies only to the Harness source; deploy and
-repair work omit a withdrawn non-model source and continue.
+repair work omit a withdrawn non-model source and continue. Maintenance also
+re-queues withdrawal work for a pending non-model withdrawal
+(`apps/controller/src/worker.ts:recoverPendingCredentialWithdrawals`), so an
+attempt that exhausted its retries during a gateway outage resumes after it.
 
 ## Debugging and Verification
 
@@ -268,7 +274,10 @@ repair work omit a withdrawn non-model source and continue.
   `tests/integration/postgres-worker-agent-revision.test.mjs` run the real queue
   and worker against PostgreSQL with a Compute double: revocation after a
   pending retry, exhaustion followed by a replay, maintenance of a withdrawn
-  revision, and a retry that omits two non-model sources revoked in one pass.
+  revision, a retry that omits two non-model sources revoked in one pass,
+  per-requester authorization of a shared withdrawal claim, maintenance recovery
+  of an exhausted non-model withdrawal, and dispatch refusal after the Agent loses
+  a source grant.
 - The real OpenShell test updates the source through the API, withdraws it from
   the running Agent, and checks that a model turn in the same Codex process
   then fails. Before that, it calls an in-cluster echo service with a
@@ -307,6 +316,8 @@ repair work omit a withdrawn non-model source and continue.
 
 - 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)
 - 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)
+- 2026-10-02 10:00: Authorized each batched withdrawal by its own requester and recovered pending non-model withdrawals during maintenance. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 92e33389d)
+
 - 2026-10-01 21:30: Added non-model sources bound through `credentialSources`, their admission, dispatch and withdrawal. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 9a202599b)
 - 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)
 - 2026-10-01 11:37: Updated the OpenShell wire-fixture pin to v0.1.3-pre.2. (authoring-run/f1f395c4-2594-4b07-9e92-ae829a5b5dd4 - f22a584e6ce21d505b40a72fdb5ae1c6e74c1c84)

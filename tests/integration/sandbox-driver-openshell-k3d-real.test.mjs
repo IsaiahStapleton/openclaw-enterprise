@@ -2185,6 +2185,7 @@ async function prepareProductionInstallation(
       resourceId: toolSource.id,
     });
     assert.equal(toolBinding.status, 201, JSON.stringify(toolBinding.error));
+    toolSource.bindingId = toolBinding.data.id;
   }
   const deployed = await request(
     "POST",
@@ -2497,6 +2498,29 @@ async function assertNonModelCredentialSource(topology) {
   assert.notEqual(after.response?.digest, expected, "a withdrawn token must not be delivered");
   const unchanged = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
   assert.equal(unchanged.data.activeRevisionId, revision.id, "withdrawal must not redeploy");
+
+  // Without the Agent principal's grant on the source, admission refuses a redeploy, so no
+  // new revision is created and the gateway attaches nothing.
+  const revisionCount = async () => {
+    const listed = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}/revisions`);
+    assert.equal(listed.status, 200, JSON.stringify(listed.error));
+    return listed.data.length;
+  };
+  const revisionsBefore = await revisionCount();
+  const ungranted = await request(
+    "DELETE",
+    `/namespaces/${namespaceId}/iam/access-bindings/${toolSource.bindingId}`,
+  );
+  assert.equal(ungranted.status, 204, JSON.stringify(ungranted.error));
+  const refused = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
+  assert.equal(refused.status, 403, JSON.stringify(refused.error ?? refused.data));
+  assert.equal(
+    await revisionCount(),
+    revisionsBefore,
+    "a refused deployment must not admit a revision",
+  );
+  const kept = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
+  assert.equal(kept.data.activeRevisionId, revision.id);
 }
 
 /**

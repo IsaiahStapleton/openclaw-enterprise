@@ -168,10 +168,15 @@ again to queue another attempt.
 A withdrawn source never re-attaches to that revision. If its Sandbox is
 recreated, a withdrawn non-model source is left out and the revision keeps
 running without it. A withdrawn model source instead fails provisioning with
-`CREDENTIAL_WITHDRAWN`, and maintenance of the revision stops preparing it. While the withdrawal is `pending`, each
-maintenance pass queues another attempt if none is outstanding. Once it is
-`revoked`, maintenance stops, so Compute no longer repairs the revision until a
-redeploy replaces it.
+`CREDENTIAL_WITHDRAWN`, and maintenance of the revision stops preparing it. While any
+withdrawal is `pending`, each maintenance pass queues another attempt if none is
+outstanding. Once a model source is `revoked`, maintenance stops, so Compute no
+longer repairs the revision until a redeploy replaces it.
+
+Withdrawals of different sources on one revision share one worker attempt, but
+each is authorized by its own `requestedBy`. A requester who lost
+`agent:operate` leaves only their withdrawal `pending` with
+`AUTHORIZATION_DENIED`; the others are still revoked.
 
 The revision still references the source, so the source cannot be deleted until
 a redeploy replaces the revision. Redeploy the Agent with a replacement source
