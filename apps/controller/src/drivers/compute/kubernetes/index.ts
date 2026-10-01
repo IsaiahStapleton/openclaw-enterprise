@@ -686,7 +686,7 @@ const WORKSPACE_NODE_BINDING_ANNOTATION = "openclaw.dev/workspace-node-binding";
 const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 20_000;
 const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
 // After the setup reaches the Harness of a first dedicated deploy, its node host
-// boots and pairs (about 0.5-7 s on k3d, the upper end under host load). The
+// boots and pairs (7-12 s on a loaded dogfood k3d host, D25). The
 // preparation pass that delivered it watches for the pairing on one Gateway
 // connection for this long instead of ending pending and paying a full pass
 // (about 1-3 s of reconciliation) per check. The worker is serial, so keep it
