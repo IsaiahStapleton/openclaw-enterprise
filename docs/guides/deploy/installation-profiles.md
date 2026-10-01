@@ -144,9 +144,11 @@ and rejects URLs the controller would reject at startup.
 
 ### External sign-in and trusted proxies
 
-Activation of GitHub or Google sign-in is one-way, so keep these inputs in every
+Activation of GitHub, Google or OIDC sign-in is one-way, so keep these inputs in every
 later rerender. Adding `controlPlane.github` or `controlPlane.google` (`{}` uses
-the chart's Secret defaults) renders `auth.github` or `auth.google` with
+the chart's Secret defaults), or `controlPlane.oidc` with its `issuer`,
+`authorizationUrl`, `tokenUrl` and `jwksUrl` ([OIDC sign-in](oidc-sign-in.md)), renders
+`auth.github`, `auth.google` or `auth.oidc` with
 `enabled: true` and `agentNativeAdmin.enabled: false`; remove
 `agentNativeAdminDomain` and `sharedCookieDomain`. `recoveryUserId` and an HTTPS
 `authBaseUrl` are required. Optional `passwordSignIn: "recovery-only"` renders
@@ -173,7 +175,8 @@ as behind a source-preserving NLB, needs none.
 }
 ```
 
-`github` and `google` also accept `clientIdKey` and `clientSecretKey`;
+`github`, `google` and `oidc` also accept `secretName`, `clientIdKey`, `clientSecretKey`
+and `egressCidrs`; `oidc` also accepts `tokenAuth` and `displayName`;
 `trustedProxy` accepts `clientAddressHeader`, required for the `generic` preset.
 
 If you opt in to repositories, add the broker inputs:

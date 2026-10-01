@@ -209,7 +209,7 @@ session. Password sign-in in this profile returns the same key. Callback denials
 (transport failure, deadline, 429/5xx, malformed body), or `EXTERNAL_IDENTITY_REJECTED`;
 State dependency failure or uncertain session completion is not a denial. Neither path retries.
 
-Google reuses `apps/controller/src/auth/github.ts:externalProviderEndpoints` for
+Google (and generic OIDC) reuses `apps/controller/src/auth/github.ts:externalProviderEndpoints` for
 start, callback, and result, with provider instance `google:<sha256(client ID)>`.
 Authorization adds scope `openid email` and an auth-secret HMAC of attempt state
 as nonce, without extra storage.
@@ -220,7 +220,7 @@ allowed domains are set), and returns only `sub`. Tokens and email are discarded
 
 Password sign-in is admitted by the controller route before `/oce/password` runs, with the
 recovery email reserved like an administrator's. Start, callback, and result each have
-bounded process-local admission (`keyedAdmission`), shared by GitHub and Google, keyed on
+bounded process-local admission (`keyedAdmission`), shared by GitHub, Google and OIDC, keyed on
 the client address only behind a trusted proxy and otherwise on the browser's cookies. Provider HTTP shares a deadline and
 limits streamed response bytes; State bounds pending attempts and expired cleanup.
 State sets the five-minute attempt and eight-hour session deadlines. Cookie

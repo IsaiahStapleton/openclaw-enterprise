@@ -42,7 +42,7 @@ Each operation lists its supported status codes.
 
 | Resource | Operations |
 | --- | --- |
-| [Authentication](#authentication) | 23 operations |
+| [Authentication](#authentication) | 27 operations |
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
@@ -72,6 +72,7 @@ Each operation lists its supported status codes.
 | [`POST /api/auth/accounts/{userId}/methods/{methodId}/detach`](#post-apiauthaccountsuseridmethodsmethodiddetach) | Detach an external sign-in identity from an account |
 | [`POST /api/auth/accounts/{userId}/providers/github`](#post-apiauthaccountsuseridprovidersgithub) | Attach an exact GitHub identity to an existing account |
 | [`POST /api/auth/accounts/{userId}/providers/google`](#post-apiauthaccountsuseridprovidersgoogle) | Attach an exact Google identity to an existing account |
+| [`POST /api/auth/accounts/{userId}/providers/oidc`](#post-apiauthaccountsuseridprovidersoidc) | Attach an exact OIDC identity to an existing account |
 | [`POST /api/auth/accounts/{userId}/revoke`](#post-apiauthaccountsuseridrevoke) | Revoke all sessions for a human account |
 | [`GET /api/auth/providers`](#get-apiauthproviders) | List configured browser sign-in methods |
 | [`GET /api/auth/providers/github/callback`](#get-apiauthprovidersgithubcallback) | Complete an enrolled GitHub sign-in |
@@ -80,6 +81,9 @@ Each operation lists its supported status codes.
 | [`GET /api/auth/providers/google/callback`](#get-apiauthprovidersgooglecallback) | Complete an enrolled Google sign-in |
 | [`POST /api/auth/providers/google/result`](#post-apiauthprovidersgoogleresult) | Confirm which session a Google sign-in created |
 | [`POST /api/auth/providers/google/start`](#post-apiauthprovidersgooglestart) | Start Google sign-in for an enrolled account |
+| [`GET /api/auth/providers/oidc/callback`](#get-apiauthprovidersoidccallback) | Complete an enrolled OIDC sign-in |
+| [`POST /api/auth/providers/oidc/result`](#post-apiauthprovidersoidcresult) | Confirm which session an OIDC sign-in created |
+| [`POST /api/auth/providers/oidc/start`](#post-apiauthprovidersoidcstart) | Start OIDC sign-in for an enrolled account |
 | [`GET /api/auth/recovery`](#get-apiauthrecovery) | Inspect the recovery account designation |
 | [`POST /api/auth/recovery`](#post-apiauthrecovery) | Move the recovery designation to another administrator |
 | [`POST /api/auth/service-keys`](#post-apiauthservicekeys) | Issue a service API key |
@@ -483,6 +487,57 @@ Attach an exact Google identity to an existing account
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
 
+#### `POST /api/auth/accounts/{userId}/providers/oidc`
+
+<span id="post-apiauthaccountsuseridprovidersoidc"></span>
+
+Attach an exact OIDC identity to an existing account
+
+**Operation ID:** `attachOidcIdentity`
+
+**Permissions:** Requires a current human Native IAM Installation administrator who holds every grant of the target account's Principal, trusted Origin and expectedVersion from a guarded account read. Commits state and audit together. An unknown outcome must be inspected without automatic retry; present state does not attribute the earlier request.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `administer` | `installation` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `userId` | path | `string` | Yes | min length: 1; max length: 200 |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `expectedVersion` | `integer` | Yes | minimum: 1; maximum: 2147483647 |
+| `subject` | `string` | Yes | pattern: `^[\x21-\x7E]{1,255}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.userId` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
 #### `POST /api/auth/accounts/{userId}/revoke`
 
 <span id="post-apiauthaccountsuseridrevoke"></span>
@@ -558,7 +613,11 @@ List configured browser sign-in methods
 | `data` | `object` | Yes | — |
 | `data.github` | `boolean` | Yes | — |
 | `data.google` | `boolean` | Yes | — |
-| `data.password` | `boolean` | Yes | False when password sign-in is recovery-only: ordinary accounts sign in with GitHub or Google, and only the recovery account uses a password. |
+| `data.oidc` | `boolean` | Yes | — |
+| `data.oidcSignIn` | `object` | No | Present only when OIDC sign-in is configured: the Console's button label and the configured authorization endpoint that the start URL must use. |
+| `data.oidcSignIn.authorizationUrl` | `string (uri)` | Yes | — |
+| `data.oidcSignIn.label` | `string` | Yes | min length: 1; max length: 40 |
+| `data.password` | `boolean` | Yes | False when password sign-in is recovery-only: ordinary accounts sign in with an external provider, and only the recovery account uses a password. |
 | `data.sessionBinding` | `boolean` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | — |
@@ -707,6 +766,89 @@ Confirm which session a Google sign-in created
 Start Google sign-in for an enrolled account
 
 **Operation ID:** `startGoogleSignIn`
+
+**Permissions:** Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.attemptId` | `string` | Yes | pattern: `^[A-Za-z0-9_-]{43}$` |
+| `data.url` | `string (uri)` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `GET /api/auth/providers/oidc/callback`
+
+<span id="get-apiauthprovidersoidccallback"></span>
+
+Complete an enrolled OIDC sign-in
+
+**Operation ID:** `completeOidcSignIn`
+
+**Permissions:** Consumes the browser-bound attempt before provider exchange. Redirects to Console after session and audit commit or with a fixed failure classification.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `302` | Redirect to Console |
+
+#### `POST /api/auth/providers/oidc/result`
+
+<span id="post-apiauthprovidersoidcresult"></span>
+
+Confirm which session an OIDC sign-in created
+
+**Operation ID:** `confirmOidcSignIn`
+
+**Permissions:** Requires the configured browser Origin, the one-use login receipt cookie set by the callback, the matching attemptId and the session cookie that callback issued. Returns that session's sessionKey; never issues or extends a session.
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `attemptId` | `string` | Yes | pattern: `^[A-Za-z0-9_-]{43}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.sessionKey` | `string` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | — |
+
+#### `POST /api/auth/providers/oidc/start`
+
+<span id="post-apiauthprovidersoidcstart"></span>
+
+Start OIDC sign-in for an enrolled account
+
+**Operation ID:** `startOidcSignIn`
 
 **Permissions:** Requires the exact configured browser Origin and, when Sec-Fetch-Site is present, same-origin. Creates a one-use browser-bound login attempt and returns its public attemptId for the result exchange; does not create an account or grant access.
 
@@ -942,7 +1084,7 @@ Sign in with email and password
 
 **Operation ID:** `signInEmail`
 
-**Permissions:** Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub or Google sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.
+**Permissions:** Authenticates a local account and issues a user session cookie. In the password-only profile, repeated failed attempts for one email, or from one client address behind a trusted proxy, are limited and return 429; with GitHub, Google or OIDC sign-in, every attempt counts, successful ones included. A successful sign-in also sets an HttpOnly known-device cookie; later attempts for that email from the same browser spend the browser's own budget instead of the email's. The cookie never authenticates.
 
 ##### Request body
 
