@@ -3665,6 +3665,8 @@ const gatewayLocalCodexTools = Object.freeze([
   "process",
   "gateway_exec",
   "gateway_process",
+  "terminal",
+  "openclaw",
 ]);
 
 // Every Codex rollout in the Harness, with its thread ID and the dynamic tools it was given.

@@ -2011,9 +2011,12 @@ function configureWorkspaceNodePlugins(config, workspaceNodeId) {
 // its dynamic tools in the Gateway process, so these would list, read, write or
 // run commands in the Gateway Pod instead. Codex's native tools cover them in
 // the Harness, and the file-transfer tools reach its workspace through the node.
+// "terminal" types into shells running in the Gateway Pod, and "openclaw"
+// delegates Gateway configuration changes, which could drop this list.
 const GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS = [
   "ls", "read", "write", "edit", "apply_patch",
   "exec", "process", "gateway_exec", "gateway_process",
+  "terminal", "openclaw",
 ];
 
 function excludeGatewayLocalCodexTools(config) {
@@ -2025,6 +2028,18 @@ function excludeGatewayLocalCodexTools(config) {
     throw new Error("The Codex plugin codexDynamicToolsExclude setting must be a list.");
   }
   codexConfig.codexDynamicToolsExclude = [...new Set([...configured, ...GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS])];
+  // Automation triggers run model-written commands and scripts in the Gateway
+  // process: stream schedules, script payloads and condition scripts. Timed
+  // automations still run Codex turns in the Harness.
+  const cron = config.cron ??= {};
+  if (!isPlainObject(cron)) {
+    throw new Error("The cron setting must be an object.");
+  }
+  const triggers = cron.triggers ??= {};
+  if (!isPlainObject(triggers)) {
+    throw new Error("The cron.triggers setting must be an object.");
+  }
+  triggers.enabled = false;
 }
 
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;

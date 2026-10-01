@@ -210,8 +210,11 @@ Other Harnesses are replaced, restarting their Gateway.
 - The Gateway's own `/home/node/workspace` stays empty. It withholds from Codex
   the OpenClaw tools that would act on it or run commands in the Gateway Pod
   (`ls`, `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
-  `gateway_exec`, `gateway_process`) through `codexDynamicToolsExclude`, keeping
-  owner entries. Codex's native tools act in the Harness; the file-transfer tools
+  `gateway_exec`, `gateway_process`, `terminal`), and `openclaw`, whose
+  configuration changes could drop this list, through `codexDynamicToolsExclude`,
+  keeping owner entries. It sets `cron.triggers.enabled: false`, because stream
+  schedules and trigger scripts run in the Gateway; timed automations still run
+  Codex turns. Codex's native tools act in the Harness; the file-transfer tools
   reach it through the node.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots. Symlinks are not followed; explicit policies remain authoritative. This
