@@ -136,9 +136,24 @@ const server = createServer(
       }
       let model = "unknown";
       try {
-        model = JSON.parse(body).model ?? model;
+        model = JSON.parse(body).model;
       } catch {
         // A malformed body still gets an answer; the caller validates it.
+      }
+      // Like the provider, authenticate first, then refuse a request without a
+      // model: the wrapper's upfront credential check sends exactly that.
+      if (model === undefined && mode !== "reject") {
+        emit({ event: "request", method: request.method, path, turn: false });
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "Missing required parameter: 'model'.",
+              type: "invalid_request_error",
+            },
+          }),
+        );
+        return;
       }
       if (mode === "reject") {
         emit({ event: "request", transport: "https", turn: true });

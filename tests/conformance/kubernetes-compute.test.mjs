@@ -5971,12 +5971,17 @@ test("Anthropic API-key admission binds every embedded model to the canonical cr
 
 test("embedded startup probes its selected provider and allows graceful Gateway shutdown", async (t) => {
   const nodeRequire = createRequire(import.meta.url);
-  function assertProbeStageDiagnostics(lines, expectedOtherLines, elapsedMs) {
+  function assertProbeStageDiagnostics(
+    lines,
+    expectedOtherLines,
+    elapsedMs,
+    expectedStages = ["prepare", "preflight", "spawn", "returned", "cleanup", "complete"],
+  ) {
     const stageLines = lines.filter((line) => line.includes('"openclaw.model_probe_stage"'));
     const stages = stageLines.map((line) => JSON.parse(line));
     assert.deepEqual(
       stages.map(({ stage }) => stage),
-      ["prepare", "spawn", "returned", "cleanup", "complete"],
+      expectedStages,
     );
     let previousElapsedMs = 0;
     for (const stage of stages) {
@@ -6002,6 +6007,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
       ["wrong provider result", "ok", "MODEL_PROBE_FAILED"],
       // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
       ["credentials rejected", "auth", "AUTHENTICATION_FAILED"],
+      // The provider's 401 to the upfront request ends the probe before OpenClaw starts.
+      ["credentials rejected upfront", undefined, "AUTHENTICATION_FAILED"],
       ["provider unavailable", "unknown", "MODEL_PROBE_FAILED"],
       ["provider timeout", "timeout", "MODEL_PROBE_TIMEOUT"],
       // The wrapper's cap ends the probe. Only CPU waiting for most of it makes
@@ -6016,6 +6023,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
       ],
     ]) {
       const accepted = failureCode === undefined;
+      const upfront = variant === "credentials rejected upfront";
       await t.test(`${provider}: ${variant}`, async () => {
         const driver = createKubernetesComputeDriver(options());
         const candidate = {
@@ -6068,6 +6076,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
             exit(code) {
               exits.push(code);
             },
+            execPath: "/usr/local/bin/node",
           },
           setTimeout(callback, delay) {
             timers.push({ callback, delay });
@@ -6127,6 +6136,10 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                     environment: { ...options.env },
                     timeout: options.timeout,
                   });
+                  if (args[0] === "-e") {
+                    // The upfront request's child exits 3 only on the provider's 401.
+                    return { status: upfront ? 3 : 0 };
+                  }
                   if (variant.startsWith("cap exceeded")) {
                     return {
                       status: null,
@@ -6171,23 +6184,53 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           },
         });
         await Promise.resolve();
-        assert.equal(calls.length, 1);
+        assert.equal(calls.length, upfront ? 1 : 2);
         assert.equal(probeTemplate, "/approved-temporary/openclaw-auth-probe-");
-        assert.equal(calls[0].environment.TMPDIR, "/isolated-probe");
-        // 15 s model turn, 5 s slack, and 45 CPU-seconds at the 500m limit.
-        assert.equal(calls[0].timeout, 110_000);
-        assert.equal(calls[0].environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
-        assert.equal(calls[0].environment.SSL_CERT_FILE, "/run/openshell/ca-bundle.crt");
-        assert.equal(calls[0].args[calls[0].args.indexOf("--probe-provider") + 1], provider);
-        assert.equal(calls[0].environment[credentialName], "fixture-model-key");
-        assert.equal(
-          calls[0].environment[provider === "openai" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"],
-          undefined,
+        // The upfront request carries the credential as OpenClaw sends it to
+        // the provider's default endpoint, and nothing else from the environment.
+        const [upfrontCall, probeCall] = calls;
+        assert.equal(upfrontCall.command, "/usr/local/bin/node");
+        assert.equal(upfrontCall.timeout, 10_000);
+        assert.deepEqual(Object.keys(upfrontCall.environment).sort(), [
+          "H",
+          "NODE_EXTRA_CA_CERTS",
+          "SSL_CERT_FILE",
+          "U",
+        ]);
+        assert.equal(upfrontCall.environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
+        assert.deepEqual(
+          [upfrontCall.environment.U, JSON.parse(upfrontCall.environment.H)],
+          provider === "openai"
+            ? [
+                "https://api.openai.com/v1/responses",
+                { authorization: "Bearer fixture-model-key", "content-type": "application/json" },
+              ]
+            : [
+                "https://api.anthropic.com/v1/messages",
+                {
+                  "x-api-key": "fixture-model-key",
+                  "anthropic-version": "2023-06-01",
+                  "content-type": "application/json",
+                },
+              ],
         );
-        assert.equal(
-          JSON.parse(files.get("/isolated-probe/openclaw.json")).agents.defaults.model,
-          `${provider}/${model}`,
-        );
+        if (!upfront) {
+          assert.equal(probeCall.environment.TMPDIR, "/isolated-probe");
+          // 15 s model turn, 5 s slack, and 45 CPU-seconds at the 500m limit.
+          assert.equal(probeCall.timeout, 110_000);
+          assert.equal(probeCall.environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
+          assert.equal(probeCall.environment.SSL_CERT_FILE, "/run/openshell/ca-bundle.crt");
+          assert.equal(probeCall.args[probeCall.args.indexOf("--probe-provider") + 1], provider);
+          assert.equal(probeCall.environment[credentialName], "fixture-model-key");
+          assert.equal(
+            probeCall.environment[provider === "openai" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"],
+            undefined,
+          );
+          assert.equal(
+            JSON.parse(files.get("/isolated-probe/openclaw.json")).agents.defaults.model,
+            `${provider}/${model}`,
+          );
+        }
         assert.equal(started, accepted);
         assert.equal(held, !accepted);
         const phaseLines = errors.filter((line) => line.includes('"runtime.startup_phase"'));
@@ -6201,6 +6244,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           otherLines,
           accepted ? [] : ["Harness model authentication probe failed."],
           probeLog.elapsedMs,
+          upfront ? ["prepare", "preflight", "cleanup", "complete"] : undefined,
         );
         if (provider === "openai" && accepted) {
           // Mutate actual generated diagnostics: a permissive filter must not
