@@ -1030,9 +1030,10 @@ function buildRendered(profile, parsed, diagnostics) {
           },
           resources: {
             // Tenant runtimes may burst to four cores; 100m requests keep the
-            // scheduling reservation unchanged.
+            // scheduling reservation unchanged. An OpenClaw Gateway settles
+            // near 1.2 GiB once it has served a few turns.
             gateway: {
-              requests: { cpu: "100m", memory: "128Mi" },
+              requests: { cpu: "100m", memory: "1280Mi" },
               limits: { cpu: "4", memory: "2Gi" },
             },
             agent: {
