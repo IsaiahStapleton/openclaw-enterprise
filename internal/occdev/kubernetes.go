@@ -127,6 +127,95 @@ func (r *runner) waitForDevelopmentKubernetesNamespace(ctx context.Context, time
 
 var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
+// engineImageReference reports the name the container engine recorded for a
+// local image.
+//
+// Docker can record a familiar Docker Hub name. Podman qualifies a local
+// build tagged `name:tag` as `localhost/name:tag`. Both `k3d image import`
+// and containerd match the recorded name, so later steps must use it.
+func (r *runner) engineImageReference(ctx context.Context, image string) (string, error) {
+	data, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{json .RepoTags}}", image)
+	if err != nil {
+		return "", err
+	}
+	var tags []string
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return "", fmt.Errorf("invalid tag inventory for image %s: %w", image, err)
+	}
+	// Engines record the implicit tag even when the request omits it. A colon
+	// in a registry port is not a tag; only inspect the final path component.
+	requested := image
+	last := image[strings.LastIndex(image, "/")+1:]
+	if !strings.Contains(image, "@") && !strings.Contains(last, ":") {
+		requested += ":latest"
+	}
+	// Prefer the requested spelling when the image has several tags.
+	for _, tag := range tags {
+		if tag == image {
+			return tag, nil
+		}
+	}
+	for _, tag := range tags {
+		if tag == requested {
+			return tag, nil
+		}
+	}
+	first, _, hasSlash := strings.Cut(image, "/")
+	qualified := hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost")
+	// Docker Hub spells one repository several ways: `postgres`,
+	// `library/postgres`, and `docker.io/library/postgres` all name the same
+	// image. Compare expanded names so any spelling finds the recorded one.
+	requestedHub, requestedOnHub := dockerHubReference(requested)
+	match := ""
+	for _, tag := range tags {
+		matched := false
+		if requestedOnHub {
+			recordedHub, recordedOnHub := dockerHubReference(tag)
+			matched = recordedOnHub && requestedHub == recordedHub
+		}
+		if !matched && !qualified {
+			registry, unqualified, found := strings.Cut(tag, "/")
+			matched = found && (registry == "localhost" || strings.ContainsAny(registry, ".:")) &&
+				(unqualified == image || unqualified == requested)
+		}
+		if !matched {
+			continue
+		}
+		if match != "" && match != tag {
+			return "", fmt.Errorf("container engine records ambiguous tags matching image %s", image)
+		}
+		match = tag
+	}
+	if match != "" {
+		return match, nil
+	}
+	return "", fmt.Errorf("container engine records no tag matching image %s", image)
+}
+
+// dockerHubReference expands Docker Hub's familiar names without changing
+// other registries, tags, or digests. The caller supplies any implicit tag.
+func dockerHubReference(reference string) (string, bool) {
+	if strings.Contains(reference, "@") {
+		return "", false
+	}
+	first, rest, hasSlash := strings.Cut(reference, "/")
+	if !hasSlash {
+		return "docker.io/library/" + reference, true
+	}
+	switch first {
+	case "docker.io", "index.docker.io":
+		if !strings.Contains(rest, "/") {
+			rest = "library/" + rest
+		}
+		return "docker.io/" + rest, true
+	default:
+		if first == "localhost" || strings.ContainsAny(first, ".:") || strings.ToLower(first) != first {
+			return "", false
+		}
+		return "docker.io/" + reference, true
+	}
+}
+
 func (r *runner) importRuntime(ctx context.Context, s *developmentState) (string, error) {
 	image := r.setting("OCC_KUBERNETES_RUNTIME_IMAGE", "openclaw-enterprise-runtime:kubernetes-quickstart")
 	if r.env["OCC_KUBERNETES_RUNTIME_IMAGE"] != "" {
@@ -160,6 +249,15 @@ func (r *runner) importDevelopmentImage(ctx context.Context, s *developmentState
 			}
 		}()
 	}
+	// Use the name the engine actually recorded. Podman qualifies an
+	// unqualified local build as `localhost/<name>`, and both k3d and
+	// containerd match that recorded name exactly, so the requested name finds
+	// nothing to import or verify.
+	recorded, err := r.engineImageReference(ctx, selected)
+	if err != nil {
+		return "", err
+	}
+	selected = recorded
 	if staged {
 		platformData, err := r.output(ctx, r.engine, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", selected)
 		if err != nil {

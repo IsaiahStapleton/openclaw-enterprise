@@ -425,6 +425,9 @@ function operationTarget(
   ) {
     return { kind: "secret", id: namespaceId, namespaceId };
   }
+  if (operation.operationId.endsWith("DeviceAuthorization") && namespaceId) {
+    return { kind: "agent", id: agentId ?? namespaceId, namespaceId };
+  }
   if (secretId && namespaceId) {
     return { kind: "secret", id: secretId, namespaceId };
   }
@@ -471,6 +474,25 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     action: operation.iamAction,
     resourceKind: operation.resourceKind,
   };
+
+  if (operation.operationId.endsWith("DeviceAuthorization")) {
+    const saved = operation.operationId.includes("SavedAgent");
+    return [
+      {
+        action: saved ? "update" : "create",
+        resourceKind: "agent",
+        scope: saved ? "requested" : "namespace",
+      },
+      ...(saved
+        ? [{ action: "read" as const, resourceKind: "agent" as const, scope: "requested" as const }]
+        : []),
+      {
+        action: operation.operationId.startsWith("start") ? "create" : "operate",
+        resourceKind: "secret",
+        scope: operation.operationId.startsWith("start") ? "namespace" : "requested",
+      },
+    ];
+  }
 
   if (operation.operationId === "createNamespace") {
     return [
@@ -2212,6 +2234,59 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       return;
     }
 
+    if (
+      operation.operationId === "startAgentDeviceAuthorization" ||
+      operation.operationId === "startSavedAgentDeviceAuthorization" ||
+      operation.operationId === "pollAgentDeviceAuthorization" ||
+      operation.operationId === "pollSavedAgentDeviceAuthorization" ||
+      operation.operationId === "cancelAgentDeviceAuthorization" ||
+      operation.operationId === "cancelSavedAgentDeviceAuthorization"
+    ) {
+      const agentId = params.agentId;
+      let result;
+      if (operation.operationId.startsWith("start")) {
+        result = await controller.startAgentDeviceAuthorization(
+          context.actorId,
+          namespaceId,
+          body?.harnessId as string,
+          agentId,
+        );
+      } else if (operation.operationId.startsWith("poll")) {
+        result = await controller.pollAgentDeviceAuthorization(
+          context.actorId,
+          namespaceId,
+          params.secretId as string,
+          agentId,
+        );
+      } else {
+        await controller.cancelAgentDeviceAuthorization(
+          context.actorId,
+          namespaceId,
+          params.secretId as string,
+          agentId,
+        );
+      }
+      // Clients poll on the provider interval; audit the transition, not every pending poll.
+      if (result?.status !== "pending" || operation.operationId.startsWith("start")) {
+        await options.auditSink.append(
+          event(
+            operation,
+            request,
+            { kind: "agent", id: agentId ?? namespaceId, namespaceId },
+            "mutation",
+            context,
+          ),
+        );
+      }
+      reply.header("cache-control", "no-store");
+      if (result === undefined) {
+        reply.status(204).send();
+      } else {
+        reply.send({ data: result, meta: { requestId: request.id } });
+      }
+      return;
+    }
+
     if (operation.operationId === "discoverAgentModels") {
       const models = await controller.discoverAgentModels(context.actorId, namespaceId, {
         provider: body?.provider as string,
@@ -2225,6 +2300,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "discoverAgentPlugins") {
       const catalog = await controller.discoverAgentPlugins(context.actorId, namespaceId, {
+        ...(body?.oauthLogin === undefined
+          ? {}
+          : { oauthLogin: body.oauthLogin as SecretReference }),
         ...(body?.secretRef === undefined
           ? { accessToken: body?.accessToken as string }
           : { secretRef: body.secretRef as SecretReference }),
@@ -2238,6 +2316,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
     if (operation.operationId === "discoverAgentPluginDetails") {
       const plugin = await controller.discoverAgentPluginDetails(context.actorId, namespaceId, {
+        ...(body?.oauthLogin === undefined
+          ? {}
+          : { oauthLogin: body.oauthLogin as SecretReference }),
         ...(body?.secretRef === undefined
           ? { accessToken: body?.accessToken as string }
           : { secretRef: body.secretRef as SecretReference }),
@@ -2265,6 +2346,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         namespaceId,
         params.agentId as string,
         {
+          ...(body?.oauthLogin === undefined
+            ? {}
+            : { oauthLogin: body.oauthLogin as SecretReference }),
           ...(body?.cursor === undefined ? {} : { cursor: body.cursor as string }),
           ...(body?.q === undefined ? {} : { q: body.q as string }),
         },
@@ -2279,7 +2363,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         context.actorId,
         namespaceId,
         params.agentId as string,
-        { pluginId: body?.pluginId as string },
+        {
+          pluginId: body?.pluginId as string,
+          ...(body?.oauthLogin === undefined
+            ? {}
+            : { oauthLogin: body.oauthLogin as SecretReference }),
+        },
       );
       reply.header("cache-control", "no-store");
       reply.send({ data: plugin, meta: { requestId: request.id } });
