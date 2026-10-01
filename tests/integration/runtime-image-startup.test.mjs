@@ -1231,7 +1231,8 @@ const environment = {
 let native;
 vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
   URL, console, setTimeout, setInterval,
-  process: { env: environment, on() {}, exit() {} },
+  // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
+  process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
   require(name) {
     if (name !== "node:child_process") return require(name);
     return {
@@ -2349,7 +2350,8 @@ assert.equal(fs.readFileSync(homeControlSentinelPath, "utf8"), homeControlSentin
 let native;
 vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
   URL, console, setTimeout, setInterval,
-  process: { env: environment, on() {}, exit() {} },
+  // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
+  process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
   require(name) {
     if (name !== "node:child_process") return require(name);
     return {

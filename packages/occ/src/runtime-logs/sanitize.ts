@@ -63,6 +63,22 @@ const STRUCTURED_FIELDS: ReadonlySet<string> = new Set([
   "method",
 ]);
 
+// Codex tool-call fields (`codex_core::tools::parallel`): names and timings only.
+const CODEX_FIELDS: readonly string[] = ["tool_name", "turn_id", "total_duration_ms"];
+// Codex tracing prints span lifecycle records (`new`, `enter`, `exit`, `close`)
+// as events whose message is the lifecycle word and whose `span` names the span.
+const CODEX_SPAN_EVENTS: ReadonlySet<string> = new Set(["new", "enter", "exit", "close"]);
+const CODEX_SPAN_NAME = /^[A-Za-z_][\w.:-]{0,63}$/;
+// Fields of Codex's `turn` span (`codex_core::tasks`) kept on its start and end.
+const CODEX_TURN_FIELDS: Readonly<Record<string, string>> = Object.freeze({
+  model: "model",
+  "turn.id": "turn_id",
+  "codex.turn.token_usage.input_tokens": "input_tokens",
+  "codex.turn.token_usage.output_tokens": "output_tokens",
+  "codex.turn.token_usage.total_tokens": "total_tokens",
+  "time.busy": "busy",
+});
+
 const LEVELS: Readonly<Record<string, RuntimeLogLevel>> = Object.freeze({
   fatal: "error",
   error: "error",
@@ -218,6 +234,10 @@ function classifyStructured(value: Readonly<Record<string, unknown>>): Classifie
   ) {
     const nested = value.fields as Readonly<Record<string, unknown>>;
     if (typeof nested.message === "string") {
+      const span = codexSpanLifecycle(value, nested);
+      if (span !== undefined) {
+        return span;
+      }
       return codexRecord({ ...nested, level: value.level, target: value.target }, nested.message);
     }
   }
@@ -225,8 +245,68 @@ function classifyStructured(value: Readonly<Record<string, unknown>>): Classifie
   return { type: "withheld", reason: "unrecognised_structured" };
 }
 
+/**
+ * A Codex span lifecycle record. The `turn` span's start and end are the turn's
+ * operational events (info, with model, IDs, token counts and busy time); every
+ * other lifecycle record is debug noise, labelled with the span name. Span fields
+ * other than those listed never leave OCC.
+ */
+function codexSpanLifecycle(
+  value: Readonly<Record<string, unknown>>,
+  nested: Readonly<Record<string, unknown>>,
+): Classified | undefined {
+  const event = nested.message as string;
+  const span = value.span;
+  if (
+    !CODEX_SPAN_EVENTS.has(event) ||
+    span === null ||
+    typeof span !== "object" ||
+    Array.isArray(span)
+  ) {
+    return undefined;
+  }
+  const spanFields = span as Readonly<Record<string, unknown>>;
+  const name =
+    typeof spanFields.name === "string" && CODEX_SPAN_NAME.test(spanFields.name)
+      ? spanFields.name
+      : "span";
+  const subsystem = value.target as string;
+  if (
+    name === "turn" &&
+    subsystem === "codex_core::tasks" &&
+    (event === "new" || event === "close")
+  ) {
+    const source: Readonly<Record<string, unknown>> = {
+      ...spanFields,
+      ...(event === "close" ? { "time.busy": nested["time.busy"] } : {}),
+    };
+    const fields: Record<string, string | number | boolean> = {};
+    for (const [from, to] of Object.entries(CODEX_TURN_FIELDS)) {
+      const kept = Object.hasOwn(source, from) ? scalar(source[from]) : undefined;
+      if (kept !== undefined) {
+        fields[to] = kept;
+      }
+    }
+    return {
+      type: "line",
+      kind: "codex",
+      level: level(value.level),
+      message: event === "new" ? "turn started" : "turn completed",
+      subsystem,
+      ...(Object.keys(fields).length === 0 ? {} : { fields: Object.freeze(fields) }),
+    };
+  }
+  return {
+    type: "line",
+    kind: "codex",
+    level: "debug",
+    message: `span ${event} ${name}`,
+    subsystem,
+  };
+}
+
 function codexRecord(value: Readonly<Record<string, unknown>>, message: string): Classified {
-  const fields = pickFields(value, STRUCTURED_FIELDS);
+  const fields = pickFields(value, [...STRUCTURED_FIELDS, ...CODEX_FIELDS]);
   return {
     type: "line",
     kind: "codex",

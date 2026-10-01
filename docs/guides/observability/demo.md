@@ -362,7 +362,8 @@ Expand a row for request, work, and workload identity. In **Explore**, query:
 {service_name="occ-api"} | request_id="<request-id-from-log-details>"
 ```
 
-Line bodies hold only the event name, so a line filter such as
+Line bodies hold the event name (Codex turn, tool-call and short plain-text
+Codex messages excepted), so a line filter such as
 `|= "rev_..."` matches nothing. Filter on structured metadata instead:
 `occ_revision_id`, `occ_agent_id`, `occ_namespace_id` and `work_id` on OCC
 records, or `openclaw_revision_id` and `openclaw_agent_id` on Gateway and
