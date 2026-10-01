@@ -18,15 +18,24 @@ existing cluster or change the default kubeconfig.
 
 ## Coverage and applicability
 
-| Proof                                                                                 | Compose OpenClaw | Compose Codex | Kubernetes OpenClaw | Kubernetes Codex |
-| ------------------------------------------------------------------------------------- | ---------------- | ------------- | ------------------- | ---------------- |
-| Startup, ready default Namespace, shipped presets                                     | Yes              | Shared        | Yes                 | Shared           |
-| Real model nonce, unauthenticated denial, exact Agent/revision/Pod                    | Yes              | Yes           | Yes                 | Yes              |
-| Authenticated console and native UI WebSocket model turn                              | Yes              | Yes           | Yes                 | Yes              |
-| Native repository checkout/edit/commit/push/PR; independent remote readback; disposal | Yes              | Yes           | Yes                 | Yes              |
-| Read-only repository push rejected                                                    | —                | Yes           | —                   | Yes              |
-| Calendar per-call allow-once/deny, automatic review, disabled tool                    | —                | Yes           | —                   | Yes              |
-| One Slack ingress, threaded response, and native outbound root                        | Unsupported      | Yes           | Unsupported         | Yes              |
+The named stages below are implemented in
+[`qa-matrix-real.test.mjs`](../../tests/integration/qa-matrix-real.test.mjs).
+Installation setup runs once before its two preset cells; the remaining stages
+run for each applicable cell.
+
+| Scenario                                                                           | Compose OpenClaw | Compose Codex | Kubernetes OpenClaw | Kubernetes Codex |
+| ---------------------------------------------------------------------------------- | ---------------- | ------------- | ------------------- | ---------------- |
+| Shipped startup, ready default Namespace, shipped presets                          | Shared setup     | Shared setup  | Shared setup        | Shared setup     |
+| Authenticated console login                                                        | Shared setup     | Shared setup  | Shared setup        | Shared setup     |
+| Repository broker setup                                                            | Shared setup     | Shared setup  | Shared setup        | Shared setup     |
+| Preset deployment and supported authentication                                     | Yes              | Yes           | Yes                 | Yes              |
+| Real model nonce, unauthenticated denial, exact Agent/revision/Pod                 | Yes              | Yes           | Yes                 | Yes              |
+| Trusted native UI and live WebSocket model response                                | Yes              | Yes           | Yes                 | Yes              |
+| Native repository clone/edit/commit/push/PR, independent remote readback, disposal | Yes              | Yes           | Yes                 | Yes              |
+| Read-only repository push rejected and session disposed                            | —                | Yes           | —                   | Yes              |
+| Calendar read, allow-once, subsequent denial, automatic review, disabled tool      | —                | Yes           | —                   | Yes              |
+| Single Slack ingress, one threaded reply, native outbound root                     | Unsupported      | Yes           | Unsupported         | Yes              |
+| Ordinary Agent cleanup, when an Agent remains running                              | Yes              | Yes           | Yes                 | Yes              |
 
 Linear READ is explicitly excluded because the provider is currently broken.
 Calendar must perform a successful harmless read before approval denial can pass.
@@ -130,16 +139,63 @@ node --env-file="$TEST_ENV_FILE" scripts/ci/run-tests.mjs run qa-matrix \
   --state /tmp/qa-matrix-state.json --results /tmp/qa-matrix-results.json
 ```
 
-`matrix.json` lists each stage's outcome. Cell evidence records Agent/revision/Pod
-identities, nonce results, independently observed repository SHAs, credential
-session disposal, and Slack timestamps. A parent failure or successful static
-check must not be reported as a live cell pass.
+### Read scenario outcomes
+
+The test runner prints named subtests. `matrix.json` records completed stage
+callbacks with `cell`, `stage`, and `outcome`, plus a redacted `reason` on failure:
+
+- `passed`: the stage completed its assertions.
+- `failed`: execution or an assertion failed.
+- `blocked`: the stage reported a prerequisite failure, such as unavailable
+  installation setup or Agent deployment.
+
+Installation setup uses `compose` or `kubernetes` as its cell; preset stages use
+names such as `compose/Codex`. Each stage updates the file, so earlier outcomes
+remain available when a later stage fails. The workflow retains these files in
+its `qa-matrix-<run-id>-<attempt>` artifact for seven days.
+
+A grouped stage has one outcome: clone, commit, push, and PR creation are not
+separate result rows. Cell evidence adds Agent/revision/Pod identities, nonce
+results, remote SHAs, credential disposal, and Slack timestamps. The summary
+currently has no per-stage durations or explicit `not run`/`not applicable` rows.
+Filtered, unentered, or interrupted stages can be absent; absence is not a pass.
+Inspect runner failures and cleanup results alongside the JSON.
+
+`scope: full` identifies the selected installations, not a successful run.
+`partial:*` identifies installation selection or test-name filtering. Exclusions
+remain explicit. A successful static check or parent setup does not establish
+that every live scenario passed.
 
 Ordinary cleanup stops agents and calls `scripts/dev-down` with each owned state
 directory. If repository disposal is uncertain, the fixture retains its
 installation and reports the recovery path. Keep that broker alive until its
 sessions are `DISPOSED`, with zero active uses, active/pending/uncertain cleanup,
 and no auxiliary cleanup pending. Do not delete another run's resources.
+
+## Extend the scenarios
+
+Add a named `stage(...)` in
+[`qa-matrix-real.test.mjs`](../../tests/integration/qa-matrix-real.test.mjs), using
+an existing helper or a focused helper under `tests/helpers/`. Keep its
+assertions about observable behavior and add its applicability to the table
+above. See [fixture and scenario conventions](fixtures-and-scenarios.md).
+
+- Reuse installation setup. State the prerequisites and report unavailable
+  prerequisites as blocked instead of passing an empty scenario.
+- Keep preset-specific cases explicit. Stages run sequentially and may change
+  Agent configuration or stop an Agent; restore the needed state or create a
+  fresh Agent before the next dependent scenario.
+- Register cleanup with the fixture, preserve uncertain credential-disposal
+  recovery, and record only nonsecret evidence.
+- For new required inputs, update
+  [`qa-matrix.json`](../../scripts/ci/test-suites/qa-matrix.json), the protected
+  workflow credential setup when needed, and this page's prerequisites.
+- Before moving an existing scenario here, retain its unique failure and
+  security assertions. Share setup rather than duplicating an entire suite.
+
+The installation and preset choices are explicit in the runner. Adding a new
+compute driver or topology also requires fixture support; adding one stage does
+not automatically qualify another deployment mode.
 
 ## Consolidated coverage
 
