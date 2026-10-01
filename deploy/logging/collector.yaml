@@ -94,7 +94,7 @@ processors:
         - "severity_number == SEVERITY_NUMBER_UNSPECIFIED"
         - 'attributes["service.name"] == "codex-app-server" and attributes["log.iostream"] != "stderr"'
         # A Codex warning without a reviewed message says nothing a reader can act on.
-        - 'attributes["event.name"] == "codex.operational" and body == "codex.operational" and severity_number < SEVERITY_NUMBER_ERROR'
+        - 'attributes["event.name"] == "codex.operational" and body == "codex.operational" and severity_number == SEVERITY_NUMBER_WARN'
   groupbyattrs/identity:
     keys:
       - service.name

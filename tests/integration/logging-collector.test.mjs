@@ -806,7 +806,10 @@ test(
               line(phase("agent", "codex-login", "ok")),
               line(phase("agent", "codex-login", "ok"), "stdout"),
               // A failed phase keeps a bounded cause code; an unbounded one is dropped.
-              line({ ...phase("agent", "plugin-install", "failed"), code: "PLUGIN_NOT_IN_CATALOG" }),
+              line({
+                ...phase("agent", "plugin-install", "failed"),
+                code: "PLUGIN_NOT_IN_CATALOG",
+              }),
               line({ ...phase("agent", "plugin-install", "failed"), code: `${canary} key` }),
               line({ ...phase("agent", "native-spawn", "ok"), code: "PLUGIN_NOT_IN_CATALOG" }),
             ],
