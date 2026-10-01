@@ -22,6 +22,9 @@
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
+      "path": "tests/conformance/harness-device-auth.test.mjs"
+    },
+    {
       "path": "tests/conformance/credential-source-occ.test.mjs"
     },
     {
@@ -158,6 +161,9 @@
     },
     {
       "path": "tests/integration/plugin-discovery-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/device-authorization-api.test.mjs"
     },
     {
       "path": "tests/integration/runtime-credentials-api.test.mjs"
