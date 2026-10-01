@@ -29,11 +29,13 @@ import {
 } from "./credentials.mjs";
 import { ensureSecretOperateBinding } from "./secret-access.mjs";
 
-function errorPanel(error, context, retry) {
+function errorPanel(error, context, retry, { version = false } = {}) {
   if (error.status === 401) {
     context.onExpired();
     return element("div");
   }
+  // Revision read is granted per version; Agent access alone does not cover new versions.
+  const versionDenied = version && error.status === 403;
   return element(
     "section",
     { className: "state-panel", role: "alert" },
@@ -42,9 +44,17 @@ function errorPanel(error, context, retry) {
       {},
       error.code === "SAVED_CONFIGURATION_UNREADABLE"
         ? "Saved configuration unreadable"
-        : "Configuration unavailable",
+        : versionDenied
+          ? "You cannot read this version"
+          : "Configuration unavailable",
     ),
-    element("p", {}, message(error)),
+    element(
+      "p",
+      {},
+      versionDenied
+        ? "Your access to this Agent does not include this version, so its configuration and deployment outcome are hidden. Ask an Agent administrator for read access to it."
+        : message(error),
+    ),
     error.remembered
       ? element(
           "p",
@@ -648,6 +658,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   let deleting = agent.status === "deleting";
   let currentRevisionId = agent.activeRevisionId;
   let visibleRevisions = [];
+  // True once the readable version list loaded; until then nothing counts as hidden.
+  let visibleRevisionsLoaded = false;
   const selected = url.searchParams.get("revision") ?? agent.activeRevisionId ?? "draft";
   const tab = url.searchParams.get("tab");
   const tabsForSelection = [
@@ -690,6 +702,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   const currentVersionNote = element("p", { className: "muted" });
   const latestDeploymentValue = element("strong", {}, "Loading…");
   const latestDeploymentNote = element("p", { className: "muted" }, "Reading deployment history.");
+  const liveServingValue = element("strong", {}, "Not verified");
+  const liveServingNote = element("p", { className: "muted" });
   const currentSummary = element(
     "section",
     { className: "agent-current-summary", "aria-label": "Agent state at a glance" },
@@ -711,11 +725,23 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       "div",
       {},
       element("span", { className: "eyebrow" }, "Live serving"),
-      element("strong", {}, "Not verified"),
-      element("p", { className: "muted" }, "Serving version and model access are unknown."),
+      liveServingValue,
+      liveServingNote,
     ),
   );
   const statusLine = element("p", { className: "agent-status-line", hidden: true });
+  // Revision read is granted per version, so someone who may deploy can still be
+  // unable to read the version that is now current, or the one they just requested.
+  function revisionHidden(revisionId) {
+    return (
+      visibleRevisionsLoaded &&
+      Boolean(revisionId) &&
+      revisionId !== "draft" &&
+      !visibleRevisions.some((revision) => revision.id === revisionId)
+    );
+  }
+  const readAccessHint =
+    "Ask an Agent administrator for read access to new versions, or check the Agent's chat or native admin UI.";
   function renderCurrentVersion() {
     const current = visibleRevisions.find((revision) => revision.id === currentRevisionId);
     const version = current
@@ -724,9 +750,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         ? shortId(currentRevisionId)
         : "None";
     currentVersionValue.textContent = version;
-    currentVersionNote.textContent = currentRevisionId
-      ? "Selected for service · live serving unverified"
-      : "No version is currently selected for service.";
+    currentVersionNote.textContent = !currentRevisionId
+      ? "No version is currently selected for service."
+      : revisionHidden(currentRevisionId)
+        ? "Selected for service · you cannot read this version"
+        : "Selected for service · live serving unverified";
   }
   renderCurrentVersion();
   const identity = element("p", { className: "resource-id" }, agent.id);
@@ -1057,7 +1085,13 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           : latestRevisionResult
             ? "No readable deployments."
             : "Reading deployment history.";
-      statusLine.hidden = true;
+      const hidden = [selected, currentRevisionId].find(revisionHidden);
+      statusLine.hidden = hidden === undefined;
+      statusLine.textContent = hidden
+        ? `You cannot read version ${shortId(hidden)}, so its progress and outcome are not shown here. ${readAccessHint}`
+        : "";
+      liveServingValue.textContent = "Not verified";
+      liveServingNote.textContent = "Serving version and model access are unknown.";
       return;
     }
     const label = {
@@ -1072,11 +1106,50 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       : latestDeploymentError
         ? "Recorded deployment status could not be read."
         : "Reading recorded deployment status.";
-    statusLine.hidden = !latestDeploymentStatus;
-    if (latestDeploymentStatus) {
-      const current = visibleRevisions.find((revision) => revision.id === currentRevisionId);
+    const current = visibleRevisions.find((revision) => revision.id === currentRevisionId);
+    const currentLabel = current ? `v${current.revision}` : shortId(currentRevisionId ?? "");
+    // A succeeded deployment becomes current, so a different current version is newer.
+    const newerHidden =
+      latestDeploymentStatus === "succeeded" &&
+      currentRevisionId !== latest.id &&
+      revisionHidden(currentRevisionId);
+    const requestedHidden = selected !== currentRevisionId && revisionHidden(selected);
+    // Deploying a dedicated Agent stops the previous version's workload before the new
+    // one starts, so a failed newer deployment usually leaves nothing serving.
+    const replacementFailed =
+      latestDeploymentStatus === "failed" &&
+      current !== undefined &&
+      current.revision < latest.revision &&
+      latest.harness?.mode === "dedicated";
+    if (newerHidden) {
+      latestDeploymentValue.textContent = "Newer version hidden";
+      latestDeploymentNote.textContent = `You cannot read the current version. v${latest.revision} (${latestDeploymentStatus}) is older.`;
+    }
+    if (replacementFailed) {
+      liveServingValue.textContent = "Probably down";
+      liveServingNote.textContent = `v${latest.revision} failed after ${currentLabel} was stopped for it.`;
+    } else {
+      liveServingValue.textContent = "Not verified";
+      liveServingNote.textContent = "Serving version and model access are unknown.";
+    }
+    statusLine.hidden = !latestDeploymentStatus && !requestedHidden;
+    if (requestedHidden || newerHidden) {
+      statusLine.textContent = [
+        requestedHidden
+          ? `Version ${shortId(selected)} was requested, but you cannot read it, so its progress and outcome are not shown here.`
+          : null,
+        newerHidden
+          ? `The current version, ${shortId(currentRevisionId)}, is one you cannot read; v${latest.revision} is an older version.`
+          : null,
+        readAccessHint,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    } else if (replacementFailed) {
+      statusLine.textContent = `v${latest.revision} deployment failed. ${currentLabel} is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
+    } else if (latestDeploymentStatus) {
       const selection = currentRevisionId
-        ? `${current ? `v${current.revision}` : shortId(currentRevisionId)} is selected.`
+        ? `${currentLabel} is selected.`
         : "No version is selected.";
       statusLine.textContent = `v${latest.revision} deployment is recorded as ${latestDeploymentStatus}. ${selection} Live serving is unverified.`;
     }
@@ -1089,6 +1162,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         ? [...revisionResult.value].sort((a, b) => b.revision - a.revision)
         : [];
     visibleRevisions = revisions;
+    visibleRevisionsLoaded = revisionResult.status === "fulfilled";
     renderCurrentVersion();
     renderVersions(
       revisions,
@@ -1681,10 +1755,15 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     if (data?.error) {
       state.reusable = false;
       content.append(
-        errorPanel(data.error, tabContext, () => {
-          context.deniedReads?.forget(snapshotPath);
-          context.navigate(target(selected, selectedTab), namespaceId, true);
-        }),
+        errorPanel(
+          data.error,
+          tabContext,
+          () => {
+            context.deniedReads?.forget(snapshotPath);
+            context.navigate(target(selected, selectedTab), namespaceId, true);
+          },
+          { version: selected !== "draft" },
+        ),
       );
     } else if (data) {
       renderConfigurationTab(tabContext, tab, data);

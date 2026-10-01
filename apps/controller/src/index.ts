@@ -3173,6 +3173,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     | ({ readonly status: "stopped" | "unsupported" } & NativeAdminTargetStatus)
     | ({ readonly status: "available"; readonly gatewayBase: string } & NativeAdminTargetStatus);
 
+  // An exclusive Compute Driver stops the active revision's workload before a newer
+  // revision starts, so nothing serves until that revision activates. If it fails, the
+  // Agent stays down while the old revision is still recorded as active.
+  function replacesActiveWorkload(successor: Readonly<AgentRevision>): boolean {
+    let compute: ComputeDriver;
+    try {
+      compute = controller!.selectedDriver("compute");
+    } catch {
+      throw dependencyUnavailable();
+    }
+    return (
+      successor.compute.id === compute.id &&
+      successor.compute.implementation === compute.implementation &&
+      compute.requiresStoppedPredecessors?.(successor) === true
+    );
+  }
+
   async function resolveNativeAdminAvailability(input: {
     readonly actorId: string;
     readonly namespaceId: string;
@@ -3205,7 +3222,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       }
       throw error;
     }
-    const { agent, revision } = selection;
+    const { agent, revision, successor } = selection;
     const target = nativeAdminTarget({
       publicOrigin,
       installationId,
@@ -3215,6 +3232,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     });
     if (agent.desiredRuntimeState !== "running") {
       return { status: "stopped", agent, revision, target };
+    }
+    if (successor !== undefined && replacesActiveWorkload(successor)) {
+      return { status: "unavailable" };
     }
     if (!nativeAdminConfigurationSupported(revision, target.origin)) {
       return { status: "unsupported", agent, revision, target };

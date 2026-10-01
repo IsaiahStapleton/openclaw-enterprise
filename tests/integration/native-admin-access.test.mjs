@@ -54,8 +54,10 @@ function nativeAdminHarnessConfiguration(nativeOrigin) {
   };
 }
 
-function nativeComputeDriver(upstreamPort) {
+function nativeComputeDriver(upstreamPort, { exclusiveReplacement = false } = {}) {
   return {
+    // Kubernetes dedicated revisions stop their predecessors before they start.
+    ...(exclusiveReplacement ? { requiresStoppedPredecessors: () => true } : {}),
     id: "native-admin-compute",
     capability: "compute",
     implementation: "native-admin-test-upstream",
@@ -187,7 +189,9 @@ async function createNativeAdminFixture(t, options = {}) {
       sharedCookieDomain: options.cookieDomain ?? cookieDomain,
     },
     nativeAdminGatewayApiKey: async () => nativeGatewayApiKey,
-    computeDriver: nativeComputeDriver(upstream.port),
+    computeDriver: nativeComputeDriver(upstream.port, {
+      exclusiveReplacement: options.exclusiveReplacement,
+    }),
   });
   await fixture.bootstrap("Native admin access test");
   const namespace = await fixture.createNamespace("Native admin", {
@@ -393,6 +397,41 @@ test("native admin status requires exact Agent administer and reports lifecycle 
   assert.equal(restored.status, 200);
   assert.equal(restored.data.status, "available");
   assert.equal(restored.data.activeRevisionId, pending.id);
+});
+
+test("native admin status is unavailable while a newer revision replaces the active workload", async (t) => {
+  // Without exclusive replacement the active revision keeps serving during a redeploy.
+  const shared = await createNativeAdminFixture(t);
+  await shared.fixture.deployAgent(shared.namespace.id, shared.agent.id);
+  const stillServing = await nativeStatus(shared);
+  assert.equal(stillServing.status, 200);
+  assert.equal(stillServing.data.status, "available");
+  assert.equal(stillServing.data.activeRevisionId, shared.revision.id);
+
+  const context = await createNativeAdminFixture(t, { exclusiveReplacement: true });
+  const available = await nativeStatus(context);
+  assert.equal(available.data.status, "available");
+  // The worker stops the active revision before the newer one starts; if that one fails,
+  // the old revision stays recorded as active with nothing serving.
+  const replacement = await context.fixture.deployAgent(context.namespace.id, context.agent.id);
+  const replacing = await nativeStatus(context);
+  assert.equal(replacing.status, 200);
+  assert.deepEqual(replacing.data, { status: "unavailable" });
+  const agent = await context.fixture.request(
+    "GET",
+    `/namespaces/${context.namespace.id}/agents/${context.agent.id}`,
+  );
+  assert.equal(agent.data.activeRevisionId, context.revision.id);
+
+  await context.fixture.activateRevision(
+    context.namespace.id,
+    context.agent.id,
+    replacement.id,
+    context.revision.id,
+  );
+  const restored = await nativeStatus(context);
+  assert.equal(restored.data.status, "available");
+  assert.equal(restored.data.activeRevisionId, replacement.id);
 });
 
 test("native admin disabled status still requires exact Agent administer", async (t) => {
