@@ -473,6 +473,12 @@
       "path": "tests/integration/google-login-transport.test.mjs"
     },
     {
+      "path": "tests/integration/oidc-id-token.test.mjs"
+    },
+    {
+      "path": "tests/integration/oidc-login-transport.test.mjs"
+    },
+    {
       "path": "tests/integration/password-sign-in-policy.test.mjs"
     },
     {

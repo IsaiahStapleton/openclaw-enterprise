@@ -272,6 +272,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-oidc-sign-in.test.mjs",
+      "expectedTests": [
+        "PostgreSQL OIDC sign-in admits only attached (issuer, subject) pairs"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
       "expectedTests": [
         "online recovery replacement moves the reserved lane and survives a restart with the original seed"
