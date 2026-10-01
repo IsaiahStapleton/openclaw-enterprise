@@ -193,8 +193,18 @@ function githubSubject(value: unknown): string | undefined {
   return typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value) ? value : undefined;
 }
 
+/** The GitHub provider instance: a new client ID is a new instance. */
+export function githubProviderId(config: Pick<ProviderClient, "clientId">): string {
+  return `github:${digest(config.clientId)}`;
+}
+
+/** The Google provider instance: a new client ID is a new instance. */
+export function googleProviderId(config: Pick<GoogleLoginConfiguration, "clientId">): string {
+  return `google:${digest(config.clientId)}`;
+}
+
 function githubProvider(config: ProviderClient, baseURL: string): ExternalProvider {
-  const providerId = `github:${digest(config.clientId)}`;
+  const providerId = githubProviderId(config);
   const callbackURL = new URL("/api/auth/providers/github/callback", baseURL).href;
   const provider = github({
     clientId: config.clientId,
@@ -213,7 +223,7 @@ function githubProvider(config: ProviderClient, baseURL: string): ExternalProvid
 }
 
 function googleProvider(config: GoogleLoginConfiguration, baseURL: string): ExternalProvider {
-  const providerId = `google:${digest(config.clientId)}`;
+  const providerId = googleProviderId(config);
   const callbackURL = new URL("/api/auth/providers/google/callback", baseURL).href;
   return {
     providerId,

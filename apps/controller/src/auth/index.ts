@@ -34,11 +34,13 @@ import type { IAMDriver } from "@openclaw-enterprise/contracts";
 import {
   createHumanLogin,
   githubLoginConfiguration,
+  githubProviderId,
+  googleProviderId,
   type GitHubLoginConfiguration,
   PASSWORD_DENIAL_AUDIT_UNAVAILABLE,
 } from "./github.ts";
 import { googleLoginConfiguration, type GoogleSignInConfiguration } from "./google.ts";
-import { oidcLoginConfiguration, type OidcSignInConfiguration } from "./oidc.ts";
+import { oidcLoginConfiguration, oidcProviderId, type OidcSignInConfiguration } from "./oidc.ts";
 import { sessionBindingKey, sessionKeyHeader, sessionKeyMatches } from "./session-binding.ts";
 import { resolveClientAddress, type ClientAddressConfiguration } from "./client-address.ts";
 import {
@@ -1722,6 +1724,13 @@ export async function createPostgresControllerAuth(
     onWarning,
     ...controllerOptions
   } = options;
+  // Sessions from an external provider instance outside this set (removed, or a changed
+  // issuer or client ID) stop authenticating; password sessions are unaffected.
+  const externalProviderIds = [
+    ...(github === undefined ? [] : [githubProviderId(github)]),
+    ...(google === undefined ? [] : [googleProviderId(google)]),
+    ...(oidc === undefined ? [] : [oidcProviderId(oidc)]),
+  ];
   const persistence =
     state === undefined
       ? undefined
@@ -1729,6 +1738,7 @@ export async function createPostgresControllerAuth(
           state,
           options.installationId,
           betterAuthIssuer(options.installationId),
+          { externalProviderIds },
         );
   // Any external provider activates the guarded profile; all share its recovery user.
   const recoveryUserId = github?.recoveryUserId ?? google?.recoveryUserId ?? oidc?.recoveryUserId;

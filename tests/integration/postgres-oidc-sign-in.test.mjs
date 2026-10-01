@@ -368,7 +368,7 @@ test(
       adminHeaders = await signedInHeaders(app, origin, admin, address());
     });
 
-    await t.test("an issuer change needs a new attach; detach removes the stale one", async () => {
+    await t.test("an issuer change ends old sessions and needs a new attach", async () => {
       const { cookie: before } = await assertSignIn(memberSubject, member.id);
       await app.close();
       app = undefined;
@@ -380,11 +380,10 @@ test(
         secrets,
       });
       adminHeaders = await signedInHeaders(app, origin, admin, address());
-      // Sessions are not tied to configuration: the old one lives until attach or detach.
-      assert.equal((await currentSession(app, before)).user.id, member.id);
+      // The old instance is no longer configured, so its session ends at once.
+      assert.equal(await currentSession(app, before), null, "the issuer change ends it");
       await assertRefused({ subject: memberSubject }, "subject under the new issuer");
       assert.equal((await attach(member.id, memberSubject)).statusCode, 200);
-      assert.equal(await currentSession(app, before), null, "attach ends the old session");
       const { cookie: after } = await assertSignIn(memberSubject, member.id);
       assert.equal(idp.tokens.at(-1).client_secret, undefined, "client_secret_basic");
       const account = await readAccount(app, adminHeaders, member.id);

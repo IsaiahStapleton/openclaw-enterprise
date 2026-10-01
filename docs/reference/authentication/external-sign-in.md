@@ -49,8 +49,9 @@ then discards tokens, expiry, and scope data. It performs no refresh, creates no
 repository grants, and gives no provider credentials to repository consumers or Agents.
 
 A new client ID requires reattachment under a new provider instance; then detach
-old methods by `methodId`. Secret rotation preserves enrollment and invalidates
-pending attempts.
+old methods by `methodId`. Sessions from the old instance end
+([session controls](#session-and-recovery-controls)). Secret rotation preserves enrollment
+and invalidates pending attempts.
 
 A human Installation administrator reads `GET /api/auth/accounts/:userId`
 ([requirements](#session-and-recovery-controls)). Its no-store response
@@ -121,8 +122,12 @@ one straight after creation.
 
 Password and GitHub sessions share admission rules: an eight-hour lifetime without refresh, current account and
 method checks, and required audit before a cookie is released or, on logout,
-cleared. Older sessions without account/method binding are rejected; users sign in again. Activation is one-way: removing every provider
-fails startup, and the database refuses sessions from older
+cleared. Older sessions without account/method binding are rejected; users sign in again.
+An external session authenticates only while its provider instance is configured: removing
+a provider, or changing its client ID (or OIDC issuer), ends that instance's sessions on their
+next request, audited once as `authentication.session.end` with reason
+`PROVIDER_NOT_CONFIGURED`. Password sessions are unaffected. Activation is one-way:
+removing every provider fails startup, and the database refuses sessions from older
 binaries. Returning to password-only sign-in needs [stopped maintenance](../../guides/deploy/auth-maintenance.md#deactivate-github-sign-in).
 
 The recovery user needs one local password, its Installation Principal, and
