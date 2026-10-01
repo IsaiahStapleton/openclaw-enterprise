@@ -138,7 +138,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
   await activity.getByRole("button", { name: "Refresh deployment" }).click();
   await activity.getByText("Waiting to continue deployment.").waitFor();
   await activity.getByText("Waiting for the runtime to become ready.").waitFor();
-  await activity.getByText("Last checked", { exact: true }).waitFor();
+  await activity.getByText("Since", { exact: true }).waitFor();
   assert.equal(await activity.getByText("Waiting for a worker claim.").count(), 0);
   await activity.getByText("Successful completion is not recorded yet.").waitFor();
   const versionRecord = page.locator(".version-deployment-record");

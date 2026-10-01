@@ -311,7 +311,7 @@ function createDeploymentStatusPanel(
                   element("dd", {}, state.status.progress.lastAttempt.message),
                   element("dt", {}, "Reason"),
                   element("dd", {}, state.status.progress.lastAttempt.code),
-                  element("dt", {}, "Last checked"),
+                  element("dt", {}, "Since"),
                   element("dd", {}, displayDate(state.status.progress.lastAttempt.at)),
                 )
               : element("p", { className: "muted" }, "No reconciliation result is available yet."),

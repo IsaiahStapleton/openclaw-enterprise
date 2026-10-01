@@ -458,7 +458,11 @@ const FAIL_EXHAUSTED_NAMESPACES_SQL = `
     RETURNING namespace.id
   )`;
 
-const INSERT_EVIDENCE_CTE_SQL = `
+/**
+ * Queue transitions append `reconcile` evidence in the same statement. `filter` narrows which
+ * transitioned rows get a row; it is appended to the evidence SELECT's WHERE clause.
+ */
+const insertEvidenceCteSql = (filter = "") => `
   evidence_targets AS (
     SELECT transitioned.*,
       CASE WHEN ${repositoryCleanupSql("transitioned")} THEN
@@ -496,9 +500,34 @@ const INSERT_EVIDENCE_CTE_SQL = `
       jsonb_build_object('reasonCode', $4::text, 'attemptCount', transitioned.attempt_count,
         'workId', transitioned.idempotency_key)
     FROM evidence_targets AS transitioned
+    WHERE true ${filter}
     RETURNING id
   )`;
+const INSERT_EVIDENCE_CTE_SQL = insertEvidenceCteSql();
 const INSERT_EVIDENCE_SQL = `${INSERT_EVIDENCE_CTE_SQL}
+  SELECT transitioned.* FROM transitioned`;
+/**
+ * A deployment waiting for its runtime defers every few seconds with the same code. Only a
+ * change is recorded: a deferral whose outcome and reason code match the latest evidence for the
+ * same revision work item adds no row. Retries, failures, and completions are always recorded.
+ * The lookup matches the `audit_events_work_attempt_idx` partial index.
+ */
+const INSERT_DEFER_EVIDENCE_SQL = `${insertEvidenceCteSql(`
+      AND NOT EXISTS (
+        SELECT 1 FROM (
+          SELECT prior.outcome, prior.details->>'reasonCode' AS reason_code
+          FROM occ.audit_events AS prior
+          WHERE prior.kind = 'mutation' AND prior.action = 'reconcile'
+            AND prior.resource_kind = 'agent_revision'
+            AND prior.details->>'workId' = transitioned.idempotency_key
+            AND prior.namespace_id = transitioned.namespace_id
+            AND prior.actor_id = transitioned.actor_id
+            AND prior.occurred_at >= transitioned.created_at
+          ORDER BY prior.occurred_at DESC, prior.id DESC
+          LIMIT 1
+        ) AS latest
+        WHERE latest.outcome = $3::text AND latest.reason_code = $4::text
+      )`)}
   SELECT transitioned.* FROM transitioned`;
 const SETTLE_PROVISIONING_FAILURE_SQL = `
   settled_provisioning_failures AS (
@@ -968,7 +997,7 @@ export class PostgresWorkQueue {
            AND claim_token = $2::uuid
            AND lease_expires_at > clock_timestamp()
          RETURNING *
-       ), ${INSERT_EVIDENCE_SQL}`,
+       ), ${INSERT_DEFER_EVIDENCE_SQL}`,
       [
         claim.idempotencyKey,
         claim.claimToken,

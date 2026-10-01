@@ -6019,12 +6019,37 @@ test(
     assert.equal(initial.status, "queued");
     assert.equal(initial.progress.lastAttempt, null);
 
+    const evidenceCodes = async () =>
+      (
+        await fixture.observerPool.query(
+          `SELECT details->>'reasonCode' AS code FROM occ.audit_events
+           WHERE details->>'workId' = $1 AND action = 'reconcile' ORDER BY occurred_at, id`,
+          [candidate.idempotencyKey],
+        )
+      ).rows.map(({ code }) => code);
+    const makeDue = () =>
+      fixture.observerPool.query(
+        "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+        [candidate.idempotencyKey],
+      );
+
     // A normal pending observation restores the failure budget to zero. It must
     // still be distinguishable from a deployment that has never been checked.
+    const first = await queue.claim();
+    assert.equal(first.idempotencyKey, candidate.idempotencyKey);
+    await queue.defer(first, { code: "REVISION_INCOMPLETE" }, { delayMs: 60_000 });
+    const firstDeferred = await readStatus();
+    assert.deepEqual(await evidenceCodes(), ["REVISION_INCOMPLETE"]);
+
+    // Repeating the same pending result is not a state transition: it adds no audit row,
+    // and progress keeps reporting when that result was first recorded.
+    await makeDue();
     const claim = await queue.claim();
     assert.equal(claim.idempotencyKey, candidate.idempotencyKey);
     await queue.defer(claim, { code: "REVISION_INCOMPLETE" }, { delayMs: 60_000 });
     const deferred = await readStatus();
+    assert.deepEqual(await evidenceCodes(), ["REVISION_INCOMPLETE"]);
+    assert.deepEqual(deferred.progress.lastAttempt, firstDeferred.progress.lastAttempt);
     assert.equal(deferred.status, "queued");
     assert.equal((await queue.findWork(candidate.idempotencyKey)).attemptCount, 0);
     assert.equal(deferred.progress.lastAttempt.code, "REVISION_INCOMPLETE");
@@ -6051,10 +6076,7 @@ test(
     assert.deepEqual((await readStatus()).progress, deferred.progress);
 
     // Rescheduling only our fixture work lets a new claim exercise retry output.
-    await fixture.observerPool.query(
-      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
-      [candidate.idempotencyKey],
-    );
+    await makeDue();
     const retry = await queue.claim();
     assert.equal(retry.idempotencyKey, candidate.idempotencyKey);
     const running = await readStatus();
@@ -6066,12 +6088,20 @@ test(
     assert.equal(retrying.progress.lastAttempt.code, "RECONCILIATION_PENDING");
     assert.doesNotMatch(JSON.stringify(retrying), /PRIVATE_PROVIDER/);
 
+    // Returning to the pending result after a failure is a transition and is recorded again.
+    await makeDue();
+    const recovered = await queue.claim();
+    assert.equal(recovered.idempotencyKey, candidate.idempotencyKey);
+    await queue.defer(recovered, { code: "REVISION_INCOMPLETE" }, { delayMs: 60_000 });
+    const codes = await evidenceCodes();
+    assert.equal(codes.length, 3);
+    assert.equal(codes[0], "REVISION_INCOMPLETE");
+    assert.equal(codes[2], "REVISION_INCOMPLETE");
+    assert.equal((await readStatus()).progress.lastAttempt.code, "REVISION_INCOMPLETE");
+
     // Let the real worker finish this admitted revision; completion must remove
     // the pending explanation rather than retain an obsolete readiness warning.
-    await fixture.observerPool.query(
-      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
-      [candidate.idempotencyKey],
-    );
+    await makeDue();
     await fixture.start(fixture.compute);
     await fixture.work(candidate, "succeeded");
     const completed = await readStatus();
@@ -6138,13 +6168,17 @@ test(
     assert.ok(success.activationMs >= 0 && success.activationMs <= success.durationMs);
     assert.ok(success.durationMs <= success.elapsedMs);
 
-    // Every deferred observation is durable and attributable while the Agent activates exactly once.
-    const pending = await fixture.observerPool.query(
-      `SELECT count(*)::integer AS count FROM occ.audit_events
-       WHERE resource_id = $1 AND details->>'reasonCode' = 'REVISION_INCOMPLETE'`,
+    // The pending state is durable and attributable, but seven identical deferrals are one
+    // state transition: the audit log records it once, then the activation.
+    const evidence = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS reason_code FROM occ.audit_events
+       WHERE resource_id = $1 AND action = 'reconcile' ORDER BY occurred_at, id`,
       [candidate.id],
     );
-    assert.equal(pending.rows[0].count, 7);
+    assert.deepEqual(evidence.rows, [
+      { outcome: "success", reason_code: "REVISION_INCOMPLETE" },
+      { outcome: "success", reason_code: "REVISION_ACTIVATED" },
+    ]);
     const active = await fixture.observerPool.query(
       "SELECT active_revision_id FROM occ.agents WHERE namespace_id = $1 AND id = $2",
       [fixture.namespace.id, owner.id],
@@ -6160,49 +6194,56 @@ test(
     const fixture = await setup(context);
     const owner = await fixture.agent("readiness-recheck");
     const candidate = await fixture.revision(owner, 1);
-    const recheckDelaysMs = [];
+    const recheckDelays = [];
     let observations = 0;
 
-    await fixture.start({
-      ...fixture.compute,
-      async prepareRevision(revision) {
-        if (revision.id !== candidate.id) {
-          return fixture.compute.prepareRevision(revision);
-        }
-        observations += 1;
-        // Two dependency failures raise the attempt count, so the queue's
-        // exponential retry backoff would now allow up to 4 s per recheck.
-        if (observations <= 2) {
-          throw new Error("transient Compute dependency failure");
-        }
-        if (observations > 3) {
-          // The claimed row keeps the due time chosen by the previous deferral;
-          // its audit evidence records when that deferral committed.
-          const deferred = await fixture.observerPool.query(
-            `SELECT EXTRACT(EPOCH FROM (work.available_at - evidence.occurred_at)) * 1000
-                AS delay_ms
-             FROM occ.controller_work AS work
-             CROSS JOIN LATERAL (
-               SELECT occurred_at FROM occ.audit_events
-               WHERE resource_id = work.revision_id
-                 AND details->>'workId' = work.idempotency_key
-                 AND details->>'reasonCode' = 'REVISION_INCOMPLETE'
-               ORDER BY occurred_at DESC LIMIT 1
-             ) AS evidence
-             WHERE work.idempotency_key = $1`,
-            [candidate.idempotencyKey],
-          );
-          recheckDelaysMs.push(Number(deferred.rows[0].delay_ms));
-        }
-        const observation = await fixture.compute.prepareRevision(revision);
-        return observations <= 5 ? { ...observation, ready: false } : observation;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          if (revision.id !== candidate.id) {
+            return fixture.compute.prepareRevision(revision);
+          }
+          observations += 1;
+          // Two dependency failures raise the attempt count, so the queue's
+          // exponential retry backoff would now allow up to 4 s per recheck.
+          if (observations <= 2) {
+            throw new Error("transient Compute dependency failure");
+          }
+          const observation = await fixture.compute.prepareRevision(revision);
+          return observations <= 5 ? { ...observation, ready: false } : observation;
+        },
       },
-    });
+      (event) => {
+        if (
+          event.event === "worker.completed" &&
+          event.workId === candidate.idempotencyKey &&
+          event.outcome === "pending"
+        ) {
+          // The deferral sets the due time and updated_at in one statement, and the
+          // row stays queued until that due time, about 500 ms after this event.
+          recheckDelays.push(
+            fixture.observerPool
+              .query(
+                `SELECT state, EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+                 FROM occ.controller_work WHERE idempotency_key = $1`,
+                [candidate.idempotencyKey],
+              )
+              .then(({ rows }) => rows[0]),
+          );
+        }
+      },
+    );
 
     const completed = await fixture.work(candidate, "succeeded", 30_000);
     assert.equal(observations, 6);
     // Failures consumed two attempts; readiness rechecks refunded theirs.
     assert.equal(completed.attempt_count, 3);
+    const recheckDelaysMs = [];
+    for (const { state, delay_ms } of await Promise.all(recheckDelays)) {
+      assert.equal(state, "queued");
+      recheckDelaysMs.push(Number(delay_ms));
+    }
     assert.equal(recheckDelaysMs.length, 3);
     for (const delayMs of recheckDelaysMs) {
       assert.ok(

@@ -278,7 +278,8 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
 Pending convergence refunds the attempt, requeuing unready revisions after 500 ms
-and others with backoff. Dependency failures consume attempts; permanent failure,
+and others with backoff. `PostgresWorkQueue.defer` appends `reconcile` evidence
+only when its outcome and code differ from that work item's latest evidence. Dependency failures consume attempts; permanent failure,
 exhaustion, deadline, or `AUTHENTICATION_FAILED` terminates work. See
 [outcomes](../reference/controller.md) and
 [timing controls](../reference/settings/operations.md#controller-worker-environment).

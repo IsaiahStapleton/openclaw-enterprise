@@ -2666,7 +2666,7 @@ export const scenarios = {
     description:
       "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
     steps: [
-      "Read the pending reason and Last checked time in Deployment activity.",
+      "Read the pending reason and Since time in Deployment activity.",
       "Click Refresh deployment; the simulated pending result remains visible.",
       "View v6 and confirm the latest deployment still describes v7.",
     ],

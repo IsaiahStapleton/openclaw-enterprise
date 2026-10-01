@@ -77,9 +77,9 @@ Responses include `deploymentId`, `namespaceId`, `agentId`, `status`, nullable
 - `succeeded`: original work activated the revision or found it already active.
 - `failed`: terminal failure or completion without activation.
 
-Pending `progress.lastAttempt` contains the latest exact-work result's `at`,
-allowlisted `code`, and fixed `message`, even when deferral resets the retry
-count. Null means no bound evidence, not proof work never ran. Maintenance and
+Pending `progress.lastAttempt` contains the latest exact-work result's
+allowlisted `code`, fixed `message`, and `at`, when first recorded; repeated
+deferrals record once. Null means no bound evidence, not proof work never ran. Maintenance and
 cleanup results are excluded. `progress.nextAttemptAt` is the earliest queued
 eligibility, not a promised start; it is null while claimed. Terminal `progress`
 is null. Results describe recorded checks, not current runtime health.
