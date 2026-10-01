@@ -566,6 +566,8 @@ export interface AuthorizedAgentDeployment {
 export interface ActiveAgentRevisionSelection {
   readonly agent: Readonly<Agent>;
   readonly revision: Readonly<AgentRevision>;
+  /** Administering reads only: the newest admitted revision after the active one, if any. */
+  readonly successor?: Readonly<AgentRevision>;
 }
 
 export type ReconciliationOperation = PlatformOperation;
@@ -2751,7 +2753,20 @@ export class OpenClawController {
       if (!revision) {
         throw new DependencyUnavailableError("The active Agent revision is unavailable.");
       }
-      return Object.freeze({ agent, revision });
+      if (action !== "administer") {
+        return Object.freeze({ agent, revision });
+      }
+      // Native admin status must know whether a newer deployment is replacing this revision.
+      // Only the newest later revision is decoded strictly, so an unreadable older snapshot
+      // cannot make a healthy Agent's native admin unavailable.
+      const newest = (await state.revisions.listRevisionsForBrowsing(namespace.id, agent.id))
+        .filter((candidate) => candidate.revision > revision.revision)
+        .sort((left, right) => right.revision - left.revision)[0];
+      const successor =
+        newest === undefined
+          ? undefined
+          : await state.revisions.findRevision(namespace.id, agent.id, newest.id);
+      return Object.freeze({ agent, revision, ...(successor === undefined ? {} : { successor }) });
     });
   }
 

@@ -2203,7 +2203,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   await page.getByRole("button", { name: "Refresh access" }).click();
   await page
     .getByText(
-      "Native admin UI access is unavailable because OCE could not load an active AgentRevision. Check this Agent’s deployment, then refresh access.",
+      "Native admin UI is unavailable because no version of this Agent is serving: a deployment is in progress or has failed. Check Deployment activity, then refresh access.",
     )
     .waitFor({ timeout: 5_000 });
   assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
@@ -2224,7 +2224,9 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
   await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
   await page
-    .getByText("This Agent does not expose a supported native admin UI endpoint.")
+    .getByText(
+      "Native admin UI is not enabled in this Agent’s current version. Someone who can edit its Configuration can enable it (see the native admin UI guide) and deploy a new version.",
+    )
     .waitFor();
   assert.equal(await page.getByText("Open native admin UI", { exact: true }).isVisible(), false);
 
@@ -2962,7 +2964,8 @@ test("Agent sharing grants existing people exact discovery and native access, th
   const recipient = (await newPage(t, fixture, browserOptions)).page;
   const recipientRequests = apiRequests(recipient, fixture.origin);
   await login(recipient, fixture, `${detail.pathname}${detail.search}`, person.credentials);
-  await recipient.getByRole("heading", { name: "Configuration unavailable" }).waitFor();
+  // Agent sharing does not include version read, so the version pane says so.
+  await recipient.getByRole("heading", { name: "You cannot read this version" }).waitFor();
   // The policy reads are denied, so the sharing card is hidden instead of showing an error.
   await recipient.locator(".agent-access").waitFor({ state: "hidden" });
   assert.equal(

@@ -1167,12 +1167,15 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
               : current.feature === "backends"
                 ? "Backend discovery unavailable"
                 : "Request unavailable";
+    const agentDenied = current.agentId && error.status === 403;
     panel(
       shell.view,
       title,
-      error.status === 403
-        ? "You do not have permission to read this collection."
-        : "The read could not be completed. Retry to check current access and saved state.",
+      agentDenied
+        ? "You do not have access to this Agent or its settings, or it was deleted. Ask its owner to share it with you."
+        : error.status === 403
+          ? "Your account does not have access to this page in this Namespace. Ask an administrator for access, or choose another Namespace."
+          : "The read could not be completed. Retry to check current access and saved state.",
       "Retry",
       () => void loadPage(),
       error.requestId,

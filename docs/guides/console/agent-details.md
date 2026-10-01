@@ -9,19 +9,19 @@ do not confirm that an Agent or its Slack connection is currently healthy.
 
 ## Navigation and Agent identity
 
-| Component                     | What it does                                                                                |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| **Control Plane**             | Identifies the OpenClaw Control Plane (OCC) console.                                        |
-| **Agents** / **← Agents**     | Opens the Agents list in the selected Namespace.                                            |
-| **Namespaces**                | Lists the Namespaces you can read.                                                          |
-| Agent name                    | Human-readable name of this Agent.                                                          |
-| **Namespace · name**          | Namespace containing the Agent.                                                             |
-| **Refresh**                   | Reloads the Agent page. It does not retry or restart deployment.                            |
-| **Current version**           | Version in the Agent's `activeRevisionId`. It may differ from the latest or viewed version. |
-| **Latest visible deployment** | Newest readable version and its recorded deployment status.                                 |
-| **Live serving**              | Remains unverified by this page and its limited diagnostics.                                |
-| **Deployment activity**       | Most recent visible version and its persisted deployment status.                            |
-| `agt_…`                       | Stable Agent identifier for API calls and support.                                          |
+| Component                     | What it does                                                                                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Control Plane**             | Identifies the OpenClaw Control Plane (OCC) console.                                                                                                                        |
+| **Agents** / **← Agents**     | Opens the Agents list in the selected Namespace.                                                                                                                            |
+| **Namespaces**                | Lists the Namespaces you can read.                                                                                                                                          |
+| Agent name                    | Human-readable name of this Agent.                                                                                                                                          |
+| **Namespace · name**          | Namespace containing the Agent.                                                                                                                                             |
+| **Refresh**                   | Reloads the Agent page. It does not retry or restart deployment.                                                                                                            |
+| **Current version**           | Version in the Agent's `activeRevisionId`. It may differ from the latest or viewed version.                                                                                 |
+| **Latest visible deployment** | Newest readable version and its recorded deployment status. **Newer version hidden** means the current version is one you cannot read; ask for read access to new versions. |
+| **Live serving**              | Unverified by this page. **Probably down** means a newer dedicated deployment failed, and the current version was probably stopped for it.                                  |
+| **Deployment activity**       | Most recent visible version and its persisted deployment status.                                                                                                            |
+| `agt_…`                       | Stable Agent identifier for API calls and support.                                                                                                                          |
 
 The bottom **OpenClaw Enterprise** menu contains **Namespace**, **Settings**,
 and **Logout**. Namespace selection changes your scope; from Agent detail it
