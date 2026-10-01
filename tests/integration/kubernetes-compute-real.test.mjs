@@ -2794,6 +2794,15 @@ test(
       ),
     );
     for (const id of namespaceIds) {
+      // Worker provisioning must admit both DNS ports for managed and adopted namespaces.
+      const dnsPolicy = await resource("networkpolicy", "allow-dns", placements.get(id));
+      assert.deepEqual(dnsPolicy.spec.egress[0].ports, [
+        { protocol: "UDP", port: 53 },
+        { protocol: "TCP", port: 53 },
+        // OpenShift DNS compatibility requires both protocols on port 5353.
+        { protocol: "UDP", port: 5353 },
+        { protocol: "TCP", port: 5353 },
+      ]);
       assert.equal(
         (await resources("deployments", placements.get(id))).length,
         0,

@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: 2026-09-25
-last_updated_session: authoring-run/e9e7299c-b7ba-46de-9e24-fd8bb4b76388
+updated: 2026-10-01
+last_updated_session: authoring-run/a4c4fa72-fa88-4660-a8ef-25b347c15dcc
 ---
 
 # Existing Kubernetes Namespace Placement Flow
@@ -79,6 +79,10 @@ API RoleBinding instead makes subsequent Configuration operations return `503`.
 Compute reconciles its owned quota, limit range, and isolation policies; no
 worker pause, restart, or Installation setting is needed.
 
+`apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.networkPolicies`
+renders `allow-dns` with UDP and TCP ports `53` and `5353`, scoped to the
+[configured DNS peer](../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking).
+
 ### 3. Colocate Configuration and workload resources
 
 `apps/controller/src/drivers/configuration/kubernetes/index.ts:KubernetesConfigurationDriver`
@@ -144,6 +148,7 @@ complete-deletion lifecycle.
 
 ## Changelog
 
+- 2026-10-01 15:40: Documented the accompanying allow-dns change to permit UDP and TCP port 5353 alongside port 53. (authoring-run/a4c4fa72-fa88-4660-a8ef-25b347c15dcc - 4cab4887b863904bb7190599fc27cd93ecdef246)
 - 2026-09-25 01:58: Documented managed namespace-name upgrade compatibility and resolved-namespace cleanup. (authoring-run/e9e7299c-b7ba-46de-9e24-fd8bb4b76388 - 8d256c22f13a0c79f1b7b9db617e895a503f1305)
 - 2026-09-01 19:09: Corrected existing-namespace storage cleanup to final gateway teardown and removed the PR-number prefix from the title. (01a05f95-dd80-7011-990f-d1c46b5bb3cc - aa366c49c44834d59f74994c5fd37fb8096f169f)
 - 2026-08-28 21:20: Removed the retired local-test Compute Driver from current selection boundaries. (01a036f4-cf1d-7cc1-bbc1-000879038ac8 - 3ec166eb5fae39ed0f51ffb5ebd93338c4a2db94)

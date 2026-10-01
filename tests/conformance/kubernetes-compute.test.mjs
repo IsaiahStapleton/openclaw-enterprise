@@ -11656,6 +11656,13 @@ test("every ordinary allow policy requires the explicit network profile", () => 
       podSelector: { matchLabels: { "k8s-app": "kube-dns" } },
     },
   ]);
+  assert.deepEqual(dns.spec.egress[0].ports, [
+    { protocol: "UDP", port: 53 },
+    { protocol: "TCP", port: 53 },
+    // OpenShift DNS compatibility requires both protocols on port 5353.
+    { protocol: "UDP", port: 5353 },
+    { protocol: "TCP", port: 5353 },
+  ]);
   const runtime = sources.find(
     ([policy]) => policy.metadata.name === `allow-agent-runtime-${d}`,
   )[0];

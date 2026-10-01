@@ -14,9 +14,10 @@ private routing, also configure the namespace and Pod selectors in
 `network.gatewayClients` for your authenticated proxy.
 
 Each tenant starts with default-deny ingress and egress. Explicit policies allow
-DNS, approved gateway clients, and required communication between an Agent's
-gateway and dedicated Harness. Cross-tenant traffic, traffic between different
-Agents, Kubernetes API access, and cloud metadata access remain denied.
+DNS (UDP/TCP ports `53` and `5353` through `allow-dns`), approved gateway clients,
+and required communication between an Agent's gateway and dedicated Harness.
+Cross-tenant traffic, traffic between different Agents, Kubernetes API access,
+and cloud metadata access remain denied.
 
 For Compute-owned startup failure evidence, plugin reporting, and on-demand
 deployment diagnostics, set
