@@ -6326,16 +6326,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
-  private samePluginWarnings(
-    left: readonly PluginDeploymentWarning[],
-    right: readonly PluginDeploymentWarning[],
-  ): boolean {
-    return isDeepStrictEqual(
-      [...left].sort((a, b) => a.pluginId.localeCompare(b.pluginId)),
-      [...right].sort((a, b) => a.pluginId.localeCompare(b.pluginId)),
-    );
-  }
-
   private podContainerId(pod: unknown, container: "agent" | "gateway"): string | undefined {
     const status = asRecord(asRecord(pod)?.status);
     const containerStatuses = Array.isArray(status?.containerStatuses)
@@ -6677,7 +6667,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (expectedWarnings !== undefined) {
       const expected = this.normalizePluginWarnings(revision, expectedWarnings);
-      if (!this.samePluginWarnings(failures, expected)) {
+      if (!isDeepStrictEqual(failures, expected)) {
         return undefined;
       }
     }
