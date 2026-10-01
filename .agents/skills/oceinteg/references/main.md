@@ -44,8 +44,8 @@ and the supported binding steps.
 
 Use standard Helm installation with the following profile:
 
-- Enable standard presets and the DevDay preset set, including **Community
-  Agent**. Verify the expected preset names in the Console of each selected OCE
+- Enable standard presets and the **SWE Agent** preset from
+  `deploy/presets/swe-preset.json`. Verify the expected preset names in the Console of each selected OCE
   Namespace. Verify later Namespace seeding and that rerendering/reconciliation
   preserves an existing customized preset.
 - Select `drivers.plugin.id: codex-plugin` with
@@ -83,12 +83,12 @@ and deployment through the Console. Read-only API, Kubernetes, and provider
 inspection may verify outcomes. A required SQL write, direct API mutation, pod
 patch, or manual runtime-file repair fails the Console-only criterion.
 
-1. Start creating `ted-backup` using **Community Agent** (the actual preset
+1. Start creating `ted-backup` using **SWE Agent** (the actual preset
    name), with the selected service-account authentication and dedicated Codex
    runtime. If that name already exists, do not overwrite it; resolve an
    isolated target.
 2. Configure the test channel, default `oce-feedback-test`, using its exact ID.
-   The preset's existing allowlist does not include this channel. Set no-mention
+   The preset starts without configured channels. Set no-mention
    handling and reply-in-thread behavior explicitly through supported controls.
 3. Bind both `openclaw/openclaw-enterprise` and `openclaw/openclaw` with the
    Console's shared **Read-only** access level (`git-read`). Select permissions

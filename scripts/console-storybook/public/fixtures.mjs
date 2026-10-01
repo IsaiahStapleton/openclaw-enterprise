@@ -1,9 +1,6 @@
 import standardCodexPreset from "/console/standard-codex-preset.mjs";
 import standardOpenclawPreset from "/console/standard-openclaw-preset.mjs";
-import devdayPreset from "/console/devday-preset.mjs";
-import devdayPartnersPreset from "/console/devday-partners-preset.mjs";
-import devdayQaPreset from "/console/devday-qa-preset.mjs";
-import devdayOncallPreset from "/console/devday-oncall-preset.mjs";
+import swePreset from "/console/swe-preset.mjs";
 
 const createdAt = "2026-09-01T12:00:00.000Z";
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
@@ -357,7 +354,7 @@ export function installFixture(scenario, evidence) {
     });
   }
   const preset = {
-    id: scenario.devdayPreset ? "pre_devday_codex" : "pre_00000000-0000-4000-8000-000000000001",
+    id: scenario.swePreset ? "pre_swe_codex" : "pre_00000000-0000-4000-8000-000000000001",
     namespaceId,
     name: "Research assistant",
     template: {
@@ -379,12 +376,12 @@ export function installFixture(scenario, evidence) {
       },
     },
   };
-  if (scenario.standardCodexPreset || scenario.standardOpenclawPreset || scenario.devdayPreset) {
+  if (scenario.standardCodexPreset || scenario.standardOpenclawPreset || scenario.swePreset) {
     Object.assign(
       preset,
       structuredClone(
-        scenario.devdayPreset
-          ? devdayPreset
+        scenario.swePreset
+          ? swePreset
           : scenario.standardOpenclawPreset
             ? standardOpenclawPreset
             : standardCodexPreset,
@@ -395,13 +392,10 @@ export function installFixture(scenario, evidence) {
     preset.template.agent.initialWorkspaceFiles = structuredClone(scenario.presetWorkspaceFiles);
   }
   const presets = [preset];
-  if (scenario.devdayPreset) {
+  if (scenario.swePreset) {
     for (const [name, definition] of [
       ["standard-codex", standardCodexPreset],
       ["standard-openclaw", standardOpenclawPreset],
-      ["devday-partners", devdayPartnersPreset],
-      ["devday-qa", devdayQaPreset],
-      ["devday-oncall", devdayOncallPreset],
     ]) {
       presets.push({
         ...structuredClone(definition),
