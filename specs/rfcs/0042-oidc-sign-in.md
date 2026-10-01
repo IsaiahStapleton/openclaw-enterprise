@@ -7,8 +7,8 @@ status: Proposed
 - **ID:** RFC-0042
 - **Owner:** rclarke0 (proposal). Auth design review: freeqaz. Scope and release: kevinlin-openai.
 - **Created:** 2026-09-30
-- **Last updated:** 2026-09-30
-- **RFC PR:** [#731][pr-731]
+- **Last updated:** 2026-10-01
+- **RFC PR:** [#731][pr-731]; implementation [#790][pr-790], stacked on it
 - **Related:** [#729][issue-729]; SSO/SCIM stays in the 1.0 backlog ([#82][issue-82], [#92][issue-92]);
   Google sign-in [PR #594][pr-594]; [RFC 31](31-human-federated-sign-in/index.md).
 - **Source baseline:** `main` at `ccf5d79b`; source links are pinned to it. Details may change as
@@ -54,7 +54,7 @@ unchanged.
 | `OCC_AUTH_OIDC_TOKEN_URL`, `_JWKS_URL` | `tokenUrl`, `jwksUrl`         | Fetched by the controller.                                         |
 | `OCC_AUTH_OIDC_CLIENT_ID`, `_SECRET`   | Secret keys, as `auth.google` | Required; a dedicated Secret, distinct from GitHub's and Google's. |
 | `OCC_AUTH_OIDC_TOKEN_AUTH`             | `tokenAuth`                   | Optional: `client_secret_post` (default) or `client_secret_basic`. |
-| `OCC_AUTH_OIDC_DISPLAY_NAME`           | `displayName`                 | Optional button label, 1–40 printable characters.                  |
+| `OCC_AUTH_OIDC_DISPLAY_NAME`           | `displayName`                 | Optional label, 1–40 printable characters; default single sign-on. |
 
 Required values are all or none; a partial set fails startup, as for Google
 ([google.ts:33-43][g-config]), and Helm and the profile renderer refuse the same inputs
@@ -124,11 +124,12 @@ click signs in again.
 Google's verifier ([google.ts:132-205][g-verify]) generalised, with the contract stated:
 `iss` equals the configured issuer exactly; `alg` is `RS256` and `kid` names an RSA key of at
 least 2,048 bits in the JWKS fetched for this callback, a floor main lacks
-([google.ts:109-127][g-key]); `none`, `HS*` and keys carried in the token header are refused;
+([google.ts:109-127][g-key]); `none`, `HS*` and the header members `jwk`, `jku`, `x5c`, `x5u`
+and `crit` are refused;
 `aud` contains the client ID and `azp` equals it when present; the nonce is the HMAC of the
 one-use, browser-bound state; `exp > now` with no leeway; `iat` within
-`[now − 3600 s, now + 60 s]`; `nbf`, which Entra emits and main ignores, is refused when in
-the future; the subject is bounded as above. The JWKS is fetched on every callback with no
+`[now − 3600 s, now + 60 s]`; `nbf`, which Entra emits and main ignores, is refused when more
+than 60 s ahead; the subject is bounded as above. The JWKS is fetched on every callback with no
 cache ([google.ts:233][g-jwks]), a decision: rotation needs no restart and a JWKS outage
 fails closed. `hd`, email, `auth_time`, `acr` and `amr` are not checked; multi-factor policy
 belongs to the IdP.
@@ -143,15 +144,15 @@ receipt, and the known-device cookie a successful callback sets
 lane. Each provider has its own callback and consumes attempts under its own attempt
 identity, so a code or receipt cannot cross providers; receipts stay unchanged. The
 callback's code cap rises from 1,024 ([github.ts:479][gh-code-cap]) to 4,096 characters
-for every provider, since Entra codes are long. Denial audits gain the provider name
-([human-authentication.ts:1151][denied]). Failure redirects to `/console/?authError=oidc`.
+for every provider, since Entra codes are long. Denial audits gain the provider name as
+`details.provider` ([human-authentication.ts:1151][denied]). Failure redirects to `/console/?authError=oidc`.
 
 `GET /api/auth/providers` adds `oidc` and `oidcSignIn: {label, authorizationUrl}`
 ([index.ts:3474-3504][discovery]); the schema is closed, so it changes. The Console checks
 GitHub and Google start URLs against a fixed origin and path ([console.mjs:31-51][console-table],
 [console.mjs:463][console-check]); for OIDC it requires `https:` and the discovered
 `authorizationUrl`, a consistency check rather than a trust boundary. `displayName` renders
-as text. The name `oidc` names the protocol, so it stays correct if the IdP changes
+as text, and the tab remembers it so messages after the IdP redirect name it. The name `oidc` names the protocol, so it stays correct if the IdP changes
 ([console.mjs:646-648][console-error]).
 
 ### Recovery and failure
@@ -214,9 +215,10 @@ Proof:
   and the deadline.
 - `postgres-oidc-sign-in`, modelled on `postgres-google-sign-in`: attach and sign in; an
   unattached subject refused; a 4,000-character code; key rotation between callbacks; issuer
-  change, then detach ending the old session; recovery during an outage; the coverage report
-  naming an OIDC-only account only before attach; detach and disable; three providers under
-  the shared budgets.
+  change, after which the old session lasts until the new attach and the stale method is
+  detached; recovery during an outage; the coverage report naming an OIDC-only account only
+  before attach; disable; three providers side by side. The shared budgets are proven in
+  `oidc-login-transport`.
 
 A `fakeOidc` fixture beside `fakeGoogle` ([production-sign-in.mjs:385][fake-google]) serves
 the token and JWKS URLs with Auth0-shaped issuers and subjects; it proves OCE against its own
@@ -224,7 +226,7 @@ reading of OIDC, not any IdP's behaviour. The live check, against an Auth0 devel
 (which the requesting team can provide) and a disposable Keycloak realm, covers the
 authorization request, the real `iss` form, subjects, both token methods, key rotation,
 NetworkPolicy egress and a Console sign-in. Okta and Entra ID stay unverified unless someone
-runs them. Nothing is implemented yet; this RFC rests on source review at the baseline.
+runs them. [#790][pr-790] implements this RFC and records which of these checks ran.
 
 <a id="alternatives-and-open-decisions"></a>
 
@@ -260,6 +262,7 @@ leeway; the JWKS stays uncached; the code cap is 4,096; denial audits carry the 
 [RFC 31](31-human-federated-sign-in/index.md); source links above.
 
 [pr-731]: https://github.com/openclaw/openclaw-enterprise/pull/731
+[pr-790]: https://github.com/openclaw/openclaw-enterprise/pull/790
 [issue-729]: https://github.com/openclaw/openclaw-enterprise/issues/729
 [issue-82]: https://github.com/openclaw/openclaw-enterprise/issues/82
 [issue-92]: https://github.com/openclaw/openclaw-enterprise/issues/92
