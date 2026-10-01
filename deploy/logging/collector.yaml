@@ -20,7 +20,16 @@ processors:
           - set(cache["record"], ParseJSON(body)) where IsString(body) and Len(body) <= 32768
           - set(attributes["event.name"], cache["record"]["event"]) where IsMap(cache["record"]) and (attributes["service.name"] == "occ-api" or attributes["service.name"] == "occ-worker") and IsString(cache["record"]["event"]) and IsMatch(cache["record"]["event"], "^(listening|startup-error|http[.]completed|http[.]unexpected_error|compute[.]preflight-warning|authentication[.](sign-in-limited|sign-in-limit-warning)|worker[.](started|stopped|health|completed|error|startup-error)|installation[.](bootstrapped|already-bootstrapped|bootstrap-failed)|migration[.](completed|failed))$$")
           - set(attributes["event.name"], "gateway.operational") where IsMap(cache["record"]) and attributes["service.name"] == "openclaw-gateway" and IsString(cache["record"]["subsystem"]) and IsMatch(cache["record"]["subsystem"], "^gateway(/|$$)")
-          - set(attributes["event.name"], "codex.operational") where IsMap(cache["record"]) and attributes["service.name"] == "codex-app-server" and attributes["log.iostream"] == "stderr" and IsString(cache["record"]["target"]) and IsMatch(cache["record"]["target"], "^codex_app_server(::|$$)")
+          # Codex prints span lifecycle records (fields.message new/enter/exit/close
+          # with a span object) for every instrumented call. The Codex `turn` span's
+          # start and end, completed tool calls, app-server records and any Codex
+          # warning or error (except the content-bearing codex_otel targets) are
+          # exported; other span lifecycle records are not.
+          - set(cache["span_event"], true) where IsMap(cache["record"]) and IsMap(cache["record"]["span"]) and IsMap(cache["record"]["fields"]) and IsString(cache["record"]["fields"]["message"]) and IsMatch(cache["record"]["fields"]["message"], "^(new|enter|exit|close)$$")
+          - set(attributes["event.name"], "codex.turn") where cache["span_event"] == true and attributes["service.name"] == "codex-app-server" and attributes["log.iostream"] == "stderr" and cache["record"]["target"] == "codex_core::tasks" and cache["record"]["span"]["name"] == "turn" and (cache["record"]["fields"]["message"] == "new" or cache["record"]["fields"]["message"] == "close")
+          - set(attributes["event.name"], "codex.tool_call") where IsMap(cache["record"]) and attributes["service.name"] == "codex-app-server" and attributes["log.iostream"] == "stderr" and cache["record"]["target"] == "codex_core::tools::parallel" and IsMap(cache["record"]["fields"]) and cache["record"]["fields"]["message"] == "tool call completed"
+          - set(attributes["event.name"], "codex.operational") where attributes["event.name"] == nil and cache["span_event"] == nil and IsMap(cache["record"]) and attributes["service.name"] == "codex-app-server" and attributes["log.iostream"] == "stderr" and IsString(cache["record"]["target"]) and (IsMatch(cache["record"]["target"], "^codex_app_server(::|$$)") or (IsMatch(cache["record"]["target"], "^codex_") and not IsMatch(cache["record"]["target"], "^codex_otel(::|$$)") and IsString(cache["record"]["level"]) and IsMatch(cache["record"]["level"], "^(WARN|ERROR)$$")))
+          - set(attributes["occ.codex.tool_name"], cache["record"]["fields"]["tool_name"]) where attributes["event.name"] == "codex.tool_call" and IsString(cache["record"]["fields"]["tool_name"]) and IsMatch(cache["record"]["fields"]["tool_name"], "^[A-Za-z][A-Za-z0-9_.:-]{0,63}$$")
           # Runtime wrapper diagnostics on stderr: fixed event names whose retained
           # fields are bounded below, so a Gateway or Codex startup failure has a cause.
           - set(attributes["event.name"], cache["record"]["event"]) where attributes["event.name"] == nil and IsMap(cache["record"]) and (attributes["service.name"] == "openclaw-gateway" or attributes["service.name"] == "codex-app-server") and attributes["log.iostream"] == "stderr" and IsString(cache["record"]["event"]) and IsMatch(cache["record"]["event"], "^(runtime[.](startup_phase|workspace_node)|(openclaw|codex)[.]model_probe)$$")
@@ -57,6 +66,14 @@ processors:
           # Time comes from the Engine/CRI envelope; arbitrary runtime message text
           # and fields never become the remote body or resource identity.
           - set(body, attributes["event.name"])
+          # Reviewed message classes. Codex turn and tool-call bodies are fixed text.
+          # A codex.operational body is Codex's own message only when it is short
+          # plain text: no quotes, braces, query strings or credential words, and
+          # no word longer than 24 characters. Anything else keeps the event name.
+          - set(body, "turn started") where attributes["event.name"] == "codex.turn" and cache["record"]["fields"]["message"] == "new"
+          - set(body, "turn completed") where attributes["event.name"] == "codex.turn" and cache["record"]["fields"]["message"] == "close"
+          - set(body, "tool call completed") where attributes["event.name"] == "codex.tool_call"
+          - set(body, cache["record"]["fields"]["message"]) where attributes["event.name"] == "codex.operational" and IsMap(cache["record"]["fields"]) and IsString(cache["record"]["fields"]["message"]) and IsMatch(cache["record"]["fields"]["message"], "^[A-Za-z].{0,239}$$") and IsMatch(cache["record"]["fields"]["message"], "^(?:[A-Za-z0-9_-]{1,24}[ ,;:()./=]{1,4})*[A-Za-z0-9_-]{0,24}$$") and not IsMatch(cache["record"]["fields"]["message"], "(?i)(token|secret|passw|bearer|cookie|credential|api.?key|authoriz|session)")
   filter/operational:
     error_mode: propagate
     logs:

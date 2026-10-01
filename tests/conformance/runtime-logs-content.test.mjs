@@ -659,3 +659,114 @@ test("Event messages hide node names, image references and Secret names", async 
   }
   assert.match(runtime.data.pods[0].events[0].message, /to \[redacted:node\]$/);
 });
+
+test("Codex span lifecycle records: turns are info events, other spans are debug, no span payload leaves", () => {
+  const stream = { source: "agent", pod: "gateway-0", container: "agent" };
+  const canary = `codex-span-canary-${randomUUID()}`;
+  const tracing = (level, target, fields, span) =>
+    JSON.stringify({
+      timestamp: "2026-10-01T07:49:44.100970Z",
+      level,
+      fields,
+      target,
+      ...(span === undefined ? {} : { span, spans: [] }),
+    });
+  // Field names follow Codex 0.158's `turn` span (codex_core::tasks) and tool-call event.
+  const turn = {
+    name: "turn",
+    "otel.name": "session_task.turn",
+    "thread.id": canary,
+    "turn.id": "turn-1",
+    model: "gpt-5.6-luna",
+    "codex.turn.reasoning_effort": "medium",
+    prompt: canary,
+  };
+  const closed = {
+    ...turn,
+    "codex.turn.token_usage.input_tokens": 1200,
+    "codex.turn.token_usage.output_tokens": 80,
+    "codex.turn.token_usage.total_tokens": 1280,
+  };
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      tracing("INFO", "codex_core::tasks", { message: "new" }, turn),
+      tracing("INFO", "codex_core::tasks", { message: "enter" }, turn),
+      tracing("INFO", "codex_core::tasks", { message: "exit" }, turn),
+      tracing("INFO", "codex_core::tools::parallel", {
+        message: "tool call completed",
+        tool_name: "shell",
+        turn_id: "turn-1",
+        call_id: canary,
+        total_duration_ms: 42,
+        arguments: canary,
+      }),
+      tracing(
+        "INFO",
+        "codex_core::tasks",
+        { message: "close", "time.busy": "2.1s", "time.idle": "9ms" },
+        closed,
+      ),
+      tracing(
+        "INFO",
+        "codex_exec_server::local_file_system",
+        { message: "close", "time.busy": "35µs" },
+        { name: "fs.read_file", path: canary },
+      ),
+      tracing("INFO", "codex_core::client", { message: "new" }, { name: `${canary} x` }),
+      // A plain event whose message happens to be a lifecycle word is not a span record.
+      tracing("INFO", "codex_core::client", { message: "close" }),
+    ].map((raw, index) => ({ time: lineTime(index + 1), raw })),
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message, subsystem, fields }) => ({
+      kind,
+      level,
+      message,
+      subsystem,
+      ...(fields === undefined ? {} : { fields }),
+    })),
+    [
+      {
+        kind: "codex",
+        level: "info",
+        message: "turn started",
+        subsystem: "codex_core::tasks",
+        fields: { model: "gpt-5.6-luna", turn_id: "turn-1" },
+      },
+      { kind: "codex", level: "debug", message: "span enter turn", subsystem: "codex_core::tasks" },
+      { kind: "codex", level: "debug", message: "span exit turn", subsystem: "codex_core::tasks" },
+      {
+        kind: "codex",
+        level: "info",
+        message: "tool call completed",
+        subsystem: "codex_core::tools::parallel",
+        fields: { tool_name: "shell", turn_id: "turn-1", total_duration_ms: 42 },
+      },
+      {
+        kind: "codex",
+        level: "info",
+        message: "turn completed",
+        subsystem: "codex_core::tasks",
+        fields: {
+          model: "gpt-5.6-luna",
+          turn_id: "turn-1",
+          input_tokens: 1200,
+          output_tokens: 80,
+          total_tokens: 1280,
+          busy: "2.1s",
+        },
+      },
+      {
+        kind: "codex",
+        level: "debug",
+        message: "span close fs.read_file",
+        subsystem: "codex_exec_server::local_file_system",
+      },
+      { kind: "codex", level: "debug", message: "span new span", subsystem: "codex_core::client" },
+      { kind: "codex", level: "info", message: "close", subsystem: "codex_core::client" },
+    ],
+  );
+  assert.equal(JSON.stringify(records).includes(canary), false, "no span payload or call ID leaks");
+});

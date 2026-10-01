@@ -121,7 +121,16 @@ returning it:
   short list of operational fields such as `status`, `method` and `durationMs`).
   Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are
   dropped.
-- **codex**: Codex tracing records (level, target, message).
+- **codex**: Codex tracing records (level, target, message). The start and end
+  of a Codex turn read `turn started` and `turn completed` (info, with `model`,
+  `turn_id`, token counts and `busy` time); a completed tool call keeps
+  `tool_name`, `turn_id` and `total_duration_ms`. Other span records are
+  `debug`, such as `span close fs.read_file`; hide them with the **debug** chip.
+  Unless the version was deployed with `logging.level: debug`, the Harness
+  drops Codex's span `enter` and `exit` records, the readiness probe's local
+  connections (`websocket client connected`) and repeats of the remote-control
+  preference retry (kept once per 10 minutes) before they are written, so a
+  page covers minutes of output, not seconds.
 - **text**: plain lines up to 4 KiB, including lines that start with a bracketed
   component tag such as `[node-host] advertised commands: ...`.
 

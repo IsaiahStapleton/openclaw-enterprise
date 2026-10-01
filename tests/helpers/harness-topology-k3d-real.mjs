@@ -2968,7 +2968,6 @@ async function assertKubernetesOtelLogs(topology) {
                 [OTEL_RESOURCE.revisionId]: topology.revision.id,
               },
               attributes: { "event.name": "codex.operational" },
-              body: "codex.operational",
             },
           ]),
     ],

@@ -805,6 +805,154 @@ test(
   },
 );
 
+test(
+  "native Collector exports Codex turns, tool calls and plain app-server messages, not span noise",
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_LOGGING_COLLECTOR=1 for pinned Collector Codex record proof.",
+    timeout: 180_000,
+  },
+  async (t) => {
+    const fixture = await collectorFixture(t, "codex");
+    const receiverAddress = await startKubernetesProcessors(fixture);
+    const canary = `CANARY_${fixture.suffix}`;
+    const resource = {
+      attributes: Object.entries({
+        "occ.managed_by": "openclaw-enterprise",
+        "occ.role": "agent",
+        "openclaw.namespace.id": `ns_${randomUUID()}`,
+        "openclaw.agent.id": `agt_${randomUUID()}`,
+        "openclaw.revision.id": `rev_${randomUUID()}`,
+        "k8s.pod.uid": `pod-${randomUUID()}`,
+        "container.id": `containerd://${randomUUID()}`,
+      }).map(([key, value]) => ({ key, value: { stringValue: value } })),
+    };
+    // Codex 0.158 tracing JSON, as `LOG_FORMAT=json` prints it.
+    const tracing = (level, target, fields, span) => ({
+      timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+      body: {
+        stringValue: JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level,
+          fields,
+          target,
+          ...(span === undefined ? {} : { span, spans: [] }),
+        }),
+      },
+      attributes: [{ key: "log.iostream", value: { stringValue: "stderr" } }],
+    });
+    const turn = { name: "turn", model: canary, "turn.id": canary, "thread.id": canary };
+    await postLogs(receiverAddress, [
+      {
+        resource,
+        scopeLogs: [
+          {
+            logRecords: [
+              tracing("INFO", "codex_core::tasks", { message: "new" }, turn),
+              tracing("INFO", "codex_core::tasks", { message: "enter" }, turn),
+              tracing("INFO", "codex_core::tasks", { message: "exit" }, turn),
+              tracing("INFO", "codex_core::tasks", { message: "close", "time.busy": canary }, turn),
+              tracing(
+                "INFO",
+                "codex_app_server::app_server_tracing",
+                { message: "enter" },
+                {
+                  name: "app_server.request",
+                },
+              ),
+              tracing(
+                "INFO",
+                "codex_app_server::app_server_tracing",
+                { message: "new" },
+                {
+                  name: "app_server.request",
+                },
+              ),
+              tracing("INFO", "codex_core::tools::parallel", {
+                message: "tool call completed",
+                tool_name: "shell",
+                call_id: canary,
+                turn_id: canary,
+              }),
+              tracing("INFO", "codex_core::tools::parallel", {
+                message: "tool call completed",
+                tool_name: `${canary} "x"`,
+              }),
+              tracing("INFO", "codex_app_server", {
+                message:
+                  "received shutdown signal; entering graceful restart drain (connections=0, runningAssistantTurns=0, new client turns rejected)",
+              }),
+              // Transport records below warn are not reviewed operational output.
+              tracing("INFO", "codex_app_server_transport::transport::websocket", {
+                message: "websocket client connected",
+                peer_addr: "127.0.0.1:41000",
+              }),
+              tracing("INFO", "codex_app_server", {
+                message: "outbound router task exited (channel closed)",
+              }),
+              // Unreviewed message text keeps the event name as its body.
+              tracing("ERROR", "codex_app_server", {
+                message: `Failed to deserialize JSONRPCMessage: invalid type: string "${canary}"`,
+              }),
+              tracing("WARN", "codex_app_server", { message: `failed to refresh token ${canary}` }),
+              tracing("WARN", "codex_app_server", { message: `${"x".repeat(30)}${canary}` }),
+              // Model failures from any Codex target, never the codex_otel content targets.
+              tracing("WARN", "codex_core::client", {
+                message: "retrying model request",
+                prompt: canary,
+              }),
+              tracing("WARN", "codex_otel::log_only", { message: "retrying model request" }),
+              tracing("INFO", "codex_core::client", { message: "using model" }),
+            ],
+          },
+        ],
+      },
+    ]);
+    const records = async () =>
+      exportedRecords(fixture.out, (_resource, record) => ({
+        attributes: attributes(record.attributes),
+        record,
+      }));
+    await waitFor(async () => (await records()).length >= 10);
+    await delay(1_000);
+    const exported = await records();
+    const summary = exported
+      .map(({ attributes: kept, record }) =>
+        JSON.stringify([
+          record.severityText,
+          kept["event.name"],
+          record.body.stringValue,
+          kept["occ.codex.tool_name"] ?? null,
+        ]),
+      )
+      .sort();
+    assert.deepEqual(
+      summary,
+      [
+        ["INFO", "codex.turn", "turn started", null],
+        ["INFO", "codex.turn", "turn completed", null],
+        ["INFO", "codex.tool_call", "tool call completed", "shell"],
+        ["INFO", "codex.tool_call", "tool call completed", null],
+        [
+          "INFO",
+          "codex.operational",
+          "received shutdown signal; entering graceful restart drain (connections=0, runningAssistantTurns=0, new client turns rejected)",
+          null,
+        ],
+        ["INFO", "codex.operational", "outbound router task exited (channel closed)", null],
+        ["ERROR", "codex.operational", "codex.operational", null],
+        ["WARN", "codex.operational", "codex.operational", null],
+        ["WARN", "codex.operational", "codex.operational", null],
+        ["WARN", "codex.operational", "retrying model request", null],
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .sort(),
+    );
+    assert.doesNotMatch(JSON.stringify(exported), /CANARY_/);
+  },
+);
+
 // Stands in for the API server behind k8sattributes: serves one Pod through
 // list or watch-list, and withholds every Pod response until the test releases it.
 const podMetadataServer = `

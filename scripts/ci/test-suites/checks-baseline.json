@@ -67,6 +67,9 @@
       "path": "tests/conformance/runtime-logs-replay.test.mjs"
     },
     {
+      "path": "tests/conformance/codex-stderr-filter.test.mjs"
+    },
+    {
       "path": "tests/conformance/occ-read.test.mjs"
     },
     {
