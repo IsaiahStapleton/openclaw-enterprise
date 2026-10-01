@@ -3859,9 +3859,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               type: "object",
               additionalProperties: false,
               required:
-                operationName === "github" ||
-                operationName === "google" ||
-                operationName === "oidc"
+                operationName === "github" || operationName === "google" || operationName === "oidc"
                   ? ["subject", "expectedVersion"]
                   : ["expectedVersion"],
               properties: {

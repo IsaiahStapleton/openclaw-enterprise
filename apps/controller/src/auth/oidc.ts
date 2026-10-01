@@ -81,7 +81,9 @@ function endpointURL(value: string): URL | undefined {
 export function oidcLoginConfiguration(
   environment: Readonly<Record<string, string | undefined>>,
 ): OidcLoginConfiguration | undefined {
-  if ([...requiredVariables, ...optionalVariables].every((name) => environment[name] === undefined)) {
+  if (
+    [...requiredVariables, ...optionalVariables].every((name) => environment[name] === undefined)
+  ) {
     return undefined;
   }
   const values = Object.fromEntries(
@@ -139,7 +141,9 @@ export function oidcLoginConfiguration(
  * The provider instance for an issuer and client: each attached method is then an exact
  * `(iss, sub)` pair for that client. Changing either makes a new instance.
  */
-export function oidcProviderId(config: Pick<OidcLoginConfiguration, "issuer" | "clientId">): string {
+export function oidcProviderId(
+  config: Pick<OidcLoginConfiguration, "issuer" | "clientId">,
+): string {
   return `oidc:${createHash("sha256").update(`${config.issuer}\0${config.clientId}`).digest("hex")}`;
 }
 

@@ -1731,8 +1731,7 @@ export async function createPostgresControllerAuth(
           betterAuthIssuer(options.installationId),
         );
   // Any external provider activates the guarded profile; all share its recovery user.
-  const recoveryUserId =
-    github?.recoveryUserId ?? google?.recoveryUserId ?? oidc?.recoveryUserId;
+  const recoveryUserId = github?.recoveryUserId ?? google?.recoveryUserId ?? oidc?.recoveryUserId;
   const guarded = recoveryUserId !== undefined;
   const providerLabel = github !== undefined ? "GitHub" : google !== undefined ? "Google" : "OIDC";
   if (!guarded && passwordSignIn !== undefined) {
@@ -1835,9 +1834,7 @@ export async function createPostgresControllerAuth(
           humanLogin!.githubProviderId,
           humanLogin!.googleProviderId,
           humanLogin!.oidcProviderId,
-        ].filter(
-          (providerId): providerId is string => providerId !== undefined,
-        ),
+        ].filter((providerId): providerId is string => providerId !== undefined),
       );
     }
   }
