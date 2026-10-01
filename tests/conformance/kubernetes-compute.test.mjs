@@ -855,7 +855,11 @@ test("activation refuses a missing or foreign workspace node before changing the
 // A first dedicated Codex deploy with plugins, workspace node enrollment and
 // gateway routing. Only transport observations are faked; startup order and
 // readiness come from the real driver.
-function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
+//
+// With `clock` ({ now }), enrollment waits are simulated on that fake clock: an
+// observation advances it by its whole wait, or to `state.pairAtMs` if the node
+// pairs within the wait, and never sleeps.
+function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
   const state = {
     setupCalls: 0,
     connected: false,
@@ -869,6 +873,9 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
     pairAfterSetupMs: undefined,
     // The wait each setup observation was given.
     observeWaits: [],
+    // With a fake clock: when the node pairs, and when a waiting observation fails.
+    pairAtMs: undefined,
+    failAtMs: undefined,
   };
   const driver = new KubernetesComputeDriver(
     routedOptions({
@@ -889,6 +896,20 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
           }
           // Like the client: one connection, re-read until connected or the wait ends.
           state.observeWaits.push(options?.waitMs ?? 0);
+          if (clock !== undefined) {
+            const deadline = clock.now + (options?.waitMs ?? 0);
+            if (state.failAtMs !== undefined && state.failAtMs <= deadline) {
+              clock.now = Math.max(clock.now, state.failAtMs);
+              throw new Error("Gateway connection closed");
+            }
+            if (!state.connected && state.pairAtMs !== undefined && state.pairAtMs <= deadline) {
+              clock.now = Math.max(clock.now, state.pairAtMs);
+              state.connected = true;
+            } else if (!state.connected) {
+              clock.now = deadline;
+            }
+            return state.connected ? { deviceId: "node-1", connected: true } : undefined;
+          }
           const deadline = Date.now() + (options?.waitMs ?? 0);
           while (!state.connected && Date.now() < deadline) {
             signal.throwIfAborted();
@@ -902,8 +923,12 @@ function dedicatedFirstDeployFixture({ statusProxy = true } = {}) {
       },
     },
   );
-  // Short enough for tests; long enough that a pass sees a node pairing within it.
-  driver.workspaceNodePairingWaitMs = 60;
+  if (clock === undefined) {
+    // Short enough for tests; long enough that a pass sees a node pairing within it.
+    driver.workspaceNodePairingWaitMs = 60;
+  } else {
+    driver.now = () => clock.now;
+  }
   const revision = routedRevision(driver, {
     plugins: {
       driver: { id: "codex-plugin", implementation: "occ/codex-plugin" },
@@ -1611,6 +1636,101 @@ test("a first dedicated deploy pass waits a bounded time for its node to pair", 
   );
   state.connected = true;
   assert.equal((await prepare()).ready, true);
+});
+
+// The worker is serial: every pass one Agent spends waiting for its node holds
+// up every other Agent's deploy. A node that never pairs gets one bounded wait
+// per setup, across all passes, then a single read per pass, as before #816 (D88).
+test("an unpaired workspace node costs at most one bounded wait across passes", async () => {
+  const clock = { now: 0 };
+  const { state, driver, gatewayName, agentName, prepare, markReady } = dedicatedFirstDeployFixture(
+    { clock },
+  );
+  assert.equal(driver.workspaceNodePairingWaitMs, 8_000);
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  markReady(gatewayName);
+  const passTimes = [];
+  for (let pass = 0; pass < 6; pass++) {
+    const started = clock.now;
+    assert.equal((await prepare()).ready, false);
+    passTimes.push(clock.now - started);
+  }
+  assert.deepEqual(state.observeWaits, [8_000, 0, 0, 0, 0, 0]);
+  assert.deepEqual(passTimes, [8_000, 0, 0, 0, 0, 0]);
+  // A late pairing is still seen by the next single read.
+  state.connected = true;
+  assert.equal((await prepare()).ready, true);
+  assert.equal(clock.now, 8_000);
+});
+
+// The normal first deploy keeps #816's fast path: the node pairs within the
+// first ready pass's wait, which ends at the pairing, so no pass ends pending.
+test("a node that pairs within its wait completes the pass that delivered its setup", async () => {
+  const clock = { now: 0 };
+  const { state, gatewayName, agentName, prepare, markReady } = dedicatedFirstDeployFixture({
+    clock,
+  });
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  markReady(gatewayName);
+  state.pairAtMs = 3_000;
+  assert.equal((await prepare()).ready, true);
+  assert.deepEqual(state.observeWaits, [8_000]);
+  assert.equal(clock.now, 3_000, "the pass ends as soon as the node pairs");
+  assert.equal(state.gatewayWorkspaceNodeId, "node-1", "and hands the node to the Gateway");
+});
+
+// A partly spent budget carries over: a wait cut short (the Gateway restarted
+// mid-wait) leaves the next pass only the rest of it.
+test("a workspace node pairing budget carries over between passes", async () => {
+  const clock = { now: 0 };
+  const { state, gatewayName, agentName, prepare, markReady } = dedicatedFirstDeployFixture({
+    clock,
+  });
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  markReady(gatewayName);
+  state.failAtMs = 5_000;
+  await assert.rejects(prepare(), /Gateway connection closed/);
+  state.failAtMs = undefined;
+  assert.equal((await prepare()).ready, false);
+  assert.equal((await prepare()).ready, false);
+  assert.deepEqual(state.observeWaits, [8_000, 3_000, 0]);
+  assert.equal(clock.now, 8_000);
+});
+
+test("a second Agent's deploy pass is not held up by another Agent's unpaired node", async () => {
+  const clock = { now: 0 };
+  const stuck = dedicatedFirstDeployFixture({ clock });
+  const fresh = dedicatedFirstDeployFixture({ clock });
+  for (const agent of [stuck, fresh]) {
+    assert.equal((await agent.prepare()).ready, false);
+    agent.markReady(agent.agentName);
+    agent.markReady(agent.gatewayName);
+  }
+  // The stuck Agent's first ready pass spends its one wait.
+  assert.equal((await stuck.prepare()).ready, false);
+  assert.equal(clock.now, 8_000);
+  // From here the single serial worker alternates between the two Agents. The
+  // fresh Agent's node pairs 2 s after its first ready pass starts.
+  fresh.state.pairAtMs = clock.now + 2_000;
+  const freshStarts = [];
+  let freshReady = false;
+  for (let round = 0; round < 4; round++) {
+    const before = clock.now;
+    assert.equal((await stuck.prepare()).ready, false);
+    assert.equal(clock.now, before, "the stuck Agent's pass does not wait again");
+    if (!freshReady) {
+      freshStarts.push(clock.now);
+      freshReady = (await fresh.prepare()).ready;
+    }
+  }
+  assert.equal(freshReady, true);
+  assert.deepEqual(freshStarts, [8_000], "the fresh Agent pairs within its first ready pass");
+  assert.equal(clock.now, 10_000);
+  assert.deepEqual(stuck.state.observeWaits, [8_000, 0, 0, 0, 0]);
+  assert.deepEqual(fresh.state.observeWaits, [8_000]);
 });
 
 test("activation fails with OpenClaw's reason when the Gateway cannot apply its workspace node", async () => {
