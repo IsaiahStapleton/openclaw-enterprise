@@ -18,8 +18,10 @@ OAuth's private `codex-home` directory is excluded from workspace serving and
 Sandbox mounts. Only the seed writer and the dedicated Codex workload mount it,
 and the Codex workload mounts it as its whole `~/.codex`: the native `auth.json`
 with rotated refresh tokens, plus Codex sessions, history, logs, and generated
-configuration, all persist across revisions. The Gateway receives no model
-credential.
+configuration, all persist across revisions. The seed writer mounts only the
+`codex-home` subpath. Before it starts, an init container that receives no
+credential creates that directory as uid 1000 with mode `0700`; it replaces any
+link or file at that path. The Gateway receives no model credential.
 
 The bundle moves one way and exists in these places:
 

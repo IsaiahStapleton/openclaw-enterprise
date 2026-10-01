@@ -9986,6 +9986,37 @@ for (const dualCluster of [false, true]) {
     );
     assert.equal(seedPod.containers[0].securityContext.readOnlyRootFilesystem, true);
     assert.deepEqual(seedPod.containers[0].securityContext.capabilities.drop, ["ALL"]);
+    // The process holding the seed sees only codex-home, never the rest of the Harness claim.
+    const seedClaim = seedPod.volumes.find(({ persistentVolumeClaim }) => persistentVolumeClaim);
+    const claimMounts = seedPod.containers[0].volumeMounts.filter(
+      ({ name }) => name === seedClaim.name,
+    );
+    assert.deepEqual(claimMounts, [
+      { name: seedClaim.name, mountPath: "/auth", subPath: "codex-home" },
+    ]);
+    assert.equal(
+      seedPod.containers[0].env.find(({ name }) => name === "CODEX_HOME").value,
+      "/auth",
+    );
+    assert.match(
+      seedPod.containers[0].readinessProbe.exec.command[2],
+      /"\/auth\/\.oce-oauth\.json"/,
+    );
+    // Only a credential-free init step sees the claim root, to create codex-home as uid 1000
+    // (a kubelet-created subPath is root-owned and world-writable).
+    assert.deepEqual(
+      seedPod.initContainers.map(({ name }) => name),
+      ["prepare-oauth-home"],
+    );
+    const [prepare] = seedPod.initContainers;
+    assert.deepEqual(prepare.volumeMounts, [
+      { name: seedClaim.name, mountPath: "/harness-workspace-state" },
+    ]);
+    assert.equal(prepare.env, undefined);
+    assert.match(prepare.args[0], /chmodSync\(path, 0o700\)/);
+    assert.match(prepare.args[0], /isDirectory\(\) === false/);
+    assert.equal(prepare.securityContext.readOnlyRootFilesystem, true);
+    assert.deepEqual(prepare.securityContext.capabilities.drop, ["ALL"]);
     assert.equal(
       records.some(
         ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith("agent-"),

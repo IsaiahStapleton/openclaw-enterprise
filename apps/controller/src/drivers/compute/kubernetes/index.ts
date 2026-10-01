@@ -10003,6 +10003,36 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
               },
               { name: "seed", secret: { secretName: name, defaultMode: 0o440 } },
             ],
+            // The writer holding the seed sees only codex-home, as the runtime does.
+            // Create that directory as uid 1000 first: a kubelet-created subPath is
+            // root-owned and group- and world-writable, and uid 1000 cannot tighten it.
+            initContainers: [
+              {
+                name: "prepare-oauth-home",
+                image: this.options.images.agent,
+                imagePullPolicy: "IfNotPresent",
+                command: ["node", "-e"],
+                args: [
+                  [
+                    'const { chmodSync, lstatSync, mkdirSync, rmSync } = require("node:fs");',
+                    'const path = "/harness-workspace-state/codex-home";',
+                    // Never let kubelet follow a planted link or mount a file as the home.
+                    "if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory() === false) {",
+                    "  rmSync(path, { force: true });",
+                    "}",
+                    "mkdirSync(path, { recursive: true, mode: 0o700 });",
+                    "chmodSync(path, 0o700);",
+                  ].join("\n"),
+                ],
+                volumeMounts: [{ name: "auth", mountPath: "/harness-workspace-state" }],
+                resources: this.options.resources.agent,
+                securityContext: {
+                  allowPrivilegeEscalation: false,
+                  readOnlyRootFilesystem: true,
+                  capabilities: { drop: ["ALL"] },
+                },
+              },
+            ],
             containers: [
               {
                 name: "oauth-bootstrap",
@@ -10011,13 +10041,13 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
                 command: ["node", "-e"],
                 args: [CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT + "\nsetInterval(() => {}, 60000);"],
                 env: [
-                  { name: "CODEX_HOME", value: "/auth/codex-home" },
+                  { name: "CODEX_HOME", value: "/auth" },
                   { name: "OCE_CODEX_OAUTH_SOURCE_UID", value: sourceUid },
                   { name: "OCE_CODEX_OAUTH_VOLUME_UID", value: volumeUid },
                   { name: "OCE_CODEX_OAUTH_SEED_PATH", value: "/seed/auth.json" },
                 ],
                 volumeMounts: [
-                  { name: "auth", mountPath: "/auth" },
+                  { name: "auth", mountPath: "/auth", subPath: "codex-home" },
                   { name: "seed", mountPath: "/seed", readOnly: true },
                 ],
                 readinessProbe: {
@@ -10025,7 +10055,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
                     command: [
                       "node",
                       "-e",
-                      'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync("/auth/codex-home/.oce-oauth.json","utf8")); process.exit(r.sourceUid===process.env.OCE_CODEX_OAUTH_SOURCE_UID && r.volumeUid===process.env.OCE_CODEX_OAUTH_VOLUME_UID ? 0 : 1);',
+                      'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync("/auth/.oce-oauth.json","utf8")); process.exit(r.sourceUid===process.env.OCE_CODEX_OAUTH_SOURCE_UID && r.volumeUid===process.env.OCE_CODEX_OAUTH_VOLUME_UID ? 0 : 1);',
                     ],
                   },
                   periodSeconds: 2,
