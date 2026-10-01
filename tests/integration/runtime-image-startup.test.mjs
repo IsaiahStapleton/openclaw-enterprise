@@ -1735,6 +1735,21 @@ test(
         defaults: { ...admitted.agents?.defaults, workspace: gatewayWorkspace },
       },
     };
+    // An owner's codex row with a reachable transport and request overrides, which
+    // would let OpenClaw's built-in runtime reach a model from the Gateway.
+    const codexProvider = configuration.models.providers.codex;
+    configuration.models = {
+      ...configuration.models,
+      providers: {
+        ...configuration.models.providers,
+        codex: {
+          ...codexProvider,
+          baseUrl: "https://model.example.test/v1",
+          headers: { "x-route": "owner" },
+          request: { allowPrivateNetwork: true },
+        },
+      },
+    };
     const directory = await mkdtemp(join(tmpdir(), "oce-runtime-image-config-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const configurationPath = join(directory, "openclaw.json");
@@ -1803,7 +1818,8 @@ test(
     assert.doesNotMatch(output, /config reload failed|config restart|workspace-node-changed/);
     // The Gateway's own workspace is empty, so Codex gets no OpenClaw tool that would
     // act on it, run commands or terminals in the Gateway, or change its configuration,
-    // and automation triggers cannot run commands there; the pinned OpenClaw accepts it.
+    // automation triggers cannot run commands there, and a built-in runtime run has no
+    // reachable model; the pinned OpenClaw accepts it.
     const effective = await runDocker([
       "exec",
       containerName,
@@ -1820,6 +1836,7 @@ const validation = cp.spawnSync("node", ["/app/openclaw.mjs", "config", "validat
 process.stdout.write(JSON.stringify({
   excluded: config.plugins.entries.codex.config.codexDynamicToolsExclude,
   triggers: config.cron.triggers,
+  codexProvider: config.models.providers.codex,
   valid: JSON.parse(validation.stdout).valid,
 }));`,
     ]);
@@ -1838,6 +1855,11 @@ process.stdout.write(JSON.stringify({
         "openclaw",
       ],
       triggers: { enabled: false },
+      codexProvider: {
+        models: codexProvider.models,
+        baseUrl: "http://127.0.0.1:9",
+        api: "openai-responses",
+      },
       valid: true,
     });
     t.diagnostic(`workspace node ack after ${result.ackMs} ms: ${JSON.stringify(result)}`);
