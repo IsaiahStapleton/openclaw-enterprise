@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import {
   codexRepositoryEvidenceScript,
   completedToolResult,
+  expandTranscriptMessage,
   sessionEvidenceScript,
 } from "./normal-agent-tools.mjs";
 import { submitRepositoryTaskScript } from "./repository-credentials-installed.mjs";
 
-const repositoryFailureSummaryScript = String.raw`
+export const repositoryFailureSummaryScript = String.raw`
+  ${expandTranscriptMessage.toString()}
   const { DatabaseSync } = require("node:sqlite");
   const db = new DatabaseSync("/home/node/.openclaw/agents/main/agent/openclaw-agent.sqlite", {readOnly: true});
   const patterns = [
@@ -41,19 +43,21 @@ const repositoryFailureSummaryScript = String.raw`
     else {
       const rows = db.prepare("SELECT seq, CASE WHEN length(CAST(event_json AS BLOB)) <= 524288 THEN event_json ELSE NULL END AS event_json FROM transcript_events WHERE session_id = ? ORDER BY seq DESC LIMIT 128").all(session.current_session_id).reverse();
       const toolResults = [];
+      const parentCalls = new Set();
       let finalAssistant, skippedOversizeEvents = 0;
       for (const row of rows) {
         if (row.event_json === null) { skippedOversizeEvents++; continue; }
         const event = JSON.parse(row.event_json);
         if (event.type !== "message" || !event.message) continue;
-        const message = event.message;
-        if (message.role === "toolResult") toolResults.push({seq:row.seq, categories:classify(message)});
+        for (const {message, seq} of expandTranscriptMessage(event.message, row.seq, parentCalls)) {
+        if (message.role === "toolResult") toolResults.push({seq, categories:classify(message)});
         if (message.role === "assistant") finalAssistant = {
-          seq:row.seq,
+          seq,
           stopReason:["stop","length","toolUse","error","aborted"].includes(message.stopReason) ? message.stopReason : "other-or-absent",
           hasToolCalls:Array.isArray(message.content) && message.content.some(block => block?.type === "toolCall"),
           categories:classify(message),
         };
+        }
       }
       process.stdout.write(JSON.stringify({exists:true, scannedEvents:rows.length, eventLimit:128, skippedOversizeEvents, toolResults, finalAssistant}));
     }

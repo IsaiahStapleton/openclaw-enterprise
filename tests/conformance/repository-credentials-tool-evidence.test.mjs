@@ -5,6 +5,7 @@ import {
   expandTranscriptMessage,
   sessionEvidenceScript,
 } from "../helpers/normal-agent-tools.mjs";
+import { repositoryFailureSummaryScript } from "../helpers/repository-native-journey.mjs";
 
 const call = { id: "push", seq: 44, name: "exec" };
 const failure = { toolCallId: "push", seq: 45, isError: true };
@@ -157,6 +158,25 @@ test("installed evidence reader recognizes nested push and exact process complet
           { action: "poll", sessionId: "swift-coral" },
           { content: [], details: { status: "completed", exitCode: 0, sessionId: "swift-coral" } },
         ),
+        parent("ordinary-failure"),
+        {
+          role: "toolResult",
+          toolCallId: "ordinary-failure",
+          content: [{ type: "text", text: "SSL certificate problem" }],
+          isError: true,
+        },
+        parent("failed-parent"),
+        nested(
+          "nested-failure",
+          "failed-parent",
+          "exec",
+          { command: "pwd" },
+          {
+            content: [{ type: "text", text: "authentication failed" }],
+            details: { status: "error", exitCode: 1 },
+            isError: true,
+          },
+        ),
         {
           role: "assistant",
           content: [{ type: "text", text: "proof-marker" }],
@@ -210,6 +230,32 @@ test("installed evidence reader recognizes nested push and exact process complet
     assert.equal(completedToolResult(trace, push).toolCallId, "poll");
     assert.equal(trace.terminalAssistantMarkerSeen, true);
     assert.equal(trace.calls.filter((value) => value.operations.length).length, 1);
+    // Diagnostics and acceptance read the same stored events. Correlation must
+    // survive both ordinary results and the two events expanded from a nested call.
+    const summaryResult = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        repositoryFailureSummaryScript.replace(
+          '"/home/node/.openclaw/agents/main/agent/openclaw-agent.sqlite"',
+          JSON.stringify(path),
+        ),
+        "proof",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(summaryResult.status, 0, summaryResult.stderr);
+    const summary = JSON.parse(summaryResult.stdout);
+    for (const [id, category] of [
+      ["ordinary-failure", "tls-validation"],
+      ["nested-failure", "repository-authentication"],
+    ]) {
+      const result = trace.results.find((entry) => entry.toolCallId === id);
+      assert.ok(result, `acceptance reader must retain ${id}`);
+      assert.deepEqual(summary.toolResults.find((entry) => entry.seq === result.seq)?.categories, [
+        category,
+      ]);
+    }
     trace.results.find((value) => value.toolCallId === "poll").exitCode = 1;
     assert.equal(completedToolResult(trace, push), undefined);
   } finally {

@@ -139,7 +139,12 @@ on the test nodes and set `OCC_TEST_KUBERNETES_CODEX_SECCOMP_PROFILE` to its
 kubelet-relative path. Codex fixtures use a 4 GiB Gateway limit and a 2 GiB
 Harness limit; the namespace quota allows two Agent pairs and revision overlap.
 Provide enough cluster memory for the selected scenario and its other workloads.
-The [shipped QA matrix](qa-matrix.md) owns Calendar approval coverage. Its proof needs `OCC_TEST_CODEX_CALENDAR_TOOL_NAME` and
+The [shipped QA matrix](qa-matrix.md) exercises Calendar approval coverage through
+both shipped installations. The existing `plugin-driver-real.test.mjs` Calendar
+entry point remains available with its imported service-account fixture until
+both matrix cells and the protected hosted lane are qualified. They share one
+policy scenario; neither entry point's presence proves a live pass.
+The proof needs `OCC_TEST_CODEX_CALENDAR_TOOL_NAME` and
 `OCC_TEST_CODEX_CALENDAR_RESULT_EXPECT`, and must show a model-chosen
 `list_calendars(max_results:1)` read during a normal Agent turn.
 
