@@ -265,6 +265,11 @@ Kubernetes in-cluster. When OpenShell is selected, the API, which registers
 credential sources, and the worker reach OpenShell Gateway through a narrow
 development NetworkPolicy in `oce-system`.
 
+The launcher sets `network.pluginStatusProxySourceCidrs` to the k3d node's Pod
+bridge address, the source the API server uses to proxy to Pods. That enables
+plugin status and diagnostics and lets a dedicated Codex Gateway start once on
+a first deploy.
+
 The OpenShell profile declares an `openshell` Backend for the Gateway
 endpoint and selects both the OpenShell Sandbox and the
 [OpenShell Credential Gateway](../../reference/drivers/openshell-credential-gateway.md),
