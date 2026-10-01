@@ -1,7 +1,7 @@
 ---
 created: 2026-08-24
-updated: 2026-09-28
-last_updated_session: authoring-run/3b7cc615-9e7b-416a-aec7-fe13c38cace1
+updated: 2026-09-30
+last_updated_session: authoring-run/134e3f48-c97b-43d0-93ea-84497c29c940
 ---
 
 # Harness Authentication Binding Flow
@@ -164,6 +164,14 @@ and configuration, disables execution and external tools, and applies read-only
 filesystem policy without approval grants. Tool events fail the probe. Login
 state remains in the bounded ephemeral home.
 
+The dedicated wrapper retains `APP_SERVER_TOKEN` for local plugin
+authentication, but omits it from the environments of `codex login` and
+`codex app-server`. The app-server listener receives the current token's
+SHA-256 digest. When plugin status is enabled, the wrapper derives that token
+from the Agent revision and startup identity before hashing it. The token
+remains in the Pod; filtering child environments does not isolate same-UID
+processes.
+
 `startAuthenticatedCodex` gives `probeCodexAuthentication` a maximum of two
 attempts within one monotonic 61-second budget. Only the subprocess's
 `ETIMEDOUT` result schedules the second attempt after a one-second timer; an
@@ -199,6 +207,10 @@ history cannot restore historical Secret values.
 
 ## Debugging and Verification
 
+- `node --test tests/conformance/plugin-compute.test.mjs` checks the filtered
+  Codex child environments, the startup-derived listener hash, and the wrapper's
+  retained token. The runtime-image startup test checks the native Codex shell
+  without a provider turn.
 - [Container launcher tests](../testing/docker.md#verify-codex-startup-probe-recovery)
   execute the generated launcher with a fixture CLI, real process timeouts,
   termination, and status reads. They prove recovery control flow, not provider
@@ -232,6 +244,8 @@ history cannot restore historical Secret values.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 23:49: Document the dedicated Codex transport-token child boundary in the accompanying change. (authoring-run/134e3f48-c97b-43d0-93ea-84497c29c940 - 704da0b47ea1973e4a9e7d18ef13d44414691eda)
 
 - 2026-09-28 18:45: Document bounded Codex model-probe recovery and sanitized attempt evidence in the accompanying change. (authoring-run/3b7cc615-9e7b-416a-aec7-fe13c38cace1 - a14435c81e0d4020dd24568babddf95aba533da7)
 
