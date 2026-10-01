@@ -380,7 +380,7 @@ test("Agent detail reports a failed dedicated replacement as probably not servin
   await page.getByRole("heading", { name: "Version v1" }).waitFor();
   const summary = page.locator(".agent-current-summary");
   await summary.getByText("Probably down", { exact: true }).waitFor();
-  await summary.getByText("v2 failed after v1 was stopped for it.").waitFor();
+  await summary.getByText("v2 failed; v1 was probably stopped for it.").waitFor();
   await page
     .locator(".agent-status-line")
     .getByText(

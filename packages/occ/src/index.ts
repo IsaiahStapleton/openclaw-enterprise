@@ -2720,9 +2720,15 @@ export class OpenClawController {
         return Object.freeze({ agent, revision });
       }
       // Native admin status must know whether a newer deployment is replacing this revision.
-      const successor = (await state.revisions.listRevisions(namespace.id, agent.id))
+      // Only the newest later revision is decoded strictly, so an unreadable older snapshot
+      // cannot make a healthy Agent's native admin unavailable.
+      const newest = (await state.revisions.listRevisionsForBrowsing(namespace.id, agent.id))
         .filter((candidate) => candidate.revision > revision.revision)
         .sort((left, right) => right.revision - left.revision)[0];
+      const successor =
+        newest === undefined
+          ? undefined
+          : await state.revisions.findRevision(namespace.id, agent.id, newest.id);
       return Object.freeze({ agent, revision, ...(successor === undefined ? {} : { successor }) });
     });
   }

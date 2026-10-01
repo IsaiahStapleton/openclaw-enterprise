@@ -19,7 +19,7 @@ do not confirm that an Agent or its Slack connection is currently healthy.
 | **Refresh**                   | Reloads the Agent page. It does not retry or restart deployment.                                                                                                            |
 | **Current version**           | Version in the Agent's `activeRevisionId`. It may differ from the latest or viewed version.                                                                                 |
 | **Latest visible deployment** | Newest readable version and its recorded deployment status. **Newer version hidden** means the current version is one you cannot read; ask for read access to new versions. |
-| **Live serving**              | Unverified by this page. **Probably down** means a newer dedicated deployment failed after the current version was stopped for it.                                          |
+| **Live serving**              | Unverified by this page. **Probably down** means a newer dedicated deployment failed, and the current version was probably stopped for it.                                  |
 | **Deployment activity**       | Most recent visible version and its persisted deployment status.                                                                                                            |
 | `agt_…`                       | Stable Agent identifier for API calls and support.                                                                                                                          |
 

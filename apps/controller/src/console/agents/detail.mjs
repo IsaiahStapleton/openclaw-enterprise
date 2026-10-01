@@ -1127,7 +1127,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     }
     if (replacementFailed) {
       liveServingValue.textContent = "Probably down";
-      liveServingNote.textContent = `v${latest.revision} failed after ${currentLabel} was stopped for it.`;
+      liveServingNote.textContent = `v${latest.revision} failed; ${currentLabel} was probably stopped for it.`;
     } else {
       liveServingValue.textContent = "Not verified";
       liveServingNote.textContent = "Serving version and model access are unknown.";
