@@ -1174,19 +1174,54 @@ func (app *application) agentRevision(
 		return "", err
 	}
 	resource, _ := agent.(map[string]any)
-	if active, _ := resource["activeRevisionId"].(string); active != "" {
-		return active, nil
+	active, _ := resource["activeRevisionId"].(string)
+	if active == "" {
+		revisions, err := client.ListAgentRevisions(namespace, agentID)
+		if err != nil {
+			return "", err
+		}
+		latest, err := latestRevisionID(agentID, revisions)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(notices, "agent %s has no active revision; using latest revision %s\n", agentID, latest)
+		return latest, nil
 	}
+	// A newer revision than the active one is being deployed or has failed; while
+	// its Pods exist they hold the current failure, and the active revision may
+	// have none (a dedicated replacement stops its predecessor).
+	if latest := newerRevisionWithPods(client, namespace, agentID, active); latest != "" {
+		fmt.Fprintf(
+			notices,
+			"notice: reading revision %s, newer than the active revision %s and not yet active; pass --revision %s for the active revision\n",
+			latest, active, active,
+		)
+		return latest, nil
+	}
+	fmt.Fprintf(notices, "notice: reading the active revision %s\n", active)
+	return active, nil
+}
+
+// newerRevisionWithPods returns the latest revision when it is not the active one
+// and has Pods, else "". Any read failure keeps the active revision.
+func newerRevisionWithPods(client *occclient.Client, namespace, agentID, active string) string {
 	revisions, err := client.ListAgentRevisions(namespace, agentID)
 	if err != nil {
-		return "", err
+		return ""
 	}
 	latest, err := latestRevisionID(agentID, revisions)
-	if err != nil {
-		return "", err
+	if err != nil || latest == active {
+		return ""
 	}
-	fmt.Fprintf(notices, "agent %s has no active revision; using latest revision %s\n", agentID, latest)
-	return latest, nil
+	description, err := client.GetAgentRuntime(namespace, agentID, latest)
+	if err != nil {
+		return ""
+	}
+	resource, _ := description.(map[string]any)
+	if pods, _ := resource["pods"].([]any); len(pods) > 0 {
+		return latest
+	}
+	return ""
 }
 
 func (app *application) agentRuntimeCommand() *cobra.Command {
@@ -1218,7 +1253,7 @@ func (app *application) agentRuntimeCommand() *cobra.Command {
 			return app.printRuntime(description)
 		},
 	}
-	command.Flags().StringVar(&revision, "revision", "", "Revision ID (default: the active revision, else the latest revision)")
+	command.Flags().StringVar(&revision, "revision", "", "Revision ID (default: a newer not-yet-active revision that has Pods, else the active revision, else the latest revision)")
 	return command
 }
 
@@ -1250,7 +1285,7 @@ func (app *application) agentLogsCommand() *cobra.Command {
 	}
 	flags := command.Flags()
 	flags.StringVar(&options.source, "source", "", "Log source: gateway, agent or sandbox")
-	flags.StringVar(&options.revision, "revision", "", "Revision ID (default: the active revision, else the latest revision)")
+	flags.StringVar(&options.revision, "revision", "", "Revision ID (default: a newer not-yet-active revision that has Pods, else the active revision, else the latest revision)")
 	flags.StringVar(&options.pod, "pod", "", "Pod name (default: the source's first Pod)")
 	flags.BoolVar(&options.previous, "previous", false, "Read the previous container instance")
 	flags.IntVar(&options.tail, "tail", 200, "Lines from the end of the stream, 1 to 1000")
