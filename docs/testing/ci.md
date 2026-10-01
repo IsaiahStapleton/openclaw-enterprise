@@ -175,6 +175,8 @@ manual dispatch, using the requested lane or `all`, not on pushes or merges. The
 `provider-account` remains manual because its configured admin credential cannot
 authenticate from the hosted runner.
 
+[Authoritative checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml); [setup/verification/recovery](../flows/clawsweeper-dispatch.md#setup-and-first-run-verification).
+
 ### Run Kubernetes model tests before merge
 
 A repository administrator must add the exact branch name to the
