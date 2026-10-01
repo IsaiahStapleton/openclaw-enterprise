@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -127,6 +127,21 @@ async function startupCode(directory, settings) {
     .find(({ event }) => event === "startup-error");
   assert.ok(diagnostic, stderr);
   return diagnostic.code;
+}
+
+// Runs `check` over `cases` with at most one start per CPU at a time: each case starts the API
+// in a child process with a 20 s deadline, and starting them all at once on a small runner
+// pushes the last ones past it.
+async function eachBounded(cases, check) {
+  const queue = [...cases];
+  const workers = Math.min(Math.max(2, availableParallelism()), queue.length);
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (queue.length > 0) {
+        await check(queue.shift());
+      }
+    }),
+  );
 }
 
 async function startupDirectory(t) {
@@ -705,36 +720,34 @@ const invalid = [
 
 test("values the chart refuses are settings the API also refuses", tooling, async (t) => {
   const directory = await startupDirectory(t);
-  await Promise.all(
-    invalid.map(async ({ name, values, chart, github, google, oidc, env, parser }) => {
-      assert.match(await chartRefusal(values), chart, name);
-      const environment = Object.fromEntries(
-        Object.entries({
-          ...resolveSecrets(
-            github
-              ? githubUpgradeSettings(recoveryUserId)
-              : google
-                ? googleUpgradeSettings(recoveryUserId)
-                : oidc
-                  ? oidcUpgradeSettings(recoveryUserId)
-                  : defaultInstallSettings,
-          ),
-          ...env,
-        }).filter(([, value]) => value !== undefined),
+  await eachBounded(invalid, async ({ name, values, chart, github, google, oidc, env, parser }) => {
+    assert.match(await chartRefusal(values), chart, name);
+    const environment = Object.fromEntries(
+      Object.entries({
+        ...resolveSecrets(
+          github
+            ? githubUpgradeSettings(recoveryUserId)
+            : google
+              ? googleUpgradeSettings(recoveryUserId)
+              : oidc
+                ? oidcUpgradeSettings(recoveryUserId)
+                : defaultInstallSettings,
+        ),
+        ...env,
+      }).filter(([, value]) => value !== undefined),
+    );
+    if (parser !== undefined) {
+      assert.throws(
+        () => {
+          humanLoginConfiguration(environment);
+          clientAddressConfiguration(environment);
+        },
+        parser,
+        name,
       );
-      if (parser !== undefined) {
-        assert.throws(
-          () => {
-            humanLoginConfiguration(environment);
-            clientAddressConfiguration(environment);
-          },
-          parser,
-          name,
-        );
-      }
-      assert.equal(await startupCode(directory, environment), "STARTUP_FAILED", name);
-    }),
-  );
+    }
+    assert.equal(await startupCode(directory, environment), "STARTUP_FAILED", name);
+  });
 });
 
 // The chart is stricter than the API for one input: the API documents ingress-nginx as the
