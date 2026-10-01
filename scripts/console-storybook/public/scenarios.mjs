@@ -10,7 +10,7 @@ const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-0000000
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
 const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
-const startOAuthLogin = [...oauthForm, click("Sign in with ChatGPT")];
+const startOAuthLogin = [...oauthForm, click("Sign in with OAuth")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
   { selector: "#create-provider-credential-secret-value", value },
@@ -2148,7 +2148,7 @@ export const scenarios = {
     agentPlugins: JSON.parse(pluginSelections),
     pluginCapabilities,
     pluginDiscovery,
-    actions: [click("Sign in with ChatGPT")],
+    actions: [click("Sign in with OAuth")],
     description:
       "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
   },
@@ -2158,7 +2158,7 @@ export const scenarios = {
     path: `${draft}&tab=credentials`,
     deployed: true,
     auth: "oauth",
-    actions: [click("Sign in with ChatGPT")],
+    actions: [click("Sign in with OAuth")],
     description:
       "The current Agent login is preserved by default. A completed new login only replaces the saved source when Save authentication source is chosen; deployment remains separate.",
   },
