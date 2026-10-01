@@ -1965,6 +1965,87 @@ test("Agent deletion recovery returns a missing Agent detail to its Namespace li
   await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
 });
 
+test("Agent link without a Namespace opens the Agent in the Namespace that holds it", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  // Sorted first, so it is the default selection for a link without a Namespace.
+  const selected = await fixture.createNamespace("A link default", { ready: true });
+  const holder = await fixture.createNamespace("Z link holder", { ready: true });
+  const agent = await fixture.createAgent(holder.id, "Linked Agent", nativeValues("link"));
+  const { page } = await newPage(t, fixture);
+  const missed = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${selected.id}/agents/${agent.id}` &&
+      response.request().method() === "GET",
+  );
+
+  await login(page, fixture, `/console/agents/${agent.id}`);
+  assert.equal((await missed).status(), 404);
+  await page.waitForURL(
+    (url) =>
+      url.pathname === `/console/agents/${agent.id}` &&
+      url.searchParams.get("namespace") === holder.id,
+  );
+  await page.getByRole("heading", { name: "Linked Agent" }).first().waitFor();
+  await expectNoText(page, "may have been deleted");
+});
+
+test("Agent link without a Namespace says when no readable Namespace has the Agent", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const selected = await fixture.createNamespace("A missing default", { ready: true });
+  const other = await fixture.createNamespace("Z missing other", { ready: true });
+  const agentId = `agt_${randomUUID()}`;
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+
+  await login(page, fixture, `/console/agents/${agentId}`);
+  await page.getByRole("heading", { name: "Agent unavailable" }).waitFor();
+  await page.getByText("None of your Namespaces has this Agent", { exact: false }).waitFor();
+  const reads = (namespaceId) =>
+    requests.filter((request) => request.path === `/namespaces/${namespaceId}/agents/${agentId}`)
+      .length;
+  assert.equal(reads(selected.id), 1);
+  assert.equal(reads(other.id), 1);
+  await page.getByRole("button", { name: "Back to Agents" }).click();
+  await page.waitForURL(
+    (url) =>
+      url.pathname === "/console/agents" && url.searchParams.get("namespace") === selected.id,
+  );
+});
+
+test("Agent link without a Namespace offers switching when the lookup is uncertain", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  await fixture.createNamespace("A uncertain default", { ready: true });
+  const other = await fixture.createNamespace("Z uncertain other", { ready: true });
+  const agentId = `agt_${randomUUID()}`;
+  const { page } = await newPage(t, fixture);
+  await page.route(`${fixture.origin}/namespaces/${other.id}/agents/${agentId}`, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "DEPENDENCY_UNAVAILABLE", message: "unavailable" },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000503" },
+      }),
+    }),
+  );
+
+  await login(page, fixture, `/console/agents/${agentId}`);
+  await page.getByRole("heading", { name: "Agent not in this Namespace" }).waitFor();
+  await page.getByText("not in the A uncertain default Namespace", { exact: false }).waitFor();
+  await expectNoText(page, "may have been deleted");
+  await page.getByRole("button", { name: "Switch Namespace" }).click();
+  assert.equal(
+    await page
+      .locator("#namespace-selector")
+      .evaluate((node) => node === node.ownerDocument.activeElement),
+    true,
+    "Switch Namespace focuses the Namespace selector",
+  );
+});
+
 test("Agent delete denial keeps the Agent visible with permission feedback", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

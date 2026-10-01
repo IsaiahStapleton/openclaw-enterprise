@@ -232,7 +232,11 @@ func Up(ctx context.Context, opts Options) (result error) {
 			return err
 		}
 	}
-	if err := writeInstallation(state, reference, openShellAssets, codexSeccompProfile); err != nil {
+	statusProxySource, err := r.developmentStatusProxySource(ctx, state)
+	if err != nil {
+		return err
+	}
+	if err := writeInstallation(state, reference, openShellAssets, codexSeccompProfile, statusProxySource); err != nil {
 		return err
 	}
 	fmt.Fprintln(r.opts.Out, "Starting the Compose controller and Kubernetes worker...")

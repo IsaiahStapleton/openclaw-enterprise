@@ -105,11 +105,28 @@ func (app *application) printAgent(value any, collection bool) error {
 	})
 }
 
-func (app *application) printAgentRevision(value any, collection bool) error {
-	return app.printItems(value, collection, []column{
+// printAgentRevisionList prints rows from describeAgentRevisions. Structured
+// output keeps every field, including active and deploymentStatus.
+func (app *application) printAgentRevisionList(rows []any) error {
+	if app.output != "table" {
+		return app.printStructured(rows)
+	}
+	table := make([]any, 0, len(rows))
+	for _, item := range rows {
+		row := maps.Clone(item.(map[string]any))
+		if active, _ := row["active"].(bool); active {
+			row["active"] = "*"
+		} else {
+			row["active"] = ""
+		}
+		table = append(table, row)
+	}
+	return printTable(app.out, table, []column{
+		{title: "ACTIVE", key: "active"},
 		{title: "ID", key: "id"},
 		{title: "REVISION", key: "revision"},
-		{title: "AGENT", key: "agentId"},
+		{title: "GENERATION", key: "configurationGeneration"},
+		{title: "STATUS", key: "deploymentStatus"},
 		{title: "CONFIGURATION", key: "configurationId"},
 		{title: "CREATED", key: "createdAt"},
 	})

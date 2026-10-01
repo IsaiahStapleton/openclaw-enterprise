@@ -1563,6 +1563,10 @@ test("activation fails with OpenClaw's reason when the Gateway cannot apply its 
   );
 });
 
+// The start-count ratchet for installs without network.pluginStatusProxySourceCidrs.
+// The second Gateway start is the price of omitting them: the development
+// launcher sets them (internal/occdev status_proxy_k3d.go), so its first deploys
+// take the single-start path pinned above.
 test("without a status proxy a dedicated Codex Gateway keeps its workspace node in the pod spec", async () => {
   const {
     state,
@@ -1592,6 +1596,11 @@ test("without a status proxy a dedicated Codex Gateway keeps its workspace node 
   await driver.activateRevision(revision, authContext(revision));
   const gateways = templates.filter(({ name }) => name === gatewayName);
   assert.equal(gateways.length, 2, "activation replaces the Gateway once");
+  assert.deepEqual(
+    templates.map(({ name }) => (name === agentName ? "harness" : name)),
+    [gatewayName, "harness", gatewayName],
+    "Harness 1 + Gateway 2",
+  );
   const activated = gateways.at(-1).template;
   assert.equal(environment(activated).OPENCLAW_WORKSPACE_NODE_ID, "node-1");
   assert.equal(environment(activated).OPENCLAW_WORKSPACE_NODE_PATH, undefined);
