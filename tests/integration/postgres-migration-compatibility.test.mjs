@@ -1487,6 +1487,7 @@ test(
       [40, "preRepositoryAccess"],
       [41, "preRestrictionReadLogs"],
       [42, "preOAuth"],
+      [43, "preCredentialWithdrawals"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1737,6 +1738,7 @@ test(
       [40, "preRepositoryAccess"],
       [41, "preRestrictionReadLogs"],
       [42, "preOAuth"],
+      [43, "preCredentialWithdrawals"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1808,6 +1810,7 @@ test(
       [40, "preRepositoryAccess"],
       [41, "preRestrictionReadLogs"],
       [42, "preOAuth"],
+      [43, "preCredentialWithdrawals"],
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });

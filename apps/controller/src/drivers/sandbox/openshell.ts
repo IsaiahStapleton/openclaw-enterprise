@@ -1307,6 +1307,12 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     }
   }
 
+  harnessResource(
+    context: Pick<SandboxHarnessContext, "namespace" | "revision">,
+  ): SandboxResourceRef {
+    return this.sandboxRef(context);
+  }
+
   private sandboxRef(
     context: Pick<SandboxHarnessContext, "namespace" | "revision">,
   ): SandboxResourceRef {

@@ -2,6 +2,7 @@ import { isNonEmptyString, isPositiveSafeInteger } from "@openclaw-enterprise/ut
 import { createHash, randomUUID } from "node:crypto";
 import { ResourceConflictError, ScopeViolationError } from "../errors.ts";
 import {
+  CREDENTIAL_WITHDRAWAL_TARGET,
   nonempty,
   safeFailureCode,
   validateFailureData,
@@ -68,7 +69,8 @@ interface WorkRow {
   readonly revision_id: string | null;
   readonly actor_id: string;
   readonly namespace_target: "ready" | "deleted" | null;
-  readonly agent_target: "stopped" | "deleted" | "provisioned" | null;
+  readonly agent_target:
+    "stopped" | "deleted" | "provisioned" | typeof CREDENTIAL_WITHDRAWAL_TARGET | null;
   readonly state: ControllerWorkState;
   readonly available_at: Date | string;
   readonly attempt_count: number;
@@ -215,7 +217,10 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
       JOIN cleanup_agents AS agent
         ON agent.namespace_id = revision.namespace_id AND agent.id = revision.agent_id
       JOIN cleanup_namespaces AS namespace ON namespace.id = source.namespace_id
-      WHERE (source.revision_id = revision.id AND source.agent_id = revision.agent_id)
+      -- Credential withdrawal work (agent_target = 'credentials_withdrawn', see
+      -- CREDENTIAL_WITHDRAWAL_TARGET) leaves its active revision running, so it owns no cleanup.
+      WHERE (source.revision_id = revision.id AND source.agent_id = revision.agent_id
+          AND source.agent_target IS NULL)
         OR (source.agent_target = 'stopped' AND source.revision_id IS NULL
           AND source.agent_id = revision.agent_id AND revision.admitted_at <= source.created_at)
         OR (source.agent_target = 'deleted' AND source.revision_id IS NULL
@@ -581,7 +586,9 @@ export class PostgresWorkQueue {
         (agentId !== null &&
           revisionId === null &&
           (namespaceTarget !== null || (agentTarget !== "stopped" && agentTarget !== "deleted"))) ||
-        (revisionId !== null && (namespaceTarget !== null || agentTarget !== null)))
+        (revisionId !== null &&
+          (namespaceTarget !== null ||
+            (agentTarget !== null && agentTarget !== CREDENTIAL_WITHDRAWAL_TARGET))))
     ) {
       throw new ScopeViolationError(
         "Controller work requires one exact Namespace, Agent, or revision target shape.",
@@ -711,6 +718,8 @@ export class PostgresWorkQueue {
              AND revision.admitted_spec->'repository_credentials' IS NOT NULL))
            AND (
              (source.agent_id = revision.agent_id AND source.revision_id IS NOT NULL
+               -- Excludes credential withdrawal work; see CREDENTIAL_WITHDRAWAL_TARGET.
+               AND source.agent_target IS NULL
                AND revision.revision_number <= source_revision.revision_number)
              OR (source.agent_target = 'stopped' AND source.revision_id IS NULL
                AND source.agent_id = revision.agent_id AND revision.admitted_at <= source.created_at)

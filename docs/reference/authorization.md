@@ -37,12 +37,16 @@ to the same administrator Role, with no Namespace or resource filter:
 | `namespace`                                  | `create`, `read`, `delete`                                              |
 | `configuration`, `preset`, `service_account` | `create`, `read`, `update`, `delete`                                    |
 | `secret`                                     | `create`, `read`, `update`, `delete`, `operate`                         |
+| `credential_source`                          | `create`, `read`, `update`, `delete`, `operate`                         |
 | `agent`                                      | `create`, `read`, `update`, `delete`, `deploy`, `operate`, `administer` |
 | `agent_revision`                             | `read`                                                                  |
 
 These grants cover existing and future Namespaces in this Installation, subject
 to exact authorization and matching Restrictions. They confer no Kubernetes or
-provider authority. Rerunning bootstrap does not rewrite stored grants. The
+provider authority. Rerunning bootstrap does not rewrite stored grants, so an
+Installation bootstrapped before an action was added to this seed lacks it until
+an administrator grants it; `credential_source:update` is one such action.
+Custom Roles never gain permissions automatically. The
 Preset upgrade extends only the unchanged built-in administrator Role; see
 [Preset upgrade eligibility](presets.md#crud-and-permissions). Removing the original human account does not
 remove the service identity. See
