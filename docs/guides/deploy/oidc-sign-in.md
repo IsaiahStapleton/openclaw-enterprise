@@ -151,6 +151,9 @@ account's sessions. The method's `providerId` starts with `oidc:`; detach it wit
 - An IdP outage, blocked egress or a rejected ID token fails that sign-in closed and
   returns the browser to `/console/?authError=oidc`; the recovery account's password
   still signs in. OIDC shares the external sign-in budgets with GitHub and Google.
+  An IdP that cannot answer also logs `authentication.provider-unavailable-warning`
+  with the failing step and cause; see the
+  [external sign-in reference](../../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts).
 
 ## Related
 
