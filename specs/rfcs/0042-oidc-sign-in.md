@@ -73,7 +73,8 @@ the values from the IdP's discovery document.
 
 The four URLs are operator configuration, not request input: nothing at request time chooses
 a host. At startup each must be `https:` on port 443, with no userinfo, query or fragment, a
-DNS name rather than an IP address, and the issuer's host. `ProviderEndpoint` is a
+DNS name rather than an IP address, and the issuer's host. The issuer is written without a
+port, even `:443`, because `iss` is compared with it as written. `ProviderEndpoint` is a
 compile-time union ([provider-transport.ts:29-34][pt-endpoint]); `providerJSON` also
 accepts a `PinnedEndpoint` that only the OIDC parser constructs. That is code discipline,
 not a runtime boundary: pinning bounds host names, not DNS answers. Addresses are bounded by
@@ -126,8 +127,11 @@ Google's verifier ([google.ts:132-205][g-verify]) generalised, with the contract
 least 2,048 bits in the JWKS fetched for this callback, a floor main lacks
 ([google.ts:109-127][g-key]); `none`, `HS*` and the header members `jwk`, `jku`, `x5c`, `x5u`
 and `crit` are refused;
-`aud` contains the client ID and `azp` equals it when present; the nonce is the HMAC of the
-one-use, browser-bound state; `exp > now` with no leeway; `iat` within
+`aud` is the client ID alone, as a string or a one-element list, and `azp` equals it when
+present. The configured client is the only trusted audience, so a token naming any other
+audience is refused, as [OIDC Core 3.1.3.7][oidc-validation] requires; main's Google verifier
+accepts an extra audience when `azp` names the client, and the shared verifier refuses it for
+Google too. The nonce is the HMAC of the one-use, browser-bound state; `exp > now` with no leeway; `iat` within
 `[now − 3600 s, now + 60 s]`; `nbf`, which Entra emits and main ignores, is refused when more
 than 60 s ahead; the subject is bounded as above. The JWKS is fetched on every callback with no
 cache ([google.ts:233][g-jwks]), a decision: rotation needs no restart and a JWKS outage
@@ -148,8 +152,12 @@ for every provider, since Entra codes are long. Denial audits gain the provider 
 `details.provider` ([human-authentication.ts:1151][denied]). Failure redirects to `/console/?authError=oidc`.
 
 `GET /api/auth/providers` adds `oidc` and `oidcSignIn: {label, authorizationUrl}`
-([index.ts:3474-3504][discovery]); the schema is closed, so it changes. The Console checks
-GitHub and Google start URLs against a fixed origin and path ([console.mjs:31-51][console-table],
+([index.ts:3474-3504][discovery]); the schema is closed, so it changes. The route needs no
+session, so the label and authorization URL are public, as starting a sign-in reveals them
+anyway. `sessionBinding` becomes `github || google || oidc`: the Console records the attempt
+and exchanges the receipt only when it is true ([console.mjs:471-473][console-binding]), so an
+OIDC-only installation would otherwise let a returning tab adopt a cookie another tab
+replaced. The Console checks GitHub and Google start URLs against a fixed origin and path ([console.mjs:31-51][console-table],
 [console.mjs:463][console-check]); for OIDC it requires `https:` and the discovered
 `authorizationUrl`, a consistency check rather than a trust boundary. `displayName` renders
 as text, and the tab remembers it so messages after the IdP redirect name it. The name `oidc` names the protocol, so it stays correct if the IdP changes
@@ -196,7 +204,8 @@ Proposed flow; the browser steps are the implemented Google flow.
 
 ## Delivery and verification
 
-1. Parser, pinned transport, generalised verifier (key floor and `nbf` apply to Google too)
+1. Parser, pinned transport, generalised verifier (key floor, `nbf` and the single trusted
+   audience apply to Google too)
    and provider instance: the provider unions in `github.ts`, `createHumanLogin`,
    `humanLoginConfiguration`, the startup guard and the coverage list.
 2. Routes, attach, discovery, Console tables, Helm (`auth.oidc`, `controlPlane.oidc`,
@@ -209,8 +218,8 @@ Proof:
 
 - `oidc-id-token`: configuration refusals (HTTP, off-host URL, query, partial set) and token
   refusals (trailing-slash mismatch, `HS256`, `none`, a 1,024-bit, foreign or header-carried
-  key, `aud`/`azp`, nonce, `exp`/`iat`/`nbf`, subject bounds). `sign-in-chart-parity` keeps
-  chart and parser aligned.
+  key, `aud`/`azp` including an extra untrusted audience, nonce, `exp`/`iat`/`nbf`, subject
+  bounds). `sign-in-chart-parity` keeps chart and parser aligned.
 - `oidc-login-transport`: only pinned URLs are fetched, with redirect refusal, the size limit
   and the deadline.
 - `postgres-oidc-sign-in`, modelled on `postgres-google-sign-in`: attach and sign in; an
@@ -219,6 +228,8 @@ Proof:
   detached; recovery during an outage; the coverage report naming an OIDC-only account only
   before attach; disable; three providers side by side. The shared budgets are proven in
   `oidc-login-transport`.
+- `postgres-oidc-tab-binding`: the GitHub tab-binding proof with only OIDC configured; a tab
+  that signed in with OIDC signs out after another tab's password sign-in.
 
 A `fakeOidc` fixture beside `fakeGoogle` ([production-sign-in.mjs:385][fake-google]) serves
 the token and JWKS URLs with Auth0-shaped issuers and subjects; it proves OCE against its own
@@ -262,6 +273,8 @@ leeway; the JWKS stays uncached; the code cap is 4,096; denial audits carry the 
 [RFC 31](31-human-federated-sign-in/index.md); source links above.
 
 [pr-731]: https://github.com/openclaw/openclaw-enterprise/pull/731
+[oidc-validation]: https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation
+[console-binding]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/apps/controller/src/console/console.mjs#L471-L473
 [pr-790]: https://github.com/openclaw/openclaw-enterprise/pull/790
 [issue-729]: https://github.com/openclaw/openclaw-enterprise/issues/729
 [issue-82]: https://github.com/openclaw/openclaw-enterprise/issues/82

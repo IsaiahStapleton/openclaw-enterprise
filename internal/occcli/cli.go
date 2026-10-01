@@ -775,7 +775,42 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 		},
 	}
 
-	command.AddCommand(create, list, get, deleteCommand)
+	var updateFile string
+	update := &cobra.Command{
+		Use:   "update ID",
+		Short: "Push current or replacement Secret values to the gateway copy",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			body := jsontext.Value("{}")
+			if updateFile != "" {
+				body, err = readJSON(updateFile)
+				if err != nil {
+					return err
+				}
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			source, err := client.UpdateCredentialSource(namespace, args[0], body)
+			if err != nil {
+				return err
+			}
+			return app.printCredentialSource(source, false)
+		},
+	}
+	update.Flags().StringVar(
+		&updateFile,
+		"file",
+		"",
+		"JSON document with replacement secrets; omit to re-send the current Secret values",
+	)
+
+	command.AddCommand(create, list, get, update, deleteCommand)
 	return command
 }
 
@@ -1015,9 +1050,62 @@ func (app *application) agentCommand() *cobra.Command {
 		stop,
 		deleteAgent,
 		app.agentRuntimeCredentialsCommand(),
+		app.agentCredentialWithdrawalCommand(),
 		app.agentRuntimeCommand(),
 		app.agentLogsCommand(),
 	)
+	return command
+}
+
+func (app *application) agentCredentialWithdrawalCommand() *cobra.Command {
+	command := commandGroup(
+		"credential-withdrawal",
+		"Revoke a credential source from an Agent's active revision",
+	)
+
+	request := &cobra.Command{
+		Use:   "request AGENT_ID SOURCE_ID",
+		Short: "Request revocation; the worker revokes it from the running revision",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			withdrawal, err := client.WithdrawAgentCredentialSource(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printCredentialWithdrawal(withdrawal)
+		},
+	}
+
+	get := &cobra.Command{
+		Use:   "get AGENT_ID SOURCE_ID",
+		Short: "Show whether the source is revoked and why a revocation is still pending",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, err := app.requiredNamespace()
+			if err != nil {
+				return err
+			}
+			client, err := app.client()
+			if err != nil {
+				return err
+			}
+			found, err := client.GetAgentCredentialWithdrawal(namespace, args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return app.printCredentialWithdrawal(found)
+		},
+	}
+
+	command.AddCommand(request, get)
 	return command
 }
 

@@ -46,11 +46,11 @@ Each operation lists its supported status codes.
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
-| [Agents](#agents) | 31 operations |
+| [Agents](#agents) | 33 operations |
 | [Agent deployments](#agent-deployments) | 4 operations |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
-| [Credential sources](#credential-sources) | 4 operations |
+| [Credential sources](#credential-sources) | 5 operations |
 | [IAM](#iam) | 8 operations |
 | [Presets](#presets) | 5 operations |
 | [Secrets](#secrets) | 5 operations |
@@ -1627,6 +1627,8 @@ Get an exact Installation-owned Namespace
 | [`DELETE /namespaces/{namespaceId}/agents/{agentId}`](#delete-namespacesnamespaceidagentsagentid) | Begin or retry deletion of an exact Namespace-owned Agent and its AgentRevisions |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}`](#get-namespacesnamespaceidagentsagentid) | Get an exact Namespace-owned Agent |
 | [`PATCH /namespaces/{namespaceId}/agents/{agentId}`](#patch-namespacesnamespaceidagentsagentid) | Replace an exact Namespace-owned Agent's editable draft |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/credential-sources/{credentialSourceId}/withdraw`](#post-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdraw) | Revoke one credential source from an Agent's active revision |
+| [`GET /namespaces/{namespaceId}/agents/{agentId}/credential-sources/{credentialSourceId}/withdrawal`](#get-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdrawal) | Get the withdrawal state of a credential source for an Agent's active revision |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/deploy`](#post-namespacesnamespaceidagentsagentiddeploy) | Admit an immutable revision from the Agent's saved draft |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations`](#post-namespacesnamespaceidagentsagentiddeviceauthorizations) | Experimental: Start a private device login for Agent configuration |
 | [`DELETE /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid) | Experimental: Discard a local device login without upstream revocation |
@@ -2603,6 +2605,111 @@ Replace an exact Namespace-owned Agent's editable draft
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `POST /namespaces/{namespaceId}/agents/{agentId}/credential-sources/{credentialSourceId}/withdraw`
+
+<span id="post-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdraw"></span>
+
+Revoke one credential source from an Agent's active revision
+
+**Operation ID:** `withdrawAgentCredentialSource`
+
+**Permissions:** Requires operate permission on the requested Agent.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `operate` | `agent` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `credentialSourceId` | path | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `202` | Accepted |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`202` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.agentId` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.completedAt` | `string (date-time)` | No | — |
+| `data.credentialSourceId` | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.lastAttemptAt` | `string (date-time)` | No | — |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.reason` | `string` | No | pattern: `^[A-Z0-9_]{1,64}$`; Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation. |
+| `data.requestedAt` | `string (date-time)` | Yes | — |
+| `data.requestedBy` | `string` | Yes | min length: 1; max length: 256; Principal whose `agent:operate` permission the worker re-checks before revoking. |
+| `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.state` | `"pending" or "revoked"` | Yes | `revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve. |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `GET /namespaces/{namespaceId}/agents/{agentId}/credential-sources/{credentialSourceId}/withdrawal`
+
+<span id="get-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdrawal"></span>
+
+Get the withdrawal state of a credential source for an Agent's active revision
+
+**Operation ID:** `getAgentCredentialWithdrawal`
+
+**Permissions:** Requires read permission on the requested Agent.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `read` | `agent` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `credentialSourceId` | path | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.agentId` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.completedAt` | `string (date-time)` | No | — |
+| `data.credentialSourceId` | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.lastAttemptAt` | `string (date-time)` | No | — |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.reason` | `string` | No | pattern: `^[A-Z0-9_]{1,64}$`; Reason code of the worker's most recent attempt, for example `CREDENTIAL_WITHDRAWAL_PENDING` while the gateway has not confirmed revocation. |
+| `data.requestedAt` | `string (date-time)` | Yes | — |
+| `data.requestedBy` | `string` | Yes | min length: 1; max length: 256; Principal whose `agent:operate` permission the worker re-checks before revoking. |
+| `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.state` | `"pending" or "revoked"` | Yes | `revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -4139,6 +4246,7 @@ Replace values and increment an exact Namespace-owned Configuration generation
 | [`POST /namespaces/{namespaceId}/credential-sources`](#post-namespacesnamespaceidcredentialsources) | Register a credential source with the selected Credential Gateway |
 | [`DELETE /namespaces/{namespaceId}/credential-sources/{credentialSourceId}`](#delete-namespacesnamespaceidcredentialsourcescredentialsourceid) | Remove an unreferenced credential source from the Credential Gateway |
 | [`GET /namespaces/{namespaceId}/credential-sources/{credentialSourceId}`](#get-namespacesnamespaceidcredentialsourcescredentialsourceid) | Get one credential source and its live Credential Gateway status |
+| [`PATCH /namespaces/{namespaceId}/credential-sources/{credentialSourceId}`](#patch-namespacesnamespaceidcredentialsourcescredentialsourceid) | Push current or replacement Secret values to the Credential Gateway copy |
 
 #### `GET /namespaces/{namespaceId}/credential-sources`
 
@@ -4329,6 +4437,72 @@ Get one credential source and its live Credential Gateway status
 | `401` | Unauthorized |
 | `403` | Forbidden |
 | `404` | Not Found |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.config` | `object<string, string>` | Yes | Non-secret source configuration keyed by catalog field name. |
+| `data.id` | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
+| `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.ref` | `object` | Yes | Exact OCC credential source reference. Shape: `{ "kind": "credential_source", "namespaceId": "ns_...", "id": "cs_..." }`. |
+| `data.ref.id` | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.ref.kind` | `"credential_source"` | Yes | — |
+| `data.ref.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.secrets` | `object<string, object>` | Yes | Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value. |
+| `data.state` | `"registering" or "ready" or "deleting"` | Yes | — |
+| `data.status` | `object` | No | Live status reported by the selected Credential Gateway. It never contains credential values. |
+| `data.status.reason` | `string` | No | max length: 512 |
+| `data.status.state` | `"ready" or "pending" or "failed" or "absent"` | Yes | — |
+| `data.type` | `string` | Yes | min length: 1; max length: 64; pattern: `^[a-z][a-z0-9-]{0,63}$`; Source type from the selected Credential Gateway catalog, for example `openai`. |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `PATCH /namespaces/{namespaceId}/credential-sources/{credentialSourceId}`
+
+<span id="patch-namespacesnamespaceidcredentialsourcescredentialsourceid"></span>
+
+Push current or replacement Secret values to the Credential Gateway copy
+
+**Operation ID:** `updateCredentialSource`
+
+**Permissions:** Requires update permission on the requested CredentialSource.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `update` | `credential_source` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `credentialSourceId` | path | `string` | Yes | pattern: `^cs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `secrets` | `object<string, object>` | No | Secret inputs keyed by catalog field name. Each value references an OCC Secret in the same Namespace; OCC never returns its value. |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
 | `500` | Internal Server Error |
 | `503` | Service Unavailable |
 

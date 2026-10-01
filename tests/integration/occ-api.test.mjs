@@ -1063,6 +1063,62 @@ test("Namespace IAM routes bind existing humans to the exact Namespace and Agent
   assert.equal(bindings.data.length, 2, "rejected grants must leave policy unchanged");
 });
 
+test("credential withdrawal routes authorize the Agent, not the credential source", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "withdrawal-iam");
+  const agent = await createAgent(controller, namespace.id, "withdrawal-agent");
+  const path = `/namespaces/${namespace.id}/agents/${agent.id}/credential-sources/cs_${randomUUID()}`;
+  const memberWith = async (label, permissions) => {
+    const { principal } = await fixture.createAuthPrincipal(label);
+    fixture.state.identities.push(principal);
+    fixture.state.roles.push({ id: `role-${label}`, namespaceId: namespace.id, permissions });
+    fixture.state.bindings.push({
+      id: `binding-${label}`,
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: `role-${label}`,
+    });
+    return fixture.createApp(principal);
+  };
+
+  // Operating every credential source in the Namespace grants nothing on an Agent that uses one.
+  const sourceOperator = await memberWith("withdrawal-source-operator", [
+    { action: "read", resourceKind: "credential_source" },
+    { action: "operate", resourceKind: "credential_source" },
+  ]);
+  for (const [method, suffix] of [
+    ["POST", "withdraw"],
+    ["GET", "withdrawal"],
+  ]) {
+    const denied = await injectedRequest(sourceOperator, method, `${path}/${suffix}`);
+    assert.equal(denied.status, 403, JSON.stringify(denied.body));
+  }
+
+  // Operating the Agent admits both routes; this Agent has no active revision to withdraw from.
+  const agentOperator = await memberWith("withdrawal-agent-operator", [
+    { action: "read", resourceKind: "agent" },
+    { action: "operate", resourceKind: "agent" },
+  ]);
+  const conflict = await injectedRequest(agentOperator, "POST", `${path}/withdraw`);
+  assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
+  const status = await injectedRequest(agentOperator, "GET", `${path}/withdrawal`);
+  assert.notEqual(status.status, 403, JSON.stringify(status.body));
+
+  // The denial's audit evidence names the Agent the route declares, not the source.
+  const withdrawalEvents = fixture.auditSink.events.filter(
+    (event) => event.action === "openclaw.agents.credential_sources.withdraw",
+  );
+  assert.deepEqual(
+    withdrawalEvents.map((event) => [event.kind, event.resource]),
+    [["authorization_denial", { kind: "agent", id: agent.id, namespaceId: namespace.id }]],
+  );
+});
+
 test("Namespace IAM routes bind humans enrolled after bootstrap through the live resolver", async () => {
   const fixture = await createInjectedFixture();
   const controller = {

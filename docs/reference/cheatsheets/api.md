@@ -63,6 +63,7 @@
 - [`listAgents`](../api.md#get-namespacesnamespaceidagents): List authorized Agents in one exact Namespace.
 - [`listRepositoryOptions`](../api.md#get-namespacesnamespaceidagentsrepositoryoptions): List approved repository choices for Agent creation in one Namespace.
 - [`getAgent`](../api.md#get-namespacesnamespaceidagentsagentid): Get an exact Namespace-owned Agent.
+- [`getAgentCredentialWithdrawal`](../api.md#get-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdrawal): Get the withdrawal state of a credential source for an Agent's active revision.
 - [`getAgentProvisioning`](../api.md#get-namespacesnamespaceidagentsprovisionworkid): Get first-time provisioning status for one exact work item.
 - [`getAgentRuntimeImages`](../api.md#get-namespacesnamespaceidagentsagentidruntimeimages): Read observed images and source commits for an Agent's active runtime.
 - [`getSavedAgentPluginPolicyCapabilities`](../api.md#get-namespacesnamespaceidagentsagentidpluginscapabilities): Read selected Plugin Driver policy capabilities for an active Agent with caller Agent read/update permission.
@@ -82,6 +83,7 @@
 - [`startAgentDeviceAuthorization`](../api.md#post-namespacesnamespaceidagentsdeviceauthorizations): Experimental: Start a private device login for Agent configuration.
 - [`startSavedAgentDeviceAuthorization`](../api.md#post-namespacesnamespaceidagentsagentiddeviceauthorizations): Experimental: Start a private device login for Agent configuration.
 - [`stopAgent`](../api.md#post-namespacesnamespaceidagentsagentidstop): Stop one Agent while retaining its revision and persistent state.
+- [`withdrawAgentCredentialSource`](../api.md#post-namespacesnamespaceidagentsagentidcredentialsourcescredentialsourceidwithdraw): Revoke one credential source from an Agent's active revision.
 - [`getAgentNativeAdmin`](../api.md#get-namespacesnamespaceidagentsagentidnativeadmin): Resolve native admin UI launch availability for one Agent.
 - [`cancelAgentDeviceAuthorization`](../api.md#delete-namespacesnamespaceidagentsdeviceauthorizationssecretid): Experimental: Discard a local device login without upstream revocation.
 - [`cancelSavedAgentDeviceAuthorization`](../api.md#delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid): Experimental: Discard a local device login without upstream revocation.
@@ -159,6 +161,7 @@
 - [`listCredentialSources`](../api.md#get-namespacesnamespaceidcredentialsources): List readable credential sources without revealing credential values.
 - [`getCredentialSource`](../api.md#get-namespacesnamespaceidcredentialsourcescredentialsourceid): Get one credential source and its live Credential Gateway status.
 - [`createCredentialSource`](../api.md#post-namespacesnamespaceidcredentialsources): Register a credential source with the selected Credential Gateway.
+- [`updateCredentialSource`](../api.md#patch-namespacesnamespaceidcredentialsourcescredentialsourceid): Push current or replacement Secret values to the Credential Gateway copy.
 - [`deleteCredentialSource`](../api.md#delete-namespacesnamespaceidcredentialsourcescredentialsourceid): Remove an unreferenced credential source from the Credential Gateway.
 
 ### Presets
