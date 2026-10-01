@@ -48,8 +48,9 @@ every few seconds and stops at `succeeded`, `failed`, or a read error.
 **Refresh deployment** rereads it, the selected version, and that version's
 deployment record without retrying work.
 
-Pending work shows its **Last recorded result** and **Last checked** time,
-including deferred readiness checks and a running worker's previous result.
+Pending work shows its **Last recorded result** and **Since**, when OCC first
+recorded that result; repeated identical readiness checks are not recorded again.
+A running worker shows its previous result.
 Next eligibility does not promise a start time; missing evidence does not mean
 work never started.
 
