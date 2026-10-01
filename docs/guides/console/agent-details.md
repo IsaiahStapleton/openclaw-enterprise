@@ -234,8 +234,10 @@ administrators can [share an Agent](agent-sharing.md) with existing people.
 
 **Stop Agent** opens a confirmation explaining that shutdown interrupts running
 work but preserves revision history, credentials, gateway state, and workspace
-files. **Cancel** closes it without a write. Confirming requires `operate`
-permission on this Agent, regardless of the viewed revision or tab.
+files. A chat that was mid-reply can keep showing the reply as in progress;
+reload it after the Agent is deployed again. **Cancel** closes it without a
+write. Confirming requires `operate` permission on this Agent, regardless of the
+viewed revision or tab.
 
 An accepted stop requests shutdown; it does not prove the runtime
 finished. **Refresh stop status** reads the desired state and selected revision.
