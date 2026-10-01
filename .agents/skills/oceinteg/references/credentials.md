@@ -70,7 +70,7 @@ Follow the current [Console creation flow](../../../../docs/reference/console/cr
 and [Credentials tab](../../../../docs/guides/console/agent-details.md#credentials-tab).
 
 1. Sign in as an authorized operator and select the intended OCE Namespace.
-   In **Create Agent**, apply **Community Agent**, choose **OpenAI** and
+   In **Create Agent**, apply **SWE Agent**, choose **OpenAI** and
    **Codex**, and select **Service Accounts** as the authentication method.
 2. In the model credential picker, select an existing appropriate Namespace
    Secret or **Create new Secret...**. Give a new Secret a run-scoped name such
