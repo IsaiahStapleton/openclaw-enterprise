@@ -79,9 +79,8 @@ occ agent logs agt_... --source agent --previous -o json
 occ agent logs agt_... --source sandbox --follow
 ```
 
-Both use the active revision unless you pass `--revision`; without one, such as
-after a failed first deployment, they use the latest revision and say so on
-stderr. `--level` sets the `minLevel` floor. Gaps and withheld counts are
+Without `--revision`, both read a newer revision that has Pods (a deploy in
+progress or failed), else the active one, else the latest, and name it on stderr. `--level` sets the `minLevel` floor. Gaps and withheld counts are
 stderr notices; `-o json` prints NDJSON records. The
 command waits out `429` responses and exits nonzero on `501` and `503`. See the
 [CLI reference](../../reference/cli.md#runtime-status-and-logs).
