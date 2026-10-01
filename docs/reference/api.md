@@ -46,7 +46,7 @@ Each operation lists its supported status codes.
 | [Backends](#backends) | 1 operation |
 | [Installation](#installation) | 4 operations |
 | [Namespaces](#namespaces) | 4 operations |
-| [Agents](#agents) | 25 operations |
+| [Agents](#agents) | 31 operations |
 | [Agent deployments](#agent-deployments) | 4 operations |
 | [Agent revisions](#agent-revisions) | 2 operations |
 | [Configurations](#configurations) | 4 operations |
@@ -1472,6 +1472,9 @@ Get an exact Installation-owned Namespace
 | --- | --- |
 | [`GET /namespaces/{namespaceId}/agents`](#get-namespacesnamespaceidagents) | List authorized Agents in one exact Namespace |
 | [`POST /namespaces/{namespaceId}/agents`](#post-namespacesnamespaceidagents) | Create a Namespace-owned Agent |
+| [`POST /namespaces/{namespaceId}/agents/device-authorizations`](#post-namespacesnamespaceidagentsdeviceauthorizations) | Experimental: Start a private device login for Agent configuration |
+| [`DELETE /namespaces/{namespaceId}/agents/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsdeviceauthorizationssecretid) | Experimental: Discard a local device login without upstream revocation |
+| [`POST /namespaces/{namespaceId}/agents/device-authorizations/{secretId}/poll`](#post-namespacesnamespaceidagentsdeviceauthorizationssecretidpoll) | Experimental: Complete device login without returning credential material |
 | [`POST /namespaces/{namespaceId}/agents/models`](#post-namespacesnamespaceidagentsmodels) | List provider models for Agent creation without storing the supplied credential |
 | [`POST /namespaces/{namespaceId}/agents/plugins`](#post-namespacesnamespaceidagentsplugins) | List or search available plugins for Agent creation using the selected Driver |
 | [`POST /namespaces/{namespaceId}/agents/plugins/details`](#post-namespacesnamespaceidagentspluginsdetails) | Read plugin details using the selected Driver |
@@ -1483,6 +1486,9 @@ Get an exact Installation-owned Namespace
 | [`GET /namespaces/{namespaceId}/agents/{agentId}`](#get-namespacesnamespaceidagentsagentid) | Get an exact Namespace-owned Agent |
 | [`PATCH /namespaces/{namespaceId}/agents/{agentId}`](#patch-namespacesnamespaceidagentsagentid) | Replace an exact Namespace-owned Agent's editable draft |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/deploy`](#post-namespacesnamespaceidagentsagentiddeploy) | Admit an immutable revision from the Agent's saved draft |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations`](#post-namespacesnamespaceidagentsagentiddeviceauthorizations) | Experimental: Start a private device login for Agent configuration |
+| [`DELETE /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}`](#delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid) | Experimental: Discard a local device login without upstream revocation |
+| [`POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}/poll`](#post-namespacesnamespaceidagentsagentiddeviceauthorizationssecretidpoll) | Experimental: Complete device login without returning credential material |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/native-admin`](#get-namespacesnamespaceidagentsagentidnativeadmin) | Resolve native admin UI launch availability for one Agent |
 | [`POST /namespaces/{namespaceId}/agents/{agentId}/plugins`](#post-namespacesnamespaceidagentsagentidplugins) | List or search plugins for an active Agent; caller needs Agent read/update. Curated discovery needs no Secret; hosted discovery needs the Agent's bound Service Accounts Secret with caller and Agent Secret operate grants |
 | [`GET /namespaces/{namespaceId}/agents/{agentId}/plugins/capabilities`](#get-namespacesnamespaceidagentsagentidpluginscapabilities) | Read selected Plugin Driver policy capabilities for an active Agent with caller Agent read/update permission |
@@ -1571,7 +1577,7 @@ Create a Namespace-owned Agent
 | `backendId` | `string or null` | No | — |
 | `configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `executionMode` | `"embedded" or "dedicated"` | No | — |
-| `harnessAuth` | `object or object or object or object or object or null` | No | — |
+| `harnessAuth` | `object or object or object or object or object or object or null` | No | — |
 | `initialWorkspaceFiles` | `object` | No | — |
 | `initialWorkspaceFiles.AGENTS.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `initialWorkspaceFiles.IDENTITY.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
@@ -1618,7 +1624,7 @@ Create a Namespace-owned Agent
 | `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
 | `data.executionMode` | `"embedded" or "dedicated"` | Yes | — |
-| `data.harnessAuth` | `object or object or object or object or object or null` | Yes | — |
+| `data.harnessAuth` | `object or object or object or object or object or object or null` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
@@ -1636,6 +1642,171 @@ Create a Namespace-owned Agent
 | `data.repositoryBindings[].repositoryRef` | `string` | Yes | min length: 1; max length: 128; pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `data.servicePrincipalId` | `string` | Yes | min length: 1; max length: 200 |
 | `data.status` | `"active" or "deleting"` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `POST /namespaces/{namespaceId}/agents/device-authorizations`
+
+<span id="post-namespacesnamespaceidagentsdeviceauthorizations"></span>
+
+Experimental: Start a private device login for Agent configuration
+
+**Operation ID:** `startAgentDeviceAuthorization`
+
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires create permission for Secret resources in the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `create` | `agent` | `namespace` |
+| `create` | `secret` | `namespace` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `harnessId` | `string` | Yes | min length: 1; max length: 100 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.expiresAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.intervalSeconds` | `integer` | Yes | minimum: 1 |
+| `data.source` | `object` | Yes | Exact OCC Secret reference. Shape: `{ "kind": "secret", "namespaceId": "ns_...", "id": "sec_..." }`. |
+| `data.source.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.source.kind` | `"secret"` | Yes | — |
+| `data.source.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.status` | `"pending" or "ready"` | Yes | — |
+| `data.userCode` | `string` | Yes | — |
+| `data.verificationUrl` | `string (uri)` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `DELETE /namespaces/{namespaceId}/agents/device-authorizations/{secretId}`
+
+<span id="delete-namespacesnamespaceidagentsdeviceauthorizationssecretid"></span>
+
+Experimental: Discard a local device login without upstream revocation
+
+**Operation ID:** `cancelAgentDeviceAuthorization`
+
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the requested Secret.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `create` | `agent` | `namespace` |
+| `operate` | `secret` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `204` | No Content |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+#### `POST /namespaces/{namespaceId}/agents/device-authorizations/{secretId}/poll`
+
+<span id="post-namespacesnamespaceidagentsdeviceauthorizationssecretidpoll"></span>
+
+Experimental: Complete device login without returning credential material
+
+**Operation ID:** `pollAgentDeviceAuthorization`
+
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires operate permission on the requested Secret.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `create` | `agent` | `namespace` |
+| `operate` | `secret` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+Schema: `object`.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.expiresAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.intervalSeconds` | `integer` | Yes | minimum: 1 |
+| `data.source` | `object` | Yes | Exact OCC Secret reference. Shape: `{ "kind": "secret", "namespaceId": "ns_...", "id": "sec_..." }`. |
+| `data.source.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.source.kind` | `"secret"` | Yes | — |
+| `data.source.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.status` | `"pending" or "ready"` | Yes | — |
+| `data.userCode` | `string` | Yes | — |
+| `data.verificationUrl` | `string (uri)` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -1725,7 +1896,7 @@ List or search available plugins for Agent creation using the selected Driver
 
 **Content type:** `application/json`
 
-Schema: `object or object or object`.
+Schema: `object or object or object or object`.
 
 ##### Responses
 
@@ -1801,7 +1972,7 @@ Read plugin details using the selected Driver
 
 **Content type:** `application/json`
 
-Schema: `object or object or object`.
+Schema: `object or object or object or object`.
 
 ##### Responses
 
@@ -1880,7 +2051,7 @@ Create a new Agent and queue first-time provisioning
 | `configuration.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `ANTHROPIC_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `configuration.values` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
 | `executionMode` | `"embedded" or "dedicated"` | No | — |
-| `harnessAuth` | `object or object or object or object or object or null` | No | — |
+| `harnessAuth` | `object or object or object or object or object or object or null` | No | — |
 | `initialWorkspaceFiles` | `object` | No | — |
 | `initialWorkspaceFiles.AGENTS.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `initialWorkspaceFiles.IDENTITY.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
@@ -2137,7 +2308,7 @@ Begin or retry deletion of an exact Namespace-owned Agent and its AgentRevisions
 | `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
 | `data.executionMode` | `"embedded" or "dedicated"` | Yes | — |
-| `data.harnessAuth` | `object or object or object or object or object or null` | Yes | — |
+| `data.harnessAuth` | `object or object or object or object or object or object or null` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
@@ -2234,7 +2405,7 @@ Replace an exact Namespace-owned Agent's editable draft
 | `backendId` | `string or null` | No | — |
 | `configurationId` | `string` | Yes | pattern: `^cfg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `executionMode` | `"embedded" or "dedicated"` | No | — |
-| `harnessAuth` | `object or object or object or object or object or null` | No | — |
+| `harnessAuth` | `object or object or object or object or object or object or null` | No | — |
 | `pluginApprovers` | `PluginApprovers or null` | No | — |
 | `plugins` | `PluginDesiredState` | No | Agent plugin selection map. Keys must be 1-253 characters matching ^[A-Za-z0-9._~:@-]{1,253}$. |
 | `repositoryAccess` | `object` | No | Desired repository access. Each omitted repository profile inherits defaultProfile; explicit profiles remain overrides. Mutually exclusive with repositoryBindings in create, provision, and update requests. |
@@ -2272,7 +2443,7 @@ Replace an exact Namespace-owned Agent's editable draft
 | `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
 | `data.executionMode` | `"embedded" or "dedicated"` | Yes | — |
-| `data.harnessAuth` | `object or object or object or object or object or null` | Yes | — |
+| `data.harnessAuth` | `object or object or object or object or object or object or null` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
@@ -2351,7 +2522,7 @@ Admit an immutable revision from the Agent's saved draft
 | `data.harness.id` | `string` | Yes | min length: 1 |
 | `data.harness.mode` | `"embedded" or "dedicated"` | Yes | — |
 | `data.harness.version` | `string` | Yes | min length: 1 |
-| `data.harnessAuth` | `object or object or object or object or object` | Yes | — |
+| `data.harnessAuth` | `object or object or object or object or object or object` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.pluginApprovers` | `PluginApprovers` | No | max items: 64 |
@@ -2373,6 +2544,177 @@ Admit an immutable revision from the Agent's saved draft
 | `data.revision` | `integer` | Yes | minimum: 1 |
 | `data.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `ANTHROPIC_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `data.secretDriverId` | `string` | No | min length: 1 |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations`
+
+<span id="post-namespacesnamespaceidagentsagentiddeviceauthorizations"></span>
+
+Experimental: Start a private device login for Agent configuration
+
+**Operation ID:** `startSavedAgentDeviceAuthorization`
+
+**Permissions:** Requires update permission on the requested Agent. Requires read permission on the requested Agent. Requires create permission for Secret resources in the requested Namespace.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `update` | `agent` | `requested` |
+| `read` | `agent` | `requested` |
+| `create` | `secret` | `namespace` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `harnessId` | `string` | Yes | min length: 1; max length: 100 |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.expiresAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.intervalSeconds` | `integer` | Yes | minimum: 1 |
+| `data.source` | `object` | Yes | Exact OCC Secret reference. Shape: `{ "kind": "secret", "namespaceId": "ns_...", "id": "sec_..." }`. |
+| `data.source.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.source.kind` | `"secret"` | Yes | — |
+| `data.source.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.status` | `"pending" or "ready"` | Yes | — |
+| `data.userCode` | `string` | Yes | — |
+| `data.verificationUrl` | `string (uri)` | Yes | — |
+| `meta` | `object` | Yes | — |
+| `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+#### `DELETE /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}`
+
+<span id="delete-namespacesnamespaceidagentsagentiddeviceauthorizationssecretid"></span>
+
+Experimental: Discard a local device login without upstream revocation
+
+**Operation ID:** `cancelSavedAgentDeviceAuthorization`
+
+**Permissions:** Requires update permission on the requested Agent. Requires read permission on the requested Agent. Requires operate permission on the requested Secret.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `update` | `agent` | `requested` |
+| `read` | `agent` | `requested` |
+| `operate` | `secret` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `204` | No Content |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+#### `POST /namespaces/{namespaceId}/agents/{agentId}/device-authorizations/{secretId}/poll`
+
+<span id="post-namespacesnamespaceidagentsagentiddeviceauthorizationssecretidpoll"></span>
+
+Experimental: Complete device login without returning credential material
+
+**Operation ID:** `pollSavedAgentDeviceAuthorization`
+
+**Permissions:** Requires update permission on the requested Agent. Requires read permission on the requested Agent. Requires operate permission on the requested Secret.
+
+| Action | Resource | Scope |
+| --- | --- | --- |
+| `update` | `agent` | `requested` |
+| `read` | `agent` | `requested` |
+| `operate` | `secret` | `requested` |
+
+##### Parameters
+
+| Name | In | Type | Required | Constraints |
+| --- | --- | --- | --- | --- |
+| `namespaceId` | path | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `agentId` | path | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `secretId` | path | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+
+##### Request body
+
+**Required:** Yes
+
+**Content type:** `application/json`
+
+Schema: `object`.
+
+##### Responses
+
+| Status | Meaning |
+| --- | --- |
+| `200` | OK |
+| `400` | Bad Request |
+| `401` | Unauthorized |
+| `403` | Forbidden |
+| `404` | Not Found |
+| `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
+| `500` | Internal Server Error |
+| `501` | Not Implemented |
+| `503` | Service Unavailable |
+
+**`200` response body:** `application/json`
+
+| Field | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `data` | `object` | Yes | — |
+| `data.expiresAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
+| `data.intervalSeconds` | `integer` | Yes | minimum: 1 |
+| `data.source` | `object` | Yes | Exact OCC Secret reference. Shape: `{ "kind": "secret", "namespaceId": "ns_...", "id": "sec_..." }`. |
+| `data.source.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.source.kind` | `"secret"` | Yes | — |
+| `data.source.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `data.status` | `"pending" or "ready"` | Yes | — |
+| `data.userCode` | `string` | Yes | — |
+| `data.verificationUrl` | `string (uri)` | Yes | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -2452,6 +2794,10 @@ List or search plugins for an active Agent; caller needs Agent read/update. Cura
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `cursor` | `string` | No | min length: 1; max length: 8192 |
+| `oauthLogin` | `object` | No | Exact OCC Secret reference. Shape: `{ "kind": "secret", "namespaceId": "ns_...", "id": "sec_..." }`. |
+| `oauthLogin.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `oauthLogin.kind` | `"secret"` | Yes | — |
+| `oauthLogin.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `q` | `string` | No | max length: 1024 |
 
 ##### Responses
@@ -2595,6 +2941,10 @@ Read plugin details for an active Agent; caller needs Agent read/update. Curated
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
+| `oauthLogin` | `object` | No | Exact OCC Secret reference. Shape: `{ "kind": "secret", "namespaceId": "ns_...", "id": "sec_..." }`. |
+| `oauthLogin.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
+| `oauthLogin.kind` | `"secret"` | Yes | — |
+| `oauthLogin.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `pluginId` | `string` | Yes | min length: 1; max length: 256 |
 
 ##### Responses
@@ -2875,7 +3225,7 @@ Stop one Agent while retaining its revision and persistent state
 | `data.createdAt` | `string (date-time)` | Yes | pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$` |
 | `data.desiredRuntimeState` | `"running" or "stopped"` | Yes | — |
 | `data.executionMode` | `"embedded" or "dedicated"` | Yes | — |
-| `data.harnessAuth` | `object or object or object or object or object or null` | Yes | — |
+| `data.harnessAuth` | `object or object or object or object or object or object or null` | Yes | — |
 | `data.id` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
