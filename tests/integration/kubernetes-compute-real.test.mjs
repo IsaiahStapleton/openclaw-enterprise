@@ -3656,6 +3656,38 @@ test(
     worker = undefined;
     workerPool = undefined;
     const replacementPlacement = kubernetesNamespaceName(namespaceIds[0]);
+    // A controller upgrade leaves ready Namespaces and their old DNS grants in place.
+    // Preparing one replacement must add backend ports without narrowing access for other Agents.
+    const readyNamespace = await request("GET", `/namespaces/${namespaceIds[0]}`);
+    assert.equal(readyNamespace.data.status, "ready");
+    const legacyDnsPolicies = [];
+    for (const target of [replacementPlacement, kubernetesGatewayNamespaceName(namespaceIds[0])]) {
+      await kubectl(
+        "patch",
+        "networkpolicy",
+        "allow-dns",
+        "-n",
+        target,
+        "--type=json",
+        "-p",
+        JSON.stringify([
+          { op: "replace", path: "/spec/podSelector", value: {} },
+          {
+            op: "replace",
+            path: "/spec/egress/0/ports",
+            value: [
+              { protocol: "UDP", port: 53 },
+              { protocol: "TCP", port: 53 },
+            ],
+          },
+        ]),
+      );
+      legacyDnsPolicies.push(await resource("networkpolicy", "allow-dns", target));
+    }
+    const otherAgentPods = (await resources("pods", replacementPlacement))
+      .filter(({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === second.id)
+      .map(({ metadata }) => metadata.uid)
+      .sort();
     const replacementClaim = await assertHarnessWorkspaceClaim(
       replacementPlacement,
       namespaceIds[0],
@@ -3676,6 +3708,28 @@ test(
     const replacement = await deploy(namespaceIds[0], first.id);
     await startWorker();
     await waitForActive(namespaceIds[0], first.id, replacement.id);
+    for (const previous of legacyDnsPolicies) {
+      const current = await resource("networkpolicy", "allow-dns", previous.metadata.namespace);
+      const expected = structuredClone(previous.spec);
+      expected.egress[0].ports.push(
+        { protocol: "UDP", port: 5353 },
+        { protocol: "TCP", port: 5353 },
+      );
+      assert.equal(current.metadata.uid, previous.metadata.uid);
+      assert.deepEqual(
+        current.spec,
+        expected,
+        "DNS upgrade must preserve the old selectors and other rules",
+      );
+    }
+    assert.deepEqual(
+      (await resources("pods", replacementPlacement))
+        .filter(({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === second.id)
+        .map(({ metadata }) => metadata.uid)
+        .sort(),
+      otherAgentPods,
+      "preparing one Agent must not restart another Agent's Pods",
+    );
     const placement = kubernetesNamespaceName(namespaceIds[0]);
     await waitFor(`old revision deployment ${revisionName(admitted[0])} to be deleted`, () =>
       missing("deployment", revisionName(admitted[0]), placement),

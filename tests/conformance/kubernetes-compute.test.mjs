@@ -733,10 +733,13 @@ test("activation refuses a missing or foreign workspace node before changing the
   revision.configuration = admitLoggingConfiguration(revision.configuration, "info");
   const namespace = kubernetesNamespaceName(revision.namespaceId);
   let secret;
-  const policies = driver.networkPolicies(
-    { namespaceId: tenant.id },
-    { name: namespace, plane: "execution" },
-  );
+  const policies = [
+    ...driver.networkPolicies({ namespaceId: tenant.id }, { name: namespace, plane: "execution" }),
+    ...driver.networkPolicies(
+      { namespaceId: tenant.id },
+      { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" },
+    ),
+  ];
   const gatewayName = `gateway-${digest(revision.agentId)}`;
   const gateway = driver.deployment(
     gatewayName,
@@ -807,8 +810,12 @@ test("activation refuses a missing or foreign workspace node before changing the
       },
     },
     networking: {
-      async readNamespacedNetworkPolicy({ name }) {
-        return structuredClone(policies.find((policy) => policy.metadata.name === name));
+      async readNamespacedNetworkPolicy({ name, namespace: target }) {
+        return structuredClone(
+          policies.find(
+            (policy) => policy.metadata.name === name && policy.metadata.namespace === target,
+          ),
+        );
       },
     },
   });
@@ -1006,11 +1013,13 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
     },
     data: { value: Buffer.from("fixture-model-key").toString("base64") },
   });
-  for (const policy of driver.networkPolicies(
-    { namespaceId: tenant.id },
+  for (const target of [
     { name: namespace, plane: "execution" },
-  )) {
-    save(policy);
+    { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" },
+  ]) {
+    for (const policy of driver.networkPolicies({ namespaceId: tenant.id }, target)) {
+      save(policy);
+    }
   }
   // Only transport observations are supplied. Startup order and readiness use
   // the real driver; successful writes do not make a Deployment ready.
@@ -1938,11 +1947,13 @@ test("dedicated replacement starts a candidate Gateway when the predecessor cann
     },
     data: { value: Buffer.from("fixture-model-key").toString("base64") },
   });
-  for (const policy of driver.networkPolicies(
-    { namespaceId: tenant.id },
+  for (const target of [
     { name: namespace, plane: "execution" },
-  )) {
-    save(policy);
+    { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" },
+  ]) {
+    for (const policy of driver.networkPolicies({ namespaceId: tenant.id }, target)) {
+      save(policy);
+    }
   }
   const predecessor = driver.deployment(
     gatewayName,
@@ -7339,11 +7350,13 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
     },
     data: { value: Buffer.from("fixture-model-key").toString("base64") },
   });
-  for (const policy of driver.networkPolicies(
-    { namespaceId: tenant.id },
+  for (const target of [
     { name: namespace, plane: "execution" },
-  )) {
-    save(policy);
+    { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" },
+  ]) {
+    for (const policy of driver.networkPolicies({ namespaceId: tenant.id }, target)) {
+      save(policy);
+    }
   }
   // Seed an already-ready gateway; the fixture never derives readiness from a write.
   const gateway = driver.deployment(
@@ -9974,11 +9987,13 @@ function workspaceSetupFixture(embedded, runtime = true, network = undefined, co
     },
     data: { value: Buffer.from("fixture-model-key").toString("base64") },
   });
-  for (const policy of driver.networkPolicies(
-    { namespaceId: tenant.id },
+  for (const target of [
     { name: namespace, plane: "execution" },
-  )) {
-    save(policy);
+    { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" },
+  ]) {
+    for (const policy of driver.networkPolicies({ namespaceId: tenant.id }, target)) {
+      save(policy);
+    }
   }
   const read =
     (kind) =>
@@ -11881,6 +11896,9 @@ function preProfilePolicy(policy) {
     policy.metadata.name === "allow-dns" || policy.metadata.name === "default-deny"
       ? {}
       : { matchLabels: withProfile(policy.spec.podSelector.matchLabels, undefined) };
+  if (policy.metadata.name === "allow-dns") {
+    legacy.spec.egress[0].ports = legacy.spec.egress[0].ports.filter(({ port }) => port === 53);
+  }
   return legacy;
 }
 
@@ -11908,7 +11926,17 @@ for (const embedded of [true, false]) {
     for (const policy of legacy) {
       const current = stored(policy);
       assert.equal(current.metadata.uid, policy.metadata.uid);
-      assert.deepEqual(current.spec, policy.spec, `${policy.metadata.name} must keep its selector`);
+      const expected = structuredClone(policy.spec);
+      if (
+        policy.metadata.name === "allow-dns" &&
+        (policy.metadata.namespace === namespace || !embedded)
+      ) {
+        expected.egress[0].ports.push(
+          { protocol: "UDP", port: 5353 },
+          { protocol: "TCP", port: 5353 },
+        );
+      }
+      assert.deepEqual(current.spec, expected, `${policy.metadata.name} must keep its selector`);
     }
     const namespaceWide = new Set(legacy.map(({ metadata }) => metadata.name));
     assert.equal(
@@ -11916,10 +11944,11 @@ for (const embedded of [true, false]) {
         ({ kind, metadata }) =>
           kind === "NetworkPolicy" &&
           namespaceWide.has(metadata.name) &&
-          metadata.name !== "allow-node-gateway",
+          metadata.name !== "allow-node-gateway" &&
+          metadata.name !== "allow-dns",
       ),
       false,
-      "preparation must not write namespace-wide DNS, deny or Gateway ingress policies",
+      "preparation must not write namespace-wide deny or Gateway ingress policies",
     );
     if (!embedded) {
       // The workspace-node policy is reconciled on every dedicated preparation.

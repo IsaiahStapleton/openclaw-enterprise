@@ -145,12 +145,11 @@ them only Gateway transport and plugin-status ingress (`allow-agent-runtime` is
 ingress-only for them): no DNS, workspace-node, model or authentication egress.
 Provider Harness readiness and activation reject a Pod with any other profile.
 
-Existing policy names remain stable, and the upgrade restarts no Pod. New
-namespaces receive the narrowed `allow-dns`, `allow-gateway-ingress` and
-`allow-node-gateway`. Earlier namespaces keep their previous versions, which
-ignore the profile, until recreated: Compute never narrows them in place.
-Running Pods keep their templates until Compute next prepares a revision of
-their Agent:
+Existing policy names remain stable; upgrading the controller restarts no Pod.
+Compute preserves existing namespace policy selectors until recreation. During
+Agent preparation, it adds missing DNS ports to the tenant and Gateway policies
+with UID/resource-version guards, preserving peers and other rules. Running Pods
+retain their templates until Compute prepares their Agent's revision:
 
 - Preparing a revision re-renders that Agent's grants and templates with the
   profile; other Agents are untouched. Re-preparing an active revision (as
