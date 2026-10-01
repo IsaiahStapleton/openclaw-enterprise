@@ -121,6 +121,24 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
     }
     assert.equal(logs.text.includes(value), false, `canary ${name} leaked into the response`);
   }
+  // A level floor only removes sanitized records; it never reaches unsanitized text.
+  const floored = await fixture.request(
+    "GET",
+    target.logsPath("source=gateway&tailLines=1000&minLevel=warn"),
+  );
+  assert.equal(floored.status, 200, floored.text);
+  for (const [name, value] of Object.entries({ ...values, SPLIT: splitFragment })) {
+    if (name === "CONTROL") {
+      continue;
+    }
+    assert.equal(floored.text.includes(value), false, `canary ${name} leaked at minLevel=warn`);
+  }
+  assert.ok(
+    floored.data.records.every(
+      (record) => record.type !== "line" || ["error", "warn", "unknown"].includes(record.level),
+    ),
+  );
+  assert.equal(floored.data.records.at(-1).reason, "truncated");
   // The download is the same sanitized page in a second serializer.
   const download = await fixture.request("GET", target.logsPath("source=gateway&download=true"));
   assert.equal(download.status, 200, download.text);

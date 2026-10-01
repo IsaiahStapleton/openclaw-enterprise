@@ -134,6 +134,7 @@ import {
 import {
   readRuntimeLogPage,
   readSandboxLogPage,
+  runtimeLogPageAtLevel,
   RuntimeLogReadError,
   SANDBOX_LOG_RETENTION,
   validRuntimeDescription,
@@ -2292,7 +2293,10 @@ export class OpenClawController {
     };
     const source = query.source;
     if (source === "sandbox") {
-      return this.readSandboxLogs(principalId, agentId, driver, binding, query, options);
+      return runtimeLogPageAtLevel(
+        await this.readSandboxLogs(principalId, agentId, driver, binding, query, options),
+        query.minLevel,
+      );
     }
     if (typeof driver.readAgentRuntimeLogs !== "function") {
       throw new NotImplementedError(
@@ -2308,7 +2312,7 @@ export class OpenClawController {
         events: false,
       });
       try {
-        return await readRuntimeLogPage({
+        const page = await readRuntimeLogPage({
           description,
           query,
           codec: options.codec,
@@ -2329,6 +2333,7 @@ export class OpenClawController {
             }
           },
         });
+        return runtimeLogPageAtLevel(page, query.minLevel);
       } catch (error) {
         if (error instanceof RuntimeLogReadError) {
           throw new RuntimeLogsError(

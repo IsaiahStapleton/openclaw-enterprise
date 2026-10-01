@@ -23,6 +23,24 @@ const lines = {
   turnEnter: record("INFO", "codex_core::tasks", { message: "enter" }, turn),
   turnExit: record("INFO", "codex_core::tasks", { message: "exit" }, turn),
   turnClose: record("INFO", "codex_core::tasks", { message: "close", "time.busy": "2.1s" }, turn),
+  // Every other span's lifecycle, including a span named "turn" from another target.
+  fsNew: record(
+    "INFO",
+    "codex_exec_server::local_file_system",
+    { message: "new" },
+    {
+      name: "fs.read_file",
+    },
+  ),
+  fsClose: record(
+    "INFO",
+    "codex_exec_server::local_file_system",
+    { message: "close", "time.busy": "1ms" },
+    { name: "fs.read_file" },
+  ),
+  otherTurnNew: record("INFO", "codex_core::session", { message: "new" }, turn),
+  // A plain event whose message is a lifecycle word is not a span record.
+  plainNew: record("INFO", "codex_core::client", { message: "new" }),
   tool: record("INFO", "codex_core::tools::parallel", {
     message: "tool call completed",
     tool_name: "shell",
@@ -68,7 +86,7 @@ function filter(rustLog = "info,codex_otel=off") {
   return { kept: context.kept, forward: context.forward, writes };
 }
 
-test("the Codex stderr filter drops span enter/exit and idle noise below debug, and keeps events", () => {
+test("the Codex stderr filter drops span lifecycle records except the turn's start and end, and idle noise, below debug", () => {
   const { kept } = filter();
   const at = Date.parse("2026-10-01T07:00:00Z");
   const decisions = Object.fromEntries(
@@ -79,6 +97,10 @@ test("the Codex stderr filter drops span enter/exit and idle noise below debug, 
     turnEnter: false,
     turnExit: false,
     turnClose: true,
+    fsNew: false,
+    fsClose: false,
+    otherTurnNew: false,
+    plainNew: true,
     tool: true,
     modelRetry: true,
     plainExit: true,
@@ -105,6 +127,7 @@ test("the Codex stderr filter forwards everything when RUST_LOG starts at debug 
   }
   const { kept } = filter("warn,codex_otel=off");
   assert.equal(kept(lines.turnEnter), false);
+  assert.equal(kept(lines.fsClose), false);
 });
 
 test("the Codex stderr forwarder splits chunks into lines and flushes the last partial line", async () => {
@@ -112,9 +135,15 @@ test("the Codex stderr forwarder splits chunks into lines and flushes the last p
   const { PassThrough } = await import("node:stream");
   const stream = new PassThrough();
   const done = forward(stream);
-  const input = [lines.turnNew, lines.turnEnter, lines.tool, lines.turnExit, lines.probe].join(
-    "\n",
-  );
+  const input = [
+    lines.turnNew,
+    lines.fsNew,
+    lines.turnEnter,
+    lines.tool,
+    lines.fsClose,
+    lines.turnExit,
+    lines.probe,
+  ].join("\n");
   // Chunk boundaries fall inside lines.
   for (let index = 0; index < input.length; index += 37) {
     stream.write(input.slice(index, index + 37));

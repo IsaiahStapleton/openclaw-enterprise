@@ -33,13 +33,12 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 ### Filter the loaded output
 
-The level chips (**error**, **warn**, **info**, **debug**, **unknown**) and the
-**Filter** box narrow the rows already loaded in this view: up to 5000 rows of
-the current page and later follow polls. The text filter is case-insensitive and
-matches the message, kind, subsystem and field values. Filters never ask the
-server for more output and do not search the whole container log; to look
-further back, use **Download** or the CLI with `--since`. Gap and withheld rows
-stay visible while filtering, so hidden loss is never filtered away.
+The server returns **info** and above (and lines of unknown level) unless you
+select **Include debug**, which starts a new view. The level chips and the
+**Filter** box narrow only the rows already loaded (up to 5000). The
+case-insensitive text filter matches the message, kind, subsystem and field
+values. To look further back, use **Download** or the CLI with `--since`. Gap
+and withheld rows stay visible, so loss is never filtered away.
 
 ### Download
 
@@ -48,7 +47,7 @@ as a text file named `<agent>-<revision>-<source>-<pod>.log`, using IDs. The
 file holds the same classified and redacted records as the page, one per line
 (`TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value`, plus `GAP` and `WITHHELD`
 rows), after a `#` header naming the Agent, revision, Pod and container.
-Filters do not apply to the download. Each download is a separate audited read;
+Only **Include debug** applies to the download. Each download is a separate audited read;
 nothing is kept on the server. The saved file stays on your device, and
 redaction is best-effort, so handle it as sensitive and delete it when done.
 
@@ -60,8 +59,9 @@ GET /namespaces/{namespaceId}/agents/{agentId}/deployments/{revisionId}/runtime/
 ```
 
 `runtime/logs` accepts only `source` (`gateway`, `agent` or `sandbox`), `pod`, `previous`,
-`tailLines` (1 to 1000, default 200), `sinceSeconds` (1 to 86400), `cursor` and
-`download`. Pass the returned `cursor` to read only newer lines of the same view.
+`tailLines` (1 to 1000, default 200), `sinceSeconds` (1 to 86400), `cursor`,
+`download` and `minLevel` (`error`, `warn`, `info` or `debug`: drop lines below it;
+unknown-level lines, gaps and withheld counts stay). Pass the returned `cursor` to read only newer lines of the same view.
 `download=true` answers `text/plain` with `Content-Disposition: attachment`,
 always reads 1000 lines, and cannot be combined with `cursor` (`400`). See the
 [API reference](../../reference/api.md).
@@ -74,15 +74,15 @@ AGENT_ID --source gateway` prints one page, and `--follow` keeps polling every
 2 seconds until Ctrl-C:
 
 ```sh
-occ agent logs agt_... --source gateway --since 10m --follow
+occ agent logs agt_... --source agent --since 10m --level info --follow
 occ agent logs agt_... --source agent --previous -o json
 occ agent logs agt_... --source sandbox --follow
 ```
 
-Both use the active revision unless you pass `--revision`. An Agent with no
-active revision, such as one whose first deployment failed, uses the latest
-revision and says so on stderr. Gaps and withheld
-counts are printed to stderr as notices; `-o json` prints NDJSON records. The
+Both use the active revision unless you pass `--revision`; without one, such as
+after a failed first deployment, they use the latest revision and say so on
+stderr. `--level` sets the `minLevel` floor. Gaps and withheld counts are
+stderr notices; `-o json` prints NDJSON records. The
 command waits out `429` responses and exits nonzero on `501` and `503`. See the
 [CLI reference](../../reference/cli.md#runtime-status-and-logs).
 
@@ -124,9 +124,8 @@ returning it:
 - **codex**: Codex tracing records (level, target, message). Turns show as
   `turn started` and `turn completed` (info, with model, turn ID, tokens and
   busy time); tool calls keep their name and duration. Other span records are
-  `debug`. Below `logging.level: debug`, the Harness drops span enter/exit
-  records, readiness-probe connections and repeated remote-control retries
-  (one per 10 minutes is kept).
+  `debug`; below `logging.level: debug` the Harness drops them, readiness-probe
+  connections and repeated remote-control retries (one per 10 minutes is kept).
 - **text**: plain lines up to 4 KiB, including lines that start with a bracketed
   component tag such as `[node-host] advertised commands: ...`.
 

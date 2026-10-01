@@ -2521,10 +2521,12 @@ if (receipt?.sourceUid === expected.sourceUid) {
 `;
 
 // Codex 0.158 app-server hard-codes FmtSpan::FULL on its stderr layer, so each
-// poll of an instrumented future prints a span "enter" and "exit" record at the
-// span's level: hundreds per turn at info. Unless RUST_LOG starts at debug or
-// trace, the wrapper drops those two records. Span "new" and "close" (a turn's
-// start and end) and every event still pass. Two idle lines are dropped too:
+// instrumented call prints span "new" and "close" records, and each poll of an
+// instrumented future a span "enter" and "exit" record, at the span's level:
+// hundreds per turn at info (fs.read_file, fs.sandbox_*, plugins...). Unless
+// RUST_LOG starts at debug or trace, the wrapper drops every span lifecycle
+// record except the "new" and "close" of the codex_core::tasks "turn" span (a
+// turn's start and end). Every event still passes. Two idle lines are dropped too:
 // the readiness probe's loopback WebSocket connection (every 2 s), and the
 // remote-control preference retry (every 1 s while Codex has no ChatGPT login),
 // which is kept once per 10 minutes. Everything else is forwarded unchanged.
@@ -2536,6 +2538,8 @@ let codexRemoteControlWaitAt = -Infinity;
 function codexStderrLineKept(line, now = Date.now()) {
   if (codexVerboseLog || !line.startsWith("{")) return true;
   if (
+    !line.includes('"message":"new"') &&
+    !line.includes('"message":"close"') &&
     !line.includes('"message":"enter"') &&
     !line.includes('"message":"exit"') &&
     !line.includes('"message":"websocket client connected"') &&
@@ -2545,8 +2549,17 @@ function codexStderrLineKept(line, now = Date.now()) {
   try { record = JSON.parse(line); } catch { return true; }
   if (record === null || typeof record !== "object" || record.fields === null || typeof record.fields !== "object") return true;
   const message = record.fields.message;
-  if ((message === "enter" || message === "exit") && record.span !== null && typeof record.span === "object") {
-    return false;
+  if (
+    (message === "new" || message === "close" || message === "enter" || message === "exit") &&
+    record.span !== null &&
+    typeof record.span === "object" &&
+    !Array.isArray(record.span)
+  ) {
+    return (
+      (message === "new" || message === "close") &&
+      record.target === "codex_core::tasks" &&
+      record.span.name === "turn"
+    );
   }
   if (
     record.target === "codex_app_server_transport::transport::websocket" &&
