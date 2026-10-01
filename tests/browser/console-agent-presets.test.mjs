@@ -1135,13 +1135,12 @@ test("Dedicated OpenClaw Presets preserve custom provider transport across execu
 });
 
 test("Partial Presets without a model policy retain the default Codex harness", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
-  await fixture.bootstrap();
   const root = await mkdtemp(join(tmpdir(), "occ-partial-preset-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const configurationDriver = new FilesystemConfigurationDriver(root);
-  fixture.controller.registerDriver(configurationDriver);
-  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Partial model Preset", { ready: true });
   const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
     body: {
