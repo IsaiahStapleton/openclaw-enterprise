@@ -798,6 +798,9 @@ test("Kubernetes dev-up authenticates the Installation and cleanup uses its save
   const compute = installation.drivers.compute.configuration;
   KubernetesComputeDriver.validateConfiguration(compute);
   assert.deepEqual(compute.network.gatewayTrustedProxyCidrs, ["127.0.0.1/32"]);
+  // The API server's Pod proxy source, so Compute can read private status and a
+  // dedicated Codex Gateway starts once on a first deploy.
+  assert.deepEqual(compute.network.pluginStatusProxySourceCidrs, ["10.42.0.1/32"]);
   assert.match(config, /transportSecretPrefix: openclaw-agent-transport/);
   assert.doesNotMatch(config, /modelSecretPrefix/);
   const startupCommands = await readJsonLines(fixture.env.SAFETY_LOG);

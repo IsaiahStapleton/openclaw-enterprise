@@ -522,6 +522,9 @@ if (command === engine) {
     if (args.includes("{{.State.Status}}")) output("exited");
     else if (args.includes("{{.State.ExitCode}}")) output("0");
     else fail("unexpected inspect: " + args.join(" "));
+  } else if (args[0] === "exec" && args[1].endsWith("-server-0") && args.slice(2, 5).join(" ") === "ip route get") {
+    // The k3d API server reaches local Pods over the node's cni0 bridge.
+    output(args[5] + " dev cni0 src 10.42.0.1 uid 0\\n    cache");
   } else if (args[0] === "exec" && args.includes("images")) {
     if (args.includes("list")) output([
       ["openclaw-enterprise-runtime:kubernetes-quickstart", "a".repeat(64)],
@@ -561,6 +564,7 @@ if (command === engine) {
 } else if (command === "kubectl") {
   if (args.includes("get") && args.includes("--raw=/version")) {}
   else if (args[0] === "apply" || args[0] === "rollout" || args[0] === "create" || args[0] === "patch") {}
+  else if (args[0] === "get" && args[1] === "node" && args[2].endsWith("-server-0")) output(JSON.stringify({ spec: { podCIDR: "10.42.0.0/24" } }));
   else if (args[0] === "get" && args[1] === "namespace") output(JSON.stringify({ metadata: { name: args[2] } }));
   else if (args[0] === "-n" && args.includes("wait")) {}
   else if (args[0] === "-n" && args.includes("rollout")) {}
