@@ -33,6 +33,9 @@ const externalAttemptStorageKeys = {
   google: "occ.console.googleAttempt",
   oidc: "occ.console.oidcAttempt",
 };
+// The last discovered OIDC label, kept per tab so messages after the IdP round trip, which
+// reloads the Console before discovery answers, name the provider the person chose.
+const oidcLabelStorageKey = "occ.console.oidcLabel";
 const externalProviders = {
   github: {
     label: "GitHub",
@@ -53,9 +56,6 @@ const externalProviders = {
   },
 };
 
-// The last discovered OIDC label, kept per tab so messages after the IdP round trip, which
-// reloads the Console before discovery answers, name the provider the person chose.
-const oidcLabelStorageKey = "occ.console.oidcLabel";
 // 1 to 40 code points, as the server's discovery schema allows.
 function validOidcLabel(label) {
   const length = [...label].length;
@@ -63,7 +63,7 @@ function validOidcLabel(label) {
 }
 function rememberedOidcLabel() {
   try {
-    const label = sessionStorage.getItem("occ.console.oidcLabel");
+    const label = sessionStorage.getItem(oidcLabelStorageKey);
     return typeof label === "string" && validOidcLabel(label) ? label : null;
   } catch {
     return null;

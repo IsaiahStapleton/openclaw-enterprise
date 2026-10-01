@@ -628,6 +628,8 @@ const invalid = [
   ...[
     ["an HTTP issuer", "issuer", "http://tenant.idp.example.test/"],
     ["an issuer on another port", "issuer", "https://tenant.idp.example.test:8443/"],
+    // The URL parser drops `:443`, but `iss` is compared with the configured string.
+    ["an issuer with an explicit port 443", "issuer", "https://tenant.idp.example.test:443/"],
     ["an IP-address issuer", "issuer", "https://203.0.113.10/"],
     ["an issuer with a query", "issuer", "https://tenant.idp.example.test/?t=1"],
   ].map(([name, key, value]) => ({

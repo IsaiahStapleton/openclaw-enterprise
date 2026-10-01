@@ -57,7 +57,7 @@ function signingKey(jwks: unknown, kid: string): { kty: "RSA"; n: string; e: str
 /**
  * Returns the claims of a valid RS256 ID token, or undefined. Valid means: signed by an RSA
  * key of at least 2,048 bits named by `kid` in `jwks`; `iss` one of `issuers`; `aud`
- * containing the client ID (and `azp` equal to it when present, or when `aud` is a list);
+ * exactly the client ID (a string, or a list naming only it), `azp` equal to it when present;
  * the expected nonce; `exp` in the future with no leeway; `iat` within the last hour and at
  * most 60 s ahead; `nbf`, when present, at most 60 s ahead; and a bounded printable `sub`.
  */
@@ -101,11 +101,11 @@ export function verifyIdToken(
       return undefined;
     }
     const { clientId } = expected;
-    if (Array.isArray(claims.aud)) {
-      if (!claims.aud.includes(clientId) || claims.azp !== clientId) {
-        return undefined;
-      }
-    } else if (claims.aud !== clientId) {
+    // The configured client is the only trusted audience (OIDC Core 3.1.3.7 step 3): a list
+    // is accepted only when it names the client alone, so any extra audience is refused.
+    const audience =
+      Array.isArray(claims.aud) && claims.aud.length === 1 ? claims.aud[0] : claims.aud;
+    if (audience !== clientId) {
       return undefined;
     }
     if (claims.azp !== undefined && claims.azp !== clientId) {

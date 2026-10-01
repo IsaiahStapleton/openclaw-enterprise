@@ -40,6 +40,8 @@ Copy four values from the IdP's discovery document
 `token_endpoint` and `jwks_uri`. The controller never fetches the discovery document, so
 these values are reviewed configuration. Each must be `https:` on port 443 with a DNS
 host name, no user name, query or fragment, and all four must share the issuer's host.
+Copy the issuer exactly, without a port: the controller compares it byte for byte with the
+token's `iss`.
 
 | IdP      | Values that fit                                                                                                                                                                  |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -103,7 +105,10 @@ The API reads these variables; see
 Enable it with the same stopped maintenance as
 [Google](google-sign-in.md#enable-it). `GET /api/auth/providers` then returns
 `oidc: true` and `oidcSignIn: {label, authorizationUrl}`, and the Console shows
-**Continue with** the label (default "single sign-on").
+**Continue with** the label (default "single sign-on"). That route needs no session, so
+anyone who can reach the Console can read the label and the IdP's authorization URL, as
+they could by starting a sign-in; neither is secret, but choose a label you are content to
+publish.
 
 ## Find a person's subject
 

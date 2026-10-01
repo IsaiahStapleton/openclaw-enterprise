@@ -297,6 +297,7 @@ test(
         ["another issuer", { claims: { iss: movedIssuer.issuer } }],
         ["wrong aud", { claims: { aud: "other-client" } }],
         ["wrong azp", { claims: { azp: "other-client" } }],
+        ["an extra untrusted aud", { claims: { aud: [clientId, "other-client"], azp: clientId } }],
         ["wrong nonce", { claims: { nonce: "A".repeat(43) } }],
         ["expired", { claims: { iat: now - 3000, exp: now - 60 } }],
         ["not yet valid", { claims: { nbf: now + 600 } }],

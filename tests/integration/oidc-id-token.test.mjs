@@ -133,6 +133,8 @@ test("OIDC configuration is all or none and pins every URL to the issuer's host"
   for (const value of [
     "http://tenant.idp.example.test/",
     "https://tenant.idp.example.test:8443/",
+    // `iss` is compared with the configured string, so even the default port is refused.
+    "https://tenant.idp.example.test:443/",
     "https://user:pass@tenant.idp.example.test/",
     "https://tenant.idp.example.test/?tenant=1",
     "https://tenant.idp.example.test/#x",
@@ -196,7 +198,8 @@ test("the provider instance is the exact issuer and client pair", () => {
 test("a valid ID token yields its subject", () => {
   assert.equal(verified(token()), subject);
   assert.equal(verified(token(claims({ azp: clientId }))), subject);
-  assert.equal(verified(token(claims({ aud: [clientId, "api"], azp: clientId }))), subject);
+  assert.equal(verified(token(claims({ aud: [clientId], azp: clientId }))), subject);
+  assert.equal(verified(token(claims({ aud: [clientId] }))), subject);
   assert.equal(verified(token(claims({ nbf: seconds + 60 }))), subject);
   assert.equal(verified(token(claims({ sub: "~".repeat(255) }))), "~".repeat(255));
 });
@@ -209,6 +212,15 @@ test("issuer, audience and nonce must match exactly", () => {
   assert.equal(verified(token(claims({ iss: "https://accounts.google.com" }))), undefined);
   assert.equal(verified(token(claims({ aud: "other" }))), undefined);
   assert.equal(verified(token(claims({ aud: [clientId, "api"] }))), undefined);
+  // The client is the only trusted audience: an extra one is refused even when azp names
+  // the client, and so are empty, malformed or duplicate lists.
+  assert.equal(verified(token(claims({ aud: [clientId, "api"], azp: clientId }))), undefined);
+  assert.equal(verified(token(claims({ aud: ["api", clientId], azp: clientId }))), undefined);
+  assert.equal(verified(token(claims({ aud: [clientId, clientId], azp: clientId }))), undefined);
+  assert.equal(verified(token(claims({ aud: [clientId, 7], azp: clientId }))), undefined);
+  assert.equal(verified(token(claims({ aud: [] }))), undefined);
+  assert.equal(verified(token(claims({ aud: [[clientId]] }))), undefined);
+  assert.equal(verified(token(claims({ aud: undefined }))), undefined);
   assert.equal(verified(token(claims({ azp: "other" }))), undefined);
   assert.equal(verified(token(claims({ nonce: "other" }))), undefined);
   assert.equal(verified(token(claims({ nonce: undefined }))), undefined);
