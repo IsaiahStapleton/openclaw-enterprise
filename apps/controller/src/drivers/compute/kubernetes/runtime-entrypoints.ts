@@ -1872,8 +1872,8 @@ function publishAgentPluginSkillPath() {
 `;
 
 export const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
-const { mkdirSync, rmSync } = require("node:fs");
-const { join } = require("node:path");
+const { accessSync, constants: fsConstants, mkdirSync, rmSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 const { spawn } = require("node:child_process");
 
 // OCE upgrades this runtime by rolling out a selected image.
@@ -2275,11 +2275,25 @@ let waitingForPeerDuringOutage = false;
 let stoppingContainer = false;
 let gatewayGeneration = 0;
 
+// OpenClaw backs up a config file it can write. One OCC mounted read-only is
+// externally managed: say so, so OpenClaw skips that backup instead of logging
+// EROFS on every start.
+function gatewayEnvironment() {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (configPath === undefined) return process.env;
+  try {
+    accessSync(dirname(configPath), fsConstants.W_OK);
+    return process.env;
+  } catch {
+    return { ...process.env, OPENCLAW_CONFIG_READONLY: "1" };
+  }
+}
+
 function startGatewayProcess() {
   const spawned = spawn(
     "node",
     ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
-    { stdio: "inherit" },
+    { stdio: "inherit", env: gatewayEnvironment() },
   );
   child = spawned;
   childRunning = true;
