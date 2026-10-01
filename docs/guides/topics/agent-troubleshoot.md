@@ -78,3 +78,27 @@ Look for `PLUGIN_INSTALL_FAILED` or `PLUGIN_AUTH_REQUIRED` in the
 succeed while the affected plugin is disabled for that startup. Inspect the
 [plugin configuration](plugins-configure.md#check-the-result) before redeploying;
 a successful revision does not confirm that a third-party connector is usable.
+
+## Read OpenShell sandbox and supervisor logs
+
+The [Sandbox source](agent-logs.md#sandbox-source) shows only what the OpenShell
+gateway recorded. An operator with `pods/log` access to the Agent's Kubernetes
+namespace can read the Harness output and the supervisor's own log. Each
+revision's Sandbox has two Pods that share an `openshell.ai/sandbox-id`: the
+Harness Pod, which keeps OCC's `openclaw.dev/revision` label, and the
+supervisor Pod, labeled `openshell.ai/boundary-role=supervisor`:
+
+```bash
+NS=<agent-kubernetes-namespace>
+REVISION_ID=<revision-id>
+HARNESS_SELECTOR="openclaw.dev/workload-role=agent,openclaw.dev/revision=$REVISION_ID"
+SANDBOX_ID="$(kubectl -n "$NS" get pod -l "$HARNESS_SELECTOR" \
+  -o jsonpath='{.items[0].metadata.annotations.openshell\.ai/sandbox-id}')"
+kubectl -n "$NS" logs --all-containers --tail=200 -l "$HARNESS_SELECTOR"
+kubectl -n "$NS" logs --all-containers --tail=200 \
+  -l "openshell.ai/sandbox-id=$SANDBOX_ID,openshell.ai/boundary-role=supervisor"
+```
+
+`kubectl -n "$NS" get sandbox,pod -l "openshell.ai/sandbox-id=$SANDBOX_ID"`
+shows the Sandbox and its supervisor Pod. This output bypasses OCC's log
+redaction, so handle it as sensitive.
