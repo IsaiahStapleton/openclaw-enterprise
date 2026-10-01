@@ -2021,7 +2021,13 @@ const GATEWAY_LOCAL_CODEX_DYNAMIC_TOOLS = [
 
 function excludeGatewayLocalCodexTools(config) {
   const codex = config.plugins?.entries?.codex;
-  if (!isPlainObject(codex)) return;
+  if (!isPlainObject(codex)) {
+    // APP_SERVER_URL names a remote Codex Harness: pin its providers even when
+    // the Gateway config lacks the plugin entry. A dedicated OpenClaw Gateway
+    // (no APP_SERVER_URL) runs its turns with these rows, so it keeps them.
+    if (process.env.APP_SERVER_URL !== undefined) pinCodexProviderTransport(config);
+    return;
+  }
   const codexConfig = codex.config ??= {};
   const configured = codexConfig.codexDynamicToolsExclude ?? [];
   if (!Array.isArray(configured)) {
@@ -2040,6 +2046,66 @@ function excludeGatewayLocalCodexTools(config) {
     throw new Error("The cron.triggers setting must be an object.");
   }
   triggers.enabled = false;
+  pinCodexProviderTransport(config);
+}
+
+// OpenClaw's built-in runtime runs in the Gateway process with Gateway-local
+// tools. An operator's "/model codex/<model> --runtime openclaw" selects it for
+// a session, and Codex hands a turn to it when the row of one of its providers
+// (codex, openai) carries request transport overrides. The Harness reaches the
+// model itself, so here those rows only name models: fields that override the
+// transport, start a local service, or make Codex declare that fallback are
+// dropped, and an authored transport becomes the unreachable stub. A built-in
+// run then has no model to call.
+const CODEX_PROVIDER_STUB_URL = "http://127.0.0.1:9";
+const CODEX_PROVIDER_KEPT_KEYS = new Set(["models", "maxTokens", "agentRuntime"]);
+const CODEX_MODEL_KEPT_KEYS = new Set([
+  "id", "name", "reasoning", "input", "cost", "contextWindow", "contextTokens",
+  "maxTokens", "thinkingLevelMap", "agentRuntime", "mediaInput", "metadataSource",
+]);
+
+function keepKeys(value, kept) {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => kept.has(key)));
+}
+
+function pinCodexProviderTransport(config) {
+  const models = config.models ??= {};
+  if (!isPlainObject(models)) {
+    throw new Error("The models setting must be an object.");
+  }
+  const providers = models.providers ??= {};
+  if (!isPlainObject(providers)) {
+    throw new Error("The models.providers setting must be an object.");
+  }
+  // OpenClaw matches provider keys after trimming and lowercasing.
+  const providerId = (key) => key.trim().toLowerCase();
+  const keys = Object.keys(providers).filter((key) => ["codex", "openai"].includes(providerId(key)));
+  if (!keys.some((key) => providerId(key) === "codex")) {
+    // "codex" is a bundled provider: without a row it would keep its own transport.
+    providers.codex = {};
+    keys.push("codex");
+  }
+  for (const key of keys) {
+    const id = providerId(key);
+    const provider = providers[key];
+    if (!isPlainObject(provider)) {
+      throw new Error("The " + id + " model provider setting must be an object.");
+    }
+    const pinned = keepKeys(provider, CODEX_PROVIDER_KEPT_KEYS);
+    if (provider.models !== undefined) {
+      if (!Array.isArray(provider.models) || !provider.models.every(isPlainObject)) {
+        throw new Error("The " + id + " model provider models setting must be a list of objects.");
+      }
+      pinned.models = provider.models.map((model) => keepKeys(model, CODEX_MODEL_KEPT_KEYS));
+    }
+    // An openai row that names no transport keeps OpenClaw's default, which has
+    // no credential in the Gateway, and Codex keeps owning its account's models.
+    const authoredTransport =
+      id === "codex" || provider.baseUrl !== undefined || provider.api !== undefined;
+    providers[key] = authoredTransport
+      ? { ...pinned, baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" }
+      : pinned;
+  }
 }
 
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
