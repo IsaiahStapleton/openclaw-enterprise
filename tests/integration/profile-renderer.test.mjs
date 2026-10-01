@@ -410,11 +410,11 @@ test(
     const original = render("codex", codexInput());
     const changed = render(
       "codex",
-      codexInput({ presets: { files: ["/app/deploy/presets/devday.json"] } }),
+      codexInput({ presets: { files: ["/app/deploy/presets/swe-preset.json"] } }),
     );
     assert.match(
       changed.installation,
-      /presets:\n {2}includeDefaults: true\n {2}files:\n {4}- \/app\/deploy\/presets\/devday.json/,
+      /presets:\n {2}includeDefaults: true\n {2}files:\n {4}- \/app\/deploy\/presets\/swe-preset.json/,
     );
     const originalManifests = helmTemplate(original);
     const changedManifests = helmTemplate(changed);

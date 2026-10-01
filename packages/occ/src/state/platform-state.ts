@@ -444,17 +444,21 @@ export function validHarnessAuthSnapshot(value: HarnessAuthSnapshot, namespaceId
       );
     }
     const binding =
-      value.method === "api_key" || value.method === "codex_pat"
+      value.method === "api_key" || value.method === "codex_pat" || value.method === "oauth"
         ? normalizeHarnessAuthBinding({ method: value.method, source: value.source })
         : normalizeHarnessAuthBinding({
             method: value.method,
             serviceAccountId: value.serviceAccountId,
           });
-    if (binding?.method === "api_key" || binding?.method === "codex_pat") {
+    if (
+      binding?.method === "api_key" ||
+      binding?.method === "codex_pat" ||
+      binding?.method === "oauth"
+    ) {
       return (
         Object.keys(value).length === 3 &&
         binding.source.namespaceId === namespaceId &&
-        (value.method === "api_key" || value.method === "codex_pat") &&
+        (value.method === "api_key" || value.method === "codex_pat" || value.method === "oauth") &&
         isNonEmptyString(value.secretDriverId)
       );
     }
@@ -492,8 +496,12 @@ export function harnessAuthMatches(
   if (binding.method === "runtime") {
     return true;
   }
-  return (binding.method === "api_key" || binding.method === "codex_pat") &&
-    (snapshot.method === "api_key" || snapshot.method === "codex_pat")
+  return (binding.method === "api_key" ||
+    binding.method === "codex_pat" ||
+    binding.method === "oauth") &&
+    (snapshot.method === "api_key" ||
+      snapshot.method === "codex_pat" ||
+      snapshot.method === "oauth")
     ? binding.source.namespaceId === snapshot.source.namespaceId &&
         binding.source.id === snapshot.source.id
     : binding.method === "credential_source" && snapshot.method === "credential_source"
@@ -509,7 +517,9 @@ function harnessSecretReference(
   secretId: string,
 ): boolean {
   return (
-    (binding?.method === "api_key" || binding?.method === "codex_pat") &&
+    (binding?.method === "api_key" ||
+      binding?.method === "codex_pat" ||
+      binding?.method === "oauth") &&
     binding.source.namespaceId === namespaceId &&
     binding.source.id === secretId
   );
@@ -545,7 +555,11 @@ export async function assertHarnessAuthAvailable(
   if (binding === null || binding.method === "runtime") {
     return;
   }
-  if (binding.method === "api_key" || binding.method === "codex_pat") {
+  if (
+    binding.method === "api_key" ||
+    binding.method === "codex_pat" ||
+    binding.method === "oauth"
+  ) {
     if (
       binding.source.namespaceId !== namespaceId ||
       (await state.secrets.findSecret(namespaceId, binding.source.id)) === undefined

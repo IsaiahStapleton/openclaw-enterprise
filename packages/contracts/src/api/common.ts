@@ -230,6 +230,10 @@ export const HarnessAuthBindingSchema = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
+    { method: Type.Literal("oauth"), source: SecretReference },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
     { additionalProperties: false },
   ),
@@ -368,6 +372,14 @@ const PluginDiscoveryAccessToken = Type.String({
 export const DiscoverAgentPluginsBody = Type.Union([
   Type.Object(
     {
+      oauthLogin: SecretReference,
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
       q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
@@ -393,6 +405,10 @@ export const DiscoverAgentPluginsBody = Type.Union([
 
 export const DiscoverAgentPluginDetailsBody = Type.Union([
   Type.Object(
+    { oauthLogin: SecretReference, pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
     { additionalProperties: false },
   ),
@@ -411,6 +427,7 @@ export const DiscoverAgentPluginDetailsBody = Type.Union([
 
 export const DiscoverSavedAgentPluginsBody = Type.Object(
   {
+    oauthLogin: Type.Optional(SecretReference),
     cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
     q: Type.Optional(Type.String({ maxLength: 1024 })),
   },
@@ -418,7 +435,10 @@ export const DiscoverSavedAgentPluginsBody = Type.Object(
 );
 
 export const DiscoverSavedAgentPluginDetailsBody = Type.Object(
-  { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+  {
+    pluginId: Type.String({ minLength: 1, maxLength: 256 }),
+    oauthLogin: Type.Optional(SecretReference),
+  },
   { additionalProperties: false },
 );
 

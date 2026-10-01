@@ -335,6 +335,7 @@ export interface CredentialWithdrawal {
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
   | { readonly method: "codex_pat"; readonly source: SecretReference }
+  | { readonly method: "oauth"; readonly source: SecretReference }
   | { readonly method: "chatgpt_service_account"; readonly serviceAccountId: string }
   | { readonly method: "credential_source"; readonly sourceId: string }
   | { readonly method: "runtime" };
@@ -349,6 +350,11 @@ export type HarnessAuthSnapshot =
     }
   | {
       readonly method: "codex_pat";
+      readonly source: SecretReference;
+      readonly secretDriverId: string;
+    }
+  | {
+      readonly method: "oauth";
       readonly source: SecretReference;
       readonly secretDriverId: string;
     }
@@ -373,7 +379,7 @@ export type HarnessAuthSnapshot =
 
 /** Authoritative delivery references, resolved again at dispatch; never secret values. */
 export type ResolvedHarnessAuth =
-  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" }> & {
+  | (Extract<HarnessAuthSnapshot, { method: "api_key" | "codex_pat" | "oauth" }> & {
       readonly backendRef: SecretBackendRef;
     })
   | (Extract<HarnessAuthSnapshot, { method: "credential_source" }> & {
@@ -1068,6 +1074,8 @@ export interface SecretDriver extends Driver {
   readonly capability: "secret";
   create(identity: SecretIdentity, value: string): Promise<SecretBackendRef>;
   update(secret: Secret, value: string): Promise<void>;
+  /** Replace an exact current value atomically; used to fence device authorization exchanges. */
+  compareAndSwap?(secret: Secret, expected: string, value: string): Promise<boolean>;
   delete(secret: Secret): Promise<void>;
   /** Verify live exact ownership and return only safe projection identity. */
   resolve(secret: Secret): Promise<SecretBackendRef>;
@@ -1197,6 +1205,12 @@ export interface PluginDriverContext {
   readonly signal: AbortSignal;
 }
 
+export interface PluginDiscoveryAuthentication {
+  readonly accessToken?: string;
+  /** Server-owned native OAuth bundle; never accepted from public discovery requests. */
+  readonly credential?: { readonly kind: "oauth"; readonly value: string };
+}
+
 export interface PluginDriver extends Driver {
   readonly capability: "plugin";
   readonly policyCapabilities: PluginPolicyCapabilities;
@@ -1206,11 +1220,11 @@ export interface PluginDriver extends Driver {
   /** Pre-Agent discovery defaults to requiring a transient credential. Results are not persisted. */
   readonly discoveryCredential?: "required" | "none";
   discoverCatalog?(
-    input: { readonly accessToken?: string; readonly cursor?: string; readonly q?: string },
+    input: PluginDiscoveryAuthentication & { readonly cursor?: string; readonly q?: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogPage>;
   getCatalogPlugin?(
-    input: { readonly accessToken?: string; readonly pluginId: string },
+    input: PluginDiscoveryAuthentication & { readonly pluginId: string },
     signal?: AbortSignal,
   ): Promise<PluginCatalogEntry>;
 }
@@ -1533,6 +1547,18 @@ export interface ComputePreflightResult {
   readonly warnings: readonly ComputePreflightWarning[];
 }
 
+export interface HarnessDeviceAuthorization {
+  readonly verificationUrl: string;
+  readonly userCode: string;
+  readonly expiresAt: string;
+  readonly intervalSeconds: number;
+  /** Provider authorization material; retain only in server-side Secret storage. */
+  readonly privateState: string;
+}
+
+export type HarnessDeviceAuthorizationResult =
+  { readonly status: "pending" } | { readonly status: "ready"; readonly credential: string };
+
 export interface ComputeDriver extends Driver {
   readonly supportsWorkspaceSetup?: true;
   readonly capability: "compute";
@@ -1551,6 +1577,15 @@ export interface ComputeDriver extends Driver {
    */
   requiresStoppedPredecessors?(revision: AgentRevision): boolean;
   getRuntimeImages?(revision: AgentRevision): Promise<readonly RuntimeImage[]>;
+  /** Provider protocol and native credential formatting belong to the selected Compute Driver. */
+  startHarnessDeviceAuthorization?(
+    harnessId: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessDeviceAuthorization>;
+  pollHarnessDeviceAuthorization?(
+    privateState: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessDeviceAuthorizationResult>;
   /** Read-only native model discovery; supplied credentials must never be persisted. */
   discoverHarnessModels?(input: {
     readonly authMethod: "api_key" | "codex_pat";

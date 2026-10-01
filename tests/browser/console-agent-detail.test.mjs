@@ -1061,6 +1061,49 @@ test("Agent draft browses the curated catalog without a saved Secret", async (t)
   });
 });
 
+test("Dedicated OpenClaw credentials and plugins do not offer Codex-only controls", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const namespace = await fixture.createNamespace("Dedicated OpenClaw controls", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Dedicated OpenClaw Agent",
+    createHarnessConfiguration("openclaw", "gpt-4.1"),
+    { executionMode: "dedicated" },
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "credentials");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByLabel("API key Secret", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByLabel("Authentication source").locator('option[value="codex_pat"]').count(),
+    0,
+  );
+  assert.equal(await page.getByLabel("API key Secret", { exact: true }).isEnabled(), true);
+
+  // A credentialless Codex catalog does not make an OpenClaw harness compatible with its plugins.
+  const capabilities = page.waitForResponse(
+    (response) =>
+      response.url() ===
+      `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/plugins/capabilities`,
+  );
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  assert.equal((await capabilities).status(), 200);
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  assert.equal(await dialog.getByRole("button", { name: "Load plugins" }).isDisabled(), true);
+  assert.deepEqual(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/${agent.id}/plugins`),
+    [],
+  );
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  assert.equal(await page.getByLabel("Plugin selections JSON").isEnabled(), true);
+});
+
 test("Agent credentials choose existing Secrets for harness authentication", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -1078,7 +1121,7 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   const agent = await fixture.createAgent(
     namespace.id,
     "Harness Picker Agent",
-    nativeValues("harness-picker"),
+    nativeValues("harness-picker", { harnessId: "codex" }),
     { harnessAuth: { method: "api_key", source: originalSecret.ref }, executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
@@ -1153,7 +1196,7 @@ test("Agent credential Secret picker distinguishes action labels from Secret nam
   const agent = await fixture.createAgent(
     namespace.id,
     "Action Name Agent",
-    nativeValues("secret-action-names"),
+    nativeValues("secret-action-names", { harnessId: "codex" }),
     { harnessAuth: { method: "api_key", source: original.ref }, executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
@@ -1222,7 +1265,7 @@ test("Agent credential Secret picker searches, validates, and preserves duplicat
   const agent = await fixture.createAgent(
     namespace.id,
     "Combobox Agent",
-    nativeValues("credential-picker-ux"),
+    nativeValues("credential-picker-ux", { harnessId: "codex" }),
     { harnessAuth: { method: "api_key", source: originalSecret.ref }, executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);

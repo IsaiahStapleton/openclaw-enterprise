@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-09-28
-last_updated_session: 01a0eb85-73a8-7572-92a9-a6a06fbdf0a5
+updated: 2026-10-01
+last_updated_session: authoring-run/d0545dc8-f524-4ce5-a3ce-918838dddd92
 ---
 
 # Controller Worker Flow
@@ -71,9 +71,14 @@ supplies Kubernetes Compute's optional Sandbox Driver. Selected hooks require
 `setLifecycleDrivers`; unsupported capabilities stop startup. Production runs
 Compute preflight before emitting `worker.started` and entering `run()`.
 
-Metrics scrapes share one read-only connection and
+Metrics scrapes use one read-only connection through
 `packages/occ/src/state/postgres-metrics.ts:PostgresMetricsSnapshot.collect`
-for lifecycle and backlog observations without runtime probes. Metrics follow
+for lifecycle and backlog observations without runtime probes. The collector owns
+transport errors through query settlement and pool handoff. Query failure or
+transport loss observed before release requests client disposal instead of reuse.
+Transport loss observed during release also rejects an otherwise successful
+snapshot. The listener is removed only after release returns; if release throws,
+transfer remains unknown and the listener stays attached. Metrics follow
 finalization independently of logging; see the [metrics contract](../reference/metrics.md).
 
 ### 2. Commit API admission and the durable work record
@@ -362,6 +367,8 @@ cannot strand provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-01 04:06: Document metrics client error ownership through release. (authoring-run/d0545dc8-f524-4ce5-a3ce-918838dddd92 - 97dfb6b9)
 
 - 2026-09-29 18:40: Continue maintenance past expired exhausted claims.
 

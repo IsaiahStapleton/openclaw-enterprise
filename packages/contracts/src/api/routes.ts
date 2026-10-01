@@ -2,6 +2,9 @@ import { Type } from "typebox";
 
 import {
   AgentParams,
+  AgentId,
+  NamespaceId,
+  SecretId,
   AgentProvisioningParams,
   PresetParams,
   CreatePresetBody,
@@ -46,6 +49,7 @@ import {
 } from "./common.ts";
 import {
   AgentListResponse,
+  AgentDeviceAuthorizationResponse,
   AgentModelListResponse,
   AgentPluginCatalogResponse,
   AgentPluginDetailsResponse,
@@ -132,6 +136,128 @@ const runtimeReadErrors = {
 } as const;
 
 export const occApiRoutes = [
+  {
+    operationId: "startAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/device-authorizations",
+    action: "openclaw.agents.device_authorization.start",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "Experimental: Start a private device login for Agent configuration",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object({ namespaceId: NamespaceId }, { additionalProperties: false }),
+      body: Type.Object(
+        { harnessId: Type.String({ minLength: 1, maxLength: 100 }) },
+        { additionalProperties: false },
+      ),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "pollAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/device-authorizations/:secretId/poll",
+    action: "openclaw.agents.device_authorization.poll",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "Experimental: Complete device login without returning credential material",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      body: Type.Object({}, { additionalProperties: false }),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "cancelAgentDeviceAuthorization",
+    method: "DELETE",
+    path: "/namespaces/:namespaceId/agents/device-authorizations/:secretId",
+    action: "openclaw.agents.device_authorization.cancel",
+    iamAction: "create",
+    resourceKind: "agent",
+    authorizationTarget: "namespace_collection",
+    summary: "Experimental: Discard a local device login without upstream revocation",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      response: { 204: Type.Null(), 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "startSavedAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/device-authorizations",
+    action: "openclaw.agents.device_authorization.start",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Experimental: Start a private device login for Agent configuration",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, agentId: AgentId },
+        { additionalProperties: false },
+      ),
+      body: Type.Object(
+        { harnessId: Type.String({ minLength: 1, maxLength: 100 }) },
+        { additionalProperties: false },
+      ),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "pollSavedAgentDeviceAuthorization",
+    method: "POST",
+    path: "/namespaces/:namespaceId/agents/:agentId/device-authorizations/:secretId/poll",
+    action: "openclaw.agents.device_authorization.poll",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Experimental: Complete device login without returning credential material",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, agentId: AgentId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      body: Type.Object({}, { additionalProperties: false }),
+      response: { 200: AgentDeviceAuthorizationResponse, 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+  {
+    operationId: "cancelSavedAgentDeviceAuthorization",
+    method: "DELETE",
+    path: "/namespaces/:namespaceId/agents/:agentId/device-authorizations/:secretId",
+    action: "openclaw.agents.device_authorization.cancel",
+    iamAction: "update",
+    resourceKind: "agent",
+    authorizationTarget: "agent",
+    summary: "Experimental: Discard a local device login without upstream revocation",
+    tags: ["Agents"],
+    schema: {
+      querystring: EmptyQuery,
+      params: Type.Object(
+        { namespaceId: NamespaceId, agentId: AgentId, secretId: SecretId },
+        { additionalProperties: false },
+      ),
+      response: { 204: Type.Null(), 501: ErrorResponseRef, ...createErrors },
+    },
+  },
+
   {
     operationId: "createPreset",
     method: "POST",

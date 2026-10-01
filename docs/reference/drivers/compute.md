@@ -34,14 +34,19 @@ container ID; both commits apply only to containers with that same image ID.
 Commits must be full lowercase Git SHAs. Missing IDs or provenance remain `null`.
 These observations do not inventory separate Sandbox Driver workloads.
 
-The optional `discoverHarnessModels({provider, apiKey})` method returns native
-model IDs and names for Agent setup without persisting credentials. OCC checks
-Agent creation authority before calling it. Bundled Kubernetes and Docker use
-the official OpenAI and Anthropic model-list APIs with bounded requests and no
-redirects. Discovery does not provision runtime credentials or establish model
-compatibility; unsupported or unavailable discovery permits manual model entry.
-It runs in the OCC API process and needs egress to the provider; see
-[Agent setup](../console/create-and-deploy.md).
+The optional `discoverHarnessModels({provider, apiKey})` returns native model IDs
+and names without persisting credentials. OCC checks Agent creation authority
+before calling it. Bundled Kubernetes and Docker call official OpenAI and
+Anthropic model-list APIs with bounded requests and no redirects. Discovery
+requires OCC API egress; it neither provisions runtime credentials nor proves
+model compatibility. Unsupported or unavailable discovery permits
+[manual model entry](../console/create-and-deploy.md).
+
+The bundled Codex OAuth device-login implementation is **Experimental**.
+Optional `startHarnessDeviceAuthorization(harnessId)` returns a public challenge
+and opaque private state; `pollHarnessDeviceAuthorization(privateState)` returns
+pending or a native credential bundle. OCC owns authorization, scope, and Secret
+custody. See the [device login flow](../../flows/native-service-account-credential-delivery.md).
 
 ### Core lifecycle operations
 
@@ -304,14 +309,14 @@ prove readiness. See [Kubernetes startup status](kubernetes-compute.md#plugin-st
 
 ## Troubleshooting
 
-| Symptom                                 | What to check                                                                                                                                                                                                              |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Startup fails                           | Check the selected Driver, required production stages, hooks, and whether preflight threw an error. Fix the cause and confirm startup completes. Preflight warnings alone do not block it.                                 |
-| Deployment fails before work is queued  | Check the Harness and authentication settings and whether `validateHarnessAuth` exists. Fix the combination or Driver and confirm OCC creates a revision.                                                                  |
-| Revision stays unready                  | Check that the Driver reported the correct Namespace, Agent, and revision; that the workload is ready and authenticated; and that plugin startup status can be trusted. After the fix, confirm the revision becomes ready. |
-| Cleanup or replacement stalls           | Check revocation, hooks, and Sandbox cleanup. Fix it and retry; confirm cleanup or activation completes. A missing workload alone does not prove cleanup succeeded.                                                        |
-| Maintenance stops after a policy change | Check that the original Principal is still authorized and IAM is available. Restore the intended permission or start a newly authorized operation, then confirm reconciliation resumes.                                    |
-| Credential setup partially fails        | Refresh stored status before retrying; confirm the required groups report configured. It does not prove the provider accepts them.                                                                                         |
+| Symptom                                 | What to check                                                                                                                                                         |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup fails                           | Check the selected Driver, required production stages, hooks, and preflight errors. Fix the cause and confirm startup; preflight warnings alone do not block it.      |
+| Deployment fails before work is queued  | Check the Harness and authentication settings and whether `validateHarnessAuth` exists. Fix the combination or Driver and confirm OCC creates a revision.             |
+| Revision stays unready                  | Check the reported Namespace, Agent and revision, workload readiness and authentication, and plugin startup-status trust. Fix the cause and confirm readiness.        |
+| Cleanup or replacement stalls           | Check revocation, hooks, and Sandbox cleanup. Fix it and retry; confirm cleanup or activation completes. A missing workload alone does not prove cleanup succeeded.   |
+| Maintenance stops after a policy change | Check the original Principal's authority and IAM availability. Restore the intended permission or start a newly authorized operation; confirm reconciliation resumes. |
+| Credential setup partially fails        | Refresh stored status before retrying; confirm the required groups report configured. It does not prove the provider accepts them.                                    |
 
 ## Implementations
 

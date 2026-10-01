@@ -146,6 +146,9 @@ function classifyReceipts(receipts, manifest) {
         return "preRestrictionReadLogs";
       }
       if (receipts.length === 42) {
+        return "preOAuth";
+      }
+      if (receipts.length === 43) {
         return "preCredentialWithdrawals";
       }
       return "providerCompleted";
@@ -214,6 +217,9 @@ function classifyReceipts(receipts, manifest) {
     return "preRestrictionReadLogs";
   }
   if (receipts.length === 42) {
+    return "preOAuth";
+  }
+  if (receipts.length === 43) {
     return "preCredentialWithdrawals";
   }
   refuse("an incomplete or unsupported development history is installed");

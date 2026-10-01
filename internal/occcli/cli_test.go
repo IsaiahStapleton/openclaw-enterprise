@@ -113,10 +113,11 @@ func TestCredentialSourceUpdateAndWithdrawalCommandsReachTheirRoutes(t *testing.
 }
 
 type runtimeLogStub struct {
-	t        *testing.T
-	queries  []url.Values
-	pages    []func(http.ResponseWriter, url.Values)
-	activeID string
+	beforeLogPage func(*http.Request)
+	t             *testing.T
+	queries       []url.Values
+	pages         []func(http.ResponseWriter, url.Values)
+	activeID      string
 	// revisions is the JSON revision list; empty means the Agent has none.
 	revisions string
 	paths     []string
@@ -140,6 +141,9 @@ func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Re
 			response.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		if stub.beforeLogPage != nil {
+			stub.beforeLogPage(request)
+		}
 		next := stub.pages[0]
 		stub.pages = stub.pages[1:]
 		next(response, query)
@@ -152,12 +156,21 @@ func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Re
 }
 
 func logPage(cursor string, records ...string) func(http.ResponseWriter, url.Values) {
+	return logPageWithStream(&cursor, `{"source":"gateway","pod":"gw-0"}`, records...)
+}
+
+func logPageWithStream(cursor *string, stream string, records ...string) func(http.ResponseWriter, url.Values) {
+	cursorJSON := "null"
+	if cursor != nil {
+		cursorJSON = fmt.Sprintf("%q", *cursor)
+	}
 	return func(response http.ResponseWriter, _ url.Values) {
 		fmt.Fprintf(
 			response,
-			`{"data":{"revisionId":"rev_1","source":"gateway","stream":{"source":"gateway","pod":"gw-0"},"observedAt":"2026-09-30T12:00:00.000Z","records":[%s],"withheld":0,"truncated":false,"cursor":%q},"meta":{"requestId":"r"}}`,
+			`{"data":{"revisionId":"rev_1","source":"gateway","stream":%s,"observedAt":"2026-09-30T12:00:00.000Z","records":[%s],"withheld":0,"truncated":false,"cursor":%s},"meta":{"requestId":"r"}}`,
+			stream,
 			strings.Join(records, ","),
-			cursor,
+			cursorJSON,
 		)
 	}
 }
@@ -183,18 +196,27 @@ const gapRecord = `{"type":"gap","time":null,"stream":{"source":"gateway"},"reas
 
 func runLogsCommand(t *testing.T, ctx context.Context, stub *runtimeLogStub, args ...string) (string, string, error) {
 	t.Helper()
+	var out, errOut strings.Builder
+	err := runLogsCommandTo(t, ctx, stub, &out, &errOut, args...)
+	return out.String(), errOut.String(), err
+}
+
+func runLogsCommandTo(t *testing.T, ctx context.Context, stub *runtimeLogStub, out, errOut io.Writer, args ...string) error {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(stub.serve))
 	t.Cleanup(server.Close)
 	keyFile := filepath.Join(t.TempDir(), "service-key.json")
 	if err := os.WriteFile(keyFile, []byte(`{"data":{"key":"test-key"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var out, errOut strings.Builder
-	command := New(&out, &errOut)
+	command := New(out, errOut)
 	command.SetArgs(append(args, "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"))
-	err := command.ExecuteContext(ctx)
-	return out.String(), errOut.String(), err
+	return command.ExecuteContext(ctx)
 }
+
+type logOutputFunc func([]byte) (int, error)
+
+func (write logOutputFunc) Write(data []byte) (int, error) { return write(data) }
 
 func recordSleeps(t *testing.T) *[]time.Duration {
 	t.Helper()
@@ -307,60 +329,111 @@ func TestAgentRuntimeAndLogsDefaultToLatestRevisionWithoutActiveRevision(t *test
 }
 
 func TestAgentLogsFollowPollsTheCursorHonoursRetryAfterAndPrintsGapNotices(t *testing.T) {
-	sleeps := recordSleeps(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	stub := &runtimeLogStub{t: t, activeID: "rev_1"}
-	stub.pages = []func(http.ResponseWriter, url.Values){
-		logPage("v1.first.sig", logLine(1, "info", "ready")),
-		logError(http.StatusTooManyRequests, "RUNTIME_LOGS_RATE_LIMITED", map[string]string{"retry-after": "5"}),
-		logPage("v1.second.sig", gapRecord, logLine(2, "error", "after restart")),
-		logError(http.StatusBadRequest, "RUNTIME_LOGS_CURSOR_INVALID", nil),
-		func(response http.ResponseWriter, query url.Values) {
-			cancel() // Ctrl-C while following
-			logPage("v1.third.sig")(response, query)
-		},
-	}
-	out, errOut, err := runLogsCommand(t, ctx, stub,
-		"agent", "logs", "agt_1", "--source", "gateway", "--since", "90s", "--follow", "-o", "json")
-	if err != nil {
-		t.Fatalf("an interrupted follow exits cleanly: %v", err)
-	}
-	cursors := []string{}
-	for _, query := range stub.queries {
-		cursors = append(cursors, query.Get("cursor"))
-	}
-	if want := []string{"", "v1.first.sig", "v1.first.sig", "v1.second.sig", ""}; !reflect.DeepEqual(cursors, want) {
-		t.Fatalf("cursors = %v, want %v", cursors, want)
-	}
-	if stub.queries[1].Get("sinceSeconds") != "" || stub.queries[0].Get("sinceSeconds") != "90" {
-		t.Fatalf("only the first request carries --since: %v", stub.queries)
-	}
-	// A rejected cursor starts a new view at once; an interrupted request ends the loop.
-	if want := []time.Duration{2 * time.Second, 5 * time.Second, 2 * time.Second}; !reflect.DeepEqual(*sleeps, want) {
-		t.Fatalf("sleeps = %v, want %v", *sleeps, want)
-	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("NDJSON lines = %d: %q", len(lines), out)
-	}
-	for _, line := range lines {
-		var record map[string]any
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("not NDJSON: %q", line)
+	for _, responseWins := range []bool{false, true} {
+		name := "cancellation wins before response"
+		if responseWins {
+			name = "response wins before cancellation"
 		}
-	}
-	if !strings.Contains(lines[1], `"reason":"stream_replaced"`) {
-		t.Fatalf("gap record missing from NDJSON: %q", lines[1])
-	}
-	for _, notice := range []string{
-		"notice: rate limited; retrying in 5s",
-		"notice: - gap stream_replaced: Container restarted; showing the new instance.",
-		"notice: the cursor was rejected; starting a new view",
-	} {
-		if !strings.Contains(errOut, notice) {
-			t.Errorf("stderr lacks %q:\n%s", notice, errOut)
-		}
+		t.Run(name, func(t *testing.T) {
+			sleeps := recordSleeps(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stub := &runtimeLogStub{t: t, activeID: "rev_1"}
+			requestCanceled := make(chan struct{})
+			if !responseWins {
+				stub.beforeLogPage = func(request *http.Request) {
+					if len(stub.queries) != 5 {
+						return
+					}
+					// Keep the response unwritten until the real HTTP request observes Ctrl-C.
+					cancel()
+					select {
+					case <-request.Context().Done():
+					case <-time.After(5 * time.Second):
+						t.Error("the in-flight log request did not observe cancellation")
+					}
+					close(requestCanceled)
+				}
+			}
+			stub.pages = []func(http.ResponseWriter, url.Values){
+				logPage("v1.first.sig", logLine(1, "info", "ready")),
+				logError(http.StatusTooManyRequests, "RUNTIME_LOGS_RATE_LIMITED", map[string]string{"retry-after": "5"}),
+				logPage("v1.second.sig", gapRecord, logLine(2, "error", "after restart")),
+				logError(http.StatusBadRequest, "RUNTIME_LOGS_CURSOR_INVALID", nil),
+				logPageWithStream(nil, "null"),
+			}
+			var stdout, stderr strings.Builder
+			finalPagePrinted := false
+			const noPodNotice = "notice: revision rev_1 has no running Pod for source gateway"
+			notices := logOutputFunc(func(data []byte) (int, error) {
+				n, err := stderr.Write(data)
+				if strings.Contains(stderr.String(), noPodNotice) {
+					// This real CLI notice is emitted only after decoding the final HTTP page.
+					finalPagePrinted = true
+					cancel()
+				}
+				return n, err
+			})
+			err := runLogsCommandTo(t, ctx, stub, &stdout, notices,
+				"agent", "logs", "agt_1", "--source", "gateway", "--since", "90s", "--follow", "-o", "json")
+			if err != nil {
+				t.Fatalf("an interrupted follow exits cleanly: %v", err)
+			}
+			if !responseWins {
+				select {
+				case <-requestCanceled:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the canceled request handler did not settle")
+				}
+			}
+			if finalPagePrinted != responseWins {
+				t.Fatalf("final page printed = %v, want %v", finalPagePrinted, responseWins)
+			}
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("follow context = %v, want cancellation", ctx.Err())
+			}
+			out, errOut := stdout.String(), stderr.String()
+			cursors := []string{}
+			for _, query := range stub.queries {
+				cursors = append(cursors, query.Get("cursor"))
+			}
+			if want := []string{"", "v1.first.sig", "v1.first.sig", "v1.second.sig", ""}; !reflect.DeepEqual(cursors, want) {
+				t.Fatalf("cursors = %v, want %v", cursors, want)
+			}
+			if stub.queries[1].Get("sinceSeconds") != "" || stub.queries[0].Get("sinceSeconds") != "90" {
+				t.Fatalf("only the first request carries --since: %v", stub.queries)
+			}
+			// Resetting a rejected cursor restarts the original --since window.
+			if got := stub.queries[4].Get("sinceSeconds"); got != "90" {
+				t.Fatalf("reset window sinceSeconds = %q, want 90", got)
+			}
+			// Cancellation ends either ordering without scheduling another poll.
+			if want := []time.Duration{2 * time.Second, 5 * time.Second, 2 * time.Second}; !reflect.DeepEqual(*sleeps, want) {
+				t.Fatalf("sleeps = %v, want %v", *sleeps, want)
+			}
+			lines := strings.Split(strings.TrimSpace(out), "\n")
+			if len(lines) != 3 {
+				t.Fatalf("NDJSON lines = %d: %q", len(lines), out)
+			}
+			for _, line := range lines {
+				var record map[string]any
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatalf("not NDJSON: %q", line)
+				}
+			}
+			if !strings.Contains(lines[1], `"reason":"stream_replaced"`) {
+				t.Fatalf("gap record missing from NDJSON: %q", lines[1])
+			}
+			for _, notice := range []string{
+				"notice: rate limited; retrying in 5s",
+				"notice: - gap stream_replaced: Container restarted; showing the new instance.",
+				"notice: the cursor was rejected; starting a new view",
+			} {
+				if !strings.Contains(errOut, notice) {
+					t.Errorf("stderr lacks %q:\n%s", notice, errOut)
+				}
+			}
+		})
 	}
 }
 
