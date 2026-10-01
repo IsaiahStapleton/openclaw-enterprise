@@ -69,6 +69,14 @@ only if one was created. Proof-nudge comments are ignored. ClawSweeper owns
 subsequent command interpretation and review; the dispatch response is not proof
 of either result.
 
+For `openclaw/openclaw-enterprise`, recognized command comments still reach the
+canonical ClawSweeper router. The Enterprise repository profile keeps read-only
+and review commands such as status, help or explain, re-review, proof, ask, and
+visualize available. It rejects repair, implementation, autofix, automerge, and
+merge-approval commands before job creation or target mutation. The dispatcher
+hands comments to that policy boundary; it does not authorize their effects. See
+the [merged policy owner](https://github.com/openclaw/clawsweeper/pull/1726).
+
 ## Setup and first-run verification
 
 Use this repository's [checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml) as the installation source of truth. [Upstream synchronization](https://github.com/openclaw/clawsweeper/pull/1720) is merged; follow its [GitHub App setup instructions](https://github.com/openclaw/clawsweeper/blob/main/docs/target-dispatcher.md#target-repository-dispatcher), but do not copy the upstream workflow template. Keep one dispatcher.
