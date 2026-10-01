@@ -114,11 +114,12 @@ email is never read. A brokering IdP can give one person several subjects; only 
 ones sign in.
 
 Changing the issuer or client ID makes a new instance: administrators attach again and
-detach stale methods. Sessions are not tied to configuration
-([human-authentication.ts:671-688][session]); they end at detach (version bump) or expiry,
-eight hours at most. OCE does not learn when an IdP disables someone, so offboarding also
-means detaching or disabling in OCE. Sign-out is local: while the IdP session lives, one
-click signs in again.
+detach stale methods. A session authenticates only while its sign-in method's instance is
+configured, so an issuer or client change, or removing the provider, ends the old instance's
+sessions on their next use, audited as `authentication.session.end`. Other sessions end at
+detach (version bump) or expiry, eight hours at most. OCE does not learn when an IdP
+disables someone, so offboarding also means detaching or disabling in OCE. Sign-out is
+local: while the IdP session lives, one click signs in again.
 
 ### ID-token checks
 
@@ -224,9 +225,8 @@ Proof:
   and the deadline.
 - `postgres-oidc-sign-in`, modelled on `postgres-google-sign-in`: attach and sign in; an
   unattached subject refused; a 4,000-character code; key rotation between callbacks; issuer
-  change, after which the old session lasts until the new attach and the stale method is
-  detached; recovery during an outage; the coverage report naming an OIDC-only account only
-  before attach; disable; three providers side by side. The shared budgets are proven in
+  change, which ends the old instance's session; recovery during an outage; the coverage
+  report naming an OIDC-only account only before attach; disable; three providers side by side. The shared budgets are proven in
   `oidc-login-transport`.
 - `postgres-oidc-tab-binding`: the GitHub tab-binding proof with only OIDC configured; a tab
   that signed in with OIDC signs out after another tab's password sign-in.
@@ -259,7 +259,7 @@ Each default stands, so implementation can proceed, unless the owner overrules i
 | Sponsor this in 0.x, apart from SSO/SCIM, in the published image         | kevinlin-openai | Yes; the non-goals stay binding.                                                                                                                                                     |
 | Endpoint trust: is operator-configured, host-pinned egress the boundary? | freeqaz         | Yes. No DNS-answer policy; `egressCidrs` narrows addresses; the link-local range is excepted by default; private CAs are out of scope for the first PR.                              |
 | Entra ID: subjects are pairwise and invisible in the portal              | freeqaz         | Entra ships unverified. The guide documents where Okta, Auth0 and Keycloak show `sub`; an opt-in `subjectClaim: oid` is a follow-up. Unattached subjects are never listed to anyone. |
-| Sessions after an issuer or client change                                | freeqaz         | The procedure requires detaching stale methods, which ends sessions. A configured-instance filter in `currentSession`, covering GitHub and Google too, is a follow-up.               |
+| Sessions after an issuer or client change                                | freeqaz         | Resolved: `currentSession` admits an external session only while its GitHub, Google or OIDC instance is configured. Detaching stale methods remains the cleanup.                     |
 
 Defaults unless overruled (not blocking): ports other than 443 and extra hosts are refused
 until an IdP needs them; `ES256`/`PS256` wait, symmetric algorithms never; `exp` keeps zero
@@ -310,7 +310,6 @@ leeway; the JWKS stays uncached; the code cap is 4,096; denial audits carry the 
 [console-check]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/apps/controller/src/console/console.mjs#L463
 [console-error]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/apps/controller/src/console/console.mjs#L646-L648
 [snapshot]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/packages/occ/src/state/human-authentication.ts#L545-L562
-[session]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/packages/occ/src/state/human-authentication.ts#L671-L688
 [attach-state]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/packages/occ/src/state/human-authentication.ts#L797-L840
 [denied]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/packages/occ/src/state/human-authentication.ts#L1151
 [db-length]: https://github.com/openclaw/openclaw-enterprise/blob/ccf5d79bd377d11d9e6ce66117839aa0e538fa19/migrations/0008_better_auth_sessions.sql#L52

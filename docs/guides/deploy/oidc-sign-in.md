@@ -140,8 +140,9 @@ account's sessions. The method's `providerId` starts with `oidc:`; detach it wit
 ## Changes, rotation and outages
 
 - The provider instance is derived from the issuer and client ID. Changing either is a
-  new instance: attach every identity again, then detach the old methods. Existing
-  sessions last until that attach or detach, or eight hours at most.
+  new instance: attach every identity again, then detach the old methods. Sessions
+  signed in through the old instance, or through OIDC once it is removed, end on their
+  next request; password sessions and other providers' sessions are unaffected.
 - Rotating only the client secret keeps attachments and voids pending sign-ins.
 - The API reads the JWKS on every callback, so IdP key rotation needs no restart.
 - OCE does not learn when the IdP disables someone: offboarding also means detaching or

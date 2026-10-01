@@ -302,6 +302,7 @@ export type {
   HumanAuthenticationAttemptKey,
   HumanAuthenticationAttempt,
   HumanAuthenticationDenial,
+  PostgresHumanAuthenticationOptions,
 } from "./state/human-authentication.ts";
 export {
   HumanAuthenticationMaintenanceRefusedError,

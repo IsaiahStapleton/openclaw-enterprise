@@ -171,16 +171,43 @@ const pendingAttemptCapacity = 1000;
 const userColumns = `u.id AS user_id, u.email, u.name, u.email_verified, u.image,
   u.created_at AS user_created_at, u.updated_at AS user_updated_at`;
 
+export interface PostgresHumanAuthenticationOptions {
+  /**
+   * Provider instance IDs of the external sign-in providers configured now (for example
+   * `github:<client id digest>` or `oidc:<issuer and client id digest>`). A session signed in
+   * through an external method of any other instance does not authenticate. Absent means no
+   * external provider is configured: only password sessions authenticate.
+   */
+  readonly externalProviderIds?: readonly string[];
+}
+
 /** Authentication persistence shares the original State transaction and audit writer. */
 export class PostgresHumanAuthentication {
   private readonly state: PostgresPlatformState;
   private readonly installationId: string;
   private readonly issuer: string;
+  private readonly externalProviderIds: readonly string[];
 
-  constructor(state: PostgresPlatformState, installationId: string, issuer: string) {
+  constructor(
+    state: PostgresPlatformState,
+    installationId: string,
+    issuer: string,
+    options: PostgresHumanAuthenticationOptions = {},
+  ) {
     this.state = state;
     this.installationId = installationId;
     this.issuer = issuer;
+    const externalProviderIds = options.externalProviderIds ?? [];
+    if (
+      !Array.isArray(externalProviderIds) ||
+      externalProviderIds.some(
+        (providerId) =>
+          typeof providerId !== "string" || providerId.length === 0 || providerId === "credential",
+      )
+    ) {
+      throw new ScopeViolationError("The configured external sign-in providers are invalid.");
+    }
+    this.externalProviderIds = Object.freeze([...new Set(externalProviderIds)]);
   }
 
   private async query(
@@ -628,6 +655,8 @@ export class PostgresHumanAuthentication {
       const user = await this.lockUser(unit, proof.userId);
       const current = await this.snapshot(unit, user, proof.providerId, proof.subject);
       if (
+        (proof.providerId !== "credential" &&
+          !this.externalProviderIds.includes(proof.providerId)) ||
         session.userId !== proof.userId ||
         current === undefined ||
         current.proof.principalId !== proof.principalId ||
@@ -668,13 +697,23 @@ export class PostgresHumanAuthentication {
     });
   }
 
+  /**
+   * The session for `token` when it still authenticates. A session whose external sign-in
+   * method belongs to a provider instance that is no longer configured (the provider was
+   * removed, or its issuer or client ID changed) is ended here and audited once; password
+   * sessions do not depend on provider configuration. The check is part of the one session
+   * query, so it adds no round trip and never calls an identity provider.
+   */
   async currentSession(
     token: string,
   ): Promise<(HumanAuthenticationSession & { user: HumanAuthenticationUser }) | undefined> {
     return this.state.transact(async (unit) => {
       const [row] = await this.query(
         unit,
-        `SELECT s.*, ${userColumns} FROM occ.session s
+        `SELECT s.*, ${userColumns}, h.principal_id AS session_principal_id,
+           m.id AS session_method_id, m.provider_id AS session_provider_id,
+           (NOT m.identity_only OR m.provider_id = ANY($4::text[])) AS provider_configured
+         FROM occ.session s
          JOIN occ.human_authentication_sessions b ON b.session_id = s.id AND b.user_id = s.user_id
          JOIN occ.human_authentication_accounts h ON h.user_id = s.user_id AND h.version = b.version
          JOIN occ.account m ON m.id = b.method_id AND m.user_id = s.user_id AND m.authentication_version = b.method_version
@@ -682,9 +721,36 @@ export class PostgresHumanAuthentication {
          JOIN occ.iam_identities p ON p.id = h.principal_id AND p.kind = 'principal' AND p.issuer = $2 AND p.subject = s.user_id
          WHERE s.token = $1 AND s.expires_at > clock_timestamp() AND NOT h.disabled AND h.installation_id = $3
          AND ((m.provider_id = 'credential' AND m.password IS NOT NULL AND m.password <> '') OR m.identity_only)`,
-        [token, this.issuer, this.installationId],
+        [token, this.issuer, this.installationId, this.externalProviderIds],
       );
-      return row === undefined ? undefined : { ...sessionFromRow(row), user: userFromRow(row) };
+      if (row === undefined) {
+        return undefined;
+      }
+      if (row.provider_configured !== true) {
+        await this.endUnconfiguredSession(unit, row);
+        return undefined;
+      }
+      return { ...sessionFromRow(row), user: userFromRow(row) };
+    });
+  }
+
+  /** Ends one session whose sign-in provider instance is gone; only the deleting call audits. */
+  private async endUnconfiguredSession(unit: PlatformUnitOfWork, row: Row): Promise<void> {
+    const userId = row.user_id as string;
+    await this.lockUser(unit, userId);
+    const [deleted] = await this.query(
+      unit,
+      `DELETE FROM occ.session WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [row.id, userId],
+    );
+    if (deleted === undefined) {
+      return;
+    }
+    await this.audit(unit, "authentication.session.end", row.session_principal_id as string, {
+      userId,
+      methodId: row.session_method_id,
+      providerId: row.session_provider_id,
+      reason: "PROVIDER_NOT_CONFIGURED",
     });
   }
 
@@ -760,8 +826,16 @@ export class PostgresHumanAuthentication {
        JOIN occ.iam_identities p ON p.id = h.principal_id AND p.kind = 'principal' AND p.issuer = $4 AND p.subject = s.user_id
        WHERE s.id = $1 AND s.user_id = $2 AND h.principal_id = $3 AND h.installation_id = $5
        AND s.expires_at > clock_timestamp() AND NOT h.disabled
-       AND ((m.provider_id = 'credential' AND m.password IS NOT NULL AND m.password <> '') OR m.identity_only)`,
-      [actor.sessionId, actor.userId, actor.principalId, this.issuer, this.installationId],
+       AND ((m.provider_id = 'credential' AND m.password IS NOT NULL AND m.password <> '')
+         OR (m.identity_only AND m.provider_id = ANY($6::text[])))`,
+      [
+        actor.sessionId,
+        actor.userId,
+        actor.principalId,
+        this.issuer,
+        this.installationId,
+        this.externalProviderIds,
+      ],
     );
     if (current === undefined) {
       throw new AuthorizationDeniedError("The human administrator session is no longer current.");

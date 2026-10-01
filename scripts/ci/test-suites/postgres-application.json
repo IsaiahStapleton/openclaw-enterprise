@@ -281,6 +281,12 @@
       "expectedTests": ["PostgreSQL OIDC sign-in admits only attached (issuer, subject) pairs"]
     },
     {
+      "path": "tests/integration/postgres-external-session-provider.test.mjs",
+      "expectedTests": [
+        "PostgreSQL sessions end when their external provider instance is no longer configured"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
       "expectedTests": [
         "online recovery replacement moves the reserved lane and survives a restart with the original seed"
