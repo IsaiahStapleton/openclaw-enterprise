@@ -19,7 +19,13 @@ export class PostgresMetricsSnapshot {
   async collect(): Promise<PlatformMetricsSnapshot> {
     const client = await this.pool.connect();
     let failed = false;
+    let transportError: Error | undefined;
+    const onTransportError = (error: Error) => {
+      transportError ??= error;
+    };
     try {
+      // A checked-out pg client owns transport errors until it returns to the pool.
+      client.on?.("error", onTransportError);
       // One statement gives all gauges the same MVCC snapshot. The dedicated
       // pool supplies connection and server-side statement deadlines.
       const result = await client.query(`
@@ -82,6 +88,9 @@ export class PostgresMetricsSnapshot {
               statement_timestamp() - min(created_at))), 0)::float8 AS oldest
           FROM occ.controller_work WHERE ${PENDING_WORK_PREDICATE}
         ) pending`);
+      if (transportError !== undefined) {
+        throw transportError;
+      }
       const row = result.rows[0] as PlatformMetricsSnapshot | undefined;
       if (row === undefined) {
         throw new Error("Metrics require the singleton Installation.");
@@ -91,7 +100,20 @@ export class PostgresMetricsSnapshot {
       failed = true;
       throw error;
     } finally {
-      client.release(failed);
+      // Wait for query settlement before returning the client. The pool takes
+      // error ownership during release; retain ours if release itself fails.
+      let released = false;
+      try {
+        client.release(failed || transportError !== undefined);
+        released = true;
+      } finally {
+        if (released) {
+          client.removeListener?.("error", onTransportError);
+        }
+      }
+      if (!failed && transportError !== undefined) {
+        throw transportError;
+      }
     }
   }
 }
