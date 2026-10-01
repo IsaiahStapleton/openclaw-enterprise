@@ -2507,6 +2507,8 @@ const timeout = setTimeout(() => {
     const directProbe = "node -e " + JSON.stringify('const socket = require("node:net").connect(443, process.argv[1]); socket.on("connect", () => { console.error("UNEXPECTED_CONNECTION"); process.exit(42); }); socket.on("error", (error) => { console.error(error.code); process.exit(1); }); setTimeout(() => { console.error("TIMEOUT"); process.exit(43); }, 5000);') + " " + unrelatedAddress;
     markStockBrokerStage("direct-private-host");
     await expectFailure("direct-unrelated-private-host", directProbe, "EPERM|EACCES|ENETUNREACH|EHOSTUNREACH");
+    // The image's bwrap on PATH serves the sandbox: no missing or unusable bubblewrap warning.
+    assert.doesNotMatch(stderr, /could not find bubblewrap on PATH|needs access to create user namespaces/);
     process.stdout.write("stock-codex-repository-broker-ready " + JSON.stringify({ commit }) + "\\n");
   } finally {
     clearTimeout(timeout);
@@ -2665,6 +2667,14 @@ const platformInventoryEntry = inventory.find((entry) => entry.path === platform
 assert.ok(platformInventoryEntry, "The final runtime inventory must include the stock Codex platform binary.");
 assert.equal((platformInventoryEntry.mode & 0o111) !== 0, true, "Codex platform binary must stay executable.");
 assert.equal(platformInventoryEntry.sha256, platformBinarySha256);
+// Codex finds its own bubblewrap on PATH, so it starts without the missing-bwrap error.
+const bundledBwrap = resolve(dirname(platformBinary), "..", "codex-resources", "bwrap");
+assert.equal(execFileSync("sh", ["-c", "command -v bwrap"], {encoding: "utf8"}).trim(), "/usr/local/bin/bwrap");
+assert.equal(
+  createHash("sha256").update(readFileSync("/usr/local/bin/bwrap")).digest("hex"),
+  createHash("sha256").update(readFileSync(bundledBwrap)).digest("hex"),
+  "bwrap on PATH must be the bubblewrap Codex ships.",
+);
 process.stdout.write("shared-codex-0.158.0-ready\n");
 `;
     const { stdout } = await runDocker([

@@ -7221,14 +7221,22 @@ export class KubernetesComputeDriver implements ComputeDriver {
       setupFile,
     );
     const defaults = asRecord(asRecord(revision.configuration.agents)?.defaults);
-    variables.push({
-      name: "OPENCLAW_WORKSPACE_BOOTSTRAP",
-      // Copy only initialization options; Gateway configuration can contain secrets.
-      value: JSON.stringify({
-        skipBootstrap: defaults?.skipBootstrap,
-        skipOptionalBootstrapFiles: defaults?.skipOptionalBootstrapFiles,
-      }),
-    });
+    variables.push(
+      {
+        name: "OPENCLAW_WORKSPACE_BOOTSTRAP",
+        // Copy only initialization options; Gateway configuration can contain secrets.
+        value: JSON.stringify({
+          skipBootstrap: defaults?.skipBootstrap,
+          skipOptionalBootstrapFiles: defaults?.skipOptionalBootstrapFiles,
+        }),
+      },
+      {
+        // The node keeps its identity across revisions; without a name it would
+        // keep the first Harness Pod's host name. Name it after the Agent instead.
+        name: "OPENCLAW_NODE_DISPLAY_NAME",
+        value: `agent-${sha256Hex(revision.agentId, 12)}-workspace`,
+      },
+    );
     // Independent restarts can orphan descendants of a failed wrapper. Tini
     // reaps them, including when a Sandbox provider runs this below PID 1.
     container.command = [...RUNTIME_WRAPPER_COMMAND];
