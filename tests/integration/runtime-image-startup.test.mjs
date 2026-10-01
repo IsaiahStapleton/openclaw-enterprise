@@ -2670,6 +2670,10 @@ const platformInventoryEntry = inventory.find((entry) => entry.path === platform
 assert.ok(platformInventoryEntry, "The final runtime inventory must include the stock Codex platform binary.");
 assert.equal((platformInventoryEntry.mode & 0o111) !== 0, true, "Codex platform binary must stay executable.");
 assert.equal(platformInventoryEntry.sha256, platformBinarySha256);
+// Codex runs its bundled bubblewrap. A bwrap on PATH would make Codex probe
+// --unshare-user --unshare-net at start, which the reviewed seccomp profile
+// denies, and log a false user-namespace error.
+assert.throws(() => execFileSync("sh", ["-c", "command -v bwrap"], {stdio: "pipe"}));
 process.stdout.write("shared-codex-0.158.0-ready\n");
 `;
     const { stdout } = await runDocker([

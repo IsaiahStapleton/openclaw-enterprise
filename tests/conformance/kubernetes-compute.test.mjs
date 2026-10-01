@@ -1224,6 +1224,13 @@ test("dedicated startup initializes Harness plugins before enrolling its workspa
     },
     command: [...RUNTIME_WRAPPER_COMMAND],
   });
+  // The node is named after the Agent, not after the revision's Pod (D85).
+  assert.equal(
+    read("Deployment", agentName).spec.template.spec.containers[0].env.find(
+      ({ name }) => name === "OPENCLAW_NODE_DISPLAY_NAME",
+    )?.value,
+    `agent-${digest(revision.agentId)}-workspace`,
+  );
   const renderedConfiguration = JSON.parse(
     read(
       "ConfigMap",

@@ -68,6 +68,31 @@ const lines = {
       error: "remote control requires ChatGPT authentication",
     },
   ),
+  // Codex 0.158 prints this once per start; the image runs Codex's bundled bubblewrap.
+  missingBwrap: record("ERROR", "codex_app_server", {
+    message:
+      "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.",
+  }),
+  // Other bubblewrap errors still pass.
+  bwrapNamespaces: record("ERROR", "codex_app_server", {
+    message: "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.",
+  }),
+  // Codex 0.158 prints this at each session's network-proxy start on Linux,
+  // whatever the Unix-socket policy says.
+  unixSocketsPlatform: record(
+    "WARN",
+    "codex_network_proxy::proxy",
+    {
+      message:
+        "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform",
+    },
+    { name: "session_init.network_proxy" },
+  ),
+  // The same text from another target is not the platform warning.
+  unixSocketsOtherTarget: record("WARN", "codex_core::client", {
+    message:
+      "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform",
+  }),
   text: "codex app-server (WebSockets)",
   malformed: '{"fields":{"message":"enter"',
 };
@@ -109,6 +134,11 @@ test("the Codex stderr filter drops span lifecycle records except the turn's sta
     gatewayClient: true,
     // The first retry line is kept, so the reason stays visible.
     remoteControlWait: true,
+    missingBwrap: false,
+    bwrapNamespaces: true,
+    // The first platform warning per app-server is kept.
+    unixSocketsPlatform: true,
+    unixSocketsOtherTarget: true,
     text: true,
     malformed: true,
   });
@@ -116,6 +146,10 @@ test("the Codex stderr filter drops span lifecycle records except the turn's sta
   assert.equal(kept(lines.remoteControlWait, at + 1_000), false);
   assert.equal(kept(lines.remoteControlWait, at + 599_000), false);
   assert.equal(kept(lines.remoteControlWait, at + 600_000), true);
+  // Later sessions repeat the platform warning: dropped for the process lifetime.
+  assert.equal(kept(lines.unixSocketsPlatform, at + 1_000), false);
+  assert.equal(kept(lines.unixSocketsPlatform, at + 86_400_000), false);
+  assert.equal(kept(lines.unixSocketsOtherTarget, at + 1_000), true);
 });
 
 test("the Codex stderr filter forwards everything when RUST_LOG starts at debug or trace", () => {

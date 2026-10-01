@@ -133,6 +133,8 @@ Gateway, so a redeploy interrupts service until the replacement is ready. Becaus
 Gateway is stopped or otherwise not ready, preparation starts the candidate Gateway after the
 candidate Harness is otherwise ready. That candidate Gateway provides the bootstrap endpoint; the
 revision remains not ready until the workspace node is enrolled and observed.
+A dedicated Codex Harness names its workspace node `agent-<agent digest>-workspace` on every
+start, so the Gateway's node list keeps one stable name across revisions.
 
 Dedicated Codex and dedicated OpenClaw keep separate Agent-owned Gateway and
 Harness ServiceAccounts. Compute owns the Gateway Pod; the selected SandboxDriver
