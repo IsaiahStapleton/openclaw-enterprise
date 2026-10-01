@@ -59,11 +59,12 @@ export function publicMarkdown(markdown, md) {
         hidden.fill(true, start, end);
       }
     }
+    // Treat comments as whitespace when deciding whether to retain this section.
     const notes = lines
       .slice(section.end, section.stop)
       .filter((_, index) => !hidden[section.end + index])
       .join("\n")
-      .replace(/<!--[^]*?-->|\{\/\*[^]*?\*\/\}/g, "")
+      .replace(/<!--[^]*?-->|\{\/\*[^]*?\*\/\}/g, " ")
       .trim();
     if (!notes) {
       hidden.fill(true, section.start, section.stop);
