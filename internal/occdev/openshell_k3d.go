@@ -291,7 +291,11 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	} else {
 		fmt.Fprintf(r.opts.Out, "Installing OCE in Namespace %s...\n", state.PlatformNamespace)
 	}
-	if err := writeInstallation(state, runtimeImage, assets, codexSeccompProfile); err != nil {
+	statusProxySource, err := r.developmentStatusProxySource(ctx, state)
+	if err != nil {
+		return err
+	}
+	if err := writeInstallation(state, runtimeImage, assets, codexSeccompProfile, statusProxySource); err != nil {
 		return err
 	}
 	if routingPodCIDR != "" {

@@ -114,6 +114,11 @@ export const CredentialSourceParams = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentCredentialSourceParams = Type.Object(
+  { namespaceId: NamespaceId, agentId: AgentId, credentialSourceId: CredentialSourceId },
+  { additionalProperties: false },
+);
+
 export const IAMRoleParams = Type.Object(
   { namespaceId: NamespaceId, roleId: IAMRoleId },
   { additionalProperties: false },
@@ -225,6 +230,10 @@ export const HarnessAuthBindingSchema = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
+    { method: Type.Literal("oauth"), source: SecretReference },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
     { additionalProperties: false },
   ),
@@ -279,6 +288,17 @@ export const CreateCredentialSourceBody = Type.Object(
     secrets: Type.Optional(CredentialSourceSecrets),
   },
   { additionalProperties: false },
+);
+
+export const UpdateCredentialSourceBody = Type.Object(
+  {
+    secrets: Type.Optional(CredentialSourceSecrets),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Re-reads the source's Secret values, or those of replacement Secret references, and updates the Credential Gateway copy. Non-secret config is immutable.",
+  },
 );
 
 export const SecretDelivery = Type.Object(
@@ -352,6 +372,14 @@ const PluginDiscoveryAccessToken = Type.String({
 export const DiscoverAgentPluginsBody = Type.Union([
   Type.Object(
     {
+      oauthLogin: SecretReference,
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+      q: Type.Optional(Type.String({ maxLength: 1024 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
       q: Type.Optional(Type.String({ maxLength: 1024 })),
     },
@@ -377,6 +405,10 @@ export const DiscoverAgentPluginsBody = Type.Union([
 
 export const DiscoverAgentPluginDetailsBody = Type.Union([
   Type.Object(
+    { oauthLogin: SecretReference, pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+    { additionalProperties: false },
+  ),
+  Type.Object(
     { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
     { additionalProperties: false },
   ),
@@ -395,6 +427,7 @@ export const DiscoverAgentPluginDetailsBody = Type.Union([
 
 export const DiscoverSavedAgentPluginsBody = Type.Object(
   {
+    oauthLogin: Type.Optional(SecretReference),
     cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
     q: Type.Optional(Type.String({ maxLength: 1024 })),
   },
@@ -402,7 +435,10 @@ export const DiscoverSavedAgentPluginsBody = Type.Object(
 );
 
 export const DiscoverSavedAgentPluginDetailsBody = Type.Object(
-  { pluginId: Type.String({ minLength: 1, maxLength: 256 }) },
+  {
+    pluginId: Type.String({ minLength: 1, maxLength: 256 }),
+    oauthLogin: Type.Optional(SecretReference),
+  },
   { additionalProperties: false },
 );
 
@@ -869,6 +905,8 @@ export type ProvisionAgentBody = Type.Static<typeof ProvisionAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
 export type ChannelDirectoryLookupBody = Type.Static<typeof ChannelDirectoryLookupBody>;
 export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
+export type UpdateCredentialSourceBody = Type.Static<typeof UpdateCredentialSourceBody>;
+export type AgentCredentialSourceParams = Type.Static<typeof AgentCredentialSourceParams>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];

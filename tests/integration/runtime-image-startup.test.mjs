@@ -2,7 +2,19 @@ import { defaultAgentModel } from "../../apps/controller/src/console/agents/star
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -14,6 +26,7 @@ import {
   AGENT_READINESS_ENTRYPOINT,
   AGENT_WITH_NODE_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
+  CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
   GATEWAY_STOP_TIMEOUT_MS,
@@ -47,6 +60,82 @@ const imageTestOptions =
         skip: "Set OCC_TEST_RUNTIME_IMAGE to a locally built OpenClaw runtime image tag.",
       }
     : {};
+
+test("Codex OAuth bootstrap preserves rotated credentials and requires a new source after disk loss", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "oce-oauth-bootstrap-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const codexHome = join(directory, "codex-home");
+  const seedPath = join(directory, "seed.json");
+  const authPath = join(codexHome, "auth.json");
+  const auth = {
+    auth_mode: "chatgpt",
+    tokens: { id_token: "test-id", access_token: "test-access", refresh_token: "test-refresh" },
+    last_refresh: "2026-09-28T00:00:00Z",
+  };
+  await writeFile(seedPath, JSON.stringify(auth));
+  const run = (sourceUid = "source-1", volumeUid = "volume-1") =>
+    execute(process.execPath, ["-e", CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT], {
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        OCE_CODEX_OAUTH_SOURCE_UID: sourceUid,
+        OCE_CODEX_OAUTH_VOLUME_UID: volumeUid,
+        OCE_CODEX_OAUTH_SEED_PATH: seedPath,
+      },
+    });
+  await run();
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), auth);
+  assert.equal((await stat(authPath)).mode & 0o777, 0o600);
+
+  // Exercise the real seed script against a native-style atomic replacement, without provider calls.
+  const refreshed = {
+    ...auth,
+    tokens: { ...auth.tokens, access_token: "rotated-access", refresh_token: "rotated-refresh" },
+  };
+  await writeFile(`${authPath}.native`, JSON.stringify(refreshed), { mode: 0o600 });
+  await rename(`${authPath}.native`, authPath);
+  await run();
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), refreshed);
+  await assert.rejects(
+    run("source-1", "replacement-volume"),
+    /could not initialize private credentials/,
+  );
+  await rm(authPath);
+  await assert.rejects(run(), /could not initialize private credentials/);
+  await assert.rejects(readFile(authPath), { code: "ENOENT" });
+
+  // A replacement source starts from an empty Codex home. Links planted by the previous
+  // process must not redirect the new bundle into the served workspace.
+  const workspace = join(directory, "workspace");
+  await mkdir(workspace);
+  await mkdir(join(codexHome, "sessions"));
+  await writeFile(join(codexHome, "sessions", "previous.jsonl"), "previous login history");
+  for (const name of ["auth.json.bootstrap", ".oce-oauth.json.bootstrap"]) {
+    await symlink(join("..", "workspace", `${name}.leak`), join(codexHome, name));
+  }
+  await run("source-2");
+  assert.deepEqual(await readdir(workspace), []);
+  assert.deepEqual((await readdir(codexHome)).sort(), [".oce-oauth.json", "auth.json"]);
+  assert.ok((await lstat(authPath)).isFile());
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), auth);
+  assert.deepEqual(JSON.parse(await readFile(join(codexHome, ".oce-oauth.json"), "utf8")), {
+    sourceUid: "source-2",
+    volumeUid: "volume-1",
+  });
+
+  // Restarting with the same source keeps the native generation and its history.
+  await mkdir(join(codexHome, "sessions"));
+  await writeFile(join(codexHome, "sessions", "current.jsonl"), "current login history");
+  await writeFile(authPath, JSON.stringify(refreshed), { mode: 0o600 });
+  await run("source-2");
+  assert.deepEqual(JSON.parse(await readFile(authPath, "utf8")), refreshed);
+  assert.deepEqual(await readdir(join(codexHome, "sessions")), ["current.jsonl"]);
+
+  // A linked credential file is not accepted as the native generation.
+  await rm(authPath);
+  await symlink(seedPath, authPath);
+  await assert.rejects(run("source-2"), /could not initialize private credentials/);
+});
 
 test("runtime image seccomp option requires the CI-prepared profile record", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "oce-runtime-seccomp-profile-"));
@@ -333,7 +422,7 @@ async function scenario(entrypoint, channel, label) {
     OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest }), OPENCLAW_GATEWAY_PORT: "18789",
     OPENCLAW_RUNTIME_STATUS_PORT: "18888", OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
     OPENCLAW_AGENT_REVISION_ID: "rev_approver-startup", OPENCLAW_POD_UID: "pod_approver-startup" };
-  const child = cp.spawn("node", ["-e", entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
+  const child = cp.spawn("node", ["-e", ...entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", value => { output += value; });
   child.stderr.on("data", value => { output += value; });
@@ -404,8 +493,8 @@ async function scenario(entrypoint, channel, label) {
       ],
       { timeout: 180_000 * imageSmokeTimeoutMultiplier },
       JSON.stringify({
-        docker: DOCKER_GATEWAY_RUNTIME_ENTRYPOINT,
-        kubernetes: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        docker: nodeProgramArguments(DOCKER_GATEWAY_RUNTIME_ENTRYPOINT),
+        kubernetes: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
       }),
     );
     assert.match(stdout, /PLUGIN_APPROVER_STARTUP_PASSED/);
@@ -1061,7 +1150,7 @@ async function runGatewaySmoke(t, harnessId, options = {}) {
     "node",
     image,
     "-e",
-    entrypoint,
+    ...nodeProgramArguments(entrypoint),
   ]);
   if (!waitUntilReady) {
     return { containerName };
@@ -1142,7 +1231,8 @@ const environment = {
 let native;
 vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
   URL, console, setTimeout, setInterval,
-  process: { env: environment, on() {}, exit() {} },
+  // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
+  process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
   require(name) {
     if (name !== "node:child_process") return require(name);
     return {
@@ -1159,8 +1249,10 @@ vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
       spawn(command, args, options) {
         const appServer = args.indexOf("app-server");
         assert.ok(appServer > 0);
+        const appServerEnvironment = options.env ?? environment;
+        assert.equal(Object.hasOwn(appServerEnvironment, "APP_SERVER_TOKEN"), false);
         native = cp.spawn(command, [...args.slice(0, appServer + 1), "--listen", "stdio://"], {
-          ...options, env: environment, stdio: ["pipe", "pipe", "pipe"],
+          ...options, env: appServerEnvironment, stdio: ["pipe", "pipe", "pipe"],
         });
         return native;
       },
@@ -1194,7 +1286,7 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
     assert.equal(config.allow_login_shell, false);
     assert.equal(config.shell_environment_policy.set.PATH, environment.PATH);
     const result = await rpc("command/exec", {
-      command: ["/bin/bash", "-c", "command -v gh; command -v git; git config --system --get-all include.path"],
+      command: ["/bin/bash", "-c", 'test -z "$APP_SERVER_TOKEN" || exit 1; command -v gh; command -v git; git config --system --get-all include.path'],
       sandboxPolicy: { type: "externalSandbox", networkAccess: "restricted" },
       timeoutMs: 5000,
     });
@@ -1506,7 +1598,7 @@ test(
     const launch = String.raw`
 const fs = require("node:fs");
 const cp = require("node:child_process");
-const { gateway, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { gatewayArgs, harness, workspaceNodeId } = JSON.parse(fs.readFileSync(0, "utf8"));
 const model = "openai/runtime-image-schema";
 function validate(path) {
   const home = fs.mkdtempSync("/tmp/oce-config-validate-");
@@ -1533,7 +1625,7 @@ function run(args, env) {
 (async () => {
   fs.mkdirSync("/tmp/gateway", { recursive: true });
   fs.copyFileSync("/etc/openclaw/openclaw.json", "/tmp/gateway/base.json");
-  const gatewayRun = await run(["-e", gateway], {
+  const gatewayRun = await run(["-e", ...gatewayArgs], {
     OPENCLAW_CONFIG_PATH: "/tmp/gateway/base.json",
     OPENCLAW_STATE_DIR: "/home/node/.openclaw",
     OPENCLAW_GATEWAY_PORT: "18789",
@@ -1599,7 +1691,7 @@ function run(args, env) {
       ],
       { timeout: 300_000 * imageSmokeTimeoutMultiplier },
       JSON.stringify({
-        gateway: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+        gatewayArgs: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
         harness: NATIVE_WORKER_ENTRYPOINT,
         workspaceNodeId: randomBytes(32).toString("hex"),
       }),
@@ -2258,7 +2350,8 @@ assert.equal(fs.readFileSync(homeControlSentinelPath, "utf8"), homeControlSentin
 let native;
 vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
   URL, console, setTimeout, setInterval,
-  process: { env: environment, on() {}, exit() {} },
+  // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
+  process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
   require(name) {
     if (name !== "node:child_process") return require(name);
     return {

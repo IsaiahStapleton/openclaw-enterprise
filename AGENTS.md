@@ -252,6 +252,8 @@ an ordinary document does not exempt that document.
 Use [technical-writing](.agents/skills/technical-writing/SKILL.md) when creating,
 editing, or reviewing documentation and specifications. It bundles the relevant
 writing guidance locally; no personal skill installation is required.
+Follow its [page-scope guidance](.agents/skills/technical-writing/SKILL.md#choose-the-smallest-useful-page)
+to keep main guides focused and route edge-case diagnostics to troubleshooting.
 
 - Give each fact one owning page: concepts define terms, references define
   behavior, guides give procedures, and flows explain implementation. Other pages

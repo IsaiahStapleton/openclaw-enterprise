@@ -40,7 +40,7 @@ as each baseline Agent becomes ready:
 ## Standard runtime branches
 
 Provision from each standard preset through Console, separately from the
-Community Agent. Use unique names and record the actual Driver and image IDs.
+SWE Agent. Use unique names and record the actual Driver and image IDs.
 
 | Branch            | Required evidence                                                                                                                                                                                                                                                                      |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ an OpenClaw Slack pass.
 
 For each runtime branch, use its separate standard Agent and an explicitly
 approved **Contributor** profile with issue management off (`git-write`). Keep
-the Community Agent's two read-only bindings and denial probes unchanged. Follow the
+the SWE Agent's two read-only bindings and denial probes unchanged. Follow the
 [repository permission guide](../../../../docs/guides/repository-credentials/installation.md)
 for the supported profile and exact numeric repository scope.
 

@@ -69,12 +69,12 @@ Do not export model or Slack values to a file just to read them back into chat.
 Follow the current [Console creation flow](../../../../docs/reference/console/create-and-deploy.md)
 and [Credentials tab](../../../../docs/guides/console/agent-details.md#credentials-tab).
 
-The following steps describe the Community Agent. For the required Standard
+The following steps describe the SWE Agent. For the required Standard
 Codex case, select **Standard Codex** with the same supported Codex authentication.
 After its model-only baseline passes, perform steps 3–5 on that Agent too: bind
 both Slack Secrets, select the exact test channel and authorized sender, save,
 and deploy. Verify its real Slack reply before native-session continuity or
-lifecycle checks. Run it sequentially with the Community Agent when sharing an
+lifecycle checks. Run it sequentially with the SWE Agent when sharing an
 app; preserve any separately authorized external consumers. Configure the
 supported Agent-wide plugin approver identity for the designated human if using
 Slack approval delivery, then verify that human can receive and deny the request.
@@ -85,7 +85,7 @@ OpenClaw plugin's documented prerequisites independently; lack of a usable model
 credential or plugin blocks that branch rather than excusing it.
 
 1. Sign in as an authorized operator and select the intended OCE Namespace.
-   In **Create Agent**, apply **Community Agent**, choose **OpenAI** and
+   In **Create Agent**, apply **SWE Agent**, choose **OpenAI** and
    **Codex**, and select **Service Accounts** as the authentication method.
 2. In the model credential picker, select an existing appropriate Namespace
    Secret or **Create new Secret...**. Give a new Secret a run-scoped name such
@@ -118,7 +118,7 @@ key. For the configured case, follow the
 This operator installation step is separate from Console-only Agent provisioning.
 
 Bootstrap OCC first to obtain its server-assigned Namespace IDs. Build the
-registry with the supplied App/installation/repository IDs and the Community Agent's
+registry with the supplied App/installation/repository IDs and the SWE Agent's
 approved `git-read` profile for every repository and the separately authorized
 contributor profile for its exact positive-write target. Prepare the service
 configuration and certificate/key/CA files using the rendered broker hostname.
@@ -137,7 +137,7 @@ Before provisioning, confirm the selected Agent/Codex account already has the
 intended Linear workspace connected for the selected plugin. Curated discovery
 needs no discovery token, but it does not grant Linear account access. After
 deployment, verify the connection with a real lookup of the chosen issue. The
-Community role's read-only instruction is not a provider-enforced permission;
+configured role's read-only Linear instruction is not a provider-enforced permission;
 record any independently verified Linear account restrictions separately.
 
 After that confirmation, select Linear from the curated catalog in
@@ -156,7 +156,7 @@ their checks; do not silently substitute another account.
 For the separate Linear approval case, use a Standard Codex Agent whose task
 permits the bounded attempt. Select the documented write-action approval policy
 and human reviewer through Console. Resolve the reviewer and disposable issue
-title before attempting the write. Preserve the Community Agent's read-only
+title before attempting the write. Preserve the SWE Agent's role
 instructions; they are not an approval-policy test.
 
 During cleanup, remove only temporary exports and run-created Secrets whose

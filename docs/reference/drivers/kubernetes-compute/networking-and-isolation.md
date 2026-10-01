@@ -29,7 +29,8 @@ Prefer individual `/32` or `/128` addresses. On an
 overlay network, the observed source may be the control-plane node's overlay
 address rather than its node IP. Verify it across nodes with enforced policies.
 An omitted list adds no API-proxy ingress rule and leaves status unavailable
-where the cluster blocks that traffic. This setting does not expose the native
+where the cluster blocks that traffic. It also restarts the Gateway once on each
+dedicated Codex first deploy. This setting does not expose the native
 gateway or grant workloads Kubernetes API access.
 
 When private Agent routing is enabled, Compute derives the only allowed peer

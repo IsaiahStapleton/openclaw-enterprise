@@ -159,6 +159,8 @@ Google sessions end and the password keeps working.
 
 The provider instance is derived from the client ID. A new client ID is a new provider
 instance: reattach every Google identity, then detach the old methods by `methodId`.
+Sessions signed in under the old client ID, or with Google once it is removed, end on
+their next request.
 Rotating only the client secret keeps attachments and invalidates pending sign-in
 attempts. Rotating `OCC_AUTH_SECRET` also fails attempts in flight.
 

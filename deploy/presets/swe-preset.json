@@ -1,5 +1,5 @@
 {
-  "name": "Q&A Agent",
+  "name": "SWE Agent",
   "template": {
     "variables": {
       "name": {
@@ -150,32 +150,7 @@
               "provider": "default",
               "id": "SLACK_BOT_TOKEN"
             },
-            "channels": {
-              "C0C49E7CS4A": {
-                "requireMention": false,
-                "users": ["*"]
-              },
-              "C0C43A2QA11": {
-                "requireMention": false,
-                "users": ["*"]
-              },
-              "C0C569NN9ME": {
-                "requireMention": false,
-                "users": ["*"]
-              },
-              "C0C4A0JH2BG": {
-                "requireMention": false,
-                "users": ["*"]
-              },
-              "C0C5KF0JLSC": {
-                "requireMention": false,
-                "users": ["*"]
-              },
-              "C0C5KF0DWLQ": {
-                "requireMention": false,
-                "users": ["*"]
-              }
-            }
+            "channels": {}
           }
         }
       },

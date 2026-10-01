@@ -27,6 +27,13 @@ import {
   type GoogleLoginConfiguration,
 } from "./google.ts";
 import {
+  exchangeOidcSubject,
+  oidcAuthorizationURL,
+  oidcNonce,
+  oidcProviderId,
+  type OidcLoginConfiguration,
+} from "./oidc.ts";
+import {
   providerExchangeFailure,
   providerJSON,
   rejected,
@@ -78,6 +85,7 @@ export interface HumanLoginProviders {
   readonly recoveryUserId: string;
   readonly github?: ProviderClient;
   readonly google?: GoogleLoginConfiguration;
+  readonly oidc?: OidcLoginConfiguration;
   /** `recovery-only` admits only the recovery account's password; absent admits every one. */
   readonly passwordSignIn?: "recovery-only";
 }
@@ -185,8 +193,18 @@ function githubSubject(value: unknown): string | undefined {
   return typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value) ? value : undefined;
 }
 
+/** The GitHub provider instance: a new client ID is a new instance. */
+export function githubProviderId(config: Pick<ProviderClient, "clientId">): string {
+  return `github:${digest(config.clientId)}`;
+}
+
+/** The Google provider instance: a new client ID is a new instance. */
+export function googleProviderId(config: Pick<GoogleLoginConfiguration, "clientId">): string {
+  return `google:${digest(config.clientId)}`;
+}
+
 function githubProvider(config: ProviderClient, baseURL: string): ExternalProvider {
-  const providerId = `github:${digest(config.clientId)}`;
+  const providerId = githubProviderId(config);
   const callbackURL = new URL("/api/auth/providers/github/callback", baseURL).href;
   const provider = github({
     clientId: config.clientId,
@@ -205,7 +223,7 @@ function githubProvider(config: ProviderClient, baseURL: string): ExternalProvid
 }
 
 function googleProvider(config: GoogleLoginConfiguration, baseURL: string): ExternalProvider {
-  const providerId = `google:${digest(config.clientId)}`;
+  const providerId = googleProviderId(config);
   const callbackURL = new URL("/api/auth/providers/google/callback", baseURL).href;
   return {
     providerId,
@@ -218,6 +236,25 @@ function googleProvider(config: GoogleLoginConfiguration, baseURL: string): Exte
       exchangeGoogleSubject(config, code, codeVerifier, callbackURL, googleNonce(secret, state)),
   };
 }
+
+function oidcProvider(config: OidcLoginConfiguration, baseURL: string): ExternalProvider {
+  const providerId = oidcProviderId(config);
+  const callbackURL = new URL("/api/auth/providers/oidc/callback", baseURL).href;
+  return {
+    providerId,
+    attemptProviderId: `${providerId}:${digest(config.clientSecret)}`,
+    callbackURL,
+    authorizationURL: (secret, state, codeVerifier) =>
+      oidcAuthorizationURL(config, state, codeVerifier, callbackURL, oidcNonce(secret, state)),
+    exchange: (secret, code, codeVerifier, state) =>
+      exchangeOidcSubject(config, code, codeVerifier, callbackURL, oidcNonce(secret, state)),
+  };
+}
+
+export type ExternalProviderName = "github" | "google" | "oidc";
+
+// Authorization codes are opaque and provider-sized; Entra ID's run past 1,024 characters.
+const authorizationCodeLimit = 4096;
 
 export interface HumanLoginAdmissionOptions {
   /**
@@ -234,7 +271,7 @@ export function createHumanLogin(
   baseURL: string,
   admission: HumanLoginAdmissionOptions = {},
 ) {
-  if (config.github === undefined && config.google === undefined) {
+  if (config.github === undefined && config.google === undefined && config.oidc === undefined) {
     throw new Error("Guarded human sign-in requires a configured external sign-in provider.");
   }
   const proofScope = new AsyncLocalStorage<{ proof?: HumanAuthenticationProof }>();
@@ -242,6 +279,7 @@ export function createHumanLogin(
     config.github === undefined ? undefined : githubProvider(config.github, baseURL);
   const googleLogin =
     config.google === undefined ? undefined : googleProvider(config.google, baseURL);
+  const oidcLogin = config.oidc === undefined ? undefined : oidcProvider(config.oidc, baseURL);
   const secure = new URL(baseURL).protocol === "https:";
   const bindingCookie = secure ? "__Host-occ_login_attempt" : "occ_login_attempt";
   const receiptCookie = secure ? "__Host-occ_login_receipt" : "occ_login_receipt";
@@ -279,9 +317,10 @@ export function createHumanLogin(
 
   // Callback denials say whether the attempt, the provider, or the identity failed.
   async function rejectExternal(
+    provider: ExternalProviderName,
     reason: "INVALID_ATTEMPT" | "EXTERNAL_IDENTITY_REJECTED" | "PROVIDER_UNAVAILABLE",
   ): Promise<never> {
-    await state.recordDenied(reason);
+    await state.recordDenied(reason, provider);
     throw rejected();
   }
 
@@ -425,7 +464,7 @@ export function createHumanLogin(
   }
   // Start, callback and result for one external provider. Every provider shares the
   // admission budget, the browser-bound attempt and receipt cookies, PKCE and session binding.
-  function externalProviderEndpoints(name: "github" | "google", provider: ExternalProvider) {
+  function externalProviderEndpoints(name: ExternalProviderName, provider: ExternalProvider) {
     return {
       start: createAuthEndpoint(`/oce/providers/${name}/start`, { method: "POST" }, async (ctx) =>
         admitStart.admit(externalKeys(ctx.headers), async () => {
@@ -476,10 +515,10 @@ export function createHumanLogin(
                 !/^[A-Za-z0-9_-]{43}$/.test(stateValue) ||
                 !browser ||
                 !/^[A-Za-z0-9_-]{43}$/.test(browser) ||
-                (!error && (!code || code.length > 1024)) ||
+                (!error && (!code || code.length > authorizationCodeLimit)) ||
                 (error && (error.length > 200 || code))
               ) {
-                return rejectExternal("INVALID_ATTEMPT");
+                return rejectExternal(name, "INVALID_ATTEMPT");
               }
               const attempt = await state.consumeAttempt({
                 stateHash: digest(stateValue),
@@ -488,11 +527,12 @@ export function createHumanLogin(
                 callbackURL: provider.callbackURL,
               });
               if (!attempt) {
-                return rejectExternal("INVALID_ATTEMPT");
+                return rejectExternal(name, "INVALID_ATTEMPT");
               }
               if (error) {
                 // RFC 6749 section 4.1.2.1: the provider reports its own failure.
                 return rejectExternal(
+                  name,
                   error === "server_error" || error === "temporarily_unavailable"
                     ? "PROVIDER_UNAVAILABLE"
                     : "EXTERNAL_IDENTITY_REJECTED",
@@ -506,7 +546,7 @@ export function createHumanLogin(
                 stateValue,
               );
               if ("denial" in exchange) {
-                return rejectExternal(exchange.denial);
+                return rejectExternal(name, exchange.denial);
               }
               const snapshot = await state.snapshotExternal(
                 provider.providerId,
@@ -514,7 +554,7 @@ export function createHumanLogin(
                 attempt.createdAt,
               );
               if (!snapshot) {
-                return rejectExternal("EXTERNAL_IDENTITY_REJECTED");
+                return rejectExternal(name, "EXTERNAL_IDENTITY_REJECTED");
               }
               const startedAt = performance.now();
               const session = await proofScope.run({ proof: snapshot.proof }, () =>
@@ -597,6 +637,8 @@ export function createHumanLogin(
     githubLogin === undefined ? undefined : externalProviderEndpoints("github", githubLogin);
   const googleEndpoints =
     googleLogin === undefined ? undefined : externalProviderEndpoints("google", googleLogin);
+  const oidcEndpoints =
+    oidcLogin === undefined ? undefined : externalProviderEndpoints("oidc", oidcLogin);
   // A rejected password is audited before the refusal. When the audit write fails the
   // answer is 503 (audits fail closed), marked so admission still spends the budget.
   async function refusePassword(): Promise<never> {
@@ -705,6 +747,13 @@ export function createHumanLogin(
             oceGoogleCallback: googleEndpoints.callback,
             oceGoogleResult: googleEndpoints.result,
           }),
+      ...(oidcEndpoints === undefined
+        ? {}
+        : {
+            oceOidcStart: oidcEndpoints.start,
+            oceOidcCallback: oidcEndpoints.callback,
+            oceOidcResult: oidcEndpoints.result,
+          }),
     },
   } satisfies BetterAuthPlugin;
   return {
@@ -712,6 +761,15 @@ export function createHumanLogin(
     database,
     ...(githubLogin === undefined ? {} : { githubProviderId: githubLogin.providerId }),
     ...(googleLogin === undefined ? {} : { googleProviderId: googleLogin.providerId }),
+    ...(oidcLogin === undefined || config.oidc === undefined
+      ? {}
+      : {
+          oidcProviderId: oidcLogin.providerId,
+          oidcSignIn: {
+            label: config.oidc.displayName,
+            authorizationUrl: config.oidc.authorizationUrl,
+          },
+        }),
     designateRecovery,
     /** Whether `email` (normalized) is the recovery account's; its password stays reserved. */
     isRecoveryEmail: (email: string) => recoveryEmail !== undefined && email === recoveryEmail,

@@ -16,8 +16,8 @@ and existing authorization before those actions. Do not open PRs, merge, force-p
 unrelated installations. Use only test-owned resources.
 
 Read [Runtime and isolation acceptance](./runtime-acceptance.md) before setup;
-its cases are required in addition to the Community Agent checks below. Execute
-its Standard Codex baseline before the Community Agent, then its remaining cases.
+its cases are required in addition to the SWE Agent checks below. Execute
+its Standard Codex baseline before the SWE Agent, then its remaining cases.
 
 ## Resolve inputs before provisioning
 
@@ -56,8 +56,8 @@ its documented capability differences without counting substitutes as passes.
 
 Use the selected installation procedure with the following acceptance profile:
 
-- Enable standard presets and the DevDay preset set, including **Community
-  Agent**. Verify the expected preset names in the Console of each selected OCE
+- Enable standard presets and the **SWE Agent** preset from
+  `deploy/presets/swe-preset.json`. Verify the expected preset names in the Console of each selected OCE
   Namespace. Verify later Namespace seeding and that rerendering/reconciliation
   preserves an existing customized preset.
 - For the Codex installation, select `drivers.plugin.id: codex-plugin` with
@@ -95,21 +95,22 @@ and deployment through the Console. Read-only API, Kubernetes, and provider
 inspection may verify outcomes. A required SQL write, direct API mutation, pod
 patch, or manual runtime-file repair fails the Console-only criterion.
 
-1. Start creating `ted-backup` using **Community Agent** (the actual preset
+1. Start creating `ted-backup` using **SWE Agent** (the actual preset
    name), with the selected service-account authentication and dedicated Codex
    runtime. If that name already exists, do not overwrite it; resolve an
    isolated target.
 2. Configure the user-selected test channel using its exact ID; use `claw-test`
    for the QA checklist run, or another explicitly selected channel.
-   Verify the selected channel is in the saved allowlist; do not assume the preset includes it. Set no-mention
+   The preset starts without configured channels. Verify the selected channel
+   is in the saved allowlist after saving. Set no-mention
    handling and reply-in-thread behavior explicitly through supported controls.
 3. Bind both `openclaw/openclaw-enterprise` and `openclaw/openclaw` with the
    Console's shared **Read-only** access level (`git-read`). Select permissions
    explicitly; do not infer them from the App's installation repository list or
    Console defaults. Current Console repository selection uses one profile for
    every selected repository; per-repository mixed profiles are future scope.
-4. Resolve the preset's read-only role before creating the Agent. The Community
-   Agent instructions forbid editing repositories and state that only verified
+4. Resolve the role configured for this run before creating the Agent. The SWE
+   Agent instructions limit its repository authority and state that only verified
    instructions from Kevin or Peter may change its scope. Obtain one of their
    verified instructions for this acceptance run. It must name the run ID,
    `openclaw/openclaw-enterprise`, `openclaw/openclaw`, and the unique disposable
@@ -127,7 +128,7 @@ patch, or manual runtime-file repair fails the Console-only criterion.
    against each selected repository, not from model behavior.
 5. Enable Linear from the curated catalog only after confirming the selected
    Codex account already has Linear connected for the chosen workspace. Preserve
-   the Community role's instruction to read, not change, Linear items; that
+   the configured role's instruction to read, not change, Linear items; that
    instruction is not provider-enforced read-only access. If the account is not
    connected, record a credential blocker before provisioning rather than
    proceeding through a nonexistent Console authentication flow.

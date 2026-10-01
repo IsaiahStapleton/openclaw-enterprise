@@ -41,12 +41,8 @@ The machine shares only `$HOME` by default, so set
 `OCC_DEVELOPMENT_STATE_DIRECTORY` beneath it.
 
 Docker inside a containerized development host also needs `cpuset` delegated
-by the outer host. If node logs show `failed to find cpuset cgroup (v2)`, inspect
-`/sys/fs/cgroup/cgroup.controllers` inside the k3d server. A running Docker daemon
-does not prove this prerequisite. If delegation changes fail, check the host
-management service and its documented delegation procedure before concluding
-that an outer-host change is required. Restore any paused management service
-and verify its health before continuing; do not disable the K3s check.
+by the outer host. For `failed to find cpuset cgroup (v2)`, follow
+[local cgroup troubleshooting](../operate/troubleshooting.md#local-k3s-cannot-find-the-cpuset-controller).
 
 Startup resolves the engine's host API socket itself. Do not export
 `DOCKER_HOST` or `CONTAINER_HOST` from the path `podman info` reports: on a
@@ -103,10 +99,8 @@ requires [hybrid private routing](local-compose-kubernetes.md) before deployment
 Follow that procedure before creating Agent Namespaces; it also describes the
 Compose repository and Slack service connections.
 
-If the default K3s channel lookup times out, set
-`OCC_DEVELOPMENT_K3S_IMAGE` to an approved explicit Kubernetes 1.35-or-newer
-image before retrying. After a failed creation, run `./scripts/dev-down` with
-the same state directory first. See [profile settings](../../reference/settings/development.md).
+If the K3s channel lookup times out, follow
+[local image-lookup troubleshooting](../operate/troubleshooting.md#local-k3s-image-lookup-times-out).
 
 ### Start the OpenShell fail-closed profile
 
@@ -271,6 +265,11 @@ Kubernetes in-cluster. When OpenShell is selected, the API, which registers
 credential sources, and the worker reach OpenShell Gateway through a narrow
 development NetworkPolicy in `oce-system`.
 
+The launcher sets `network.pluginStatusProxySourceCidrs` to the k3d node's Pod
+bridge address, the source the API server uses to proxy to Pods. That enables
+plugin status and diagnostics and lets a dedicated Codex Gateway start once on
+a first deploy.
+
 The OpenShell profile declares an `openshell` Backend for the Gateway
 endpoint and selects both the OpenShell Sandbox and the
 [OpenShell Credential Gateway](../../reference/drivers/openshell-credential-gateway.md),
@@ -323,8 +322,9 @@ kubectl --kubeconfig '<profile-kubeconfig>' --context '<profile-context>' \
 
 Expect the workspace to become `Bound` with access mode `RWO`, followed by a
 running Harness Pod. With `WaitForFirstConsumer`, a pending claim before Pod
-creation is normal. Existing owned RWX claims are retained; do not delete a claim
-or change its access mode to adopt the new default.
+creation is normal. Legacy RWX claims are unsupported; before upgrading an older
+installation, follow the [storage transition prerequisite](upgrade-checklist.md#remove-legacy-rwx-workspaces).
+Do not change a PVC's access mode in place.
 
 ### Preserve storage across restarts
 

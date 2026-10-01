@@ -31,7 +31,11 @@ let externalSessionBinding = false;
 const externalAttemptStorageKeys = {
   github: "occ.console.githubAttempt",
   google: "occ.console.googleAttempt",
+  oidc: "occ.console.oidcAttempt",
 };
+// The last discovered OIDC label, kept per tab so messages after the IdP round trip, which
+// reloads the Console before discovery answers, name the provider the person chose.
+const oidcLabelStorageKey = "occ.console.oidcLabel";
 const externalProviders = {
   github: {
     label: "GitHub",
@@ -43,7 +47,48 @@ const externalProviders = {
     origin: "https://accounts.google.com",
     pathname: "/o/oauth2/v2/auth",
   },
+  // The operator configures the IdP: discovery supplies its label and authorization
+  // endpoint, and the start URL must use exactly that HTTPS endpoint.
+  oidc: {
+    label: rememberedOidcLabel() ?? "single sign-on",
+    origin: null,
+    pathname: null,
+  },
 };
+
+// 1 to 40 code points, as the server's discovery schema allows.
+function validOidcLabel(label) {
+  const length = [...label].length;
+  return length > 0 && length <= 40;
+}
+function rememberedOidcLabel() {
+  try {
+    const label = sessionStorage.getItem(oidcLabelStorageKey);
+    return typeof label === "string" && validOidcLabel(label) ? label : null;
+  } catch {
+    return null;
+  }
+}
+
+// Adopts discovery's OIDC settings; false when they are missing or malformed.
+function configureOidc(signIn) {
+  try {
+    const endpoint = new URL(signIn?.authorizationUrl);
+    const label = signIn?.label;
+    if (endpoint.protocol !== "https:" || typeof label !== "string" || !validOidcLabel(label)) {
+      return false;
+    }
+    externalProviders.oidc = { label, origin: endpoint.origin, pathname: endpoint.pathname };
+    try {
+      sessionStorage.setItem(oidcLabelStorageKey, label);
+    } catch {
+      // Without tab storage, post-redirect messages use the default label.
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 const bindingValue = /^[A-Za-z0-9_-]{43}$/;
 
 // A failed provider sign-in. Where password sign-in is recovery-only, ordinary users
@@ -462,6 +507,7 @@ function showLogin(message = "", returnPath = null) {
         }
         const authorization = new URL(result.url);
         if (
+          origin === null ||
           authorization.origin !== origin ||
           authorization.pathname !== pathname ||
           (externalSessionBinding && !bindingValue.test(result.attemptId ?? ""))
@@ -490,6 +536,8 @@ function showLogin(message = "", returnPath = null) {
   };
   const github = providerButton("github");
   const google = providerButton("google");
+  // Created once discovery has supplied its label and endpoint.
+  let oidc = null;
   const recovery = button(
     "Recovery sign-in",
     () => {
@@ -505,6 +553,9 @@ function showLogin(message = "", returnPath = null) {
     submit.disabled = disabled;
     github.disabled = disabled;
     google.disabled = disabled;
+    if (oidc !== null) {
+      oidc.disabled = disabled;
+    }
   }
   const providers = element("div", { className: "auth-providers" });
   let pending = false;
@@ -576,8 +627,16 @@ function showLogin(message = "", returnPath = null) {
         if (available?.google === true) {
           providers.append(google);
         }
+        if (available?.oidc === true && configureOidc(available.oidcSignIn)) {
+          oidc = providerButton("oidc");
+          oidc.disabled = pending;
+          providers.append(oidc);
+        }
         // Only an explicit false hides the form: failed or older discovery keeps it.
-        if (available?.password === false && (available.github || available.google)) {
+        if (
+          available?.password === false &&
+          (available.github || available.google || available.oidc)
+        ) {
           recoveryOnly = true;
           if (feedback.textContent === describe(true)) {
             feedback.textContent = describe(false);
@@ -1060,6 +1119,31 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       }
     }
     shell = renderShell(current.feature);
+    if (current.agentId && error.status === 404 && current.namespace === null) {
+      // A typed or shared link has no Namespace, so the console read the Agent in
+      // the default selection. Agent IDs are unique: look in the others.
+      panel(shell.view, "Loading…", "Looking for this Agent in your other Namespaces.");
+      const located = await locateAgentNamespace(current.agentId, namespaceId);
+      if (!lifetime.isCurrent(active)) {
+        return;
+      }
+      if (located.namespaceId) {
+        navigate(current.target, located.namespaceId, true);
+        return;
+      }
+      const selected = namespaces.find((item) => item.id === namespaceId);
+      panel(
+        shell.view,
+        located.complete ? "Agent unavailable" : "Agent not in this Namespace",
+        located.complete
+          ? "None of your Namespaces has this Agent. It may have been deleted, or you no longer have access to it."
+          : `This Agent is not in ${selected ? `the ${selected.name} Namespace` : "the selected Namespace"}. Choose the Namespace that contains it.`,
+        located.complete ? "Back to Agents" : "Switch Namespace",
+        () => (located.complete ? navigate("agents") : switchNamespace()),
+        error.requestId,
+      );
+      return;
+    }
     if (current.agentId && error.status === 404) {
       panel(
         shell.view,
@@ -1099,6 +1183,34 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       shell.view.setAttribute("aria-busy", "false");
     }
   }
+}
+
+// Bounds the reads one Namespace-less Agent link can cause.
+const agentLookupNamespaceLimit = 20;
+
+// Finds the readable Namespace that holds agentId, other than the one already
+// read. complete is true when every other readable Namespace answered that it
+// has no such Agent.
+async function locateAgentNamespace(agentId, excluded) {
+  const candidates = namespaces.filter((item) => item.id !== excluded);
+  const probed = candidates.slice(0, agentLookupNamespaceLimit);
+  const results = await Promise.allSettled(
+    probed.map((item) =>
+      request(`/namespaces/${encodeURIComponent(item.id)}/agents/${encodeURIComponent(agentId)}`),
+    ),
+  );
+  const found = probed.filter(
+    (_, index) => results[index].status === "fulfilled" && results[index].value?.id === agentId,
+  );
+  if (found.length === 1) {
+    return { namespaceId: found[0].id, complete: true };
+  }
+  const complete =
+    candidates.length === probed.length &&
+    results.every(
+      (result) => result.status === "rejected" && [403, 404].includes(result.reason?.status),
+    );
+  return { namespaceId: null, complete };
 }
 
 async function revalidateMountedAgent(current) {

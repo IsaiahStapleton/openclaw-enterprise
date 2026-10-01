@@ -74,7 +74,7 @@ test("valid Google ID token yields the sub claim, never the email", () => {
   assert.equal(verified(token()), "110169484474386276334");
   assert.equal(verified(token(claims({ iss: "accounts.google.com" }))), "110169484474386276334");
   assert.equal(
-    verified(token(claims({ aud: [clientId, "other"], azp: clientId }))),
+    verified(token(claims({ aud: [clientId], azp: clientId }))),
     "110169484474386276334",
   );
   assert.equal(verified(token(claims({ azp: undefined }))), "110169484474386276334");
@@ -84,6 +84,8 @@ test("valid Google ID token yields the sub claim, never the email", () => {
 test("audience and issuer mismatches are rejected", () => {
   assert.equal(verified(token(claims({ aud: "other-client" }))), undefined);
   assert.equal(verified(token(claims({ aud: [clientId, "other"], azp: undefined }))), undefined);
+  // The client is the only trusted audience, so an extra one is refused even with azp.
+  assert.equal(verified(token(claims({ aud: [clientId, "other"], azp: clientId }))), undefined);
   assert.equal(verified(token(claims({ aud: [clientId], azp: "other" }))), undefined);
   assert.equal(verified(token(claims({ azp: "other" }))), undefined);
   assert.equal(verified(token(claims({ iss: "https://evil.example.test" }))), undefined);

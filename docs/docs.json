@@ -280,6 +280,10 @@
                           {
                             "page": "reference/drivers/kubernetes-compute/storage-and-credentials",
                             "label": "Storage and Credentials"
+                          },
+                          {
+                            "page": "reference/drivers/kubernetes-compute/codex-oauth-storage",
+                            "label": "Codex OAuth Storage"
                           }
                         ]
                       },
@@ -457,6 +461,10 @@
                   {
                     "page": "guides/deploy/google-sign-in",
                     "label": "Google Sign-in"
+                  },
+                  {
+                    "page": "guides/deploy/oidc-sign-in",
+                    "label": "OIDC Sign-in"
                   },
                   {
                     "page": "guides/deploy/local-k3d-image-upgrade",
@@ -893,6 +901,7 @@
               "flows/workspace-files",
               "flows/pr-24-ssh-compute",
               "flows/github-actions-testing",
+              "flows/clawsweeper-dispatch",
               "flows/container-package-bootstrap",
               "flows/container-publication",
               "flows/cli-publication",

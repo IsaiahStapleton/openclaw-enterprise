@@ -145,6 +145,13 @@ privileges, denied secret exposure, allowed and denied tool egress, replacement,
 and cleanup. It separately checks the OpenClaw Control Plane (OCC) Agent Service
 selector. Missing prerequisites fail rather than skip.
 
+The Codex scenario then updates the source through the API, withdraws it from
+the running Agent, waits for `revoked`, and expects the next model turn in the
+same process to fail. It accepts any turn failure, so it does not yet tell a
+credential rejection from a transport error or a restarted process. Full
+integration lanes run only from `main`, so this proof runs after a withdrawal
+change lands, not on its pull request.
+
 `OCC_TEST_OPENSHELL_HARNESS` defaults to `codex`. Select `openclaw` to verify
 that the native Harness requests no inbound OpenShell service exposure and
 completes a real model turn through its outbound enrolled-worker connection.
