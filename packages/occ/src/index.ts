@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { deploymentDiagnostics } from "./deployment-diagnostics.ts";
 import {
   deviceAuthorizationSession,
   type DeviceAuthorizationSession,
@@ -74,7 +75,6 @@ import type {
   ResourceKind,
   ResourceRef,
   Role,
-  RuntimeDiagnosticCheck,
   SandboxDriver,
   SandboxFacet,
   Secret,
@@ -605,22 +605,6 @@ const RUNTIME_LOG_REQUEST_TIMEOUT_MS = 10_000;
  * gateway copy does not prove that no late create is still in flight, so the record is kept.
  */
 const CREDENTIAL_REGISTRATION_FENCE_MS = 2 * CREDENTIAL_GATEWAY_TIMEOUT_MS + 10_000;
-
-const RUNTIME_DIAGNOSTIC_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
-const RUNTIME_DIAGNOSTIC_TIMESTAMP =
-  /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$/u;
-
-function validRuntimeDiagnosticIdentifier(value: unknown): value is string {
-  return typeof value === "string" && RUNTIME_DIAGNOSTIC_IDENTIFIER.test(value);
-}
-
-function validRuntimeDiagnosticTimestamp(value: unknown): value is string {
-  if (typeof value !== "string" || !RUNTIME_DIAGNOSTIC_TIMESTAMP.test(value)) {
-    return false;
-  }
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
-}
 
 /** Rejects unknown and missing catalog fields before any Credential Gateway effect. */
 function credentialSourceFieldsMatch(
@@ -2081,7 +2065,7 @@ export class OpenClawController {
       // Native Driver failures can contain private runtime or credential details.
       throw new DependencyUnavailableError("Runtime diagnostics are unavailable.");
     }
-    return this.deploymentDiagnostics(diagnostics, revision.id);
+    return deploymentDiagnostics(diagnostics, revision.id);
   }
 
   /** Tier 1: Pod status, restarts, Events and log sources (Agent operate + read). */
@@ -7078,57 +7062,6 @@ export class OpenClawController {
         agent,
         driver: this.runtimeCredentialComputeDriver("provision"),
       });
-    });
-  }
-
-  private validRuntimeDiagnosticCheck(value: RuntimeDiagnosticCheck): RuntimeDiagnosticCheck {
-    const state = value?.state;
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      Array.isArray(value) ||
-      !validRuntimeDiagnosticIdentifier(value.component) ||
-      !validRuntimeDiagnosticIdentifier(value.check) ||
-      (state !== "succeeded" && state !== "failed" && state !== "unknown") ||
-      (value.checkedAt !== null && !validRuntimeDiagnosticTimestamp(value.checkedAt)) ||
-      (value.code !== undefined && !validRuntimeDiagnosticIdentifier(value.code))
-    ) {
-      throw new DependencyUnavailableError(
-        "The selected compute Driver returned invalid runtime diagnostic evidence.",
-      );
-    }
-    return Object.freeze({
-      component: value.component,
-      check: value.check,
-      state,
-      checkedAt: value.checkedAt,
-      ...(value.code === undefined ? {} : { code: value.code }),
-    });
-  }
-
-  private deploymentDiagnostics(
-    diagnostics: AgentDeploymentDiagnostics,
-    revisionId: string,
-  ): Readonly<AgentDeploymentDiagnostics> {
-    if (
-      typeof diagnostics !== "object" ||
-      diagnostics === null ||
-      Array.isArray(diagnostics) ||
-      diagnostics.revisionId !== revisionId ||
-      !validRuntimeDiagnosticTimestamp(diagnostics.observedAt) ||
-      !Array.isArray(diagnostics.checks) ||
-      diagnostics.checks.length > 32
-    ) {
-      throw new DependencyUnavailableError(
-        "The selected compute Driver returned invalid runtime diagnostics.",
-      );
-    }
-    return Object.freeze({
-      revisionId: diagnostics.revisionId,
-      observedAt: diagnostics.observedAt,
-      checks: Object.freeze(
-        diagnostics.checks.map((check) => this.validRuntimeDiagnosticCheck(check)),
-      ),
     });
   }
 
