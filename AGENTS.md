@@ -39,6 +39,15 @@ Keep other authors' PRs, branches, and worktrees read-only unless explicitly
 assigned. Repository permissions and dependencies do not expand scope.
 Subagents inherit these limits.
 
+For new PRs, default to pushing a topic branch to the requesting user's fork
+and opening it against `openclaw/openclaw-enterprise`, including when the user
+has write access to the upstream repository. Push new branches directly to
+upstream only when explicitly requested for the selected work. When assigned to
+update an existing PR, preserve its head repository and branch. Follow the
+[fork workflow](CONTRIBUTING.md#prepare-a-pull-request); verify repository URLs
+and ownership rather than assuming `origin` is the fork. Preserve existing
+remotes and worktrees.
+
 "Refresh against main" does not authorize force pushes. Preserve published
 history by default. Rewrite history only with explicit authorization for the
 selected branches, using `--force-with-lease` against a freshly verified head;

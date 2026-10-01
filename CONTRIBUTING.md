@@ -104,6 +104,36 @@ defect, not merely restate mocks.
 Use the [developer skills](docs/testing/developer-skills.md) for test quality,
 proof selection, diff cleanup, and requested independent review.
 
+Open new PRs from a topic branch in your own fork against
+`openclaw/openclaw-enterprise`. This is the default for core team members too,
+even with upstream write access. Agents push new branches directly to upstream
+only when the user explicitly requests it for the selected work. When updating
+an assigned existing PR, keep its head repository and branch.
+
+Before publishing, verify the authenticated GitHub account with
+`gh api user --jq .login` and confirm it matches the requesting contributor.
+Create or reuse that contributor's fork. Inspect the actual fetch and push URLs
+with `git remote -v`; preserve existing remotes and worktrees. In a new fork
+checkout, `origin` usually points to the fork and `upstream` to
+`openclaw/openclaw-enterprise`, but remote names do not establish ownership.
+Fetch the intended upstream base before comparing or refreshing a branch.
+
+Before each push, verify the fork's push URL, destination ref, remote head, and
+author of any existing PR. Stop on unexpected changes. After replacing
+`FORK_REMOTE`, `CONTRIBUTOR_LOGIN`, and `BRANCH` with the verified values and
+writing the PR description to `/tmp/enterprise-pr.md`, publish with explicit
+head and base repositories:
+
+```sh
+git push FORK_REMOTE HEAD:refs/heads/BRANCH
+gh pr create --repo openclaw/openclaw-enterprise --base main \
+  --head CONTRIBUTOR_LOGIN:BRANCH --title "Describe the change" \
+  --body-file /tmp/enterprise-pr.md
+```
+
+Use the intended target branch in `--base` when it differs from `main`.
+An explicit `--head` keeps `gh pr create` from choosing where to push the branch.
+
 - Keep one coherent change per PR. Stack only when a dependency is real, and
   link the prerequisite PR and intended base.
 - Explain the problem, behavior change, evidence, and remaining risks. Link
@@ -120,7 +150,7 @@ proof selection, diff cleanup, and requested independent review.
 - Inspect the entire diff and attachments for credentials, tenant data, private
   hostnames, and personal paths. Use synthetic fixtures and redacted evidence.
 
-Open a draft while implementation or proof is incomplete, then mark it ready for
+Open a draft with `--draft` while implementation or proof is incomplete, then mark it ready for
 review. New contributors wait for maintainer feedback before merging. Core team
 members are expected to carry their own changes through merge. When the PR author
 and authenticated account match, an authorized maintainer may use their merge
