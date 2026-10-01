@@ -1748,6 +1748,12 @@ test(
           headers: { "x-route": "owner" },
           request: { allowPrivateNetwork: true },
         },
+        // Codex's other provider, with an owner transport of its own.
+        openai: {
+          baseUrl: "https://model.example.test/v1",
+          headers: { "x-route": "owner" },
+          models: codexProvider.models,
+        },
       },
     };
     const directory = await mkdtemp(join(tmpdir(), "oce-runtime-image-config-"));
@@ -1837,6 +1843,7 @@ process.stdout.write(JSON.stringify({
   excluded: config.plugins.entries.codex.config.codexDynamicToolsExclude,
   triggers: config.cron.triggers,
   codexProvider: config.models.providers.codex,
+  openaiProvider: config.models.providers.openai,
   valid: JSON.parse(validation.stdout).valid,
 }));`,
     ]);
@@ -1856,6 +1863,11 @@ process.stdout.write(JSON.stringify({
       ],
       triggers: { enabled: false },
       codexProvider: {
+        models: codexProvider.models,
+        baseUrl: "http://127.0.0.1:9",
+        api: "openai-responses",
+      },
+      openaiProvider: {
         models: codexProvider.models,
         baseUrl: "http://127.0.0.1:9",
         api: "openai-responses",

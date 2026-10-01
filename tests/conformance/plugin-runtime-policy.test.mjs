@@ -934,7 +934,15 @@ test("a workspace-node Gateway keeps owner Codex tool excludes, pins the codex p
           },
         ],
       },
-      openai: { baseUrl: "https://api.openai.com/v1", models: [] },
+      // Codex's other provider: an authored transport here would also make Codex
+      // hand a normal openai/<model> turn to the built-in runtime.
+      OpenAI: {
+        baseUrl: "https://proxy.example.test/v1",
+        headers: { "x-route": "c" },
+        request: { proxy: { mode: "explicit-proxy", url: "http://proxy.example.test:3128" } },
+        models: [{ id: "gpt-5", headers: { "x-model": "d" }, contextWindow: 400000 }],
+      },
+      anthropic: { baseUrl: "https://api.anthropic.com", models: [] },
     },
   };
   const { files } = await runOpenClawRuntimeHelper(undefined, [], {
@@ -961,9 +969,52 @@ test("a workspace-node Gateway keeps owner Codex tool excludes, pins the codex p
         baseUrl: "http://127.0.0.1:9",
         api: "openai-responses",
       },
-      openai: ownerConfig.models.providers.openai,
+      OpenAI: {
+        models: [{ id: "gpt-5", contextWindow: 400000 }],
+        baseUrl: "http://127.0.0.1:9",
+        api: "openai-responses",
+      },
+      anthropic: ownerConfig.models.providers.anthropic,
     },
   });
+  // An openai row that names no transport keeps OpenClaw's default (no credential
+  // in the Gateway) so Codex keeps owning its account's models; overrides still go.
+  // APP_SERVER_URL marks a Codex Gateway, so the pin holds without the plugin entry.
+  const noEntry = codexGatewayConfig();
+  delete noEntry.plugins.entries.codex;
+  noEntry.models = {
+    providers: {
+      openai: { headers: { "x-route": "e" }, models: [{ id: "gpt-5", params: { store: false } }] },
+    },
+  };
+  const noEntryRun = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: noEntry,
+    env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+    workspaceNodeId: "enrolled-node",
+  });
+  const noEntryConfig = JSON.parse(noEntryRun.files.get("/home/node/.openclaw/openclaw.json"));
+  assert.deepEqual(noEntryConfig.models, {
+    providers: {
+      openai: { models: [{ id: "gpt-5" }] },
+      codex: { baseUrl: "http://127.0.0.1:9", api: "openai-responses" },
+    },
+  });
+  // A dedicated OpenClaw Gateway runs its turns with these rows, so it keeps them.
+  const native = codexGatewayConfig();
+  delete native.plugins.entries.codex;
+  native.models = {
+    providers: { openai: { baseUrl: "https://model.example.test/v1", models: [] } },
+  };
+  const nativeRun = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: native,
+    env: { OPENCLAW_NATIVE_WORKER_PROFILE: "native" },
+    workspaceNodeId: "enrolled-node",
+  });
+  const nativeConfig = JSON.parse(
+    nativeRun.files.get("/home/node/.openclaw/openclaw.json") ??
+      nativeRun.files.get("/etc/openclaw/openclaw.json"),
+  );
+  assert.deepEqual(nativeConfig.models, native.models);
   // A malformed setting fails the Gateway start instead of being replaced silently.
   await assert.rejects(
     () =>
@@ -994,6 +1045,11 @@ test("a workspace-node Gateway keeps owner Codex tool excludes, pins the codex p
     ["none", /models setting must be an object/],
     [{ providers: [] }, /models\.providers setting must be an object/],
     [{ providers: { codex: "stub" } }, /codex model provider setting must be an object/],
+    [{ providers: { openai: "stub" } }, /openai model provider setting must be an object/],
+    [
+      { providers: { OpenAI: { models: "gpt-5" } } },
+      /openai model provider models setting must be a list/,
+    ],
     [
       { providers: { codex: { models: {} } } },
       /codex model provider models setting must be a list/,
