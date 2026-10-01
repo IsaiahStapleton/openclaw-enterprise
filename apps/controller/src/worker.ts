@@ -6,6 +6,7 @@ import { isSandboxFacet, normalizeSecretBindings } from "@openclaw-enterprise/co
 import type {
   Agent,
   AgentRevision,
+  CredentialSource,
   AuditEvent,
   AuthorizationDecision,
   AuthorizationRequest,
@@ -298,13 +299,33 @@ interface AgentStopDispatchResult extends DispatchResult {
   readonly revision?: Readonly<AgentRevision>;
 }
 
-interface CredentialWithdrawalDispatchResult extends DispatchResult {
-  /** The pending withdrawal's source; absent when no withdrawal was pending. */
-  readonly credentialSourceId?: string;
+interface CredentialWithdrawalAttempt {
+  readonly credentialSourceId: string;
+  readonly code: string;
   /** True once the gateway confirmed revocation or the Sandbox no longer exists. */
-  readonly revoked?: boolean;
-  /** An earlier attempt already settled the withdrawal; this one changed nothing. */
+  readonly revoked: boolean;
+}
+
+interface CredentialWithdrawalDispatchResult extends DispatchResult {
+  /** One entry per pending withdrawal this pass reached; absent when none was pending. */
+  readonly attempts?: readonly CredentialWithdrawalAttempt[];
+  /** Earlier attempts already settled every withdrawal; this one changed nothing. */
   readonly nothingPending?: boolean;
+}
+
+function unrevokedAttempts(
+  sourceIds: readonly string[],
+  code: string,
+): CredentialWithdrawalAttempt[] {
+  return sourceIds.map((credentialSourceId) => ({ credentialSourceId, code, revoked: false }));
+}
+
+/** The revision's admitted sources: its Harness source first, then its non-model sources. */
+function revisionCredentialSourceIds(revision: Readonly<AgentRevision>): readonly string[] {
+  return [
+    ...(revision.harnessAuth.method === "credential_source" ? [revision.harnessAuth.sourceId] : []),
+    ...(revision.credentialSources ?? []).map(({ sourceId }) => sourceId),
+  ];
 }
 
 interface AgentDeletionDispatchResult extends DispatchResult {
@@ -2238,12 +2259,14 @@ export class ControllerWorker {
   }
 
   /**
-   * Revokes the source the revision authenticates with from its Sandbox. A withdrawal is marked
+   * Revokes every pending withdrawal of the revision's sources from its Sandbox, in admission
+   * order: the Harness source first, then each non-model source. A withdrawal is marked
    * `revoked` only after the gateway confirms it; anything still pending retries with backoff.
    */
   private async processCredentialWithdrawal(claim: ClaimedWork): Promise<void> {
     let result: CredentialWithdrawalDispatchResult;
-    let credentialSourceId: string | undefined;
+    let pendingSourceIds: readonly string[] = [];
+    const attempts: CredentialWithdrawalAttempt[] = [];
     try {
       if (claim.agentId === undefined || claim.revisionId === undefined) {
         await this.finalizeCredentialWithdrawal(claim, {
@@ -2262,28 +2285,33 @@ export class ControllerWorker {
         });
         return;
       }
-      const { revision, withdrawal, source } = await this.state.read(async (view) => {
+      const { revision, pending } = await this.state.read(async (view) => {
         const found = await view.revisions.findRevision(
           claim.namespaceId,
           claim.agentId!,
           claim.revisionId!,
         );
-        // Admission withdraws only the source the revision authenticates with.
-        if (found?.harnessAuth.method !== "credential_source") {
-          return { revision: found, withdrawal: undefined, source: undefined };
+        if (found === undefined) {
+          return { revision: found, pending: [] };
         }
-        return {
-          revision: found,
-          withdrawal: await view.credentialSources.findCredentialWithdrawal(
+        // Admission withdraws only sources the revision was admitted with.
+        const pendingSources: Readonly<CredentialSource>[] = [];
+        for (const sourceId of revisionCredentialSourceIds(found)) {
+          const withdrawal = await view.credentialSources.findCredentialWithdrawal(
             claim.namespaceId,
             found.id,
-            found.harnessAuth.sourceId,
-          ),
-          source: await view.credentialSources.findCredentialSource(
+            sourceId,
+          );
+          const source = await view.credentialSources.findCredentialSource(
             claim.namespaceId,
-            found.harnessAuth.sourceId,
-          ),
-        };
+            sourceId,
+          );
+          // A source's deletion removes its withdrawals, so it has nothing left to revoke.
+          if (withdrawal?.state === "pending" && source !== undefined) {
+            pendingSources.push(source);
+          }
+        }
+        return { revision: found, pending: pendingSources };
       });
       // A retired revision took its Sandbox and attachments with it.
       if (revision === undefined) {
@@ -2293,8 +2321,8 @@ export class ControllerWorker {
         });
         return;
       }
-      // An earlier attempt already revoked it, or the source's deletion removed it.
-      if (withdrawal?.state !== "pending" || source === undefined) {
+      // Earlier attempts already revoked every requested source.
+      if (pending.length === 0) {
         await this.finalizeCredentialWithdrawal(claim, {
           outcome: "success",
           code: "CREDENTIALS_WITHDRAWN",
@@ -2302,11 +2330,14 @@ export class ControllerWorker {
         });
         return;
       }
-      credentialSourceId = source.id;
+      pendingSourceIds = pending.map(({ id }) => id);
       // The recorded actor must still operate the Agent before any effect.
       const denied = await this.authorizeAgentAction(claim, agent, "operate");
       if (denied !== undefined) {
-        await this.finalizeCredentialWithdrawal(claim, { ...denied, credentialSourceId });
+        await this.finalizeCredentialWithdrawal(claim, {
+          ...denied,
+          attempts: unrevokedAttempts(pendingSourceIds, denied.code),
+        });
         return;
       }
       if (
@@ -2316,7 +2347,7 @@ export class ControllerWorker {
         await this.finalizeCredentialWithdrawal(claim, {
           outcome: "permanent",
           code: "COMPUTE_DRIVER_MISMATCH",
-          credentialSourceId,
+          attempts: unrevokedAttempts(pendingSourceIds, "COMPUTE_DRIVER_MISMATCH"),
         });
         return;
       }
@@ -2325,25 +2356,43 @@ export class ControllerWorker {
         await this.finalizeCredentialWithdrawal(claim, {
           outcome: "permanent",
           code: "CREDENTIAL_WITHDRAWAL_UNSUPPORTED",
-          credentialSourceId,
+          attempts: unrevokedAttempts(pendingSourceIds, "CREDENTIAL_WITHDRAWAL_UNSUPPORTED"),
         });
         return;
       }
-      const status = await this.withClaimHeartbeat(claim, (signal) =>
-        withdraw(revision, source, signal),
-      );
-      result =
-        status.state === "revoked" || status.state === "absent"
-          ? { outcome: "success", code: "CREDENTIALS_WITHDRAWN", credentialSourceId, revoked: true }
-          : { outcome: "retry", code: "CREDENTIAL_WITHDRAWAL_PENDING", credentialSourceId };
+      for (const source of pending) {
+        const status = await this.withClaimHeartbeat(claim, (signal) =>
+          withdraw(revision, source, signal),
+        );
+        attempts.push(
+          status.state === "revoked" || status.state === "absent"
+            ? { credentialSourceId: source.id, code: "CREDENTIALS_WITHDRAWN", revoked: true }
+            : {
+                credentialSourceId: source.id,
+                code: "CREDENTIAL_WITHDRAWAL_PENDING",
+                revoked: false,
+              },
+        );
+      }
+      result = attempts.every(({ revoked }) => revoked)
+        ? { outcome: "success", code: "CREDENTIALS_WITHDRAWN", attempts }
+        : { outcome: "retry", code: "CREDENTIAL_WITHDRAWAL_PENDING", attempts };
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
         throw error;
       }
+      // Confirmed revocations stand; every source not yet confirmed retries.
+      const settled = new Set(attempts.map(({ credentialSourceId }) => credentialSourceId));
       result = {
         outcome: "retry",
         code: "DEPENDENCY_UNAVAILABLE",
-        ...(credentialSourceId === undefined ? {} : { credentialSourceId }),
+        attempts: [
+          ...attempts,
+          ...unrevokedAttempts(
+            pendingSourceIds.filter((sourceId) => !settled.has(sourceId)),
+            "DEPENDENCY_UNAVAILABLE",
+          ),
+        ],
       };
     }
     await this.finalizeCredentialWithdrawal(claim, result);
@@ -2357,20 +2406,20 @@ export class ControllerWorker {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
-      if (result.credentialSourceId !== undefined) {
-        // The row explains a withdrawal that is still pending, including after the last attempt.
-        const at = new Date().toISOString();
+      // Each row explains a withdrawal that is still pending, including after the last attempt.
+      const at = new Date().toISOString();
+      for (const attempt of result.attempts ?? []) {
         await unit.credentialSources.recordCredentialWithdrawalAttempt(
           claim.namespaceId,
           claim.revisionId!,
-          result.credentialSourceId,
-          { reason: result.code, at },
+          attempt.credentialSourceId,
+          { reason: attempt.code, at },
         );
-        if (result.revoked === true) {
+        if (attempt.revoked) {
           await unit.credentialSources.markCredentialWithdrawalRevoked(
             claim.namespaceId,
             claim.revisionId!,
-            result.credentialSourceId,
+            attempt.credentialSourceId,
             at,
           );
         }
@@ -2443,8 +2492,12 @@ export class ControllerWorker {
         computeDriverId: this.compute.id,
         reasonCode: result.code,
         ...(claim.revisionId === undefined ? {} : { revisionId: claim.revisionId }),
-        ...(result.revoked === true && result.credentialSourceId !== undefined
-          ? { credentialSourceIds: [result.credentialSourceId] }
+        ...((result.attempts ?? []).some(({ revoked }) => revoked)
+          ? {
+              credentialSourceIds: (result.attempts ?? [])
+                .filter(({ revoked }) => revoked)
+                .map(({ credentialSourceId }) => credentialSourceId),
+            }
           : {}),
       },
     });
@@ -2960,15 +3013,15 @@ export class ControllerWorker {
     ) {
       return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
     }
-    if (auth.method === "credential_source") {
-      // Both the deploying actor and the Agent principal must still operate the source.
+    // Both the deploying actor and the Agent principal must still operate every source.
+    for (const sourceId of revisionCredentialSourceIds(revision)) {
       for (const principalId of [claim.actorId, revision.servicePrincipalId]) {
         const sourceAuthorization: AuthorizationRequest = {
           principalId,
           action: "operate",
           resource: {
             kind: "credential_source",
-            id: auth.sourceId,
+            id: sourceId,
             namespaceId: revision.namespaceId,
           },
         };
@@ -3243,6 +3296,39 @@ export class ControllerWorker {
     } else {
       harnessAuth = revision.harnessAuth;
     }
+    const credentialSources: Readonly<CredentialSource>[] = [];
+    for (const snapshot of revision.credentialSources ?? []) {
+      if (
+        this.credentialGateway === undefined ||
+        snapshot.credentialGatewayId !== this.credentialGateway.id
+      ) {
+        return { result: { outcome: "permanent", code: "CREDENTIAL_GATEWAY_MISMATCH" } };
+      }
+      const { source, withdrawal } = await this.state.read(async (view) => ({
+        source: await view.credentialSources.findCredentialSource(
+          revision.namespaceId,
+          snapshot.sourceId,
+        ),
+        withdrawal: await view.credentialSources.findCredentialWithdrawal(
+          revision.namespaceId,
+          revision.id,
+          snapshot.sourceId,
+        ),
+      }));
+      // A withdrawn non-model source stays detached; the revision keeps running without it.
+      if (withdrawal !== undefined) {
+        continue;
+      }
+      if (
+        source === undefined ||
+        source.state !== "ready" ||
+        source.driverId !== snapshot.credentialGatewayId ||
+        source.type !== snapshot.sourceType
+      ) {
+        return { result: { outcome: "permanent", code: "CREDENTIAL_SOURCE_UNAVAILABLE" } };
+      }
+      credentialSources.push(source);
+    }
     const workspaceSetup = await this.state.read((view) =>
       view.workspaceSetups.find(revision.namespaceId, revision.agentId),
     );
@@ -3253,6 +3339,9 @@ export class ControllerWorker {
       context: {
         secretEnvironment: Object.freeze(resolved),
         harnessAuth,
+        ...(credentialSources.length === 0
+          ? {}
+          : { credentialSources: Object.freeze(credentialSources) }),
         ...(workspaceSetup === undefined ? {} : { workspaceSetup }),
       },
     };

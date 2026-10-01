@@ -3240,6 +3240,90 @@ revisionTest(
 );
 
 revisionTest(
+  "non-model sources reach Compute at dispatch and a retry omits the ones withdrawn meanwhile",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent(
+      "withdraw-tool-sources",
+      { auth: "credential_source", nonModelSources: 2 },
+    );
+    const active = await fixture.revision(owner, 1);
+    const [first, second] = owner.credentialSources.map(({ sourceId }) => sourceId);
+    const dispatched = [];
+    const withdrawn = [];
+    let interruptActivation = true;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        // Compute attaches the model source and each resolved non-model source.
+        async prepareRevision(revision, revisionContext) {
+          if (revision.namespaceId === fixture.namespace.id) {
+            dispatched.push((revisionContext?.credentialSources ?? []).map(({ id }) => id));
+          }
+          return fixture.compute.prepareRevision(revision, revisionContext);
+        },
+        async activateRevision(revision) {
+          if (revision.id === active.id && interruptActivation) {
+            interruptActivation = false;
+            // Withdraw both non-model sources while this deployment must still be retried. The
+            // second request queues no work while the first attempt is outstanding.
+            for (const credentialSourceId of [first, second]) {
+              await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, {
+                namespaceId: fixture.namespace.id,
+                agentId: owner.id,
+                credentialSourceId,
+              });
+            }
+            throw new Error("activation interrupted");
+          }
+        },
+        async withdrawCredentialSource(revision, source) {
+          withdrawn.push([revision.id, source.id]);
+          return { sourceId: source.id, state: "revoked" };
+        },
+      },
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      withCredentialGateway,
+    );
+    await fixture.work(active, "succeeded", 30_000);
+    await waitFor(
+      "both withdrawals to be revoked",
+      async () => {
+        const found = await fixture.state.read((view) =>
+          view.credentialSources.listCredentialWithdrawals(fixture.namespace.id, active.id),
+        );
+        return found.length === 2 && found.every(({ state }) => state === "revoked")
+          ? found
+          : undefined;
+      },
+      30_000,
+    );
+    await fixture.stop();
+
+    // Unlike a withdrawn model source, withdrawn tool sources do not stop the revision: the
+    // retry prepares it again without them and the deployment succeeds.
+    assert.deepEqual(dispatched, [[first, second], []]);
+    // One withdrawal pass revoked every pending source, in admission order.
+    assert.deepEqual(withdrawn, [
+      [active.id, first],
+      [active.id, second],
+    ]);
+    const audit = await fixture.observerPool.query(
+      `SELECT details->'credentialSourceIds' AS sources
+       FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.credentials_withdraw'
+         AND outcome = 'success'`,
+      [fixture.namespace.id],
+    );
+    assert.deepEqual(audit.rows, [{ sources: [first, second] }]);
+  },
+);
+
+revisionTest(
   "a withdrawal whose requester lost Agent operate fails once with a denial and no revocation",
   async (fixture) => {
     const { owner, candidate: active } = await fixture.admitInitialRevision("withdraw-denied", {
