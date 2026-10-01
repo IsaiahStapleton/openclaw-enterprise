@@ -974,9 +974,15 @@ test("real Git empty, type-change and non-UTF-8 diffs have accurate conservative
       encoding: null,
     });
     assert.equal(raw.status, 0);
-    if (reason === "empty_diff") assert.equal(raw.stdout.length, 0);
-    if (pattern) assert.match(raw.stdout.toString("binary"), pattern);
-    if (reason === "filename_not_utf8") assert.ok(raw.stdout.includes(Buffer.from([0xff])));
+    if (reason === "empty_diff") {
+      assert.equal(raw.stdout.length, 0);
+    }
+    if (pattern) {
+      assert.match(raw.stdout.toString("binary"), pattern);
+    }
+    if (reason === "filename_not_utf8") {
+      assert.ok(raw.stdout.includes(Buffer.from([0xff])));
+    }
     const output = join(f.dir, "edge-output");
     writeFileSync(output, "");
     const selected = f.run(["--github-output", output]);
