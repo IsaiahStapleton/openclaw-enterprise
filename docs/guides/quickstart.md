@@ -28,34 +28,6 @@ Run the commands below from the repository root on Linux or macOS. You need:
   `OCC_DEVELOPMENT_BROWSER_PORT`, or `OCC_DEVELOPMENT_KUBERNETES_API_PORT`;
   see [development settings](../reference/settings/development.md#required-development-controller-environment).
 
-On some Linux hosts, especially Ubuntu with Docker 29, the k3d node cannot
-resolve container registries. Startup then waits on the cert-manager rollout
-while its pods stay in `ContainerCreating`. The launcher does not print those
-Pod events, and it prints the kubeconfig path only after startup succeeds.
-
-In a second terminal, while that wait is still running, describe the
-cert-manager Pods. The context is `k3d-` plus the cluster name from the first
-startup line, `Creating Kubernetes-only k3d cluster ...`. `<state-directory>`
-belongs to the process that started OCC, not to this second terminal. Use
-`OCC_DEVELOPMENT_STATE_DIRECTORY` when that process set it. Otherwise use that
-process's temporary directory plus `openclaw-development`: its `TMPDIR` when
-set, and `/tmp` on Linux when `TMPDIR` is unset. Do not substitute this
-terminal's `TMPDIR`. The
-[development settings](../reference/settings/development.md#required-development-controller-environment)
-define that directory.
-
-```bash
-kubectl --kubeconfig '<state-directory>/kubeconfig' \
-  --context 'k3d-<cluster>' \
-  -n cert-manager describe pods
-```
-
-A registry DNS failure shows up as a lookup error in the Pod events. Follow
-[Resolve node DNS failures](deploy/local-kubernetes-development.md#resolve-node-dns-failures)
-and set a reachable resolver for a fresh start. That recovery changes only the
-owned node's resolver. If startup rolls the cluster back, wait until that
-command exits before starting again.
-
 You do not need a model credential to install the platform. Have an OpenAI API
 key available when you continue to [deploy your first Agent](first-agent.md).
 
@@ -77,6 +49,8 @@ images. This can take several minutes. Wait for `OpenClaw Enterprise development
 command prints the API URL, Installation ID, local service-key file, kubeconfig,
 Kubernetes context, and cleanup command. Keep this output; the service-key file
 is an administrator credential and must remain on your machine.
+
+If startup stalls on cert-manager, follow [local startup troubleshooting](operate/troubleshooting.md#local-startup-stalls-on-cert-manager).
 
 ## Open the platform console
 
