@@ -898,11 +898,23 @@ test(
               tracing("WARN", "codex_app_server", { message: `failed to refresh token ${canary}` }),
               tracing("WARN", "codex_app_server", { message: `${"x".repeat(30)}${canary}` }),
               // Model failures from any Codex target, never the codex_otel content targets.
-              tracing("WARN", "codex_core::client", {
-                message: "retrying model request",
+              // Only app-server and the fixed codex_core retry messages keep their text.
+              tracing("WARN", "codex_core::responses_retry", {
+                message: "stream connection failed; waiting to retry",
+                error: canary,
                 prompt: canary,
               }),
-              tracing("WARN", "codex_otel::log_only", { message: "retrying model request" }),
+              tracing("WARN", "codex_otel::log_only", {
+                message: "stream connection failed; waiting to retry",
+              }),
+              // codex_core can interpolate chat text into a warning; plain prose
+              // that passes the plain-text pattern still keeps the event name.
+              tracing("WARN", "codex_core::event_mapping", {
+                message: "Output text in user message: deploy the payroll service now",
+              }),
+              tracing("ERROR", "codex_core::session::handlers", {
+                message: "Failed to apply execpolicy amendment: rm allowed",
+              }),
               tracing("INFO", "codex_core::client", { message: "using model" }),
             ],
           },
@@ -914,7 +926,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 10);
+    await waitFor(async () => (await records()).length >= 12);
     await delay(1_000);
     const exported = await records();
     const summary = exported
@@ -944,7 +956,9 @@ test(
         ["ERROR", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "codex.operational", null],
-        ["WARN", "codex.operational", "retrying model request", null],
+        ["WARN", "codex.operational", "stream connection failed; waiting to retry", null],
+        ["WARN", "codex.operational", "codex.operational", null],
+        ["ERROR", "codex.operational", "codex.operational", null],
       ]
         .map((entry) => JSON.stringify(entry))
         .sort(),

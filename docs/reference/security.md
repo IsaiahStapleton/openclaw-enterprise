@@ -193,8 +193,10 @@ code. It parses JSON records up to `32KiB`,
 maps severity explicitly, keeps allowlisted attributes, and replaces retained
 bodies with the event class, stripping arbitrary content. Codex turn and tool-call
 bodies are fixed text; a `codex.operational` body keeps Codex's own message only
-when it is short plain text with no quotes, braces, query strings, credential
-words or word over 24 characters. It drops malformed,
+for `codex_app_server` targets or the fixed `codex_core::responses_retry` retry
+messages, and only when it is short plain text with no quotes, braces, query
+strings, credential words or word over 24 characters. Other Codex warnings and
+errors, which can interpolate chat text, keep the event name. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex stdout protocol records.
 Resource identity comes from protected Docker labels or Kubernetes Pod metadata;
 request, work, Namespace, Agent, and revision IDs remain attributes.

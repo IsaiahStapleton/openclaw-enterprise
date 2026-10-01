@@ -158,7 +158,8 @@ Kubernetes resources drop the `latest` image tag that metadata extraction report
 for a digest-only image. For retained records it keeps allowlisted
 attributes and replaces the body with the event name, stripping arbitrary content;
 Codex turn and tool-call bodies are fixed text, and a `codex.operational` body
-keeps a short plain-text Codex message (span lifecycle records are dropped).
+keeps a short plain-text Codex message only from `codex_app_server` or the fixed
+`codex_core::responses_retry` retry messages (span lifecycle records are dropped).
 OCC `compute.preflight-warning` records retain WARN severity and bounded `occ.code`;
 the local diagnostic message is excluded from remote export.
 `authentication.sign-in-limit-warning` keeps `occ.code`, and
