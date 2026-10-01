@@ -70,8 +70,9 @@ actual policy, installs it only on the owned k3d node, and verifies workspace
 and outside-write boundaries and missing-profile failure. Only dedicated Codex
 containers select the profile. The private state directory records its hashes and
 node provenance in `codex-seccomp-provenance.json`. If the policy, runtime, or
-verification is unsupported, startup fails and rolls back the owned cluster;
-check the reported failure and host user-namespace restrictions before retrying.
+verification is unsupported, startup fails and rolls back the owned cluster.
+On Ubuntu 24.04, follow
+[local Codex sandbox troubleshooting](../operate/troubleshooting.md#local-codex-sandbox-check-fails).
 The sandbox check applies to that node and image at startup; repeat it after a
 runtime, kernel, or image change by recreating the local installation.
 
