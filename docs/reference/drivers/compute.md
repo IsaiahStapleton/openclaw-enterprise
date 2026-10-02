@@ -50,19 +50,18 @@ custody. See the [device login flow](../../flows/native-service-account-credenti
 
 ### Core lifecycle operations
 
-| Required method                       | What it does                                                                                                                                                                                                                           |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ensureNamespace(namespace)`          | Prepares or checks infrastructure for the specified Namespace. Returns `namespaceReady`. Runs before an Agent exists; do not require or guess its ID.                                                                                  |
-| `deleteNamespace(namespace)`          | Returns `namespaceDeleted` after supported teardown. OCC permits deletion only for an empty Namespace. If the backend has no approved deletion path, fail without deleting the physical namespace or Agent resources.                  |
-| `prepareRevision(revision, context?)` | Creates or reuses the Agent gateway and prepares the configured Harness workload. Returns `ready` for that Namespace, Agent, and revision, plus optional plugin warnings. `ready: false` stays pending; OCC rejects an invalid result. |
-| `stopRevision(revision)`              | Removes inbound routing and stops execution for this revision, including applicable hooks and Sandbox cleanup. Safe to repeat; retains snapshots, runtime credentials, workspace data, and other persistent Agent state.               |
-| `retireRevision(revision)`            | Revokes workload access, then stops the workload and requests applicable Sandbox cleanup. Preserves an Agent gateway already owned by its replacement.                                                                                 |
+| Required method                       | What it does                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ensureNamespace(namespace)`          | Prepares or checks infrastructure for the specified Namespace. Returns `namespaceReady`. Runs before an Agent exists; do not require or guess its ID.                                                                                                                                                                           |
+| `deleteNamespace(namespace)`          | Returns `namespaceDeleted` after supported teardown. OCC permits deletion only for an empty Namespace. If the backend has no approved deletion path, fail without deleting the physical namespace or Agent resources.                                                                                                           |
+| `prepareRevision(revision, context?)` | Creates or reuses the Agent gateway and prepares the configured Harness workload. Returns `ready` for that Namespace, Agent, and revision, plus optional plugin warnings. `ready: false` stays pending, with an optional [`pendingReason`](../agents/deployment.md#pending-deployment-progress); OCC rejects an invalid result. |
+| `stopRevision(revision)`              | Removes inbound routing and stops execution for this revision, including applicable hooks and Sandbox cleanup. Safe to repeat; retains snapshots, runtime credentials, workspace data, and other persistent Agent state.                                                                                                        |
+| `retireRevision(revision)`            | Revokes workload access, then stops the workload and requests applicable Sandbox cleanup. Preserves an Agent gateway already owned by its replacement.                                                                                                                                                                          |
 
 Namespace results can mark a failure `retryable` or `permanent`; success
 requires a true flag and no failure.
 Methods without a return value must reject if they cannot complete. The revision
-context is optional in TypeScript; the worker supplies it to preparation and
-activation after authorization.
+context is optional in TypeScript; the worker supplies it after authorization.
 
 ### Optional additions
 

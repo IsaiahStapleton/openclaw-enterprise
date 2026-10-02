@@ -144,6 +144,18 @@ grant. When only the Agent principal's grant is missing, the `403` names that
 for example `The Agent service principal <id> is not authorized to operate
 secret <id>`. Denials of your own permissions stay generic.
 
+### Pending deployment progress
+
+While a revision is not ready, deployment `progress.lastAttempt.code` says why
+when Compute knows. Kubernetes reports `REVISION_UNSCHEDULABLE` when a live Pod
+of the revision has `PodScheduled` `False` with reason `Unschedulable`, for
+example for want of node memory, and `WORKSPACE_NODE_PENDING` when the Harness
+and gateway are ready and only the workspace node's gateway connection is
+outstanding. Otherwise the code is `REVISION_INCOMPLETE`. These codes change no
+outcome: the revision stays pending until it is ready, a held runtime failure
+ends it, or the convergence deadline passes. The worker rechecks an unready
+revision after 500 ms, growing with the deployment's age to 5 s at 200 s.
+
 ### The active revision after a failed deployment
 
 `activeRevisionId` names the revision the worker last committed to run. Stop

@@ -1100,6 +1100,21 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
             uid: `${role}-uid`,
             labels,
           },
+          ...(state.unschedulableRole === role
+            ? {
+                status: {
+                  phase: "Pending",
+                  conditions: [
+                    {
+                      type: "PodScheduled",
+                      status: "False",
+                      reason: "Unschedulable",
+                      message: "0/1 nodes are available: 1 Insufficient memory.",
+                    },
+                  ],
+                },
+              }
+            : {}),
         },
       ],
     };
@@ -1668,6 +1683,32 @@ test("a first dedicated deploy pass waits a bounded time for its node to pair", 
   );
   state.connected = true;
   assert.equal((await prepare()).ready, true);
+});
+
+// A deploy whose Pods cannot be placed says so instead of a generic wait (D224),
+// and one whose workloads are ready says it waits only for its node (D222).
+test("a pending dedicated deploy reports an unschedulable Pod or an unpaired node", async () => {
+  const clock = { now: 0 };
+  const { state, gatewayName, agentName, prepare, markReady } = dedicatedFirstDeployFixture({
+    clock,
+  });
+  state.unschedulableRole = "agent";
+  const unschedulable = await prepare();
+  assert.equal(unschedulable.ready, false);
+  assert.equal(unschedulable.pendingReason, "WORKLOAD_UNSCHEDULABLE");
+  state.unschedulableRole = undefined;
+  const starting = await prepare();
+  assert.equal(starting.ready, false);
+  assert.equal(starting.pendingReason, undefined);
+  markReady(agentName);
+  markReady(gatewayName);
+  const unpaired = await prepare();
+  assert.equal(unpaired.ready, false);
+  assert.equal(unpaired.pendingReason, "WORKSPACE_NODE_PENDING");
+  state.connected = true;
+  const ready = await prepare();
+  assert.equal(ready.ready, true);
+  assert.equal(ready.pendingReason, undefined);
 });
 
 // The worker is serial: every pass one Agent spends waiting for its node holds

@@ -45,6 +45,7 @@ import type {
   ComputeDriver,
   ComputeAgentBinding,
   ComputeAgentRevisionBinding,
+  ComputePendingReason,
   ComputeReadiness,
   ComputePreflightResult,
   ComputeRevisionContext,
@@ -3408,13 +3409,25 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
     const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
     const pluginOwnership = this.pluginRuntimeOwnership(revision);
-    const incomplete = async (): Promise<ComputeReadiness> => {
+    // A known pending reason is reported with the observation; otherwise a Pod
+    // the scheduler cannot place explains the wait (D224).
+    const incomplete = async (pendingReason?: ComputePendingReason): Promise<ComputeReadiness> => {
       const runtimeFailure = await this.safeRuntimeFailureObservation(
         revision,
         namespace,
         workspaceSetup !== undefined,
       );
-      return runtimeFailure === undefined ? result : { ...result, runtimeFailure };
+      const reason =
+        pendingReason ??
+        (runtimeFailure === undefined &&
+        (await this.safeUnschedulableObservation(revision, namespace))
+          ? "WORKLOAD_UNSCHEDULABLE"
+          : undefined);
+      return {
+        ...result,
+        ...(runtimeFailure === undefined ? {} : { runtimeFailure }),
+        ...(reason === undefined ? {} : { pendingReason: reason }),
+      };
     };
     const ready = async (
       expectedWarnings?: readonly PluginDeploymentWarning[],
@@ -4039,7 +4052,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           return incomplete();
         }
         if (!(await this.workspaceNodeReady(revision, namespace))) {
-          return incomplete();
+          return incomplete("WORKSPACE_NODE_PENDING");
         }
         return repositoryMaterial !== undefined &&
           !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
@@ -4107,7 +4120,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       }
       if (!workspaceNodeIsReady) {
-        return incomplete();
+        // Both workloads are ready: only the node's connection is outstanding (D222).
+        return incomplete("WORKSPACE_NODE_PENDING");
       }
       // Gateway plugin and node observations may outlive the material readiness observation.
       if (
@@ -6678,6 +6692,46 @@ export class KubernetesComputeDriver implements ComputeDriver {
         throw ownerSignal.reason;
       }
       return undefined;
+    }
+  }
+
+  // True when a live Pod of this revision is unschedulable (PodScheduled False,
+  // reason Unschedulable), for example for want of node memory. Like failure
+  // evidence, an unavailable observation reports nothing.
+  private async safeUnschedulableObservation(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<boolean> {
+    const ownerSignal = currentComputeAbortSignal();
+    try {
+      for (const role of this.runtimeStatusContainers(revision)) {
+        const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+        for (const pod of await this.revisionPods(revision, target, role)) {
+          if (asRecord(pod.metadata)?.deletionTimestamp !== undefined) {
+            continue;
+          }
+          const conditions = asRecord(pod.status)?.conditions;
+          if (
+            Array.isArray(conditions) &&
+            conditions.some((item) => {
+              const condition = asRecord(item);
+              return (
+                condition?.type === "PodScheduled" &&
+                condition.status === "False" &&
+                condition.reason === "Unschedulable"
+              );
+            })
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch {
+      if (ownerSignal?.aborted) {
+        throw ownerSignal.reason;
+      }
+      return false;
     }
   }
 

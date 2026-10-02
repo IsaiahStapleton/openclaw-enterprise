@@ -79,10 +79,10 @@ Responses include `deploymentId`, `namespaceId`, `agentId`, `status`, nullable
 
 Pending `progress.lastAttempt` contains the latest exact-work result's
 allowlisted `code`, fixed `message`, and `at`, when first recorded; repeated
-deferrals record once. Null means no bound evidence, not proof work never ran. Maintenance and
+deferrals record once ([readiness codes](agents/deployment.md#pending-deployment-progress)). Null means no bound evidence, not proof work never ran. Maintenance and
 cleanup results are excluded. `progress.nextAttemptAt` is the earliest queued
 eligibility, not a promised start; it is null while claimed. Terminal `progress`
-is null. Results describe recorded checks, not current runtime health.
+is null. Results describe recorded checks, not runtime health.
 
 Errors have fixed codes, messages, and allowlisted `error.data`.
 `CONVERGENCE_DEADLINE_EXCEEDED` data includes positive `timeoutMs` and optional

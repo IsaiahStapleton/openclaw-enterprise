@@ -1326,6 +1326,12 @@ export interface RuntimeFailureEvidence {
   readonly code: string;
 }
 
+/**
+ * Why an unready revision is still pending, when Compute knows: its Pods cannot be
+ * scheduled, or its workloads are ready but the workspace node has not connected.
+ */
+export type ComputePendingReason = "WORKLOAD_UNSCHEDULABLE" | "WORKSPACE_NODE_PENDING";
+
 export interface ComputeReadiness extends Scope {
   readonly namespaceId: string;
   readonly agentId: string;
@@ -1333,6 +1339,8 @@ export interface ComputeReadiness extends Scope {
   readonly ready: boolean;
   readonly warnings?: readonly PluginDeploymentWarning[];
   readonly runtimeFailure?: RuntimeFailureEvidence;
+  /** Only on an unready observation; the worker ignores unknown values. */
+  readonly pendingReason?: ComputePendingReason;
   readonly repositoryCredentialMaterialMissing?: readonly RepositoryCredentialMaterialRef[];
 }
 

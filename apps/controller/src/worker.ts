@@ -94,9 +94,41 @@ type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
 type Outcome = "success" | "pending" | "retry" | "permanent";
 
 // A revision whose runtime is not ready yet is progress, not a failure. Recheck
-// it on a short fixed cadence so earlier transient failures on the same Work do
-// not stretch readiness waits through the queue's exponential retry backoff.
+// it on a short cadence so earlier transient failures on the same Work do not
+// stretch readiness waits through the queue's exponential retry backoff. The
+// worker is serial and each recheck is a full preparation pass (0.2-1.7 s live),
+// so the cadence grows with the deployment's age, from 500 ms to 5 s at 200 s:
+// a runtime that stays unready for minutes cannot take half the worker (D223).
 const REVISION_READINESS_RECHECK_MS = 500;
+const REVISION_READINESS_RECHECK_MAX_MS = 5_000;
+const REVISION_READINESS_RECHECK_AGE_DIVISOR = 40;
+
+// Pending reason codes for an unready revision. Compute may say why it waits.
+const REVISION_PENDING_CODES: Readonly<Record<string, string>> = Object.freeze({
+  WORKLOAD_UNSCHEDULABLE: "REVISION_UNSCHEDULABLE",
+  WORKSPACE_NODE_PENDING: "WORKSPACE_NODE_PENDING",
+});
+const REVISION_READINESS_CODES: ReadonlySet<string> = new Set([
+  "REVISION_INCOMPLETE",
+  ...Object.values(REVISION_PENDING_CODES),
+]);
+
+function revisionPendingCode(observation: unknown): string {
+  const reason = (observation as { readonly pendingReason?: unknown }).pendingReason;
+  return typeof reason === "string" && Object.hasOwn(REVISION_PENDING_CODES, reason)
+    ? REVISION_PENDING_CODES[reason]!
+    : "REVISION_INCOMPLETE";
+}
+
+function revisionReadinessRecheckMs(ageMs: number): number {
+  return Math.min(
+    REVISION_READINESS_RECHECK_MAX_MS,
+    Math.max(
+      REVISION_READINESS_RECHECK_MS,
+      Math.round(ageMs / REVISION_READINESS_RECHECK_AGE_DIVISOR),
+    ),
+  );
+}
 
 interface DispatchResult {
   readonly outcome: Outcome;
@@ -2451,7 +2483,7 @@ export class ControllerWorker {
             await this.finalizeActiveRevision(
               claim,
               revision,
-              "REVISION_INCOMPLETE",
+              revisionPendingCode(observation),
               runtimeFailureFromObservation(observation),
             );
             return;
@@ -2736,7 +2768,7 @@ export class ControllerWorker {
         const runtimeFailure = runtimeFailureFromObservation(observation);
         return {
           outcome: "pending",
-          code: "REVISION_INCOMPLETE",
+          code: revisionPendingCode(observation),
           ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
         };
       }
@@ -3122,7 +3154,9 @@ export class ControllerWorker {
         await queue.defer(
           claim,
           { code: resolved.code },
-          resolved.code === "REVISION_INCOMPLETE" ? { delayMs: REVISION_READINESS_RECHECK_MS } : {},
+          REVISION_READINESS_CODES.has(resolved.code)
+            ? { delayMs: revisionReadinessRecheckMs(Date.now() - claim.createdAt.getTime()) }
+            : {},
         );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, {

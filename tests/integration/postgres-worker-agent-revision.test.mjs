@@ -6273,6 +6273,89 @@ test(
 );
 
 test(
+  "deployment progress names Compute's pending reason and old pending work rechecks less often",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const unscheduled = await fixture.agent("pending-unschedulable");
+    const unpaired = await fixture.agent("pending-node");
+    const unscheduledRevision = await fixture.revision(unscheduled, 1);
+    const unpairedRevision = await fixture.revision(unpaired, 1);
+    const reasons = new Map([
+      [unscheduledRevision.id, "WORKLOAD_UNSCHEDULABLE"],
+      [unpairedRevision.id, "WORKSPACE_NODE_PENDING"],
+    ]);
+    const delays = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          return {
+            ...(await fixture.compute.prepareRevision(revision)),
+            ready: false,
+            pendingReason: reasons.get(revision.id),
+          };
+        },
+      },
+      (event) => {
+        if (
+          event.event === "worker.completed" &&
+          event.workId === unpairedRevision.idempotencyKey &&
+          event.outcome === "pending"
+        ) {
+          delays.push(
+            fixture.observerPool
+              .query(
+                `SELECT EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+                 FROM occ.controller_work WHERE idempotency_key = $1`,
+                [event.workId],
+              )
+              .then(({ rows }) => Number(rows[0].delay_ms)),
+          );
+        }
+      },
+    );
+    const progress = async (owner, revision) => {
+      const lastAttempt = await waitFor(`pending progress for ${revision.id}`, async () => {
+        const status = await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          revision.id,
+        );
+        return status.progress?.lastAttempt ?? undefined;
+      });
+      return { code: lastAttempt.code, message: lastAttempt.message };
+    };
+    assert.deepEqual(await progress(unscheduled, unscheduledRevision), {
+      code: "REVISION_UNSCHEDULABLE",
+      message:
+        "The cluster has no room for this Agent's Pods yet; they are waiting to be scheduled.",
+    });
+    assert.deepEqual(await progress(unpaired, unpairedRevision), {
+      code: "WORKSPACE_NODE_PENDING",
+      message: "Workloads are ready; waiting for the workspace node to connect to the Gateway.",
+    });
+    const fresh = await delays[0];
+    assert.ok(fresh > 450 && fresh <= 500, `a new deployment rechecks in 500 ms (${fresh} ms)`);
+
+    // Five minutes later, still inside the 900-second deadline, a runtime that
+    // stays unready is rechecked every 5 s, so one stuck Agent cannot take most
+    // of the serial worker (D223). Only the worker's wall clock moves.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 300_000;
+    context.after(() => {
+      Date.now = realNow;
+    });
+    const seen = delays.length;
+    await waitFor("a recheck after five minutes", async () => delays.length > seen || undefined);
+    const old = await delays[seen];
+    Date.now = realNow;
+    assert.ok(old > 4_500 && old <= 5_000, `an old deployment rechecks in 5 s (${old} ms)`);
+  },
+);
+
+test(
   "an overdue Agent runtime fails closed without activating its incomplete revision",
   requiresPostgres,
   async (context) => {
