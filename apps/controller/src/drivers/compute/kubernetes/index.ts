@@ -685,7 +685,10 @@ const WORKSPACE_NODE_BINDING_ANNOTATION = "openclaw.dev/workspace-node-binding";
 // Kubelet refresh after the Pod nudge (1.3-1.7 s on k3d, #612), then the
 // wrapper's 1 s poll, its config write and OpenClaw's plugin reload, confirmed
 // through OpenClaw's plugin list (about 2.5 s from the file in the runtime
-// image test), with margin. A slower Gateway retries on the next pass.
+// image test), with margin. A slower Gateway retries on the next pass. Like the
+// pairing wait below, this is a budget per binding, not per pass: activation
+// that fails for want of the ack is retried, and the serial worker must not
+// spend another full wait on every retry while other Agents' deploys queue (D221).
 const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 20_000;
 const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
 // After the setup reaches the Harness of a first dedicated deploy, its node host
@@ -1662,6 +1665,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private workspaceNodePairingWaitMs = WORKSPACE_NODE_PAIRING_WAIT_MS;
   // Pairing wait already spent per workspace node setup ID.
   private readonly workspaceNodePairingSpentMs = new Map<string, number>();
+  // How long, in total across activation attempts, one binding's ack may be awaited.
+  private workspaceNodeBindingAckWaitMs = WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS;
+  // Ack wait already spent per revision and workspace node.
+  private readonly workspaceNodeBindingAckSpentMs = new Map<string, number>();
+  private delay: (ms: number) => Promise<void> = (ms) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
   private now: () => number = () => Date.now();
   private readonly readNodeCa: (() => Promise<string | undefined>) | undefined;
   private lifecycle: ComputeLifecycleDispatcher;
@@ -7093,7 +7102,42 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return true;
     }
     const signal = this.operationSignal();
-    const deadline = Date.now() + WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS;
+    const budgetKey = `${revision.id}:${configuration.workspaceNodeId}`;
+    const spentMs = this.workspaceNodeBindingAckSpentMs.get(budgetKey) ?? 0;
+    const started = this.now();
+    const deadline = started + Math.max(0, this.workspaceNodeBindingAckWaitMs - spentMs);
+    let applied = false;
+    try {
+      applied = await this.pollWorkspaceNodeBindingAck(
+        revision,
+        namespace,
+        configuration,
+        deadline,
+        signal,
+      );
+    } finally {
+      if (applied) {
+        this.workspaceNodeBindingAckSpentMs.delete(budgetKey);
+      } else {
+        this.recordBudgetSpent(
+          this.workspaceNodeBindingAckSpentMs,
+          budgetKey,
+          spentMs + Math.max(0, this.now() - started),
+        );
+      }
+    }
+    return applied;
+  }
+
+  // Reads the Gateway's applied node until it matches or the deadline passes;
+  // a spent budget still gets one read, so a late ack is seen on the next attempt.
+  private async pollWorkspaceNodeBindingAck(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    configuration: GatewayConfigurationSnapshot,
+    deadline: number,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     for (;;) {
       signal.throwIfAborted();
       const readback = await this.privateStatusReadback(
@@ -7127,10 +7171,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
       }
-      if (Date.now() >= deadline) {
+      if (this.now() >= deadline) {
         return false;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, WORKSPACE_NODE_BINDING_ACK_POLL_MS));
+      await this.delay(WORKSPACE_NODE_BINDING_ACK_POLL_MS);
     }
   }
 
@@ -7414,14 +7458,14 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     return deviceId || undefined;
   }
 
-  private recordWorkspaceNodePairingWait(setupId: string, spentMs: number): void {
+  private recordBudgetSpent(budgets: Map<string, number>, key: string, spentMs: number): void {
     // Re-insert so the map stays in least-recently-waited order.
-    this.workspaceNodePairingSpentMs.delete(setupId);
-    this.workspaceNodePairingSpentMs.set(setupId, spentMs);
-    if (this.workspaceNodePairingSpentMs.size > MAX_WORKSPACE_NODE_PAIRING_BUDGETS) {
-      const oldest = this.workspaceNodePairingSpentMs.keys().next().value;
+    budgets.delete(key);
+    budgets.set(key, spentMs);
+    if (budgets.size > MAX_WORKSPACE_NODE_PAIRING_BUDGETS) {
+      const oldest = budgets.keys().next().value;
       if (oldest !== undefined) {
-        this.workspaceNodePairingSpentMs.delete(oldest);
+        budgets.delete(oldest);
       }
     }
   }
@@ -7503,7 +7547,11 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       );
     } finally {
       if (waitMs > 0) {
-        this.recordWorkspaceNodePairingWait(setupId, spentMs + Math.max(0, this.now() - started));
+        this.recordBudgetSpent(
+          this.workspaceNodePairingSpentMs,
+          setupId,
+          spentMs + Math.max(0, this.now() - started),
+        );
       }
     }
     if (observation === undefined) {
