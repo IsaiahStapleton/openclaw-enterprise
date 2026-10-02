@@ -21,6 +21,7 @@ const runtimeOnlyRoots = [
 const minimumRuntimeAvailableBytes = 36 * 1024 ** 3;
 const largeImageLane = [
   "container-runtime-build",
+  "first-agent-smoke",
   "k3d-observability",
   "k3d-observability-demo",
 ].includes(process.env.OPENCLAW_CI_HEADROOM_LANE);
@@ -146,7 +147,7 @@ async function main() {
     process.platform === "linux" &&
       process.env.RUNNER_OS === "Linux" &&
       (process.env.ImageOS === "ubuntu24" ||
-        (["k3d-observability", "k3d-observability-demo"].includes(
+        (["first-agent-smoke", "k3d-observability", "k3d-observability-demo"].includes(
           process.env.OPENCLAW_CI_HEADROOM_LANE,
         ) &&
           process.env.ImageOS === "ubuntu22")),
@@ -160,6 +161,7 @@ async function main() {
     [
       "repository-credentials-platform",
       "container-runtime-build",
+      "first-agent-smoke",
       "k3d-observability",
       "k3d-observability-demo",
     ].includes(process.env.OPENCLAW_CI_HEADROOM_LANE) && process.argv.length === 2,
