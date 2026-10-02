@@ -1726,9 +1726,42 @@ async function installCodexSelectionSet(selections, failures = []) {
   return { successfulPluginIds, failures: failed };
 }
 
+// Codex serves the curated remote catalog only to ChatGPT logins and rejects an
+// API-key login ("api key auth is not supported"), so retrying cannot succeed.
+// Disable every enabled selection as an authentication requirement and turn the
+// plugin features off instead of holding the Harness unready.
+async function disableCodexSelectionsWithoutChatGptLogin(selections, failures = []) {
+  const failed = [...failures];
+  const failedIds = pluginFailureIds(failed);
+  for (const pluginId of enabledCodexSelectionIds(selections)) {
+    if (failedIds.has(pluginId)) continue;
+    const diagnostic = pluginDiagnostic(pluginId, "PLUGIN_AUTH_REQUIRED");
+    if (!pluginBestEffortEnabled()) {
+      throw new PluginTerminalDiagnosticError(
+        diagnostic,
+        "Codex plugins require a ChatGPT login; API-key authentication cannot install them.",
+      );
+    }
+    failed.push(diagnostic);
+    failedIds.add(pluginId);
+  }
+  if (Object.keys(selections).length > 0) {
+    const configuration = {
+      features: { apps: false, plugins: false, remote_plugin: false },
+      apps: { _default: { enabled: false } },
+    };
+    await writeCodexAppConfiguration(configuration);
+    verifyCodexAppConfiguration(configuration, await readCodexAppConfiguration());
+  }
+  return { successfulPluginIds: [], failures: failed };
+}
+
 async function installCodexPlugins(runtime, failures = []) {
   assertCodexPluginRuntime(runtime);
   const selections = runtime.manifest.selections ?? {};
+  if (process.env.CODEX_LOGIN_MODE === "api_key") {
+    return disableCodexSelectionsWithoutChatGptLogin(selections, failures);
+  }
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
   let lastError = new Error("Codex plugin installation deadline expired before the first attempt.");
   let result = { successfulPluginIds: [], failures };
