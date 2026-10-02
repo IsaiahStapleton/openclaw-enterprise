@@ -688,9 +688,10 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 
 	var createFile string
 	create := &cobra.Command{
-		Use:   "create",
-		Short: "Register a credential source from a JSON document",
-		Args:  cobra.NoArgs,
+		Use:     "create",
+		Short:   "Register a credential source from a JSON document",
+		Example: credentialSourceCreateExample,
+		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {

@@ -27,19 +27,22 @@ const STARTUP_PHASE_EVENT = "runtime.startup_phase";
 
 // One stderr JSON line per startup phase, for deploy-time measurement. Callers
 // pass fixed phase names only: never provider, model, credential or path values.
+// A failed phase may add a fixed upper-case cause code, which the Collector exports.
 // Date.now() keeps this usable in every wrapper, including stubbed test contexts.
-function startupPhaseHelper(container: "gateway" | "agent"): string {
+export function startupPhaseHelper(container: "gateway" | "agent"): string {
   return String.raw`
 const startupPhaseOrigin = Date.now();
-function logStartupPhase(phase, startedAt, outcome = "ok") {
+function logStartupPhase(phase, startedAt, outcome = "ok", code) {
   const now = Date.now();
+  const failed = outcome !== "ok";
   console.error(JSON.stringify({
     event: ${JSON.stringify(STARTUP_PHASE_EVENT)},
     container: ${JSON.stringify(container)},
     phase,
-    outcome: outcome === "ok" ? "ok" : "failed",
+    outcome: failed ? "failed" : "ok",
     ms: now - startedAt,
     sinceStartMs: now - startupPhaseOrigin,
+    ...(failed && typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? { code } : {}),
   }));
 }
 async function timeStartupPhase(phase, run) {
@@ -1723,9 +1726,42 @@ async function installCodexSelectionSet(selections, failures = []) {
   return { successfulPluginIds, failures: failed };
 }
 
+// Codex serves the curated remote catalog only to ChatGPT logins and rejects an
+// API-key login ("api key auth is not supported"), so retrying cannot succeed.
+// Disable every enabled selection as an authentication requirement and turn the
+// plugin features off instead of holding the Harness unready.
+async function disableCodexSelectionsWithoutChatGptLogin(selections, failures = []) {
+  const failed = [...failures];
+  const failedIds = pluginFailureIds(failed);
+  for (const pluginId of enabledCodexSelectionIds(selections)) {
+    if (failedIds.has(pluginId)) continue;
+    const diagnostic = pluginDiagnostic(pluginId, "PLUGIN_AUTH_REQUIRED");
+    if (!pluginBestEffortEnabled()) {
+      throw new PluginTerminalDiagnosticError(
+        diagnostic,
+        "Codex plugins require a ChatGPT login; API-key authentication cannot install them.",
+      );
+    }
+    failed.push(diagnostic);
+    failedIds.add(pluginId);
+  }
+  if (Object.keys(selections).length > 0) {
+    const configuration = {
+      features: { apps: false, plugins: false, remote_plugin: false },
+      apps: { _default: { enabled: false } },
+    };
+    await writeCodexAppConfiguration(configuration);
+    verifyCodexAppConfiguration(configuration, await readCodexAppConfiguration());
+  }
+  return { successfulPluginIds: [], failures: failed };
+}
+
 async function installCodexPlugins(runtime, failures = []) {
   assertCodexPluginRuntime(runtime);
   const selections = runtime.manifest.selections ?? {};
+  if (process.env.CODEX_LOGIN_MODE === "api_key") {
+    return disableCodexSelectionsWithoutChatGptLogin(selections, failures);
+  }
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
   let lastError = new Error("Codex plugin installation deadline expired before the first attempt.");
   let result = { successfulPluginIds: [], failures };
@@ -1740,9 +1776,24 @@ async function installCodexPlugins(runtime, failures = []) {
     }
   }
   if (lastError !== undefined) {
-    throw new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+    const failure = new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+    failure.startupCode = codexPluginStartupFailureCode(lastError);
+    throw failure;
   }
   return result;
+}
+
+// A fixed cause code for remote logs; the message, which can carry native
+// Codex error text, stays in local container output.
+function codexPluginStartupFailureCode(error) {
+  switch (pluginRuntimeErrorMessage(error)) {
+    case "Codex plugin catalog did not contain the selected plugin.":
+      return "PLUGIN_NOT_IN_CATALOG";
+    case "Codex plugin detail did not contain the selected plugin.":
+      return "PLUGIN_DETAIL_MISSING";
+    default:
+      return "PLUGIN_NOT_READY";
+  }
 }
 `;
 
@@ -2079,7 +2130,7 @@ function excludeGatewayLocalCodexTools(config) {
     // APP_SERVER_URL names a remote Codex Harness: pin its providers even when
     // the Gateway config lacks the plugin entry. A dedicated OpenClaw Gateway
     // (no APP_SERVER_URL) runs its turns with these rows, so it keeps them.
-    if (process.env.APP_SERVER_URL !== undefined) pinCodexProviderTransport(config);
+    if (process.env.APP_SERVER_URL !== undefined) logOverriddenSettings(pinCodexProviderTransport(config));
     return;
   }
   const codexConfig = codex.config ??= {};
@@ -2099,8 +2150,14 @@ function excludeGatewayLocalCodexTools(config) {
   if (!isPlainObject(triggers)) {
     throw new Error("The cron.triggers setting must be an object.");
   }
+  const overridden = triggers.enabled === undefined || triggers.enabled === false ? [] : ["cron.triggers.enabled"];
   triggers.enabled = false;
-  pinCodexProviderTransport(config);
+  logOverriddenSettings([...overridden, ...pinCodexProviderTransport(config)]);
+}
+
+// Say which owner settings this Gateway replaced: setting names only, never values.
+function logOverriddenSettings(settings) {
+  if (settings.length > 0) console.error(JSON.stringify({ event: "runtime.gateway_settings_overridden", container: "gateway", settings }));
 }
 
 // OpenClaw's built-in runtime runs in the Gateway process with Gateway-local
@@ -2122,7 +2179,9 @@ function keepKeys(value, kept) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => kept.has(key)));
 }
 
+// Returns the owner settings it dropped or replaced.
 function pinCodexProviderTransport(config) {
+  const overridden = new Set();
   const models = config.models ??= {};
   if (!isPlainObject(models)) {
     throw new Error("The models setting must be an object.");
@@ -2146,9 +2205,19 @@ function pinCodexProviderTransport(config) {
       throw new Error("The " + id + " model provider setting must be an object.");
     }
     const pinned = keepKeys(provider, CODEX_PROVIDER_KEPT_KEYS);
+    const stub = { baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" };
+    const row = "models.providers." + id + ".";
+    for (const name of Object.keys(provider)) {
+      if (!CODEX_PROVIDER_KEPT_KEYS.has(name) && provider[name] !== stub[name]) overridden.add(row + name);
+    }
     if (provider.models !== undefined) {
       if (!Array.isArray(provider.models) || !provider.models.every(isPlainObject)) {
         throw new Error("The " + id + " model provider models setting must be a list of objects.");
+      }
+      for (const model of provider.models) {
+        for (const name of Object.keys(model)) {
+          if (!CODEX_MODEL_KEPT_KEYS.has(name)) overridden.add(row + "models[]." + name);
+        }
       }
       pinned.models = provider.models.map((model) => keepKeys(model, CODEX_MODEL_KEPT_KEYS));
     }
@@ -2156,10 +2225,9 @@ function pinCodexProviderTransport(config) {
     // no credential in the Gateway, and Codex keeps owning its account's models.
     const authoredTransport =
       id === "codex" || provider.baseUrl !== undefined || provider.api !== undefined;
-    providers[key] = authoredTransport
-      ? { ...pinned, baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" }
-      : pinned;
+    providers[key] = authoredTransport ? { ...pinned, ...stub } : pinned;
   }
+  return [...overridden];
 }
 
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -2705,13 +2773,18 @@ if (receipt?.sourceUid === expected.sourceUid) {
 // policy says; only the first such warning per app-server is kept. Codex's
 // startup ERROR that no bubblewrap is on PATH is dropped: the image runs the
 // bubblewrap Codex ships on purpose, because a bwrap on PATH makes Codex run a
-// namespace probe that the reviewed seccomp profile denies. Everything else is
-// forwarded unchanged.
+// namespace probe that the reviewed seccomp profile denies. Codex's startup
+// ERROR that project-local config is disabled until the project is trusted is
+// dropped when the only folder it names is the workspace's own .codex: an empty
+// one appears once any session has run, the workspace is deliberately not
+// trusted, and the line is not a fault. Everything else is forwarded unchanged.
 export const CODEX_STDERR_FILTER_HELPER = String.raw`
 const codexVerboseLog = /^(?:debug|trace)(?:,|$)/i.test(process.env.RUST_LOG ?? "");
 const CODEX_REMOTE_CONTROL_WAIT = "waiting to resolve remote control preference until authentication is available";
 const CODEX_MISSING_BWRAP_WARNING = "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.";
 const CODEX_UNIX_SOCKETS_PLATFORM_WARNING = "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform";
+const CODEX_UNTRUSTED_PROJECT_WARNING = "until the project is trusted";
+const CODEX_UNTRUSTED_WORKSPACE_MESSAGE = /^Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load\.\n {4}1\. \/home\/node\/workspace\/\.codex\n {7}To load project-local config, hooks, and exec policies, add \/home\/node\/workspace as a trusted project in \S+\/config\.toml\.\n?$/;
 const CODEX_STDERR_LINE_LIMIT = 65536;
 let codexRemoteControlWaitAt = -Infinity;
 let codexUnixSocketsPlatformWarned = false;
@@ -2725,7 +2798,8 @@ function codexStderrLineKept(line, now = Date.now()) {
     !line.includes('"message":"websocket client connected"') &&
     !line.includes(CODEX_REMOTE_CONTROL_WAIT) &&
     !line.includes(CODEX_UNIX_SOCKETS_PLATFORM_WARNING) &&
-    !line.includes(CODEX_MISSING_BWRAP_WARNING)
+    !line.includes(CODEX_MISSING_BWRAP_WARNING) &&
+    !line.includes(CODEX_UNTRUSTED_PROJECT_WARNING)
   ) return true;
   let record;
   try { record = JSON.parse(line); } catch { return true; }
@@ -2758,6 +2832,7 @@ function codexStderrLineKept(line, now = Date.now()) {
     codexRemoteControlWaitAt = now;
   }
   if (record.target === "codex_app_server" && message === CODEX_MISSING_BWRAP_WARNING) return false;
+  if (record.target === "codex_app_server" && typeof message === "string" && CODEX_UNTRUSTED_WORKSPACE_MESSAGE.test(message)) return false;
   if (record.target === "codex_network_proxy::proxy" && message === CODEX_UNIX_SOCKETS_PLATFORM_WARNING) {
     if (codexUnixSocketsPlatformWarned) return false;
     codexUnixSocketsPlatformWarned = true;
@@ -3112,17 +3187,24 @@ child.on("exit", (code, signal) => {
   codexStderrDone.then(() => process.exit(status));
 });
 (async () => {
+  const pluginInstallStartedAt = Date.now();
+  let pluginInstallLogged = false;
   try {
     if (pluginRuntime !== undefined) {
-      const pluginInstallStartedAt = Date.now();
       const result = await installCodexPlugins(pluginRuntime);
       logStartupPhase("plugin-install", pluginInstallStartedAt);
+      pluginInstallLogged = true;
       publishPluginRuntimeStatus({ phase: "ready", ...result });
     } else {
       publishPluginRuntimeStatus({ phase: "ready", successfulPluginIds: [], failures: [] });
     }
     pluginRuntimeReady();
   } catch (error) {
+    // The phase line (with a fixed code) reaches the log backend; the message stays local.
+    // A failure after a logged install (publishing status) is not a plugin-install failure.
+    if (pluginRuntime !== undefined && !pluginInstallLogged) {
+      logStartupPhase("plugin-install", pluginInstallStartedAt, "failed", error?.startupCode ?? "PLUGIN_NOT_READY");
+    }
     console.error("Codex plugin runtime initialization failed: " + pluginRuntimeErrorMessage(error));
     child.kill("SIGTERM");
     process.exit(1);

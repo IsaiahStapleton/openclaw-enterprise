@@ -45,6 +45,7 @@ import type {
   ComputeDriver,
   ComputeAgentBinding,
   ComputeAgentRevisionBinding,
+  ComputePendingReason,
   ComputeReadiness,
   ComputePreflightResult,
   ComputeRevisionContext,
@@ -685,7 +686,10 @@ const WORKSPACE_NODE_BINDING_ANNOTATION = "openclaw.dev/workspace-node-binding";
 // Kubelet refresh after the Pod nudge (1.3-1.7 s on k3d, #612), then the
 // wrapper's 1 s poll, its config write and OpenClaw's plugin reload, confirmed
 // through OpenClaw's plugin list (about 2.5 s from the file in the runtime
-// image test), with margin. A slower Gateway retries on the next pass.
+// image test), with margin. A slower Gateway retries on the next pass. Like the
+// pairing wait below, this is a budget per binding, not per pass: activation
+// that fails for want of the ack is retried, and the serial worker must not
+// spend another full wait on every retry while other Agents' deploys queue (D221).
 const WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS = 20_000;
 const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
 // After the setup reaches the Harness of a first dedicated deploy, its node host
@@ -1262,6 +1266,54 @@ function harnessModels(configuration: OpenClawConfigurationDocument): readonly s
   return [...new Set(models as string[])];
 }
 
+// A dedicated Codex Gateway entrypoint rewrites these settings at every start
+// (excludeGatewayLocalCodexTools, pinCodexProviderTransport) and refuses to start
+// on a shape it cannot rewrite. Reject those shapes here, before a deployment
+// replaces a working Gateway with one that crash-loops. null and absent values
+// are replaced at start, so they are accepted.
+function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurationDocument): void {
+  const object = (value: unknown, setting: string): Record<string, unknown> | undefined => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const record = asRecord(value);
+    if (record === undefined) {
+      throw new ConfigurationFailure(`The ${setting} setting must be an object.`);
+    }
+    return record;
+  };
+  const codex = asRecord(asRecord(asRecord(configuration.plugins)?.entries)?.codex);
+  if (codex !== undefined) {
+    const excluded = object(codex.config, "Codex plugin config")?.codexDynamicToolsExclude;
+    if (excluded !== undefined && excluded !== null && !Array.isArray(excluded)) {
+      throw new ConfigurationFailure(
+        "The Codex plugin codexDynamicToolsExclude setting must be a list.",
+      );
+    }
+    object(object(configuration.cron, "cron")?.triggers, "cron.triggers");
+  }
+  const providers = object(object(configuration.models, "models")?.providers, "models.providers");
+  for (const [key, provider] of Object.entries(providers ?? {})) {
+    // The entrypoint matches provider keys as OpenClaw does: trimmed, lowercased.
+    const id = key.trim().toLowerCase();
+    if (id !== "codex" && id !== "openai") {
+      continue;
+    }
+    const row = asRecord(provider);
+    if (row === undefined) {
+      throw new ConfigurationFailure(`The ${id} model provider setting must be an object.`);
+    }
+    if (
+      row.models !== undefined &&
+      (!Array.isArray(row.models) || !row.models.every((model) => asRecord(model) !== undefined))
+    ) {
+      throw new ConfigurationFailure(
+        `The ${id} model provider models setting must be a list of objects.`,
+      );
+    }
+  }
+}
+
 function nativeRuntimeConfiguration(configuration: OpenClawConfigurationDocument): object {
   const models = harnessModels(configuration);
   const configuredAgentIds = Object.keys(asRecord(asRecord(configuration.agents)?.entries) ?? {});
@@ -1662,6 +1714,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
   private workspaceNodePairingWaitMs = WORKSPACE_NODE_PAIRING_WAIT_MS;
   // Pairing wait already spent per workspace node setup ID.
   private readonly workspaceNodePairingSpentMs = new Map<string, number>();
+  // How long, in total across activation attempts, one binding's ack may be awaited.
+  private workspaceNodeBindingAckWaitMs = WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS;
+  // Ack wait already spent per revision and workspace node.
+  private readonly workspaceNodeBindingAckSpentMs = new Map<string, number>();
+  private delay: (ms: number) => Promise<void> = (ms) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
   private now: () => number = () => Date.now();
   private readonly readNodeCa: (() => Promise<string | undefined>) | undefined;
   private lifecycle: ComputeLifecycleDispatcher;
@@ -2189,6 +2247,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (native) {
       nativeRuntimeConfiguration(configuration);
+    }
+    if (codex) {
+      requireCodexGatewayConfigurationShape(configuration);
     }
     const conflictingAuth = () =>
       new ConfigurationFailure("Model credentials must use the Harness authentication binding.");
@@ -3348,13 +3409,25 @@ export class KubernetesComputeDriver implements ComputeDriver {
     const revisionName = `${agentName}-rev-${sha256Hex(revision.id, 12)}`;
     const revisionOwnership = { ...agentOwnership, revisionId: revision.id };
     const pluginOwnership = this.pluginRuntimeOwnership(revision);
-    const incomplete = async (): Promise<ComputeReadiness> => {
+    // A known pending reason is reported with the observation; otherwise a Pod
+    // the scheduler cannot place explains the wait (D224).
+    const incomplete = async (pendingReason?: ComputePendingReason): Promise<ComputeReadiness> => {
       const runtimeFailure = await this.safeRuntimeFailureObservation(
         revision,
         namespace,
         workspaceSetup !== undefined,
       );
-      return runtimeFailure === undefined ? result : { ...result, runtimeFailure };
+      const reason =
+        pendingReason ??
+        (runtimeFailure === undefined &&
+        (await this.safeUnschedulableObservation(revision, namespace))
+          ? "WORKLOAD_UNSCHEDULABLE"
+          : undefined);
+      return {
+        ...result,
+        ...(runtimeFailure === undefined ? {} : { runtimeFailure }),
+        ...(reason === undefined ? {} : { pendingReason: reason }),
+      };
     };
     const ready = async (
       expectedWarnings?: readonly PluginDeploymentWarning[],
@@ -3979,7 +4052,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           return incomplete();
         }
         if (!(await this.workspaceNodeReady(revision, namespace))) {
-          return incomplete();
+          return incomplete("WORKSPACE_NODE_PENDING");
         }
         return repositoryMaterial !== undefined &&
           !(await this.repositoryMaterialReady(revision, namespace, repositoryMaterial))
@@ -4047,7 +4120,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
         }
       }
       if (!workspaceNodeIsReady) {
-        return incomplete();
+        // Both workloads are ready: only the node's connection is outstanding (D222).
+        return incomplete("WORKSPACE_NODE_PENDING");
       }
       // Gateway plugin and node observations may outlive the material readiness observation.
       if (
@@ -6621,6 +6695,46 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
+  // True when a live Pod of this revision is unschedulable (PodScheduled False,
+  // reason Unschedulable), for example for want of node memory. Like failure
+  // evidence, an unavailable observation reports nothing.
+  private async safeUnschedulableObservation(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+  ): Promise<boolean> {
+    const ownerSignal = currentComputeAbortSignal();
+    try {
+      for (const role of this.runtimeStatusContainers(revision)) {
+        const target = role === "gateway" ? this.gatewayNamespace(revision, namespace) : namespace;
+        for (const pod of await this.revisionPods(revision, target, role)) {
+          if (asRecord(pod.metadata)?.deletionTimestamp !== undefined) {
+            continue;
+          }
+          const conditions = asRecord(pod.status)?.conditions;
+          if (
+            Array.isArray(conditions) &&
+            conditions.some((item) => {
+              const condition = asRecord(item);
+              return (
+                condition?.type === "PodScheduled" &&
+                condition.status === "False" &&
+                condition.reason === "Unschedulable"
+              );
+            })
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch {
+      if (ownerSignal?.aborted) {
+        throw ownerSignal.reason;
+      }
+      return false;
+    }
+  }
+
   private async pluginRuntimeStatus(
     revision: AgentRevision,
     namespace: KubernetesNamespaceAddress,
@@ -7093,7 +7207,42 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return true;
     }
     const signal = this.operationSignal();
-    const deadline = Date.now() + WORKSPACE_NODE_BINDING_ACK_TIMEOUT_MS;
+    const budgetKey = `${revision.id}:${configuration.workspaceNodeId}`;
+    const spentMs = this.workspaceNodeBindingAckSpentMs.get(budgetKey) ?? 0;
+    const started = this.now();
+    const deadline = started + Math.max(0, this.workspaceNodeBindingAckWaitMs - spentMs);
+    let applied = false;
+    try {
+      applied = await this.pollWorkspaceNodeBindingAck(
+        revision,
+        namespace,
+        configuration,
+        deadline,
+        signal,
+      );
+    } finally {
+      if (applied) {
+        this.workspaceNodeBindingAckSpentMs.delete(budgetKey);
+      } else {
+        this.recordBudgetSpent(
+          this.workspaceNodeBindingAckSpentMs,
+          budgetKey,
+          spentMs + Math.max(0, this.now() - started),
+        );
+      }
+    }
+    return applied;
+  }
+
+  // Reads the Gateway's applied node until it matches or the deadline passes;
+  // a spent budget still gets one read, so a late ack is seen on the next attempt.
+  private async pollWorkspaceNodeBindingAck(
+    revision: AgentRevision,
+    namespace: KubernetesNamespaceAddress,
+    configuration: GatewayConfigurationSnapshot,
+    deadline: number,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     for (;;) {
       signal.throwIfAborted();
       const readback = await this.privateStatusReadback(
@@ -7127,10 +7276,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
       }
-      if (Date.now() >= deadline) {
+      if (this.now() >= deadline) {
         return false;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, WORKSPACE_NODE_BINDING_ACK_POLL_MS));
+      await this.delay(WORKSPACE_NODE_BINDING_ACK_POLL_MS);
     }
   }
 
@@ -7414,14 +7563,14 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     return deviceId || undefined;
   }
 
-  private recordWorkspaceNodePairingWait(setupId: string, spentMs: number): void {
+  private recordBudgetSpent(budgets: Map<string, number>, key: string, spentMs: number): void {
     // Re-insert so the map stays in least-recently-waited order.
-    this.workspaceNodePairingSpentMs.delete(setupId);
-    this.workspaceNodePairingSpentMs.set(setupId, spentMs);
-    if (this.workspaceNodePairingSpentMs.size > MAX_WORKSPACE_NODE_PAIRING_BUDGETS) {
-      const oldest = this.workspaceNodePairingSpentMs.keys().next().value;
+    budgets.delete(key);
+    budgets.set(key, spentMs);
+    if (budgets.size > MAX_WORKSPACE_NODE_PAIRING_BUDGETS) {
+      const oldest = budgets.keys().next().value;
       if (oldest !== undefined) {
-        this.workspaceNodePairingSpentMs.delete(oldest);
+        budgets.delete(oldest);
       }
     }
   }
@@ -7503,7 +7652,11 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       );
     } finally {
       if (waitMs > 0) {
-        this.recordWorkspaceNodePairingWait(setupId, spentMs + Math.max(0, this.now() - started));
+        this.recordBudgetSpent(
+          this.workspaceNodePairingSpentMs,
+          setupId,
+          spentMs + Math.max(0, this.now() - started),
+        );
       }
     }
     if (observation === undefined) {

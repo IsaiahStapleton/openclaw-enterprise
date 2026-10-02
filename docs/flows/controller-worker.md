@@ -277,8 +277,12 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence refunds the attempt, requeuing unready revisions after 500 ms
-and others with backoff. `PostgresWorkQueue.defer` appends `reconcile` evidence
+Pending convergence refunds the attempt, requeuing unready revisions after 500 ms,
+growing with the deployment's age to 5 s at 200 s, and others with backoff. An
+unready observation's Compute `pendingReason` selects the pending code:
+`REVISION_UNSCHEDULABLE` for Pods the scheduler cannot place,
+`WORKSPACE_NODE_PENDING` for ready workloads whose workspace node has not
+connected, and `REVISION_INCOMPLETE` otherwise. `PostgresWorkQueue.defer` appends `reconcile` evidence
 only when its outcome and code differ from that work item's latest evidence. Dependency failures consume attempts; permanent failure,
 exhaustion, deadline, or `AUTHENTICATION_FAILED` terminates work. See
 [outcomes](../reference/controller.md) and
@@ -368,6 +372,8 @@ cannot strand provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 
 - 2026-10-01 04:06: Document metrics client error ownership through release. (authoring-run/d0545dc8-f524-4ce5-a3ce-918838dddd92 - 97dfb6b9)
 
