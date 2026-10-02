@@ -221,10 +221,7 @@ and foreign/stale workloads fail closed. Dedicated activation waits for the
 Gateway to report the workspace node it was handed; that wait is a 20-second
 budget per revision and node across activation retries, then one status read per
 retry, so a Gateway that never applies its node cannot hold the serial worker
-on every retry. This wait, and the first deploy's wait for its node to pair,
-also end after one read when another Agent's Work could be claimed: the pass
-ends pending and is requeued, and the other deploy runs next instead of queuing
-behind the wait. The time not spent stays in the budget.
+on every retry. It and the pairing wait end early when other Work is claimable.
 
 When stopping a revision, the Driver stops its Gateway while leaving the Harness
 available for active work. Gateway supervision and Pod termination allow the
@@ -316,7 +313,7 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 
 ## Changelog
 
-- 2026-10-02 14:00: End the workspace node pairing and binding ack waits early when other Work could be claimed. (r7-d221)
+- 2026-10-02 14:00: End node pairing and ack waits early for claimable Work. (r7-d221)
 
 - 2026-10-02 12:00: Delete a replaced embedded predecessor's Secret and ConfigMap copies at activation re-render. (fix-d280-embedded-retire)
 
