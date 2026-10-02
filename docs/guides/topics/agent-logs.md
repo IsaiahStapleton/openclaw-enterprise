@@ -187,7 +187,9 @@ spend only its own budget and learns only whether the feature is on.
 
 Kubernetes keeps only the current and the previous instance of each container.
 Output from deleted Pods and older restarts is gone. For history, use your
-[observability backend](../observability.md).
+[observability backend](../observability.md). While a crash-looping container is
+being replaced, the previous instance can read as empty for a short time; read it
+again after a few seconds.
 
 ## Sandbox source
 

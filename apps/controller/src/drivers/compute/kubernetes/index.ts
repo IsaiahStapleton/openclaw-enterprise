@@ -1061,6 +1061,9 @@ export function kubernetesNamespaceName(namespaceId: string): string {
   return `oce-${sha256Hex(id, 15)}`;
 }
 
+const KUBELET_LOG_UNAVAILABLE =
+  /^unable to retrieve container logs for [a-z][a-z0-9+.-]{0,31}:\/\/[0-9a-f]{1,128}\r?\n?$/;
+
 function previousKubernetesNamespaceName(namespaceId: string): string {
   const id = required(namespaceId, "Platform Namespace ID");
   const slug =
@@ -2478,6 +2481,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (typeof raw !== "string") {
       throw new DependencyUnavailableError("The Kubernetes client returned invalid log output.");
+    }
+    // While a crash-looping container is being replaced, kubelet answers 200 with its own
+    // error text instead of container output. Every container line carries a timestamp,
+    // so this untimestamped line is not output: the instance has no readable log yet.
+    if (KUBELET_LOG_UNAVAILABLE.test(raw)) {
+      raw = "";
     }
     // Re-read after the log read so the caller can detect a replaced instance.
     const latest = (
