@@ -67,9 +67,11 @@ models only when they retain the selected provider and an explicit matching
 Harness runtime. Model fallbacks under defaults or Agent entries must retain
 the primary provider and resolve through the same policy checks to the same
 Harness. A provider's native `models` array is limited to the resolved primary
-and fallback models. Nonempty native `agents.list` configurations remain
-unsupported. Admission preserves the fallback order in the immutable revision;
-it does not implement fallback execution or allow changing topology.
+and fallback models. Each entry's `id` is the full model reference or the model
+ID after the first slash, which may itself contain slashes. Nonempty native
+`agents.list` configurations remain unsupported. Admission preserves the
+fallback order in the immutable revision; it does not implement fallback
+execution or allow changing topology.
 
 ## Admission and immutable execution
 

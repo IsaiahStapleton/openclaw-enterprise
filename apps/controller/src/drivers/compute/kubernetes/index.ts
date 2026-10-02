@@ -3,6 +3,7 @@ import {
   isNonEmptyString,
   numericErrorStatus,
   sha256Hex,
+  splitModelRef,
 } from "@openclaw-enterprise/utils";
 import { randomBytes, X509Certificate } from "node:crypto";
 import { BlockList, isIP } from "node:net";
@@ -1233,7 +1234,7 @@ function harnessProbeConfiguration(configuration: OpenClawConfigurationDocument)
 
 // The immutable model selection owns both native credential projection and probing.
 function harnessModelAuthentication(configuration: OpenClawConfigurationDocument) {
-  const providerId = harnessPrimaryModel(configuration).split("/", 1)[0]!;
+  const providerId = splitModelRef(harnessPrimaryModel(configuration)).provider;
   if (providerId === "openai" || providerId === "codex") {
     return { providerId, environmentName: MODEL_API_KEY };
   }
@@ -1280,7 +1281,7 @@ function nativeRuntimeConfiguration(configuration: OpenClawConfigurationDocument
   }
   const entries = openai.models.map((value) => asRecord(value));
   const runtimeModels = models.map((reference) => {
-    const [provider, id] = reference.split("/", 2);
+    const { provider, id } = splitModelRef(reference);
     if (provider !== "openai" || !id) {
       throw new ConfigurationFailure(
         "Dedicated OpenClaw currently requires explicit openai model references.",
@@ -2208,9 +2209,11 @@ export class KubernetesComputeDriver implements ComputeDriver {
       }
     }
     const providers = asRecord(asRecord(configuration.models)?.providers) ?? {};
-    const selectedProviders = new Set(models.map((model) => (model as string).split("/", 1)[0]));
+    const selectedProviders = new Set(
+      models.map((model) => splitModelRef(model as string).provider),
+    );
     for (const provider of selectedProviders) {
-      const config = asRecord(providers[provider!]);
+      const config = asRecord(providers[provider]);
       if (
         [config, ...(Array.isArray(config?.models) ? config.models : [])].some((model) =>
           Object.keys(asRecord(asRecord(model)?.headers) ?? {}).some((name) =>
