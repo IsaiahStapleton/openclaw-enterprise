@@ -59,9 +59,21 @@ public addresses on TCP 443, and OpenClaw refuses provider addresses in private
 or special-use ranges, so the provider uses `11.111.0.2`. That address is
 routable only on the runner's Docker network.
 
+After restarting CoreDNS, the smoke waits until the API proxy Pod resolves both
+the API Service and `api.openai.com` to the provider before it calls the API.
+
 The runtime image differs from the checkout's image by one layer: the test CA
 in the system trust store (`SSL_CERT_FILE`) and in `NODE_EXTRA_CA_CERTS`. No
 product code or Agent configuration is changed for the smoke.
+
+## Node resolver
+
+Local Setup starts its k3d node with `IPTABLES_MODE=legacy`. On the hosted
+Ubuntu 22.04 runner, whose Docker uses iptables-nft, the node's resolver then
+refuses queries, so the node cannot pull images. The smoke therefore sets the
+documented `OCC_DEVELOPMENT_K3D_DNS_RESOLVER` to the runner's first non-loopback
+upstream resolver unless the variable is already set. See
+[Resolve node DNS failures](../guides/deploy/local-kubernetes-development.md#resolve-node-dns-failures).
 
 ## Limits
 
@@ -73,7 +85,10 @@ those.
 ## Troubleshooting
 
 On failure the job prints the stand-in provider's events, Pods, events, each
-Agent's deployment status and logs, and the platform Pod logs. The model key is a
+Agent's deployment status and logs, and the platform Pod logs. `occ dev up`
+deletes its cluster when it fails, so while it runs the smoke also records Pods,
+warning events, node conditions, and details of Pods that stay unready, and
+prints them if Local Setup fails. The model key is a
 placeholder and the cluster is discarded with the runner.
 
 Run it locally only on a disposable Linux host with Docker, k3d, kubectl, Helm,
