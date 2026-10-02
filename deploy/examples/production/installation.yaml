@@ -74,7 +74,7 @@ drivers:
             memory: 1280Mi
           limits:
             cpu: "4"
-            memory: 2Gi
+            memory: 3Gi
         agent:
           requests:
             cpu: 100m
