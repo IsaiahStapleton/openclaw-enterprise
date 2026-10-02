@@ -67,6 +67,16 @@ export function deploymentProgressForWork(
       code = attempt.code;
       message = "A dependency was unavailable. The controller will retry.";
       break;
+    case "AGENT_GATEWAY_UNAVAILABLE":
+      code = attempt.code;
+      message =
+        "The Agent Gateway was not reachable through its route yet. The controller will retry until the deployment deadline.";
+      break;
+    case "KUBERNETES_API_UNAVAILABLE":
+      code = attempt.code;
+      message =
+        "The Kubernetes API was unavailable. The controller will retry until the deployment deadline.";
+      break;
     case "ACTIVE_REVISION_CHANGED":
       code = attempt.code;
       message = "The selected version changed. The controller will reconcile again.";
@@ -446,6 +456,10 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment runtime failed a startup check.";
     case "REVISION_SUPERSEDED":
       return "Deployment was superseded by a newer revision.";
+    case "AGENT_GATEWAY_UNAVAILABLE":
+      return "The Agent Gateway was still not reachable through its route at the deployment deadline.";
+    case "KUBERNETES_API_UNAVAILABLE":
+      return "The Kubernetes API was still unavailable at the deployment deadline.";
     case "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED":
       return "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.";
     case "SANDBOX_HARNESS_UNSUPPORTED":

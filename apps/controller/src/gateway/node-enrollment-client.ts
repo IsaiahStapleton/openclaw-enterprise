@@ -1,5 +1,11 @@
-import { GatewayClient, type GatewayClientOptions } from "@openclaw/gateway-client";
+import {
+  GatewayClient,
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+  type GatewayClientOptions,
+} from "@openclaw/gateway-client";
 import { setTimeout as delay } from "node:timers/promises";
+import { TransientDependencyError } from "@openclaw-enterprise/occ";
 import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
 
 export interface NodeSetup {
@@ -47,6 +53,71 @@ export const NODE_SETUP_POLL_MS = 250;
 const GATEWAY_CONNECT_BUDGET_MS = 10_000;
 
 type GatewayHello = Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0];
+
+// The Gateway's route answers these while it converges: 404 until Envoy has the
+// HTTPRoute, 502-504 until it has a ready endpoint for the new Pod.
+const CONVERGING_ROUTE_STATUSES = new Set([404, 502, 503, 504]);
+const UNREACHABLE_SOCKET_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+]);
+
+/**
+ * Names a Gateway connection failure that clears as the Gateway and its route
+ * converge, so the worker retries it within the deployment deadline. Rejected
+ * credentials, protocol errors and invalid answers stay as they are.
+ */
+function transientGatewayFailure(error: unknown): TransientDependencyError | undefined {
+  if (error instanceof GatewayClientRequestTimeoutError) {
+    return new TransientDependencyError(
+      "agent_gateway",
+      "timeout",
+      "An Agent Gateway request timed out.",
+      { cause: error },
+    );
+  }
+  const record = asRecord(error);
+  const details = asRecord(record?.details);
+  if (details?.reason === "websocket-upgrade-rejected") {
+    const status = details.httpStatus;
+    return typeof status === "number" && CONVERGING_ROUTE_STATUSES.has(status)
+      ? new TransientDependencyError(
+          "agent_gateway",
+          "unavailable",
+          `The Agent Gateway route answered HTTP ${status} to the connection upgrade.`,
+          { cause: error },
+        )
+      : undefined;
+  }
+  if (typeof record?.code === "string" && UNREACHABLE_SOCKET_CODES.has(record.code)) {
+    return new TransientDependencyError(
+      "agent_gateway",
+      "unreachable",
+      `The Agent Gateway route was unreachable (${record.code}).`,
+      { cause: error },
+    );
+  }
+  if (
+    (error instanceof GatewayClientRequestError &&
+      error.code === "UNAVAILABLE" &&
+      error.retryable) ||
+    (error instanceof Error && /^gateway (?:closed \(|not connected$)/u.test(error.message))
+  ) {
+    return new TransientDependencyError(
+      "agent_gateway",
+      "unavailable",
+      "The Agent Gateway closed the connection or reported itself unavailable.",
+      { cause: error },
+    );
+  }
+  return undefined;
+}
 
 /** Compute uses the existing administrative route; only the node-only setup crosses to the Harness. */
 export function createGatewayNodeEnrollment(
@@ -207,11 +278,24 @@ async function withGateway<T>(
     throw new Error("Node enrollment requires a private WSS Gateway endpoint.");
   }
   const apiKey = await readApiKey();
-  const signal = AbortSignal.any([
-    ownerSignal,
-    AbortSignal.timeout(GATEWAY_CONNECT_BUDGET_MS + waitMs),
-  ]);
+  const budget = AbortSignal.timeout(GATEWAY_CONNECT_BUDGET_MS + waitMs);
+  const signal = AbortSignal.any([ownerSignal, budget]);
   signal.throwIfAborted();
+  const failure = (error: unknown): unknown => {
+    if (ownerSignal.aborted) {
+      // The owner's reason (a lost claim, worker shutdown) is never a Gateway failure.
+      return ownerSignal.reason ?? error;
+    }
+    if (budget.aborted) {
+      return new TransientDependencyError(
+        "agent_gateway",
+        "timeout",
+        "The Agent Gateway did not answer within its connection budget.",
+        { cause: error },
+      );
+    }
+    return transientGatewayFailure(error) ?? error;
+  };
   let resolveHello!: (hello: GatewayHello) => void;
   let rejectHello!: (error: unknown) => void;
   const hello = new Promise<GatewayHello>((resolve, reject) => {
@@ -237,11 +321,20 @@ async function withGateway<T>(
     } catch (error) {
       rejectHello(error);
     }
-    const connected = await hello;
+    let connected: GatewayHello;
+    try {
+      connected = await hello;
+    } catch (error) {
+      throw failure(error);
+    }
     if (connected.auth?.role !== "operator" || !connected.auth.scopes?.includes("operator.admin")) {
       throw new Error("Node enrollment requires the Gateway administrative service identity.");
     }
-    return await operation(client, signal);
+    try {
+      return await operation(client, signal);
+    } catch (error) {
+      throw failure(error);
+    }
   } finally {
     signal.removeEventListener("abort", abort);
     client.stop();

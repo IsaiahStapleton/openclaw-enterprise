@@ -237,7 +237,10 @@ export {
   RuntimeLogsSandboxNotFoundError,
   SandboxRevisionUnsupportedError,
   ScopeViolationError,
+  TransientDependencyError,
   type RuntimeLogsErrorCode,
+  type TransientDependency,
+  type TransientDependencyReason,
 } from "./errors.ts";
 export {
   createRuntimeLogCursorCodec,

@@ -84,6 +84,7 @@ import {
   DependencyUnavailableError,
   ResourceConflictError,
   RuntimeLogsForbiddenByClusterError,
+  TransientDependencyError,
 } from "@openclaw-enterprise/occ";
 import {
   createKubernetesClientConfiguration,
@@ -458,6 +459,37 @@ function unreachableSocketFailure(error: unknown, depth = 0): boolean {
   }
   const nested = Array.isArray(record.errors) ? record.errors : [];
   return [record.cause, ...nested].some((entry) => unreachableSocketFailure(entry, depth + 1));
+}
+
+/**
+ * Names a Kubernetes API failure that clears by itself, so the worker retries
+ * it within the deployment deadline instead of spending its attempt budget: a
+ * request that timed out or never reached the API server, or an answer of 429
+ * or 5xx. Other errors, including a lost claim, pass through unchanged.
+ */
+function transientKubernetesFailure(error: unknown): unknown {
+  if (error instanceof TransientDependencyError) {
+    return error;
+  }
+  if (unreachableSocketFailure(error)) {
+    const timedOut = error instanceof KubernetesRequestTimeout;
+    return new TransientDependencyError(
+      "kubernetes_api",
+      timedOut ? "timeout" : "unreachable",
+      timedOut ? "A Kubernetes API request timed out." : "The Kubernetes API was unreachable.",
+      { cause: error },
+    );
+  }
+  const status = numericErrorStatus(error);
+  if (status === 429 || (status !== undefined && status >= 500 && status <= 599)) {
+    return new TransientDependencyError(
+      "kubernetes_api",
+      "unavailable",
+      `The Kubernetes API answered HTTP ${status}.`,
+      { cause: error },
+    );
+  }
+  return error;
 }
 
 function unreachableKubernetesApi(server: string | undefined, error: unknown): unknown {
@@ -3313,6 +3345,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
     revision: AgentRevision,
     context?: ComputeRevisionContext,
   ): Promise<ComputeReadiness> {
+    try {
+      return await this.prepareRevisionWorkloads(revision, context);
+    } catch (error) {
+      throw transientKubernetesFailure(error);
+    }
+  }
+
+  private async prepareRevisionWorkloads(
+    revision: AgentRevision,
+    context?: ComputeRevisionContext,
+  ): Promise<ComputeReadiness> {
     this.lifecycleStarted = true;
     const result = {
       namespaceId: revision.namespaceId,
@@ -4555,6 +4598,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   async deactivateRevision(revision: AgentRevision): Promise<void> {
+    try {
+      await this.deactivateRevisionWorkloads(revision);
+    } catch (error) {
+      throw transientKubernetesFailure(error);
+    }
+  }
+
+  private async deactivateRevisionWorkloads(revision: AgentRevision): Promise<void> {
     if (this.options.runtime === undefined) {
       return;
     }

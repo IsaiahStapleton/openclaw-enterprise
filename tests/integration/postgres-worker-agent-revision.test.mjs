@@ -10,6 +10,7 @@ import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import {
   PostgresMetricsSnapshot,
   SandboxRevisionUnsupportedError,
+  TransientDependencyError,
 } from "../../packages/occ/src/index.ts";
 import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
@@ -6849,6 +6850,140 @@ test(
       code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
       message:
         "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.",
+    });
+  },
+);
+
+test(
+  "a Gateway route that lags its Ready Pod is retried within the deadline, not the attempt budget",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("gateway-route-lag");
+    const candidate = await fixture.revision(owner, 1);
+    const events = [];
+    const progress = [];
+    let failures = 0;
+
+    // D28: the worker reaches a new Gateway through its private route as soon as
+    // the Pod is Ready. Until Envoy programs the new HTTPRoute the upgrade answers
+    // 404, for longer than five quick retries last. Fail more passes than the
+    // attempt budget allows, then let the route converge.
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision, revisionContext) {
+          if (failures < 8) {
+            failures += 1;
+            if (failures === 3) {
+              const status = await fixture.controller.getDeploymentStatus(
+                fixture.actor.id,
+                fixture.namespace.id,
+                owner.id,
+                candidate.id,
+              );
+              progress.push(status.progress?.lastAttempt);
+            }
+            throw new TransientDependencyError(
+              "agent_gateway",
+              "unavailable",
+              "The Agent Gateway route answered HTTP 404 to the connection upgrade.",
+            );
+          }
+          return fixture.compute.prepareRevision(revision, revisionContext);
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    const succeeded = await fixture.work(candidate, "succeeded", 30_000);
+    assert.equal(failures, 8);
+    assert.equal(succeeded.attempt_count, 1);
+    assert.equal(
+      (
+        await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          candidate.id,
+        )
+      ).status,
+      "succeeded",
+    );
+    assert.equal(progress.length, 1);
+    assert.equal(progress[0]?.code, "AGENT_GATEWAY_UNAVAILABLE");
+    assert.equal(
+      progress[0]?.message,
+      "The Agent Gateway was not reachable through its route yet. The controller will retry until the deployment deadline.",
+    );
+    const passes = events.filter(
+      (event) => event.event === "worker.completed" && event.revisionId === candidate.id,
+    );
+    assert.deepEqual(
+      passes.slice(0, 8).map(({ outcome, code, dependency, cause }) => ({
+        outcome,
+        code,
+        dependency,
+        cause,
+      })),
+      Array.from({ length: 8 }, () => ({
+        outcome: "pending",
+        code: "AGENT_GATEWAY_UNAVAILABLE",
+        dependency: "agent_gateway",
+        cause: "unavailable",
+      })),
+    );
+  },
+);
+
+test(
+  "a dependency still failing at the convergence deadline fails deployment with its own code",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("kubernetes-api-down");
+    const candidate = await fixture.revision(owner, 1);
+    let observations = 0;
+
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision() {
+          observations += 1;
+          throw new TransientDependencyError(
+            "kubernetes_api",
+            "timeout",
+            "A Kubernetes API request timed out.",
+          );
+        },
+      },
+      undefined,
+      2_500,
+    );
+
+    const failed = await fixture.work(candidate, "failed_permanent", 30_000);
+    assert.ok(
+      observations > 5,
+      `expected more passes than the attempt budget, saw ${observations}`,
+    );
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [
+      { reason_code: "KUBERNETES_API_UNAVAILABLE", result_data: null },
+    ]);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "KUBERNETES_API_UNAVAILABLE",
+      message: "The Kubernetes API was still unavailable at the deployment deadline.",
     });
   },
 );
