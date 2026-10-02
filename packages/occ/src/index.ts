@@ -210,6 +210,7 @@ import type {
 } from "./state/agent-provisioning.ts";
 
 export {
+  ActivationPendingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -239,6 +240,7 @@ export {
   SandboxRevisionUnsupportedError,
   ScopeViolationError,
   TransientDependencyError,
+  type ActivationPendingCode,
   type RuntimeLogsErrorCode,
   type TransientDependency,
   type TransientDependencyReason,

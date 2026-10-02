@@ -23,7 +23,7 @@ import {
   kubernetesGatewayNamespaceName,
   resolveKubernetesNamespace,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
-import { ConfigurationHarnessError } from "../../packages/occ/src/index.ts";
+import { ActivationPendingError, ConfigurationHarnessError } from "../../packages/occ/src/index.ts";
 import {
   currentComputeAbortSignal,
   withComputeAbortSignal,
@@ -1672,10 +1672,13 @@ test("an unacknowledged workspace node binding costs at most one bounded wait ac
   const attemptTimes = [];
   for (let attempt = 0; attempt < 4; attempt++) {
     const started = clock.now;
-    await assert.rejects(
-      driver.activateRevision(revision, authContext(revision)),
-      /has not applied its workspace node/,
-    );
+    await assert.rejects(driver.activateRevision(revision, authContext(revision)), (error) => {
+      // D330: the worker records this wait under its own code.
+      assert.ok(error instanceof ActivationPendingError);
+      assert.equal(error.code, "WORKSPACE_NODE_BINDING_PENDING");
+      assert.match(error.message, /has not applied its workspace node/);
+      return true;
+    });
     attemptTimes.push(clock.now - started);
   }
   assert.deepEqual(attemptTimes, [20_000, 0, 0, 0]);

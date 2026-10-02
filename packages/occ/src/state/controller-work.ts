@@ -63,6 +63,10 @@ export function deploymentProgressForWork(
       code = attempt.code;
       message = "Workloads are ready; waiting for the workspace node to connect to the Gateway.";
       break;
+    case "WORKSPACE_NODE_BINDING_PENDING":
+      code = attempt.code;
+      message = "Workloads are ready; waiting for the Gateway to apply the workspace node.";
+      break;
     case "DEPENDENCY_UNAVAILABLE":
       code = attempt.code;
       message = "A dependency was unavailable. The controller will retry.";

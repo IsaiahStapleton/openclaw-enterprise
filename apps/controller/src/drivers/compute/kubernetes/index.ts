@@ -81,6 +81,7 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
 import {
+  ActivationPendingError,
   ConfigurationHarnessError,
   DependencyUnavailableError,
   ResourceConflictError,
@@ -4212,6 +4213,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
   }
 
   async activateRevision(revision: AgentRevision, context?: ComputeRevisionContext): Promise<void> {
+    try {
+      await this.activateRevisionWorkloads(revision, context);
+    } catch (error) {
+      throw transientKubernetesFailure(error);
+    }
+  }
+
+  private async activateRevisionWorkloads(
+    revision: AgentRevision,
+    context?: ComputeRevisionContext,
+  ): Promise<void> {
     const materialInput = this.repositoryMaterialInput(revision, context);
     const repositoryConsumer =
       materialInput === undefined ? undefined : this.repositoryConsumer(revision);
@@ -4588,10 +4600,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
       throw new Error("The exact AgentRevision gateway is not ready.");
     }
     if (!(await this.workspaceNodeBindingApplied(revision, namespace, configuration))) {
-      throw new Error("The exact AgentRevision gateway has not applied its workspace node.");
+      throw new ActivationPendingError(
+        "WORKSPACE_NODE_BINDING_PENDING",
+        "The exact AgentRevision gateway has not applied its workspace node.",
+      );
     }
     if (!(await this.workspaceNodeReady(revision, namespace))) {
-      throw new Error("The exact AgentRevision Harness node is not ready.");
+      throw new ActivationPendingError(
+        "WORKSPACE_NODE_PENDING",
+        "The exact AgentRevision Harness node is not ready.",
+      );
     }
     if (repositoryMaterial !== undefined && !repositoryMaterialCurrent(repositoryMaterial)) {
       throw new DependencyUnavailableError(
