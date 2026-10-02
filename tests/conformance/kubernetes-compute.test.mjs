@@ -4229,6 +4229,58 @@ test("OAuth Harness authentication requires Compute-owned dedicated Codex", () =
   }
 });
 
+test("dedicated Codex admission rejects settings its Gateway entrypoint cannot rewrite", () => {
+  // The Gateway entrypoint refuses to start on these shapes; admitting them let
+  // a deployment replace a working Gateway with one that crash-looped (D201).
+  const oauth = { ...apiKeyAuth, method: "oauth" };
+  const codex = { id: "codex", version: "1.0.0", mode: "dedicated" };
+  const base = { agents: { defaults: { model: "codex/gpt-5" } } };
+  const withCodexConfig = (config) => ({ ...base, plugins: { entries: { codex: { config } } } });
+  const driver = new KubernetesComputeDriver(options());
+  for (const accepted of [
+    base,
+    withCodexConfig({ codexDynamicToolsExclude: ["tts"] }),
+    withCodexConfig(null),
+    { ...withCodexConfig({}), cron: { enabled: true, triggers: { enabled: true } } },
+    { ...withCodexConfig({}), cron: null },
+    // Without the plugin entry the entrypoint leaves cron alone.
+    { ...base, cron: "off" },
+    {
+      ...base,
+      models: {
+        providers: {
+          Codex: { baseUrl: "https://model.example.test/v1", models: [{ id: "gpt-5" }] },
+          openai: {},
+          // Rows of other providers are not rewritten.
+          anthropic: "unchanged",
+        },
+      },
+    },
+  ]) {
+    driver.validateHarnessAuth(codex, oauth, accepted);
+  }
+  for (const [rejected, message] of [
+    [withCodexConfig({ codexDynamicToolsExclude: "tts" }), /codexDynamicToolsExclude .*list/],
+    [withCodexConfig("on"), /Codex plugin config setting must be an object/],
+    [{ ...withCodexConfig({}), cron: "off" }, /cron setting must be an object/],
+    [{ ...withCodexConfig({}), cron: { triggers: true } }, /cron\.triggers setting/],
+    [{ ...base, models: "none" }, /models setting must be an object/],
+    [{ ...base, models: { providers: [] } }, /models\.providers setting/],
+    [{ ...base, models: { providers: { codex: "stub" } } }, /codex model provider setting/],
+    [{ ...base, models: { providers: { " OpenAI ": null } } }, /openai model provider setting/],
+    [
+      { ...base, models: { providers: { codex: { models: {} } } } },
+      /models setting must be a list/,
+    ],
+    [
+      { ...base, models: { providers: { openai: { models: ["gpt-5"] } } } },
+      /openai model provider models setting must be a list of objects/,
+    ],
+  ]) {
+    assert.throws(() => driver.validateHarnessAuth(codex, oauth, rejected), message);
+  }
+});
+
 test("credential-source authentication renders no model Secret and requires the paired gateway", () => {
   const sandboxDriver = {
     id: "sandbox-openshell",

@@ -1263,6 +1263,54 @@ function harnessModels(configuration: OpenClawConfigurationDocument): readonly s
   return [...new Set(models as string[])];
 }
 
+// A dedicated Codex Gateway entrypoint rewrites these settings at every start
+// (excludeGatewayLocalCodexTools, pinCodexProviderTransport) and refuses to start
+// on a shape it cannot rewrite. Reject those shapes here, before a deployment
+// replaces a working Gateway with one that crash-loops. null and absent values
+// are replaced at start, so they are accepted.
+function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurationDocument): void {
+  const object = (value: unknown, setting: string): Record<string, unknown> | undefined => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const record = asRecord(value);
+    if (record === undefined) {
+      throw new ConfigurationFailure(`The ${setting} setting must be an object.`);
+    }
+    return record;
+  };
+  const codex = asRecord(asRecord(asRecord(configuration.plugins)?.entries)?.codex);
+  if (codex !== undefined) {
+    const excluded = object(codex.config, "Codex plugin config")?.codexDynamicToolsExclude;
+    if (excluded !== undefined && excluded !== null && !Array.isArray(excluded)) {
+      throw new ConfigurationFailure(
+        "The Codex plugin codexDynamicToolsExclude setting must be a list.",
+      );
+    }
+    object(object(configuration.cron, "cron")?.triggers, "cron.triggers");
+  }
+  const providers = object(object(configuration.models, "models")?.providers, "models.providers");
+  for (const [key, provider] of Object.entries(providers ?? {})) {
+    // The entrypoint matches provider keys as OpenClaw does: trimmed, lowercased.
+    const id = key.trim().toLowerCase();
+    if (id !== "codex" && id !== "openai") {
+      continue;
+    }
+    const row = asRecord(provider);
+    if (row === undefined) {
+      throw new ConfigurationFailure(`The ${id} model provider setting must be an object.`);
+    }
+    if (
+      row.models !== undefined &&
+      (!Array.isArray(row.models) || !row.models.every((model) => asRecord(model) !== undefined))
+    ) {
+      throw new ConfigurationFailure(
+        `The ${id} model provider models setting must be a list of objects.`,
+      );
+    }
+  }
+}
+
 function nativeRuntimeConfiguration(configuration: OpenClawConfigurationDocument): object {
   const models = harnessModels(configuration);
   const configuredAgentIds = Object.keys(asRecord(asRecord(configuration.agents)?.entries) ?? {});
@@ -2190,6 +2238,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
     if (native) {
       nativeRuntimeConfiguration(configuration);
+    }
+    if (codex) {
+      requireCodexGatewayConfigurationShape(configuration);
     }
     const conflictingAuth = () =>
       new ConfigurationFailure("Model credentials must use the Harness authentication binding.");
