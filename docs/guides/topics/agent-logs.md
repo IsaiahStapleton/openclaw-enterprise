@@ -94,22 +94,17 @@ and exits nonzero on `501` and `503`. See the
 | Log text                                                                   | Agent `read_logs` or `administer`, and Agent `read`   | Once per view as `openclaw.agents.runtime_logs.view`      |
 | Log download                                                               | Same as log text                                      | Every download as `openclaw.agents.runtime_logs.download` |
 
-Installation administrators hold Agent `administer`. The same principals can
-already open the [native admin UI](../../reference/agent-native-admin.md), whose
-Logs page shows Gateway log text. To let someone read logs without that
-access, bind a Namespace Role with Agent `read_logs` and `read` to the exact
-Agent. It covers every version of that Agent, including later deployments.
-To open the Agent in the console, the person also needs `read` on the
-Namespace itself (a Role with Namespace `read` bound to that Namespace);
-without it the Agent page says "Namespace unavailable", although the API
-routes answer.
-Runtime status still needs `read` bound to each exact version. A `read_logs`
-Restriction blocks log text for everyone, administrators included. Without
-`operate`, the Logs tab shows no runtime strip and no Pod picker: it offers
-every source, reads the source's current Pod, and says so when this version
-lacks a source. Service principals may call both routes under the same grants.
-Every request, including each follow poll, is authorized again, so revoking a
-grant stops the next poll. See
+Installation administrators hold Agent `administer` and can already read Gateway
+log text in the [native admin UI](../../reference/agent-native-admin.md). To
+delegate log reading, bind a Namespace Role with Agent `read_logs` and `read` to
+the exact Agent; it covers every version, including later deployments. To open
+the Agent in the console the person also needs Namespace `read` bound to that
+Namespace; without it the page says "Namespace unavailable". Runtime status
+needs `read` bound to each exact version. A `read_logs` Restriction blocks log
+text even for administrators. Without `operate`, the Logs tab has no runtime
+strip or Pod picker; it reads each source's current Pod and says when this
+version lacks a source. Service principals use the same grants. Each request and
+follow poll is authorized again, so revoking a grant stops the next poll. See
 [authorization](../../reference/authorization.md).
 
 ## What the output contains
