@@ -325,6 +325,9 @@ active and running within its credential deadline; outages never retire it. Each
 claim reauthorizes its actor. Successor keys use strictly later time buckets despite clock skew.
 
 `worker.completed` reports the target, outcome, and code; polling continues.
+A Namespace lifecycle pass that observes the same pending state as the last one
+this worker audited (for example, Kubernetes namespaces still terminating) writes
+no new lifecycle audit row; a changed pending state and the terminal pass do.
 Lease loss reports `worker.error` `CLAIM_LOST` instead of stale lifecycle state.
 On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 `worker.stopped`. Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted

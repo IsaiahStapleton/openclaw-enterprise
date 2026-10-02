@@ -4611,6 +4611,56 @@ test(
 );
 
 test(
+  "Namespace teardown audits one pending pass and the terminal pass, not every pass",
+  requiresPostgres,
+  async (context) => {
+    // D323: each worker pass while Kubernetes namespaces terminated wrote its own
+    // lifecycle.delete audit row (38 rows for one deletion).
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-audit-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    let deleteAttempts = 0;
+    await fixture.start({
+      ...fixture.compute,
+      async deleteNamespace(target) {
+        assert.equal(target.id, namespace.id);
+        deleteAttempts += 1;
+        return { namespaceId: target.id, namespaceDeleted: deleteAttempts >= 4 };
+      },
+    });
+    const deletion = {
+      id: namespace.id,
+      idempotencyKey: `namespace:${namespace.id}:reconcile:deleted`,
+    };
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "succeeded");
+    assert.equal(deleteAttempts, 4);
+    const { rows } = await fixture.observerPool.query(
+      `SELECT outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.lifecycle.delete'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      rows.map(({ outcome, details }) => ({
+        outcome,
+        namespaceDeleted: details.namespaceDeleted,
+        convergencePending: details.convergencePending,
+      })),
+      [
+        { outcome: "success", namespaceDeleted: false, convergencePending: true },
+        { outcome: "success", namespaceDeleted: true, convergencePending: undefined },
+      ],
+    );
+  },
+);
+
+test(
   "another authorized actor takes over failed Namespace deletion once the initiator loses permission",
   requiresPostgres,
   async (context) => {
