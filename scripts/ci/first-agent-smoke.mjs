@@ -50,6 +50,7 @@ const nodeBaseImage =
 // on this host's Docker network; nothing outside the runner is contacted.
 const modelNetwork = { name: "oce-first-agent-smoke-model", subnet: "11.111.0.0/29" };
 const modelAddress = "11.111.0.2";
+const nodeModelAddress = "11.111.0.3";
 const modelContainer = "oce-first-agent-smoke-model";
 const noncePattern = "OCE_SMOKE_[A-Za-z0-9-]+|FIRST_AGENT_[A-Za-z0-9-]+";
 const minute = 60_000;
@@ -517,9 +518,12 @@ function kubectl(stack, args, options = {}) {
 // its certificate against the CA added to the runtime image.
 async function routeModelProvider(stack, modelDirectory, runtimeImage) {
   await run("docker", ["network", "create", "--subnet", modelNetwork.subnet, modelNetwork.name]);
+  // Fixed addresses: Docker would otherwise give the node the provider's address.
   await run("docker", [
     "network",
     "connect",
+    "--ip",
+    nodeModelAddress,
     modelNetwork.name,
     `k3d-${stack.state.cluster}-server-0`,
   ]);
@@ -906,10 +910,11 @@ async function diagnostics(stack) {
   }
 }
 
-// On hosted Ubuntu 22.04 runners the Local Setup node could not resolve
-// registry-1.docker.io with k3d's default DNS handling, so no Pod sandbox
-// started. Give the node the host's upstream resolver, the documented Local
-// Setup workaround (OCC_DEVELOPMENT_K3D_DNS_RESOLVER), unless one is selected.
+// Local Setup starts its k3d node with IPTABLES_MODE=legacy. On a host whose
+// Docker uses iptables-nft (the hosted Ubuntu 22.04 runner), the node's resolver
+// then refuses queries, so no image pulls and no Pod sandbox starts. Give the
+// node the host's upstream resolver, the documented Local Setup workaround
+// (OCC_DEVELOPMENT_K3D_DNS_RESOLVER), unless one is already selected.
 async function upstreamResolver() {
   for (const path of ["/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"]) {
     try {
