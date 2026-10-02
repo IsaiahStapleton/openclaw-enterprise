@@ -168,6 +168,12 @@ hash is not exported. `authentication.provider-unavailable-warning` keeps
 `occ.sign_in.provider`, `.step`, `.cause` and `.status`, plus a transport code as
 `occ.code`; the provider instance ID stays local. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex protocol stdout records.
+OpenClaw's Gateway startup failure (an `error` record with no subsystem whose
+message starts `Gateway failed to start:`) is exported as
+`gateway.startup_failed`, so a crash-looping Gateway's cause reaches the backend;
+its body keeps the message under the same plain-text rules as `codex.operational`.
+Those rules also reject a message with an argv credential flag (`-u`, `--password`)
+or a `user:password` pair.
 Collector-only configuration holds exporter credentials and TLS settings. Finite
 queues and retries make logs best-effort; outage or overflow cannot block API
 service, worker reconciliation, or PostgreSQL audit persistence.

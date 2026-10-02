@@ -955,6 +955,14 @@ test(
               }),
               tracing("WARN", "codex_app_server", { message: `failed to refresh token ${canary}` }),
               tracing("WARN", "codex_app_server", { message: `${"x".repeat(30)}${canary}` }),
+              // argv credentials have no credential word: a flag or a user:password pair
+              // keeps the event name.
+              tracing("ERROR", "codex_app_server", {
+                message: `exec_command failed: curl -u admin:${canary} https://x.example`,
+              }),
+              tracing("ERROR", "codex_app_server", {
+                message: `exec_command failed: git --password ${canary}`,
+              }),
               // Model failures from any Codex target, never the codex_otel content targets.
               // Only app-server and the fixed codex_core retry messages keep their text.
               tracing("WARN", "codex_core::responses_retry", {
@@ -984,7 +992,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 12);
+    await waitFor(async () => (await records()).length >= 14);
     await delay(1_000);
     const exported = await records();
     const summary = exported
@@ -1012,11 +1020,95 @@ test(
         ],
         ["INFO", "codex.operational", "outbound router task exited (channel closed)", null],
         ["ERROR", "codex.operational", "codex.operational", null],
+        ["ERROR", "codex.operational", "codex.operational", null],
+        ["ERROR", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "stream connection failed; waiting to retry", null],
         ["WARN", "codex.operational", "codex.operational", null],
         ["ERROR", "codex.operational", "codex.operational", null],
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .sort(),
+    );
+    assert.doesNotMatch(JSON.stringify(exported), /CANARY_/);
+  },
+);
+
+test(
+  "native Collector exports a Gateway startup failure as a fixed event with a bounded cause",
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_LOGGING_COLLECTOR=1 for pinned Collector Gateway startup proof.",
+    timeout: 180_000,
+  },
+  async (t) => {
+    const fixture = await collectorFixture(t, "gateway-startup");
+    const receiverAddress = await startKubernetesProcessors(fixture);
+    const canary = `CANARY_${fixture.suffix}`;
+    const resource = {
+      attributes: Object.entries({
+        "occ.managed_by": "openclaw-enterprise",
+        "occ.role": "gateway",
+        "openclaw.namespace.id": `ns_${randomUUID()}`,
+        "openclaw.agent.id": `agt_${randomUUID()}`,
+        "openclaw.revision.id": `rev_${randomUUID()}`,
+        "k8s.pod.uid": `pod-${randomUUID()}`,
+        "container.id": `containerd://${randomUUID()}`,
+      }).map(([key, value]) => ({ key, value: { stringValue: value } })),
+    };
+    // OpenClaw's JSON console prints the startup failure with no subsystem.
+    const consoleLine = (record) => ({
+      timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+      body: { stringValue: JSON.stringify({ time: new Date().toISOString(), ...record }) },
+      attributes: [{ key: "log.iostream", value: { stringValue: "stdout" } }],
+    });
+    const cause =
+      "Gateway failed to start: gateway.bind=custom requires gateway.customBindHost. Run openclaw gateway status --deep for diagnostics.";
+    await postLogs(receiverAddress, [
+      {
+        resource,
+        scopeLogs: [
+          {
+            logRecords: [
+              consoleLine({ level: "error", message: cause }),
+              // A cause that names a credential, or quotes a value, keeps the event name.
+              consoleLine({
+                level: "error",
+                message: `Gateway failed to start: gateway.auth.token ${canary} is invalid`,
+              }),
+              consoleLine({
+                level: "error",
+                message: `Gateway failed to start: "${canary}"`,
+              }),
+              // Other subsystem-less output (a chat reply printed by runtime.log) and
+              // a non-error startup line are not exported.
+              consoleLine({ level: "info", message: `Gateway failed to start: ${canary}` }),
+              consoleLine({ level: "error", message: canary }),
+            ],
+          },
+        ],
+      },
+    ]);
+    const records = async () =>
+      exportedRecords(fixture.out, (_resource, record) => ({
+        attributes: attributes(record.attributes),
+        record,
+      }));
+    await waitFor(async () => (await records()).length >= 3);
+    await delay(1_000);
+    const exported = await records();
+    assert.deepEqual(
+      exported
+        .map(({ attributes: kept, record }) =>
+          JSON.stringify([record.severityText, kept["event.name"], record.body.stringValue]),
+        )
+        .sort(),
+      [
+        ["ERROR", "gateway.startup_failed", cause],
+        ["ERROR", "gateway.startup_failed", "gateway.startup_failed"],
+        ["ERROR", "gateway.startup_failed", "gateway.startup_failed"],
       ]
         .map((entry) => JSON.stringify(entry))
         .sort(),
