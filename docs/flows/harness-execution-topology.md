@@ -217,7 +217,11 @@ becomes ready (and so never reaches predecessor retirement) does not keep them.
 If activation, readiness, predecessor retirement, or audit completion fails,
 the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`; recovery
 retries activation and retirement for the already-active revision. Lost claims
-and foreign/stale workloads fail closed.
+and foreign/stale workloads fail closed. Dedicated activation waits for the
+Gateway to report the workspace node it was handed; that wait is a 20-second
+budget per revision and node across activation retries, then one status read per
+retry, so a Gateway that never applies its node cannot hold the serial worker
+on every retry.
 
 When stopping a revision, the Driver stops its Gateway while leaving the Harness
 available for active work. Gateway supervision and Pod termination allow the
@@ -310,6 +314,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 ## Changelog
 
 - 2026-10-02 12:00: Delete a replaced embedded predecessor's Secret and ConfigMap copies at activation re-render. (fix-d280-embedded-retire)
+
+- 2026-10-02 06:00: Budget the workspace node binding ack wait per binding across activation retries. (fix-deploy-node-pairing)
 
 - 2026-09-30 09:30: Include the Harness network profile in Service selectors for EKS policy resolution. (authoring-run/1373b7f3-e273-466a-b9da-bb197bdb469e - 0d00e8970b69)
 

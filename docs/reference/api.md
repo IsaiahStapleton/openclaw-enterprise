@@ -1017,7 +1017,7 @@ Revoke a service API key
 
 **Operation ID:** `revokeServiceKey`
 
-**Permissions:** Requires a session or Installation-scoped service key with administer on the Installation. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.
+**Permissions:** Requires a session or Installation-scoped service key with administer on the Installation, plus every IAM grant of the key's ServicePrincipal, as for issuance. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
