@@ -99,6 +99,10 @@ already open the [native admin UI](../../reference/agent-native-admin.md), whose
 Logs page shows Gateway log text. To let someone read logs without that
 access, bind a Namespace Role with Agent `read_logs` and `read` to the exact
 Agent. It covers every version of that Agent, including later deployments.
+To open the Agent in the console, the person also needs `read` on the
+Namespace itself (a Role with Namespace `read` bound to that Namespace);
+without it the Agent page says "Namespace unavailable", although the API
+routes answer.
 Runtime status still needs `read` bound to each exact version. A `read_logs`
 Restriction blocks log text for everyone, administrators included. Without
 `operate`, the Logs tab shows no runtime strip and no Pod picker: it offers
