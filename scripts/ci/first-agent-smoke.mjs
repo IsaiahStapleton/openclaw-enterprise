@@ -693,7 +693,10 @@ async function waitForDeployment(stack, agentId, revisionId, label) {
   );
 }
 
-async function agentPods(stack, agentId) {
+// Pending or Running Agent Pods. A terminating Pod (deletionTimestamp set)
+// can still be running during graceful shutdown, so it counts unless the
+// caller asks for live Pods only (gateway selection).
+async function agentPods(stack, agentId, { includeTerminating = false } = {}) {
   const { stdout } = await kubectl(stack, [
     "get",
     "pods",
@@ -705,7 +708,9 @@ async function agentPods(stack, agentId) {
   ]);
   // Completed setup Pods are history, not workloads.
   return JSON.parse(stdout).items.filter(
-    (pod) => !pod.metadata.deletionTimestamp && ["Pending", "Running"].includes(pod.status?.phase),
+    (pod) =>
+      (includeTerminating || !pod.metadata.deletionTimestamp) &&
+      ["Pending", "Running"].includes(pod.status?.phase),
   );
 }
 
@@ -825,7 +830,7 @@ async function stopAgent(stack, agent) {
   await waitFor(
     `${agent.label} Pods to terminate after a reported stop`,
     async () => {
-      const pods = await agentPods(stack, agent.id);
+      const pods = await agentPods(stack, agent.id, { includeTerminating: true });
       return { done: pods.length === 0, state: pods.map((pod) => pod.metadata.name) };
     },
     2 * minute,
