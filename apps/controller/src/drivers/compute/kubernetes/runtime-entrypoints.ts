@@ -2773,13 +2773,18 @@ if (receipt?.sourceUid === expected.sourceUid) {
 // policy says; only the first such warning per app-server is kept. Codex's
 // startup ERROR that no bubblewrap is on PATH is dropped: the image runs the
 // bubblewrap Codex ships on purpose, because a bwrap on PATH makes Codex run a
-// namespace probe that the reviewed seccomp profile denies. Everything else is
-// forwarded unchanged.
+// namespace probe that the reviewed seccomp profile denies. Codex's startup
+// ERROR that project-local config is disabled until the project is trusted is
+// dropped when the only folder it names is the workspace's own .codex: an empty
+// one appears once any session has run, the workspace is deliberately not
+// trusted, and the line is not a fault. Everything else is forwarded unchanged.
 export const CODEX_STDERR_FILTER_HELPER = String.raw`
 const codexVerboseLog = /^(?:debug|trace)(?:,|$)/i.test(process.env.RUST_LOG ?? "");
 const CODEX_REMOTE_CONTROL_WAIT = "waiting to resolve remote control preference until authentication is available";
 const CODEX_MISSING_BWRAP_WARNING = "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.";
 const CODEX_UNIX_SOCKETS_PLATFORM_WARNING = "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform";
+const CODEX_UNTRUSTED_PROJECT_WARNING = "until the project is trusted";
+const CODEX_UNTRUSTED_WORKSPACE_MESSAGE = /^Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load\.\n {4}1\. \/home\/node\/workspace\/\.codex\n {7}To load project-local config, hooks, and exec policies, add \/home\/node\/workspace as a trusted project in \S+\/config\.toml\.\n?$/;
 const CODEX_STDERR_LINE_LIMIT = 65536;
 let codexRemoteControlWaitAt = -Infinity;
 let codexUnixSocketsPlatformWarned = false;
@@ -2793,7 +2798,8 @@ function codexStderrLineKept(line, now = Date.now()) {
     !line.includes('"message":"websocket client connected"') &&
     !line.includes(CODEX_REMOTE_CONTROL_WAIT) &&
     !line.includes(CODEX_UNIX_SOCKETS_PLATFORM_WARNING) &&
-    !line.includes(CODEX_MISSING_BWRAP_WARNING)
+    !line.includes(CODEX_MISSING_BWRAP_WARNING) &&
+    !line.includes(CODEX_UNTRUSTED_PROJECT_WARNING)
   ) return true;
   let record;
   try { record = JSON.parse(line); } catch { return true; }
@@ -2826,6 +2832,7 @@ function codexStderrLineKept(line, now = Date.now()) {
     codexRemoteControlWaitAt = now;
   }
   if (record.target === "codex_app_server" && message === CODEX_MISSING_BWRAP_WARNING) return false;
+  if (record.target === "codex_app_server" && typeof message === "string" && CODEX_UNTRUSTED_WORKSPACE_MESSAGE.test(message)) return false;
   if (record.target === "codex_network_proxy::proxy" && message === CODEX_UNIX_SOCKETS_PLATFORM_WARNING) {
     if (codexUnixSocketsPlatformWarned) return false;
     codexUnixSocketsPlatformWarned = true;
