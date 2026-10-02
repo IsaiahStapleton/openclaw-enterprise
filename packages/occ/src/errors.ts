@@ -201,6 +201,30 @@ export class IAMAccessBindingRoleError extends Error {
   }
 }
 
+/**
+ * A Namespace IAM policy write names an invalid or unavailable input: an unsupported
+ * Permission, or a subject, Role or target that is not usable in the exact Namespace.
+ * The caller already administers the Namespace's IAM policy, so HTTP reports the static
+ * message and the offending request field as an invalid request.
+ */
+export class IAMPolicyValidationError extends ScopeViolationError {
+  readonly path: string;
+
+  constructor(path: string, message: string) {
+    super(message);
+    this.name = "IAMPolicyValidationError";
+    this.path = path;
+  }
+}
+
+/** A Namespace Role cannot be deleted while AccessBindings still reference it. */
+export class IAMRoleInUseError extends ResourceConflictError {
+  constructor() {
+    super("The IAM Role is referenced by AccessBindings. Delete those AccessBindings first.");
+    this.name = "IAMRoleInUseError";
+  }
+}
+
 /** The Installation selects no Credential Gateway, so credential sources are unavailable. */
 export class CredentialGatewayNotConfiguredError extends Error {
   constructor() {
