@@ -223,6 +223,16 @@ Other Harnesses are replaced, restarting their Gateway.
   session an operator switches to OpenClaw's built-in runtime with
   `/model <ref> --runtime openclaw` runs in the Gateway with no reachable model,
   and Codex never hands that runtime a turn.
+- At each start the Gateway logs one `runtime.gateway_settings_overridden`
+  event naming (never valuing) the owner settings it replaced or dropped.
+  `occ agent logs` shows it as a warning with the setting names; the Collector
+  exports only the event name.
+  Deployment admission rejects the shapes it cannot rewrite: a non-list
+  `codexDynamicToolsExclude`, a non-object Codex plugin `config`, `cron`,
+  `cron.triggers`, `models` or `models.providers`, and a `codex` or `openai`
+  row that is not an object or whose `models` is not a list of objects. The
+  deploy request fails with `400 INVALID_REQUEST` naming the setting path, and
+  no revision is created.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots. Symlinks are not followed; explicit policies remain authoritative. This
   serves previews, browsing, bootstrap and outputs.

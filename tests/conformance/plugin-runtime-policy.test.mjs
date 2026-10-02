@@ -84,6 +84,98 @@ test("OpenClaw runtime helper installs exact admitted package pins and verifies 
   assert.deepEqual(effective.tools.alsoAllow, ["existing-tool", "diffs"]);
 });
 
+test("OpenClaw runtime helper opens Diffs viewer links only through the native admin origin", () => {
+  const origin = "https://agent-0123456789abcdef.agents.example.test";
+  const nativeAdminGateway = {
+    port: 8080,
+    publicOrigin: origin,
+    auth: { mode: "trusted-proxy" },
+    controlUi: { enabled: true, allowedOrigins: [origin] },
+  };
+  const effectiveEntries = (gateway, selection) => {
+    const { files } = runOpenClawRuntimeHelper(
+      openClawRuntime(selection),
+      installedPluginResponses(),
+      { baseConfig: { gateway } },
+    );
+    const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+    assert.equal(effective.gateway.publicOrigin, gateway.publicOrigin);
+    return effective.plugins.entries;
+  };
+
+  assert.deepEqual(effectiveEntries(nativeAdminGateway), {
+    diffs: { enabled: true, config: { security: { allowRemoteViewer: true } } },
+  });
+  assert.deepEqual(effectiveEntries(nativeAdminGateway, { enabled: false }), {
+    diffs: { enabled: false },
+  });
+  for (const gateway of [
+    { port: 8080 },
+    { ...nativeAdminGateway, publicOrigin: undefined },
+    { ...nativeAdminGateway, publicOrigin: "https://other.agents.example.test" },
+    { ...nativeAdminGateway, controlUi: { enabled: true, allowedOrigins: [] } },
+    { ...nativeAdminGateway, auth: { mode: "password" } },
+    {
+      ...nativeAdminGateway,
+      publicOrigin: "http://127.0.0.1:8080",
+      controlUi: { enabled: true, allowedOrigins: ["http://127.0.0.1:8080"] },
+    },
+  ]) {
+    assert.deepEqual(effectiveEntries(gateway), { diffs: { enabled: true } });
+  }
+});
+
+test("OpenClaw runtime helper disables a failed Diffs install behind the native admin origin", () => {
+  const origin = "https://agent-0123456789abcdef.agents.example.test";
+  const result = runOpenClawRuntimeHelper(
+    openClawRuntime(),
+    [{ status: 1, stdout: "", stderr: "native install failed" }],
+    {
+      baseConfig: {
+        gateway: {
+          publicOrigin: origin,
+          auth: { mode: "trusted-proxy" },
+          controlUi: { enabled: true, allowedOrigins: [origin] },
+        },
+      },
+      env: {
+        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+        OPENCLAW_AGENT_REVISION_ID: "revision-plugin-compute-1",
+        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+      },
+    },
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.value)), {
+    successfulPluginIds: [],
+    failures: [{ pluginId: "occ-plugin:diffs", code: "PLUGIN_INSTALL_FAILED" }],
+  });
+  const effective = JSON.parse(result.files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(effective.plugins.entries.diffs.enabled, false);
+  assert.equal(effective.tools?.alsoAllow?.includes("diffs") ?? false, false);
+});
+
+test("OpenClaw runtime helper rejects foreign Diffs config beside the native admin origin", () => {
+  const origin = "https://agent-0123456789abcdef.agents.example.test";
+  const result = runOpenClawRuntimeHelper(openClawRuntime(), [], {
+    captureError: true,
+    baseConfig: {
+      gateway: {
+        publicOrigin: origin,
+        auth: { mode: "trusted-proxy" },
+        controlUi: { enabled: true, allowedOrigins: [origin] },
+      },
+      plugins: {
+        entries: {
+          diffs: { enabled: true, config: { security: { allowRemoteViewer: false } } },
+        },
+      },
+    },
+  });
+  assert.match(result.error?.message ?? "", /conflicts with managed plugin selections/);
+  assert.deepEqual(result.calls, []);
+});
+
 for (const [label, channels] of [
   ["no channels", undefined],
   ["unrelated channel", { msteams: { enabled: true } }],
@@ -945,12 +1037,49 @@ test("a workspace-node Gateway keeps owner Codex tool excludes, pins the codex p
       anthropic: { baseUrl: "https://api.anthropic.com", models: [] },
     },
   };
+  const logged = [];
   const { files } = await runOpenClawRuntimeHelper(undefined, [], {
     baseConfig: ownerConfig,
     env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
     workspaceNodeId: "enrolled-node",
+    console: { error: (line) => logged.push(line) },
   });
   const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  // The Gateway says which owner settings it replaced, by name only (D202).
+  const overrides = logged
+    .filter((line) => line.includes("runtime.gateway_settings_overridden"))
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(overrides, [
+    {
+      event: "runtime.gateway_settings_overridden",
+      container: "gateway",
+      settings: [
+        "cron.triggers.enabled",
+        "models.providers.codex.baseUrl",
+        "models.providers.codex.api",
+        "models.providers.codex.apiKey",
+        "models.providers.codex.timeoutSeconds",
+        "models.providers.codex.headers",
+        "models.providers.codex.params",
+        "models.providers.codex.authHeader",
+        "models.providers.codex.request",
+        "models.providers.codex.localService",
+        "models.providers.codex.models[].api",
+        "models.providers.codex.models[].baseUrl",
+        "models.providers.codex.models[].headers",
+        "models.providers.codex.models[].params",
+        "models.providers.codex.models[].compat",
+        "models.providers.openai.baseUrl",
+        "models.providers.openai.headers",
+        "models.providers.openai.request",
+        "models.providers.openai.models[].headers",
+      ],
+    },
+  ]);
+  assert.ok(
+    logged.every((line) => !line.includes("owner-key") && !line.includes("example.test")),
+    "override events never carry setting values",
+  );
   // Owner exclusions stay first and are not duplicated.
   assert.deepEqual(effective.plugins.entries.codex.config.codexDynamicToolsExclude, [
     "web_search",

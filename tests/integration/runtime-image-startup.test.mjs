@@ -15,7 +15,6 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -636,19 +635,6 @@ process.exit(material.status ?? 1);
   ]);
 }
 
-async function reserveTcpPort() {
-  const server = createTcpServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "0.0.0.0", resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
 async function createRuntimeBrokerTlsMaterial(t) {
   const directory = await mkdtemp(join(tmpdir(), "oce-runtime-broker-tls-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1247,7 +1233,8 @@ const environment = {
   APP_SERVER_TOKEN: "synthetic-transport-token", APP_SERVER_PORT: "4500",
 };
 let native;
-vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
+// The entrypoint arrives on stdin: inlined, it can exceed the per-argument limit.
+vm.runInNewContext(fs.readFileSync(0, "utf8"), {
   URL, console, setTimeout, setInterval,
   // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
   process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
@@ -1321,28 +1308,33 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
-    const { stdout } = await runDocker([
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--read-only",
-      "--user",
-      "1000:1000",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--tmpfs",
-      "/home/node:size=128m,uid=1000,gid=1000,mode=700",
-      "--tmpfs",
-      "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
-      "--entrypoint",
-      "node",
-      image,
-      "-e",
-      probe,
-    ]);
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "-i",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--user",
+        "1000:1000",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/home/node:size=128m,uid=1000,gid=1000,mode=700",
+        "--tmpfs",
+        "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+        "--entrypoint",
+        "node",
+        image,
+        "-e",
+        probe,
+      ],
+      {},
+      AGENT_RUNTIME_ENTRYPOINT,
+    );
     assert.match(stdout, /native-repository-shell-ready/);
   },
 );
@@ -2119,11 +2111,10 @@ test(
     const deniedMaterialVolumeName = `oce-runtime-broker-material-denied-${suffix}`;
     const workspaceBranch = "native-feature";
     const tls = await createRuntimeBrokerTlsMaterial(t);
-    const listenPort = await reserveTcpPort();
     const fixture = await startRegistryCredentialServiceFixture(t, {
       tls,
       autoOpen: false,
-      gateway: { publicOrigin: "https://git.oce.svc", listen: `0.0.0.0:${listenPort}` },
+      gateway: { publicOrigin: "https://git.oce.svc", listen: "0.0.0.0:0" },
       repositories: [
         {
           repositoryRef: "guarded",
@@ -2270,7 +2261,7 @@ server.listen(443, "0.0.0.0", () => console.log("broker-forwarder-ready"));
       "-e",
       forwarder,
       "host.docker.internal",
-      String(listenPort),
+      String(fixture.listeners.address.port),
     ]);
     await waitForDockerLog(proxyName, /broker-forwarder-ready/);
 
