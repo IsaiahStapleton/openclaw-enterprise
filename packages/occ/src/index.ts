@@ -123,6 +123,7 @@ import {
   PluginDiscoveryError,
   ChannelDirectoryError,
   ChannelCredentialError,
+  ConfigurationHarnessError,
   CredentialGatewayNotConfiguredError,
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
@@ -5262,7 +5263,12 @@ export class OpenClawController {
           configuration.secretBindings,
           credentialSourceType,
         );
-      } catch {
+      } catch (error) {
+        // A driver names unsupported Configuration content the caller owns; keep that
+        // message. Other refusals stay generic.
+        if (error instanceof ConfigurationHarnessError) {
+          throw error;
+        }
         throw new ResourceConflictError(
           "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
         );

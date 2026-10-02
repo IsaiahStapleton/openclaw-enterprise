@@ -21,6 +21,7 @@ import { NativeIAMDriver, validateAuthAccountPrincipalSeed } from "../../package
 import {
   AgentDeletingError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  ConfigurationHarnessError,
   InMemoryPlatformState,
   OpenClawController,
 } from "../../packages/occ/src/index.ts";
@@ -4892,6 +4893,41 @@ test("authorization rejects sparse decision evidence", async () => {
   });
   assert.equal(response.status, 503);
   assert.equal(response.body.error.code, "DEPENDENCY_UNAVAILABLE");
+});
+
+test("deploy reports Configuration content a Compute Driver names as unsupported", async () => {
+  // D321: a refused Codex Gateway setting surfaced as "resource already exists".
+  const computeDriver = createProvisioningCapableComputeDriver();
+  let refusal;
+  computeDriver.validateHarnessAuth = () => {
+    throw refusal;
+  };
+  const fixture = await createInjectedFixture({ computeDriver });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller, "Unsupported Configuration content");
+  const namespace = await createNamespace(controller, "unsupported-configuration");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const agent = await createAgent(controller, namespace.id, "unsupported-configuration-agent");
+  await bindHarnessKey(fixture, namespace.id, agent);
+  const deploy = () =>
+    controller.request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/deploy`);
+
+  refusal = new ConfigurationHarnessError(
+    "Configuration setting cron must be an object: a dedicated Codex Gateway cannot apply it otherwise.",
+  );
+  const named = await deploy();
+  assert.equal(named.status, 400, JSON.stringify(named.body));
+  assert.equal(named.body.error.code, "INVALID_REQUEST");
+  assert.equal(named.body.error.message, refusal.message);
+
+  // Other driver refusals can carry internal detail and stay generic.
+  refusal = new Error("internal driver detail");
+  const generic = await deploy();
+  assert.equal(generic.status, 409, JSON.stringify(generic.body));
+  assert.equal(generic.body.error.code, "RESOURCE_CONFLICT");
+  assert.doesNotMatch(JSON.stringify(generic.body), /internal driver detail/);
 });
 
 test("deploy audit preserves its authorization decision and rolls back with append failure", async () => {
