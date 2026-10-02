@@ -31,6 +31,7 @@ import {
   GATEWAY_STOP_TIMEOUT_MS,
   NATIVE_WORKER_ENTRYPOINT,
   PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN,
+  PLUGIN_RUNTIME_HELPERS,
   RUNTIME_WRAPPER_COMMAND,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
@@ -1757,6 +1758,35 @@ function run(args, env) {
         assert.match(output, /Unrecognized key/, name);
       }
     }
+  },
+);
+
+test(
+  "runtime image Gateway probes time out and recover without CLI descendants",
+  imageTestOptions,
+  async (t) => {
+    const containerName = `oce-runtime-gateway-probe-${randomBytes(6).toString("hex")}`;
+    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
+    const source = await readFile(
+      new URL("../fixtures/runtime-gateway-probe.cjs", import.meta.url),
+      "utf8",
+    );
+    const { stdout } = await runDocker([
+      "run",
+      "--rm",
+      "--name",
+      containerName,
+      "--network",
+      "none",
+      "--entrypoint",
+      "node",
+      image,
+      "-e",
+      source,
+      "fixture",
+      PLUGIN_RUNTIME_HELPERS,
+    ]);
+    assert.match(stdout, /GATEWAY_PROBE_RECOVERY_PASSED/);
   },
 );
 

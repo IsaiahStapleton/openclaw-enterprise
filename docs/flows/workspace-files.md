@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-09-30
-last_updated_session: authoring-run/e062d2c6-e51f-42eb-8046-fd6ec6d6b3c4
+updated: 2026-10-01
+last_updated_session: authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c
 ---
 
 # Agent Workspace Files Flow
@@ -205,8 +205,12 @@ Other Harnesses are replaced, restarting their Gateway.
   managed PATH; the node waits for a complete code. Neither gets OCC's key.
 - With the status proxy, a Codex Gateway hot-loads `file-transfer` from an
   Agent-owned ConfigMap (replacing the Codex plugin runtime); activation awaits
-  OpenClaw's report or fails with its cause. Otherwise the ID is set at Gateway
-  start. Losing it fails.
+  OpenClaw's report or fails with its cause. The wrapper queries `plugins.list`
+  through the public Gateway SDK, without starting a CLI process. Each query has
+  an eight-second deadline and cancels its connection on timeout; later polls
+  can retry. An active plugin in the newly loaded registry is still required
+  before acknowledging the binding. Otherwise the ID is set at Gateway start.
+  Losing it fails.
 - The Gateway's own `/home/node/workspace` stays empty. It withholds from Codex
   the OpenClaw tools that would act on it or run commands in the Gateway Pod
   (`ls`, `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
@@ -348,6 +352,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-01 15:11: Query Gateway workspace binding state through bounded SDK calls. (authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c - 521549df)
 
 - 2026-09-30 16:29: Require RWO for new and reused Harness claims, including final deletion. (authoring-run/e062d2c6-e51f-42eb-8046-fd6ec6d6b3c4 - 4baeb8f6d21ff0d73102e0800c4e6cc0ed6a6366)
 

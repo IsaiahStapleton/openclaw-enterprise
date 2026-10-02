@@ -2672,10 +2672,11 @@ test("gateway runtime status maps native Slack channel status without provider d
   let statusHandler;
   let channelStatus;
   let channelStatusCalls = 0;
+  let channelError;
+  const transportError = new Error("connection refused");
   let holdChannelStatusResponse = false;
-  let pendingChannelStatusListeners;
-  let childTimeout;
-  const childKillSignals = [];
+  let pendingChannelSignal;
+  let rpcTimeout;
   const sandbox = {
     AbortController,
     AbortSignal,
@@ -2701,7 +2702,7 @@ test("gateway runtime status maps native Slack channel status without provider d
     },
     setTimeout(callback, timeoutMs) {
       if (timeoutMs === 6000) {
-        childTimeout = callback;
+        rpcTimeout = callback;
       }
       return { unref() {} };
     },
@@ -2735,50 +2736,27 @@ test("gateway runtime status maps native Slack channel status without provider d
           writeFileSync() {},
         };
       }
-      if (specifier === "node:child_process") {
+      if (specifier === "openclaw/plugin-sdk/gateway-runtime") {
         return {
-          spawn(command, args) {
-            if (args?.[1] !== "channels") {
-              return { on() {}, kill() {} };
-            }
-            assert.equal(command, "node");
-            assert.deepEqual(plain(args), [
-              "/app/openclaw.mjs",
-              "channels",
-              "status",
-              "--channel",
-              "slack",
-              "--json",
-              "--probe",
-              "--timeout",
-              "5000",
-            ]);
+          isGatewayTransportError: (error) => error === transportError,
+          async callGatewayFromCli(method, options, params, { signal }) {
+            assert.equal(method, "channels.status");
+            assert.deepEqual(plain(params), { channel: "slack", probe: true, timeoutMs: 5000 });
             channelStatusCalls += 1;
-            const listeners = {};
-            const child = {
-              stdout: {
-                on(event, listener) {
-                  listeners["stdout:" + event] = listener;
-                },
-              },
-              kill(signal) {
-                childKillSignals.push(signal);
-              },
-              on(event, listener) {
-                listeners[event] = listener;
-              },
-            };
-            if (holdChannelStatusResponse) {
-              pendingChannelStatusListeners = listeners;
-            } else {
-              queueMicrotask(() => {
-                listeners["stdout:data"]?.(Buffer.from(JSON.stringify(channelStatus)));
-                listeners.close?.(0, null);
-              });
+            pendingChannelSignal = signal;
+            if (channelError) {
+              throw channelError;
             }
-            return child;
+            // A stuck transport must not hold the HTTP response or the next probe.
+            if (holdChannelStatusResponse) {
+              return new Promise(() => {});
+            }
+            return channelStatus;
           },
         };
+      }
+      if (specifier === "node:child_process") {
+        return { spawn: () => ({ on() {}, kill() {} }) };
       }
       return nodeRequire(specifier);
     },
@@ -2823,23 +2801,17 @@ test("gateway runtime status maps native Slack channel status without provider d
   );
 
   await assertSlackDiagnostics(
-    { configOnly: true, configuredChannels: [] },
+    {
+      channels: { slack: { configured: false } },
+      channelAccounts: { slack: [{ accountId: "default", configured: false }] },
+      channelDefaultAccountId: { slack: "default" },
+    },
     [
       { check: "configuration", state: "failed", code: "NOT_CONFIGURED" },
       { check: "authentication", state: "unknown", code: undefined },
       { check: "connectivity", state: "unknown", code: undefined },
     ],
     "disabled",
-  );
-
-  await assertSlackDiagnostics(
-    { gatewayReachable: false, configOnly: true, configuredChannels: ["slack"] },
-    [
-      { check: "configuration", state: "succeeded", code: undefined },
-      { check: "authentication", state: "unknown", code: "UNAVAILABLE" },
-      { check: "connectivity", state: "unknown", code: "UNAVAILABLE" },
-    ],
-    "configured but gateway unavailable",
   );
 
   for (const error of [
@@ -2903,22 +2875,34 @@ test("gateway runtime status maps native Slack channel status without provider d
   );
 
   await assertSlackDiagnostics(
-    { configOnly: true },
+    { channels: [] },
     [
       { check: "configuration", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       { check: "authentication", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
       { check: "connectivity", state: "unknown", code: "INCOMPATIBLE_RESPONSE" },
     ],
-    "malformed config fallback",
+    "malformed live response",
   );
+
+  for (const [error, code] of [
+    [transportError, "UNAVAILABLE"],
+    [new Error("RPC failed"), "PROBE_FAILED"],
+  ]) {
+    channelError = error;
+    const diagnostics = await readRuntimeChannelChecksFromHandler(statusHandler);
+    assert.deepEqual(
+      diagnostics.checks.map(({ state, code }) => ({ state, code })),
+      Array.from({ length: 3 }, () => ({ state: "unknown", code })),
+    );
+  }
+  channelError = undefined;
 
   holdChannelStatusResponse = true;
   const timedOutRequest = readRuntimeChannelChecksFromHandler(statusHandler);
   await Promise.resolve();
-  assert.equal(typeof childTimeout, "function");
-  childTimeout();
-  assert.deepEqual(childKillSignals.slice(-1), ["SIGTERM"]);
-  pendingChannelStatusListeners.close?.(null, "SIGTERM");
+  assert.equal(typeof rpcTimeout, "function");
+  rpcTimeout();
+  assert.equal(pendingChannelSignal.aborted, true);
   const timedOutDiagnostics = await timedOutRequest;
   assert.deepEqual(
     timedOutDiagnostics.checks.map(({ state, code }) => ({ state, code })),
@@ -2950,13 +2934,12 @@ test("gateway runtime status maps native Slack channel status without provider d
     },
   );
   await Promise.resolve();
-  assert.ok(pendingChannelStatusListeners);
+  assert.ok(pendingChannelSignal);
   requestListeners.aborted();
-  assert.deepEqual(childKillSignals.slice(-1), ["SIGTERM"]);
-  pendingChannelStatusListeners.close?.(null, "SIGTERM");
+  assert.equal(pendingChannelSignal.aborted, true);
   await abortedRequest;
   responseListeners.close?.();
-  assert.equal(channelStatusCalls, 10);
+  assert.equal(channelStatusCalls, 11);
 });
 
 test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {

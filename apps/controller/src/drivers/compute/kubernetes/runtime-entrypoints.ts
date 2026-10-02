@@ -95,7 +95,7 @@ const {
   timingSafeEqual: pluginTimingSafeEqual,
   randomUUID: pluginRandomUUID,
 } = require("node:crypto");
-const { spawn: pluginSpawn, spawnSync: pluginSpawnSync } = require("node:child_process");
+const { spawnSync: pluginSpawnSync } = require("node:child_process");
 const { createServer: pluginCreateServer } = require("node:http");
 const { isDeepStrictEqual: pluginDeepEqual } = require("node:util");
 
@@ -328,64 +328,49 @@ function armTimer(callback, timeoutMs) {
   return timer;
 }
 
-function runNativeRuntimeJson(args, timeoutMs, abortSignal, maxBytes = 65536) {
+// Query the running Gateway through OpenClaw's public SDK. Starting a CLI here
+// also starts its launcher/respawn lifecycle; killing that launcher cannot bound
+// a probe whose descendant still owns stdout.
+function callNativeGateway(method, params, timeoutMs, abortSignal, maxBytes = 65536) {
   return new Promise((resolve) => {
-    const child = pluginSpawn("node", ["/app/openclaw.mjs", ...args], {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    let stdout = "";
-    let oversized = false;
-    let failed = false;
-    let aborted = false;
-    let killTimer;
+    const controller = new AbortController();
     let settled = false;
+    let timer;
+    let gatewayRuntime;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimer(timer);
-      if (killTimer !== undefined) clearTimer(killTimer);
-      abortSignal?.removeEventListener?.("abort", abortChild);
+      abortSignal?.removeEventListener?.("abort", cancel);
       resolve(result);
     };
-    const abortChild = () => {
-      if (settled || aborted) return;
-      aborted = true;
-      child.kill("SIGTERM");
-      killTimer = armTimer(() => child.kill("SIGKILL"), 1000);
+    const cancel = () => {
+      controller.abort();
+      finish({ ok: false, code: "UNAVAILABLE" });
     };
-    const timer = armTimer(abortChild, timeoutMs);
-    if (abortSignal?.aborted) abortChild();
-    else abortSignal?.addEventListener?.("abort", abortChild, { once: true });
-    child.stdout.on("data", (chunk) => {
-      if (oversized) return;
-      stdout += chunk.toString("utf8");
-      if (Buffer.byteLength(stdout, "utf8") > maxBytes) {
-        oversized = true;
-        child.kill("SIGKILL");
-      }
-    });
-    child.on("error", () => {
-      failed = true;
-    });
-    child.on("close", (code, signal) => {
-      if (oversized) {
+    if (abortSignal?.aborted) {
+      cancel();
+      return;
+    }
+    timer = armTimer(cancel, timeoutMs);
+    abortSignal?.addEventListener?.("abort", cancel, { once: true });
+    Promise.resolve().then(async () => {
+      if (settled) return;
+      gatewayRuntime = require("openclaw/plugin-sdk/gateway-runtime");
+      const value = await gatewayRuntime.callGatewayFromCli(method, { json: true, timeout: String(timeoutMs) }, params, {
+        progress: false,
+        signal: controller.signal,
+      });
+      if (settled) return;
+      if (Buffer.byteLength(JSON.stringify(value), "utf8") > maxBytes) {
         finish({ ok: false, code: "INCOMPATIBLE_RESPONSE" });
         return;
       }
-      if (aborted || signal === "SIGTERM" || signal === "SIGKILL") {
-        finish({ ok: false, code: "UNAVAILABLE" });
-        return;
-      }
-      if (failed || code !== 0) {
-        finish({ ok: false, code: "PROBE_FAILED" });
-        return;
-      }
-      try {
-        finish({ ok: true, value: JSON.parse(stdout) });
-      } catch {
-        finish({ ok: false, code: "INCOMPATIBLE_RESPONSE" });
-      }
-    });
+      finish({ ok: true, value });
+    }).catch((error) => finish({
+      ok: false,
+      code: gatewayRuntime?.isGatewayTransportError(error) ? "UNAVAILABLE" : "PROBE_FAILED",
+    }));
   });
 }
 
@@ -452,24 +437,6 @@ function connectivityCheckFromConnected(connected, checkedAt) {
 }
 
 function slackChecksFromStatusPayload(payload, checkedAt) {
-  if (payload?.configOnly === true) {
-    if (!Array.isArray(payload.configuredChannels)) {
-      return unknownSlackChecks(checkedAt, "INCOMPATIBLE_RESPONSE");
-    }
-    const configured = payload.configuredChannels.includes("slack");
-    if (configured !== true) {
-      return [
-        runtimeDiagnosticCheck("configuration", "failed", checkedAt, "NOT_CONFIGURED"),
-        runtimeDiagnosticCheck("authentication", "unknown", checkedAt),
-        runtimeDiagnosticCheck("connectivity", "unknown", checkedAt),
-      ];
-    }
-    return [
-      runtimeDiagnosticCheck("configuration", "succeeded", checkedAt),
-      runtimeDiagnosticCheck("authentication", "unknown", checkedAt, "UNAVAILABLE"),
-      runtimeDiagnosticCheck("connectivity", "unknown", checkedAt, "UNAVAILABLE"),
-    ];
-  }
   const channelSummary = isPlainObject(payload?.channels) ? payload.channels.slack : undefined;
   const accountsByChannel = isPlainObject(payload?.channelAccounts) ? payload.channelAccounts : undefined;
   const defaultAccounts = isPlainObject(payload?.channelDefaultAccountId)
@@ -514,8 +481,9 @@ function slackChecksFromStatusPayload(payload, checkedAt) {
 
 async function slackChannelDiagnosticChecks(checkedAt, abortSignal) {
   if (runtimeStatusContainer() !== "gateway") return [];
-  const result = await runNativeRuntimeJson(
-    ["channels", "status", "--channel", "slack", "--json", "--probe", "--timeout", "5000"],
+  const result = await callNativeGateway(
+    "channels.status",
+    { channel: "slack", probe: true, timeoutMs: 5000 },
     6000,
     abortSignal,
   );
@@ -2297,8 +2265,9 @@ function replaceOpenClawConfig(config) {
 // live plugin registry ("active", "service-failed", "disabled", "unloaded")
 // and that registry's generation, which every plugin reload replaces.
 async function openClawFileTransferState() {
-  const result = await runNativeRuntimeJson(
-    ["gateway", "call", "plugins.list", "--params", "{}", "--json", "--timeout", "5000"],
+  const result = await callNativeGateway(
+    "plugins.list",
+    {},
     8000,
     undefined,
     4 * 1024 * 1024,
