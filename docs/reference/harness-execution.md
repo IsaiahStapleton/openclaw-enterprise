@@ -137,7 +137,8 @@ cannot be supplied through Configuration `secretBindings` or the initial runtime
 credential API; those own gateway credentials and transport/channel setup.
 
 Kubernetes OpenClaw performs one native model probe (20 seconds plus 45
-CPU-seconds at its CPU limit) in the process that owns model access, for initial
+CPU-seconds at its CPU limit, 256 output tokens) in the process that owns model
+access, for initial
 and replacement deployments. Embedded activation uses
 the shared gateway's `Recreate` strategy: cutover can stop the working gateway
 before the replacement validates its credentials. Invalid credentials or a
