@@ -19,6 +19,7 @@ import {
   PluginPolicyValidationError,
   PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
+  ResourceStateConflictError,
   RuntimeLogsError,
   ScopeViolationError,
   type RuntimeLogsErrorCode,
@@ -384,6 +385,9 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (isDependencyUnavailable(error)) {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
+  }
+  if (error instanceof ResourceStateConflictError) {
+    return failure(409, "RESOURCE_CONFLICT", error.message);
   }
   if (error instanceof ResourceConflictError) {
     return failure(409, "RESOURCE_CONFLICT", "The requested platform resource already exists.");

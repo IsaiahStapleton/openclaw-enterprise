@@ -1219,6 +1219,75 @@ test("Codex runtime helper reports connector-auth warnings with the admitted key
   });
 });
 
+test("Codex runtime helper disables curated plugins at once under API-key login", async () => {
+  // Codex rejects the remote catalog for API-key logins, so a selected plugin
+  // can never install: report it and serve without plugins instead of retrying.
+  const runtime = {
+    manifest: {
+      kind: "codex",
+      selections: {
+        "codex-plugin:linear@openai-curated-remote": {
+          enabled: true,
+          toolDefaults: { approval: "provider_default" },
+        },
+        "codex-plugin:slack@openai-curated-remote": { enabled: false },
+      },
+    },
+  };
+  const disabledConfig = {
+    config: {
+      features: { apps: false, plugins: false, remote_plugin: false },
+      apps: { _default: { enabled: false } },
+      plugins: {},
+    },
+    origins: {},
+  };
+  const result = await runCodexRuntimeHelper(
+    runtime,
+    (method) => {
+      if (method === "initialize") {
+        return { serverInfo: { name: "codex", version: "0.149.0" } };
+      }
+      if (method === "config/read") {
+        return disabledConfig;
+      }
+      if (method === "config/batchWrite") {
+        return { status: "ok", version: "test-config-1" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    },
+    { env: { CODEX_LOGIN_MODE: "api_key", OPENCLAW_PLUGIN_STATUS_PORT: "18791" } },
+  );
+
+  assert.deepEqual(plain(result.value), {
+    successfulPluginIds: [],
+    failures: [
+      { pluginId: "codex-plugin:linear@openai-curated-remote", code: "PLUGIN_AUTH_REQUIRED" },
+    ],
+  });
+  const calls = result.requests.filter((request) => request.method !== "initialize");
+  assert.deepEqual(
+    calls.map((request) => request.method),
+    ["config/read", "config/batchWrite", "config/read"],
+  );
+  assert.deepEqual(calls[1].params.edits.slice(0, 4), [
+    { keyPath: "features.apps", mergeStrategy: "replace", value: false },
+    { keyPath: "features.plugins", mergeStrategy: "replace", value: false },
+    { keyPath: "features.remote_plugin", mergeStrategy: "replace", value: false },
+    { keyPath: 'apps."_default"', mergeStrategy: "replace", value: { enabled: false } },
+  ]);
+
+  const strict = await runCodexRuntimeHelper(
+    runtime,
+    (method) => {
+      throw new Error(`unexpected request ${method}`);
+    },
+    { env: { CODEX_LOGIN_MODE: "api_key" }, captureError: true },
+  );
+  assert.match(String(strict.error?.message), /require a ChatGPT login/);
+  assert.deepEqual(strict.requests, []);
+});
+
 test("Codex runtime helper keeps malformed matching install responses generic", async (t) => {
   const state = codexLinearPluginState();
   const runtime = {
