@@ -147,6 +147,11 @@ function updateContributors() {
   for (const pr of github(`repos/${repository}/pulls?state=closed&per_page=100`, true)) {
     assert.ok(pr && Object.hasOwn(pr, "merged_at") && pr.base, "Invalid GitHub PR data.");
     if (pr.merged_at && pr.base.ref === metadata.default_branch) {
+      // Deleted authors have no account ID to resolve; retain the prior-wall guard below.
+      if (pr.user === null) {
+        console.warn(`Skipping merged PR #${pr.number}: its author is unavailable.`);
+        continue;
+      }
       ids.add(accountId(pr.user));
     }
   }

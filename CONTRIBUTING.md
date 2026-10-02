@@ -182,7 +182,8 @@ The wall combines GitHub contributors and authors of PRs merged into the default
 branch, deduplicates by account ID, and sorts by current login. Documentation
 contributors and default avatars are included. GitHub bot accounts are omitted.
 The contributor API can lag, and co-authors or people helping outside merged PRs
-may need explicit inclusion.
+may need explicit inclusion. Merged PRs whose author is unavailable are skipped;
+previously published credit still requires an explicit correction before removal.
 
 Use [scripts/contributors.json](scripts/contributors.json) for corrections. Keys
 are numeric GitHub account IDs, which survive login changes. Each entry requires
