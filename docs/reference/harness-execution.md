@@ -176,7 +176,11 @@ event or access-token login error reporting 401 or 403. The worker then fails th
 A CPU-starved OpenClaw probe reports `MODEL_PROBE_CPU_STARVED`, failing with
 `RUNTIME_CPU_STARVED`.
 Other timeouts, provider server errors, and transport failures keep `MODEL_PROBE_TIMEOUT`,
-`MODEL_PROBE_FAILED`, or `LOGIN_FAILED` and remain pending.
+`MODEL_PROBE_FAILED`, or `LOGIN_FAILED`. Each is published only after the wrapper's
+retries end and is held until restart, so the worker fails the deployment at once with
+`RUNTIME_MODEL_PROBE_TIMEOUT`, `RUNTIME_MODEL_PROBE_FAILED`, or `RUNTIME_LOGIN_FAILED`
+instead of waiting for the convergence deadline. A transient timeout needs only a new
+deployment.
 
 Gateway and Harness startup wrappers also emit one `runtime.startup_phase` log
 per phase (login, model probe, peer plugin status, plugin install, workspace

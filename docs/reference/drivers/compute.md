@@ -138,10 +138,16 @@ the core does not inspect native runtime output. Evidence contains safe
 `component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
 provider errors. An unavailable or untrusted observation omits the evidence.
 
-The worker persists that observation at the convergence deadline. Codes
-`AUTHENTICATION_FAILED` (deterministic credential rejection) and
-`MODEL_PROBE_CPU_STARVED` fail the deployment immediately with
-`RUNTIME_AUTHENTICATION_FAILED` or `RUNTIME_CPU_STARVED`. The
+Kubernetes runtime entrypoints publish evidence only after their own retries
+end and then hold the container unready until a restart that nothing performs,
+so the worker fails the deployment as soon as it observes a held code:
+`AUTHENTICATION_FAILED` (deterministic credential rejection) with
+`RUNTIME_AUTHENTICATION_FAILED`, `MODEL_PROBE_CPU_STARVED` with
+`RUNTIME_CPU_STARVED`, `MODEL_PROBE_TIMEOUT` with `RUNTIME_MODEL_PROBE_TIMEOUT`,
+`MODEL_PROBE_FAILED` with `RUNTIME_MODEL_PROBE_FAILED`, `LOGIN_FAILED` with
+`RUNTIME_LOGIN_FAILED`, and `UNAVAILABLE` or `INCOMPATIBLE_RESPONSE` with
+`RUNTIME_STARTUP_FAILED`. Other codes stay pending, and the worker persists the
+last observation with `CONVERGENCE_DEADLINE_EXCEEDED` at the deadline. The
 [deployment status API](../agents.md#deployment-status) returns saved evidence
 under exact-revision read permission without invoking Compute.
 
