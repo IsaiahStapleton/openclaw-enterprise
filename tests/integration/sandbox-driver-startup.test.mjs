@@ -179,9 +179,13 @@ test("startup constructs the bundled OpenShell SandboxDriver before constructing
 });
 
 test("startup composes both OpenShell members from one Backend", async (t) => {
+  // An explicit mandatory setting must compose just like the omitted secure default
+  // exercised above; rejecting every supplied value would prevent valid startup.
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.policy.landlockCompatibility = "hard_requirement";
   const createdDriver = await loadInstallationConfiguration({
     mode: "production",
-    environment: { OCC_CONFIG_PATH: await fixture(t, sandboxInstallation()) },
+    environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
   });
 
   assert.ok(createdDriver.credentialGatewayDriver instanceof OpenShellCredentialGatewayDriver);

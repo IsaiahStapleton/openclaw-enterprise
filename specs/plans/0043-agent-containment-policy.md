@@ -32,7 +32,7 @@ Each behavior-changing step updates its owning reference, guide, source-backed f
 
 | Required outcome | Real check and prerequisites | Result or remaining proof |
 | --- | --- | --- |
-| Weaker OpenShell Landlock modes fail at Installation startup; the request uses `hard_requirement` | Existing Sandbox Driver startup and provisioning integration tests | Authored; not run because this checkout lacks a complete installed dependency graph and Node 24 |
+| Omitted and explicit mandatory settings compose; weaker modes fail at Installation startup; the request uses `hard_requirement` | Existing Sandbox Driver startup and provisioning integration tests | Authored; Node 24.19.0 is available, but the test cannot load because the installed `pg` dependency is missing |
 | A real child cannot start without filesystem policy | Disposable Kubernetes OpenShell integration with a pinned compatible runtime | Not run; runtime qualification pending |
 | Exact Agent policy scope, authorization, and immutable snapshot | Regular API and worker Agent deployment integration with PostgreSQL | Not implemented |
 | Enforcement before activation and fail-closed replacement | Real API → worker → Compute → selected Driver integration | Not implemented |
@@ -44,12 +44,16 @@ OCE maintainers must settle the smallest provider-neutral policy vocabulary and 
 
 ## Delivery record
 
-The OpenShell hardening slice changes [the bundled adapter](../../apps/controller/src/drivers/sandbox/openshell.ts), [its integration test](../../tests/integration/sandbox-driver-startup.test.mjs), [the current reference](../../docs/reference/drivers/openshell-sandbox.md), and [the flow](../../docs/flows/openshell-sandbox-provisioning.md). Its PR and runtime results remain pending. The `SandboxPolicy` resource, immutable revision snapshot, and enforcement evidence are not implemented.
+The OpenShell hardening slice changes [the bundled adapter](../../apps/controller/src/drivers/sandbox/openshell.ts), [its integration test](../../tests/integration/sandbox-driver-startup.test.mjs), [the current reference](../../docs/reference/drivers/openshell-sandbox.md), and [the flow](../../docs/flows/openshell-sandbox-provisioning.md). Runtime qualification remains pending. The `SandboxPolicy` resource, immutable revision snapshot, and enforcement evidence are not implemented.
+
+[PR #919](https://github.com/openclaw/openclaw-enterprise/pull/919) review found no actionable patch defect. Startup integration execution, real filesystem denial and pre-execution failure evidence, and maintainer acceptance of the mandatory startup boundary remain outstanding. The existing compatibility suite's filesystem checks do not establish the unavailable-Landlock failure case. Local Docker is stopped and k3d is absent; runtime setup and pinned assets are still required.
 
 ## Manual Notes
 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-02: Added explicit mandatory-setting startup coverage and recorded PR #919's remaining runtime proof and maintainer decision (source `78db8531f`).
 
 - 2026-10-02: Split the proposal into RFC-0043 and its implementation plan after the repository adopted separate RFC and plan locations (source `a10baed3c`).

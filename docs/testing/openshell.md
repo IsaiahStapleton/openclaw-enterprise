@@ -143,9 +143,10 @@ runs the real model turn over the authenticated Pod-loopback endpoint. The
 scenario also requires exact workload identity claims, approved mounts and
 privileges, denied secret exposure, allowed and denied tool egress, replacement,
 and cleanup. The Installation omits `policy.landlockCompatibility`, so the real
-Sandbox path exercises the Driver's `hard_requirement` default; a missing
-Landlock boundary must prevent the Harness from starting. It separately checks
-the OpenClaw Control Plane (OCC) Agent Service selector. Missing prerequisites
+Sandbox path exercises the Driver's `hard_requirement` default. The suite does
+not simulate an unavailable Landlock kernel or prove refusal before child
+execution in that condition; that negative runtime proof remains required.
+It separately checks the OpenClaw Control Plane (OCC) Agent Service selector. Missing prerequisites
 fail rather than skip.
 
 The Codex scenario then updates the source through the API, withdraws it from
