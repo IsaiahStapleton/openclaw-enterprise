@@ -313,11 +313,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Prepare hosted disk capacity
-        env:
-          OPENCLAW_CI_HEADROOM_LANE: first-agent-smoke
-        run: node scripts/ci/repository-platform-headroom.mjs
-      # After the capacity step, which removes the preinstalled Go toolchains.
+      # The runner starts with about 90 GB free; the smoke uses far less, so it
+      # skips the SDK removal the large image lanes need.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

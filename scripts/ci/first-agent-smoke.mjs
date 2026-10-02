@@ -23,6 +23,7 @@ import {
   mkdir,
   readFile,
   realpath,
+  statfs,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -1006,6 +1007,12 @@ async function summarize() {
   const lines = ["| Step | Seconds | Result |", "| --- | ---: | --- |"];
   for (const [name, seconds, status] of timings) {
     lines.push(`| ${name} | ${seconds} | ${status} |`);
+  }
+  try {
+    const disk = await statfs("/");
+    lines.push("", `Free disk: ${Math.round((disk.bavail * disk.bsize) / 1024 ** 3)} GiB`);
+  } catch {
+    // Informational only.
   }
   log(`\n${lines.join("\n")}`);
   if (process.env.GITHUB_STEP_SUMMARY) {
