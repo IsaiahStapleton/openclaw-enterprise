@@ -208,6 +208,44 @@ export class NativeWorkerSupportError extends Error {
   }
 }
 
+/** A platform dependency a Compute Driver reaches while it reconciles a revision. */
+export type TransientDependency = "agent_gateway" | "kubernetes_api";
+
+/** Why the dependency failed, from a closed set that carries no provider text. */
+export type TransientDependencyReason = "unreachable" | "timeout" | "unavailable";
+
+const TRANSIENT_DEPENDENCY_CODES: Readonly<Record<TransientDependency, string>> = Object.freeze({
+  agent_gateway: "AGENT_GATEWAY_UNAVAILABLE",
+  kubernetes_api: "KUBERNETES_API_UNAVAILABLE",
+});
+
+/**
+ * A Compute dependency failed in a way that clears without a change to the
+ * revision: the Kubernetes API timed out or answered 429/5xx, or the Agent
+ * Gateway's route refused or dropped a connection while it converged. The
+ * worker retries it within the deployment's convergence deadline instead of
+ * spending the attempt budget, and records `code`, which names the dependency.
+ * The message stays in the controller; status shows a fixed text.
+ */
+export class TransientDependencyError extends Error {
+  readonly dependency: TransientDependency;
+  readonly reason: TransientDependencyReason;
+  readonly code: string;
+
+  constructor(
+    dependency: TransientDependency,
+    reason: TransientDependencyReason,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "TransientDependencyError";
+    this.dependency = dependency;
+    this.reason = reason;
+    this.code = TRANSIENT_DEPENDENCY_CODES[dependency];
+  }
+}
+
 /**
  * A Sandbox Driver cannot run this exact AgentRevision with the installed
  * driver. Retrying cannot change the outcome, so the worker fails the deployment

@@ -156,6 +156,15 @@ outcome: the revision stays pending until it is ready, a held runtime failure
 ends it, or the convergence deadline passes. The worker rechecks an unready
 revision after 500 ms, growing with the deployment's age to 5 s at 200 s.
 
+A dependency that fails while it converges is pending too.
+`AGENT_GATEWAY_UNAVAILABLE` means the worker could not reach the new gateway
+through its route yet (for example, the route answers 404 until the gateway
+proxy has the new route, or 503 until it has the ready Pod), and
+`KUBERNETES_API_UNAVAILABLE` means a Kubernetes API request timed out, could not
+connect, or got 429 or 5xx. The worker retries on the same cadence without
+spending its `OCC_WORKER_MAX_ATTEMPTS` budget. A dependency still failing at the
+convergence deadline fails the deployment with its own code.
+
 ### The active revision after a failed deployment
 
 `activeRevisionId` names the revision the worker last committed to run. Stop

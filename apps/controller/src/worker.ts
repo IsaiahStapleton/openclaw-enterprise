@@ -43,6 +43,7 @@ import {
   PostgresWorkQueue,
   OpenClawController,
   SandboxRevisionUnsupportedError,
+  TransientDependencyError,
   WorkClaimLostError,
   CREDENTIAL_WITHDRAWAL_TARGET,
   isCredentialWithdrawalWork,
@@ -115,6 +116,43 @@ const REVISION_READINESS_CODES: ReadonlySet<string> = new Set([
   ...Object.values(REVISION_PENDING_CODES),
 ]);
 
+const LOGGED_ERROR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
+
+/**
+ * Log fields that say which dependency failed and why, without provider text:
+ * a transient dependency names itself and a closed reason; any other failure
+ * gives only its error class and, for an HTTP SDK error, the status.
+ */
+function revisionFailureLogFields(error: unknown): {
+  readonly dependency?: string;
+  readonly cause?: string;
+  readonly status?: number;
+} {
+  if (error instanceof TransientDependencyError) {
+    return { dependency: error.dependency, cause: error.reason };
+  }
+  const record = error !== null && typeof error === "object" ? error : undefined;
+  const name =
+    record === undefined
+      ? undefined
+      : [(record as { readonly name?: unknown }).name, record.constructor?.name].find(
+          (candidate): candidate is string =>
+            typeof candidate === "string" &&
+            candidate !== "Error" &&
+            LOGGED_ERROR_NAME.test(candidate),
+        );
+  // Kubernetes SDK errors carry the HTTP status in `code`.
+  const status = (record as { readonly code?: unknown } | undefined)?.code;
+  const httpStatus =
+    typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+      ? status
+      : undefined;
+  return {
+    cause: name ?? "Error",
+    ...(httpStatus === undefined ? {} : { status: httpStatus }),
+  };
+}
+
 function revisionPendingCode(observation: unknown): string {
   const reason = (observation as { readonly pendingReason?: unknown }).pendingReason;
   return typeof reason === "string" && Object.hasOwn(REVISION_PENDING_CODES, reason)
@@ -141,6 +179,8 @@ interface DispatchResult {
 }
 
 interface RevisionDispatchResult extends DispatchResult {
+  /** A transient dependency failure, retried until the convergence deadline. */
+  readonly dependencyFailure?: TransientDependencyError;
   readonly data?: Readonly<Record<string, unknown>>;
   readonly resultData?: Readonly<Record<string, unknown>>;
   readonly revision?: Readonly<AgentRevision>;
@@ -2259,6 +2299,7 @@ export class ControllerWorker {
   private async processRevision(claim: ClaimedWork): Promise<void> {
     this.beginDeployPass(claim);
     let result: RevisionDispatchResult;
+    let failureLogFields: Readonly<Record<string, string | number>> | undefined;
     try {
       if (
         claim.agentId === undefined ||
@@ -2540,13 +2581,22 @@ export class ControllerWorker {
       if (error instanceof WorkClaimLostError) {
         throw error;
       }
-      result =
+      if (
         error instanceof RepositoryCredentialAuthorityError ||
         error instanceof SandboxRevisionUnsupportedError
-          ? { outcome: "permanent", code: error.code }
-          : { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
+      ) {
+        result = { outcome: "permanent", code: error.code };
+      } else if (error instanceof TransientDependencyError) {
+        // A dependency that recovers by itself must not spend the attempt budget:
+        // five quick retries end long before a Gateway route or an API server
+        // that is converging under load comes back (D28).
+        result = { outcome: "pending", code: error.code, dependencyFailure: error };
+      } else {
+        result = { outcome: "retry", code: "DEPENDENCY_UNAVAILABLE" };
+      }
+      failureLogFields = revisionFailureLogFields(error);
     }
-    await this.finalizeRevision(claim, result);
+    await this.finalizeRevision(claim, result, failureLogFields);
   }
 
   private async authorizeRevision(
@@ -3040,6 +3090,7 @@ export class ControllerWorker {
   private async finalizeRevision(
     claim: ClaimedWork,
     result: RevisionDispatchResult,
+    failureLogFields?: Readonly<Record<string, string | number>>,
   ): Promise<void> {
     const runtimeFailure =
       result.outcome === "pending"
@@ -3055,17 +3106,22 @@ export class ControllerWorker {
     // failure ends the deployment at once with a code naming its cause.
     const heldFailureCode =
       runtimeFailure === undefined ? undefined : heldRuntimeFailureCode(runtimeFailure.code);
-    let resolved: RevisionDispatchResult =
-      heldFailureCode !== undefined
-        ? { outcome: "permanent", code: heldFailureCode }
-        : expired
-          ? {
-              ...result,
-              outcome: "permanent",
-              code: "CONVERGENCE_DEADLINE_EXCEEDED",
-              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
-            }
-          : result;
+    let resolved: RevisionDispatchResult;
+    if (heldFailureCode !== undefined) {
+      resolved = { outcome: "permanent", code: heldFailureCode };
+    } else if (expired && result.dependencyFailure !== undefined) {
+      // The dependency was still failing at the deadline: name it, not the deadline.
+      resolved = { outcome: "permanent", code: result.code };
+    } else if (expired) {
+      resolved = {
+        ...result,
+        outcome: "permanent",
+        code: "CONVERGENCE_DEADLINE_EXCEEDED",
+        data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+      };
+    } else {
+      resolved = result;
+    }
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -3153,11 +3209,14 @@ export class ControllerWorker {
           ...(resolved.resultData === undefined ? {} : { resultData: resolved.resultData }),
         });
       } else if (resolved.outcome === "pending") {
+        const ageMs = Date.now() - claim.createdAt.getTime();
         await queue.defer(
           claim,
           { code: resolved.code },
-          REVISION_READINESS_CODES.has(resolved.code)
-            ? { delayMs: revisionReadinessRecheckMs(Date.now() - claim.createdAt.getTime()) }
+          // A transient dependency failure is rechecked on the readiness cadence:
+          // like an unready runtime, it waits for convergence, not for a fix.
+          resolved.dependencyFailure !== undefined || REVISION_READINESS_CODES.has(resolved.code)
+            ? { delayMs: revisionReadinessRecheckMs(ageMs) }
             : {},
         );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
@@ -3227,6 +3286,7 @@ export class ControllerWorker {
       result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
+      ...failureLogFields,
       ...this.deployTimingFields(claim),
     });
   }
