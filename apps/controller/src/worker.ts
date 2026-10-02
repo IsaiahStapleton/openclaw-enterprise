@@ -62,6 +62,8 @@ import {
 } from "@openclaw-enterprise/occ";
 import {
   backendDefinitionMap,
+  removeNamespacePolicy,
+  removedPolicyDetails,
   validateBackendDefinitions,
   validateServiceAccountBackendBinding,
 } from "@openclaw-enterprise/occ";
@@ -3565,14 +3567,18 @@ export class ControllerWorker {
           (resolved.outcome === "permanent" || exhausted)
         ) {
           await unit.namespaces.transitionNamespaceStatus(current.id, "provisioning", "failed");
-        } else if (claim.namespaceTarget === "deleted" && resolved.outcome === "success") {
+        }
+        let removedPolicy;
+        if (claim.namespaceTarget === "deleted" && resolved.outcome === "success") {
           await unit.namespaces.markNamespaceDeleted(current.id, new Date().toISOString());
+          // No grant outlives its Namespace; the lifecycle event records what was removed.
+          removedPolicy = await removeNamespacePolicy(unit, current.id);
         }
 
         if (resolved.decision !== undefined) {
           await this.appendDenial(unit, claim, current, resolved);
         } else if (resolved.observation !== undefined) {
-          await this.appendObservation(unit, claim, current, resolved);
+          await this.appendObservation(unit, claim, current, resolved, removedPolicy);
         }
       }
 
@@ -3605,6 +3611,7 @@ export class ControllerWorker {
     claim: ClaimedWork,
     namespace: Readonly<Namespace>,
     result: DispatchResult,
+    removedPolicy?: Parameters<typeof removedPolicyDetails>[0],
   ): Promise<void> {
     const installation = this.installation;
     if (installation === undefined) {
@@ -3621,6 +3628,7 @@ export class ControllerWorker {
         : { namespaceDeleted: observation.namespaceDeleted }),
       ...(observation.failure === undefined ? {} : { failure: observation.failure }),
       ...(result.outcome === "pending" ? { convergencePending: true } : {}),
+      ...removedPolicyDetails(removedPolicy),
     };
     const event: AuditEvent = {
       id: `aud_${randomUUID()}`,

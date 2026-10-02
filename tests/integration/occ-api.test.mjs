@@ -1274,6 +1274,143 @@ test("Namespace IAM routes bind humans enrolled after bootstrap through the live
   assert.equal(bindings.data.length, 4, "rejected subjects must leave policy unchanged");
 });
 
+test("access removed by deleting its target or Namespace is audited and leaves no policy behind", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("side-effect-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "side-effect-access");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Side effect key", value: "side-effect-secret" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+  const configuration = await createConfiguration(controller, namespace.id);
+  const agent = await createAgent(controller, namespace.id, "side-effect-agent");
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  const role = await controller.request("POST", `${policyPath}/roles`, {
+    body: {
+      permissions: [
+        { action: "read", resourceKind: "secret" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "delete", resourceKind: "agent" },
+      ],
+    },
+  });
+  assert.equal(role.status, 201, JSON.stringify(role.body));
+  const bind = async (resourceKind, resourceId) => {
+    const binding = await controller.request("POST", `${policyPath}/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: role.data.id,
+        resourceKind,
+        resourceId,
+      },
+    });
+    assert.equal(binding.status, 201, JSON.stringify(binding.body));
+    return binding.data;
+  };
+  const secretBinding = await bind("secret", secret.data.id);
+  const configurationBinding = await bind("configuration", configuration.id);
+  const agentBinding = await bind("agent", agent.id);
+  const removedEntry = (binding) => ({
+    id: binding.id,
+    subjectKind: "identity",
+    subjectId: member.principal.id,
+    roleId: role.data.id,
+    resourceKind: binding.resourceKind,
+    resourceId: binding.resourceId,
+  });
+  const lastEvent = (action) =>
+    fixture.auditSink.events.findLast((event) => event.action === action);
+
+  assert.equal(
+    (await controller.request("DELETE", `/namespaces/${namespace.id}/secrets/${secret.data.id}`))
+      .status,
+    204,
+  );
+  assert.deepEqual(lastEvent("openclaw.secrets.delete").details.removedAccessBindings, [
+    removedEntry(secretBinding),
+  ]);
+  assert.equal(
+    (
+      await controller.request(
+        "DELETE",
+        `/namespaces/${namespace.id}/configurations/${configuration.id}`,
+      )
+    ).status,
+    204,
+  );
+  assert.deepEqual(lastEvent("openclaw.configurations.delete").details.removedAccessBindings, [
+    removedEntry(configurationBinding),
+  ]);
+  const deleting = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
+  assert.deepEqual(lastEvent("openclaw.agents.delete").details.accessBindingsRemovedOnCompletion, [
+    removedEntry(agentBinding),
+  ]);
+
+  // A Namespace tombstone keeps none of its own Roles or AccessBindings.
+  const empty = await createNamespace(controller, "side-effect-empty");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, empty.id, "ready");
+  const reader = await controller.request("POST", `/namespaces/${empty.id}/iam/roles`, {
+    body: { permissions: [{ action: "read", resourceKind: "namespace" }] },
+  });
+  assert.equal(reader.status, 201, JSON.stringify(reader.body));
+  const unused = await controller.request("POST", `/namespaces/${empty.id}/iam/roles`, {
+    body: { permissions: [{ action: "read", resourceKind: "agent" }] },
+  });
+  assert.equal(unused.status, 201, JSON.stringify(unused.body));
+  const readerBinding = await controller.request(
+    "POST",
+    `/namespaces/${empty.id}/iam/access-bindings`,
+    {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: reader.data.id,
+        resourceKind: "namespace",
+        resourceId: empty.id,
+      },
+    },
+  );
+  assert.equal(readerBinding.status, 201, JSON.stringify(readerBinding.body));
+  assert.equal((await controller.request("DELETE", `/namespaces/${empty.id}`)).status, 202);
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, empty.id, "deleted");
+  assert.equal((await controller.request("GET", `/namespaces/${empty.id}`)).status, 404);
+  const remaining = await fixture.controller.transact(async (unit) => ({
+    bindings: await unit.iamPolicy.listAccessBindings(empty.id),
+    roles: await unit.iamPolicy.listRoles(empty.id),
+  }));
+  assert.deepEqual(remaining, { bindings: [], roles: [] });
+  const teardown = fixture.auditSink.events.findLast(
+    (event) =>
+      event.action === "openclaw.namespaces.lifecycle.delete" && event.resource.id === empty.id,
+  );
+  assert.equal(teardown.outcome, "success");
+  assert.deepEqual(teardown.details.removedAccessBindings, [
+    {
+      id: readerBinding.data.id,
+      subjectKind: "identity",
+      subjectId: member.principal.id,
+      roleId: reader.data.id,
+      resourceKind: "namespace",
+      resourceId: empty.id,
+    },
+  ]);
+  assert.deepEqual(
+    [...teardown.details.removedRoleIds].sort(),
+    [reader.data.id, unused.data.id].sort(),
+  );
+});
+
 test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespace binding", async () => {
   const fixture = await createInjectedFixture();
   const member = await fixture.createAuthPrincipal("namespace-escalation-member");
