@@ -354,6 +354,39 @@ jobs:
       - name: Install, deploy, chat, stop and start
         run: node scripts/ci/first-agent-smoke.mjs run
 
+  # THROWAWAY: k3d node DNS probe, reverted before review.
+  k3d-dns-probe:
+    name: k3d DNS Probe (throwaway)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up CI tools
+        run: bash scripts/ci/setup-tools.sh k3d
+      - name: Probe
+        run: |
+          set -x
+          sudo iptables --version || true
+          cat /etc/resolv.conf; cat /run/systemd/resolve/resolv.conf || true
+          docker version --format '{{.Server.Version}}'
+          image=docker.io/rancher/k3s:v1.36.4-k3s1@sha256:edad48e12bf81c3a09ac1c05c0c0ffaaa22145980b989d6fae84543a76b83657
+          for mode in legacy default; do
+            extra=()
+            if [ "$mode" = legacy ]; then extra=(--env IPTABLES_MODE=legacy@server:0); fi
+            docker network create "probe-$mode" >/dev/null
+            k3d cluster create "occ-dev-probe-$mode" --image "$image" --servers 1 --agents 0 --network "probe-$mode" --timeout 180s "${extra[@]}" --kubeconfig-update-default=false --kubeconfig-switch-context=false || true
+            node="k3d-occ-dev-probe-$mode-server-0"
+            docker exec "$node" cat /etc/resolv.conf || true
+            docker exec "$node" sh -c 'iptables --version; iptables-save -t nat 2>&1 | grep -i -E "DOCKER|53" | head -20' || true
+            docker exec "$node" sh -c 'iptables-legacy-save -t nat 2>&1 | grep -i -E "DOCKER|53" | head -20; iptables-nft-save -t nat 2>&1 | grep -i -E "DOCKER|53" | head -20' || true
+            docker exec "$node" sh -c 'nslookup registry-1.docker.io 2>&1 | head -8' || true
+            docker exec "$node" sh -c 'timeout 90 crictl pull docker.io/rancher/mirrored-pause:3.10.2; echo "pull-exit=$?"' || true
+            k3d cluster delete "occ-dev-probe-$mode" || true
+            docker network rm "probe-$mode" || true
+          done
+
   ci-required:
     name: CI Required
     runs-on: ubuntu-22.04
