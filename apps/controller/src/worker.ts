@@ -497,6 +497,7 @@ function uniqueSecretRefs(bindings: SecretBindings): SecretReference[] {
 }
 
 const MAX_STOPPED_PREDECESSOR_RECORDS = 4_096;
+const MAX_AUDITED_PENDING_LIFECYCLE_RECORDS = 4_096;
 
 export class ControllerWorker {
   private readonly metrics: OccMetrics | undefined;
@@ -550,6 +551,13 @@ export class ControllerWorker {
     { readonly stoppedAt: number; readonly restopAfterMs: number }
   >();
   private readonly deployTimings = new Map<string, DeployTiming>();
+  /**
+   * The last pending Namespace lifecycle observation this process audited, by work
+   * key. A teardown waits for Kubernetes namespaces to terminate over many passes;
+   * a pass that observes the same pending state again is not audited again. The
+   * terminal pass and a changed pending state are always audited.
+   */
+  private readonly auditedPendingLifecycle = new Map<string, string>();
 
   constructor(options: ControllerWorkerOptions) {
     this.metrics = options.metrics;
@@ -3670,6 +3678,11 @@ export class ControllerWorker {
     const resolved: DispatchResult = expired
       ? { ...result, outcome: "permanent", code: "CONVERGENCE_DEADLINE_EXCEEDED" }
       : result;
+    const pendingAudit =
+      resolved.outcome === "pending" && resolved.observation !== undefined
+        ? JSON.stringify([claim.namespaceTarget, resolved.code, resolved.observation])
+        : undefined;
+    let auditedPending = false;
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
@@ -3702,8 +3715,13 @@ export class ControllerWorker {
 
         if (resolved.decision !== undefined) {
           await this.appendDenial(unit, claim, current, resolved);
-        } else if (resolved.observation !== undefined) {
+        } else if (
+          resolved.observation !== undefined &&
+          (pendingAudit === undefined ||
+            this.auditedPendingLifecycle.get(claim.idempotencyKey) !== pendingAudit)
+        ) {
           await this.appendObservation(unit, claim, current, resolved, removedPolicy);
+          auditedPending = pendingAudit !== undefined;
         }
       }
 
@@ -3717,6 +3735,17 @@ export class ControllerWorker {
         await queue.retry(claim, { code: resolved.code });
       }
     }, this.queueOptions);
+    // Recorded after commit: a rolled-back audit row is written again next pass.
+    if (pendingAudit === undefined) {
+      this.auditedPendingLifecycle.delete(claim.idempotencyKey);
+    } else if (auditedPending) {
+      this.auditedPendingLifecycle.delete(claim.idempotencyKey);
+      if (this.auditedPendingLifecycle.size >= MAX_AUDITED_PENDING_LIFECYCLE_RECORDS) {
+        // Drop the oldest; at worst that work's next identical pass is audited again.
+        this.auditedPendingLifecycle.delete(this.auditedPendingLifecycle.keys().next().value!);
+      }
+      this.auditedPendingLifecycle.set(claim.idempotencyKey, pendingAudit);
+    }
     this.passOutcome =
       resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts
         ? "permanent"
