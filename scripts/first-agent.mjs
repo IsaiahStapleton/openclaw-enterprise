@@ -252,9 +252,18 @@ async function loadLocalInstallation() {
     if (state.deploymentMode === "k3d") {
       // Local Setup runs PostgreSQL as a StatefulSet; let kubectl resolve its Pod
       // (postgres-0 today) instead of naming a Pod that may be renamed.
-      return kubectl("-n", state.platformNamespace, "exec", "-i", "pod/postgres", "--", ...psql, {
-        input: sql,
-      });
+      return kubectl(
+        "-n",
+        state.platformNamespace,
+        "exec",
+        "-i",
+        "statefulset/postgres",
+        "-c",
+        "postgres",
+        "--",
+        ...psql,
+        { input: sql },
+      );
     }
     return run(state.containerEngine, [...composeBase, "exec", "-T", "postgres", ...psql], {
       env: environment,
