@@ -389,8 +389,108 @@ function createApi(origin, key) {
   };
 }
 
+const clusterName = "occ-dev-first-agent-smoke";
+const watchLog = join(workDirectory, "cluster-watch.log");
+
+// `occ dev up` deletes its cluster when a step fails, so record what the
+// cluster looked like while it was being installed.
+function watchCluster() {
+  const kubeconfig = join(workDirectory, "watch-kubeconfig");
+  let stopped = false;
+  const record = async (label, command, args) => {
+    try {
+      const { stdout } = await run(command, args, { timeout: minute });
+      await appendFile(watchLog, `----- ${new Date().toISOString()} ${label}\n${stdout}\n`);
+    } catch (error) {
+      await appendFile(watchLog, `----- ${label} unavailable: ${error.message.slice(0, 300)}\n`);
+    }
+  };
+  const loop = (async () => {
+    while (!stopped) {
+      await delay(30_000);
+      try {
+        const { stdout } = await run("k3d", ["kubeconfig", "get", clusterName], {
+          timeout: minute,
+        });
+        await writeFile(kubeconfig, stdout, { mode: 0o600 });
+      } catch {
+        continue;
+      }
+      const k = ["--kubeconfig", kubeconfig];
+      await record("pods", "kubectl", [...k, "get", "pods", "-A", "-o", "wide"]);
+      await record("warning events", "kubectl", [
+        ...k,
+        "get",
+        "events",
+        "-A",
+        "--field-selector",
+        "type!=Normal",
+      ]);
+      await record("node conditions", "kubectl", [
+        ...k,
+        "get",
+        "nodes",
+        "-o",
+        'jsonpath={range .items[*].status.conditions[*]}{.type}={.status} {.message}{"\\n"}{end}{.items[*].spec.taints}',
+      ]);
+      try {
+        const { stdout } = await run("kubectl", [...k, "get", "pods", "-A", "-o", "json"]);
+        for (const pod of JSON.parse(stdout).items) {
+          const ready = pod.status?.conditions?.some(
+            ({ type, status }) => type === "Ready" && status === "True",
+          );
+          const age = Date.now() - Date.parse(pod.metadata.creationTimestamp);
+          if (!ready && pod.status?.phase !== "Succeeded" && age > 90_000) {
+            await record(`describe ${pod.metadata.namespace}/${pod.metadata.name}`, "kubectl", [
+              ...k,
+              "-n",
+              pod.metadata.namespace,
+              "describe",
+              "pod",
+              pod.metadata.name,
+            ]);
+            await record(`logs ${pod.metadata.namespace}/${pod.metadata.name}`, "kubectl", [
+              ...k,
+              "-n",
+              pod.metadata.namespace,
+              "logs",
+              pod.metadata.name,
+              "--all-containers",
+              "--tail",
+              "40",
+            ]);
+          }
+        }
+      } catch {
+        // The cluster may be going away.
+      }
+    }
+  })();
+  return async () => {
+    stopped = true;
+    await loop;
+  };
+}
+
+async function printWatchLog() {
+  try {
+    const text = await readFile(watchLog, "utf8");
+    process.stdout.write(`----- cluster watch (last 60000 bytes)\n${text.slice(-60_000)}\n`);
+  } catch {
+    process.stdout.write("----- cluster watch: nothing recorded\n");
+  }
+}
+
 async function startLocalSetup(environment) {
-  await run(occ, ["dev", "up"], { env: environment, timeout: 25 * minute, label: "dev-up" });
+  const stopWatching = watchCluster();
+  try {
+    await run(occ, ["dev", "up"], { env: environment, timeout: 25 * minute, label: "dev-up" });
+  } catch (error) {
+    await stopWatching();
+    await printWatchLog();
+    throw error;
+  }
+  await stopWatching();
   const directory = environment.OCC_DEVELOPMENT_STATE_DIRECTORY;
   const state = JSON.parse(await readFile(join(directory, "state.json"), "utf8"));
   const key = JSON.parse(await readFile(state.keyPath, "utf8"));
@@ -825,6 +925,7 @@ async function smoke() {
     OCC_DEVELOPMENT_SANDBOX_DRIVER: "none",
     OCC_DEVELOPMENT_CONTAINER_ENGINE: "docker",
     OCC_DEVELOPMENT_STATE_DIRECTORY: join(await realpath(workDirectory), "local-setup"),
+    OCC_DEVELOPMENT_KUBERNETES_CLUSTER: clusterName,
     OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS: "900",
   };
   delete environment.OPENAI_API_KEY;
