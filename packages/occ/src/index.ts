@@ -130,6 +130,7 @@ import {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  ResourceStateConflictError,
   RuntimeLogsError,
   RuntimeLogsForbiddenByClusterError,
   RuntimeLogsSandboxNotFoundError,
@@ -224,6 +225,7 @@ export {
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
   ResourceConflictError,
+  ResourceStateConflictError,
   RuntimeLogsError,
   RuntimeLogsForbiddenByClusterError,
   RuntimeLogsSandboxNotFoundError,
@@ -813,7 +815,7 @@ function assertAccessBindingRoleApplies(role: Readonly<Role>, resourceKind: Reso
   if (creates.length > 0) {
     throw new IAMAccessBindingRoleError(
       `Role ${role.id} has Permissions that no AccessBinding can grant: ${creates.map(label).join(", ")}. ` +
-        "Create is authorized on the Namespace, not on an existing resource. Remove them from the Role.",
+        "No AccessBinding grants create: only Installation administrators can create Agents, Configurations, Secrets and other resources. Remove these Permissions from the Role.",
     );
   }
   if (!role.permissions.some((permission) => permission.resourceKind === resourceKind)) {
@@ -3600,8 +3602,8 @@ export class OpenClawController {
         );
       }
       if (await state.credentialSources.hasReferences(locked.id, found.id)) {
-        throw new ResourceConflictError(
-          "An Agent, active revision, or pending deployment still references the credential source.",
+        throw new ResourceStateConflictError(
+          "An Agent, active revision, or pending deployment still references the credential source. Delete those Agents, or deploy them without it, first.",
         );
       }
       const deleting =
@@ -3965,7 +3967,9 @@ export class OpenClawController {
       }
       const agents = await state.agents.listAgents(namespace.id);
       if (agents.some((agent) => agent.configurationId === configuration.id)) {
-        throw new ResourceConflictError("An Agent still references the exact Configuration.");
+        throw new ResourceStateConflictError(
+          "An Agent still references the Configuration. Delete the Agent or select another Configuration first.",
+        );
       }
       const previous = this.exactConfiguration(
         await this.driverOperation(() =>
@@ -5442,7 +5446,9 @@ export class OpenClawController {
     input: AgentCredentialSourceInput,
   ): Promise<Readonly<AgentRevision>> {
     if (agent.status !== "active" || agent.activeRevisionId === undefined) {
-      throw new ResourceConflictError("The Agent has no active revision to withdraw from.");
+      throw new ResourceStateConflictError(
+        "The Agent has no active revision to withdraw the credential source from.",
+      );
     }
     const revision = await state.revisions.findRevision(
       agent.namespaceId,

@@ -16,6 +16,7 @@ import {
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
   PLUGIN_RUNTIME_HELPERS,
+  startupPhaseHelper,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import {
   PLUGIN_RUNTIME_CODEX_CONFIG,
@@ -1219,6 +1220,75 @@ test("Codex runtime helper reports connector-auth warnings with the admitted key
   });
 });
 
+test("Codex runtime helper disables curated plugins at once under API-key login", async () => {
+  // Codex rejects the remote catalog for API-key logins, so a selected plugin
+  // can never install: report it and serve without plugins instead of retrying.
+  const runtime = {
+    manifest: {
+      kind: "codex",
+      selections: {
+        "codex-plugin:linear@openai-curated-remote": {
+          enabled: true,
+          toolDefaults: { approval: "provider_default" },
+        },
+        "codex-plugin:slack@openai-curated-remote": { enabled: false },
+      },
+    },
+  };
+  const disabledConfig = {
+    config: {
+      features: { apps: false, plugins: false, remote_plugin: false },
+      apps: { _default: { enabled: false } },
+      plugins: {},
+    },
+    origins: {},
+  };
+  const result = await runCodexRuntimeHelper(
+    runtime,
+    (method) => {
+      if (method === "initialize") {
+        return { serverInfo: { name: "codex", version: "0.149.0" } };
+      }
+      if (method === "config/read") {
+        return disabledConfig;
+      }
+      if (method === "config/batchWrite") {
+        return { status: "ok", version: "test-config-1" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    },
+    { env: { CODEX_LOGIN_MODE: "api_key", OPENCLAW_PLUGIN_STATUS_PORT: "18791" } },
+  );
+
+  assert.deepEqual(plain(result.value), {
+    successfulPluginIds: [],
+    failures: [
+      { pluginId: "codex-plugin:linear@openai-curated-remote", code: "PLUGIN_AUTH_REQUIRED" },
+    ],
+  });
+  const calls = result.requests.filter((request) => request.method !== "initialize");
+  assert.deepEqual(
+    calls.map((request) => request.method),
+    ["config/read", "config/batchWrite", "config/read"],
+  );
+  assert.deepEqual(calls[1].params.edits.slice(0, 4), [
+    { keyPath: "features.apps", mergeStrategy: "replace", value: false },
+    { keyPath: "features.plugins", mergeStrategy: "replace", value: false },
+    { keyPath: "features.remote_plugin", mergeStrategy: "replace", value: false },
+    { keyPath: 'apps."_default"', mergeStrategy: "replace", value: { enabled: false } },
+  ]);
+
+  const strict = await runCodexRuntimeHelper(
+    runtime,
+    (method) => {
+      throw new Error(`unexpected request ${method}`);
+    },
+    { env: { CODEX_LOGIN_MODE: "api_key" }, captureError: true },
+  );
+  assert.match(String(strict.error?.message), /require a ChatGPT login/);
+  assert.deepEqual(strict.requests, []);
+});
+
 test("Codex runtime helper keeps malformed matching install responses generic", async (t) => {
   const state = codexLinearPluginState();
   const runtime = {
@@ -1338,6 +1408,7 @@ test("Codex runtime helper keeps pre-install native uncertainty generic", async 
 
   assert.match(result.error.message, /did not reach readiness/);
   assert.equal(result.error.diagnostic, undefined);
+  assert.equal(result.error.startupCode, "PLUGIN_NOT_READY");
 });
 
 test("Codex runtime keeps disabled selected plugins default-denied while preserving install identity", async () => {
@@ -1569,6 +1640,27 @@ test("Codex gateway bridge config writes through the runtime state directory wit
   });
 });
 
+test("a failed startup phase line carries only a fixed upper-case cause code", () => {
+  const lines = [];
+  vm.runInNewContext(
+    `${startupPhaseHelper("agent")}
+logStartupPhase("plugin-install", Date.now(), "failed", "PLUGIN_NOT_IN_CATALOG");
+logStartupPhase("plugin-install", Date.now(), "failed", "catalog lacks linear");
+logStartupPhase("plugin-install", Date.now(), "failed");
+logStartupPhase("native-spawn", Date.now(), "ok", "PLUGIN_NOT_IN_CATALOG");`,
+    { Date, JSON, console: { error: (line) => lines.push(JSON.parse(line)) } },
+  );
+  assert.deepEqual(
+    lines.map(({ phase, outcome, code }) => [phase, outcome, code]),
+    [
+      ["plugin-install", "failed", "PLUGIN_NOT_IN_CATALOG"],
+      ["plugin-install", "failed", undefined],
+      ["plugin-install", "failed", undefined],
+      ["native-spawn", "ok", undefined],
+    ],
+  );
+});
+
 test("Codex runtime helper fails before readiness when catalog identity is absent", async () => {
   const state = codexLinearPluginState();
   const runtime = {
@@ -1589,7 +1681,12 @@ test("Codex runtime helper fails before readiness when catalog identity is absen
         }
         throw new Error(`unexpected request ${method}`);
       }),
-    /catalog did not contain the selected plugin/,
+    (error) => {
+      assert.match(error.message, /catalog did not contain the selected plugin/);
+      // The fixed code, not the message, is what the wrapper exports remotely.
+      assert.equal(error.startupCode, "PLUGIN_NOT_IN_CATALOG");
+      return true;
+    },
   );
 });
 
