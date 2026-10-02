@@ -246,6 +246,25 @@ export class TransientDependencyError extends Error {
   }
 }
 
+/** A step of dedicated activation that completes by itself once a workload catches up. */
+export type ActivationPendingCode = "WORKSPACE_NODE_PENDING" | "WORKSPACE_NODE_BINDING_PENDING";
+
+/**
+ * Activation found its workloads ready but is still waiting for one of them:
+ * the Gateway has not applied the workspace node it was handed, or the Harness
+ * node has not connected to the Gateway. The worker records `code` so status
+ * names the wait. The message stays in the controller.
+ */
+export class ActivationPendingError extends Error {
+  readonly code: ActivationPendingCode;
+
+  constructor(code: ActivationPendingCode, message: string) {
+    super(message);
+    this.name = "ActivationPendingError";
+    this.code = code;
+  }
+}
+
 /**
  * A Sandbox Driver cannot run this exact AgentRevision with the installed
  * driver. Retrying cannot change the outcome, so the worker fails the deployment

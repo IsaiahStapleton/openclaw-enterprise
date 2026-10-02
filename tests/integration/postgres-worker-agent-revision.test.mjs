@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { prepareFile } from "../../scripts/ci/prepare.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import {
+  ActivationPendingError,
   PostgresMetricsSnapshot,
   SandboxRevisionUnsupportedError,
   TransientDependencyError,
@@ -6983,6 +6984,122 @@ test(
         cause: "unavailable",
       })),
     );
+  },
+);
+
+test(
+  "an activation wait or a lagging Gateway route keeps its own code, not REVISION_FINALIZATION_INCOMPLETE",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("activation-wait-codes");
+    const candidate = await fixture.revision(owner, 1);
+    const events = [];
+    const progress = [];
+    const readProgress = async () =>
+      (
+        await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          candidate.id,
+        )
+      ).progress?.lastAttempt;
+    let activations = 0;
+
+    // D330: dedicated activation runs after the pointer is published. It waits
+    // for the Gateway to apply its workspace node, for the Harness node to
+    // connect, and reaches the Gateway through its route, which can answer 404
+    // while Envoy converges. Each pass must name what it waits on.
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async activateRevision(revision, revisionContext) {
+          activations += 1;
+          if (activations > 1) {
+            progress.push(await readProgress());
+          }
+          if (activations <= 2) {
+            throw new ActivationPendingError(
+              "WORKSPACE_NODE_BINDING_PENDING",
+              "The exact AgentRevision gateway has not applied its workspace node.",
+            );
+          }
+          if (activations === 3) {
+            throw new ActivationPendingError(
+              "WORKSPACE_NODE_PENDING",
+              "The exact AgentRevision Harness node is not ready.",
+            );
+          }
+          if (activations === 4) {
+            throw new TransientDependencyError(
+              "agent_gateway",
+              "unavailable",
+              "The Agent Gateway route answered HTTP 404 to the connection upgrade.",
+            );
+          }
+          if (activations === 5) {
+            throw new RangeError("unexpected activation failure");
+          }
+          return fixture.compute.activateRevision?.(revision, revisionContext);
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    await fixture.work(candidate, "succeeded", 30_000);
+    assert.equal(activations, 6);
+    assert.deepEqual(
+      progress.map((attempt) => [attempt?.code, attempt?.message]),
+      [
+        [
+          "WORKSPACE_NODE_BINDING_PENDING",
+          "Workloads are ready; waiting for the Gateway to apply the workspace node.",
+        ],
+        [
+          "WORKSPACE_NODE_BINDING_PENDING",
+          "Workloads are ready; waiting for the Gateway to apply the workspace node.",
+        ],
+        [
+          "WORKSPACE_NODE_PENDING",
+          "Workloads are ready; waiting for the workspace node to connect to the Gateway.",
+        ],
+        [
+          "AGENT_GATEWAY_UNAVAILABLE",
+          "The Agent Gateway was not reachable through its route yet. The controller will retry until the deployment deadline.",
+        ],
+        [
+          "RECONCILIATION_PENDING",
+          "Deployment has not completed. Another reconciliation is pending.",
+        ],
+      ],
+    );
+    const passes = events
+      .filter(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === candidate.id &&
+          event.outcome === "pending",
+      )
+      .slice(-5)
+      .map(({ code, dependency, cause }) => ({ code, dependency, cause }));
+    assert.deepEqual(passes, [
+      {
+        code: "WORKSPACE_NODE_BINDING_PENDING",
+        dependency: undefined,
+        cause: "ActivationPendingError",
+      },
+      {
+        code: "WORKSPACE_NODE_BINDING_PENDING",
+        dependency: undefined,
+        cause: "ActivationPendingError",
+      },
+      { code: "WORKSPACE_NODE_PENDING", dependency: undefined, cause: "ActivationPendingError" },
+      { code: "AGENT_GATEWAY_UNAVAILABLE", dependency: "agent_gateway", cause: "unavailable" },
+      { code: "REVISION_FINALIZATION_INCOMPLETE", dependency: undefined, cause: "RangeError" },
+    ]);
+    const succeeded = await fixture.work(candidate, "succeeded");
+    assert.equal(succeeded.attempt_count, 1);
   },
 );
 

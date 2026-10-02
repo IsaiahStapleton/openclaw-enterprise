@@ -42,6 +42,7 @@ import {
   PostgresPlatformState,
   PostgresWorkQueue,
   OpenClawController,
+  ActivationPendingError,
   SandboxRevisionUnsupportedError,
   TransientDependencyError,
   WorkClaimLostError,
@@ -116,6 +117,7 @@ const REVISION_PENDING_CODES: Readonly<Record<string, string>> = Object.freeze({
 });
 const REVISION_READINESS_CODES: ReadonlySet<string> = new Set([
   "REVISION_INCOMPLETE",
+  "WORKSPACE_NODE_BINDING_PENDING",
   ...Object.values(REVISION_PENDING_CODES),
 ]);
 
@@ -154,6 +156,25 @@ function revisionFailureLogFields(error: unknown): {
     cause: name ?? "Error",
     ...(httpStatus === undefined ? {} : { status: httpStatus }),
   };
+}
+
+/**
+ * The pending result of an activation pass that did not finish: a dependency
+ * that is converging and a known activation wait keep their own codes (D330);
+ * anything else stays REVISION_FINALIZATION_INCOMPLETE.
+ */
+function activationPendingResult(error: unknown): {
+  readonly outcome: "pending";
+  readonly code: string;
+  readonly dependencyFailure?: TransientDependencyError;
+} {
+  if (error instanceof TransientDependencyError) {
+    return { outcome: "pending", code: error.code, dependencyFailure: error };
+  }
+  if (error instanceof ActivationPendingError) {
+    return { outcome: "pending", code: error.code };
+  }
+  return { outcome: "pending", code: "REVISION_FINALIZATION_INCOMPLETE" };
 }
 
 function revisionPendingCode(observation: unknown): string {
@@ -2559,7 +2580,13 @@ export class ControllerWorker {
           ) {
             throw error;
           }
-          await this.finalizeActiveRevision(claim, revision, "REVISION_FINALIZATION_INCOMPLETE");
+          const pending = activationPendingResult(error);
+          await this.finalizeActiveRevision(claim, revision, pending.code, undefined, {
+            ...(pending.dependencyFailure === undefined
+              ? {}
+              : { dependencyFailure: pending.dependencyFailure }),
+            failureLogFields: revisionFailureLogFields(error),
+          });
           return;
         }
         await this.completeActivatedRevision(claim, {
@@ -3286,10 +3313,11 @@ export class ControllerWorker {
           await this.finalizeRevision(claim, { outcome: "permanent", code: error.code });
           return;
         }
-        await this.finalizeRevision(claim, {
-          outcome: "pending",
-          code: "REVISION_FINALIZATION_INCOMPLETE",
-        });
+        await this.finalizeRevision(
+          claim,
+          activationPendingResult(error),
+          revisionFailureLogFields(error),
+        );
         return;
       }
       await this.completeActivatedRevision(claim, resolved);
@@ -3418,6 +3446,10 @@ export class ControllerWorker {
     revision: Readonly<AgentRevision>,
     code: string,
     runtimeFailure?: RuntimeFailureEvidence,
+    failure: {
+      readonly dependencyFailure?: TransientDependencyError;
+      readonly failureLogFields?: Readonly<Record<string, string | number>>;
+    } = {},
   ): Promise<void> {
     if (
       this.revisionMaintenanceInterval(revision) === undefined ||
@@ -3425,11 +3457,18 @@ export class ControllerWorker {
         claim.idempotencyKey,
       )
     ) {
-      await this.finalizeRevision(claim, {
-        outcome: "pending",
-        code,
-        ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
-      });
+      await this.finalizeRevision(
+        claim,
+        {
+          outcome: "pending",
+          code,
+          ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
+          ...(failure.dependencyFailure === undefined
+            ? {}
+            : { dependencyFailure: failure.dependencyFailure }),
+        },
+        failure.failureLogFields,
+      );
       return;
     }
     let superseded = false;
@@ -3481,6 +3520,7 @@ export class ControllerWorker {
       result: "pending",
       outcome: "pending",
       code,
+      ...failure.failureLogFields,
     });
   }
 

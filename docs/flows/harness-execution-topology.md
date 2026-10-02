@@ -215,7 +215,8 @@ ConfigMap copies as soon as it re-renders the Gateway, so a replacement that nev
 becomes ready (and so never reaches predecessor retirement) does not keep them.
 
 If activation, readiness, predecessor retirement, or audit completion fails,
-the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`; recovery
+the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`, or a
+known wait's own [pending code](../reference/agents/deployment.md#pending-deployment-progress); recovery
 retries activation and retirement for the already-active revision. Lost claims
 and foreign/stale workloads fail closed. Dedicated activation waits for the
 Gateway to report the workspace node it was handed; that wait is a 20-second
