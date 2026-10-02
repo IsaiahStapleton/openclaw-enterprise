@@ -160,7 +160,8 @@ Kubernetes embedded replacement reports ready while the predecessor still
 serves, so the worker sets the pointer first. Activation then replaces the
 shared gateway, and the new gateway runs the startup model probe. If that
 probe rejects the credential, the deployment fails with
-`RUNTIME_AUTHENTICATION_FAILED`. The failed revision stays active because its
+`RUNTIME_AUTHENTICATION_FAILED` (or, for a probe that timed out after its retries,
+`RUNTIME_MODEL_PROBE_TIMEOUT`). The failed revision stays active because its
 workload is the only one left; the predecessor has already been replaced. OCC
 never rolls back to an earlier revision. To recover, correct the cause and
 deploy a new revision, or stop the Agent.

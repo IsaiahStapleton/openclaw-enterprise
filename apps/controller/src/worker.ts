@@ -369,6 +369,28 @@ function runtimeFailureFromObservation(observation: unknown): RuntimeFailureEvid
   );
 }
 
+// Deployment failure codes for runtime failures that Kubernetes runtime
+// entrypoints hold until restart. AUTHENTICATION_FAILED is a provider 401/403 or
+// invalid-key rejection; MODEL_PROBE_CPU_STARVED ran out of a CPU budget sized
+// for the container's CPU limit; the others are a probe timeout or failure, a
+// failed Codex login, a missing probe configuration, and an invalid plugin
+// approver configuration. Unknown codes stay pending until the deadline.
+const HELD_RUNTIME_FAILURE_CODES: Readonly<Record<string, string>> = Object.freeze({
+  AUTHENTICATION_FAILED: "RUNTIME_AUTHENTICATION_FAILED",
+  MODEL_PROBE_CPU_STARVED: "RUNTIME_CPU_STARVED",
+  MODEL_PROBE_TIMEOUT: "RUNTIME_MODEL_PROBE_TIMEOUT",
+  MODEL_PROBE_FAILED: "RUNTIME_MODEL_PROBE_FAILED",
+  LOGIN_FAILED: "RUNTIME_LOGIN_FAILED",
+  UNAVAILABLE: "RUNTIME_STARTUP_FAILED",
+  INCOMPATIBLE_RESPONSE: "RUNTIME_STARTUP_FAILED",
+});
+
+function heldRuntimeFailureCode(code: string): string | undefined {
+  return Object.hasOwn(HELD_RUNTIME_FAILURE_CODES, code)
+    ? HELD_RUNTIME_FAILURE_CODES[code]
+    : undefined;
+}
+
 function convergenceDeadlineResultData(
   timeoutMs: number,
   runtimeFailure: RuntimeFailureEvidence | undefined,
@@ -2992,25 +3014,24 @@ export class ControllerWorker {
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
-    // or invalid-key rejections, and MODEL_PROBE_CPU_STARVED only when the model
-    // probe ran out of a CPU budget sized for the container's CPU limit while it
-    // waited for CPU. Both hold unready until restart, and a restart gets the same
-    // credential and CPU, so waiting for the deadline cannot change the result.
-    // Other failures may recover.
+    // Runtime entrypoints publish a runtime failure only after their own retries
+    // end, and then hold the container unready until an explicit restart that
+    // nothing performs: no liveness probe or controller restarts it. Waiting for
+    // the convergence deadline therefore cannot change the result, so every held
+    // failure ends the deployment at once with a code naming its cause.
+    const heldFailureCode =
+      runtimeFailure === undefined ? undefined : heldRuntimeFailureCode(runtimeFailure.code);
     let resolved: RevisionDispatchResult =
-      runtimeFailure?.code === "AUTHENTICATION_FAILED"
-        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
-        : runtimeFailure?.code === "MODEL_PROBE_CPU_STARVED"
-          ? { outcome: "permanent", code: "RUNTIME_CPU_STARVED" }
-          : expired
-            ? {
-                ...result,
-                outcome: "permanent",
-                code: "CONVERGENCE_DEADLINE_EXCEEDED",
-                data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
-              }
-            : result;
+      heldFailureCode !== undefined
+        ? { outcome: "permanent", code: heldFailureCode }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);

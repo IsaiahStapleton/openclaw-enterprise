@@ -87,9 +87,11 @@ is null. Results describe recorded checks, not current runtime health.
 Errors have fixed codes, messages, and allowlisted `error.data`.
 `CONVERGENCE_DEADLINE_EXCEEDED` data includes positive `timeoutMs` and optional
 `runtimeFailure` (`component`, `check`, `checkedAt`, `code`) captured by Compute
-from that revision. The primary error remains unchanged; missing evidence
-leaves the cause unspecified. `RUNTIME_AUTHENTICATION_FAILED` (rejected credential, HTTP 401/403) and
-`RUNTIME_CPU_STARVED` (too little CPU) end deployment early; fix and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
+from that revision; missing evidence leaves the cause unspecified. Held runtime
+failures end deployment early: `RUNTIME_AUTHENTICATION_FAILED` (rejected
+credential), `RUNTIME_CPU_STARVED`, `RUNTIME_MODEL_PROBE_TIMEOUT`,
+`RUNTIME_MODEL_PROBE_FAILED`, `RUNTIME_LOGIN_FAILED`, or
+`RUNTIME_STARTUP_FAILED`; fix and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
 with a closed code and admitted `pluginId`.
 
 Polling reads persisted state without runtime, provider, or model probes.
