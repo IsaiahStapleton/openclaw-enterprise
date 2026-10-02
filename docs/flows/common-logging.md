@@ -1,7 +1,7 @@
 ---
 created: 2026-09-02
-updated: 2026-09-25
-last_updated_session: redacted
+updated: 2026-10-01
+last_updated_session: authoring-run/dda71266-f9f6-404c-aaba-b0c03f010ae2
 ---
 
 # Common Operational Logging Flow
@@ -80,6 +80,10 @@ the separate Collector filter in step 7. For worker records, the Collector retai
 allowlisted `work.operation` values and bounded `work.id` shapes. Agent stop keys
 include the operation UUID; deletion keys have no operation suffix. Unsupported
 values and key shapes are excluded.
+
+Compute preparation failures may include a Driver-reviewed stage, classification,
+status, and bounded message. The worker never serializes the raw exception, and
+the sanitizer drops secret-shaped messages before local output.
 
 ### 3. Admission freezes runtime logging
 
@@ -234,6 +238,8 @@ for panels, correlation, and authorization limits.
 - 2026-10-05 03:30: Export `presets.bundled-default-shadowed` as WARN with only its event name.
 - 2026-10-05 02:30: Export `presets.default-create-skipped` as WARN with only the Namespace ID.
 - 2026-10-04 23:10: Export `presets.default-refresh-skipped` as WARN with only the Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)
+
+- 2026-10-01 16:37: Added the sanitized Compute preparation diagnostic boundary. (authoring-run/dda71266-f9f6-404c-aaba-b0c03f010ae2 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
 
 - 2026-10-01 14:45: Export sign-in provider outage warnings with bounded provider, step, cause and status attributes. (collector-auth-warning - 769c8cd88)
 

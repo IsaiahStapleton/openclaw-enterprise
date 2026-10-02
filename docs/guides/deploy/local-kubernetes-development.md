@@ -6,10 +6,9 @@ OpenClaw Control Plane (OCC), and Agent workloads in the owned cluster.
 
 ## Start the profile
 
-Install Node.js 24 or newer, the repository-pinned pnpm, the Go version from
-`go.mod`, k3d, kubectl, Helm, and either Docker or Podman. In Kubernetes-only
-mode, the container engine hosts k3d and builds or imports images without
-running OCE application services.
+Install Node.js 24+, repository-pinned pnpm, the Go version from `go.mod`, k3d,
+kubectl, Helm, and Docker or Podman. Kubernetes-only mode uses the engine for
+k3d and images, not OCE services.
 
 K3s requires the `cpuset` cgroup controller, which systemd does not delegate to
 a rootless session. On Podman, run as root or use a rootful Podman machine;
@@ -114,7 +113,7 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
 ./scripts/dev-up
 ```
 
-The checkout-local CLI creates one k3d cluster and then:
+The checkout-local CLI creates one k3d cluster, then:
 
 1. installs the pinned Agent Sandbox controller and OpenShell
    `v0.1.3-pre.2` assets;
@@ -123,17 +122,26 @@ The checkout-local CLI creates one k3d cluster and then:
 3. creates `oce-system` and installs PostgreSQL, one central OpenShell Gateway
    for the cluster, and the OCE Helm release there;
 4. exposes a labeled development proxy through a loopback-only k3d port map;
-   and
 5. waits for the bootstrap Namespace and its OpenShell Workspace to become
-   ready.
+   ready; and
+6. writes kubeconfig and the administrator service key to private state.
 
 OpenShell's Agent Sandbox controller remains in its upstream
 `agent-sandbox-system` Namespace. OCC runs in the cluster and creates tenant
 Workspaces, Sandbox resources, and Agent Pods in separate OCC-owned `oce-*`
 Namespaces.
 
+To keep PostgreSQL, the OCC API, and the Kubernetes worker in Compose, set
+`OCC_DEVELOPMENT_CONTROL_PLANE=compose` with the same OpenShell selection. This
+profile also installs the pinned private Envoy route in k3d. It mounts the
+route's service key and public CA only into the Compose controller and
+`worker-kubernetes`, then records the k3d node hostname and Envoy NodePort in
+the Installation. Do not run the separate manual hybrid-routing procedure for
+this OpenShell profile.
+
 The first start requires network access. To use reviewed local assets instead,
-set `OCC_DEVELOPMENT_OPENSHELL_HELM_CHART`,
+set
+`OCC_DEVELOPMENT_OPENSHELL_HELM_CHART`,
 `OCC_DEVELOPMENT_OPENSHELL_WORKSPACE_HELM_CHART`, and
 `OCC_DEVELOPMENT_OPENSHELL_AGENT_SANDBOX_MANIFEST` to absolute paths.
 
