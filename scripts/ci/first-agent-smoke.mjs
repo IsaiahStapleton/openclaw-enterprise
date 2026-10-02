@@ -365,16 +365,22 @@ async function buildImages() {
 
 function createApi(origin, key) {
   return async (method, path, body) => {
-    const response = await fetch(new URL(path, origin), {
-      method,
-      redirect: "error",
-      signal: AbortSignal.timeout(30_000),
-      headers: {
-        "x-api-key": key,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    let response;
+    try {
+      response = await fetch(new URL(path, origin), {
+        method,
+        redirect: "error",
+        signal: AbortSignal.timeout(30_000),
+        headers: {
+          "x-api-key": key,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (error) {
+      const cause = error.cause ? `: ${error.cause.code ?? ""} ${error.cause.message}` : "";
+      throw new Error(`${method} ${path}: ${error.message}${cause}`, { cause: error });
+    }
     const text = await response.text();
     let envelope;
     try {
@@ -576,6 +582,57 @@ async function routeModelProvider(stack, modelDirectory, runtimeImage) {
     "deployment/coredns",
     "--timeout=120s",
   ]);
+  // The Local Setup API proxy resolves the API Service for every connection,
+  // so API calls made while the old resolver Pod terminates fail after a DNS
+  // timeout. Wait until only the new Pod remains and, from the proxy Pod, the
+  // API Service resolves and api.openai.com resolves to the stand-in provider.
+  const lookup = `const dns = require("node:dns").promises;
+const address = (name) => dns.lookup(name, { family: 4 }).then((r) => r.address, () => null);
+Promise.all([address("api.openai.com"), address("openclaw-enterprise-api")]).then(([provider, api]) =>
+  process.stdout.write(JSON.stringify({ provider, api })));`;
+  await waitFor(
+    "cluster DNS to answer through the restarted resolver",
+    async () => {
+      const { stdout } = await kubectl(stack, [
+        "-n",
+        "kube-system",
+        "get",
+        "pods",
+        "-l",
+        "k8s-app=kube-dns",
+        "-o",
+        "json",
+      ]);
+      const pods = JSON.parse(stdout).items;
+      if (pods.length !== 1 || pods[0].metadata.deletionTimestamp) {
+        return { done: false, state: pods.map((pod) => pod.metadata.name) };
+      }
+      try {
+        const result = JSON.parse(
+          (
+            await kubectl(
+              stack,
+              [
+                "-n",
+                stack.state.platformNamespace,
+                "exec",
+                "deployment/occ-development-api-proxy",
+                "--",
+                "node",
+                "-e",
+                lookup,
+              ],
+              { timeout: 30_000 },
+            )
+          ).stdout,
+        );
+        return { done: result.provider === modelAddress && Boolean(result.api), state: result };
+      } catch (error) {
+        return { done: false, state: error.message.slice(0, 300) };
+      }
+    },
+    2 * minute,
+  );
 }
 
 async function modelEvents() {
