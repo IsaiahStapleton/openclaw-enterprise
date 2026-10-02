@@ -1247,7 +1247,8 @@ const environment = {
   APP_SERVER_TOKEN: "synthetic-transport-token", APP_SERVER_PORT: "4500",
 };
 let native;
-vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
+// The entrypoint arrives on stdin: inlined, it can exceed the per-argument limit.
+vm.runInNewContext(fs.readFileSync(0, "utf8"), {
   URL, console, setTimeout, setInterval,
   // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
   process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
@@ -1321,30 +1322,33 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
-    const { stdout } = await runDocker([
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--read-only",
-      "--user",
-      "1000:1000",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--tmpfs",
-      "/home/node:size=128m,uid=1000,gid=1000,mode=700",
-      "--tmpfs",
-      "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
-      "--entrypoint",
-      "node",
-      image,
-      "-e",
-      // The probe embeds the whole Harness entrypoint; bounded pieces keep each
-      // exec argument under Linux's 128 KiB MAX_ARG_STRLEN.
-      ...nodeProgramArguments(probe),
-    ]);
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "-i",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--user",
+        "1000:1000",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/home/node:size=128m,uid=1000,gid=1000,mode=700",
+        "--tmpfs",
+        "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+        "--entrypoint",
+        "node",
+        image,
+        "-e",
+        probe,
+      ],
+      {},
+      AGENT_RUNTIME_ENTRYPOINT,
+    );
     assert.match(stdout, /native-repository-shell-ready/);
   },
 );

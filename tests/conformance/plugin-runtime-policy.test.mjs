@@ -84,6 +84,98 @@ test("OpenClaw runtime helper installs exact admitted package pins and verifies 
   assert.deepEqual(effective.tools.alsoAllow, ["existing-tool", "diffs"]);
 });
 
+test("OpenClaw runtime helper opens Diffs viewer links only through the native admin origin", () => {
+  const origin = "https://agent-0123456789abcdef.agents.example.test";
+  const nativeAdminGateway = {
+    port: 8080,
+    publicOrigin: origin,
+    auth: { mode: "trusted-proxy" },
+    controlUi: { enabled: true, allowedOrigins: [origin] },
+  };
+  const effectiveEntries = (gateway, selection) => {
+    const { files } = runOpenClawRuntimeHelper(
+      openClawRuntime(selection),
+      installedPluginResponses(),
+      { baseConfig: { gateway } },
+    );
+    const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+    assert.equal(effective.gateway.publicOrigin, gateway.publicOrigin);
+    return effective.plugins.entries;
+  };
+
+  assert.deepEqual(effectiveEntries(nativeAdminGateway), {
+    diffs: { enabled: true, config: { security: { allowRemoteViewer: true } } },
+  });
+  assert.deepEqual(effectiveEntries(nativeAdminGateway, { enabled: false }), {
+    diffs: { enabled: false },
+  });
+  for (const gateway of [
+    { port: 8080 },
+    { ...nativeAdminGateway, publicOrigin: undefined },
+    { ...nativeAdminGateway, publicOrigin: "https://other.agents.example.test" },
+    { ...nativeAdminGateway, controlUi: { enabled: true, allowedOrigins: [] } },
+    { ...nativeAdminGateway, auth: { mode: "password" } },
+    {
+      ...nativeAdminGateway,
+      publicOrigin: "http://127.0.0.1:8080",
+      controlUi: { enabled: true, allowedOrigins: ["http://127.0.0.1:8080"] },
+    },
+  ]) {
+    assert.deepEqual(effectiveEntries(gateway), { diffs: { enabled: true } });
+  }
+});
+
+test("OpenClaw runtime helper disables a failed Diffs install behind the native admin origin", () => {
+  const origin = "https://agent-0123456789abcdef.agents.example.test";
+  const result = runOpenClawRuntimeHelper(
+    openClawRuntime(),
+    [{ status: 1, stdout: "", stderr: "native install failed" }],
+    {
+      baseConfig: {
+        gateway: {
+          publicOrigin: origin,
+          auth: { mode: "trusted-proxy" },
+          controlUi: { enabled: true, allowedOrigins: [origin] },
+        },
+      },
+      env: {
+        OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+        OPENCLAW_AGENT_REVISION_ID: "revision-plugin-compute-1",
+        OPENCLAW_PLUGIN_STATUS_CONTAINER: "gateway",
+      },
+    },
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.value)), {
+    successfulPluginIds: [],
+    failures: [{ pluginId: "occ-plugin:diffs", code: "PLUGIN_INSTALL_FAILED" }],
+  });
+  const effective = JSON.parse(result.files.get("/home/node/.openclaw/openclaw.json"));
+  assert.equal(effective.plugins.entries.diffs.enabled, false);
+  assert.equal(effective.tools?.alsoAllow?.includes("diffs") ?? false, false);
+});
+
+test("OpenClaw runtime helper rejects foreign Diffs config beside the native admin origin", () => {
+  const origin = "https://agent-0123456789abcdef.agents.example.test";
+  const result = runOpenClawRuntimeHelper(openClawRuntime(), [], {
+    captureError: true,
+    baseConfig: {
+      gateway: {
+        publicOrigin: origin,
+        auth: { mode: "trusted-proxy" },
+        controlUi: { enabled: true, allowedOrigins: [origin] },
+      },
+      plugins: {
+        entries: {
+          diffs: { enabled: true, config: { security: { allowRemoteViewer: false } } },
+        },
+      },
+    },
+  });
+  assert.match(result.error?.message ?? "", /conflicts with managed plugin selections/);
+  assert.deepEqual(result.calls, []);
+});
+
 for (const [label, channels] of [
   ["no channels", undefined],
   ["unrelated channel", { msteams: { enabled: true } }],
