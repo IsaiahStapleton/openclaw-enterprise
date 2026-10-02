@@ -2130,7 +2130,7 @@ function excludeGatewayLocalCodexTools(config) {
     // APP_SERVER_URL names a remote Codex Harness: pin its providers even when
     // the Gateway config lacks the plugin entry. A dedicated OpenClaw Gateway
     // (no APP_SERVER_URL) runs its turns with these rows, so it keeps them.
-    if (process.env.APP_SERVER_URL !== undefined) pinCodexProviderTransport(config);
+    if (process.env.APP_SERVER_URL !== undefined) logOverriddenSettings(pinCodexProviderTransport(config));
     return;
   }
   const codexConfig = codex.config ??= {};
@@ -2150,8 +2150,14 @@ function excludeGatewayLocalCodexTools(config) {
   if (!isPlainObject(triggers)) {
     throw new Error("The cron.triggers setting must be an object.");
   }
+  const overridden = triggers.enabled === undefined || triggers.enabled === false ? [] : ["cron.triggers.enabled"];
   triggers.enabled = false;
-  pinCodexProviderTransport(config);
+  logOverriddenSettings([...overridden, ...pinCodexProviderTransport(config)]);
+}
+
+// Say which owner settings this Gateway replaced: setting names only, never values.
+function logOverriddenSettings(settings) {
+  if (settings.length > 0) console.error(JSON.stringify({ event: "runtime.gateway_settings_overridden", container: "gateway", settings }));
 }
 
 // OpenClaw's built-in runtime runs in the Gateway process with Gateway-local
@@ -2173,7 +2179,9 @@ function keepKeys(value, kept) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => kept.has(key)));
 }
 
+// Returns the owner settings it dropped or replaced.
 function pinCodexProviderTransport(config) {
+  const overridden = new Set();
   const models = config.models ??= {};
   if (!isPlainObject(models)) {
     throw new Error("The models setting must be an object.");
@@ -2197,9 +2205,19 @@ function pinCodexProviderTransport(config) {
       throw new Error("The " + id + " model provider setting must be an object.");
     }
     const pinned = keepKeys(provider, CODEX_PROVIDER_KEPT_KEYS);
+    const stub = { baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" };
+    const row = "models.providers." + id + ".";
+    for (const name of Object.keys(provider)) {
+      if (!CODEX_PROVIDER_KEPT_KEYS.has(name) && provider[name] !== stub[name]) overridden.add(row + name);
+    }
     if (provider.models !== undefined) {
       if (!Array.isArray(provider.models) || !provider.models.every(isPlainObject)) {
         throw new Error("The " + id + " model provider models setting must be a list of objects.");
+      }
+      for (const model of provider.models) {
+        for (const name of Object.keys(model)) {
+          if (!CODEX_MODEL_KEPT_KEYS.has(name)) overridden.add(row + "models[]." + name);
+        }
       }
       pinned.models = provider.models.map((model) => keepKeys(model, CODEX_MODEL_KEPT_KEYS));
     }
@@ -2207,10 +2225,9 @@ function pinCodexProviderTransport(config) {
     // no credential in the Gateway, and Codex keeps owning its account's models.
     const authoredTransport =
       id === "codex" || provider.baseUrl !== undefined || provider.api !== undefined;
-    providers[key] = authoredTransport
-      ? { ...pinned, baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" }
-      : pinned;
+    providers[key] = authoredTransport ? { ...pinned, ...stub } : pinned;
   }
+  return [...overridden];
 }
 
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
