@@ -112,7 +112,8 @@ claimed.
 both read the latest revision when it is newer than the active one and has Pods
 (a deploy in progress or a failed replacement, whose Pods hold the failure),
 else the active revision, else the latest revision. They print the revision they
-read to stderr. `runtime` accepts `-o table|json|yaml`
+read to stderr; a reader without Agent `operate` cannot check for Pods, so the
+notice names the newer revision to pass. `runtime` accepts `-o table|json|yaml`
 and needs Agent `operate` and `read` plus `read` on the revision. Its table output
 ends with each Pod's Events (`POD`, `CONTAINER`, `TYPE`, `REASON`, `COUNT`,
 `LAST SEEN`, `MESSAGE`); `CONTAINER` is `-` for Pod-level Events. `logs` needs

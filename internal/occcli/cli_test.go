@@ -123,6 +123,8 @@ type runtimeLogStub struct {
 	paths     []string
 	// podless lists revisions whose runtime description has no Pods.
 	podless []string
+	// forbidden lists revisions whose runtime description is refused with 403.
+	forbidden []string
 }
 
 func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Request) {
@@ -149,6 +151,10 @@ func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Re
 		next := stub.pages[0]
 		stub.pages = stub.pages[1:]
 		next(response, query)
+	case strings.HasSuffix(request.URL.Path, "/runtime") && slices.ContainsFunc(stub.forbidden, func(id string) bool {
+		return strings.HasSuffix(request.URL.Path, "/deployments/"+id+"/runtime")
+	}):
+		logError(http.StatusForbidden, "FORBIDDEN", nil)(response, nil)
 	case strings.HasSuffix(request.URL.Path, "/runtime") && slices.ContainsFunc(stub.podless, func(id string) bool {
 		return strings.HasSuffix(request.URL.Path, "/deployments/"+id+"/runtime")
 	}):
@@ -371,16 +377,20 @@ func TestAgentRuntimeAndLogsDefaultToLatestRevisionWithoutActiveRevision(t *test
 func TestAgentLogsDefaultToANewerRevisionWithPodsAndNameTheRevision(t *testing.T) {
 	revisions := `[{"id":"rev_1","revision":1},{"id":"rev_2","revision":2}]`
 	for _, test := range []struct {
-		name     string
-		podless  []string
-		revision string
-		notice   string
+		name      string
+		podless   []string
+		forbidden []string
+		revision  string
+		notice    string
 	}{
-		{"newer revision has Pods", nil, "rev_2", "notice: reading revision rev_2, newer than the active revision rev_1 and not yet active; pass --revision rev_1 for the active revision"},
-		{"newer revision has no Pods", []string{"rev_2"}, "rev_1", "notice: reading the active revision rev_1"},
+		{"newer revision has Pods", nil, nil, "rev_2", "notice: reading revision rev_2, newer than the active revision rev_1 and not yet active; pass --revision rev_1 for the active revision"},
+		{"newer revision has no Pods", []string{"rev_2"}, nil, "rev_1", "notice: reading the active revision rev_1\n"},
+		// A log reader without Agent operate cannot read the runtime description;
+		// the notice still names the newer revision it may read with --revision.
+		{"newer revision runtime is refused", nil, []string{"rev_2"}, "rev_1", "notice: reading the active revision rev_1; a newer revision rev_2 exists but its runtime could not be read (OCC operation failed (HTTP 403): FORBIDDEN: fixed message); pass --revision rev_2 to read it"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			stub := &runtimeLogStub{t: t, activeID: "rev_1", revisions: revisions, podless: test.podless, pages: []func(http.ResponseWriter, url.Values){
+			stub := &runtimeLogStub{t: t, activeID: "rev_1", revisions: revisions, podless: test.podless, forbidden: test.forbidden, pages: []func(http.ResponseWriter, url.Values){
 				logPage("", logLine(1, "error", "plugin install failed")),
 			}}
 			out, errOut, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "agent")
@@ -397,6 +407,15 @@ func TestAgentLogsDefaultToANewerRevisionWithPodsAndNameTheRevision(t *testing.T
 				t.Fatalf("notice = %q, want %q", errOut, test.notice)
 			}
 		})
+	}
+	// `occ agent runtime` reuses the probed description of the newer revision.
+	runtimeStub := &runtimeLogStub{t: t, activeID: "rev_1", revisions: revisions}
+	if _, _, err := runLogsCommand(t, context.Background(), runtimeStub, "agent", "runtime", "agt_1"); err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := "/namespaces/ns_1/agents/agt_1/deployments/rev_2/runtime"
+	if got := slices.Index(runtimeStub.paths, runtimePath); got < 0 || slices.Contains(runtimeStub.paths[got+1:], runtimePath) {
+		t.Fatalf("runtime requests = %v, want %s exactly once", runtimeStub.paths, runtimePath)
 	}
 	// The active revision is the latest: no runtime probe, and the notice names it.
 	stub := &runtimeLogStub{t: t, activeID: "rev_2", revisions: revisions, pages: []func(http.ResponseWriter, url.Values){
