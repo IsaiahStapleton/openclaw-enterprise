@@ -3164,10 +3164,12 @@ child.on("exit", (code, signal) => {
 });
 (async () => {
   const pluginInstallStartedAt = Date.now();
+  let pluginInstallLogged = false;
   try {
     if (pluginRuntime !== undefined) {
       const result = await installCodexPlugins(pluginRuntime);
       logStartupPhase("plugin-install", pluginInstallStartedAt);
+      pluginInstallLogged = true;
       publishPluginRuntimeStatus({ phase: "ready", ...result });
     } else {
       publishPluginRuntimeStatus({ phase: "ready", successfulPluginIds: [], failures: [] });
@@ -3175,7 +3177,8 @@ child.on("exit", (code, signal) => {
     pluginRuntimeReady();
   } catch (error) {
     // The phase line (with a fixed code) reaches the log backend; the message stays local.
-    if (pluginRuntime !== undefined) {
+    // A failure after a logged install (publishing status) is not a plugin-install failure.
+    if (pluginRuntime !== undefined && !pluginInstallLogged) {
       logStartupPhase("plugin-install", pluginInstallStartedAt, "failed", error?.startupCode ?? "PLUGIN_NOT_READY");
     }
     console.error("Codex plugin runtime initialization failed: " + pluginRuntimeErrorMessage(error));
