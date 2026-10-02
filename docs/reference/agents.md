@@ -91,7 +91,11 @@ from that revision; missing evidence leaves the cause unspecified. Held runtime
 failures end deployment early: `RUNTIME_AUTHENTICATION_FAILED` (rejected
 credential), `RUNTIME_CPU_STARVED`, `RUNTIME_MODEL_PROBE_TIMEOUT`,
 `RUNTIME_MODEL_PROBE_FAILED`, `RUNTIME_LOGIN_FAILED`, or
-`RUNTIME_STARTUP_FAILED`; fix and redeploy. Success can include [plugin warnings](agent-plugins.md#lifecycle)
+`RUNTIME_STARTUP_FAILED`; fix and redeploy. `AGENT_GATEWAY_UNAVAILABLE` and
+`KUBERNETES_API_UNAVAILABLE` name a dependency that was still failing at the
+convergence deadline; before it, pending `progress.lastAttempt` shows the same
+code while the worker retries. Other failures end as `DEPENDENCY_UNAVAILABLE`
+once the worker's attempts are exhausted. Success can include [plugin warnings](agent-plugins.md#lifecycle)
 with a closed code and admitted `pluginId`.
 
 Polling reads persisted state without runtime, provider, or model probes.
