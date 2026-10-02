@@ -1106,8 +1106,22 @@ test("credential withdrawal routes authorize the Agent, not the credential sourc
   ]);
   const conflict = await injectedRequest(agentOperator, "POST", `${path}/withdraw`);
   assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
+  assert.equal(conflict.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(conflict.body.error.message, /has no active revision to withdraw/);
   const status = await injectedRequest(agentOperator, "GET", `${path}/withdrawal`);
   assert.notEqual(status.status, 403, JSON.stringify(status.body));
+
+  // An in-use conflict names what blocks it instead of the generic "already exists" text.
+  const configurationInUse = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.equal(configurationInUse.status, 409, JSON.stringify(configurationInUse.body));
+  assert.equal(configurationInUse.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(
+    configurationInUse.body.error.message,
+    /An Agent still references the Configuration/,
+  );
 
   // The denial's audit evidence names the Agent the route declares, not the source.
   const withdrawalEvents = fixture.auditSink.events.filter(
@@ -1165,7 +1179,7 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     assert.deepEqual(rejected.body.error.details, [{ path: "/roleId", code: "INVALID_VALUE" }]);
     assert.match(
       rejected.body.error.message,
-      /agent:create, configuration:create, secret:create\. Create is authorized on the Namespace/,
+      /agent:create, configuration:create, secret:create\. No AccessBinding grants create: only Installation administrators/,
     );
   }
 
