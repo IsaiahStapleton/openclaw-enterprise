@@ -1,9 +1,14 @@
-# Agent containment policy
+---
+status: Proposed
+---
 
-- **Status:** Implementing; the OpenShell Landlock hardening slice is authored but not yet runtime-verified
+# Proposal: Agent containment policy
+
+- **ID:** RFC-0043
 - **Owner:** OpenClaw Enterprise maintainers
-- **Current references:** [Agents](../docs/reference/agents.md), [Sandbox Driver](../docs/reference/drivers/sandbox.md), and [runtime security](../docs/reference/security/runtime-isolation.md)
-- **Architecture:** [Resources](../docs/design/resources.md), [Drivers](../docs/design/drivers.md), and [safeguards](../docs/design/safeguards.md)
+- **Current references:** [Agents](../../docs/reference/agents.md), [Sandbox Driver](../../docs/reference/drivers/sandbox.md), and [runtime security](../../docs/reference/security/runtime-isolation.md)
+- **Architecture:** [Resources](../../docs/design/resources.md), [Drivers](../../docs/design/drivers.md), and [safeguards](../../docs/design/safeguards.md)
+- **Delivery:** [Implementation plan](../plans/0043-agent-containment-policy.md)
 
 ## Problem and decision
 
@@ -38,19 +43,14 @@ Secret values and provider credentials are not policy data or revision data. Cre
 
 ## Delivery and verification
 
-1. Add the Namespace policy resource, IAM and audit operations, API schema, PostgreSQL constraints, Agent reference, and immutable revision snapshot. Update the current reference and API cheat sheet through their owners. Extend the regular Agent deployment integration test to prove exact authorization, scope, snapshot immutability, and refusal without a capable Driver.
-2. Extend the existing `SandboxDriver` interface with provider-neutral admission and enforcement evidence. Wire the real API → work queue → worker → Compute caller. Prove rejection, pending enforcement, activation, replacement, and cleanup through the supported workflow. A test-only Driver cannot establish production containment.
-3. Qualify a pinned OpenShell release against OCE's projected identity, Secret references, workspace mounts, authenticated transport, and pre-execution policy requirements. Extend the existing disposable Kubernetes OpenShell integration to run a real model turn and real allowed and denied child actions. Keep unsupported upstream combinations fail closed.
-4. Qualify any gVisor or Kata RuntimeClass separately as a Compute-owned host isolation option, with scheduling, storage, networking, and denial tests. No runtime gets a security claim from configuration or rendered manifests alone.
-
-Each code milestone updates its owning reference, guide, source-backed flow, and integration coverage. A draft PR can collect human architecture feedback while implementation proceeds. Production support requires installed-runtime evidence; passing unit tests or a simulated provider does not establish it.
+The [implementation plan](../plans/0043-agent-containment-policy.md) records the ordered work and proof. The first OpenShell hardening slice requires mandatory Landlock compatibility but does not deliver the policy resource or production support. Production support requires installed-runtime evidence; passing unit tests or a simulated provider does not establish it.
 
 ## Open decisions
 
 - **Later rollout:** Decide whether and when to require containment for embedded Kubernetes and SSH Agents after each has a qualified implementation. The first milestone covers dedicated Kubernetes execution only.
 - **Policy vocabulary:** Agree on the smallest normalized network, filesystem, and process fields that can be enforced by at least one supported provider without making the platform core parse provider configuration. Version the contract and reject unknown requirements.
 - **Enforcement proof:** Define the evidence that binds an applied policy to the exact revision and workload generation, and how a controller recovers after an uncertain provider response. Pod readiness and declared facets are insufficient.
-- **OpenShell qualification:** Pin an upstream release only after confirming its Kubernetes contract. Current upstream documentation describes capabilities that the OCE `v0.1.0` adapter does not consume; compatibility must be tested rather than inferred.
+- **OpenShell qualification:** Pin an upstream release only after confirming its Kubernetes contract. Current upstream documentation describes capabilities that the OCE `v0.1.3-pre.1` adapter does not consume; compatibility must be tested rather than inferred.
 
 ## Current implementation boundary
 
