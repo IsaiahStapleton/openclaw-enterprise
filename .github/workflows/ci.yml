@@ -363,6 +363,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Set up CI tools
         run: bash scripts/ci/setup-tools.sh k3d
       - name: Probe
@@ -375,8 +378,7 @@ jobs:
           for mode in legacy default; do
             extra=()
             if [ "$mode" = legacy ]; then extra=(--env IPTABLES_MODE=legacy@server:0); fi
-            docker network create "probe-$mode" >/dev/null
-            k3d cluster create "occ-dev-probe-$mode" --image "$image" --servers 1 --agents 0 --network "probe-$mode" --timeout 180s "${extra[@]}" --kubeconfig-update-default=false --kubeconfig-switch-context=false || true
+            k3d cluster create "occ-dev-probe-$mode" --image "$image" --servers 1 --agents 0 --timeout 180s "${extra[@]}" --kubeconfig-update-default=false --kubeconfig-switch-context=false || true
             node="k3d-occ-dev-probe-$mode-server-0"
             docker exec "$node" cat /etc/resolv.conf || true
             docker exec "$node" sh -c 'iptables --version; iptables-save -t nat 2>&1 | grep -i -E "DOCKER|53" | head -20' || true
@@ -384,7 +386,6 @@ jobs:
             docker exec "$node" sh -c 'nslookup registry-1.docker.io 2>&1 | head -8' || true
             docker exec "$node" sh -c 'timeout 90 crictl pull docker.io/rancher/mirrored-pause:3.10.2; echo "pull-exit=$?"' || true
             k3d cluster delete "occ-dev-probe-$mode" || true
-            docker network rm "probe-$mode" || true
           done
 
   ci-required:
