@@ -8,8 +8,10 @@ import { fileURLToPath } from "node:url";
 import { prepareFile } from "../../scripts/ci/prepare.mjs";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import {
+  ActivationPendingError,
   PostgresMetricsSnapshot,
   SandboxRevisionUnsupportedError,
+  TransientDependencyError,
 } from "../../packages/occ/src/index.ts";
 import { encodeRepositoryCredentialSessionFiles } from "../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 import {
@@ -693,6 +695,61 @@ test(
   },
 );
 
+// The worker is serial. A Compute wait that only saves a later pass asks whether
+// other Work is waiting and ends early when it is, so another Agent's deploy
+// runs next instead of queuing behind the wait (D221).
+test(
+  "a revision pass learns when another Agent's Work is waiting for the serial worker",
+  { ...requiresPostgres, timeout: 30_000 },
+  async (context) => {
+    const { computeWorkWaiting } =
+      await import("../../apps/controller/src/drivers/compute/operation-context.ts");
+    const fixture = await setup(context);
+    const first = await fixture.agent("waiting-first", "dedicated");
+    const second = await fixture.agent("waiting-second", "dedicated");
+    const prepared = [];
+    let secondRevision;
+    let wait;
+    const compute = {
+      ...fixture.compute,
+      async prepareRevision(revision, deploymentContext) {
+        prepared.push(revision.agentId);
+        if (revision.agentId !== first.id || wait !== undefined) {
+          return fixture.compute.prepareRevision(revision, deploymentContext);
+        }
+        // The first Agent's pass waits, as for its node to pair; nothing else is
+        // queued yet, so nothing is waiting for the worker.
+        const before = await computeWorkWaiting();
+        secondRevision = await fixture.revision(second, 1);
+        const started = Date.now();
+        let endedEarly = false;
+        while (Date.now() - started < 10_000) {
+          if (await computeWorkWaiting()) {
+            endedEarly = true;
+            break;
+          }
+          await delay(25);
+        }
+        wait = { before, endedEarly, ms: Date.now() - started };
+        return {
+          ...(await fixture.compute.prepareRevision(revision, deploymentContext)),
+          ready: false,
+        };
+      },
+    };
+    await fixture.start(compute);
+    const firstRevision = await fixture.revision(first, 1);
+    await waitFor("the second Agent to deploy during the first pass", async () => secondRevision);
+    await fixture.work(secondRevision, "succeeded");
+    await fixture.work(firstRevision, "succeeded");
+    assert.equal(wait.before, false, "the pass's own Agent is not other Work");
+    assert.equal(wait.endedEarly, true);
+    assert.ok(wait.ms < 5_000, `the wait ended early (${wait.ms} ms)`);
+    // The pending first pass ended and the second Agent's pass ran next.
+    assert.deepEqual(prepared.slice(0, 2), [first.id, second.id]);
+  },
+);
+
 test(
   "exclusive replacement blocks overlap, supersedes old maintenance and recovers through a new revision",
   { ...requiresPostgres, timeout: 30_000 },
@@ -939,7 +996,6 @@ test(
       { startRepositoryReceiptServer },
       { startControlResponseRelay },
       { createResourceScope },
-      { createServer },
       { dirname },
     ] = await Promise.all([
       import("../../apps/controller/src/drivers/repo/github/driver.ts"),
@@ -948,21 +1004,13 @@ test(
       import("../../apps/controller/src/backends/repository-credentials/receipt-server.ts"),
       import("../fixtures/repository-credentials/control-relay.mjs"),
       import("../fixtures/repository-credentials/resources.mjs"),
-      import("node:net"),
       import("node:path"),
     ]);
-    const reservation = createServer();
-    await new Promise((resolve, reject) => {
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", resolve);
-    });
-    const port = reservation.address().port;
-    await new Promise((resolve) => reservation.close(resolve));
     const credentials = await startRegistryCredentialServiceFixture(context, {
       namespaceId: fixture.namespace.id,
       autoOpen: false,
       clock: { ...createControlledClock(), wallNow: Date.now },
-      gateway: { listen: `127.0.0.1:${port}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const scope = createResourceScope();
     context.after(() => scope.close());
@@ -1076,20 +1124,11 @@ test(
       { GitHubRepoDriver },
       { UnixRepositoryCredentialControlClient },
       { startRegistryCredentialServiceFixture },
-      { createServer },
     ] = await Promise.all([
       import("../../apps/controller/src/drivers/repo/github/driver.ts"),
       import("../../apps/controller/src/backends/repository-credentials/control-client.ts"),
       import("../fixtures/repository-credentials/registry.mjs"),
-      import("node:net"),
     ]);
-    const reservation = createServer();
-    await new Promise((resolve, reject) => {
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", resolve);
-    });
-    const port = reservation.address().port;
-    await new Promise((resolve) => reservation.close(resolve));
     const clock = createControlledClock();
     const startedWall = clock.wallNow();
     const credentials = await startRegistryCredentialServiceFixture(context, {
@@ -1098,7 +1137,7 @@ test(
       // Worker admission IDs use real wall time. Preserve that progress while
       // allowing this fixture's provider-retirement expiry to advance explicitly.
       clock: { ...clock, wallNow: () => Date.now() + clock.wallNow() - startedWall },
-      gateway: { listen: `127.0.0.1:${port}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const driver = new GitHubRepoDriver(
       {
@@ -4272,7 +4311,15 @@ test(
     );
     await assert.rejects(
       fixture.controller.deleteAgent(otherActor, fixture.namespace.id, owner.id),
-      { message: "Only the initiating actor can retry deletion." },
+      {
+        name: "DeletionRetryOwnedError",
+        message: /Only the actor that started this deletion can retry it/,
+        initiatingActorId: fixture.actor.id,
+        authorization: {
+          action: "delete",
+          resource: { kind: "agent", id: owner.id, namespaceId: fixture.namespace.id },
+        },
+      },
     );
     assert.deepEqual(await observe(), exhausted);
 
@@ -4547,6 +4594,56 @@ test(
 );
 
 test(
+  "Namespace teardown audits one pending pass and the terminal pass, not every pass",
+  requiresPostgres,
+  async (context) => {
+    // D323: each worker pass while Kubernetes namespaces terminated wrote its own
+    // lifecycle.delete audit row (38 rows for one deletion).
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-audit-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    let deleteAttempts = 0;
+    await fixture.start({
+      ...fixture.compute,
+      async deleteNamespace(target) {
+        assert.equal(target.id, namespace.id);
+        deleteAttempts += 1;
+        return { namespaceId: target.id, namespaceDeleted: deleteAttempts >= 4 };
+      },
+    });
+    const deletion = {
+      id: namespace.id,
+      idempotencyKey: `namespace:${namespace.id}:reconcile:deleted`,
+    };
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(deletion, "succeeded");
+    assert.equal(deleteAttempts, 4);
+    const { rows } = await fixture.observerPool.query(
+      `SELECT outcome, details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.lifecycle.delete'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      rows.map(({ outcome, details }) => ({
+        outcome,
+        namespaceDeleted: details.namespaceDeleted,
+        convergencePending: details.convergencePending,
+      })),
+      [
+        { outcome: "success", namespaceDeleted: false, convergencePending: true },
+        { outcome: "success", namespaceDeleted: true, convergencePending: undefined },
+      ],
+    );
+  },
+);
+
+test(
   "another authorized actor takes over failed Namespace deletion once the initiator loses permission",
   requiresPostgres,
   async (context) => {
@@ -4600,7 +4697,13 @@ test(
     );
     // While the initiator still holds delete permission, it keeps ownership.
     await assert.rejects(fixture.controller.deleteNamespace(otherActor, namespace.id), {
-      message: "Only the initiating actor can retry deletion.",
+      name: "DeletionRetryOwnedError",
+      message: /Only the actor that started this deletion can retry it/,
+      initiatingActorId: fixture.actor.id,
+      authorization: {
+        action: "delete",
+        resource: { kind: "namespace", id: namespace.id, namespaceId: namespace.id },
+      },
     });
     assert.deepEqual(await observe(), exhausted);
 
@@ -4627,11 +4730,44 @@ test(
       assert.equal(retried.actorId, otherActor);
       assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
     }
+    // Namespace policy left at teardown is removed with the tombstone and audited.
+    const policyRole = `role-${randomUUID()}`;
+    const policyBinding = `binding-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+       VALUES ($1, $2, NULL, '[{"action":"read","resourceKind":"namespace"}]'::jsonb)`,
+      [policyRole, namespace.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       VALUES ($1, $2, $3, $4, 'namespace', $2)`,
+      [policyBinding, namespace.id, otherActor, policyRole],
+    );
     await fixture.work(deletion, "succeeded");
     assert.equal(deleteAttempts, 2);
     assert.equal(
       await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id)),
       undefined,
+    );
+    const { rows: leftover } = await fixture.observerPool.query(
+      `SELECT (SELECT count(*) FROM occ.iam_roles WHERE namespace_id = $1)::int AS roles,
+              (SELECT count(*) FROM occ.iam_access_bindings WHERE namespace_id = $1)::int AS bindings`,
+      [namespace.id],
+    );
+    assert.deepEqual(leftover, [{ roles: 0, bindings: 0 }]);
+    const { rows: teardownAudit } = await fixture.observerPool.query(
+      `SELECT details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.lifecycle.delete'
+         AND outcome = 'success'`,
+      [namespace.id],
+    );
+    assert.equal(teardownAudit.length, 1);
+    assert.ok(teardownAudit[0].details.removedRoleIds.includes(policyRole));
+    assert.ok(
+      teardownAudit[0].details.removedAccessBindings.some(
+        (binding) => binding.id === policyBinding && binding.subjectId === otherActor,
+      ),
     );
     const { rows: retryAudit } = await fixture.observerPool.query(
       `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events
@@ -6259,6 +6395,89 @@ test(
 );
 
 test(
+  "deployment progress names Compute's pending reason and old pending work rechecks less often",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const unscheduled = await fixture.agent("pending-unschedulable");
+    const unpaired = await fixture.agent("pending-node");
+    const unscheduledRevision = await fixture.revision(unscheduled, 1);
+    const unpairedRevision = await fixture.revision(unpaired, 1);
+    const reasons = new Map([
+      [unscheduledRevision.id, "WORKLOAD_UNSCHEDULABLE"],
+      [unpairedRevision.id, "WORKSPACE_NODE_PENDING"],
+    ]);
+    const delays = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          return {
+            ...(await fixture.compute.prepareRevision(revision)),
+            ready: false,
+            pendingReason: reasons.get(revision.id),
+          };
+        },
+      },
+      (event) => {
+        if (
+          event.event === "worker.completed" &&
+          event.workId === unpairedRevision.idempotencyKey &&
+          event.outcome === "pending"
+        ) {
+          delays.push(
+            fixture.observerPool
+              .query(
+                `SELECT EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+                 FROM occ.controller_work WHERE idempotency_key = $1`,
+                [event.workId],
+              )
+              .then(({ rows }) => Number(rows[0].delay_ms)),
+          );
+        }
+      },
+    );
+    const progress = async (owner, revision) => {
+      const lastAttempt = await waitFor(`pending progress for ${revision.id}`, async () => {
+        const status = await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          revision.id,
+        );
+        return status.progress?.lastAttempt ?? undefined;
+      });
+      return { code: lastAttempt.code, message: lastAttempt.message };
+    };
+    assert.deepEqual(await progress(unscheduled, unscheduledRevision), {
+      code: "REVISION_UNSCHEDULABLE",
+      message:
+        "The cluster has no room for this Agent's Pods yet; they are waiting to be scheduled.",
+    });
+    assert.deepEqual(await progress(unpaired, unpairedRevision), {
+      code: "WORKSPACE_NODE_PENDING",
+      message: "Workloads are ready; waiting for the workspace node to connect to the Gateway.",
+    });
+    const fresh = await delays[0];
+    assert.ok(fresh > 450 && fresh <= 500, `a new deployment rechecks in 500 ms (${fresh} ms)`);
+
+    // Five minutes later, still inside the 900-second deadline, a runtime that
+    // stays unready is rechecked every 5 s, so one stuck Agent cannot take most
+    // of the serial worker (D223). Only the worker's wall clock moves.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 300_000;
+    context.after(() => {
+      Date.now = realNow;
+    });
+    const seen = delays.length;
+    await waitFor("a recheck after five minutes", async () => delays.length > seen || undefined);
+    const old = await delays[seen];
+    Date.now = realNow;
+    assert.ok(old > 4_500 && old <= 5_000, `an old deployment rechecks in 5 s (${old} ms)`);
+  },
+);
+
+test(
   "an overdue Agent runtime fails closed without activating its incomplete revision",
   requiresPostgres,
   async (context) => {
@@ -6332,19 +6551,19 @@ test(
     });
     let observations = 0;
 
-    // The default 900-second deadline stays in force: a transient probe failure
-    // remains pending, and only the credential rejection ends the deployment.
+    // The default 900-second deadline stays in force: an unready runtime without
+    // failure evidence remains pending, and the held rejection ends the deployment.
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
         observations += 1;
-        return {
+        const observed = {
           ...(await fixture.compute.prepareRevision(revision)),
           ready: false,
-          runtimeFailure: failure(
-            observations === 1 ? "MODEL_PROBE_TIMEOUT" : "AUTHENTICATION_FAILED",
-          ),
         };
+        return observations === 1
+          ? observed
+          : { ...observed, runtimeFailure: failure("AUTHENTICATION_FAILED") };
       },
     });
 
@@ -6397,22 +6616,28 @@ test(
     const candidate = await fixture.revision(owner, 1);
     let observations = 0;
 
-    // Under the default 900-second deadline a plain probe timeout stays pending;
-    // a probe that ran out of CPU at the container's limit ends the deployment.
+    // Under the default 900-second deadline an unready runtime without failure
+    // evidence stays pending; a probe that ran out of CPU at the container's
+    // limit ends the deployment.
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
         observations += 1;
-        return {
+        const observed = {
           ...(await fixture.compute.prepareRevision(revision)),
           ready: false,
-          runtimeFailure: {
-            component: "gateway",
-            check: "model-probe",
-            checkedAt: "2026-09-30T08:00:00.000Z",
-            code: observations === 1 ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_CPU_STARVED",
-          },
         };
+        return observations === 1
+          ? observed
+          : {
+              ...observed,
+              runtimeFailure: {
+                component: "gateway",
+                check: "model-probe",
+                checkedAt: "2026-09-30T08:00:00.000Z",
+                code: "MODEL_PROBE_CPU_STARVED",
+              },
+            };
       },
     });
 
@@ -6440,6 +6665,89 @@ test(
       code: "RUNTIME_CPU_STARVED",
       message: "Deployment runtime did not get enough CPU to start.",
     });
+  },
+);
+
+test(
+  "held runtime probe and login failures fail deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    // Runtime entrypoints publish these codes only after their own retries end
+    // and then hold the container unready with nothing to restart it, so the
+    // default 900-second deadline could only report the same failure later.
+    const fixture = await setup(context);
+    const cases = [
+      [
+        "agent",
+        "model-probe",
+        "MODEL_PROBE_TIMEOUT",
+        "RUNTIME_MODEL_PROBE_TIMEOUT",
+        "Deployment runtime startup model check timed out.",
+      ],
+      [
+        "gateway",
+        "model-probe",
+        "MODEL_PROBE_FAILED",
+        "RUNTIME_MODEL_PROBE_FAILED",
+        "Deployment runtime startup model check failed.",
+      ],
+      [
+        "agent",
+        "login",
+        "LOGIN_FAILED",
+        "RUNTIME_LOGIN_FAILED",
+        "Deployment runtime could not sign in to the model provider.",
+      ],
+      [
+        "gateway",
+        "plugin-approvers",
+        "INCOMPATIBLE_RESPONSE",
+        "RUNTIME_STARTUP_FAILED",
+        "Deployment runtime failed a startup check.",
+      ],
+    ];
+    const failures = new Map();
+    const candidates = [];
+    for (const [index, [component, check, runtimeCode]] of cases.entries()) {
+      const owner = await fixture.agent(`held-runtime-${index}`);
+      const candidate = await fixture.revision(owner, 1);
+      failures.set(candidate.id, {
+        component,
+        check,
+        checkedAt: "2026-10-01T08:00:00.000Z",
+        code: runtimeCode,
+      });
+      candidates.push({ owner, candidate });
+    }
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: failures.get(revision.id),
+        };
+      },
+    });
+
+    for (const [index, { owner, candidate }] of candidates.entries()) {
+      const [, , , code, message] = cases[index];
+      const failed = await fixture.work(candidate, "failed_permanent", 10_000);
+      assert.equal(failed.attempt_count, 1);
+      const result = await fixture.observerPool.query(
+        "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+        [candidate.idempotencyKey],
+      );
+      assert.deepEqual(result.rows, [{ reason_code: code, result_data: null }]);
+      const status = await fixture.controller.getDeploymentStatus(
+        fixture.actor.id,
+        fixture.namespace.id,
+        owner.id,
+        candidate.id,
+      );
+      assert.equal(status.status, "failed");
+      assert.deepEqual(status.error, { code, message });
+    }
   },
 );
 
@@ -6575,6 +6883,256 @@ test(
       code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
       message:
         "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.",
+    });
+  },
+);
+
+test(
+  "a Gateway route that lags its Ready Pod is retried within the deadline, not the attempt budget",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("gateway-route-lag");
+    const candidate = await fixture.revision(owner, 1);
+    const events = [];
+    const progress = [];
+    let failures = 0;
+
+    // D28: the worker reaches a new Gateway through its private route as soon as
+    // the Pod is Ready. Until Envoy programs the new HTTPRoute the upgrade answers
+    // 404, for longer than five quick retries last. Fail more passes than the
+    // attempt budget allows, then let the route converge.
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision, revisionContext) {
+          if (failures < 8) {
+            failures += 1;
+            if (failures === 3) {
+              const status = await fixture.controller.getDeploymentStatus(
+                fixture.actor.id,
+                fixture.namespace.id,
+                owner.id,
+                candidate.id,
+              );
+              progress.push(status.progress?.lastAttempt);
+            }
+            throw new TransientDependencyError(
+              "agent_gateway",
+              "unavailable",
+              "The Agent Gateway route answered HTTP 404 to the connection upgrade.",
+            );
+          }
+          return fixture.compute.prepareRevision(revision, revisionContext);
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    const succeeded = await fixture.work(candidate, "succeeded", 30_000);
+    assert.equal(failures, 8);
+    assert.equal(succeeded.attempt_count, 1);
+    assert.equal(
+      (
+        await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          candidate.id,
+        )
+      ).status,
+      "succeeded",
+    );
+    assert.equal(progress.length, 1);
+    assert.equal(progress[0]?.code, "AGENT_GATEWAY_UNAVAILABLE");
+    assert.equal(
+      progress[0]?.message,
+      "The Agent Gateway was not reachable through its route yet. The controller will retry until the deployment deadline.",
+    );
+    const passes = events.filter(
+      (event) => event.event === "worker.completed" && event.revisionId === candidate.id,
+    );
+    assert.deepEqual(
+      passes.slice(0, 8).map(({ outcome, code, dependency, cause }) => ({
+        outcome,
+        code,
+        dependency,
+        cause,
+      })),
+      Array.from({ length: 8 }, () => ({
+        outcome: "pending",
+        code: "AGENT_GATEWAY_UNAVAILABLE",
+        dependency: "agent_gateway",
+        cause: "unavailable",
+      })),
+    );
+  },
+);
+
+test(
+  "an activation wait or a lagging Gateway route keeps its own code, not REVISION_FINALIZATION_INCOMPLETE",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("activation-wait-codes");
+    const candidate = await fixture.revision(owner, 1);
+    const events = [];
+    const progress = [];
+    const readProgress = async () =>
+      (
+        await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          candidate.id,
+        )
+      ).progress?.lastAttempt;
+    let activations = 0;
+
+    // D330: dedicated activation runs after the pointer is published. It waits
+    // for the Gateway to apply its workspace node, for the Harness node to
+    // connect, and reaches the Gateway through its route, which can answer 404
+    // while Envoy converges. Each pass must name what it waits on.
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async activateRevision(revision, revisionContext) {
+          activations += 1;
+          if (activations > 1) {
+            progress.push(await readProgress());
+          }
+          if (activations <= 2) {
+            throw new ActivationPendingError(
+              "WORKSPACE_NODE_BINDING_PENDING",
+              "The exact AgentRevision gateway has not applied its workspace node.",
+            );
+          }
+          if (activations === 3) {
+            throw new ActivationPendingError(
+              "WORKSPACE_NODE_PENDING",
+              "The exact AgentRevision Harness node is not ready.",
+            );
+          }
+          if (activations === 4) {
+            throw new TransientDependencyError(
+              "agent_gateway",
+              "unavailable",
+              "The Agent Gateway route answered HTTP 404 to the connection upgrade.",
+            );
+          }
+          if (activations === 5) {
+            throw new RangeError("unexpected activation failure");
+          }
+          return fixture.compute.activateRevision?.(revision, revisionContext);
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    await fixture.work(candidate, "succeeded", 30_000);
+    assert.equal(activations, 6);
+    assert.deepEqual(
+      progress.map((attempt) => [attempt?.code, attempt?.message]),
+      [
+        [
+          "WORKSPACE_NODE_BINDING_PENDING",
+          "Workloads are ready; waiting for the Gateway to apply the workspace node.",
+        ],
+        [
+          "WORKSPACE_NODE_BINDING_PENDING",
+          "Workloads are ready; waiting for the Gateway to apply the workspace node.",
+        ],
+        [
+          "WORKSPACE_NODE_PENDING",
+          "Workloads are ready; waiting for the workspace node to connect to the Gateway.",
+        ],
+        [
+          "AGENT_GATEWAY_UNAVAILABLE",
+          "The Agent Gateway was not reachable through its route yet. The controller will retry until the deployment deadline.",
+        ],
+        [
+          "RECONCILIATION_PENDING",
+          "Deployment has not completed. Another reconciliation is pending.",
+        ],
+      ],
+    );
+    const passes = events
+      .filter(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === candidate.id &&
+          event.outcome === "pending",
+      )
+      .slice(-5)
+      .map(({ code, dependency, cause }) => ({ code, dependency, cause }));
+    assert.deepEqual(passes, [
+      {
+        code: "WORKSPACE_NODE_BINDING_PENDING",
+        dependency: undefined,
+        cause: "ActivationPendingError",
+      },
+      {
+        code: "WORKSPACE_NODE_BINDING_PENDING",
+        dependency: undefined,
+        cause: "ActivationPendingError",
+      },
+      { code: "WORKSPACE_NODE_PENDING", dependency: undefined, cause: "ActivationPendingError" },
+      { code: "AGENT_GATEWAY_UNAVAILABLE", dependency: "agent_gateway", cause: "unavailable" },
+      { code: "REVISION_FINALIZATION_INCOMPLETE", dependency: undefined, cause: "RangeError" },
+    ]);
+    const succeeded = await fixture.work(candidate, "succeeded");
+    assert.equal(succeeded.attempt_count, 1);
+  },
+);
+
+test(
+  "a dependency still failing at the convergence deadline fails deployment with its own code",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const owner = await fixture.agent("kubernetes-api-down");
+    const candidate = await fixture.revision(owner, 1);
+    let observations = 0;
+
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision() {
+          observations += 1;
+          throw new TransientDependencyError(
+            "kubernetes_api",
+            "timeout",
+            "A Kubernetes API request timed out.",
+          );
+        },
+      },
+      undefined,
+      2_500,
+    );
+
+    const failed = await fixture.work(candidate, "failed_permanent", 30_000);
+    assert.ok(
+      observations > 5,
+      `expected more passes than the attempt budget, saw ${observations}`,
+    );
+    assert.equal(failed.attempt_count, 1);
+    const result = await fixture.observerPool.query(
+      "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+      [candidate.idempotencyKey],
+    );
+    assert.deepEqual(result.rows, [
+      { reason_code: "KUBERNETES_API_UNAVAILABLE", result_data: null },
+    ]);
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "KUBERNETES_API_UNAVAILABLE",
+      message: "The Kubernetes API was still unavailable at the deployment deadline.",
     });
   },
 );

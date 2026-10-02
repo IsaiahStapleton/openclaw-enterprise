@@ -77,7 +77,10 @@ test("Agent detail separates the current version, viewed version, and latest dep
               agentId: agent.id,
               status,
               error: null,
-              warnings: [],
+              warnings:
+                status === "succeeded"
+                  ? [{ code: "PLUGIN_AUTH_REQUIRED", pluginId: "linear@openai-curated-remote" }]
+                  : [],
               progress: status === "queued" ? pendingProgress : null,
             },
             meta: { requestId: "req_test_deployment_activity" },
@@ -144,6 +147,12 @@ test("Agent detail separates the current version, viewed version, and latest dep
   const versionRecord = page.locator(".version-deployment-record");
   await versionRecord.getByRole("heading", { name: "This version’s deployment record" }).waitFor();
   await versionRecord.getByText("Recorded outcome: succeeded").waitFor();
+  // D331: a startup warning says what happened to the plugin, not only its code.
+  await versionRecord
+    .getByText(
+      "linear@openai-curated-remote was disabled for this startup because it is not authenticated: Codex plugins need a ChatGPT login rather than an API key, and some also need their app connected to that account. (PLUGIN_AUTH_REQUIRED)",
+    )
+    .waitFor();
   const observations = page.locator(".version-diagnostics");
   await observations
     .getByText(/For Kubernetes Compute, Gateway checks cover only the Slack channel/)
@@ -988,7 +997,8 @@ test("Agent draft plugin browsing explains a missing hosted credential", async (
     namespace.id,
     "Hosted plugin Agent",
     nativeValues("plugin-discovery-auth", { harnessId: "codex" }),
-    { executionMode: "dedicated" },
+    // No API key: Codex serves plugins only to ChatGPT logins.
+    { executionMode: "dedicated", harnessAuth: null },
   );
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
@@ -1010,6 +1020,42 @@ test("Agent draft plugin browsing explains a missing hosted credential", async (
   assert.equal(await page.getByLabel("Plugin selections JSON").isEnabled(), true);
 });
 
+test("Agent draft plugin picker warns that API-key Codex Agents cannot use plugins", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const driver = new CodexPluginDriver({ catalogSource: "openai-curated" });
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const namespace = await fixture.createNamespace("API-key plugins", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "API-key plugin Agent",
+    nativeValues("api-key-plugins", { harnessId: "codex" }),
+    { executionMode: "dedicated" },
+  );
+  assert.equal(agent.harnessAuth.method, "api_key");
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "plugins");
+  await login(page, fixture, url.pathname + url.search);
+  await page
+    .getByText(
+      "Codex plugins need a ChatGPT login. This Agent uses an API key, so each selected plugin is disabled when it deploys (PLUGIN_AUTH_REQUIRED).",
+      { exact: false },
+    )
+    .waitFor();
+  await page.getByRole("button", { name: "Configure plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Configure plugins", exact: true });
+  await dialog.getByText("Plugin browsing is unavailable with API-key authentication.").waitFor();
+  assert.equal(await dialog.getByRole("button", { name: "Load plugins" }).isDisabled(), true);
+  assert.equal(
+    pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/${agent.id}/plugins`).length,
+    0,
+  );
+  await dialog.getByRole("button", { name: "Done" }).click();
+  assert.equal(await page.getByLabel("Plugin selections JSON").isEnabled(), true);
+});
+
 test("Agent draft browses the curated catalog without a saved Secret", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -1021,7 +1067,8 @@ test("Agent draft browses the curated catalog without a saved Secret", async (t)
     namespace.id,
     "Curated plugin Agent",
     nativeValues("curated-revision", { harnessId: "codex" }),
-    { executionMode: "dedicated" },
+    // No API key: Codex serves plugins only to ChatGPT logins.
+    { executionMode: "dedicated", harnessAuth: null },
   );
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);

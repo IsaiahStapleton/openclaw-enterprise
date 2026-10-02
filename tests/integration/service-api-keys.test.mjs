@@ -1056,4 +1056,44 @@ test("service key issuance cannot exceed the caller's own IAM grants", async (t)
       .status,
     200,
   );
+  const coverageDenial = auditSink.events.find(
+    (event) =>
+      event.action === "openclaw.auth.service-keys.create" &&
+      event.kind === "authorization_denial" &&
+      event.actorId === operator.principal.id,
+  );
+  assert.equal(coverageDenial.reasonCode, "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED");
+  assert.match(coverageDenial.decisionReason, /every grant of the target ServicePrincipal/);
+  assert.equal(coverageDenial.details.servicePrincipalId, bootstrapService.id);
+
+  // Revocation needs the same authority as issuance.
+  const revokePath = `/api/auth/service-keys/${bootstrapKey.data.id}`;
+  const revokeEscalation = await request("DELETE", revokePath, { headers: asOperator });
+  assert.equal(revokeEscalation.status, 403, JSON.stringify(revokeEscalation));
+  assert.equal(
+    (await request("GET", namespacePath, { headers: { "x-api-key": bootstrapKey.data.key } }))
+      .status,
+    200,
+  );
+  const revokeDenial = auditSink.events.find(
+    (event) =>
+      event.action === "openclaw.auth.service-keys.revoke" &&
+      event.kind === "authorization_denial" &&
+      event.actorId === operator.principal.id,
+  );
+  assert.equal(revokeDenial.reasonCode, "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED");
+  assert.equal(revokeDenial.details.servicePrincipalId, bootstrapService.id);
+  assert.equal(revokeDenial.details.serviceKeyId, bootstrapKey.data.id);
+  // The operator can still revoke a key whose principal it covers.
+  assert.equal(
+    (await request("DELETE", `/api/auth/service-keys/${covered.data.id}`, { headers: asOperator }))
+      .status,
+    200,
+  );
+  assert.equal((await request("DELETE", revokePath, { headers: asAdmin })).status, 200);
+  assert.equal(
+    (await request("GET", namespacePath, { headers: { "x-api-key": bootstrapKey.data.key } }))
+      .status,
+    401,
+  );
 });

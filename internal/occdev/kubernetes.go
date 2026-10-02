@@ -342,8 +342,10 @@ func writeInstallation(s *developmentState, reference string, openShell *openShe
 		gatewayClientNamespace = s.PlatformNamespace
 	}
 	resources := map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "256Mi"}, "limits": map[string]string{"cpu": "2", "memory": "2Gi"}}
-	// An OpenClaw Gateway settles near 1.2 GiB once it has served a few turns.
-	gatewayResources := map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "1280Mi"}, "limits": map[string]string{"cpu": "2", "memory": "2Gi"}}
+	// An OpenClaw Gateway settles near 1.2 GiB once it has served a few turns. A
+	// dedicated Codex Gateway with native admin chat peaked at 1.9 GiB and was
+	// OOM-killed at a 2Gi limit on its first coding turn.
+	gatewayResources := map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "1280Mi"}, "limits": map[string]string{"cpu": "2", "memory": "3Gi"}}
 	config := map[string]any{
 		"occ": map[string]string{"cluster": s.Cluster}, "backend": []any{},
 		"drivers": map[string]any{

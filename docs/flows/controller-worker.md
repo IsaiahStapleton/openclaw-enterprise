@@ -277,8 +277,12 @@ and remove completed deletions from inventory.
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.defer`,
 `packages/occ/src/state/postgres-work-queue.ts:PostgresWorkQueue.retry`
 
-Pending convergence refunds the attempt, requeuing unready revisions after 500 ms
-and others with backoff. `PostgresWorkQueue.defer` appends `reconcile` evidence
+Pending convergence refunds the attempt, requeuing unready revisions after 500 ms,
+growing with the deployment's age to 5 s at 200 s, and others with backoff. An
+unready observation's Compute `pendingReason` selects the pending code:
+`REVISION_UNSCHEDULABLE` for Pods the scheduler cannot place,
+`WORKSPACE_NODE_PENDING` for ready workloads whose workspace node has not
+connected, and `REVISION_INCOMPLETE` otherwise. `PostgresWorkQueue.defer` appends `reconcile` evidence
 only when its outcome and code differ from that work item's latest evidence. Dependency failures consume attempts; permanent failure,
 exhaustion, deadline, or `AUTHENTICATION_FAILED` terminates work. See
 [outcomes](../reference/controller.md) and
@@ -321,6 +325,9 @@ active and running within its credential deadline; outages never retire it. Each
 claim reauthorizes its actor. Successor keys use strictly later time buckets despite clock skew.
 
 `worker.completed` reports the target, outcome, and code; polling continues.
+A Namespace lifecycle pass that observes the same pending state as the last one
+this worker audited (for example, Kubernetes namespaces still terminating) writes
+no new lifecycle audit row; a changed pending state and the terminal pass do.
 Lease loss reports `worker.error` `CLAIM_LOST` instead of stale lifecycle state.
 On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, waits for the loop, closes PostgreSQL, and emits
 `worker.stopped`. Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
@@ -338,7 +345,12 @@ cannot strand provisioning.
 - For queued operations, compare API and worker database and Installation
   configuration, then inspect `worker.completed` and `worker.error`. Check current
   IAM state for `ACTOR_REVOKED` or `AUTHORIZATION_DENIED`; `DEPENDENCY_UNAVAILABLE`
-  is retryable; `CLAIM_LOST` ends publication ownership.
+  is retryable within `OCC_WORKER_MAX_ATTEMPTS`; `CLAIM_LOST` ends publication ownership.
+  A revision pass that fails on a dependency logs it: `AGENT_GATEWAY_UNAVAILABLE`
+  or `KUBERNETES_API_UNAVAILABLE` with `dependency` and `cause` (`unreachable`,
+  `timeout` or `unavailable`) is deferred until the convergence deadline without
+  spending an attempt; any other failure logs its error class in `cause` and, for
+  an HTTP error, `status`.
 - [Revision](../../tests/integration/postgres-worker-agent-revision.test.mjs) and
   [stale-claim](../../tests/integration/postgres-worker-stale-claim.test.mjs) tests
   require PostgreSQL; neither proves real model execution.
@@ -368,6 +380,8 @@ cannot strand provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 
 - 2026-10-01 17:20: Point Agent lifecycle admission at its HTTP owner; deployment audit keeps the admitted authorization. (authoring-run/bef09bf6-deaa-4189-9568-5f13beb451e7 - 7a6cc931d)
 

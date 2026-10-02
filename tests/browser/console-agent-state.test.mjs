@@ -389,6 +389,36 @@ test("Agent detail reports a failed dedicated replacement as probably not servin
     .waitFor();
 });
 
+// Embedded activation selects the new version before its gateway is ready, so a failed
+// embedded redeploy leaves the failed version selected and nothing else serving (D225).
+test("Agent detail reports a failed selected version as probably not serving", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Failed selection", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Embedded Agent", nativeValues("v1"));
+  const first = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const selected = await fixture.seedActiveAgentRevision(namespace.id, agent.id, first.revision.id);
+  const { page } = await newPage(t, fixture);
+  await routeDeploymentStatus(page, fixture, namespace, agent, selected.revision, "failed", {
+    code: "RUNTIME_MODEL_PROBE_TIMEOUT",
+    message: "Deployment runtime startup model check timed out.",
+  });
+
+  const url = detailUrl(fixture, namespace.id, agent.id, selected.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v2" }).waitFor();
+  const summary = page.locator(".agent-current-summary");
+  await summary.getByText("Probably down", { exact: true }).waitFor();
+  await summary.getByText("v2 is selected and its deployment failed.").waitFor();
+  await page
+    .locator(".agent-status-line")
+    .getByText(
+      /^v2 deployment failed\. v2 is still selected because its runtime already replaced the previous version, so this Agent is probably not serving/,
+    )
+    .waitFor();
+  assert.equal(await page.getByText("Live serving is unverified").count(), 0);
+});
+
 test("Agent detail keeps an embedded Agent's failed redeploy separate from serving", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
