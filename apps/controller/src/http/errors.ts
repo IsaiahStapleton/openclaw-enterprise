@@ -4,6 +4,7 @@ import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
+  DeletionRetryOwnedError,
   ChannelDirectoryError,
   ChannelCredentialError,
   ConfigurationHarnessError,
@@ -390,6 +391,10 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof ScopeViolationError) {
     return failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+  }
+  if (error instanceof DeletionRetryOwnedError) {
+    // The caller holds delete on this exact resource; only the retry condition is named.
+    return failure(403, "FORBIDDEN", error.message);
   }
   if (error instanceof AgentPrincipalAuthorizationError) {
     // Only the Agent's own principal is named; caller denials stay generic below.

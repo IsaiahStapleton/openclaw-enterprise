@@ -115,6 +115,7 @@ import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
+  DeletionRetryOwnedError,
   DependencyUnavailableError,
   DriverSelectionError,
   ModelDiscoveryError,
@@ -208,6 +209,7 @@ export {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
+  DeletionRetryOwnedError,
   DependencyUnavailableError,
   DriverSelectionError,
   ModelDiscoveryError,
@@ -5433,7 +5435,11 @@ export class OpenClawController {
               })
             ).decision.allowed
           ) {
-            throw new AuthorizationDeniedError("Only the initiating actor can retry deletion.");
+            throw new DeletionRetryOwnedError(work.actorId, {
+              kind: "namespace",
+              id: namespace.id,
+              namespaceId: namespace.id,
+            });
           }
           if (
             !(await state.operations.retryFailedNamespaceDeletion(
@@ -5589,7 +5595,11 @@ export class OpenClawController {
               })
             ).decision.allowed
           ) {
-            throw new AuthorizationDeniedError("Only the initiating actor can retry deletion.");
+            throw new DeletionRetryOwnedError(work.actorId, {
+              kind: "agent",
+              id: agent.id,
+              namespaceId: namespace.id,
+            });
           }
           if (
             !(await state.operations.retryFailedAgentDeletion(

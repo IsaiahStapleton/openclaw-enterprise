@@ -4272,7 +4272,15 @@ test(
     );
     await assert.rejects(
       fixture.controller.deleteAgent(otherActor, fixture.namespace.id, owner.id),
-      { message: "Only the initiating actor can retry deletion." },
+      {
+        name: "DeletionRetryOwnedError",
+        message: /Only the actor that started this deletion can retry it/,
+        initiatingActorId: fixture.actor.id,
+        authorization: {
+          action: "delete",
+          resource: { kind: "agent", id: owner.id, namespaceId: fixture.namespace.id },
+        },
+      },
     );
     assert.deepEqual(await observe(), exhausted);
 
@@ -4600,7 +4608,13 @@ test(
     );
     // While the initiator still holds delete permission, it keeps ownership.
     await assert.rejects(fixture.controller.deleteNamespace(otherActor, namespace.id), {
-      message: "Only the initiating actor can retry deletion.",
+      name: "DeletionRetryOwnedError",
+      message: /Only the actor that started this deletion can retry it/,
+      initiatingActorId: fixture.actor.id,
+      authorization: {
+        action: "delete",
+        resource: { kind: "namespace", id: namespace.id, namespaceId: namespace.id },
+      },
     });
     assert.deepEqual(await observe(), exhausted);
 

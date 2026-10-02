@@ -74,6 +74,7 @@ import {
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
+  DeletionRetryOwnedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
   NamespaceNotReadyError,
@@ -1777,19 +1778,30 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     context?: RequestContext,
     evidence?: AuthorizationEvidence,
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
+    explanation?: {
+      readonly decisionReason: string;
+      readonly details: Readonly<Record<string, unknown>>;
+    },
   ): Promise<void> {
     try {
+      const base = event(
+        operation,
+        request,
+        operationTarget(operation, installationId, request.params as Record<string, unknown>),
+        kind,
+        context,
+        evidence,
+        undefined,
+        authorization,
+      );
       await options.auditSink.append(
-        event(
-          operation,
-          request,
-          operationTarget(operation, installationId, request.params as Record<string, unknown>),
-          kind,
-          context,
-          evidence,
-          undefined,
-          authorization,
-        ),
+        explanation === undefined
+          ? base
+          : {
+              ...base,
+              decisionReason: explanation.decisionReason,
+              details: { ...base.details, ...explanation.details },
+            },
       );
     } catch {
       throw failure(
@@ -4887,6 +4899,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             context,
             error.evidence,
             error.authorization,
+            error instanceof DeletionRetryOwnedError
+              ? {
+                  decisionReason:
+                    "A deletion can be retried only by its initiating actor while it holds delete.",
+                  details: { initiatingActorId: error.initiatingActorId },
+                }
+              : undefined,
           );
         } catch (auditError) {
           mapped = requestFailure(auditError);
