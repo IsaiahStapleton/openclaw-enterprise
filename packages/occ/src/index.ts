@@ -92,6 +92,7 @@ import {
   normalizeInitialWorkspaceFiles,
   normalizeWorkspaceDefaultsId,
   PERMISSION_ACTIONS,
+  isSupportedPermission,
   RESOURCE_KINDS,
   admitLoggingConfiguration,
   normalizeLoggingLevel,
@@ -123,6 +124,7 @@ import {
   ChannelCredentialError,
   CredentialGatewayNotConfiguredError,
   IAMAccessBindingRoleError,
+  IAMPolicyValidationError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -218,6 +220,8 @@ export {
   ConfigurationHarnessError,
   CredentialGatewayNotConfiguredError,
   IAMAccessBindingRoleError,
+  IAMPolicyValidationError,
+  IAMRoleInUseError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -801,6 +805,18 @@ function discoveryLoginCredential(value: string): string {
   }
 }
 
+/** Resource kinds that Namespace IAM Roles and AccessBindings may name. */
+const NAMESPACE_POLICY_RESOURCE_KINDS: ReadonlySet<ResourceKind> = new Set<ResourceKind>([
+  "namespace",
+  "agent",
+  "agent_revision",
+  "configuration",
+  "credential_source",
+  "preset",
+  "secret",
+  "service_account",
+]);
+
 /**
  * Refuses an AccessBinding whose Role cannot take effect on the binding's target, so a
  * policy write never reports success for a grant that IAM evaluation drops. `create` is
@@ -1133,7 +1149,7 @@ export class OpenClawController {
   async createIAMRole(principalId: string, input: CreateIAMRoleInput): Promise<Readonly<Role>> {
     const permissions = this.iamRolePermissions(input.permissions);
     if (input.name !== undefined && !validName(input.name)) {
-      throw new ScopeViolationError("The IAM Role name is invalid.");
+      throw new IAMPolicyValidationError("/name", "The IAM Role name is invalid.");
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, input.namespaceId);
     const driver = this.iamPolicyDriver("createNamespaceRole");
@@ -1227,14 +1243,17 @@ export class OpenClawController {
     input: CreateIAMAccessBindingInput,
   ): Promise<Readonly<AccessBinding>> {
     if (input.subjectKind !== "identity" || !isNonEmptyString(input.subjectId)) {
-      throw new ScopeViolationError("The IAM AccessBinding subject is invalid.");
+      throw new IAMPolicyValidationError("/subjectId", "The IAM AccessBinding subject is invalid.");
     }
     if (!isNonEmptyString(input.roleId)) {
-      throw new ScopeViolationError("The IAM AccessBinding Role is invalid.");
+      throw new IAMPolicyValidationError("/roleId", "The IAM AccessBinding Role is invalid.");
     }
     this.assertNamespacePolicyResourceKind(input.resourceKind);
     if (!isNonEmptyString(input.resourceId)) {
-      throw new ScopeViolationError("The IAM AccessBinding resource is invalid.");
+      throw new IAMPolicyValidationError(
+        "/resourceId",
+        "The IAM AccessBinding resource is invalid.",
+      );
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, input.namespaceId);
     await this.authorize(principalId, "read", {
@@ -7351,51 +7370,72 @@ export class OpenClawController {
   }
 
   private assertNamespacePolicyResourceKind(kind: ResourceKind): void {
-    if (
-      kind !== "namespace" &&
-      kind !== "agent" &&
-      kind !== "agent_revision" &&
-      kind !== "configuration" &&
-      kind !== "credential_source" &&
-      kind !== "preset" &&
-      kind !== "secret" &&
-      kind !== "service_account"
-    ) {
-      throw new ScopeViolationError("IAM policy APIs require an exact Namespace resource target.");
+    if (!NAMESPACE_POLICY_RESOURCE_KINDS.has(kind)) {
+      throw new IAMPolicyValidationError(
+        "/resourceKind",
+        "IAM policy APIs require an exact Namespace resource target.",
+      );
     }
   }
 
   private iamRolePermissions(permissions: readonly Permission[]): readonly Permission[] {
     if (!Array.isArray(permissions) || permissions.length === 0 || permissions.length > 64) {
-      throw new ScopeViolationError("IAM Roles require one or more supported Permissions.");
+      throw new IAMPolicyValidationError(
+        "/permissions",
+        "IAM Roles require 1 to 64 supported Permissions.",
+      );
     }
     const seen = new Set<string>();
-    return Object.freeze(
-      permissions.map((permission) => {
-        if (
-          typeof permission !== "object" ||
-          permission === null ||
-          Array.isArray(permission) ||
-          !PERMISSION_ACTIONS.includes(permission.action) ||
-          !RESOURCE_KINDS.includes(permission.resourceKind)
-        ) {
-          throw new ScopeViolationError("IAM Role Permissions are invalid.");
-        }
-        this.assertNamespacePolicyResourceKind(permission.resourceKind);
-        if (permission.resourceKind === "namespace" && permission.action !== "read") {
-          throw new ScopeViolationError("IAM Namespace Role Permissions support only read.");
-        }
-        const key = `${permission.action}\u0000${permission.resourceKind}`;
-        if (seen.has(key)) {
-          throw new ScopeViolationError("IAM Role Permissions contain duplicates.");
-        }
-        seen.add(key);
-        return Object.freeze({
-          action: permission.action,
-          resourceKind: permission.resourceKind,
-        });
-      }),
-    );
+    const unsupported: string[] = [];
+    const checked = permissions.map((permission, index) => {
+      if (
+        typeof permission !== "object" ||
+        permission === null ||
+        Array.isArray(permission) ||
+        !PERMISSION_ACTIONS.includes(permission.action) ||
+        !RESOURCE_KINDS.includes(permission.resourceKind)
+      ) {
+        throw new IAMPolicyValidationError(
+          `/permissions/${index}`,
+          "IAM Role Permissions are invalid.",
+        );
+      }
+      if (!NAMESPACE_POLICY_RESOURCE_KINDS.has(permission.resourceKind)) {
+        throw new IAMPolicyValidationError(
+          `/permissions/${index}/resourceKind`,
+          `Namespace IAM Roles cannot grant ${permission.resourceKind} Permissions.`,
+        );
+      }
+      if (permission.resourceKind === "namespace" && permission.action !== "read") {
+        throw new IAMPolicyValidationError(
+          `/permissions/${index}/action`,
+          "Namespace IAM Roles support only namespace:read on the Namespace itself.",
+        );
+      }
+      const key = `${permission.action}\u0000${permission.resourceKind}`;
+      if (seen.has(key)) {
+        throw new IAMPolicyValidationError(
+          `/permissions/${index}`,
+          `IAM Role Permissions contain ${permission.resourceKind}:${permission.action} more than once.`,
+        );
+      }
+      seen.add(key);
+      if (!isSupportedPermission(permission)) {
+        unsupported.push(`${permission.resourceKind}:${permission.action}`);
+      }
+      return Object.freeze({
+        action: permission.action,
+        resourceKind: permission.resourceKind,
+      });
+    });
+    if (unsupported.length > 0) {
+      throw new IAMPolicyValidationError(
+        "/permissions",
+        `No operation checks these Permissions, so they would grant nothing: ${unsupported.join(", ")}. ` +
+          "See the per-kind actions in the permissions reference.",
+      );
+    }
+    return Object.freeze(checked);
   }
 
   private async verifyNamespacePolicyResource(
@@ -7406,14 +7446,20 @@ export class OpenClawController {
     await this.read(async (state) => {
       if (resourceKind === "namespace") {
         if (resourceId !== namespaceId) {
-          throw new ScopeViolationError("The IAM target must be the exact Namespace.");
+          throw new IAMPolicyValidationError(
+            "/resourceId",
+            "A namespace target must be the Namespace in the request path.",
+          );
         }
         await this.exactNamespace(state, namespaceId);
         return;
       }
       if (resourceKind === "agent") {
         if ((await state.agents.findAgent(namespaceId, resourceId)) === undefined) {
-          throw new ScopeViolationError("The IAM target Agent does not belong to the Namespace.");
+          throw new IAMPolicyValidationError(
+            "/resourceId",
+            "The IAM target Agent does not belong to the Namespace.",
+          );
         }
         return;
       }
@@ -7426,19 +7472,24 @@ export class OpenClawController {
             return;
           }
         }
-        throw new ScopeViolationError(
+        throw new IAMPolicyValidationError(
+          "/resourceId",
           "The IAM target AgentRevision does not belong to the Namespace.",
         );
       }
       if (resourceKind === "preset") {
         if ((await state.presets.findPreset(namespaceId, resourceId)) === undefined) {
-          throw new ScopeViolationError("The IAM target Preset does not belong to the Namespace.");
+          throw new IAMPolicyValidationError(
+            "/resourceId",
+            "The IAM target Preset does not belong to the Namespace.",
+          );
         }
         return;
       }
       if (resourceKind === "configuration") {
         if ((await state.configurations.findConfiguration(namespaceId, resourceId)) === undefined) {
-          throw new ScopeViolationError(
+          throw new IAMPolicyValidationError(
+            "/resourceId",
             "The IAM target Configuration does not belong to the Namespace.",
           );
         }
@@ -7446,7 +7497,10 @@ export class OpenClawController {
       }
       if (resourceKind === "secret") {
         if ((await state.secrets.findSecret(namespaceId, resourceId)) === undefined) {
-          throw new ScopeViolationError("The IAM target Secret does not belong to the Namespace.");
+          throw new IAMPolicyValidationError(
+            "/resourceId",
+            "The IAM target Secret does not belong to the Namespace.",
+          );
         }
         return;
       }
@@ -7455,14 +7509,16 @@ export class OpenClawController {
           (await state.credentialSources.findCredentialSource(namespaceId, resourceId)) ===
           undefined
         ) {
-          throw new ScopeViolationError(
+          throw new IAMPolicyValidationError(
+            "/resourceId",
             "The IAM target credential source does not belong to the Namespace.",
           );
         }
         return;
       }
       if ((await state.serviceAccounts.findServiceAccount(namespaceId, resourceId)) === undefined) {
-        throw new ScopeViolationError(
+        throw new IAMPolicyValidationError(
+          "/resourceId",
           "The IAM target ServiceAccount does not belong to the Namespace.",
         );
       }

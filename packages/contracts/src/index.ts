@@ -765,6 +765,38 @@ export const PERMISSION_ACTIONS = Object.freeze([
 
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
 
+/**
+ * The actions some platform operation checks for each resource kind (the per-kind table in
+ * docs/reference/cheatsheets/permissions.md). A Permission outside this table grants nothing,
+ * so Namespace Role writes refuse it.
+ */
+export const SUPPORTED_PERMISSION_ACTIONS: Readonly<
+  Record<ResourceKind, readonly PermissionAction[]>
+> = Object.freeze({
+  installation: Object.freeze(["read", "administer"] as const),
+  namespace: Object.freeze(["create", "read", "delete"] as const),
+  configuration: Object.freeze(["create", "read", "update", "delete"] as const),
+  preset: Object.freeze(["create", "read", "update", "delete"] as const),
+  service_account: Object.freeze(["create", "read", "update", "delete"] as const),
+  secret: Object.freeze(["create", "read", "update", "delete", "operate"] as const),
+  credential_source: Object.freeze(["create", "read", "update", "delete", "operate"] as const),
+  agent: Object.freeze([
+    "create",
+    "read",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ] as const),
+  agent_revision: Object.freeze(["read"] as const),
+});
+
+export function isSupportedPermission(permission: Readonly<Permission>): boolean {
+  return SUPPORTED_PERMISSION_ACTIONS[permission.resourceKind].includes(permission.action);
+}
+
 export interface Permission {
   readonly action: PermissionAction;
   readonly resourceKind: ResourceKind;

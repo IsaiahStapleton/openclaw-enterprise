@@ -1043,7 +1043,8 @@ test("Namespace IAM routes bind existing humans to the exact Namespace and Agent
     [member.principal.id, "agent", namespace.id],
   ]) {
     const denied = await bind(subjectId, resourceKind, resourceId);
-    assert.equal(denied.status, 404, JSON.stringify(denied.body));
+    assert.equal(denied.status, 400, JSON.stringify(denied.body));
+    assert.equal(denied.body.error.code, "INVALID_REQUEST");
   }
 
   const memberApp = fixture.createApp(member.principal);
@@ -1279,13 +1280,119 @@ test("Namespace IAM routes bind humans enrolled after bootstrap through the live
     [member.principal.id, "agent", foreignAgent.id],
   ]) {
     const denied = await bind(subjectId, resourceKind, resourceId);
-    assert.equal(denied.status, 404, `${subjectId}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.status, 400, `${subjectId}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "INVALID_REQUEST");
   }
   const bindings = await controller.request(
     "GET",
     `/namespaces/${namespace.id}/iam/access-bindings`,
   );
   assert.equal(bindings.data.length, 4, "rejected subjects must leave policy unchanged");
+});
+
+test("Namespace IAM reports invalid policy input as 400 with the field and refuses inert Permissions", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("policy-validation-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "policy-validation");
+  const other = await createNamespace(controller, "policy-validation-other");
+  const createRole = (namespaceId, permissions) =>
+    controller.request("POST", `/namespaces/${namespaceId}/iam/roles`, {
+      body: { permissions },
+    });
+
+  // Pairs that no operation checks would be stored and grant nothing.
+  for (const [action, resourceKind] of [
+    ["read_logs", "secret"],
+    ["administer", "secret"],
+    ["deploy", "configuration"],
+    ["update", "agent_revision"],
+    ["operate", "preset"],
+  ]) {
+    const rejected = await createRole(namespace.id, [
+      { action: "read", resourceKind: "agent" },
+      { action, resourceKind },
+    ]);
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.deepEqual(rejected.body.error.details, [
+      { path: "/permissions", code: "INVALID_VALUE" },
+    ]);
+    assert.match(
+      rejected.body.error.message,
+      new RegExp(`grant nothing: ${resourceKind}:${action}\\.`),
+    );
+  }
+  const duplicate = await createRole(namespace.id, [
+    { action: "read", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent" },
+  ]);
+  assert.equal(duplicate.status, 400, JSON.stringify(duplicate.body));
+  assert.deepEqual(duplicate.body.error.details, [
+    { path: "/permissions/1", code: "INVALID_VALUE" },
+  ]);
+  assert.match(duplicate.body.error.message, /agent:read more than once/);
+  const lifecycle = await createRole(namespace.id, [
+    { action: "delete", resourceKind: "namespace" },
+  ]);
+  assert.equal(lifecycle.status, 400, JSON.stringify(lifecycle.body));
+  assert.deepEqual(lifecycle.body.error.details, [
+    { path: "/permissions/0/action", code: "INVALID_VALUE" },
+  ]);
+  const roles = await controller.request("GET", `/namespaces/${namespace.id}/iam/roles`);
+  assert.deepEqual(roles.data, [], "rejected Roles must not be persisted");
+
+  // Every supported pair is still accepted.
+  const supported = await createRole(namespace.id, [
+    { action: "read", resourceKind: "namespace" },
+    { action: "operate", resourceKind: "secret" },
+    { action: "read_logs", resourceKind: "agent" },
+    { action: "administer", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent_revision" },
+    { action: "operate", resourceKind: "credential_source" },
+  ]);
+  assert.equal(supported.status, 201, JSON.stringify(supported.body));
+  const reader = await createRole(namespace.id, [{ action: "read", resourceKind: "namespace" }]);
+  const foreignRole = await createRole(other.id, [{ action: "read", resourceKind: "namespace" }]);
+  assert.equal(foreignRole.status, 201, JSON.stringify(foreignRole.body));
+
+  const bind = (body) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: reader.data.id,
+        resourceKind: "namespace",
+        resourceId: namespace.id,
+        ...body,
+      },
+    });
+  for (const [body, path] of [
+    [{ resourceId: other.id }, "/resourceId"],
+    [{ roleId: foreignRole.data.id }, "/roleId"],
+    [{ roleId: `role_${randomUUID()}` }, "/roleId"],
+    [{ subjectId: `prn_${randomUUID()}` }, "/subjectId"],
+  ]) {
+    const rejected = await bind(body);
+    assert.equal(rejected.status, 400, `${path}: ${JSON.stringify(rejected.body)}`);
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.deepEqual(rejected.body.error.details, [{ path, code: "INVALID_VALUE" }]);
+  }
+
+  // A Role still referenced by an AccessBinding names the reason, not "already exists".
+  const binding = await bind({});
+  assert.equal(binding.status, 201, JSON.stringify(binding.body));
+  const inUse = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/iam/roles/${reader.data.id}`,
+  );
+  assert.equal(inUse.status, 409, JSON.stringify(inUse.body));
+  assert.equal(inUse.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(inUse.body.error.message, /referenced by AccessBindings/);
 });
 
 test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespace binding", async () => {
@@ -1314,9 +1421,8 @@ test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespac
       { action: "read", resourceKind: "namespace" },
       { action, resourceKind: "namespace" },
     ]);
-    // OCC reports the ScopeViolation as not found, like other out-of-scope policy input.
-    assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
-    assert.equal(rejected.body.error.code, "NOT_FOUND");
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
   }
   const roles = await controller.request("GET", `/namespaces/${namespace.id}/iam/roles`);
   assert.deepEqual(roles.data, [], "rejected Namespace Roles must not be persisted");
@@ -1406,8 +1512,8 @@ test("OCC rejects Namespace lifecycle Role Permissions before any IAM Driver or 
     "read_logs",
   ]) {
     const rejected = await createRole([{ action, resourceKind: "namespace" }]);
-    assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
-    assert.equal(rejected.body.error.code, "NOT_FOUND");
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
   }
   assert.deepEqual(driverCalls, [], "OCC must reject before delegating to the IAM Driver");
 

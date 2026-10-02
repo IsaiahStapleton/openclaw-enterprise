@@ -10,6 +10,8 @@ import {
   CredentialGatewayNotConfiguredError,
   DependencyUnavailableError,
   IAMAccessBindingRoleError,
+  IAMPolicyValidationError,
+  IAMRoleInUseError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
@@ -336,6 +338,14 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(400, "INVALID_REQUEST", error.message, [
       { path: "/roleId", code: "INVALID_VALUE" },
     ]);
+  }
+  if (error instanceof IAMPolicyValidationError) {
+    return failure(400, "INVALID_REQUEST", error.message, [
+      { path: error.path, code: "INVALID_VALUE" },
+    ]);
+  }
+  if (error instanceof IAMRoleInUseError) {
+    return failure(409, "RESOURCE_CONFLICT", error.message);
   }
   if (error instanceof CredentialGatewayNotConfiguredError) {
     return failure(409, "CREDENTIAL_GATEWAY_NOT_CONFIGURED", error.message);
