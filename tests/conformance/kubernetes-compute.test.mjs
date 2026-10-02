@@ -5744,6 +5744,14 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
         save(value);
         return value;
       },
+      async deleteNamespacedSecret({ name, body }) {
+        assert.equal(objects.get(key("Secret", name))?.metadata.uid, body.preconditions.uid);
+        objects.delete(key("Secret", name));
+      },
+      async deleteNamespacedConfigMap({ name, body }) {
+        assert.equal(objects.get(key("ConfigMap", name))?.metadata.uid, body.preconditions.uid);
+        objects.delete(key("ConfigMap", name));
+      },
 
       async listNamespacedPod() {
         return { items: [] };
@@ -5897,12 +5905,43 @@ async function exerciseEmbeddedReplacement({ providerId, model, environmentName,
     false,
   );
 
+  // The served predecessor's own per-revision copies (its model key and rendered
+  // configuration) exist until something retires them.
+  const revisionArtifacts = (target) => [
+    key("Secret", `harness-secrets-${suffix}-${digest(target.id)}`),
+    key("ConfigMap", `${gatewayName}-rev-${digest(target.id)}`),
+  ];
+  const execution = { name: namespace, plane: "execution" };
+  for (const [kind, name, ownership] of [
+    [
+      "Secret",
+      `harness-secrets-${suffix}-${digest(oldRevision.id)}`,
+      { ...agentOwnership, revisionId: oldRevision.id },
+    ],
+    ["ConfigMap", `${gatewayName}-rev-${digest(oldRevision.id)}`, gatewayOwnership],
+  ]) {
+    const seeded = driver.manifest("v1", kind, name, ownership, execution);
+    seeded.metadata.uid = `${name}-uid`;
+    save(seeded);
+  }
+  for (const artifact of revisionArtifacts(oldRevision)) {
+    assert.ok(objects.has(artifact), `${artifact} is seeded for the served predecessor`);
+  }
+
   // The guarded activation replaces the shared workload before model authentication
   // succeeds. Its failing startup may leave the Agent unavailable until redeploy.
   await assert.rejects(
     driver.activateRevision(replacement, authContext(replacement)),
     /gateway is not ready/i,
   );
+  // The Recreate Gateway no longer runs the predecessor, and a failed activation
+  // never reaches worker retirement, so its copies go with the re-render.
+  for (const artifact of revisionArtifacts(oldRevision)) {
+    assert.equal(objects.has(artifact), false, `${artifact} is removed once replaced`);
+  }
+  for (const artifact of revisionArtifacts(replacement)) {
+    assert.ok(objects.has(artifact), `${artifact} is kept for the activating revision`);
+  }
   const replaced = objects.get(key("Deployment", gatewayName));
   assert.equal(replaced.metadata.annotations["openclaw.dev/agent-revision-id"], replacement.id);
   assert.equal(replaced.spec.strategy.type, "Recreate");

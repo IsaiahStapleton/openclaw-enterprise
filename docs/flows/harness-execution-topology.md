@@ -210,6 +210,9 @@ runs for initial and replacement gateways. A failed check, including a provider
 timeout or rate limit, holds the gateway unready until repair and restart or a
 new deployment. Readiness polling does not repeat model requests; worker retries
 do not restart an unchanged Pod. No automatic rollback restores the predecessor.
+Embedded activation deletes the replaced predecessor's per-revision Secret and
+ConfigMap copies as soon as it re-renders the Gateway, so a replacement that never
+becomes ready (and so never reaches predecessor retirement) does not keep them.
 
 If activation, readiness, predecessor retirement, or audit completion fails,
 the worker requeues the revision with `REVISION_FINALIZATION_INCOMPLETE`; recovery
@@ -309,6 +312,8 @@ owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-02 12:00: Delete a replaced embedded predecessor's Secret and ConfigMap copies at activation re-render. (fix-d280-embedded-retire)
 
 - 2026-10-02 06:00: Budget the workspace node binding ack wait per binding across activation retries. (fix-deploy-node-pairing)
 

@@ -3834,7 +3834,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
           // The predecessor never served (for example, it failed model auth) and is
           // unready: repair it with this revision's template, as the dedicated path does.
           await reconcileGatewayDeployment(gatewayEnvironment);
-          await this.deleteRepairedPredecessorArtifacts(revision, gateway, namespace);
+          await this.deleteReplacedPredecessorArtifacts(revision, gateway, namespace);
           return incomplete();
         }
         if (gateway === undefined || !this.deploymentReady(gateway, current)) {
@@ -4299,6 +4299,10 @@ export class KubernetesComputeDriver implements ComputeDriver {
           await this.lifecycle.beforeWorkloadStop(revision, { cleanup: true });
           throw error;
         }
+        // The Recreate Gateway no longer runs the older revision it served, and the
+        // active pointer already names this one. Its copies go now: if this
+        // activation never becomes ready, retirement would not run before stop.
+        await this.deleteReplacedPredecessorArtifacts(revision, gateway, namespace);
       }
       for (const { resource: policy, namespace: target } of this.agentNetworkPolicies(
         revision,
@@ -4998,12 +5002,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
     return false;
   }
 
-  // An embedded repair replaces a never-served predecessor's Gateway with the
+  // An embedded repair or activation replaces the predecessor's Gateway with the
   // successor's template, so nothing runs that predecessor any more. Its
-  // credential and configuration copies go now; without a successor
+  // credential and configuration copies go now; without a ready successor
   // activation, nothing else would retire them before stop or delete. A newer
   // revision's copies are left alone: its own pass may still be converging.
-  private async deleteRepairedPredecessorArtifacts(
+  private async deleteReplacedPredecessorArtifacts(
     revision: AgentRevision,
     predecessorGateway: ManagedKubernetesObject<"Deployment">,
     namespace: KubernetesNamespaceAddress,
