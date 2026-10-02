@@ -47,8 +47,8 @@ as a text file named `<agent>-<revision>-<source>-<pod>.log`, using IDs. The
 file holds the same classified and redacted records as the page, one per line
 (`TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value`, plus `GAP` and `WITHHELD`
 rows), after a `#` header naming the Agent, revision, Pod and container.
-Only **Include debug** applies to the download. Each download is a separate audited read;
-nothing is kept on the server. The saved file stays on your device, and
+Only **Include debug** applies to the download. Each download is a separate audited read.
+The saved file stays on your device, and
 redaction is best-effort, so handle it as sensitive and delete it when done.
 
 The HTTP API has the same two reads:
@@ -68,8 +68,7 @@ always reads 1000 lines, and cannot be combined with `cursor` (`400`). See the
 
 ## Command line
 
-`occ agent runtime AGENT_ID` prints the Pods, sources and Events (with the
-container each concerns); `occ agent logs
+`occ agent runtime AGENT_ID` prints the Pods, sources and Events; `occ agent logs
 AGENT_ID --source gateway` prints one page, and `--follow` keeps polling every
 2 seconds until Ctrl-C:
 
@@ -79,11 +78,12 @@ occ agent logs agt_... --source agent --previous -o json
 occ agent logs agt_... --source sandbox --follow
 ```
 
-Both use the active revision unless you pass `--revision`; without one, such as
-after a failed first deployment, they use the latest revision and say so on
-stderr. `--level` sets the `minLevel` floor. Gaps and withheld counts are
-stderr notices; `-o json` prints NDJSON records. The
-command waits out `429` responses and exits nonzero on `501` and `503`. See the
+Without `--revision`, both read a newer revision that has Pods (a deploy in
+progress or failed), else the active one, else the latest, and name it on stderr.
+Checking Pods needs Agent `operate`; otherwise stderr names the newer revision.
+`--level` sets the `minLevel` floor. Gaps and withheld counts are
+stderr notices; `-o json` prints NDJSON records. The command waits out `429`
+and exits nonzero on `501` and `503`. See the
 [CLI reference](../../reference/cli.md#runtime-status-and-logs).
 
 ## Who can see what

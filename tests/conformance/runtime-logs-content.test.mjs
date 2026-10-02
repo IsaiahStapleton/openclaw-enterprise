@@ -315,6 +315,37 @@ test("the wrapper's fixed plain-text failure line is a wrapper error, not unknow
   );
 });
 
+test("a failed startup phase keeps its fixed cause code", () => {
+  const { records } = sanitizeRuntimeLogChunk({
+    stream: { source: "agent", pod: "agent-0", container: "agent" },
+    truncated: false,
+    lines: [
+      {
+        time: lineTime(1),
+        raw: '{"event":"runtime.startup_phase","container":"agent","phase":"plugin-install","outcome":"failed","ms":60000,"sinceStartMs":62000,"code":"PLUGIN_NOT_IN_CATALOG"}',
+      },
+    ],
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message, fields }) => ({ kind, level, message, fields })),
+    [
+      {
+        kind: "wrapper",
+        level: "error",
+        message: "runtime.startup_phase",
+        fields: {
+          container: "agent",
+          phase: "plugin-install",
+          outcome: "failed",
+          ms: 60000,
+          sinceStartMs: 62000,
+          code: "PLUGIN_NOT_IN_CATALOG",
+        },
+      },
+    ],
+  );
+});
+
 test("the sanitizer drops a partial final line and bounds oversized input", () => {
   const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
   const fragment = randomBytes(10).toString("hex");

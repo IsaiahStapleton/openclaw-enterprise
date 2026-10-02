@@ -805,6 +805,13 @@ test(
               }),
               line(phase("agent", "codex-login", "ok")),
               line(phase("agent", "codex-login", "ok"), "stdout"),
+              // A failed phase keeps a bounded cause code; an unbounded one is dropped.
+              line({
+                ...phase("agent", "plugin-install", "failed"),
+                code: "PLUGIN_NOT_IN_CATALOG",
+              }),
+              line({ ...phase("agent", "plugin-install", "failed"), code: `${canary} key` }),
+              line({ ...phase("agent", "native-spawn", "ok"), code: "PLUGIN_NOT_IN_CATALOG" }),
             ],
           },
         ],
@@ -816,7 +823,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 9);
+    await waitFor(async () => (await records()).length >= 12);
     await delay(1_000);
     const exported = await records();
     for (const { resource } of exported) {
@@ -857,6 +864,13 @@ test(
         gateway("WARN", phaseEvent),
         codex("WARN", { "event.name": "codex.model_probe", "occ.code": "AUTHENTICATION_FAILED" }),
         codex("INFO", { ...phaseEvent, "occ.startup.phase": "codex-login" }),
+        codex("WARN", {
+          ...phaseEvent,
+          "occ.startup.phase": "plugin-install",
+          "occ.code": "PLUGIN_NOT_IN_CATALOG",
+        }),
+        codex("WARN", { ...phaseEvent, "occ.startup.phase": "plugin-install" }),
+        codex("INFO", { ...phaseEvent, "occ.startup.phase": "native-spawn" }),
       ]),
     );
     assert.doesNotMatch(JSON.stringify(exported), /CANARY_/);
@@ -949,7 +963,8 @@ test(
               tracing("INFO", "codex_app_server", {
                 message: "outbound router task exited (channel closed)",
               }),
-              // Unreviewed message text keeps the event name as its body.
+              // Unreviewed message text keeps the event name as its body (errors) or is
+              // dropped (warnings).
               tracing("ERROR", "codex_app_server", {
                 message: `Failed to deserialize JSONRPCMessage: invalid type: string "${canary}"`,
               }),
@@ -966,7 +981,7 @@ test(
                 message: "stream connection failed; waiting to retry",
               }),
               // codex_core can interpolate chat text into a warning; plain prose
-              // that passes the plain-text pattern still keeps the event name.
+              // that passes the plain-text pattern is never exported as text.
               tracing("WARN", "codex_core::event_mapping", {
                 message: "Output text in user message: deploy the payroll service now",
               }),
@@ -974,6 +989,10 @@ test(
                 message: "Failed to apply execpolicy amendment: rm allowed",
               }),
               tracing("INFO", "codex_core::client", { message: "using model" }),
+              // A repeating plugin warning without a reviewed message is dropped.
+              tracing("WARN", "codex_core_plugins::manager", {
+                message: "remote installed plugin bundle sync failed",
+              }),
             ],
           },
         ],
@@ -984,7 +1003,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 12);
+    await waitFor(async () => (await records()).length >= 9);
     await delay(1_000);
     const exported = await records();
     const summary = exported
@@ -1012,10 +1031,7 @@ test(
         ],
         ["INFO", "codex.operational", "outbound router task exited (channel closed)", null],
         ["ERROR", "codex.operational", "codex.operational", null],
-        ["WARN", "codex.operational", "codex.operational", null],
-        ["WARN", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "stream connection failed; waiting to retry", null],
-        ["WARN", "codex.operational", "codex.operational", null],
         ["ERROR", "codex.operational", "codex.operational", null],
       ]
         .map((entry) => JSON.stringify(entry))

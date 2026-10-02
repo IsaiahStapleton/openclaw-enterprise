@@ -33,7 +33,7 @@ const MAX_JSON_DEPTH = 8;
 const TRUNCATION_MARK = "…[truncated]";
 
 const WRAPPER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  "runtime.startup_phase": ["container", "phase", "outcome", "ms", "sinceStartMs"],
+  "runtime.startup_phase": ["container", "phase", "outcome", "ms", "sinceStartMs", "code"],
   "openclaw.model_probe": ["elapsedMs", "capMs", "cpuWaitMs", "code"],
   "codex.model_probe": ["attempt", "elapsedMs", "exitCode", "signal", "code"],
   "runtime.workspace_node": ["container", "outcome", "code"],

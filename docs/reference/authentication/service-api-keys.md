@@ -135,7 +135,8 @@ python3 -c 'import json, os, pathlib, sys; key=json.loads(pathlib.Path(os.enviro
 ```
 
 Use the same protected header pattern with `DELETE /api/auth/service-keys/:keyId`
-to revoke a key. Namespace-scoped keys cannot manage service keys. Account
+to revoke a key. Revocation needs the same coverage as issuance: a caller that
+does not hold every grant of the key's principal gets `403`. Namespace-scoped keys cannot manage service keys. Account
 creation and bootstrap still require human sessions.
 
 ## Retrieve the bootstrap service key
