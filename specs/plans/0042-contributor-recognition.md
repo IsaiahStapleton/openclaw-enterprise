@@ -1,7 +1,7 @@
 # Implementation plan: recognize Enterprise contributors
 
 - **ID:** TASK-0042
-- **Delivery status:** In progress
+- **Delivery status:** Completed
 - **Owner:** OpenClaw Enterprise maintainers
 - **Authority:** [Contribution policy](../../CONTRIBUTING.md) and [repository layout](../../docs/layout.md); independent repository-maintenance work, with no RFC required.
 - **Source baseline:** Enterprise `7a6cc931d0edda65fec91935bffc8f56a44ded1c`; upstream GitHub `main` resolved to `8f98c12c581fa16e8c2af1ff5fbe92e1af350878` on 2026-10-02.
@@ -126,8 +126,8 @@ policy.
 ## Delivery record
 
 Implemented locally on `dev/kevinlin/contributor-recognition`, based on
-`a10baed3c4a551c697c09c2e4a96ef529509a37a`. No commit or PR has been created;
-delivery remains In progress until the change has a committed record.
+`a10baed3c4a551c697c09c2e4a96ef529509a37a`. Implementation commit:
+[`ccaa2af5a`](https://github.com/openclaw/openclaw-enterprise/commit/ccaa2af5a4816b3a1ea98ae912594ec6510f8f64).
 
 - [Generator](../../scripts/update-contributors.mjs), [corrections](../../scripts/contributors.json),
   package command, and [README wall](../../README.md#contributors) are implemented.
