@@ -4,7 +4,7 @@ import type {
   OccApiRoute,
   ResourceRef,
 } from "@openclaw-enterprise/contracts";
-import type { OpenClawController } from "@openclaw-enterprise/occ";
+import type { DeployAgentAuthorization, OpenClawController } from "@openclaw-enterprise/occ";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 export interface RequestContext {
@@ -15,7 +15,7 @@ export interface RequestContext {
   readonly operation: OccApiRoute;
 }
 
-type ResourceHandler = (input: {
+export type ResourceHandler = (input: {
   readonly controller: OpenClawController;
   readonly context: RequestContext;
   readonly request: FastifyRequest;
@@ -28,6 +28,7 @@ type ResourceHandler = (input: {
   readonly mutationEvent: (
     resource: ResourceRef,
     details?: Readonly<Record<string, unknown>>,
+    authorization?: Readonly<DeployAgentAuthorization>,
   ) => AuditEvent;
 }) => Promise<void>;
 
