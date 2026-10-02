@@ -6,11 +6,10 @@ namespace ownership for the [Kubernetes Compute Driver](../kubernetes-compute.md
 ## Networking
 
 Configure the cluster DNS namespace and Pod labels and the gateway port.
-Set `network.gatewayTrustedProxyCidrs` to a
-nonempty list of valid CIDRs for the actual proxy socket sources. This is trusted
-Installation configuration; the Driver has no production CIDR default and rejects
-all-source ranges, including IPv4-mapped equivalents. Without
-private routing, also configure the namespace and Pod selectors in
+Set `network.gatewayTrustedProxyCidrs` to nonempty, valid CIDRs for the proxy
+socket sources. This trusted Installation setting has no production default and
+rejects all-source ranges, including IPv4-mapped equivalents. Without private
+routing, also configure the namespace and Pod selectors in
 `network.gatewayClients` for your authenticated proxy.
 
 Each tenant starts with default-deny ingress and egress. Explicit policies allow
@@ -21,15 +20,14 @@ and cloud metadata access remain denied where those addresses fall inside the
 model egress exclusions below.
 
 For Compute-owned startup failure evidence, plugin reporting, and on-demand
-deployment diagnostics, set
-`network.pluginStatusProxySourceCidrs` to the precise source addresses used by the
-Kubernetes API server when proxying requests to workload Pods. The policy allows
-those sources only to the private status port, TCP/18791. Both worker and API
-ServiceAccounts need namespace-local `get` on `pods/proxy` for their respective
-reads. The ingress rule also applies when an Agent has no enabled plugins.
-Prefer individual `/32` or `/128` addresses. On an
-overlay network, the observed source may be the control-plane node's overlay
-address rather than its node IP. Verify it across nodes with enforced policies.
+deployment diagnostics, set `network.pluginStatusProxySourceCidrs` to the
+Kubernetes API server's source addresses when proxying requests to workload Pods.
+The policy allows those sources only to the private status port, TCP/18791.
+Worker and API ServiceAccounts each need namespace-local `get` on `pods/proxy`.
+The ingress rule also applies when an Agent has no enabled plugins.
+Prefer individual `/32` or `/128` addresses. On overlay networks, the source may
+be the control-plane node's overlay address rather than its node IP. Verify it
+across nodes with enforced policies.
 An omitted list adds no API-proxy ingress rule and leaves status unavailable
 where the cluster blocks that traffic. It also restarts the Gateway once on each
 dedicated Codex first deploy. This setting does not expose the native
