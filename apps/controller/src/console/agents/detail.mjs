@@ -1121,6 +1121,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       current !== undefined &&
       current.revision < latest.revision &&
       latest.harness?.mode === "dedicated";
+    // Embedded activation selects the new version before its gateway is ready, and that
+    // gateway replaces the previous one, so a failed selected version is the only one left.
+    const selectedFailed =
+      latestDeploymentStatus === "failed" && current !== undefined && current.id === latest.id;
     if (newerHidden) {
       latestDeploymentValue.textContent = "Newer version hidden";
       latestDeploymentNote.textContent = `You cannot read the current version. v${latest.revision} (${latestDeploymentStatus}) is older.`;
@@ -1128,6 +1132,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     if (replacementFailed) {
       liveServingValue.textContent = "Probably down";
       liveServingNote.textContent = `v${latest.revision} failed; ${currentLabel} was probably stopped for it.`;
+    } else if (selectedFailed) {
+      liveServingValue.textContent = "Probably down";
+      liveServingNote.textContent = `${currentLabel} is selected and its deployment failed.`;
     } else {
       liveServingValue.textContent = "Not verified";
       liveServingNote.textContent = "Serving version and model access are unknown.";
@@ -1147,6 +1154,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         .join(" ");
     } else if (replacementFailed) {
       statusLine.textContent = `v${latest.revision} deployment failed. ${currentLabel} is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
+    } else if (selectedFailed) {
+      statusLine.textContent = `${currentLabel} deployment failed. ${currentLabel} is still selected because its runtime already replaced the previous version, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
     } else if (latestDeploymentStatus) {
       const selection = currentRevisionId
         ? `${currentLabel} is selected.`
