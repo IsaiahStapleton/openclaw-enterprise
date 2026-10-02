@@ -1,4 +1,4 @@
-// Minimal OpenShell v0.1.0 gateway surface used by OpenClaw Enterprise.
+// Minimal OpenShell v0.1.3-pre.1 gateway surface used by OpenClaw Enterprise.
 //
 // This intentionally models only the messages needed for lifecycle-safe
 // Workspace, Sandbox, and credential provider lifecycle, plus the read-only
@@ -520,7 +520,7 @@ enum ProviderReadinessReason {
   PROVIDER_READINESS_REASON_SNAPSHOT_MISMATCH = 15;
 }
 
-// Sandbox logs, from OpenShell proto/openshell.proto at 496ebba (GetSandboxLogs,
+// Sandbox logs, from OpenShell proto/openshell.proto at dde8a9a (GetSandboxLogs,
 // SandboxLogLine). The gateway keeps the last 2000 lines per sandbox in memory.
 message GetSandboxLogsRequest {
   WorkspaceSelector workspace_scope = 6;

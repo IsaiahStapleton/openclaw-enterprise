@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
-updated: "2026-09-30"
-last_updated_session: "pr-553-alignment"
+updated: 2026-10-01
+last_updated_session: authoring-run/b158c89c-3010-42ae-95b4-350b05de7441
 ---
 
 # Credential source lifecycle Flow
@@ -70,8 +70,9 @@ commits, OCC calls `registerSource` or `removeSource`.
 
 The route schema accepts `name`, `type`, optional `config`, and optional
 `secrets` keyed by lowercase field names. Inside one transaction, OCC locks the
-Namespace, authorizes `credential_source:create` on it, and requires a `ready`
-Namespace. It asks the selected gateway for `listSourceTypes` and rejects an
+Namespace, authorizes `credential_source:create` on it, returns
+`409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` when the Installation selects no
+Credential Gateway, and requires a `ready` Namespace. It asks the selected gateway for `listSourceTypes` and rejects an
 unknown type, an unknown field, or a missing required field with
 `ScopeViolationError` (`404`) before any Secret read or gateway write.
 
@@ -236,7 +237,7 @@ than re-attach the source.
   methods with a gateway selected. It uses an in-process gateway double, not
   OpenShell.
 - `node --test tests/conformance/openshell-gateway-wire.test.mjs` checks the
-  provider, profile, update, and detach RPC encoding against the pinned `v0.1.0`
+  provider, profile, update, and detach RPC encoding against the pinned `v0.1.3-pre.1`
   wire fixture.
 - The credential withdrawal cases in
   `tests/integration/postgres-worker-agent-revision.test.mjs` run the real queue
@@ -273,6 +274,9 @@ than re-attach the source.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)
+- 2026-09-30 21:14: Updated the independent OpenShell wire-contract verification pointer to v0.1.3-pre.1. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 
 - 2026-09-30 04:00: Recorded withdrawal attempt reasons, replay deduplication, and maintenance of a withdrawn revision; corrected the update ordering. (pr-553-alignment - 3a5e48035)
 - 2026-09-28 18:00: Added source update and per-Agent withdrawal through worker-executed revocation. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 7cd4a210)

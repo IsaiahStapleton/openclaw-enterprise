@@ -70,8 +70,9 @@ actual policy, installs it only on the owned k3d node, and verifies workspace
 and outside-write boundaries and missing-profile failure. Only dedicated Codex
 containers select the profile. The private state directory records its hashes and
 node provenance in `codex-seccomp-provenance.json`. If the policy, runtime, or
-verification is unsupported, startup fails and rolls back the owned cluster;
-check the reported failure and host user-namespace restrictions before retrying.
+verification is unsupported, startup fails and rolls back the owned cluster.
+On Ubuntu 24.04, follow
+[local Codex sandbox troubleshooting](../operate/troubleshooting.md#local-codex-sandbox-check-fails).
 The sandbox check applies to that node and image at startup; repeat it after a
 runtime, kernel, or image change by recreating the local installation.
 
@@ -117,7 +118,7 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
 The checkout-local CLI creates one k3d cluster and then:
 
 1. installs the pinned Agent Sandbox controller and OpenShell
-   `v0.1.0` assets;
+   `v0.1.3-pre.1` assets;
 2. imports digest-resolved OpenShell, OCE controller, Agent runtime, and
    PostgreSQL images;
 3. creates `oce-system` and installs PostgreSQL, OpenShell Gateway, and the OCE
@@ -164,8 +165,9 @@ helper does not modify the default kubeconfig or current kubectl context.
 
 For separate stacks, select distinct state directories, cluster names, bridge
 subnets and published ports. Compose also needs a distinct `OCC_POSTGRES_PORT`;
-changing the API port alone leaves PostgreSQL on port 55432. Generated runtime workloads have a 2 GiB memory limit
-each; size the local engine VM for OCC plus the Agents you run. Keep each
+changing the API port alone leaves PostgreSQL on port 55432. Generated Harness workloads have a 2 GiB memory limit
+each, and each Agent Gateway requests 1280 MiB with a 3 GiB limit; size the local engine VM for OCC
+plus the Agents you run. Keep each
 stack's resources under the helper's lifecycle until cleanup.
 
 ## Require both proxies before enabling Slack
@@ -416,7 +418,7 @@ for both scoped RoleBindings.
 - This is a development environment, not a production deployment recipe.
 - The OpenShell profile installs one central Gateway per cluster. OCC runs in
   the cluster and creates tenant resources in separate `oce-*` Namespaces.
-- Stock OpenShell `v0.1.0` remains fail-closed for unsupported Secret and
+- Stock OpenShell `v0.1.3-pre.1` remains fail-closed for unsupported Secret and
   workload-identity projections. Workspace readiness does not prove that an
   Agent Sandbox can start or complete a model turn.
 - OpenShell Gateway permits unauthenticated users only inside this disposable,
