@@ -23,6 +23,7 @@ import {
   kubernetesGatewayNamespaceName,
   resolveKubernetesNamespace,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
+import { ConfigurationHarnessError } from "../../packages/occ/src/index.ts";
 import {
   currentComputeAbortSignal,
   withComputeAbortSignal,
@@ -4421,24 +4422,40 @@ test("dedicated Codex admission rejects settings its Gateway entrypoint cannot r
     driver.validateHarnessAuth(codex, oauth, accepted);
   }
   for (const [rejected, message] of [
-    [withCodexConfig({ codexDynamicToolsExclude: "tts" }), /codexDynamicToolsExclude .*list/],
-    [withCodexConfig("on"), /Codex plugin config setting must be an object/],
-    [{ ...withCodexConfig({}), cron: "off" }, /cron setting must be an object/],
-    [{ ...withCodexConfig({}), cron: { triggers: true } }, /cron\.triggers setting/],
-    [{ ...base, models: "none" }, /models setting must be an object/],
-    [{ ...base, models: { providers: [] } }, /models\.providers setting/],
-    [{ ...base, models: { providers: { codex: "stub" } } }, /codex model provider setting/],
-    [{ ...base, models: { providers: { " OpenAI ": null } } }, /openai model provider setting/],
+    [
+      withCodexConfig({ codexDynamicToolsExclude: "tts" }),
+      "plugins.entries.codex.config.codexDynamicToolsExclude must be a list",
+    ],
+    [withCodexConfig("on"), "plugins.entries.codex.config must be an object"],
+    [{ ...withCodexConfig({}), cron: "off" }, "cron must be an object"],
+    [{ ...withCodexConfig({}), cron: { triggers: true } }, "cron.triggers must be an object"],
+    [{ ...base, models: "none" }, "models must be an object"],
+    [{ ...base, models: { providers: [] } }, "models.providers must be an object"],
+    [
+      { ...base, models: { providers: { codex: "stub" } } },
+      "models.providers.codex must be an object",
+    ],
+    [
+      { ...base, models: { providers: { " OpenAI ": null } } },
+      "models.providers. OpenAI  must be an object",
+    ],
     [
       { ...base, models: { providers: { codex: { models: {} } } } },
-      /models setting must be a list/,
+      "models.providers.codex.models must be a list of objects",
     ],
     [
       { ...base, models: { providers: { openai: { models: ["gpt-5"] } } } },
-      /openai model provider models setting must be a list of objects/,
+      "models.providers.openai.models must be a list of objects",
     ],
   ]) {
-    assert.throws(() => driver.validateHarnessAuth(codex, oauth, rejected), message);
+    // Admission returns this message to the Configuration owner (D321).
+    assert.throws(
+      () => driver.validateHarnessAuth(codex, oauth, rejected),
+      (error) =>
+        error instanceof ConfigurationHarnessError &&
+        error.message ===
+          `Configuration setting ${message}: a dedicated Codex Gateway cannot apply it otherwise.`,
+    );
   }
 });
 

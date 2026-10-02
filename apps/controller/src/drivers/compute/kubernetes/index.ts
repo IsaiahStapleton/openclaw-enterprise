@@ -81,6 +81,7 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
 import {
+  ConfigurationHarnessError,
   DependencyUnavailableError,
   ResourceConflictError,
   RuntimeLogsForbiddenByClusterError,
@@ -810,6 +811,7 @@ function required(value: unknown, description: string): string {
 function failure(error: unknown): "retryable" | "permanent" {
   return error instanceof OwnershipFailure ||
     error instanceof ConfigurationFailure ||
+    error instanceof ConfigurationHarnessError ||
     [400, 401, 403, 422].includes(numericErrorStatus(error) ?? 0)
     ? "permanent"
     : "retryable";
@@ -1311,25 +1313,28 @@ function harnessModels(configuration: OpenClawConfigurationDocument): readonly s
 // (excludeGatewayLocalCodexTools, pinCodexProviderTransport) and refuses to start
 // on a shape it cannot rewrite. Reject those shapes here, before a deployment
 // replaces a working Gateway with one that crash-loops. null and absent values
-// are replaced at start, so they are accepted.
+// are replaced at start, so they are accepted. The caller owns this Configuration,
+// so the error names the setting path and admission returns it as invalid content.
 function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurationDocument): void {
-  const object = (value: unknown, setting: string): Record<string, unknown> | undefined => {
+  const unsupported = (path: string, shape: string) =>
+    new ConfigurationHarnessError(
+      `Configuration setting ${path} must be ${shape}: a dedicated Codex Gateway cannot apply it otherwise.`,
+    );
+  const object = (value: unknown, path: string): Record<string, unknown> | undefined => {
     if (value === undefined || value === null) {
       return undefined;
     }
     const record = asRecord(value);
     if (record === undefined) {
-      throw new ConfigurationFailure(`The ${setting} setting must be an object.`);
+      throw unsupported(path, "an object");
     }
     return record;
   };
   const codex = asRecord(asRecord(asRecord(configuration.plugins)?.entries)?.codex);
   if (codex !== undefined) {
-    const excluded = object(codex.config, "Codex plugin config")?.codexDynamicToolsExclude;
+    const excluded = object(codex.config, "plugins.entries.codex.config")?.codexDynamicToolsExclude;
     if (excluded !== undefined && excluded !== null && !Array.isArray(excluded)) {
-      throw new ConfigurationFailure(
-        "The Codex plugin codexDynamicToolsExclude setting must be a list.",
-      );
+      throw unsupported("plugins.entries.codex.config.codexDynamicToolsExclude", "a list");
     }
     object(object(configuration.cron, "cron")?.triggers, "cron.triggers");
   }
@@ -1342,15 +1347,13 @@ function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurat
     }
     const row = asRecord(provider);
     if (row === undefined) {
-      throw new ConfigurationFailure(`The ${id} model provider setting must be an object.`);
+      throw unsupported(`models.providers.${key}`, "an object");
     }
     if (
       row.models !== undefined &&
       (!Array.isArray(row.models) || !row.models.every((model) => asRecord(model) !== undefined))
     ) {
-      throw new ConfigurationFailure(
-        `The ${id} model provider models setting must be a list of objects.`,
-      );
+      throw unsupported(`models.providers.${key}.models`, "a list of objects");
     }
   }
 }
