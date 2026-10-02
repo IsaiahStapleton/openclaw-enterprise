@@ -162,6 +162,17 @@ export class ResourceConflictError extends ScopeViolationError {
   }
 }
 
+/**
+ * A conflict raised only after the caller was authorized on the resource, whose message
+ * names what blocks the operation. HTTP returns that message instead of the generic text.
+ */
+export class ResourceStateConflictError extends ResourceConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResourceStateConflictError";
+  }
+}
+
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {
     super(message);
