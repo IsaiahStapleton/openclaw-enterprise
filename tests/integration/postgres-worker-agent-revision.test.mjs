@@ -4641,11 +4641,44 @@ test(
       assert.equal(retried.actorId, otherActor);
       assert.equal(retried.idempotencyKey, exhausted.idempotencyKey);
     }
+    // Namespace policy left at teardown is removed with the tombstone and audited.
+    const policyRole = `role-${randomUUID()}`;
+    const policyBinding = `binding-${randomUUID()}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_roles (id, namespace_id, name, permissions)
+       VALUES ($1, $2, NULL, '[{"action":"read","resourceKind":"namespace"}]'::jsonb)`,
+      [policyRole, namespace.id],
+    );
+    await fixture.observerPool.query(
+      `INSERT INTO occ.iam_access_bindings
+         (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+       VALUES ($1, $2, $3, $4, 'namespace', $2)`,
+      [policyBinding, namespace.id, otherActor, policyRole],
+    );
     await fixture.work(deletion, "succeeded");
     assert.equal(deleteAttempts, 2);
     assert.equal(
       await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id)),
       undefined,
+    );
+    const { rows: leftover } = await fixture.observerPool.query(
+      `SELECT (SELECT count(*) FROM occ.iam_roles WHERE namespace_id = $1)::int AS roles,
+              (SELECT count(*) FROM occ.iam_access_bindings WHERE namespace_id = $1)::int AS bindings`,
+      [namespace.id],
+    );
+    assert.deepEqual(leftover, [{ roles: 0, bindings: 0 }]);
+    const { rows: teardownAudit } = await fixture.observerPool.query(
+      `SELECT details FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'openclaw.namespaces.lifecycle.delete'
+         AND outcome = 'success'`,
+      [namespace.id],
+    );
+    assert.equal(teardownAudit.length, 1);
+    assert.ok(teardownAudit[0].details.removedRoleIds.includes(policyRole));
+    assert.ok(
+      teardownAudit[0].details.removedAccessBindings.some(
+        (binding) => binding.id === policyBinding && binding.subjectId === otherActor,
+      ),
     );
     const { rows: retryAudit } = await fixture.observerPool.query(
       `SELECT actor_id AS "actorId", outcome, details FROM occ.audit_events

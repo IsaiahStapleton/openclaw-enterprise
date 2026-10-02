@@ -74,6 +74,7 @@ import {
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
+  accessBindingsTargeting,
   DeletionRetryOwnedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
@@ -2731,14 +2732,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     if (operation.operationId === "deleteAgent") {
       const agent = await controller.transact(async (unit) => {
         const deleting = await controller!.deleteAgent(context.actorId, namespaceId, agentId);
+        // The deleting Agent is locked and refuses new bindings, so these are exactly the
+        // AccessBindings that completing the deletion removes (unless deleted explicitly).
+        const pending = await accessBindingsTargeting(unit, namespaceId, "agent", deleting.id);
+        const recorded = event(
+          operation,
+          request,
+          { kind: "agent", id: deleting.id, namespaceId },
+          "mutation",
+          context,
+        );
         await unit.audit.append(
-          event(
-            operation,
-            request,
-            { kind: "agent", id: deleting.id, namespaceId },
-            "mutation",
-            context,
-          ),
+          pending.length === 0
+            ? recorded
+            : {
+                ...recorded,
+                details: { ...recorded.details, accessBindingsRemovedOnCompletion: pending },
+              },
         );
         return clientAgent(deleting);
       });

@@ -844,6 +844,95 @@ function assertAccessBindingRoleApplies(role: Readonly<Role>, resourceKind: Reso
   }
 }
 
+/** An AccessBinding removed as a side effect, as recorded in the audit of the removal. */
+export interface RemovedAccessBinding {
+  readonly id: string;
+  readonly subjectKind: AccessBinding["subjectKind"];
+  readonly subjectId: string;
+  readonly roleId: string;
+  readonly resourceKind?: ResourceKind;
+  readonly resourceId?: string;
+}
+
+function removedAccessBinding(binding: Readonly<AccessBinding>): RemovedAccessBinding {
+  return Object.freeze({
+    id: binding.id,
+    subjectKind: binding.subjectKind,
+    subjectId: binding.subjectId,
+    roleId: binding.roleId,
+    ...(binding.resourceKind === undefined ? {} : { resourceKind: binding.resourceKind }),
+    ...(binding.resourceId === undefined ? {} : { resourceId: binding.resourceId }),
+  });
+}
+
+/**
+ * Lists the Namespace AccessBindings that target one exact resource. Deleting the resource
+ * removes them, so callers record the list in that deletion's audit event.
+ */
+export async function accessBindingsTargeting(
+  state: Pick<PlatformReadView, "iamPolicy">,
+  namespaceId: string,
+  resourceKind: ResourceKind,
+  resourceId: string,
+): Promise<readonly RemovedAccessBinding[]> {
+  return Object.freeze(
+    (await state.iamPolicy.listAccessBindings(namespaceId))
+      .filter(
+        (binding) => binding.resourceKind === resourceKind && binding.resourceId === resourceId,
+      )
+      .map(removedAccessBinding),
+  );
+}
+
+/**
+ * Removes a deleted Namespace's own policy (its AccessBindings, then its Roles) in the
+ * tombstoning transaction, so no grant outlives the Namespace. Returns what was removed
+ * for the lifecycle audit event.
+ */
+export async function removeNamespacePolicy(
+  state: Pick<PlatformUnitOfWork, "iamPolicy">,
+  namespaceId: string,
+): Promise<{
+  readonly accessBindings: readonly RemovedAccessBinding[];
+  readonly roleIds: readonly string[];
+}> {
+  const accessBindings: RemovedAccessBinding[] = [];
+  for (const binding of await state.iamPolicy.listAccessBindings(namespaceId)) {
+    if (await state.iamPolicy.deleteAccessBinding(namespaceId, binding.id)) {
+      accessBindings.push(removedAccessBinding(binding));
+    }
+  }
+  const roleIds: string[] = [];
+  for (const role of await state.iamPolicy.listRoles(namespaceId)) {
+    if (await state.iamPolicy.deleteRole(namespaceId, role.id)) {
+      roleIds.push(role.id);
+    }
+  }
+  return Object.freeze({
+    accessBindings: Object.freeze(accessBindings),
+    roleIds: Object.freeze(roleIds),
+  });
+}
+
+/** Audit details for removed Namespace policy; empty when nothing was removed. */
+export function removedPolicyDetails(
+  removed:
+    | {
+        readonly accessBindings: readonly RemovedAccessBinding[];
+        readonly roleIds: readonly string[];
+      }
+    | undefined,
+): Readonly<Record<string, unknown>> {
+  return {
+    ...(removed === undefined || removed.accessBindings.length === 0
+      ? {}
+      : { removedAccessBindings: removed.accessBindings }),
+    ...(removed === undefined || removed.roleIds.length === 0
+      ? {}
+      : { removedRoleIds: removed.roleIds }),
+  };
+}
+
 export class OpenClawController {
   readonly installation: Readonly<Installation>;
 
@@ -3011,10 +3100,15 @@ export class OpenClawController {
     });
   }
 
-  async deletePreset(principalId: string, namespaceId: string, presetId: string): Promise<void> {
+  /** Returns the AccessBindings removed with the Preset, for its deletion audit. */
+  async deletePreset(
+    principalId: string,
+    namespaceId: string,
+    presetId: string,
+  ): Promise<readonly RemovedAccessBinding[]> {
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
-      await this.deletePresetInState(state, principalId, namespace.id, presetId);
+      return this.deletePresetInState(state, principalId, namespace.id, presetId);
     });
   }
 
@@ -3023,7 +3117,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     presetId: string,
-  ): Promise<void> {
+  ): Promise<readonly RemovedAccessBinding[]> {
     await this.authorize(principalId, "delete", {
       kind: "preset",
       id: presetId,
@@ -3032,14 +3126,14 @@ export class OpenClawController {
     if (!(await state.presets.lockPreset(namespaceId, presetId))) {
       throw new ScopeViolationError("The Preset does not belong to the exact Namespace.");
     }
-    for (const binding of await state.iamPolicy.listAccessBindings(namespaceId)) {
-      if (binding.resourceKind === "preset" && binding.resourceId === presetId) {
-        await state.iamPolicy.deleteAccessBinding(namespaceId, binding.id);
-      }
+    const removed = await accessBindingsTargeting(state, namespaceId, "preset", presetId);
+    for (const binding of removed) {
+      await state.iamPolicy.deleteAccessBinding(namespaceId, binding.id);
     }
     if (!(await state.presets.deletePreset(namespaceId, presetId))) {
       throw new ResourceConflictError("The Preset changed during deletion.");
     }
+    return removed;
   }
 
   /** True when a Preset is still the exact Installation default seeded into its Namespace. */
@@ -3179,7 +3273,12 @@ export class OpenClawController {
     });
   }
 
-  async deleteSecret(principalId: string, namespaceId: string, secretId: string): Promise<void> {
+  /** Returns the AccessBindings removed with the Secret, for its deletion audit. */
+  async deleteSecret(
+    principalId: string,
+    namespaceId: string,
+    secretId: string,
+  ): Promise<readonly RemovedAccessBinding[]> {
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
@@ -3196,11 +3295,13 @@ export class OpenClawController {
           "A Configuration, active revision, or pending deployment still references the Secret.",
         );
       }
+      const removed = await accessBindingsTargeting(state, namespace.id, "secret", secret.id);
       const driver = this.secretDriver(secret.driverId);
       await this.secretOperation(() => driver.delete(secret));
       if (!(await state.secrets.deleteSecret(namespace.id, secret.id))) {
         throw new ResourceConflictError("The Secret changed during deletion.");
       }
+      return removed;
     });
   }
 
@@ -3502,7 +3603,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     credentialSourceId: string,
-    audit?: () => AuditEvent,
+    audit?: (removedAccessBindings: readonly RemovedAccessBinding[]) => AuditEvent,
   ): Promise<void> {
     this.assertCredentialSourceTransactionBoundary();
     const { namespace, source } = await this.mutate(async (state) => {
@@ -3552,11 +3653,17 @@ export class OpenClawController {
     // The success event commits with the final removal, so a completed deletion is always audited.
     await this.mutate(async (state) => {
       await this.lockNamespace(state, namespace.id);
+      const removed = await accessBindingsTargeting(
+        state,
+        namespace.id,
+        "credential_source",
+        source.id,
+      );
       if (!(await state.credentialSources.deleteCredentialSource(namespace.id, source.id))) {
         throw new ResourceConflictError("The credential source changed during deletion.");
       }
       if (audit !== undefined) {
-        await state.audit.append(audit());
+        await state.audit.append(audit(removed));
       }
     });
   }
@@ -3730,7 +3837,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     serviceAccountId: string,
-  ): Promise<void> {
+  ): Promise<readonly RemovedAccessBinding[]> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
@@ -3758,9 +3865,16 @@ export class OpenClawController {
       if (driver !== undefined) {
         await this.driverOperation(() => driver.delete(account), "ServiceAccount");
       }
+      const removed = await accessBindingsTargeting(
+        state,
+        namespace.id,
+        "service_account",
+        account.id,
+      );
       if (!(await state.serviceAccounts.deleteServiceAccount(namespace.id, account.id))) {
         throw new ResourceConflictError("The ServiceAccount changed during deletion.");
       }
+      return removed;
     });
   }
 
@@ -3855,7 +3969,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     configurationId: string,
-  ): Promise<void> {
+  ): Promise<readonly RemovedAccessBinding[]> {
     this.configurationIdentity(namespaceId, configurationId);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
@@ -3890,9 +4004,16 @@ export class OpenClawController {
       this.registerRollback(async () => {
         await driver.create(previous);
       });
+      const removed = await accessBindingsTargeting(
+        state,
+        namespace.id,
+        "configuration",
+        configuration.id,
+      );
       if (!(await state.configurations.deleteConfiguration(namespace.id, configuration.id))) {
         throw new ResourceConflictError("The Configuration changed during deletion.");
       }
+      return removed;
     });
   }
 
@@ -5762,6 +5883,7 @@ export class OpenClawController {
         const updated = deleted
           ? await state.namespaces.markNamespaceDeleted(current.id, this.timestamp())
           : current;
+        const removedPolicy = deleted ? await removeNamespacePolicy(state, current.id) : undefined;
         await this.appendLifecycleAudit(
           state,
           actorId,
@@ -5771,6 +5893,7 @@ export class OpenClawController {
           {
             namespaceDeleted: result.namespaceDeleted,
             ...(result.failure === undefined ? {} : { failure: result.failure }),
+            ...removedPolicyDetails(removedPolicy),
           },
         );
         return updated;
