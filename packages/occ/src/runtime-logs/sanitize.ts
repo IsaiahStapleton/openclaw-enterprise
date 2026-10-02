@@ -133,9 +133,16 @@ function truncateBytes(value: string, limit: number): { text: string; truncated:
   return { text: `${text}${TRUNCATION_MARK}`, truncated: true };
 }
 
-/** Redacts, then bounds, one retained string. */
+/**
+ * Redacts, then bounds, one retained string. argv credentials (`curl -u user:pass`,
+ * `-p pass`) have no key the text rules can see, so they are masked first, for every
+ * source and field.
+ */
 export function sanitizeRuntimeLogText(value: string, limit = RUNTIME_LOG_MAX_OUTPUT_BYTES) {
-  return truncateBytes(redactRuntimeLogText(stripRuntimeLogControls(value)), limit);
+  return truncateBytes(
+    redactRuntimeLogText(redactArgvCredentials(stripRuntimeLogControls(value))),
+    limit,
+  );
 }
 
 function scalar(value: unknown): string | number | boolean | undefined {
@@ -214,13 +221,25 @@ function classifyStructured(value: Readonly<Record<string, unknown>>): Classifie
       return codexRecord(value, value.message);
     }
     // OpenClaw JSON console style: `{ ...meta, time, level, subsystem?, message }`.
+    const recordLevel = level(value.level);
+    const subsystem =
+      typeof value.subsystem === "string" && value.subsystem.length > 0
+        ? value.subsystem
+        : undefined;
+    if (subsystem === undefined && recordLevel !== "error" && recordLevel !== "warn") {
+      // Without a subsystem this is a `runtime.log` stdout write, not a logger record:
+      // the agent command prints reply payloads that way (the OpenAI-compatible chat
+      // endpoint). Errors and warnings stay, since `Gateway failed to start: ...` has no
+      // subsystem either.
+      return { type: "withheld", reason: "unrecognised_structured" };
+    }
     const fields = pickFields(value, STRUCTURED_FIELDS);
     return {
       type: "line",
       kind: "openclaw",
-      level: level(value.level),
+      level: recordLevel,
       message: value.message,
-      ...(typeof value.subsystem === "string" ? { subsystem: value.subsystem } : {}),
+      ...(subsystem === undefined ? {} : { subsystem }),
       ...(fields === undefined ? {} : { fields }),
     };
   }

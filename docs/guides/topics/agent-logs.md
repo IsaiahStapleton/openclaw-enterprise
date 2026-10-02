@@ -120,7 +120,10 @@ returning it:
 - **openclaw**: Gateway JSON console records (level, subsystem, message and a
   short list of operational fields such as `status`, `method` and `durationMs`).
   Payload keys such as `prompt`, `content`, `messages`, `args` and `headers` are
-  dropped.
+  dropped. An `info` or `debug` record without a subsystem is withheld: the
+  agent command prints reply text that way, for example for the
+  OpenAI-compatible chat endpoint. Errors and warnings without a subsystem, such
+  as `Gateway failed to start: ...`, are kept.
 - **codex**: Codex tracing records (level, target, message). Turns show as
   `turn started` and `turn completed` (info, with model, turn ID, tokens and
   busy time); tool calls keep their name and duration. Other span records are
@@ -136,10 +139,14 @@ and so is a pretty-printed (multi-line) JSON value: its opening line, every memb
 line and its closing line become one withheld row.
 
 Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
-and cookie header values, `Bearer` tokens, JWTs, known token prefixes (`sk-`, `ghp_`, `ghs_`,
-`github_pat_`, `xoxb-`, `AKIA` and others), URL user information, every URL
-query value and fragment, `password=`/`token:`/`"api_key":`-style values, and
-long base64 or hex runs with `[redacted:<pattern>]`. A PEM block printed over
+and cookie header values, `Bearer` tokens, `Basic` user:password values, JWTs,
+known token prefixes (`sk-`, `sk_live_`, `rk_live_`, `ghp_`, `ghs_`,
+`github_pat_`, `hf_`, `xoxb-`, `AKIA` and others), URL user information, every
+URL query value and fragment, `password=`/`token:`/`"api_key":`-style values,
+upper-case `*_KEY=` assignments, netrc `login <user> password <secret>` values,
+the value after a command-line credential flag (`curl -u user:password`, `-p`,
+`--token`; the list under "Sandbox source" below), and long base64 or hex runs
+with `[redacted:<pattern>]`. A PEM block printed over
 several lines is masked from an observed BEGIN through END, including across
 follow polls in the same container view. Ordered lines newer than the prior cursor
 frontier can close a carried block at END or the first line that is not base64,

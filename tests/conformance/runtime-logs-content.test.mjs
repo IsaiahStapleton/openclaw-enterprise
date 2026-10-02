@@ -47,6 +47,14 @@ function canaries() {
     CODEX_PROMPT: `codex-prompt-${randomUUID()}`,
     WRAPPER_EXTRA: `wrapper-extra-${randomUUID()}`,
     MALFORMED: `malformed-canary-${randomUUID()}`,
+    ARGV_PASSWORD: `argv${randomString(12)}`,
+    HF_TOKEN: `hf_${randomString(34)}`,
+    STRIPE_KEY: `sk_live_${randomString(24)}`,
+    BASIC: Buffer.from(`user:${randomString(12)}`).toString("base64"),
+    NETRC_PASSWORD: `netrc${randomString(12)}`,
+    SERVICE_KEY: randomBytes(16).toString("hex"),
+    // A chat reply that the agent command prints through `runtime.log` (no subsystem).
+    REPLY: `reply-canary-${randomUUID()}`,
   };
 }
 
@@ -150,7 +158,7 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
     assert.equal(download.text.includes(value), false, `canary ${name} leaked into the download`);
   }
   assert.match(download.text, /\[redacted:/);
-  assert.match(download.text, / WITHHELD 2 unrecognised_structured$/m);
+  assert.match(download.text, / WITHHELD 3 unrecognised_structured$/m);
   assert.match(download.text, / GAP truncated: /);
   const controls = [...download.text].filter((character) => {
     const code = character.codePointAt(0);
@@ -188,15 +196,100 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
   assert.deepEqual(
     withheld.map(({ reason, count }) => ({ reason, count })),
     [
-      { reason: "unrecognised_structured", count: 2 },
+      { reason: "unrecognised_structured", count: 3 },
       { reason: "malformed", count: 2 },
     ],
   );
-  assert.equal(logs.data.withheld, 4);
+  assert.equal(logs.data.withheld, 5);
   // The byte cut is labelled, never silent.
   assert.equal(logs.data.truncated, true);
   assert.equal(logs.data.records.at(-1).type, "gap");
   assert.equal(logs.data.records.at(-1).reason, "truncated");
+});
+
+test("OpenClaw console records without a subsystem are withheld below warn", () => {
+  const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
+  const reply = `reply-canary-${randomUUID()}`;
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: JSON.stringify({ level: "info", message: reply }) },
+      { time: lineTime(2), raw: JSON.stringify({ level: "debug", message: reply, subsystem: "" }) },
+      {
+        time: lineTime(3),
+        raw: JSON.stringify({
+          level: "error",
+          message: "Gateway failed to start: gateway.bind=custom requires gateway.customBindHost",
+        }),
+      },
+      { time: lineTime(4), raw: JSON.stringify({ level: "warn", message: "config reloaded" }) },
+      {
+        time: lineTime(5),
+        raw: JSON.stringify({ level: "info", subsystem: "gateway", message: "listening" }),
+      },
+    ],
+  });
+  assert.deepEqual(
+    records.map((record) =>
+      record.type === "withheld"
+        ? `withheld ${record.reason} ${record.count}`
+        : `${record.level} ${record.message}`,
+    ),
+    [
+      "withheld unrecognised_structured 2",
+      "error Gateway failed to start: gateway.bind=custom requires gateway.customBindHost",
+      "warn config reloaded",
+      "info listening",
+    ],
+  );
+});
+
+test("credential shapes outside key names are masked in messages and kept fields", () => {
+  const stream = { source: "agent", pod: "gateway-0", container: "agent" };
+  const password = `pw${randomString(14)}`;
+  const hf = `hf_${randomString(34)}`;
+  const stripe = `sk_live_${randomString(24)}`;
+  const restricted = `rk_test_${randomString(24)}`;
+  const basic = Buffer.from(`svc:${randomString(12)}`).toString("base64");
+  const netrc = `n${randomString(15)}`;
+  const serviceKey = randomBytes(16).toString("hex");
+  const turn = `curl --user ops:${password} https://x.example.invalid`;
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: `curl -u admin:${password} https://x.example.invalid` },
+      { time: lineTime(2), raw: `token ${hf} ${stripe} ${restricted}` },
+      { time: lineTime(3), raw: `Proxy auth Basic ${basic}` },
+      { time: lineTime(4), raw: `machine github.com login bob password ${netrc}` },
+      { time: lineTime(5), raw: `MY_SERVICE_KEY=${serviceKey}` },
+      {
+        time: lineTime(6),
+        raw: JSON.stringify({
+          level: "warn",
+          target: "codex_core::tools::parallel",
+          fields: { message: "tool failed", turn_id: turn },
+        }),
+      },
+      {
+        time: lineTime(7),
+        raw: JSON.stringify({ level: "warn", subsystem: "x", message: "m", code: stripe }),
+      },
+      // Prose and identifiers stay readable.
+      { time: lineTime(8), raw: "basic authentication failed; see hf_hub_download and sort -u" },
+    ],
+  });
+  const text = JSON.stringify(records);
+  for (const value of [password, hf, stripe, restricted, basic, netrc, serviceKey]) {
+    assert.equal(text.includes(value), false, `${value.slice(0, 6)}... leaked`);
+  }
+  assert.equal(
+    records.at(-1).message,
+    "basic authentication failed; see hf_hub_download and sort -u",
+  );
+  assert.match(records[0].message, /^curl -u \[redacted:argv\] https:/);
+  assert.equal(records[4].message, "MY_SERVICE_KEY=[redacted:key-value]");
 });
 
 test("the wrapper's fixed plain-text failure line is a wrapper error, not unknown text", () => {
@@ -252,7 +345,12 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   const long = sanitizeRuntimeLogChunk({
     stream,
     truncated: false,
-    lines: [{ time: lineTime(1), raw: `{"level":"info","message":"${"z ".repeat(6000)}"}` }],
+    lines: [
+      {
+        time: lineTime(1),
+        raw: `{"level":"info","subsystem":"gateway","message":"${"z ".repeat(6000)}"}`,
+      },
+    ],
   });
   assert.equal(long.records[0].truncated, true);
   assert.ok(Buffer.byteLength(long.records[0].message) <= 8 * 1024);
