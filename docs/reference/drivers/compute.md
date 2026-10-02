@@ -133,8 +133,9 @@ method are unaffected.
 ### Startup failure evidence
 
 `ComputeReadiness.runtimeFailure` optionally reports a bounded startup failure
-for the exact observed revision. Compute owns collection and classification;
-the core does not inspect native runtime output. Evidence contains safe
+for the exact observed revision; an unready one's `pendingReason` says
+[why it waits](../agents/deployment.md#pending-deployment-progress). Compute
+owns collection and classification. Evidence contains safe
 `component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
 provider errors. An unavailable or untrusted observation omits the evidence.
 

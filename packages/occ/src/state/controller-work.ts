@@ -54,6 +54,15 @@ export function deploymentProgressForWork(
       code = attempt.code;
       message = "Waiting for the runtime to become ready.";
       break;
+    case "REVISION_UNSCHEDULABLE":
+      code = attempt.code;
+      message =
+        "The cluster has no room for this Agent's Pods yet; they are waiting to be scheduled.";
+      break;
+    case "WORKSPACE_NODE_PENDING":
+      code = attempt.code;
+      message = "Workloads are ready; waiting for the workspace node to connect to the Gateway.";
+      break;
     case "DEPENDENCY_UNAVAILABLE":
       code = attempt.code;
       message = "A dependency was unavailable. The controller will retry.";
