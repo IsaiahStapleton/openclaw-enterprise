@@ -996,12 +996,7 @@ func (app *application) agentCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.printItems(deployment, false, []column{
-				{title: "ID", key: "deploymentId"},
-				{title: "AGENT", key: "agentId"},
-				{title: "STATUS", key: "status"},
-				{title: "ERROR", key: "error"},
-			})
+			return app.printDeploymentStatus(deployment)
 		},
 	}
 	stop := &cobra.Command{

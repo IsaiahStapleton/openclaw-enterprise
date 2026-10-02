@@ -77,7 +77,10 @@ test("Agent detail separates the current version, viewed version, and latest dep
               agentId: agent.id,
               status,
               error: null,
-              warnings: [],
+              warnings:
+                status === "succeeded"
+                  ? [{ code: "PLUGIN_AUTH_REQUIRED", pluginId: "linear@openai-curated-remote" }]
+                  : [],
               progress: status === "queued" ? pendingProgress : null,
             },
             meta: { requestId: "req_test_deployment_activity" },
@@ -144,6 +147,12 @@ test("Agent detail separates the current version, viewed version, and latest dep
   const versionRecord = page.locator(".version-deployment-record");
   await versionRecord.getByRole("heading", { name: "This version’s deployment record" }).waitFor();
   await versionRecord.getByText("Recorded outcome: succeeded").waitFor();
+  // D331: a startup warning says what happened to the plugin, not only its code.
+  await versionRecord
+    .getByText(
+      "linear@openai-curated-remote was disabled for this startup because it is not authenticated: Codex plugins need a ChatGPT login rather than an API key, and some also need their app connected to that account. (PLUGIN_AUTH_REQUIRED)",
+    )
+    .waitFor();
   const observations = page.locator(".version-diagnostics");
   await observations
     .getByText(/For Kubernetes Compute, Gateway checks cover only the Slack channel/)

@@ -8,6 +8,21 @@ import { configuredHarnessId } from "./harness-auth.mjs";
 export const API_KEY_PLUGIN_MESSAGE =
   "Codex plugins need a ChatGPT login. This Agent uses an API key, so each selected plugin is disabled when it deploys (PLUGIN_AUTH_REQUIRED). Change its Harness authentication under Credentials to use plugins.";
 
+const PLUGIN_WARNING_EXPLANATIONS = Object.freeze({
+  PLUGIN_AUTH_REQUIRED:
+    "was disabled for this startup because it is not authenticated: Codex plugins need a ChatGPT login rather than an API key, and some also need their app connected to that account.",
+  PLUGIN_INSTALL_FAILED:
+    "was disabled for this startup because it could not be installed. Check the Agent's runtime logs.",
+});
+
+/** One sentence per deployment startup warning, keeping its code for lookup. */
+export function pluginWarningText(warning) {
+  const explanation = Object.hasOwn(PLUGIN_WARNING_EXPLANATIONS, warning.code)
+    ? PLUGIN_WARNING_EXPLANATIONS[warning.code]
+    : "reported a startup warning.";
+  return `${warning.pluginId} ${explanation} (${warning.code})`;
+}
+
 export function renderAgentPlugins(
   context,
   { agent, snapshot, draft, path, onState, onSaved, onReload },
