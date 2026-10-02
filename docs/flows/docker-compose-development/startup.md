@@ -311,8 +311,10 @@ and Secret Drivers with native IAM. Without OpenShell, it includes both bundled
 Presets and the Codex Plugin Driver after the shared Codex sandbox check.
 Its runtime section configures the transport
 Secret prefix and gateway storage class accepted by the current Compute Driver
-schema. Generated Gateway and Harness resource limits allow 2 GiB of memory per
-workload; the current runtime can exceed the former 1 GiB limit during startup.
+schema. Generated Harness resource limits allow 2 GiB of memory per workload and
+Gateway limits allow 3 GiB; the current runtime can exceed the former 1 GiB
+limit during startup, and a dedicated Codex Gateway serving native admin chat
+peaked at 1.9 GiB.
 The container configuration and kubeconfig are individually readable by
 non-root containers, behind the private host directory, and mounted read-only
 into the API and Kubernetes worker. Neither service receives the engine socket.
