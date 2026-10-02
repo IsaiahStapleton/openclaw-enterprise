@@ -693,6 +693,61 @@ test(
   },
 );
 
+// The worker is serial. A Compute wait that only saves a later pass asks whether
+// other Work is waiting and ends early when it is, so another Agent's deploy
+// runs next instead of queuing behind the wait (D221).
+test(
+  "a revision pass learns when another Agent's Work is waiting for the serial worker",
+  { ...requiresPostgres, timeout: 30_000 },
+  async (context) => {
+    const { computeWorkWaiting } =
+      await import("../../apps/controller/src/drivers/compute/operation-context.ts");
+    const fixture = await setup(context);
+    const first = await fixture.agent("waiting-first", "dedicated");
+    const second = await fixture.agent("waiting-second", "dedicated");
+    const prepared = [];
+    let secondRevision;
+    let wait;
+    const compute = {
+      ...fixture.compute,
+      async prepareRevision(revision, deploymentContext) {
+        prepared.push(revision.agentId);
+        if (revision.agentId !== first.id || wait !== undefined) {
+          return fixture.compute.prepareRevision(revision, deploymentContext);
+        }
+        // The first Agent's pass waits, as for its node to pair; nothing else is
+        // queued yet, so nothing is waiting for the worker.
+        const before = await computeWorkWaiting();
+        secondRevision = await fixture.revision(second, 1);
+        const started = Date.now();
+        let endedEarly = false;
+        while (Date.now() - started < 10_000) {
+          if (await computeWorkWaiting()) {
+            endedEarly = true;
+            break;
+          }
+          await delay(25);
+        }
+        wait = { before, endedEarly, ms: Date.now() - started };
+        return {
+          ...(await fixture.compute.prepareRevision(revision, deploymentContext)),
+          ready: false,
+        };
+      },
+    };
+    await fixture.start(compute);
+    const firstRevision = await fixture.revision(first, 1);
+    await waitFor("the second Agent to deploy during the first pass", async () => secondRevision);
+    await fixture.work(secondRevision, "succeeded");
+    await fixture.work(firstRevision, "succeeded");
+    assert.equal(wait.before, false, "the pass's own Agent is not other Work");
+    assert.equal(wait.endedEarly, true);
+    assert.ok(wait.ms < 5_000, `the wait ended early (${wait.ms} ms)`);
+    // The pending first pass ended and the second Agent's pass ran next.
+    assert.deepEqual(prepared.slice(0, 2), [first.id, second.id]);
+  },
+);
+
 test(
   "exclusive replacement blocks overlap, supersedes old maintenance and recovers through a new revision",
   { ...requiresPostgres, timeout: 30_000 },

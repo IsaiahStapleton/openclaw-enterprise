@@ -103,7 +103,11 @@ import {
   OAUTH_PHASE_ANNOTATION,
   OAUTH_VOLUME_ANNOTATION,
 } from "../../kubernetes/oauth-seal.ts";
-import { currentComputeAbortSignal, withComputeAbortSignal } from "../operation-context.ts";
+import {
+  computeWorkWaiting,
+  currentComputeAbortSignal,
+  withComputeAbortSignal,
+} from "../operation-context.ts";
 import { unsupportedNativeGatewayAuthFields } from "../../../gateway/auth-fields.ts";
 import type {
   GatewayNodeEnrollment,
@@ -699,7 +703,9 @@ const WORKSPACE_NODE_BINDING_ACK_POLL_MS = 250;
 // (about 1-3 s of reconciliation) per check. The worker is serial, so this is
 // a budget per setup, not per pass: once a setup has spent it, later passes read
 // the setup once and end pending, so a node that never pairs cannot hold the
-// worker on every pass and delay other Agents' deploys (D88).
+// worker on every pass and delay other Agents' deploys (D88). Both this wait
+// and the ack wait above also end at once when other Work could be claimed, so
+// they only use a worker nobody else is waiting for (D221).
 const WORKSPACE_NODE_PAIRING_WAIT_MS = 8_000;
 // Remembered setups whose pairing budget is partly or fully spent. Forgetting
 // one (a full map, or a controller restart) only grants that setup one more wait.
@@ -7289,7 +7295,9 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
       }
-      if (this.now() >= deadline) {
+      // Other Work waiting for the serial worker ends the wait early, like the
+      // pairing wait: activation fails, is retried, and reads again (D221).
+      if (this.now() >= deadline || (await computeWorkWaiting())) {
         return false;
       }
       await this.delay(WORKSPACE_NODE_BINDING_ACK_POLL_MS);
@@ -7661,7 +7669,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         url,
         setupId,
         this.operationSignal(),
-        waitMs > 0 ? { waitMs } : undefined,
+        // Another Agent's Work waiting for the serial worker ends the wait:
+        // the pass ends pending and the next one reads the setup again (D221).
+        waitMs > 0 ? { waitMs, stopWaiting: computeWorkWaiting } : undefined,
       );
     } finally {
       if (waitMs > 0) {

@@ -14,14 +14,21 @@ export interface GatewayNodeEnrollment {
    * Reads the setup's completion and whether its node is connected. With
    * `waitMs`, keeps one connection and re-reads until the node is connected or
    * the time is up, so a node that pairs a moment later is seen at once.
+   * `stopWaiting` ends the wait early, after at least one reading, when it
+   * returns true between readings.
    */
   observeSetup(
     url: string,
     setupId: string,
     signal: AbortSignal,
-    options?: { readonly waitMs?: number },
+    options?: NodeSetupObserveOptions,
   ): Promise<NodeSetupObservation | undefined>;
   isConnected(url: string, deviceId: string, signal: AbortSignal): Promise<boolean>;
+}
+
+export interface NodeSetupObserveOptions {
+  readonly waitMs?: number;
+  readonly stopWaiting?: () => Promise<boolean>;
 }
 
 export interface NodeSetupObservation {
@@ -84,6 +91,7 @@ export function createGatewayNodeEnrollment(
             setupId,
             requestSignal,
             waitMs,
+            options.stopWaiting,
           ),
         waitMs,
       );
@@ -103,6 +111,7 @@ export function createGatewayNodeEnrollment(
  * Setup status and node presence over one Gateway connection. Without a wait
  * this is a single read. With one, it re-reads every NODE_SETUP_POLL_MS until
  * the node is connected or `waitMs` has passed, and returns the last reading.
+ * `stopWaiting`, asked between readings, ends the wait early the same way.
  * Every reading gets the same validation; waiting never relaxes it.
  */
 export async function observeNodeSetup(
@@ -110,6 +119,7 @@ export async function observeNodeSetup(
   setupId: string,
   signal: AbortSignal,
   waitMs = 0,
+  stopWaiting?: () => Promise<boolean>,
 ): Promise<NodeSetupObservation | undefined> {
   const deadline = Date.now() + waitMs;
   let deviceId: string | undefined;
@@ -138,7 +148,11 @@ export async function observeNodeSetup(
       deviceId === undefined
         ? undefined
         : { deviceId, connected: await isConnected(request, deviceId, signal) };
-    if (observation?.connected === true || Date.now() + NODE_SETUP_POLL_MS > deadline) {
+    if (
+      observation?.connected === true ||
+      Date.now() + NODE_SETUP_POLL_MS > deadline ||
+      (stopWaiting !== undefined && (await stopWaiting()))
+    ) {
       return observation;
     }
     try {

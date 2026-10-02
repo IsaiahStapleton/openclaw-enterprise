@@ -811,17 +811,7 @@ export class PostgresWorkQueue {
           `WITH candidate AS (
              SELECT work.idempotency_key
              FROM occ.controller_work AS work
-             WHERE work.state = 'queued'
-               AND work.available_at <= clock_timestamp()
-               AND (work.attempt_count < $2::integer OR ${repositoryCleanupSql("work")})
-               ${this.namespaceFilter("work")}
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM occ.controller_work AS in_flight
-                 WHERE in_flight.state = 'claimed'
-                   AND COALESCE(in_flight.agent_id, in_flight.namespace_id) =
-                       COALESCE(work.agent_id, work.namespace_id)
-               )
+             WHERE ${this.claimablePredicate("$2")}
              ORDER BY work.available_at, work.created_at, work.idempotency_key
              FOR UPDATE OF work SKIP LOCKED
              LIMIT 1
@@ -867,6 +857,27 @@ export class PostgresWorkQueue {
       [claim.idempotencyKey, claim.claimToken, this.leaseDurationMs],
     );
     return renewed.rows[0] === undefined ? undefined : asClaimedWork(renewed.rows[0]);
+  }
+
+  /**
+   * Whether some Work could be claimed now. Work for an Agent or Namespace that
+   * already has a claim (the caller's own included) does not count: no worker
+   * could take it.
+   */
+  async claimableWorkWaiting(): Promise<boolean> {
+    const waiting = await this.client.query(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM occ.controller_work AS work
+         WHERE ${this.claimablePredicate("$1")}
+       ) AS waiting`,
+      [this.maxAttempts],
+    );
+    const value = (waiting.rows[0] as { waiting?: unknown } | undefined)?.waiting;
+    if (typeof value !== "boolean") {
+      throw new ScopeViolationError("The controller work backlog returned an invalid answer.");
+    }
+    return value;
   }
 
   async pending(): Promise<number> {
@@ -1266,6 +1277,21 @@ export class PostgresWorkQueue {
       throw new ScopeViolationError("Controller work retry jitter must be in the range [0, 1).");
     }
     return value;
+  }
+
+  // Queued Work a worker may claim now; `maxAttempts` names the bound parameter.
+  private claimablePredicate(maxAttempts: string): string {
+    return `work.state = 'queued'
+               AND work.available_at <= clock_timestamp()
+               AND (work.attempt_count < ${maxAttempts}::integer OR ${repositoryCleanupSql("work")})
+               ${this.namespaceFilter("work")}
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM occ.controller_work AS in_flight
+                 WHERE in_flight.state = 'claimed'
+                   AND COALESCE(in_flight.agent_id, in_flight.namespace_id) =
+                       COALESCE(work.agent_id, work.namespace_id)
+               )`;
   }
 
   private namespaceFilter(alias?: string): string {
