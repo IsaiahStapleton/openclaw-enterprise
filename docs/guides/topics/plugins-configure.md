@@ -131,6 +131,11 @@ In the client's tool activity, check the actual `diffs` call and a successful
 result for the requested file and view mode. Runtime versions may return a
 structured result rather than `Diff viewer ready.` A model reply alone does
 not prove it called the tool.
+In `view` mode, Diffs returns a viewer link. It opens in a browser only when the
+Agent uses [native admin access](../deploy/native-admin.md) with
+`gateway.publicOrigin` set to the Agent's native admin origin; otherwise the link
+points at the Gateway's private loopback address. Use `mode: "file"` when you
+need the rendered diff without a link.
 The [Chat Completions check](../operate/model-verification.md) reads only
 assistant text; it cannot verify that Diffs ran. The OCC console has no chat.
 Use the TUI's tool activity for this verification.
