@@ -9650,7 +9650,14 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
           {
             ipBlock: {
               cidr: "0.0.0.0/0",
-              except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"],
+              except: [
+                "10.0.0.0/8",
+                // Carrier-grade NAT: some VPC Pod/Service ranges and cloud metadata use it.
+                "100.64.0.0/10",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "169.254.0.0/16",
+              ],
             },
           },
         ],
