@@ -35,7 +35,7 @@ processors:
           - set(attributes["occ.codex.tool_name"], cache["record"]["fields"]["tool_name"]) where attributes["event.name"] == "codex.tool_call" and IsString(cache["record"]["fields"]["tool_name"]) and IsMatch(cache["record"]["fields"]["tool_name"], "^[A-Za-z][A-Za-z0-9_.:-]{0,63}$$")
           # Runtime wrapper diagnostics on stderr: fixed event names whose retained
           # fields are bounded below, so a Gateway or Codex startup failure has a cause.
-          - set(attributes["event.name"], cache["record"]["event"]) where attributes["event.name"] == nil and IsMap(cache["record"]) and (attributes["service.name"] == "openclaw-gateway" or attributes["service.name"] == "codex-app-server") and attributes["log.iostream"] == "stderr" and IsString(cache["record"]["event"]) and IsMatch(cache["record"]["event"], "^(runtime[.](startup_phase|workspace_node)|(openclaw|codex)[.]model_probe)$$")
+          - set(attributes["event.name"], cache["record"]["event"]) where attributes["event.name"] == nil and IsMap(cache["record"]) and (attributes["service.name"] == "openclaw-gateway" or attributes["service.name"] == "codex-app-server") and attributes["log.iostream"] == "stderr" and IsString(cache["record"]["event"]) and IsMatch(cache["record"]["event"], "^(runtime[.](startup_phase|workspace_node|gateway_settings_overridden)|(openclaw|codex)[.]model_probe)$$")
           - set(attributes["occ.code"], cache["record"]["code"]) where (attributes["event.name"] == "openclaw.model_probe" or attributes["event.name"] == "codex.model_probe" or attributes["event.name"] == "runtime.workspace_node") and IsString(cache["record"]["code"]) and IsMatch(cache["record"]["code"], "^[A-Z][A-Z0-9_]{0,63}$$")
           - set(attributes["occ.startup.phase"], cache["record"]["phase"]) where attributes["event.name"] == "runtime.startup_phase" and IsString(cache["record"]["phase"]) and IsMatch(cache["record"]["phase"], "^[a-z][a-z0-9-]{0,63}$$")
           # A failed startup phase may name a bounded cause, such as a plugin missing from the catalog.
@@ -64,6 +64,8 @@ processors:
           # Wrapper diagnostics carry no level: a failed phase or probe is a warning.
           - set(cache["level"], "WARN") where cache["level"] == nil and (attributes["event.name"] == "runtime.startup_phase" or attributes["event.name"] == "runtime.workspace_node") and cache["record"]["outcome"] == "failed"
           - set(cache["level"], "INFO") where cache["level"] == nil and attributes["event.name"] == "runtime.startup_phase" and cache["record"]["outcome"] == "ok"
+          # The Gateway replaced owner settings; their names stay in local logs and OCC.
+          - set(cache["level"], "WARN") where cache["level"] == nil and attributes["event.name"] == "runtime.gateway_settings_overridden"
           - set(cache["level"], "INFO") where cache["level"] == nil and (attributes["event.name"] == "openclaw.model_probe" or attributes["event.name"] == "codex.model_probe") and cache["record"]["code"] == "READY"
           - set(cache["level"], "WARN") where cache["level"] == nil and (attributes["event.name"] == "openclaw.model_probe" or attributes["event.name"] == "codex.model_probe")
           - set(severity_number, SEVERITY_NUMBER_DEBUG) where cache["level"] == "debug" or cache["level"] == "DEBUG" or cache["level"] == 20

@@ -155,6 +155,8 @@ stderr diagnostics: `runtime.startup_phase` keeps `occ.startup.phase` (and a
 failed phase's cause as `occ.code`, such as `PLUGIN_NOT_IN_CATALOG`), and
 `runtime.workspace_node` and the model probes keep `occ.code`. A failed phase or
 non-`READY` probe is WARN, so a startup failure's cause reaches the backend.
+`runtime.gateway_settings_overridden` is WARN with no attributes: the names of
+the replaced owner settings stay in `occ agent logs`.
 Kubernetes resources drop the `latest` image tag that metadata extraction reports
 for a digest-only image. For retained records it keeps allowlisted
 attributes and replaces the body with the event name, stripping arbitrary content;
