@@ -80,14 +80,15 @@ processors:
           # targets (whose formats interpolate only error values) or the two fixed
           # codex_core::responses_retry messages, and only when it is short plain text: no
           # quotes, braces, query strings or credential words, and no word longer
-          # than 24 characters, no argv credential flag (`-u`, `--password`) and no
-          # `user:password` pair. Other Codex warnings and errors (codex_core can log
-          # chat text and model-proposed values) keep the event name. A Gateway
-          # startup failure keeps its message under the same plain-text rules.
+          # than 24 characters. Other Codex warnings and errors (codex_core can log
+          # chat text and model-proposed values) keep the event name.
           - set(body, "turn started") where attributes["event.name"] == "codex.turn" and cache["record"]["fields"]["message"] == "new"
           - set(body, "turn completed") where attributes["event.name"] == "codex.turn" and cache["record"]["fields"]["message"] == "close"
           - set(body, "tool call completed") where attributes["event.name"] == "codex.tool_call"
           - set(body, cache["record"]["fields"]["message"]) where attributes["event.name"] == "codex.operational" and (IsMatch(cache["record"]["target"], "^codex_app_server(::|$$)") or (cache["record"]["target"] == "codex_core::responses_retry" and IsString(cache["record"]["fields"]["message"]) and IsMatch(cache["record"]["fields"]["message"], "^(stream connection failed; waiting to retry|remote compaction v2 stream failed; retrying request after delay)$$"))) and IsMap(cache["record"]["fields"]) and IsString(cache["record"]["fields"]["message"]) and IsMatch(cache["record"]["fields"]["message"], "^[A-Za-z].{0,239}$$") and IsMatch(cache["record"]["fields"]["message"], "^(?:[A-Za-z0-9_-]{1,24}[ ,;:()./=]{1,4})*[A-Za-z0-9_-]{0,24}$$") and not IsMatch(cache["record"]["fields"]["message"], "(?i)(token|secret|passw|bearer|cookie|credential|api.?key|authoriz|session)") and not IsMatch(cache["record"]["fields"]["message"], "(^|[ ])-{1,2}(u|user|p|pass|password|a|proxy-user)([ ]|=)") and not IsMatch(cache["record"]["fields"]["message"], "[A-Za-z0-9_-]:[A-Za-z0-9_-]")
+          # argv credentials carry no credential word: a codex.operational body also
+          # rejects a credential flag (`-u`, `--password`) or a `user:password` pair.
+          # A Gateway startup failure keeps its message under the same rules.
           - set(body, cache["record"]["message"]) where attributes["event.name"] == "gateway.startup_failed" and IsMatch(cache["record"]["message"], "^.{0,240}$$") and IsMatch(cache["record"]["message"], "^(?:[A-Za-z0-9_-]{1,24}[ ,;:()./=]{1,4})*[A-Za-z0-9_-]{0,24}$$") and not IsMatch(cache["record"]["message"], "(?i)(token|secret|passw|bearer|cookie|credential|api.?key|authoriz|session)") and not IsMatch(cache["record"]["message"], "(^|[ ])-{1,2}(u|user|p|pass|password|a|proxy-user)([ ]|=)") and not IsMatch(cache["record"]["message"], "[A-Za-z0-9_-]:[A-Za-z0-9_-]")
   filter/operational:
     error_mode: propagate

@@ -955,14 +955,6 @@ test(
               }),
               tracing("WARN", "codex_app_server", { message: `failed to refresh token ${canary}` }),
               tracing("WARN", "codex_app_server", { message: `${"x".repeat(30)}${canary}` }),
-              // argv credentials have no credential word: a flag or a user:password pair
-              // keeps the event name.
-              tracing("ERROR", "codex_app_server", {
-                message: `exec_command failed: curl -u admin:${canary} https://x.example`,
-              }),
-              tracing("ERROR", "codex_app_server", {
-                message: `exec_command failed: git --password ${canary}`,
-              }),
               // Model failures from any Codex target, never the codex_otel content targets.
               // Only app-server and the fixed codex_core retry messages keep their text.
               tracing("WARN", "codex_core::responses_retry", {
@@ -992,7 +984,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 14);
+    await waitFor(async () => (await records()).length >= 12);
     await delay(1_000);
     const exported = await records();
     const summary = exported
@@ -1020,8 +1012,6 @@ test(
         ],
         ["INFO", "codex.operational", "outbound router task exited (channel closed)", null],
         ["ERROR", "codex.operational", "codex.operational", null],
-        ["ERROR", "codex.operational", "codex.operational", null],
-        ["ERROR", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "codex.operational", null],
         ["WARN", "codex.operational", "stream connection failed; waiting to retry", null],
@@ -1036,7 +1026,7 @@ test(
 );
 
 test(
-  "native Collector exports a Gateway startup failure as a fixed event with a bounded cause",
+  "native Collector keeps argv credentials out of Codex bodies and exports Gateway startup failures",
   {
     skip: selected
       ? false
@@ -1066,7 +1056,37 @@ test(
     });
     const cause =
       "Gateway failed to start: gateway.bind=custom requires gateway.customBindHost. Run openclaw gateway status --deep for diagnostics.";
+    const codexResource = {
+      attributes: resource.attributes.map((entry) =>
+        entry.key === "occ.role" ? { key: "occ.role", value: { stringValue: "agent" } } : entry,
+      ),
+    };
+    const codexError = (message) => ({
+      timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+      body: {
+        stringValue: JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: "ERROR",
+          fields: { message },
+          target: "codex_app_server",
+        }),
+      },
+      attributes: [{ key: "log.iostream", value: { stringValue: "stderr" } }],
+    });
     await postLogs(receiverAddress, [
+      {
+        // argv credentials have no credential word: a codex.operational body with a
+        // credential flag or a user:password pair keeps the event name.
+        resource: codexResource,
+        scopeLogs: [
+          {
+            logRecords: [
+              codexError(`exec_command failed: curl -u admin:${canary} https://x.example`),
+              codexError(`exec_command failed: git --password ${canary}`),
+            ],
+          },
+        ],
+      },
       {
         resource,
         scopeLogs: [
@@ -1096,7 +1116,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 3);
+    await waitFor(async () => (await records()).length >= 5);
     await delay(1_000);
     const exported = await records();
     assert.deepEqual(
@@ -1106,6 +1126,8 @@ test(
         )
         .sort(),
       [
+        ["ERROR", "codex.operational", "codex.operational"],
+        ["ERROR", "codex.operational", "codex.operational"],
         ["ERROR", "gateway.startup_failed", cause],
         ["ERROR", "gateway.startup_failed", "gateway.startup_failed"],
         ["ERROR", "gateway.startup_failed", "gateway.startup_failed"],
