@@ -62,6 +62,29 @@ export class AgentPrincipalAuthorizationError extends AuthorizationDeniedError {
 }
 
 /**
+ * A permanently failed deletion belongs to the actor that started it. Another caller that
+ * also holds delete may take it over only after the initiating actor loses delete, so the
+ * refusal names that condition and, for audit only, the initiating actor.
+ */
+export class DeletionRetryOwnedError extends AuthorizationDeniedError {
+  readonly initiatingActorId: string;
+  declare readonly authorization: {
+    readonly action: AuthorizationRequest["action"];
+    readonly resource: ResourceRef;
+  };
+
+  constructor(initiatingActorId: string, resource: ResourceRef) {
+    super(
+      "Only the actor that started this deletion can retry it while that actor still holds delete. Retry as that actor, or remove its delete permission first.",
+      undefined,
+      { action: "delete", resource },
+    );
+    this.name = "DeletionRetryOwnedError";
+    this.initiatingActorId = initiatingActorId;
+  }
+}
+
+/**
  * Authority and audit outages fail closed as authorization failures while
  * remaining distinguishable from explicit denials for HTTP and audit handling.
  */
@@ -209,6 +232,30 @@ export class IAMAccessBindingRoleError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "IAMAccessBindingRoleError";
+  }
+}
+
+/**
+ * A Namespace IAM policy write names an invalid or unavailable input: an unsupported
+ * Permission, or a subject, Role or target that is not usable in the exact Namespace.
+ * The caller already administers the Namespace's IAM policy, so HTTP reports the static
+ * message and the offending request field as an invalid request.
+ */
+export class IAMPolicyValidationError extends ScopeViolationError {
+  readonly path: string;
+
+  constructor(path: string, message: string) {
+    super(message);
+    this.name = "IAMPolicyValidationError";
+    this.path = path;
+  }
+}
+
+/** A Namespace Role cannot be deleted while AccessBindings still reference it. */
+export class IAMRoleInUseError extends ResourceConflictError {
+  constructor() {
+    super("The IAM Role is referenced by AccessBindings. Delete those AccessBindings first.");
+    this.name = "IAMRoleInUseError";
   }
 }
 

@@ -133,15 +133,14 @@ method are unaffected.
 ### Startup failure evidence
 
 `ComputeReadiness.runtimeFailure` optionally reports a bounded startup failure
-for the exact observed revision. Compute owns collection and classification;
-the core does not inspect native runtime output. Evidence contains safe
+for the exact observed revision. Compute owns collection and classification. Evidence contains safe
 `component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
 provider errors. An unavailable or untrusted observation omits the evidence.
 
-The worker persists that observation at the convergence deadline. Codes
-`AUTHENTICATION_FAILED` (deterministic credential rejection) and
-`MODEL_PROBE_CPU_STARVED` fail the deployment immediately with
-`RUNTIME_AUTHENTICATION_FAILED` or `RUNTIME_CPU_STARVED`. The
+Runtimes hold published evidence until restart, so the worker fails at once
+with `RUNTIME_` plus the code (`RUNTIME_CPU_STARVED` for
+`MODEL_PROBE_CPU_STARVED`; `RUNTIME_STARTUP_FAILED` for `UNAVAILABLE` and
+`INCOMPATIBLE_RESPONSE`). It persists other codes at the convergence deadline. The
 [deployment status API](../agents.md#deployment-status) returns saved evidence
 under exact-revision read permission without invoking Compute.
 

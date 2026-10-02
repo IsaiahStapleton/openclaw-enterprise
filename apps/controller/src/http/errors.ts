@@ -4,12 +4,15 @@ import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
+  DeletionRetryOwnedError,
   ChannelDirectoryError,
   ChannelCredentialError,
   ConfigurationHarnessError,
   CredentialGatewayNotConfiguredError,
   DependencyUnavailableError,
   IAMAccessBindingRoleError,
+  IAMPolicyValidationError,
+  IAMRoleInUseError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
@@ -337,6 +340,14 @@ export function requestFailure(error: unknown): RequestFailure {
       { path: "/roleId", code: "INVALID_VALUE" },
     ]);
   }
+  if (error instanceof IAMPolicyValidationError) {
+    return failure(400, "INVALID_REQUEST", error.message, [
+      { path: error.path, code: "INVALID_VALUE" },
+    ]);
+  }
+  if (error instanceof IAMRoleInUseError) {
+    return failure(409, "RESOURCE_CONFLICT", error.message);
+  }
   if (error instanceof CredentialGatewayNotConfiguredError) {
     return failure(409, "CREDENTIAL_GATEWAY_NOT_CONFIGURED", error.message);
   }
@@ -394,6 +405,10 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof ScopeViolationError) {
     return failure(404, "NOT_FOUND", "The requested platform resource was not found.");
+  }
+  if (error instanceof DeletionRetryOwnedError) {
+    // The caller holds delete on this exact resource; only the retry condition is named.
+    return failure(403, "FORBIDDEN", error.message);
   }
   if (error instanceof AgentPrincipalAuthorizationError) {
     // Only the Agent's own principal is named; caller denials stay generic below.

@@ -427,6 +427,14 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment runtime credentials were rejected.";
     case "RUNTIME_CPU_STARVED":
       return "Deployment runtime did not get enough CPU to start.";
+    case "RUNTIME_MODEL_PROBE_TIMEOUT":
+      return "Deployment runtime startup model check timed out.";
+    case "RUNTIME_MODEL_PROBE_FAILED":
+      return "Deployment runtime startup model check failed.";
+    case "RUNTIME_LOGIN_FAILED":
+      return "Deployment runtime could not sign in to the model provider.";
+    case "RUNTIME_STARTUP_FAILED":
+      return "Deployment runtime failed a startup check.";
     case "REVISION_SUPERSEDED":
       return "Deployment was superseded by a newer revision.";
     case "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED":

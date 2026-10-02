@@ -1613,6 +1613,38 @@ test("activation waits for the Gateway to report the node preparation handed it"
   assert.equal(podPatches.filter(({ name }) => name === "gateway-pod").length, 1);
 });
 
+// Activation that fails for want of the Gateway's ack is retried, and the worker
+// is serial: a Gateway that never acks gets one bounded wait per binding across
+// attempts, then a single read per attempt, like the pairing budget (D221).
+test("an unacknowledged workspace node binding costs at most one bounded wait across activations", async () => {
+  const clock = { now: 0 };
+  const { state, driver, revision, gatewayName, agentName, prepare, markReady } =
+    dedicatedFirstDeployFixture({ clock });
+  driver.delay = async (ms) => {
+    clock.now += ms;
+  };
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  markReady(gatewayName);
+  state.connected = true;
+  state.gatewayAppliesBinding = false;
+  assert.equal((await prepare()).ready, true);
+  const attemptTimes = [];
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const started = clock.now;
+    await assert.rejects(
+      driver.activateRevision(revision, authContext(revision)),
+      /has not applied its workspace node/,
+    );
+    attemptTimes.push(clock.now - started);
+  }
+  assert.deepEqual(attemptTimes, [20_000, 0, 0, 0]);
+  // A late ack is still seen by the next single read.
+  state.gatewayWorkspaceNodeId = "node-1";
+  await driver.activateRevision(revision, authContext(revision));
+  assert.equal(clock.now, 20_000);
+});
+
 // A node that has not paired within the pass's wait leaves the pass pending; the
 // wait starts only once the setup exists and the Gateway is ready.
 test("a first dedicated deploy pass waits a bounded time for its node to pair", async () => {

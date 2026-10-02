@@ -4272,7 +4272,15 @@ test(
     );
     await assert.rejects(
       fixture.controller.deleteAgent(otherActor, fixture.namespace.id, owner.id),
-      { message: "Only the initiating actor can retry deletion." },
+      {
+        name: "DeletionRetryOwnedError",
+        message: /Only the actor that started this deletion can retry it/,
+        initiatingActorId: fixture.actor.id,
+        authorization: {
+          action: "delete",
+          resource: { kind: "agent", id: owner.id, namespaceId: fixture.namespace.id },
+        },
+      },
     );
     assert.deepEqual(await observe(), exhausted);
 
@@ -4600,7 +4608,13 @@ test(
     );
     // While the initiator still holds delete permission, it keeps ownership.
     await assert.rejects(fixture.controller.deleteNamespace(otherActor, namespace.id), {
-      message: "Only the initiating actor can retry deletion.",
+      name: "DeletionRetryOwnedError",
+      message: /Only the actor that started this deletion can retry it/,
+      initiatingActorId: fixture.actor.id,
+      authorization: {
+        action: "delete",
+        resource: { kind: "namespace", id: namespace.id, namespaceId: namespace.id },
+      },
     });
     assert.deepEqual(await observe(), exhausted);
 
@@ -6365,19 +6379,19 @@ test(
     });
     let observations = 0;
 
-    // The default 900-second deadline stays in force: a transient probe failure
-    // remains pending, and only the credential rejection ends the deployment.
+    // The default 900-second deadline stays in force: an unready runtime without
+    // failure evidence remains pending, and the held rejection ends the deployment.
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
         observations += 1;
-        return {
+        const observed = {
           ...(await fixture.compute.prepareRevision(revision)),
           ready: false,
-          runtimeFailure: failure(
-            observations === 1 ? "MODEL_PROBE_TIMEOUT" : "AUTHENTICATION_FAILED",
-          ),
         };
+        return observations === 1
+          ? observed
+          : { ...observed, runtimeFailure: failure("AUTHENTICATION_FAILED") };
       },
     });
 
@@ -6430,22 +6444,28 @@ test(
     const candidate = await fixture.revision(owner, 1);
     let observations = 0;
 
-    // Under the default 900-second deadline a plain probe timeout stays pending;
-    // a probe that ran out of CPU at the container's limit ends the deployment.
+    // Under the default 900-second deadline an unready runtime without failure
+    // evidence stays pending; a probe that ran out of CPU at the container's
+    // limit ends the deployment.
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
         observations += 1;
-        return {
+        const observed = {
           ...(await fixture.compute.prepareRevision(revision)),
           ready: false,
-          runtimeFailure: {
-            component: "gateway",
-            check: "model-probe",
-            checkedAt: "2026-09-30T08:00:00.000Z",
-            code: observations === 1 ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_CPU_STARVED",
-          },
         };
+        return observations === 1
+          ? observed
+          : {
+              ...observed,
+              runtimeFailure: {
+                component: "gateway",
+                check: "model-probe",
+                checkedAt: "2026-09-30T08:00:00.000Z",
+                code: "MODEL_PROBE_CPU_STARVED",
+              },
+            };
       },
     });
 
@@ -6473,6 +6493,89 @@ test(
       code: "RUNTIME_CPU_STARVED",
       message: "Deployment runtime did not get enough CPU to start.",
     });
+  },
+);
+
+test(
+  "held runtime probe and login failures fail deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    // Runtime entrypoints publish these codes only after their own retries end
+    // and then hold the container unready with nothing to restart it, so the
+    // default 900-second deadline could only report the same failure later.
+    const fixture = await setup(context);
+    const cases = [
+      [
+        "agent",
+        "model-probe",
+        "MODEL_PROBE_TIMEOUT",
+        "RUNTIME_MODEL_PROBE_TIMEOUT",
+        "Deployment runtime startup model check timed out.",
+      ],
+      [
+        "gateway",
+        "model-probe",
+        "MODEL_PROBE_FAILED",
+        "RUNTIME_MODEL_PROBE_FAILED",
+        "Deployment runtime startup model check failed.",
+      ],
+      [
+        "agent",
+        "login",
+        "LOGIN_FAILED",
+        "RUNTIME_LOGIN_FAILED",
+        "Deployment runtime could not sign in to the model provider.",
+      ],
+      [
+        "gateway",
+        "plugin-approvers",
+        "INCOMPATIBLE_RESPONSE",
+        "RUNTIME_STARTUP_FAILED",
+        "Deployment runtime failed a startup check.",
+      ],
+    ];
+    const failures = new Map();
+    const candidates = [];
+    for (const [index, [component, check, runtimeCode]] of cases.entries()) {
+      const owner = await fixture.agent(`held-runtime-${index}`);
+      const candidate = await fixture.revision(owner, 1);
+      failures.set(candidate.id, {
+        component,
+        check,
+        checkedAt: "2026-10-01T08:00:00.000Z",
+        code: runtimeCode,
+      });
+      candidates.push({ owner, candidate });
+    }
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: failures.get(revision.id),
+        };
+      },
+    });
+
+    for (const [index, { owner, candidate }] of candidates.entries()) {
+      const [, , , code, message] = cases[index];
+      const failed = await fixture.work(candidate, "failed_permanent", 10_000);
+      assert.equal(failed.attempt_count, 1);
+      const result = await fixture.observerPool.query(
+        "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+        [candidate.idempotencyKey],
+      );
+      assert.deepEqual(result.rows, [{ reason_code: code, result_data: null }]);
+      const status = await fixture.controller.getDeploymentStatus(
+        fixture.actor.id,
+        fixture.namespace.id,
+        owner.id,
+        candidate.id,
+      );
+      assert.equal(status.status, "failed");
+      assert.deepEqual(status.error, { code, message });
+    }
   },
 );
 
