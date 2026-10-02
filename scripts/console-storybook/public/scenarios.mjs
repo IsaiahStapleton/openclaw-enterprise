@@ -433,6 +433,9 @@ export const scenarios = {
     githubEnabled: true,
     description:
       "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    steps: [
+      "Check the GitHub icon and label, then select the button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
   },
   githubUnavailable: {
@@ -520,6 +523,9 @@ export const scenarios = {
     googleEnabled: true,
     description:
       "Provider discovery adds Continue with Google beside the password form and any other configured provider. Clicking it demonstrates an unavailable provider; this fixture never navigates to Google.",
+    steps: [
+      "Check the Google and GitHub icons and labels, then select either button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the Google subject identifier to an existing account through the API. Email addresses never match an account. OAuth navigation and session issuance require backend verification.",
   },
   googleUnavailable: {
