@@ -11,6 +11,12 @@ internal Kubernetes `ClusterIP` Service and a default-deny ingress
 selectors. The cluster must enforce NetworkPolicies. Do not expose the listener
 through a `NodePort`, `LoadBalancer`, `hostNetwork`, or public endpoint.
 
+The Helm charts allow DNS egress on UDP/TCP ports `53` and `5353` to their
+configured `dns.namespace` and `dns.podLabels` peers. Port `5353` supports
+OpenShift DNS backends after Service address translation. These grants cover
+API, worker, initialization, collector, Slack proxy, Envoy, and observability
+demo workloads.
+
 The trusted-operator native admin pilot is the only documented public-ingress
 exception: the console host and Agent wildcard hosts route to OCC through the
 procedure in [Deploy native admin UI access](../../guides/deploy/native-admin.md).
