@@ -4785,6 +4785,7 @@ test("account-token authentication grants only the exact Codex revision outbound
   assert.deepEqual(policy.spec.egress[0].ports, [{ protocol: "TCP", port: 443 }]);
   assert.deepEqual(policy.spec.egress[0].to[0].ipBlock.except, [
     "10.0.0.0/8",
+    "100.64.0.0/10",
     "172.16.0.0/12",
     "192.168.0.0/16",
     "169.254.0.0/16",
@@ -11885,7 +11886,13 @@ test("ordinary embedded and dedicated policy callers retain exact model and Harn
       {
         ipBlock: {
           cidr: "0.0.0.0/0",
-          except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"],
+          except: [
+            "10.0.0.0/8",
+            "100.64.0.0/10",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "169.254.0.0/16",
+          ],
         },
       },
     ],
