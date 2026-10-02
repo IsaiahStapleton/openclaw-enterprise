@@ -355,13 +355,16 @@ async function runCodexRuntimeHelper(runtime, handler, options = {}) {
   const requests = [];
   const sockets = [];
   const files = new Map(options.files ?? []);
+  // options.refusedConnections models an app-server that is not listening yet.
+  const refusedConnections = options.refusedConnections ?? 0;
   class FakeWebSocket {
     constructor(url, options) {
       this.url = url;
       this.options = options;
       this.listeners = new Map();
       sockets.push(this);
-      setTimeout(() => this.dispatch("open", {}), 0);
+      const refused = sockets.length <= refusedConnections;
+      setTimeout(() => this.dispatch(refused ? "error" : "open", {}), 0);
     }
     on(name, listener) {
       const existing = this.listeners.get(name) ?? [];
@@ -1287,6 +1290,74 @@ test("Codex runtime helper disables curated plugins at once under API-key login"
   );
   assert.match(String(strict.error?.message), /require a ChatGPT login/);
   assert.deepEqual(strict.requests, []);
+});
+
+test("Codex runtime helper waits for a late app-server before disabling API-key plugin selections", async () => {
+  // D320: the Harness reached plugin setup before the Codex app-server accepted
+  // connections; a single attempt failed the transport and restarted Codex forever.
+  const runtime = {
+    manifest: {
+      kind: "codex",
+      selections: {
+        "codex-plugin:linear@openai-curated-remote": {
+          enabled: true,
+          toolDefaults: { approval: "provider_default" },
+        },
+      },
+    },
+  };
+  const disabledConfig = {
+    config: {
+      features: { apps: false, plugins: false, remote_plugin: false },
+      apps: { _default: { enabled: false } },
+      plugins: {},
+    },
+    origins: {},
+  };
+  const handler = (method) => {
+    if (method === "initialize") {
+      return { serverInfo: { name: "codex", version: "0.149.0" } };
+    }
+    if (method === "config/read") {
+      return disabledConfig;
+    }
+    if (method === "config/batchWrite") {
+      return { status: "ok", version: "test-config-1" };
+    }
+    throw new Error(`unexpected request ${method}`);
+  };
+  const result = await runCodexRuntimeHelper(runtime, handler, {
+    env: {
+      CODEX_LOGIN_MODE: "api_key",
+      OPENCLAW_PLUGIN_STATUS_PORT: "18791",
+      OPENCLAW_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS: "5000",
+    },
+    refusedConnections: 2,
+  });
+  assert.equal(result.sockets.length, 5);
+  assert.deepEqual(plain(result.value), {
+    successfulPluginIds: [],
+    failures: [
+      { pluginId: "codex-plugin:linear@openai-curated-remote", code: "PLUGIN_AUTH_REQUIRED" },
+    ],
+  });
+  assert.deepEqual(
+    result.requests
+      .filter((request) => request.method !== "initialize")
+      .map((request) => request.method),
+    ["config/read", "config/batchWrite", "config/read"],
+  );
+
+  const neverReady = await runCodexRuntimeHelper(runtime, handler, {
+    env: { CODEX_LOGIN_MODE: "api_key", OPENCLAW_PLUGIN_STATUS_PORT: "18791" },
+    refusedConnections: Number.POSITIVE_INFINITY,
+    captureError: true,
+  });
+  assert.match(
+    String(neverReady.error?.message),
+    /plugin disable did not reach readiness: .*transport failed/,
+  );
+  assert.equal(neverReady.error?.startupCode, "PLUGIN_NOT_READY");
 });
 
 test("Codex runtime helper keeps malformed matching install responses generic", async (t) => {

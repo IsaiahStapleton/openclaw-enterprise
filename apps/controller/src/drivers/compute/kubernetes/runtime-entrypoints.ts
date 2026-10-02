@@ -1750,8 +1750,25 @@ async function disableCodexSelectionsWithoutChatGptLogin(selections, failures = 
       features: { apps: false, plugins: false, remote_plugin: false },
       apps: { _default: { enabled: false } },
     };
-    await writeCodexAppConfiguration(configuration);
-    verifyCodexAppConfiguration(configuration, await readCodexAppConfiguration());
+    // The app-server may still be starting: retry like the ChatGPT install path.
+    const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
+    let lastError = new Error("Codex plugin disable deadline expired before the first attempt.");
+    while (Date.now() < deadline) {
+      try {
+        await writeCodexAppConfiguration(configuration);
+        verifyCodexAppConfiguration(configuration, await readCodexAppConfiguration());
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        await pluginRuntimeDelay(250);
+      }
+    }
+    if (lastError !== undefined) {
+      const failure = new Error("Codex plugin disable did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+      failure.startupCode = codexPluginStartupFailureCode(lastError);
+      throw failure;
+    }
   }
   return { successfulPluginIds: [], failures: failed };
 }
