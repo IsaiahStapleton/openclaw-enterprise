@@ -20,7 +20,6 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { deflateRawSync } from "node:zlib";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
 import { GATEWAY_RUNTIME_ENTRYPOINT as DOCKER_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/docker/index.ts";
 import {
@@ -373,14 +372,6 @@ console.log("WORKSPACE_INITIALIZATION_PASSED");
     assert.match(stdout, /WORKSPACE_INITIALIZATION_PASSED/);
   },
 );
-
-// A probe is one `node -e` argument, which Linux caps at 128 KiB (MAX_ARG_STRLEN).
-// Embed a large program compressed, as production does, so it cannot outgrow the cap.
-function compressedProgramSource(program) {
-  return `require("node:zlib").inflateRawSync(Buffer.from(${JSON.stringify(
-    deflateRawSync(program).toString("base64"),
-  )}, "base64")).toString("utf8")`;
-}
 
 async function runDocker(args, options = {}, input) {
   const command = execute(docker, args, {
@@ -1256,7 +1247,8 @@ const environment = {
   APP_SERVER_TOKEN: "synthetic-transport-token", APP_SERVER_PORT: "4500",
 };
 let native;
-vm.runInNewContext(${compressedProgramSource(AGENT_RUNTIME_ENTRYPOINT)}, {
+// The entrypoint arrives on stdin: inlined, it can exceed the per-argument limit.
+vm.runInNewContext(fs.readFileSync(0, "utf8"), {
   URL, console, setTimeout, setInterval,
   // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
   process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },
@@ -1330,28 +1322,33 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
-    const { stdout } = await runDocker([
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--read-only",
-      "--user",
-      "1000:1000",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--tmpfs",
-      "/home/node:size=128m,uid=1000,gid=1000,mode=700",
-      "--tmpfs",
-      "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
-      "--entrypoint",
-      "node",
-      image,
-      "-e",
-      probe,
-    ]);
+    const { stdout } = await runDocker(
+      [
+        "run",
+        "-i",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--user",
+        "1000:1000",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/home/node:size=128m,uid=1000,gid=1000,mode=700",
+        "--tmpfs",
+        "/tmp:size=64m,uid=1000,gid=1000,mode=1777",
+        "--entrypoint",
+        "node",
+        image,
+        "-e",
+        probe,
+      ],
+      {},
+      AGENT_RUNTIME_ENTRYPOINT,
+    );
     assert.match(stdout, /native-repository-shell-ready/);
   },
 );
@@ -2478,7 +2475,7 @@ const homeControlSentinel = "synthetic-openclaw-control-sentinel\\n";
 fs.writeFileSync(homeControlSentinelPath, homeControlSentinel, { mode: 0o600 });
 assert.equal(fs.readFileSync(homeControlSentinelPath, "utf8"), homeControlSentinel);
 let native;
-vm.runInNewContext(${compressedProgramSource(AGENT_RUNTIME_ENTRYPOINT)}, {
+vm.runInNewContext(${JSON.stringify(AGENT_RUNTIME_ENTRYPOINT)}, {
   URL, console, setTimeout, setInterval,
   // The wrapper forwards filtered app-server stderr; the probe reads native.stderr itself.
   process: { env: environment, stderr: { write() { return true; } }, on() {}, exit() {} },

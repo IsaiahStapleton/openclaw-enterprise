@@ -709,11 +709,30 @@ function objectAtPath(root, path) {
   return isPlainObject(current) ? current : undefined;
 }
 
-function isManagedOpenClawPluginEntry(value) {
+function isManagedOpenClawPluginEntry(value, pluginId) {
+  if (!isPlainObject(value) || typeof value.enabled !== "boolean") return false;
+  const keys = Object.keys(value);
+  if (keys.length === 1) return true;
+  const managedConfig = pluginRuntimeTranslator.openClawManagedEntryConfig(pluginId);
   return (
-    isPlainObject(value) &&
-    typeof value.enabled === "boolean" &&
-    Object.keys(value).length === 1
+    keys.length === 2 &&
+    hasOwn(value, "config") &&
+    managedConfig !== undefined &&
+    pluginDeepEqual(value.config, managedConfig)
+  );
+}
+
+// The Gateway serves browsers through an OCC-authenticated public origin only
+// when native admin routes that exact origin to it with trusted-proxy auth.
+function gatewayServesPublicOrigin(config) {
+  const gateway = config?.gateway;
+  const raw = gateway?.publicOrigin;
+  return (
+    typeof raw === "string" &&
+    /^https:\/\/[a-z0-9.-]+(:[0-9]{1,5})?$/.test(raw) &&
+    gateway.auth?.mode === "trusted-proxy" &&
+    Array.isArray(gateway.controlUi?.allowedOrigins) &&
+    gateway.controlUi.allowedOrigins.includes(raw)
   );
 }
 
@@ -781,8 +800,8 @@ function assertNoOpenClawPluginConfigConflict(base, overlay, options = {}) {
     ) {
       if (
         options.allowManagedOpenClawPluginReplacement === true &&
-        isManagedOpenClawPluginEntry(baseEntries[pluginId]) &&
-        isManagedOpenClawPluginEntry(overlayEntries[pluginId])
+        isManagedOpenClawPluginEntry(baseEntries[pluginId], pluginId) &&
+        isManagedOpenClawPluginEntry(overlayEntries[pluginId], pluginId)
       ) {
         continue;
       }
@@ -813,7 +832,7 @@ function mergeOpenClawPluginConfiguration(base, overlay, options = {}) {
   const overlayEntries = objectAtPath(overlay, ["plugins", "entries"]);
   if (overlayEntries !== undefined) {
     const disabledManagedTools = Object.entries(overlayEntries)
-      .filter(([pluginId, entry]) => pluginId !== "codex" && isManagedOpenClawPluginEntry(entry) && entry.enabled === false)
+      .filter(([pluginId, entry]) => pluginId !== "codex" && isManagedOpenClawPluginEntry(entry, pluginId) && entry.enabled === false)
       .map(([pluginId]) => pluginId);
     if (disabledManagedTools.length > 0 && Array.isArray(next.tools?.alsoAllow)) {
       next.tools.alsoAllow = next.tools.alsoAllow.filter((tool) => !disabledManagedTools.includes(tool));
@@ -922,9 +941,14 @@ function samePluginFailures(left, right) {
     JSON.stringify([...(right ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
 }
 
-function openClawPluginConfiguration(runtime, failures = []) {
+function openClawPluginConfiguration(runtime, failures = [], base) {
   if (runtime.manifest?.kind === "openclaw") {
-    return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures, runtime.manifest.pluginApprovers).configuration;
+    return pluginRuntimeTranslator.openClawRuntimeArtifact(
+      runtime.manifest.selections ?? {},
+      failures,
+      runtime.manifest.pluginApprovers,
+      gatewayServesPublicOrigin(base),
+    ).configuration;
   }
   if (runtime.manifest?.kind === "codex") {
     return pluginRuntimeTranslator.codexOpenClawConfiguration(
@@ -987,9 +1011,9 @@ function holdPluginApproverConfigurationFailure(error) {
 }
 
 function applyOpenClawPluginConfiguration(runtime, failures = [], options = {}) {
-  const overlay = openClawPluginConfiguration(runtime, failures);
-  if (overlay === undefined) return;
   const base = readOpenClawConfig();
+  const overlay = openClawPluginConfiguration(runtime, failures, base);
+  if (overlay === undefined) return;
   if (objectAtPath(overlay, ["approvals", "plugin", "slack"]) !== undefined) {
     const slack = objectAtPath(base, ["channels", "slack"]);
     if (slack === undefined || slack.enabled === false) {
