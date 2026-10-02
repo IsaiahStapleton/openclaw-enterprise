@@ -403,6 +403,10 @@ cutover, and allowed/denied NetworkPolicy checks. Configure API egress for its
 actual translated `/32` endpoint and port. The fixture suite's scoped RBAC does
 not verify shared-cluster admission guardrails.
 
+## Browser automation
+
+On a devbox without an X server, run Playwright with `headless: true`.
+
 ## Console Storybook
 
 UI changes require reviewable visual evidence, not just passing checks.
