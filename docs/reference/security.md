@@ -201,6 +201,12 @@ oversized, unclassified, unspecified-severity, and Codex stdout protocol records
 Resource identity comes from protected Docker labels or Kubernetes Pod metadata;
 request, work, Namespace, Agent, and revision IDs remain attributes.
 
+A Gateway startup failure (OpenClaw's `Gateway failed to start:` error, which has
+no subsystem) is promoted as `gateway.startup_failed`; its body keeps the message
+only under the `codex.operational` plain-text rules. Those rules also reject
+messages with an argv credential flag (`-u`, `--password`) or a `user:password`
+pair.
+
 Collector credentials and TLS material live only in Collector-owned deployment
 configuration. In Helm, the bundled Collector uses dedicated config and exporter
 Secrets, read-only `/var/log/pods`, a non-root UID with supplementary group
