@@ -1037,12 +1037,49 @@ test("a workspace-node Gateway keeps owner Codex tool excludes, pins the codex p
       anthropic: { baseUrl: "https://api.anthropic.com", models: [] },
     },
   };
+  const logged = [];
   const { files } = await runOpenClawRuntimeHelper(undefined, [], {
     baseConfig: ownerConfig,
     env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
     workspaceNodeId: "enrolled-node",
+    console: { error: (line) => logged.push(line) },
   });
   const effective = JSON.parse(files.get("/home/node/.openclaw/openclaw.json"));
+  // The Gateway says which owner settings it replaced, by name only (D202).
+  const overrides = logged
+    .filter((line) => line.includes("runtime.gateway_settings_overridden"))
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(overrides, [
+    {
+      event: "runtime.gateway_settings_overridden",
+      container: "gateway",
+      settings: [
+        "cron.triggers.enabled",
+        "models.providers.codex.baseUrl",
+        "models.providers.codex.api",
+        "models.providers.codex.apiKey",
+        "models.providers.codex.timeoutSeconds",
+        "models.providers.codex.headers",
+        "models.providers.codex.params",
+        "models.providers.codex.authHeader",
+        "models.providers.codex.request",
+        "models.providers.codex.localService",
+        "models.providers.codex.models[].api",
+        "models.providers.codex.models[].baseUrl",
+        "models.providers.codex.models[].headers",
+        "models.providers.codex.models[].params",
+        "models.providers.codex.models[].compat",
+        "models.providers.openai.baseUrl",
+        "models.providers.openai.headers",
+        "models.providers.openai.request",
+        "models.providers.openai.models[].headers",
+      ],
+    },
+  ]);
+  assert.ok(
+    logged.every((line) => !line.includes("owner-key") && !line.includes("example.test")),
+    "override events never carry setting values",
+  );
   // Owner exclusions stay first and are not duplicated.
   assert.deepEqual(effective.plugins.entries.codex.config.codexDynamicToolsExclude, [
     "web_search",
