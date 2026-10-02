@@ -809,6 +809,10 @@
                         "label": "CI"
                       },
                       {
+                        "page": "testing/first-agent-smoke",
+                        "label": "First Agent Smoke"
+                      },
+                      {
                         "page": "testing/ci-manual-integration",
                         "label": "Manual Integration Lanes"
                       },

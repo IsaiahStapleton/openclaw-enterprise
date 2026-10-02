@@ -133,10 +133,10 @@ async function waitFor(description, operation, timeout) {
   throw new Error(`Timed out waiting for ${description}: ${JSON.stringify(last?.state ?? null)}`);
 }
 
+// `run` reads the selections from its environment (GitHub Actions) or from the
+// work directory (local runs).
 async function exportEnvironment(values) {
-  for (const [name, value] of Object.entries(values)) {
-    process.env[name] = value;
-  }
+  await writeFile(join(workDirectory, "images.json"), `${JSON.stringify(values)}\n`);
   if (process.env.GITHUB_ENV) {
     await appendFile(
       process.env.GITHUB_ENV,
@@ -807,9 +807,17 @@ async function diagnostics(stack) {
 }
 
 async function smoke() {
+  if (!process.env.OCC_FIRST_AGENT_SMOKE_MODEL_DIRECTORY) {
+    try {
+      Object.assign(
+        process.env,
+        JSON.parse(await readFile(join(workDirectory, "images.json"), "utf8")),
+      );
+    } catch {
+      throw new Error("Run `node scripts/ci/first-agent-smoke.mjs images` first.");
+    }
+  }
   const modelDirectory = process.env.OCC_FIRST_AGENT_SMOKE_MODEL_DIRECTORY;
-  assert.ok(modelDirectory, "run `images` first");
-  await mkdir(workDirectory, { recursive: true });
   const environment = {
     ...process.env,
     OCC_DEVELOPMENT_COMPUTE_DRIVER: "kubernetes",
