@@ -2150,6 +2150,77 @@ test("Agent deployment status polls the admitted revision work with exact read a
   assert.equal(denied.status, 403);
 });
 
+test("a deletion retry by another delete holder names the initiator condition and audits it", async () => {
+  const deploymentWorks = new Map();
+  const fixture = await createInjectedFixture({ deploymentWorks, recordOperations: true });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "deletion-takeover");
+  const agent = await createAgent(controller, namespace.id, "takeover-agent");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const started = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  // The administrator's teardown failed permanently; it still holds delete.
+  deploymentWorks.set(`agent:${agent.id}:reconcile:deleted`, {
+    idempotencyKey: `agent:${agent.id}:reconcile:deleted`,
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    actorId: fixture.principal.id,
+    state: "failed_permanent",
+    availableAt: new Date(0),
+    attemptCount: 1,
+    completedAt: new Date(1),
+    reasonCode: "AUTHORIZATION_DENIED",
+    createdAt: new Date(0),
+    updatedAt: new Date(1),
+  });
+
+  const { principal: other } = await fixture.createAuthPrincipal("deletion-takeover-other");
+  fixture.state.identities.push(other);
+  fixture.state.roles.push({
+    id: "role-deletion-takeover",
+    namespaceId: namespace.id,
+    permissions: [{ action: "delete", resourceKind: "agent" }],
+  });
+  fixture.state.bindings.push({
+    id: "binding-deletion-takeover",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: other.id,
+    roleId: "role-deletion-takeover",
+    resourceKind: "agent",
+    resourceId: agent.id,
+  });
+  const refused = await injectedRequest(
+    fixture.createApp(other),
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(refused.status, 403, JSON.stringify(refused.body));
+  assert.equal(refused.body.error.code, "FORBIDDEN");
+  assert.match(refused.body.error.message, /Only the actor that started this deletion/);
+  assert.match(refused.body.error.message, /remove its delete permission first/);
+  assert.equal(JSON.stringify(refused.body).includes(fixture.principal.id), false);
+
+  const denial = fixture.auditSink.events.findLast(
+    (event) => event.kind === "authorization_denial" && event.actorId === other.id,
+  );
+  assert.ok(denial, "the refusal must be audited");
+  assert.equal(denial.authorization.action, "delete");
+  assert.deepEqual(denial.authorization.resource, {
+    kind: "agent",
+    id: agent.id,
+    namespaceId: namespace.id,
+  });
+  assert.match(denial.decisionReason, /initiating actor/);
+  assert.equal(denial.details.initiatingActorId, fixture.principal.id);
+});
+
 test("Installation deployment inventory fails closed on incomplete authorization and reports in-flight work", async () => {
   const deploymentWorks = new Map();
   const fixture = await createInjectedFixture({ deploymentWorks, recordOperations: true });

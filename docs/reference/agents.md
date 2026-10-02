@@ -336,10 +336,11 @@ and Secrets survive. Deletion releases its name;
 [repository cleanup](repository-credentials.md#repo-driver-contract) continues independently.
 
 Teardown retries are bounded. After permanent failure or exhaustion, the Agent
-stays `deleting`. Once the cause is corrected, the initiating caller can repeat
+stays `deleting`. After a fix, the initiating caller can repeat
 DELETE to replenish the attempt budget. OCC and the worker recheck permission.
 Another permitted actor takes over only once the initiator lost permission.
-Prior failure audits remain; the retry adds an audit event. Namespace deletion
+Until then it gets `403`, audited with the `initiatingActorId`.
+Prior failure audits remain; each retry is audited. Namespace deletion
 has the same [recovery](namespaces.md#failure-semantics-and-limitations), including takeover.
 
 ## Editable configuration
