@@ -1628,6 +1628,31 @@ test("activation waits for the Gateway to report the node preparation handed it"
   assert.equal(podPatches.filter(({ name }) => name === "gateway-pod").length, 1);
 });
 
+// A node that has not paired within the pass's wait leaves the pass pending; the
+// wait starts only once the setup exists and the Gateway is ready.
+test("a first dedicated deploy pass waits a bounded time for its node to pair", async () => {
+  const { state, driver, gatewayName, agentName, objects, prepare, markReady } =
+    dedicatedFirstDeployFixture();
+  assert.equal((await prepare()).ready, false);
+  markReady(agentName);
+  assert.equal((await prepare()).ready, false);
+  assert.deepEqual(state.observeWaits, [], "no enrollment call before the Gateway is ready");
+  markReady(gatewayName);
+  const started = Date.now();
+  assert.equal((await prepare()).ready, false);
+  assert.ok(Date.now() - started >= driver.workspaceNodePairingWaitMs);
+  assert.deepEqual(state.observeWaits, [driver.workspaceNodePairingWaitMs]);
+  assert.equal(
+    [...objects.values()].some(
+      (object) => object.kind === "ConfigMap" && object.metadata.name.endsWith("-workspace-node"),
+    ),
+    false,
+    "no node is handed to the Gateway before it pairs",
+  );
+  state.connected = true;
+  assert.equal((await prepare()).ready, true);
+});
+
 // A deploy whose Pods cannot be placed says so instead of a generic wait (D224),
 // and one whose workloads are ready says it waits only for its node (D222).
 test("a pending dedicated deploy reports an unschedulable Pod or an unpaired node", async () => {
@@ -1652,31 +1677,6 @@ test("a pending dedicated deploy reports an unschedulable Pod or an unpaired nod
   const ready = await prepare();
   assert.equal(ready.ready, true);
   assert.equal(ready.pendingReason, undefined);
-});
-
-// A node that has not paired within the pass's wait leaves the pass pending; the
-// wait starts only once the setup exists and the Gateway is ready.
-test("a first dedicated deploy pass waits a bounded time for its node to pair", async () => {
-  const { state, driver, gatewayName, agentName, objects, prepare, markReady } =
-    dedicatedFirstDeployFixture();
-  assert.equal((await prepare()).ready, false);
-  markReady(agentName);
-  assert.equal((await prepare()).ready, false);
-  assert.deepEqual(state.observeWaits, [], "no enrollment call before the Gateway is ready");
-  markReady(gatewayName);
-  const started = Date.now();
-  assert.equal((await prepare()).ready, false);
-  assert.ok(Date.now() - started >= driver.workspaceNodePairingWaitMs);
-  assert.deepEqual(state.observeWaits, [driver.workspaceNodePairingWaitMs]);
-  assert.equal(
-    [...objects.values()].some(
-      (object) => object.kind === "ConfigMap" && object.metadata.name.endsWith("-workspace-node"),
-    ),
-    false,
-    "no node is handed to the Gateway before it pairs",
-  );
-  state.connected = true;
-  assert.equal((await prepare()).ready, true);
 });
 
 // The worker is serial: every pass one Agent spends waiting for its node holds
