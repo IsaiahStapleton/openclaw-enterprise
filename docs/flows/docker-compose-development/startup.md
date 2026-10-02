@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-09-30
-last_updated_session: authoring-run/6c4c7a4c-4674-456a-b1c4-69cec0c52c70
+updated: 2026-10-02
+last_updated_session: authoring-run/20771b6e-d59b-4737-8a63-cb33c420218e
 ---
 
 # Compose development startup
@@ -204,7 +204,14 @@ and runs PostgreSQL, migration, bootstrap, API and worker in Kubernetes.
 Without OpenShell, it verifies the pinned cert-manager and Envoy Gateway
 manifests. It waits for the k3s-owned Gateway API CRDs to be created and
 established before installing Envoy, and prints k3s add-on status before rollback
-if that wait fails. Before configuring gateway proxy trust,
+if that wait fails. For those CRDs and for the cert-manager and Envoy Gateway
+CRDs installed afterward,
+`internal/occdev/gateway_k3d.go:waitForCRDEstablished` polls
+`kubectl get crd --ignore-not-found -o json` once per second instead of using
+`kubectl wait`, which returns at once while `status.conditions` is still unset.
+Empty output, missing conditions, or an `Established` condition that is not
+`True` keep polling until the startup timeout; a `kubectl` error or invalid JSON
+stops the wait immediately. Before configuring gateway proxy trust,
 `internal/occdev/network_k3d.go:verifyDevelopmentNetworkPolicy`
 checks allowed and denied direct Pod traffic with credential-free Pods and a
 temporary policy. After bootstrap creates the initial Gateway Namespace, it
@@ -372,6 +379,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-02 11:01: Polled CRD status for the Established condition instead of relying on `kubectl wait`. (authoring-run/20771b6e-d59b-4737-8a63-cb33c420218e - 67302dd99e03d28053dbb72ba2569418f6aca1d0)
 
 - 2026-09-30 00:26: Tightened startup prose without changing its behavior. (authoring-run/6c4c7a4c-4674-456a-b1c4-69cec0c52c70 - 282ab1031ff2dd86af00c0c3ff304c9ad442fec1)
 
