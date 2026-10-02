@@ -12697,6 +12697,32 @@ test("Kubernetes runtime log and Event 403s become the typed cluster RBAC error"
   assert.deepEqual(empty.lines, []);
 });
 
+test("Kubernetes runtime log reads drop kubelet's untimestamped log-unavailable answer", async () => {
+  const fixture = runtimeLogDriverFixture();
+  // While the container restarts, kubelet answers 200 with its own error line, which has
+  // no timestamp. It is not container output.
+  fixture.state.logs.gateway =
+    "unable to retrieve container logs for containerd://50c25aa8e1ba378edb6953635f4b49e376f6802d3d9a49775772c89845d8a7e0";
+  const restarting = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway", { previous: true }),
+  );
+  assert.deepEqual(restarting.lines, []);
+  // The same text printed by the container carries a timestamp and stays.
+  fixture.state.logs.gateway =
+    "2026-09-30T12:00:00Z unable to retrieve container logs for containerd://abc\n";
+  const printed = await fixture.driver.readAgentRuntimeLogs(
+    fixture.binding,
+    fixture.request("gateway", { previous: true }),
+  );
+  assert.deepEqual(printed.lines, [
+    {
+      time: "2026-09-30T12:00:00Z",
+      raw: "unable to retrieve container logs for containerd://abc",
+    },
+  ]);
+});
+
 // A first embedded deploy that never became ready (for example rejected model
 // auth) leaves an unready Gateway behind an inactive Service while workspace
 // setup is still pending. The next deploy must repair it with its own template

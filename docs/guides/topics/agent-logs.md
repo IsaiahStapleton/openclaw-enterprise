@@ -182,12 +182,12 @@ Limits per request: 1000 lines, 1 MiB read from the cluster, 32 KiB per input
 line, 512 KiB per response, 100 Events per Pod, 10 seconds overall. Each API
 replica allows each principal 2 requests per second per Agent with a burst of
 10 (`429` with `Retry-After`) and 16 concurrent reads (`503`). The limit and the
-operator switch are checked before authorization, so a caller without grants can
-spend only its own budget and learns only whether the feature is on.
+operator switch apply before authorization, so a caller without grants spends
+only its own budget and learns only whether the feature is on.
 
-Kubernetes keeps only the current and the previous instance of each container.
-Output from deleted Pods and older restarts is gone. For history, use your
-[observability backend](../observability.md).
+Kubernetes keeps only each container's current and previous instance; for
+older output use your [observability backend](../observability.md). While a
+container crash-loops, the previous instance can briefly read as empty.
 
 ## Sandbox source
 
