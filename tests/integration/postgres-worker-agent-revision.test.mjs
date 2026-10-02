@@ -4272,7 +4272,15 @@ test(
     );
     await assert.rejects(
       fixture.controller.deleteAgent(otherActor, fixture.namespace.id, owner.id),
-      { message: "Only the initiating actor can retry deletion." },
+      {
+        name: "DeletionRetryOwnedError",
+        message: /Only the actor that started this deletion can retry it/,
+        initiatingActorId: fixture.actor.id,
+        authorization: {
+          action: "delete",
+          resource: { kind: "agent", id: owner.id, namespaceId: fixture.namespace.id },
+        },
+      },
     );
     assert.deepEqual(await observe(), exhausted);
 
@@ -4600,7 +4608,13 @@ test(
     );
     // While the initiator still holds delete permission, it keeps ownership.
     await assert.rejects(fixture.controller.deleteNamespace(otherActor, namespace.id), {
-      message: "Only the initiating actor can retry deletion.",
+      name: "DeletionRetryOwnedError",
+      message: /Only the actor that started this deletion can retry it/,
+      initiatingActorId: fixture.actor.id,
+      authorization: {
+        action: "delete",
+        resource: { kind: "namespace", id: namespace.id, namespaceId: namespace.id },
+      },
     });
     assert.deepEqual(await observe(), exhausted);
 
@@ -6259,6 +6273,89 @@ test(
 );
 
 test(
+  "deployment progress names Compute's pending reason and old pending work rechecks less often",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const unscheduled = await fixture.agent("pending-unschedulable");
+    const unpaired = await fixture.agent("pending-node");
+    const unscheduledRevision = await fixture.revision(unscheduled, 1);
+    const unpairedRevision = await fixture.revision(unpaired, 1);
+    const reasons = new Map([
+      [unscheduledRevision.id, "WORKLOAD_UNSCHEDULABLE"],
+      [unpairedRevision.id, "WORKSPACE_NODE_PENDING"],
+    ]);
+    const delays = [];
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          return {
+            ...(await fixture.compute.prepareRevision(revision)),
+            ready: false,
+            pendingReason: reasons.get(revision.id),
+          };
+        },
+      },
+      (event) => {
+        if (
+          event.event === "worker.completed" &&
+          event.workId === unpairedRevision.idempotencyKey &&
+          event.outcome === "pending"
+        ) {
+          delays.push(
+            fixture.observerPool
+              .query(
+                `SELECT EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+                 FROM occ.controller_work WHERE idempotency_key = $1`,
+                [event.workId],
+              )
+              .then(({ rows }) => Number(rows[0].delay_ms)),
+          );
+        }
+      },
+    );
+    const progress = async (owner, revision) => {
+      const lastAttempt = await waitFor(`pending progress for ${revision.id}`, async () => {
+        const status = await fixture.controller.getDeploymentStatus(
+          fixture.actor.id,
+          fixture.namespace.id,
+          owner.id,
+          revision.id,
+        );
+        return status.progress?.lastAttempt ?? undefined;
+      });
+      return { code: lastAttempt.code, message: lastAttempt.message };
+    };
+    assert.deepEqual(await progress(unscheduled, unscheduledRevision), {
+      code: "REVISION_UNSCHEDULABLE",
+      message:
+        "The cluster has no room for this Agent's Pods yet; they are waiting to be scheduled.",
+    });
+    assert.deepEqual(await progress(unpaired, unpairedRevision), {
+      code: "WORKSPACE_NODE_PENDING",
+      message: "Workloads are ready; waiting for the workspace node to connect to the Gateway.",
+    });
+    const fresh = await delays[0];
+    assert.ok(fresh > 450 && fresh <= 500, `a new deployment rechecks in 500 ms (${fresh} ms)`);
+
+    // Five minutes later, still inside the 900-second deadline, a runtime that
+    // stays unready is rechecked every 5 s, so one stuck Agent cannot take most
+    // of the serial worker (D223). Only the worker's wall clock moves.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 300_000;
+    context.after(() => {
+      Date.now = realNow;
+    });
+    const seen = delays.length;
+    await waitFor("a recheck after five minutes", async () => delays.length > seen || undefined);
+    const old = await delays[seen];
+    Date.now = realNow;
+    assert.ok(old > 4_500 && old <= 5_000, `an old deployment rechecks in 5 s (${old} ms)`);
+  },
+);
+
+test(
   "an overdue Agent runtime fails closed without activating its incomplete revision",
   requiresPostgres,
   async (context) => {
@@ -6332,19 +6429,19 @@ test(
     });
     let observations = 0;
 
-    // The default 900-second deadline stays in force: a transient probe failure
-    // remains pending, and only the credential rejection ends the deployment.
+    // The default 900-second deadline stays in force: an unready runtime without
+    // failure evidence remains pending, and the held rejection ends the deployment.
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
         observations += 1;
-        return {
+        const observed = {
           ...(await fixture.compute.prepareRevision(revision)),
           ready: false,
-          runtimeFailure: failure(
-            observations === 1 ? "MODEL_PROBE_TIMEOUT" : "AUTHENTICATION_FAILED",
-          ),
         };
+        return observations === 1
+          ? observed
+          : { ...observed, runtimeFailure: failure("AUTHENTICATION_FAILED") };
       },
     });
 
@@ -6397,22 +6494,28 @@ test(
     const candidate = await fixture.revision(owner, 1);
     let observations = 0;
 
-    // Under the default 900-second deadline a plain probe timeout stays pending;
-    // a probe that ran out of CPU at the container's limit ends the deployment.
+    // Under the default 900-second deadline an unready runtime without failure
+    // evidence stays pending; a probe that ran out of CPU at the container's
+    // limit ends the deployment.
     await fixture.start({
       ...fixture.compute,
       async prepareRevision(revision) {
         observations += 1;
-        return {
+        const observed = {
           ...(await fixture.compute.prepareRevision(revision)),
           ready: false,
-          runtimeFailure: {
-            component: "gateway",
-            check: "model-probe",
-            checkedAt: "2026-09-30T08:00:00.000Z",
-            code: observations === 1 ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_CPU_STARVED",
-          },
         };
+        return observations === 1
+          ? observed
+          : {
+              ...observed,
+              runtimeFailure: {
+                component: "gateway",
+                check: "model-probe",
+                checkedAt: "2026-09-30T08:00:00.000Z",
+                code: "MODEL_PROBE_CPU_STARVED",
+              },
+            };
       },
     });
 
@@ -6440,6 +6543,89 @@ test(
       code: "RUNTIME_CPU_STARVED",
       message: "Deployment runtime did not get enough CPU to start.",
     });
+  },
+);
+
+test(
+  "held runtime probe and login failures fail deployment before the convergence deadline",
+  requiresPostgres,
+  async (context) => {
+    // Runtime entrypoints publish these codes only after their own retries end
+    // and then hold the container unready with nothing to restart it, so the
+    // default 900-second deadline could only report the same failure later.
+    const fixture = await setup(context);
+    const cases = [
+      [
+        "agent",
+        "model-probe",
+        "MODEL_PROBE_TIMEOUT",
+        "RUNTIME_MODEL_PROBE_TIMEOUT",
+        "Deployment runtime startup model check timed out.",
+      ],
+      [
+        "gateway",
+        "model-probe",
+        "MODEL_PROBE_FAILED",
+        "RUNTIME_MODEL_PROBE_FAILED",
+        "Deployment runtime startup model check failed.",
+      ],
+      [
+        "agent",
+        "login",
+        "LOGIN_FAILED",
+        "RUNTIME_LOGIN_FAILED",
+        "Deployment runtime could not sign in to the model provider.",
+      ],
+      [
+        "gateway",
+        "plugin-approvers",
+        "INCOMPATIBLE_RESPONSE",
+        "RUNTIME_STARTUP_FAILED",
+        "Deployment runtime failed a startup check.",
+      ],
+    ];
+    const failures = new Map();
+    const candidates = [];
+    for (const [index, [component, check, runtimeCode]] of cases.entries()) {
+      const owner = await fixture.agent(`held-runtime-${index}`);
+      const candidate = await fixture.revision(owner, 1);
+      failures.set(candidate.id, {
+        component,
+        check,
+        checkedAt: "2026-10-01T08:00:00.000Z",
+        code: runtimeCode,
+      });
+      candidates.push({ owner, candidate });
+    }
+    await fixture.start({
+      ...fixture.compute,
+      async prepareRevision(revision) {
+        return {
+          ...(await fixture.compute.prepareRevision(revision)),
+          ready: false,
+          runtimeFailure: failures.get(revision.id),
+        };
+      },
+    });
+
+    for (const [index, { owner, candidate }] of candidates.entries()) {
+      const [, , , code, message] = cases[index];
+      const failed = await fixture.work(candidate, "failed_permanent", 10_000);
+      assert.equal(failed.attempt_count, 1);
+      const result = await fixture.observerPool.query(
+        "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
+        [candidate.idempotencyKey],
+      );
+      assert.deepEqual(result.rows, [{ reason_code: code, result_data: null }]);
+      const status = await fixture.controller.getDeploymentStatus(
+        fixture.actor.id,
+        fixture.namespace.id,
+        owner.id,
+        candidate.id,
+      );
+      assert.equal(status.status, "failed");
+      assert.deepEqual(status.error, { code, message });
+    }
   },
 );
 

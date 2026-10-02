@@ -94,9 +94,41 @@ type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
 type Outcome = "success" | "pending" | "retry" | "permanent";
 
 // A revision whose runtime is not ready yet is progress, not a failure. Recheck
-// it on a short fixed cadence so earlier transient failures on the same Work do
-// not stretch readiness waits through the queue's exponential retry backoff.
+// it on a short cadence so earlier transient failures on the same Work do not
+// stretch readiness waits through the queue's exponential retry backoff. The
+// worker is serial and each recheck is a full preparation pass (0.2-1.7 s live),
+// so the cadence grows with the deployment's age, from 500 ms to 5 s at 200 s:
+// a runtime that stays unready for minutes cannot take half the worker (D223).
 const REVISION_READINESS_RECHECK_MS = 500;
+const REVISION_READINESS_RECHECK_MAX_MS = 5_000;
+const REVISION_READINESS_RECHECK_AGE_DIVISOR = 40;
+
+// Pending reason codes for an unready revision. Compute may say why it waits.
+const REVISION_PENDING_CODES: Readonly<Record<string, string>> = Object.freeze({
+  WORKLOAD_UNSCHEDULABLE: "REVISION_UNSCHEDULABLE",
+  WORKSPACE_NODE_PENDING: "WORKSPACE_NODE_PENDING",
+});
+const REVISION_READINESS_CODES: ReadonlySet<string> = new Set([
+  "REVISION_INCOMPLETE",
+  ...Object.values(REVISION_PENDING_CODES),
+]);
+
+function revisionPendingCode(observation: unknown): string {
+  const reason = (observation as { readonly pendingReason?: unknown }).pendingReason;
+  return typeof reason === "string" && Object.hasOwn(REVISION_PENDING_CODES, reason)
+    ? REVISION_PENDING_CODES[reason]!
+    : "REVISION_INCOMPLETE";
+}
+
+function revisionReadinessRecheckMs(ageMs: number): number {
+  return Math.min(
+    REVISION_READINESS_RECHECK_MAX_MS,
+    Math.max(
+      REVISION_READINESS_RECHECK_MS,
+      Math.round(ageMs / REVISION_READINESS_RECHECK_AGE_DIVISOR),
+    ),
+  );
+}
 
 interface DispatchResult {
   readonly outcome: Outcome;
@@ -367,6 +399,28 @@ function runtimeFailureFromObservation(observation: unknown): RuntimeFailureEvid
   return safeRuntimeFailureEvidence(
     (observation as { readonly runtimeFailure?: unknown }).runtimeFailure,
   );
+}
+
+// Deployment failure codes for runtime failures that Kubernetes runtime
+// entrypoints hold until restart. AUTHENTICATION_FAILED is a provider 401/403 or
+// invalid-key rejection; MODEL_PROBE_CPU_STARVED ran out of a CPU budget sized
+// for the container's CPU limit; the others are a probe timeout or failure, a
+// failed Codex login, a missing probe configuration, and an invalid plugin
+// approver configuration. Unknown codes stay pending until the deadline.
+const HELD_RUNTIME_FAILURE_CODES: Readonly<Record<string, string>> = Object.freeze({
+  AUTHENTICATION_FAILED: "RUNTIME_AUTHENTICATION_FAILED",
+  MODEL_PROBE_CPU_STARVED: "RUNTIME_CPU_STARVED",
+  MODEL_PROBE_TIMEOUT: "RUNTIME_MODEL_PROBE_TIMEOUT",
+  MODEL_PROBE_FAILED: "RUNTIME_MODEL_PROBE_FAILED",
+  LOGIN_FAILED: "RUNTIME_LOGIN_FAILED",
+  UNAVAILABLE: "RUNTIME_STARTUP_FAILED",
+  INCOMPATIBLE_RESPONSE: "RUNTIME_STARTUP_FAILED",
+});
+
+function heldRuntimeFailureCode(code: string): string | undefined {
+  return Object.hasOwn(HELD_RUNTIME_FAILURE_CODES, code)
+    ? HELD_RUNTIME_FAILURE_CODES[code]
+    : undefined;
 }
 
 function convergenceDeadlineResultData(
@@ -2429,7 +2483,7 @@ export class ControllerWorker {
             await this.finalizeActiveRevision(
               claim,
               revision,
-              "REVISION_INCOMPLETE",
+              revisionPendingCode(observation),
               runtimeFailureFromObservation(observation),
             );
             return;
@@ -2714,7 +2768,7 @@ export class ControllerWorker {
         const runtimeFailure = runtimeFailureFromObservation(observation);
         return {
           outcome: "pending",
-          code: "REVISION_INCOMPLETE",
+          code: revisionPendingCode(observation),
           ...(runtimeFailure === undefined ? {} : { data: { runtimeFailure } }),
         };
       }
@@ -2992,25 +3046,24 @@ export class ControllerWorker {
     const expired =
       result.outcome === "pending" &&
       Date.now() - claim.createdAt.getTime() >= this.convergenceTimeoutMs;
-    // Runtime entrypoints publish AUTHENTICATION_FAILED only for provider 401/403
-    // or invalid-key rejections, and MODEL_PROBE_CPU_STARVED only when the model
-    // probe ran out of a CPU budget sized for the container's CPU limit while it
-    // waited for CPU. Both hold unready until restart, and a restart gets the same
-    // credential and CPU, so waiting for the deadline cannot change the result.
-    // Other failures may recover.
+    // Runtime entrypoints publish a runtime failure only after their own retries
+    // end, and then hold the container unready until an explicit restart that
+    // nothing performs: no liveness probe or controller restarts it. Waiting for
+    // the convergence deadline therefore cannot change the result, so every held
+    // failure ends the deployment at once with a code naming its cause.
+    const heldFailureCode =
+      runtimeFailure === undefined ? undefined : heldRuntimeFailureCode(runtimeFailure.code);
     let resolved: RevisionDispatchResult =
-      runtimeFailure?.code === "AUTHENTICATION_FAILED"
-        ? { outcome: "permanent", code: "RUNTIME_AUTHENTICATION_FAILED" }
-        : runtimeFailure?.code === "MODEL_PROBE_CPU_STARVED"
-          ? { outcome: "permanent", code: "RUNTIME_CPU_STARVED" }
-          : expired
-            ? {
-                ...result,
-                outcome: "permanent",
-                code: "CONVERGENCE_DEADLINE_EXCEEDED",
-                data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
-              }
-            : result;
+      heldFailureCode !== undefined
+        ? { outcome: "permanent", code: heldFailureCode }
+        : expired
+          ? {
+              ...result,
+              outcome: "permanent",
+              code: "CONVERGENCE_DEADLINE_EXCEEDED",
+              data: convergenceDeadlineResultData(this.convergenceTimeoutMs, runtimeFailure),
+            }
+          : result;
     if (resolved.outcome === "success" && resolved.revision?.repositoryCredentials !== undefined) {
       try {
         await this.assertRepositoryAuthority(claim, resolved.revision);
@@ -3101,7 +3154,9 @@ export class ControllerWorker {
         await queue.defer(
           claim,
           { code: resolved.code },
-          resolved.code === "REVISION_INCOMPLETE" ? { delayMs: REVISION_READINESS_RECHECK_MS } : {},
+          REVISION_READINESS_CODES.has(resolved.code)
+            ? { delayMs: revisionReadinessRecheckMs(Date.now() - claim.createdAt.getTime()) }
+            : {},
         );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, {

@@ -74,6 +74,7 @@ import {
 } from "@openclaw-enterprise/contracts";
 import {
   AuthorizationDeniedError,
+  DeletionRetryOwnedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   DependencyUnavailableError,
   NamespaceNotReadyError,
@@ -1777,19 +1778,30 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     context?: RequestContext,
     evidence?: AuthorizationEvidence,
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
+    explanation?: {
+      readonly decisionReason: string;
+      readonly details: Readonly<Record<string, unknown>>;
+    },
   ): Promise<void> {
     try {
+      const base = event(
+        operation,
+        request,
+        operationTarget(operation, installationId, request.params as Record<string, unknown>),
+        kind,
+        context,
+        evidence,
+        undefined,
+        authorization,
+      );
       await options.auditSink.append(
-        event(
-          operation,
-          request,
-          operationTarget(operation, installationId, request.params as Record<string, unknown>),
-          kind,
-          context,
-          evidence,
-          undefined,
-          authorization,
-        ),
+        explanation === undefined
+          ? base
+          : {
+              ...base,
+              decisionReason: explanation.decisionReason,
+              details: { ...base.details, ...explanation.details },
+            },
       );
     } catch {
       throw failure(
@@ -3408,7 +3420,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           summary: operation.summary,
           description: creating
             ? "Requires a session or Installation-scoped service key with administer on the Installation. Issues a Better Auth key for an existing non-Agent ServicePrincipal in its exact scope when the caller already holds every IAM grant of that ServicePrincipal at the same or a broader scope; creates no identity or IAM grant. The plaintext key is returned only here."
-            : "Requires a session or Installation-scoped service key with administer on the Installation. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.",
+            : "Requires a session or Installation-scoped service key with administer on the Installation, plus every IAM grant of the key's ServicePrincipal, as for issuance. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.",
           tags: [...operation.tags],
           security: [{ sessionCookie: [] }, { serviceApiKey: [] }],
           "x-openclaw-permissions": [
@@ -3495,6 +3507,54 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               },
             };
           };
+          // Issuing or revoking a key acts with every grant of its ServicePrincipal, so the
+          // caller must already hold all of them; Installation administer alone is not enough.
+          const requireCoverage = async (servicePrincipalId: string) => {
+            let covered;
+            try {
+              covered =
+                typeof selected.coversIdentityAccess === "function" &&
+                (await selected.coversIdentityAccess({
+                  principalId: context.actorId,
+                  targetIdentityId: servicePrincipalId,
+                })) === true;
+            } catch {
+              throw dependencyUnavailable();
+            }
+            if (covered) {
+              return;
+            }
+            const base = event(
+              operation,
+              request,
+              target,
+              "authorization_denial",
+              context,
+              decision.evidence,
+              { outcome: "denied", reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED" },
+            );
+            try {
+              await options.auditSink.append({
+                ...base,
+                decisionReason:
+                  "The caller does not hold every grant of the target ServicePrincipal.",
+                details: {
+                  ...base.details,
+                  servicePrincipalId,
+                  ...(creating
+                    ? {}
+                    : { serviceKeyId: (request.params as { keyId: string }).keyId }),
+                },
+              });
+            } catch {
+              throw dependencyUnavailable();
+            }
+            throw failure(
+              403,
+              "FORBIDDEN",
+              "The caller does not hold every grant of the target ServicePrincipal.",
+            );
+          };
           if (creating) {
             const body = request.body as {
               servicePrincipalId: string;
@@ -3525,25 +3585,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               );
             }
             // A key carries all of its principal's grants; never issue beyond the caller's own.
-            let covered;
-            try {
-              covered =
-                typeof selected.coversIdentityAccess === "function" &&
-                (await selected.coversIdentityAccess({
-                  principalId: context.actorId,
-                  targetIdentityId: principal.id,
-                })) === true;
-            } catch {
-              throw dependencyUnavailable();
-            }
-            if (!covered) {
-              await denial(operation, request, "authorization_denial", context, decision.evidence);
-              throw failure(
-                403,
-                "FORBIDDEN",
-                "The caller does not hold every grant of the target ServicePrincipal.",
-              );
-            }
+            await requireCoverage(principal.id);
             let key;
             try {
               key = await options.auth.createServiceKey({
@@ -3571,6 +3613,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             if (!key) {
               throw failure(404, "NOT_FOUND", "The service API key was not found.");
             }
+            // Revocation requires the same authority as issuance.
+            await requireCoverage(key.servicePrincipalId);
             try {
               await options.auth.revokeServiceKey(key);
               await options.auditSink.append(audit(key));
@@ -4887,6 +4931,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             context,
             error.evidence,
             error.authorization,
+            error instanceof DeletionRetryOwnedError
+              ? {
+                  decisionReason:
+                    "A deletion can be retried only by its initiating actor while it holds delete.",
+                  details: { initiatingActorId: error.initiatingActorId },
+                }
+              : undefined,
           );
         } catch (auditError) {
           mapped = requestFailure(auditError);
