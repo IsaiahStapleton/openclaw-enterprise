@@ -70,7 +70,10 @@ import {
 } from "@openclaw-enterprise/occ";
 import type { InstallationRuntimeDrivers } from "./composition/installation-config.ts";
 import { resolveApprovedHarness } from "./composition/production-harness.ts";
-import { withComputeAbortSignal } from "./drivers/compute/operation-context.ts";
+import {
+  withComputeAbortSignal,
+  withComputeWorkWaiting,
+} from "./drivers/compute/operation-context.ts";
 import type { OccMetrics, WorkKind, WorkOutcome } from "./metrics/index.ts";
 import {
   RepositoryCredentialAuthorityError,
@@ -3027,7 +3030,14 @@ export class ControllerWorker {
     // health() serializes its own updates and reports failures separately.
     void this.health(false);
     try {
-      return await withComputeAbortSignal(operation.signal, () => effect(operation.signal));
+      // The worker is serial: Compute may end an optional in-pass wait early
+      // when other Work could be claimed, instead of holding it back (D221).
+      return await withComputeAbortSignal(operation.signal, () =>
+        withComputeWorkWaiting(
+          () => this.queue.claimableWorkWaiting(),
+          () => effect(operation.signal),
+        ),
+      );
     } finally {
       clearInterval(heartbeat);
       this.abort.signal.removeEventListener("abort", abandon);
