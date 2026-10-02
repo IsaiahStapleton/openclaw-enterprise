@@ -187,9 +187,9 @@ event names, gateway subsystem records under `gateway`, Codex app-server
 stderr records under `codex_app_server`, Codex warnings and errors (never the
 `codex_otel` targets), the Codex `turn` span's start and end (`codex.turn`),
 completed tool calls (`codex.tool_call`), and the runtime wrappers' fixed stderr
-diagnostics (`runtime.startup_phase`, `runtime.workspace_node`, and
-`openclaw.model_probe` / `codex.model_probe`) with only a bounded phase name or
-code. It parses JSON records up to `32KiB`,
+diagnostics (`runtime.startup_phase`, `runtime.workspace_node`,
+`runtime.gateway_settings_overridden`, and `openclaw.model_probe` /
+`codex.model_probe`) with only a bounded phase name or code. It parses JSON records up to `32KiB`,
 maps severity explicitly, keeps allowlisted attributes, and replaces retained
 bodies with the event class, stripping arbitrary content. Codex turn and tool-call
 bodies are fixed text; a `codex.operational` body keeps Codex's own message only

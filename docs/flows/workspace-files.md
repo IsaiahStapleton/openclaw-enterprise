@@ -225,6 +225,8 @@ Other Harnesses are replaced, restarting their Gateway.
   and Codex never hands that runtime a turn.
 - At each start the Gateway logs one `runtime.gateway_settings_overridden`
   event naming (never valuing) the owner settings it replaced or dropped.
+  `occ agent logs` shows it as a warning with the setting names; the Collector
+  exports only the event name.
   Deployment admission rejects the shapes it cannot rewrite: a non-list
   `codexDynamicToolsExclude`, a non-object Codex plugin `config`, `cron`,
   `cron.triggers`, `models` or `models.providers`, and a `codex` or `openai`

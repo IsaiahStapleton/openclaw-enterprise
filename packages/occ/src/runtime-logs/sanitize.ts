@@ -37,7 +37,27 @@ const WRAPPER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freez
   "openclaw.model_probe": ["elapsedMs", "capMs", "cpuWaitMs", "code"],
   "codex.model_probe": ["attempt", "elapsedMs", "exitCode", "signal", "code"],
   "runtime.workspace_node": ["container", "outcome", "code"],
+  "runtime.gateway_settings_overridden": ["container"],
 });
+
+// `runtime.gateway_settings_overridden` names (never values) the owner settings a
+// Gateway replaced. A name can carry an owner-typed key, so the list is kept only
+// when every item is a short key path; otherwise the event keeps no list.
+const OVERRIDDEN_SETTING =
+  /^[A-Za-z][A-Za-z0-9_-]{0,63}(?:(?:\[\])?\.[A-Za-z][A-Za-z0-9_-]{0,63}){0,7}$/;
+const MAX_OVERRIDDEN_SETTINGS = 32;
+
+function overriddenSettings(value: unknown): string | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_OVERRIDDEN_SETTINGS ||
+    !value.every((item) => typeof item === "string" && OVERRIDDEN_SETTING.test(item))
+  ) {
+    return undefined;
+  }
+  return scalar(value.join(", ")) as string;
+}
 
 // Fixed plain-text failure lines the runtime wrapper prints next to its structured
 // events (`runtime-entrypoints.ts`). They are wrapper errors, not `unknown` text.
@@ -204,14 +224,20 @@ type Classified =
 function classifyStructured(value: Readonly<Record<string, unknown>>): Classified {
   const event = value.event;
   if (typeof event === "string" && Object.hasOwn(WRAPPER_FIELDS, event)) {
-    const fields = pickFields(value, WRAPPER_FIELDS[event]!);
+    let fields = pickFields(value, WRAPPER_FIELDS[event]!);
+    const overridden = event === "runtime.gateway_settings_overridden";
+    const settings = overridden ? overriddenSettings(value.settings) : undefined;
+    if (settings !== undefined) {
+      fields = Object.freeze({ ...fields, settings });
+    }
     const failed =
       value.outcome === "failed" ||
       (typeof value.code === "string" && value.code !== "READY" && event.endsWith("model_probe"));
     return {
       type: "line",
       kind: "wrapper",
-      level: failed ? "error" : "info",
+      // The Gateway ignored owner settings: the owner should see it at the default level.
+      level: failed ? "error" : overridden ? "warn" : "info",
       message: event,
       ...(fields === undefined ? {} : { fields }),
     };

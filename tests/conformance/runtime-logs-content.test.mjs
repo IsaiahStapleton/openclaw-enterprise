@@ -346,6 +346,55 @@ test("a failed startup phase keeps its fixed cause code", () => {
   );
 });
 
+test("a Gateway settings override keeps its setting names, never values (D322)", () => {
+  const event = (settings) =>
+    JSON.stringify({
+      event: "runtime.gateway_settings_overridden",
+      container: "gateway",
+      settings,
+    });
+  const { records, withheld } = sanitizeRuntimeLogChunk({
+    stream: { source: "gateway", pod: "gateway-0", container: "gateway" },
+    truncated: false,
+    lines: [
+      {
+        time: lineTime(1),
+        raw: event([
+          "cron.triggers.enabled",
+          "models.providers.codex.baseUrl",
+          "models.providers.codex.apiKey",
+          "models.providers.codex.models[].headers",
+        ]),
+      },
+      // An item that is not a key path drops the list, never the event.
+      { time: lineTime(2), raw: event(["cron.triggers.enabled", "models.providers.sk-live x"]) },
+      { time: lineTime(3), raw: event("cron.triggers.enabled") },
+    ],
+  });
+  assert.equal(withheld, 0);
+  assert.deepEqual(
+    records.map(({ kind, level, message, fields }) => ({ kind, level, message, fields })),
+    [
+      {
+        kind: "wrapper",
+        level: "warn",
+        message: "runtime.gateway_settings_overridden",
+        fields: {
+          container: "gateway",
+          settings:
+            "cron.triggers.enabled, models.providers.codex.baseUrl, models.providers.codex.apiKey, models.providers.codex.models[].headers",
+        },
+      },
+      ...[2, 3].map(() => ({
+        kind: "wrapper",
+        level: "warn",
+        message: "runtime.gateway_settings_overridden",
+        fields: { container: "gateway" },
+      })),
+    ],
+  );
+});
+
 test("the sanitizer drops a partial final line and bounds oversized input", () => {
   const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
   const fragment = randomBytes(10).toString("hex");

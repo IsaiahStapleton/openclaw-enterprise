@@ -780,6 +780,12 @@ test(
                 outcome: "failed",
                 code: "WORKSPACE_NODE_FAILED",
               }),
+              // Setting names stay out of the remote record (D322).
+              line({
+                event: "runtime.gateway_settings_overridden",
+                container: "gateway",
+                settings: ["cron.triggers.enabled", `models.providers.${canary}.headers`],
+              }),
               // Unbounded values lose the field, never the event.
               line(openclawProbe(`${canary} key`)),
               line(phase("gateway", `${canary}/../path`, "failed")),
@@ -823,7 +829,7 @@ test(
         attributes: attributes(record.attributes),
         record,
       }));
-    await waitFor(async () => (await records()).length >= 12);
+    await waitFor(async () => (await records()).length >= 13);
     await delay(1_000);
     const exported = await records();
     for (const { resource } of exported) {
@@ -860,6 +866,7 @@ test(
           "event.name": "runtime.workspace_node",
           "occ.code": "WORKSPACE_NODE_FAILED",
         }),
+        gateway("WARN", { "event.name": "runtime.gateway_settings_overridden" }),
         gateway("WARN", probeEvent),
         gateway("WARN", phaseEvent),
         codex("WARN", { "event.name": "codex.model_probe", "occ.code": "AUTHENTICATION_FAILED" }),
