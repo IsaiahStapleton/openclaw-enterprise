@@ -2501,9 +2501,17 @@ test("embedded plugin preparation applies runtime egress before gateway readines
 test("Kubernetes plugin runtime status requires the exact ready Pod report", async (t) => {
   const driver = createKubernetesComputeDriver(kubernetesOptions());
   const candidate = revision({
-    harness: { id: "openclaw", version: "1.0.0", mode: "embedded" },
     compute: { id: driver.id, implementation: driver.implementation },
-    plugins: openClawPluginState(),
+    plugins: {
+      ...codexLinearPluginState(),
+      plugins: {
+        ...codexSelection(),
+        [`codex-plugin:${CODEX_ASANA_NATIVE_ID}`]: {
+          enabled: true,
+          toolDefaults: { approval: "provider_default" },
+        },
+      },
+    },
   });
   const namespace = kubernetesNamespaceName(tenant.id);
   const pod = {
@@ -2511,7 +2519,7 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
     kind: "Pod",
     metadata: {
       name: "gateway-plugin-status",
-      namespace,
+      namespace: kubernetesGatewayNamespaceName(tenant.id),
       uid: "pod-plugin-status-1",
       labels: {
         "openclaw.dev/agent": candidate.agentId,
@@ -2526,17 +2534,41 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
     startupId: "startup-plugin-status-1",
     podUid: "pod-plugin-status-1",
     phase: "ready",
-    successfulPluginIds: ["occ-plugin:diffs"],
+    successfulPluginIds: [
+      `codex-plugin:${CODEX_LINEAR_NATIVE_ID}`,
+      `codex-plugin:${CODEX_ASANA_NATIVE_ID}`,
+    ],
     failures: [],
   };
+  // Gateway readiness requires the Harness's complete warning set, regardless of order.
+  const warningReport = {
+    ...readyReport,
+    successfulPluginIds: [],
+    failures: [
+      { pluginId: `codex-plugin:${CODEX_ASANA_NATIVE_ID}`, code: "PLUGIN_INSTALL_FAILED" },
+      { pluginId: `codex-plugin:${CODEX_LINEAR_NATIVE_ID}`, code: "PLUGIN_AUTH_REQUIRED" },
+    ],
+  };
 
-  for (const [name, response, expected] of [
+  for (const [name, response, expected, expectedWarnings = []] of [
     ["missing proxy", Object.assign(new Error("not found"), { code: 404 }), "not-ready"],
     ["starting phase", { ...readyReport, phase: "starting" }, "not-ready"],
     ["wrong revision", { ...readyReport, revisionId: "another-revision" }, "rejects"],
     ["wrong container", { ...readyReport, container: "agent" }, "rejects"],
     ["malformed report", { ...readyReport, successfulPluginIds: "occ-plugin:diffs" }, "rejects"],
     ["ready", readyReport, readyReport],
+    [
+      "matching warnings in another order",
+      { ...warningReport, failures: [...warningReport.failures].reverse() },
+      warningReport,
+      warningReport.failures,
+    ],
+    [
+      "different warning code keeps the runtime unready",
+      warningReport,
+      "not-ready",
+      [{ ...warningReport.failures[0], code: "PLUGIN_AUTH_REQUIRED" }, warningReport.failures[1]],
+    ],
   ]) {
     await t.test(name, async () => {
       driver.clients = async () => ({
@@ -2557,7 +2589,7 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
               candidate,
               { name: namespace, plane: "execution" },
               "gateway",
-              [],
+              expectedWarnings,
             ),
           DependencyUnavailableError,
         );
@@ -2566,7 +2598,7 @@ test("Kubernetes plugin runtime status requires the exact ready Pod report", asy
           candidate,
           { name: namespace, plane: "execution" },
           "gateway",
-          [],
+          expectedWarnings,
         );
         assert.deepEqual(status, expected === "not-ready" ? undefined : expected);
       }
