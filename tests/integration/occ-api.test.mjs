@@ -33,6 +33,7 @@ import {
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
+import { stopProcess } from "../helpers/stop-process.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
@@ -84,27 +85,6 @@ function startChild(port, overrides = {}) {
   return { child, output: () => output };
 }
 
-async function stopChild(child) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  const exited = once(child, "exit");
-  child.kill("SIGTERM");
-  const forced = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }, 1_000);
-  forced.unref();
-
-  try {
-    await exited;
-  } finally {
-    clearTimeout(forced);
-  }
-}
-
 async function assertUnsafeStartupRejected() {
   const configuredDatabase = { OCC_DATABASE_URL: "postgresql://127.0.0.1:1/openclaw" };
   for (const [description, overrides] of [
@@ -139,7 +119,7 @@ async function assertUnsafeStartupRejected() {
       assert.notEqual(exitCode, 0, `${description} must fail closed:\n${processState.output()}`);
     } finally {
       clearTimeout(deadline);
-      await stopChild(processState.child);
+      await stopProcess(processState.child, { graceMs: 1_000 });
     }
   }
 }
