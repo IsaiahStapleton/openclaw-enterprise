@@ -28,7 +28,9 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  trackSettledFetches,
   waitForInputValue,
+  waitForSettledFetches,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 import {
@@ -2148,6 +2150,7 @@ test("Preset picker ignores stale Preset responses after switching selection", a
   assert.equal(first.status, 201, JSON.stringify(first.body));
   assert.equal(second.status, 201, JSON.stringify(second.body));
   const { page } = await newPage(t, fixture);
+  await trackSettledFetches(page);
   await routeInstallationWithoutProvisioning(page, fixture);
   let releaseFirst;
   const firstBlocked = new Promise((resolve) => {
@@ -2162,7 +2165,8 @@ test("Preset picker ignores stale Preset responses after switching selection", a
   await page.getByLabel("Preset template").selectOption(second.data.id);
   await page.getByLabel("Second Name", { exact: true }).waitFor();
   releaseFirst();
-  await page.waitForTimeout(50);
+  // The page has read the stale response and run its handler.
+  await waitForSettledFetches(page, `/namespaces/${namespace.id}/presets/${first.data.id}`, 1);
   assert.equal(await page.getByLabel("First Name", { exact: true }).count(), 0);
   await page.getByLabel("Second Name", { exact: true }).fill("Current Agent");
   await page.getByRole("button", { name: "Use Preset" }).click();

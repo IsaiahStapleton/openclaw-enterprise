@@ -66,6 +66,7 @@ async function setup(
     leaseDurationMs = 30_000,
     maxAttempts = 5,
     onHealthy,
+    onProgress,
     metrics,
     repoDriver,
     secretAuthMethod = "api_key",
@@ -396,6 +397,7 @@ async function setup(
       leaseDurationMs,
       maxAttempts,
       onHealthy,
+      onProgress,
       ...(drivers === undefined ? { computeDriver } : { drivers }),
       ...(convergenceTimeoutMs === undefined ? {} : { convergenceTimeoutMs }),
       emit,
@@ -976,6 +978,129 @@ test(
     await fixture.start(fixture.compute);
     await fixture.work(candidate, "succeeded");
     await waitFor("repository-disabled worker readiness", async () => (healthy ? true : undefined));
+  },
+);
+
+/**
+ * Relay PostgreSQL connections through a local proxy that can go silent: it stops relaying on
+ * every open connection without closing it, as a client sees after a failover or partition
+ * that sent no RST. New connections still reach the server.
+ */
+async function startSilenceableProxy(context, databaseUrl) {
+  const { createServer, connect } = await import("node:net");
+  const target = new URL(databaseUrl);
+  const pairs = new Set();
+  const server = createServer((client) => {
+    const upstream = connect(Number(target.port || 5432), target.hostname);
+    const pair = { client, upstream };
+    pairs.add(pair);
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const close = () => {
+      pairs.delete(pair);
+      client.destroy();
+      upstream.destroy();
+    };
+    for (const socket of [client, upstream]) {
+      socket.on("error", close);
+      socket.on("close", close);
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const close = () => {
+    for (const { client, upstream } of pairs) {
+      client.destroy();
+      upstream.destroy();
+    }
+    return new Promise((resolve) => server.close(resolve));
+  };
+  context.after(close);
+  const url = new URL(databaseUrl);
+  url.hostname = "127.0.0.1";
+  url.port = String(server.address().port);
+  return {
+    url: url.toString(),
+    silence() {
+      for (const { client, upstream } of pairs) {
+        client.unpipe(upstream);
+        upstream.unpipe(client);
+        client.pause();
+        upstream.pause();
+      }
+    },
+    close,
+  };
+}
+
+test(
+  "a worker abandons a query on a silent database connection and resumes work",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const [{ Pool }, { workerDatabasePoolOptions }] = await Promise.all([
+      import("pg"),
+      import("../../apps/controller/src/worker.ts"),
+    ]);
+    const fixture = await setup(context);
+    const proxy = await startSilenceableProxy(context, fixture.database.url);
+    const pool = new Pool({
+      connectionString: proxy.url,
+      ...workerDatabasePoolOptions(3_000),
+      max: 2,
+    });
+    fixture.database.pools.add(pool);
+    const first = await fixture.agent("before-silence");
+    const before = await fixture.revision(first, 1);
+    await fixture.start(fixture.compute, undefined, undefined, undefined, pool);
+    await fixture.work(before, "succeeded");
+
+    // Every pooled connection now swallows queries without an answer or an error.
+    proxy.silence();
+    const second = await fixture.agent("after-silence");
+    const after = await fixture.revision(second, 1);
+    await fixture.work(after, "succeeded", 30_000);
+    await fixture.stop();
+    await proxy.close();
+  },
+);
+
+test(
+  "worker progress continues through a database outage and stops when the loop is stuck",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const { Pool } = await import("pg");
+    let progressed = 0;
+    const fixture = await setup(context, {
+      onProgress: async () => {
+        progressed += 1;
+      },
+    });
+    const proxy = await startSilenceableProxy(context, fixture.database.url);
+    // No query timeout: this isolates the liveness signal from the timeout that would unstick it.
+    const pool = new Pool({ connectionString: proxy.url, max: 1 });
+    fixture.database.pools.add(pool);
+    pool.on("error", () => {});
+    await fixture.start(fixture.compute, undefined, undefined, undefined, pool);
+    await waitFor("idle worker progress", async () => (progressed >= 2 ? true : undefined));
+
+    proxy.silence();
+    // A negative check needs a fixed window. Progress is reported at most once per second
+    // here (pollIntervalMs 15), so 1.5 s lets an in-flight pass settle and 3 s spans three
+    // reports a moving loop would have made.
+    await delay(1_500);
+    const stuck = progressed;
+    await delay(3_000);
+    assert.equal(
+      progressed,
+      stuck,
+      "a worker stuck on a silent query must stop reporting progress",
+    );
+
+    // Refused connections fail each pass fast; the loop still moves, so liveness holds.
+    await proxy.close();
+    await waitFor("progress through a database outage", async () =>
+      progressed >= stuck + 2 ? true : undefined,
+    );
+    await fixture.stop();
   },
 );
 
@@ -3177,7 +3302,7 @@ test(
 );
 
 test(
-  "an exhausted credential withdrawal stays pending with its reason until a replay retries it",
+  "an exhausted credential withdrawal stays pending, reports no attempt in progress, and a replay retries it",
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context, { maxAttempts: 2 });
@@ -3221,14 +3346,21 @@ test(
           [active.id],
         )
       ).rows;
-    await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, request);
+    const requested = await fixture.controller.withdrawAgentCredentialSource(
+      fixture.actor.id,
+      request,
+    );
+    assert.equal(requested.withdrawalInProgress, true);
+    const read = () => fixture.controller.readAgentCredentialWithdrawal(fixture.actor.id, request);
+    assert.equal((await read()).withdrawalInProgress, true);
     const [first] = await withdrawalWork();
     await fixture.work(
       { id: active.id, idempotencyKey: first.idempotency_key },
       "failed_permanent",
     );
 
-    // Exhausting attempts leaves the withdrawal pending, and the row says why.
+    // Exhausting attempts leaves the withdrawal pending, and the row says why. Nothing retries
+    // it (this revision has no maintenance), so the read must not suggest an attempt is coming.
     const exhausted = await fixture.controller.readAgentCredentialWithdrawal(
       fixture.actor.id,
       request,
@@ -3236,6 +3368,7 @@ test(
     assert.equal(exhausted.state, "pending");
     assert.equal(exhausted.lastReason, "CREDENTIAL_WITHDRAWAL_PENDING");
     assert.ok(exhausted.lastAttemptAt);
+    assert.equal(exhausted.withdrawalInProgress, false);
     const audit = await fixture.observerPool.query(
       `SELECT outcome, details->>'reasonCode' AS reason_code FROM occ.audit_events
        WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.credentials_withdraw'`,
@@ -3250,6 +3383,7 @@ test(
     await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, request);
     const work = await withdrawalWork();
     assert.equal(work.length, 2);
+    assert.equal((await read()).withdrawalInProgress, true);
     await fixture.work({ id: active.id, idempotencyKey: work[1].idempotency_key }, "succeeded");
     const revoked = await fixture.controller.readAgentCredentialWithdrawal(
       fixture.actor.id,
@@ -3257,6 +3391,7 @@ test(
     );
     assert.equal(revoked.state, "revoked");
     assert.equal(revoked.lastReason, "CREDENTIALS_WITHDRAWN");
+    assert.equal(revoked.withdrawalInProgress, false);
   },
 );
 
@@ -3919,6 +4054,95 @@ test(
         reason_code: "AGENT_DELETED",
       },
     ]);
+  },
+);
+
+test(
+  "a repository cleanup stuck on an invalidated attempt logs its cause once and backs off",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary({ count: 2 });
+    // The production default; the fixture's hour-long interval would hide the backoff.
+    repository.driver.maintenanceIntervalMs = 30_000;
+    const fixture = await setup(context, { repoDriver: repository.driver });
+    const owner = await fixture.agent("cleanup-invalidated");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    const events = [];
+    await fixture.start(fixture.compute, (event) => events.push(event));
+    await fixture.work(candidate, "succeeded");
+    const [attempt, sibling] = await repositoryAttempts(fixture, candidate);
+    // An invalidated attempt has no outgoing transition, so no pass can settle this cleanup.
+    await fixture.observerPool.query(
+      `UPDATE occ.repository_session_attempts
+       SET phase = 'invalidated', updated_at = clock_timestamp()
+       WHERE admission_id = $1`,
+      [attempt.admissionId],
+    );
+    const cleanupKey = `agent_revision:${candidate.id}:repository_cleanup:${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.controller_work
+         (idempotency_key, namespace_id, agent_id, revision_id, actor_id,
+          namespace_target, agent_target, state, available_at, attempt_count, created_at,
+          updated_at)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL, 'queued',
+          clock_timestamp(), 0, clock_timestamp() - interval '1 day', clock_timestamp())`,
+      [cleanupKey, fixture.namespace.id, owner.id, candidate.id, fixture.actor.id],
+    );
+    const deferred = async (passes) =>
+      waitFor(`cleanup pass ${passes} to defer`, async () => {
+        const completed = events.filter(
+          (event) => event.event === "worker.completed" && event.workId === cleanupKey,
+        );
+        if (completed.length < passes) {
+          return undefined;
+        }
+        const { rows } = await fixture.observerPool.query(
+          `SELECT state, EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+           FROM occ.controller_work WHERE idempotency_key = $1`,
+          [cleanupKey],
+        );
+        return rows[0]?.state === "queued" ? rows[0] : undefined;
+      });
+    // A day-old stuck cleanup rechecks every 10 minutes, not every 30 s.
+    const first = await deferred(1);
+    assert.ok(Number(first.delay_ms) >= 590_000, `delay ${first.delay_ms} ms`);
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+      [cleanupKey],
+    );
+    await deferred(2);
+    // The cause is logged once, not on every recheck.
+    assert.deepEqual(
+      events
+        .filter(
+          (event) =>
+            event.event === "worker.repository-cleanup-warning" && event.workId === cleanupKey,
+        )
+        .map(({ code, cause }) => ({ code, cause })),
+      [{ code: "REPOSITORY_CLEANUP_STALLED", cause: "REPOSITORY_ATTEMPT_INVALIDATED" }],
+    );
+    // A session still closing keeps the configured cadence, even next to an invalidated one.
+    repository.driver.close = async () => {
+      throw new Error("REPOSITORY_BROKER_UNAVAILABLE");
+    };
+    await fixture.observerPool.query(
+      `UPDATE occ.repository_session_attempts
+       SET phase = 'closing', updated_at = clock_timestamp()
+       WHERE admission_id = $1`,
+      [sibling.admissionId],
+    );
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+      [cleanupKey],
+    );
+    const closing = await deferred(3);
+    assert.ok(Number(closing.delay_ms) < 60_000, `delay ${closing.delay_ms} ms`);
+    // Retain the unsettled obligation while keeping it out of later scheduling.
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [cleanupKey],
+    );
+    await fixture.stop();
   },
 );
 

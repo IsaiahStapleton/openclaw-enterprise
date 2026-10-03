@@ -15,6 +15,16 @@ import { RepositoryReceiptClient } from "./receipt-client.ts";
 
 // A new correlation must be fresh; completed-session tombstones share this window.
 const admissionWindowMs = 60_000;
+// Refusals of the request itself; control answers them with 400 invalid-request.
+const invalidAdmissionErrors: ReadonlySet<string> = new Set([
+  "INVALID_ADMISSION",
+  "ADMISSION_CONFLICT",
+  "INVALID_BINDING",
+  "INVALID_DEADLINE",
+  "INVALID_PROFILE",
+  "INVALID_DURATION",
+  "BOUND_SESSION_REQUIRED",
+]);
 
 interface AdmissionRecord {
   readonly input: SessionInput;
@@ -147,20 +157,50 @@ export function createControlAdmission(
     if (records.size >= 2 * config.limits.sessions) {
       throw new Error("SESSION_CAPACITY");
     }
+    let opened: ReturnType<SessionControl["open"]> | undefined;
     if (isBoundInput(admittedInput)) {
-      const result = await journal!.admission(
-        id,
-        admittedInput,
-        recoverOnly || age >= admissionWindowMs,
-      );
+      const lookupOnly = recoverOnly || age >= admissionWindowMs;
+      let refused: unknown;
+      // Open before reserving. Only bind advances a reserved receipt, so an open
+      // refused after reservation (capacity, shutdown) would strand it. Such a
+      // refusal writes no receipt and the same admission may retry. Invalid input
+      // keeps the journal-first answer; the unreserved session is never handed out.
+      if (!lookupOnly) {
+        try {
+          opened = service.open(admittedInput);
+        } catch (error) {
+          if (!(error instanceof Error && invalidAdmissionErrors.has(error.message))) {
+            throw error;
+          }
+          refused = error;
+        }
+      }
+      const discard = () => {
+        if (opened !== undefined && service.status(opened.session.sessionId) !== undefined) {
+          service.close(opened.session.sessionId);
+        }
+      };
+      let result: Awaited<ReturnType<RepositoryReceiptClient["admission"]>>;
+      try {
+        result = await journal!.admission(id, admittedInput, lookupOnly);
+      } catch (error) {
+        discard();
+        throw error;
+      }
+      if (lookupOnly || result.kind !== "reserved") {
+        discard();
+      }
       if (result.kind === "disposed") {
         return { result: result.status, sessionId: result.status.sessionId, created: false };
       }
       if (result.kind === "missing") {
         throw new Error("ADMISSION_MISSING");
       }
-      if (recoverOnly || result.kind !== "reserved") {
+      if (lookupOnly || result.kind !== "reserved") {
         throw new Error("RECEIPT_UNAVAILABLE");
+      }
+      if (refused !== undefined) {
+        throw refused;
       }
     } else if (age >= admissionWindowMs) {
       throw new Error("ADMISSION_MISSING");
@@ -183,7 +223,7 @@ export function createControlAdmission(
       );
       throw new Error("ADMISSION_MISSING");
     }
-    const opened = service.open(admittedInput);
+    opened ??= service.open(admittedInput);
     const record: AdmissionRecord = {
       input: admittedInput,
       sessionId: opened.session.sessionId,
@@ -433,17 +473,7 @@ export async function handleControl(
     }
   } catch (error) {
     if (!response.destroyed && !response.headersSent) {
-      const invalid =
-        error instanceof Error &&
-        [
-          "INVALID_ADMISSION",
-          "ADMISSION_CONFLICT",
-          "INVALID_BINDING",
-          "INVALID_DEADLINE",
-          "INVALID_PROFILE",
-          "INVALID_DURATION",
-          "BOUND_SESSION_REQUIRED",
-        ].includes(error.message);
+      const invalid = error instanceof Error && invalidAdmissionErrors.has(error.message);
       let code = "unavailable";
       let status = 503;
       if (invalid) {

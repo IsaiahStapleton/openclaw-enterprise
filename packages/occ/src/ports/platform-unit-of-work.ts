@@ -21,6 +21,7 @@ export function bindPlatformUnitOfWork(
       "lockNamespace",
       "hasAgents",
       "hasConfigurations",
+      "listConfigurationIds",
       "hasPresets",
       "hasServiceAccounts",
       "hasSecrets",

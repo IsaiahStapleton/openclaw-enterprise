@@ -28,7 +28,7 @@ import type {
   CredentialSource,
   CredentialSourceMetadata,
   CredentialSourceStatus,
-  CredentialWithdrawal,
+  CredentialWithdrawalStatus,
   CredentialSourceType,
   AuditEvent,
   Driver,
@@ -5487,7 +5487,7 @@ export class OpenClawController {
   async withdrawAgentCredentialSource(
     principalId: string,
     input: AgentCredentialSourceInput,
-  ): Promise<Readonly<CredentialWithdrawal>> {
+  ): Promise<Readonly<CredentialWithdrawalStatus>> {
     return this.mutate(async (state) => {
       await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(input.namespaceId, input.agentId);
@@ -5530,14 +5530,21 @@ export class OpenClawController {
           operationId: crypto.randomUUID(),
         });
       }
-      return withdrawal;
+      // A pending withdrawal now has an attempt queued or running, either earlier or just now.
+      // Like the read, this reflects the queue at commit: a claim that expired on its last
+      // attempt counts until recoverStale fails it.
+      return Object.freeze({ ...withdrawal, withdrawalInProgress: withdrawal.state === "pending" });
     });
   }
 
+  /**
+   * A `pending` withdrawal whose attempts ran out has no outstanding work, whether the last
+   * attempt failed or its claim expired, so `withdrawalInProgress` is read from the queue.
+   */
   async readAgentCredentialWithdrawal(
     principalId: string,
     input: AgentCredentialSourceInput,
-  ): Promise<Readonly<CredentialWithdrawal>> {
+  ): Promise<Readonly<CredentialWithdrawalStatus>> {
     await this.authorize(principalId, "read", {
       kind: "agent",
       id: input.agentId,
@@ -5559,7 +5566,15 @@ export class OpenClawController {
           "The credential source was not withdrawn from the Agent's active revision.",
         );
       }
-      return withdrawal;
+      return Object.freeze({
+        ...withdrawal,
+        withdrawalInProgress:
+          withdrawal.state === "pending" &&
+          (await state.operations.hasOutstandingCredentialWithdrawalWork(
+            withdrawal.namespaceId,
+            withdrawal.revisionId,
+          )),
+      });
     });
   }
 
@@ -5720,32 +5735,52 @@ export class OpenClawController {
         }
         return namespace;
       }
+      // The 409 names each remaining resource's ID: Configurations have no list view, so
+      // the error is the only place an operator can find what to delete.
       const contents: string[] = [];
+      const ids: Record<string, readonly string[]> = {};
+      const remaining = (kind: string, resources: readonly { readonly id: string }[]) => {
+        contents.push(kind);
+        ids[kind] = resources.map((resource) => resource.id);
+      };
       if (await state.namespaces.hasAgents(namespace.id)) {
-        contents.push("Agents");
+        remaining("Agents", await state.agents.listAgents(namespace.id));
       }
-      if (await state.namespaces.hasConfigurations(namespace.id)) {
-        contents.push("Configurations");
+      const configurationIds = await state.namespaces.listConfigurationIds(namespace.id);
+      if (configurationIds.length > 0) {
+        remaining(
+          "Configurations",
+          configurationIds.map((id) => ({ id })),
+        );
       }
       const presets = await state.presets.listPresets(namespace.id);
       const seededPresets = presets.filter((preset) => this.isUnmodifiedDefaultPreset(preset));
       if (seededPresets.length < presets.length) {
-        contents.push("Presets");
+        remaining(
+          "Presets",
+          presets.filter((preset) => !seededPresets.includes(preset)),
+        );
       }
       if (await state.namespaces.hasSecrets(namespace.id)) {
-        contents.push("Secrets");
+        remaining("Secrets", await state.secrets.listSecrets(namespace.id));
       }
       if (await state.namespaces.hasCredentialSources(namespace.id)) {
-        contents.push("credential sources");
+        remaining(
+          "credential sources",
+          await state.credentialSources.listCredentialSources(namespace.id),
+        );
       }
       if (await state.namespaces.hasServiceAccounts(namespace.id)) {
-        contents.push("service accounts");
+        remaining(
+          "service accounts",
+          await state.serviceAccounts.listServiceAccounts(namespace.id),
+        );
       }
       if (await state.provisioning.hasPendingNamespaceProvisioning(namespace.id)) {
         contents.push("pending Agent provisioning");
       }
       if (contents.length > 0) {
-        throw new NamespaceNotEmptyError(contents);
+        throw new NamespaceNotEmptyError(contents, ids);
       }
       // Installation defaults were seeded by Namespace creation, so deletion removes
       // them only while they still match the defaults; edited copies block above.
