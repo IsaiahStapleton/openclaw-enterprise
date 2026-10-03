@@ -304,8 +304,11 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   if (resume !== undefined && !replacedDuringRead) {
     const lastTime = resume.lastTime!;
     const seen = new Set(resume.lastHashes);
+    // The overlap re-reads the last delivered line unless the tail dropped it. The
+    // Driver applies the tail before its byte cut, so a cut page may hold fewer than
+    // `tailLines` lines and still have lost the lines before it.
     if (
-      chunk.lines.length >= query.tailLines &&
+      (chunk.lines.length >= query.tailLines || chunk.truncated) &&
       earliest !== null &&
       compareRuntimeLogTime(earliest, lastTime) > 0
     ) {

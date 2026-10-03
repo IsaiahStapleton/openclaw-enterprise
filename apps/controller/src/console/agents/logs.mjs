@@ -688,10 +688,10 @@ export function renderAgentLogs(context, { agent, revisionId }) {
         return;
       }
       if (error.code === "RUNTIME_LOGS_CURSOR_INVALID") {
-        // A new audited view replaces a rejected cursor.
+        // A new audited view replaces a rejected cursor. It starts in `finally`, after
+        // this read releases `reading`, so the new read keeps its own guard.
         cursor = null;
-        reading = false;
-        void readLogs({ restart: true });
+        restartPending = true;
         return;
       }
       if (restart) {
