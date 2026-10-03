@@ -80,8 +80,11 @@ unknown type, an unknown field, or a missing required field with
 
 `packages/occ/src/index.ts:createCredentialSource`
 
-For each Secret reference, OCC rejects a foreign Namespace, authorizes
-`secret:operate`, locks the Secret, and calls the owning Driver's optional
+OCC first rejects any Secret reference to another Namespace with
+`SecretBindingValidationError` (`400 INVALID_REQUEST`, "Credential source
+Secrets cannot cross Namespaces."). For each Secret reference, it then authorizes
+`secret:operate`, locks the Secret (a Secret the Namespace does not hold is
+`404`), and calls the owning Driver's optional
 `withValue`. The Kubernetes Secret Driver verifies the stored object's ownership
 labels, UID, and key before decoding it. A Driver without `withValue` fails the
 request with `503`. The values exist only in memory for the next call.
@@ -281,6 +284,7 @@ than re-attach the source.
 
 ## Changelog
 
+- 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)
 - 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)
 - 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)
 - 2026-09-30 21:14: Updated the independent OpenShell wire-contract verification pointer to v0.1.3-pre.1. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)

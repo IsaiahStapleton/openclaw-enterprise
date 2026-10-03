@@ -46,7 +46,9 @@ The request fields are:
   `404` before any gateway call.
 - `config`: optional nonsecret strings keyed by catalog field name.
 - `secrets`: Secret references keyed by catalog field name. Each Secret must
-  belong to the same Namespace.
+  belong to the same Namespace: a reference to another Namespace fails with
+  `400 INVALID_REQUEST` before any Secret is read, and a reference to a Secret
+  the Namespace does not hold fails with `404`.
 
 OCC rejects unknown fields and missing required fields before it reads any
 Secret. It reads each value through the Secret Driver, sends the values to the
@@ -187,7 +189,7 @@ deleted, and its referenced Secrets cannot be deleted.
 
 | Status                                  | Meaning                                                                                                                                                                                  |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400 INVALID_REQUEST`                   | The body or a field name is malformed.                                                                                                                                                   |
+| `400 INVALID_REQUEST`                   | The body or a field name is malformed, or a Secret reference names another Namespace.                                                                                                    |
 | `403 FORBIDDEN`                         | A required `credential_source` or `secret` permission is missing.                                                                                                                        |
 | `404 NOT_FOUND`                         | The source, Secret, or type is not in the exact Namespace or catalog, or a catalog field is invalid; or the Agent's active revision does not use the source or has no withdrawal for it. |
 | `409 NAMESPACE_NOT_READY`               | The Namespace is not `ready`.                                                                                                                                                            |
