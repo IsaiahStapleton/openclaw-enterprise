@@ -1149,6 +1149,91 @@ test(
   },
 );
 
+test(
+  "a Namespace is deletable after provisioning fails with its Configuration effect settled",
+  { ...requiresPostgres, timeout: 90_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const name = `Duplicate ${randomUUID().slice(0, 8)}`;
+    const first = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets, { name }),
+    });
+    assert.equal(first.status, 202, JSON.stringify(first.body));
+    await fixture.startWorker();
+    try {
+      const created = await waitFor("first Agent provisioning to succeed", async () => {
+        const observed = await fixture.request("GET", first.data.provisioning.url);
+        assert.equal(observed.status, 200, JSON.stringify(observed.body));
+        return observed.data.status === "succeeded" ? observed.data : undefined;
+      });
+      const duplicate = await fixture.request(
+        "POST",
+        `/namespaces/${namespace.id}/agents/provision`,
+        { body: provisioningBody(namespace.id, secrets, { name }) },
+      );
+      assert.equal(duplicate.status, 202, JSON.stringify(duplicate.body));
+      await waitFor("duplicate-name Agent provisioning to fail", async () => {
+        const work = await fixture.pool.query(
+          "SELECT state FROM occ.controller_work WHERE idempotency_key = $1",
+          [duplicate.data.provisioning.workId],
+        );
+        return work.rows[0]?.state === "failed_permanent" ? true : undefined;
+      });
+
+      // The worker wrote the Configuration through its Driver and recorded the receipt,
+      // then the Agent insert hit the name conflict and rolled back the metadata. The
+      // job is terminal and its effect is settled, so nothing remains in flight.
+      const failed = await fixture.pool.query(
+        `SELECT status, completed_phase, progress->'pendingEffect' AS pending,
+                progress->'effectReceipt' AS receipt
+         FROM occ.agent_provisioning_work WHERE work_id = $1`,
+        [duplicate.data.provisioning.workId],
+      );
+      assert.equal(failed.rowCount, 1);
+      const [row] = failed.rows;
+      assert.equal(row.status, "failed");
+      assert.equal(row.completed_phase, "admitted");
+      assert.equal(row.pending?.kind, "configuration");
+      assert.equal(row.receipt?.kind, row.pending.kind);
+      assert.equal(row.receipt?.owner, row.pending.owner);
+      assert.equal(row.receipt?.targetId, row.pending.targetId);
+
+      // Empty the Namespace of everything else, as an administrator would.
+      const agentPath = `/namespaces/${namespace.id}/agents/${created.agentId}`;
+      const deleting = await fixture.request("DELETE", agentPath);
+      assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
+      await waitFor(
+        "the first Agent deletion to finish",
+        async () => {
+          const observed = await fixture.request("GET", agentPath);
+          return observed.status === 404 ? true : undefined;
+        },
+        30_000,
+      );
+      const configuration = await fixture.request(
+        "DELETE",
+        `/namespaces/${namespace.id}/configurations/${created.configurationId}`,
+      );
+      assert.ok([200, 204, 404].includes(configuration.status), JSON.stringify(configuration.body));
+      for (const secret of Object.values(secrets)) {
+        const removed = await fixture.request(
+          "DELETE",
+          `/namespaces/${namespace.id}/secrets/${secret.id}`,
+        );
+        assert.ok([200, 204].includes(removed.status), JSON.stringify(removed.body));
+      }
+
+      const deleted = await fixture.request("DELETE", `/namespaces/${namespace.id}`);
+      assert.equal(deleted.status, 202, JSON.stringify(deleted.body));
+      assert.equal(deleted.data.status, "deleting");
+    } finally {
+      await fixture.stopWorker();
+    }
+  },
+);
+
 async function createFailedPreHandoffAgent(fixture) {
   const namespace = await fixture.bootstrapNamespace();
   const secrets = await createProvisioningSecrets(fixture, namespace.id);
@@ -1420,6 +1505,10 @@ test(
       [409, 409, 409, 409],
       "failed pre-handoff provisioning must reserve direct credential, deploy, Agent, and Configuration mutations",
     );
+    // The transport write has no receipt, so the failed job still counts as in flight.
+    const occupied = await fixture.request("DELETE", `/namespaces/${namespace.id}`);
+    assert.equal(occupied.status, 409, JSON.stringify(occupied.body));
+    assert.match(occupied.body.error.message, /pending Agent provisioning\.$/);
 
     failTransportSettlement = false;
     reportTransportConfigured = true;
