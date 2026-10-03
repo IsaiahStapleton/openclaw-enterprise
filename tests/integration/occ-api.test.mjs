@@ -3901,6 +3901,11 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   });
   assert.equal(duplicateAgent.status, 409);
   assert.equal(duplicateAgent.body.error.code, "RESOURCE_CONFLICT");
+  // The caller chose only the name, so the conflict says the name is taken here.
+  assert.equal(
+    duplicateAgent.body.error.message,
+    "An Agent with this name already exists in this Namespace. Choose a different name.",
+  );
 
   for (const configurationId of [null, [], "invalid"]) {
     const invalidCreation = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
@@ -3977,9 +3982,21 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
 
   const malformedIdentifier = await controller.request("GET", "/namespaces/ns_not-a-uuid");
   assert.equal(malformedIdentifier.status, 400);
+  // Path-parameter failures name the parameter and its syntax, like body failures name fields.
+  assert.deepEqual(malformedIdentifier.body.error.details, [
+    { path: "/namespaceId", code: "INVALID_FORMAT" },
+  ]);
+  assert.match(malformedIdentifier.body.error.message, /params \/namespaceId .* expected ns_ /);
 
   const wrongResourceKind = await controller.request("GET", `/namespaces/${agent.id}`);
   assert.equal(wrongResourceKind.status, 400);
+
+  const nonV4Agent = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/agt_00000000-0000-0000-0000-000000000000`,
+  );
+  assert.equal(nonV4Agent.status, 400);
+  assert.deepEqual(nonV4Agent.body.error.details, [{ path: "/agentId", code: "INVALID_FORMAT" }]);
 
   const oversized = await controller.request("POST", "/namespaces", {
     body: { name: "x".repeat(64 * 1024) },

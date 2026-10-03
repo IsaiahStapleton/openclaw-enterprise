@@ -55,10 +55,12 @@ import {
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy } from "@openclaw-enterprise/utils";
 import {
+  AGENT_NAME_CONFLICT,
   DependencyUnavailableError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
   ResourceConflictError,
+  ResourceStateConflictError,
   ScopeViolationError,
 } from "../errors.ts";
 import type {
@@ -690,6 +692,11 @@ function databaseError(error: unknown): Error {
 
   const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
   if (code === "23505") {
+    // The only caller-chosen unique Agent field is its name; the caller was already
+    // authorized to create Agents in this Namespace.
+    if ("constraint" in error && error.constraint === "agents_namespace_id_name_unique") {
+      return new ResourceStateConflictError(AGENT_NAME_CONFLICT);
+    }
     return new ResourceConflictError(
       "A platform resource with this identity or name already exists.",
     );
