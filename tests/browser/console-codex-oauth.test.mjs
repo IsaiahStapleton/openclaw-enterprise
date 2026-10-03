@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
-import { apiRequests, login, newPage } from "./console-agents-browser-helpers.mjs";
+import {
+  apiRequests,
+  expectNoText,
+  login,
+  nativeValues,
+  newPage,
+} from "./console-agents-browser-helpers.mjs";
 
 test("Codex OAuth console creates an Agent and keeps plugin editing separate from credential replacement", async (t) => {
   const fixture = await createConsoleAppFixture(t);
@@ -254,4 +260,35 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
     providerRequests.some((url) => url.includes("revoke") || url.includes("whoami")),
     false,
   );
+});
+
+test("saving ChatGPT OAuth before sign-in names the missing step and sends nothing", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("OAuth save guard", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "OAuth save guard",
+    nativeValues("oauth-save-guard", { harnessId: "codex" }),
+  );
+  const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(
+    page,
+    fixture,
+    `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft&tab=credentials`,
+  );
+  const save = page.getByRole("button", { name: "Save authentication source", exact: true });
+  await save.waitFor();
+  await page.getByLabel("Authentication source").selectOption("oauth");
+  await save.click();
+  await page.getByText("Complete ChatGPT sign-in before saving.", { exact: true }).waitFor();
+  await expectNoText(page, /Service unavailable/);
+  assert.equal(await save.isEnabled(), true);
+  assert.equal(
+    requests.some((request) => request.method === "PATCH" && request.path === agentPath),
+    false,
+  );
+  assert.equal((await fixture.request("GET", agentPath)).data.harnessAuth.method, "api_key");
 });
