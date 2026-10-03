@@ -2087,6 +2087,10 @@ async function assertGatewayExitsDuringPeerScenario(t, scenario, expectedPhase) 
       "OPENCLAW_AGENT_REVISION_ID=revision-peer-respawn",
       "OPENCLAW_POD_UID=pod-peer-respawn",
       "OPENCLAW_WORKSPACE_DIR=/home/node/workspace",
+      // The stale-replacement fixture answers its verification read only after
+      // checking the replacement (a readiness command and two local reads), so
+      // the wrapper's peer read must outlast that work on a slow runner.
+      `OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS=${30_000 * imageSmokeTimeoutMultiplier}`,
     ],
     waitUntilReady: false,
   });
