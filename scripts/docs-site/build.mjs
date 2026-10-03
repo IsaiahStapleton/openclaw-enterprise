@@ -9,6 +9,7 @@ import {
   parseFrontmatter,
   resolveDocsFragment,
 } from "./vendor/docs-markdown.mjs";
+import { githubAnchors } from "./github-anchors.mjs";
 import { publicMarkdown } from "./public-markdown.mjs";
 
 if (process.argv.slice(2).some((arg) => arg !== "--check")) {
@@ -245,6 +246,13 @@ function resolveLink(page, href) {
   }
   if (target.startsWith(docs + path.sep)) {
     return "/" + docSource.split("/").map(encodeURIComponent).join("/") + url.search + url.hash;
+  }
+  if (
+    url.hash &&
+    target.endsWith(".md") &&
+    !resolveDocsFragment(url.hash, githubAnchors(target, md))
+  ) {
+    throw new Error(page.source + ": missing heading in " + href);
   }
   return (
     repository +
