@@ -105,7 +105,7 @@ digest-pinned Gateway, Sandbox, and supervisor images. The launcher supplies v0.
 image registry, repository, and digest values for each component and omits the
 NetworkPolicy acknowledgement removed from that chart.
 Before tool discovery or state creation, `upK3d` rejects equal development API
-and Kubernetes API host ports in both profiles. The profile without a Sandbox
+and Kubernetes API host ports in Kubernetes-only mode, with or without OpenShell. The mode without a Sandbox
 Driver also rejects browser-port collisions.
 The CLI records the exact engine endpoint, cluster,
 platform Namespace, API port, and key destination before creating resources.
