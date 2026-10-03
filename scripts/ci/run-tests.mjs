@@ -775,10 +775,15 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
   return summary.exitCode;
 }
 
+// One job-log line per entry: a newline in a message or name cannot start a new
+// line (or a workflow command) of its own.
+function oneLine(text) {
+  return (text ?? "").trim().replace(/\s*\n\s*/gu, " | ");
+}
+
 // The job log keeps every attempt, so name each failure there as well. The
 // reporter has already bounded and redacted the message.
 function logFailures(files) {
-  const oneLine = (text) => (text ?? "").trim().replace(/\s*\n\s*/gu, " | ");
   for (const file of files) {
     const failures = file.tests.filter((testCase) => testCase.status === "failed");
     if (file.fileFailure) {
@@ -800,7 +805,9 @@ function logFailures(files) {
 // manifest entries, paths and test names, never from test output.
 function logIssues(issues) {
   for (const { code, message, file } of issues) {
-    process.stderr.write(`run-tests: issue ${code}${file ? ` ${file}` : ""}: ${message}\n`);
+    process.stderr.write(
+      `run-tests: issue ${code}${file ? ` ${file}` : ""}: ${oneLine(message)}\n`,
+    );
   }
 }
 
