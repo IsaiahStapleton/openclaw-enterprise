@@ -50,6 +50,7 @@ import {
   passwordFailureAdmission,
   passwordFailureBudget,
   type PasswordSignInAdmission,
+  type PasswordSlowLaneOptions,
 } from "./admission.ts";
 import {
   issueKnownDevice,
@@ -196,6 +197,12 @@ export interface ControllerAuthOptions {
   readonly passwordAdministrator?: (userId: string) => Promise<boolean>;
   /** Replaces the in-memory failure-counting password admission (both profiles). */
   readonly passwordAdmission?: PasswordSignInAdmission;
+  /**
+   * Replaces the default admission's slow-lane floors and slots. Production composition
+   * leaves it unset (`passwordFailureBudget.slow`); tests shorten the floor cap so paced
+   * refusals do not wait the full eight seconds.
+   */
+  readonly passwordSlowLane?: PasswordSlowLaneOptions;
   /**
    * The password-only profile's known-device account state (see known-device.ts). Without
    * it, and without an external provider, entries are bound to the user and a hash of its
@@ -1058,6 +1065,7 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     options.passwordAdmission ??
     passwordFailureAdmission({
       ...passwordFailureBudget,
+      ...(options.passwordSlowLane === undefined ? {} : { slow: options.passwordSlowLane }),
       countsAsFailure: countsAsSignInFailure,
       ...(options.onOperationalEvent === undefined
         ? {}
