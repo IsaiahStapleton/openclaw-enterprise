@@ -836,7 +836,8 @@ test(
       assert.equal(hasLogRules(role(disabled, suffix).rules), false, suffix);
     }
 
-    // The execution chart grants the same reads, plus Pod reads, to its tenant API role.
+    // The execution chart grants its tenant API role the observer's Pod and proxy reads
+    // (runtime diagnostics) and the same log reads.
     const executionArgs = [
       "template",
       "oce",
@@ -853,9 +854,13 @@ test(
     const execution = await resources(
       (await execute(helm, executionArgs, { cwd: repository, maxBuffer: 2_000_000 })).stdout,
     );
-    assert.deepEqual(role(execution, "-execution-tenant-api").rules, [
+    const executionPodReads = [
       { apiGroups: ["apps"], resources: ["deployments"], verbs: ["list"] },
       { apiGroups: [""], resources: ["pods"], verbs: ["get", "list"] },
+      { apiGroups: [""], resources: ["pods/proxy"], verbs: ["get"] },
+    ];
+    assert.deepEqual(role(execution, "-execution-tenant-api").rules, [
+      ...executionPodReads,
       ...runtimeLogRules,
     ]);
     assert.equal(hasLogRules(role(execution, "-execution-tenant-worker").rules), false);
@@ -867,9 +872,7 @@ test(
         })
       ).stdout,
     );
-    assert.deepEqual(role(executionDisabled, "-execution-tenant-api").rules, [
-      { apiGroups: ["apps"], resources: ["deployments"], verbs: ["list"] },
-    ]);
+    assert.deepEqual(role(executionDisabled, "-execution-tenant-api").rules, executionPodReads);
   },
 );
 
