@@ -244,7 +244,7 @@ spec:
                 values: [api, worker]
         - namespaceSelector:
             matchLabels:
-              openclaw-enterprise.io/gateway: {{ $routeNamespaceLabel }}
+              openclaw-enterprise.io/gateway: {{ $routeNamespaceLabel | quote }}
           podSelector:
             matchLabels:
               openclaw.dev/workload-role: agent
@@ -255,7 +255,7 @@ spec:
 
         - namespaceSelector:
             matchLabels:
-              openclaw-enterprise.io/gateway: {{ $routeNamespaceLabel }}
+              openclaw-enterprise.io/gateway: {{ $routeNamespaceLabel | quote }}
           podSelector:
             matchLabels:
               openshell.ai/boundary-role: supervisor
