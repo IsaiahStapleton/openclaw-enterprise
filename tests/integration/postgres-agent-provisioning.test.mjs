@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 import pg from "pg";
 
@@ -17,7 +14,10 @@ import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-session.mjs";
-import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
+import {
+  ensureDevelopmentBootstrap,
+  privateBootstrapDirectory,
+} from "../helpers/bootstrap-installation.mjs";
 import { waitFor } from "../helpers/postgres-backend-state.mjs";
 
 const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
@@ -184,13 +184,6 @@ function createProvisioningConfigurationDriver(options) {
   return driver;
 }
 
-async function privateBootstrapDirectory(context) {
-  const directory = await mkdtemp(join(tmpdir(), "openclaw-agent-provisioning-bootstrap-"));
-  await chmod(directory, 0o700);
-  context.after(() => rm(directory, { recursive: true, force: true }));
-  return directory;
-}
-
 async function ensureProvisioningBootstrap(context, state) {
   if ((await state.loadInstallation()) !== undefined) {
     return;
@@ -198,7 +191,7 @@ async function ensureProvisioningBootstrap(context, state) {
   bootstrapPromise ??= (async () => {
     await ensureDevelopmentBootstrap(context, {
       databaseUrl,
-      directory: await privateBootstrapDirectory(context),
+      directory: await privateBootstrapDirectory(context, "openclaw-agent-provisioning-bootstrap-"),
       email: adminEmail,
       password: adminPassword,
       authSecret,
