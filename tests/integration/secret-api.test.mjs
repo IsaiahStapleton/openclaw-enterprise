@@ -864,10 +864,16 @@ for (const [model, method, executionMode] of [
       body: { configurationId: configuration.id },
     });
     assert.deepEqual(unchanged.data.harnessAuth, binding);
+    // The caller holds delete on the Secret, so the conflict names what still depends on it.
+    const blocked = await request(
+      fixture.app,
+      "DELETE",
+      `/namespaces/${namespace.id}/secrets/${key.data.id}`,
+    );
+    assert.equal(blocked.status, 409);
     assert.equal(
-      (await request(fixture.app, "DELETE", `/namespaces/${namespace.id}/secrets/${key.data.id}`))
-        .status,
-      409,
+      blocked.body.error.message,
+      "A Configuration, credential source, Agent draft, active revision, or pending deployment still references the Secret. Remove those references first.",
     );
     // Administrative rights on the actor do not give the Agent permission to receive a key.
     const denied = await request(fixture.app, "POST", `${path}/deploy`);

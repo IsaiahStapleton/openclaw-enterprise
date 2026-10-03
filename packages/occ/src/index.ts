@@ -3313,8 +3313,8 @@ export class OpenClawController {
         throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
       }
       if (await state.secrets.hasReferences(namespace.id, secret.id)) {
-        throw new ResourceConflictError(
-          "A Configuration, active revision, or pending deployment still references the Secret.",
+        throw new ResourceStateConflictError(
+          "A Configuration, credential source, Agent draft, active revision, or pending deployment still references the Secret. Remove those references first.",
         );
       }
       const removed = await accessBindingsTargeting(state, namespace.id, "secret", secret.id);
