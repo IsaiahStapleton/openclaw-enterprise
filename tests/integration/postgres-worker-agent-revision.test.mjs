@@ -4640,6 +4640,21 @@ test(
         { outcome: "success", namespaceDeleted: true, convergencePending: undefined },
       ],
     );
+    // The queue's own reconcile evidence follows the same rule: one row for the
+    // unchanged waiting state, one for completion.
+    const reconcile = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS code FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'reconcile' AND resource_kind = 'namespace'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      reconcile.rows.map(({ outcome, code }) => ({ outcome, code })),
+      [
+        { outcome: "success", code: "NAMESPACE_INCOMPLETE" },
+        { outcome: "success", code: "RECONCILE_SUCCEEDED" },
+      ],
+    );
   },
 );
 
