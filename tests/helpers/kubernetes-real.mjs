@@ -22,6 +22,53 @@ async function kubectlFor(selection, ...args) {
   return stdout;
 }
 
+// kubectl reports a dropped API server or kubelet stream on stderr: an exec
+// WebSocket that closed mid-stream ("error: EOF"), a reset or refused
+// connection, or a kubelet tunnel that could not be dialed. A remote command
+// that ran and failed ends with "command terminated with exit code N"; that is
+// the command's own result and is never retried.
+const transientKubectlFailure =
+  /^error: (?:unexpected )?EOF$|Unable to connect to the server|error dialing backend|websocket: close|unexpected EOF|connection reset by peer|connection refused|http2: client connection lost|TLS handshake timeout|i\/o timeout|the server is currently unable to handle the request|etcdserver: request timed out/m;
+
+export function isTransientKubectlFailure(error) {
+  if (typeof error?.code === "string") {
+    // spawn failures (ENOENT, EACCES): kubectl never ran
+    return false;
+  }
+  const stderr = String(error?.stderr ?? "");
+  return !/command terminated with exit code/.test(stderr) && transientKubectlFailure.test(stderr);
+}
+
+// Retries a kubectl command that changes nothing in the cluster or in the
+// container (a get, or an exec that only reads) when the transport dropped.
+// Any other failure, and the last transient one, is thrown unchanged.
+export async function retryKubectlRead(
+  read,
+  {
+    attempts = 4,
+    firstDelayMs = 500,
+    sleep = delay,
+    log = (message) => process.stderr.write(`${message}\n`),
+  } = {},
+) {
+  let delayMs = firstDelayMs;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      if (attempt >= attempts || !isTransientKubectlFailure(error)) {
+        throw error;
+      }
+      const reason = String(error.stderr).trim().split("\n").at(-1);
+      log(
+        `Transient kubectl failure (${reason}); retrying in ${delayMs} ms (attempt ${attempt + 1}/${attempts})`,
+      );
+      await sleep(delayMs);
+      delayMs *= 2;
+    }
+  }
+}
+
 export function createKubernetesClient({
   selection,
   kubectl = (...args) => kubectlFor(selection, ...args),

@@ -28,6 +28,7 @@ import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-ses
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
   createKubernetesFixtureHarnessAuth,
+  retryKubectlRead,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
@@ -72,16 +73,23 @@ async function kubectl(...args) {
   return stdout;
 }
 
+// A get, or an exec that only reads, survives a dropped API server or kubelet
+// stream (finding 308: an exec into a Ready gateway Pod failed with
+// "error: EOF"). Commands that change state stay single-shot.
+function kubectlRead(...args) {
+  return retryKubectlRead(() => kubectl(...args));
+}
+
 async function resource(kind, name, namespace) {
   const args = ["get", kind, name, "-o", "json"];
   if (namespace !== undefined) {
     args.push("--namespace", namespace);
   }
-  return JSON.parse(await kubectl(...args));
+  return JSON.parse(await kubectlRead(...args));
 }
 
 async function resources(kind, namespace) {
-  return JSON.parse(await kubectl("get", kind, "--namespace", namespace, "-o", "json")).items;
+  return JSON.parse(await kubectlRead("get", kind, "--namespace", namespace, "-o", "json")).items;
 }
 
 async function missing(kind, name, namespace) {
@@ -526,7 +534,7 @@ async function assertReadyGateway(namespaceName, agentId, namespaceId, snapshot)
     "the Agent's single gateway Pod must be ready",
   );
   if (snapshot !== undefined) {
-    const mountedDocument = await kubectl(
+    const mountedDocument = await kubectlRead(
       "exec",
       gatewayPods[0].metadata.name,
       "--namespace",
@@ -660,7 +668,7 @@ async function createDriver(overrides = {}, selection = {}) {
 
 async function workloadPod(namespaceName, selector) {
   const pods = JSON.parse(
-    await kubectl(
+    await kubectlRead(
       "get",
       "pods",
       "--namespace",
@@ -2968,7 +2976,7 @@ test(
       executionMode = "dedicated",
     ) {
       const placement = placements.get(namespaceId);
-      const output = await kubectl(
+      const output = await kubectlRead(
         "exec",
         `deployment/${executionMode === "embedded" ? gatewayName(agentId) : revisionName(candidate)}`,
         "--namespace",
@@ -3364,7 +3372,7 @@ test(
               ),
             );
             const script = `const expected=${JSON.stringify(agent.boundSecretValue)};process.stdout.write(process.env.BOUND_SENTINEL===expected?"matched":"missing")`;
-            const observedSecret = await kubectl(
+            const observedSecret = await kubectlRead(
               "exec",
               pod.metadata.name,
               "--namespace",
@@ -3833,7 +3841,7 @@ test(
       ),
     );
     assert.equal(
-      await kubectl(
+      await kubectlRead(
         "exec",
         restartedPod.metadata.name,
         "--namespace",
@@ -3942,7 +3950,7 @@ test(
       replacementClaim.metadata.uid,
     );
     assert.equal(
-      await kubectl(
+      await kubectlRead(
         "exec",
         `deployment/${revisionName(replacement)}`,
         "-n",
@@ -4033,7 +4041,7 @@ test(
         replacementClaim.metadata.uid,
       );
       assert.equal(
-        await kubectl(
+        await kubectlRead(
           "exec",
           `deployment/${revisionName(recovered)}`,
           "-n",
