@@ -1523,6 +1523,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   }
   void loadInstallationCapabilities();
   async function submitProvisioningAttempt(attempt) {
+    // A retry of a job known to have failed. Read before the request: an admitted first
+    // attempt also gains a retry URL, and after an unknown outcome the job may have
+    // succeeded, so a refusal there must keep the request ID to recover it.
+    const retrying = attempt.retryUrl !== undefined && !outcomeUnknown;
     pending = true;
     outcomeUnknown = false;
     updateControls();
@@ -1554,6 +1558,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         mutationStarted &&
         !error.provisioningTerminal &&
         ![400, 403, 404, 409, 429].includes(error.status);
+      // The API refuses to retry a job whose Namespace or Agent lifecycle changed, or
+      // that was cancelled or handed off; that job can never finish.
+      const retryRefused = retrying && error.status === 409;
       const detail =
         outcomeUnknown && attempt.acknowledged
           ? "Outcome unknown after provisioning admission. Retry resubmits the same request ID and saved references so the API can recover the job."
@@ -1563,9 +1570,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
               ? `${error.message} Retry uses the accepted provisioning job.`
               : error.provisioningFailed
                 ? `${error.message} Select Create Agent to submit a new request.`
-                : error.status === undefined && error.message
-                  ? error.message
-                  : message(error, mutationStarted);
+                : retryRefused
+                  ? "The provisioning job can no longer be retried. Select Create Agent to submit a new request."
+                  : error.status === undefined && error.message
+                    ? error.message
+                    : message(error, mutationStarted);
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
       if (error.provisioningTerminal && error.canRetryProvisioning) {
         provisioningAttempt = {
@@ -1574,7 +1583,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         };
       } else if (!outcomeUnknown) {
         provisioningAttempt = null;
-        if (error.provisioningFailed) {
+        if (error.provisioningFailed || retryRefused) {
           // The failed job keeps this request ID; an edited form needs a new one.
           provisioningRequestId = createClientRequestId();
         }
