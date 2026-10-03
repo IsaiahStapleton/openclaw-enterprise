@@ -2062,6 +2062,21 @@ test(
       [409, 409, 409, 409],
       "failed pre-handoff provisioning must reserve direct credential, deploy, Agent, and Configuration mutations",
     );
+    const agentReserved =
+      "The Agent is reserved for provisioning. Stop or delete it, or retry its failed provisioning request.";
+    assert.deepEqual(
+      reserved.map(({ body }) => [body.error.code, body.error.message]),
+      [
+        ["RESOURCE_CONFLICT", agentReserved],
+        ["RESOURCE_CONFLICT", agentReserved],
+        ["RESOURCE_CONFLICT", agentReserved],
+        [
+          "RESOURCE_CONFLICT",
+          "The Configuration is reserved for provisioning and is not available for this operation.",
+        ],
+      ],
+      "each refusal names the provisioning reservation, not a duplicate",
+    );
     // The transport write has no receipt, so the failed job still counts as in flight.
     const occupied = await fixture.request("DELETE", `/namespaces/${namespace.id}`);
     assert.equal(occupied.status, 409, JSON.stringify(occupied.body));
