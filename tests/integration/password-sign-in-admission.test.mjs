@@ -155,7 +155,7 @@ test("an administrator is slowed, never refused, and slow guesses are bounded", 
   assert.ok(performance.now() - started >= slow.maxFloorMs - 2, "the floor grew to its cap");
 });
 
-// Lets every pending callback and I/O event run once; promise chains settle before it.
+// One macrotask turn: every promise chain that needs no timer or I/O has settled by then.
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 
 test("refusals take the growing floor whether or not the email administers", async () => {
@@ -179,9 +179,14 @@ test("refusals take the growing floor whether or not the email administers", asy
   const emails = ["member@x.test", "admin@example.test", "missing@x.test", "admin@example.test"];
   for (const [index, email] of emails.entries()) {
     let answer;
-    const refusal = status(limiter, { clientAddress: client, email }).then((code) => {
-      answer = code;
-    });
+    const refusal = status(limiter, { clientAddress: client, email }).then(
+      (code) => {
+        answer = code;
+      },
+      (error) => {
+        answer = error;
+      },
+    );
     await turn();
     assert.deepEqual(
       floors.map(({ floorMs }) => floorMs),

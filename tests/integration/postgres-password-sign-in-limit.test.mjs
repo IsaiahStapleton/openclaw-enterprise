@@ -43,27 +43,30 @@ const slowLane = {
 };
 
 // Counts the floors that start from now on and holds each one past its time until release().
-function watchFloors() {
+function watchFloors(expected) {
+  const reached = Promise.withResolvers();
   const release = Promise.withResolvers();
   const watch = {
     count: 0,
-    waiters: [],
     released: release.promise,
     started() {
       watch.count += 1;
-      for (const waiter of watch.waiters.splice(0)) {
-        waiter();
+      if (watch.count === expected) {
+        reached.resolve();
       }
     },
-    async reached(count, deadlineMs) {
-      const deadline = performance.now() + deadlineMs;
-      while (watch.count < count) {
-        const left = deadline - performance.now();
-        assert.ok(left > 0, `${watch.count} of ${count} slow-lane floors started`);
+    // Resolves once `expected` floors have started; fails after the deadline.
+    async reached(deadlineMs) {
+      const timeout = new AbortController();
+      try {
         await Promise.race([
-          new Promise((resolve) => watch.waiters.push(resolve)),
-          delay(left, undefined, { ref: false }),
+          reached.promise,
+          delay(deadlineMs, undefined, { signal: timeout.signal }).then(() =>
+            assert.fail(`${watch.count} of ${expected} slow-lane floors started`),
+          ),
         ]);
+      } finally {
+        timeout.abort();
       }
     },
     release() {
@@ -612,22 +615,24 @@ test(
         // Strangers hold both of the email's slow-lane slots and queue behind them. Each
         // holds its slot from the start of its floor, and the watch keeps those floors from
         // ending until the known browser has its answer.
-        const floors = watchFloors();
+        const floors = watchFloors(passwordFailureBudget.slow.concurrentPerEmail);
+        const deadline = new AbortController();
         let flood;
         let answered;
         try {
           flood = Array.from({ length: 4 }, () =>
             plainSignIn({ ...knownAdmin, password: wrongPassword }),
           );
-          await floors.reached(passwordFailureBudget.slow.concurrentPerEmail, 30_000);
+          await floors.reached(30_000);
           // A browser that queued behind those slots, or was paced itself, would not answer
           // while the floors are held; after the deadline they end and the test fails.
           const signingIn = plainSignInWith(adminDevice, knownAdmin);
           answered = await Promise.race([
             signingIn.then((response) => ({ response, floors: floors.count })),
-            delay(30_000, undefined, { ref: false }),
+            delay(30_000, undefined, { signal: deadline.signal }).catch(() => undefined),
           ]);
         } finally {
+          deadline.abort();
           floors.release();
         }
         assert.ok(answered !== undefined, "the known browser waited for strangers' floors");
