@@ -2,7 +2,7 @@ import { button, element } from "../dom.mjs";
 import { message } from "./list.mjs";
 
 const warning =
-  "Native admin access can change this gateway outside OCE. Do not change configuration here; use OCE. Native changes are not recorded in AgentRevisions and may be overwritten by deployment. You can access the conversations and credentials available to this gateway.";
+  "Native admin access can change this gateway outside OCE. Do not change configuration here; use OCE. Native changes are not recorded in Agent versions and may be overwritten by deployment. You can access the conversations and credentials available to this gateway.";
 
 function unavailableText(status) {
   switch (status) {
