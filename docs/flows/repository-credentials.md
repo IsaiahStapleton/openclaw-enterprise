@@ -1,6 +1,6 @@
 ---
 created: "2026-09-17"
-updated: "2026-10-03"
+updated: "2026-09-28"
 last_updated_session: authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352
 ---
 
@@ -338,8 +338,6 @@ client and alternate-adapter checks; live-provider behavior requires separate qu
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
-
-- 2026-10-03: Open the bound session before reserving its receipt so a refused open cannot strand the reservation.
 
 - 2026-09-28 08:12: Trace durable admission fencing and original-broker disposal acknowledgments. (authoring-run/41ba3c72-c44a-4a26-8285-7d4724f24352 - e06ff9625e72ff5ab3483a504a2f02a69a370cbb)
 
