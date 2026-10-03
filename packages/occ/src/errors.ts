@@ -113,6 +113,24 @@ export class ModelDiscoveryError extends Error {
   }
 }
 
+/**
+ * Device login could not start. `reason` is `unreachable` when the API could not open a
+ * connection to the sign-in service (DNS, refused, reset, timeout), else `unavailable`.
+ * `failure` is a bounded class for the server log only (an error code such as
+ * `ECONNREFUSED`, `TimeoutError` or `HTTP_503`); no provider body or message is kept.
+ */
+export class DeviceAuthorizationStartError extends Error {
+  readonly reason: "unreachable" | "unavailable";
+  readonly failure: string;
+
+  constructor(reason: DeviceAuthorizationStartError["reason"], failure = "unclassified") {
+    super("Device login could not start.");
+    this.name = "DeviceAuthorizationStartError";
+    this.reason = reason;
+    this.failure = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(failure) ? failure : "unclassified";
+  }
+}
+
 /** Safe discovery outcomes carry no upstream response, credential, or error cause. */
 export class PluginDiscoveryError extends Error {
   readonly reason: "credentials_rejected" | "rate_limited" | "unavailable" | "invalid_response";
@@ -155,6 +173,31 @@ export class ConfigurationHarnessError extends ScopeViolationError {
   }
 }
 
+const modelCredentialMessage = (path: string): string =>
+  `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
+
+/**
+ * A literal credential in a known model credential field of Configuration values. The
+ * message names the field's JSON pointer and never the value, so HTTP returns it.
+ */
+export class ModelCredentialValueError extends Error {
+  readonly path: string;
+
+  constructor(path: string) {
+    // The error contract caps messages at 256 characters; a long provider name shortens the
+    // path. The cut counts code points, so it never leaves half of a surrogate pair.
+    const budget = 256 - modelCredentialMessage("").length;
+    const characters = Array.from(path);
+    super(
+      modelCredentialMessage(
+        characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
+      ),
+    );
+    this.name = "ModelCredentialValueError";
+    this.path = path;
+  }
+}
+
 export class ResourceConflictError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
@@ -172,6 +215,26 @@ export class ResourceStateConflictError extends ResourceConflictError {
     this.name = "ResourceStateConflictError";
   }
 }
+
+/*
+ * Duplicate caller-chosen names, shared by the memory and PostgreSQL stores so both report
+ * them alike. Each is raised only after the caller was authorized to create (or rename) that
+ * resource kind in that scope, and the 409 already revealed that the name is taken, so naming
+ * the kind discloses nothing new.
+ */
+export const AGENT_NAME_CONFLICT =
+  "An Agent with this name already exists in this Namespace. Choose a different name.";
+export const SECRET_NAME_CONFLICT =
+  "A Secret with this name already exists in this Namespace. Choose a different name.";
+export const PRESET_NAME_CONFLICT =
+  "A Preset with this name already exists in this Namespace. Choose a different name.";
+export const SERVICE_ACCOUNT_NAME_CONFLICT =
+  "A ServiceAccount with this name already exists in this Namespace. Choose a different name.";
+export const CREDENTIAL_SOURCE_NAME_CONFLICT =
+  "A credential source with this name already exists in this Namespace. Choose a different name.";
+/** Deleted Namespaces keep their name, so a name can be taken by one no longer listed. */
+export const NAMESPACE_NAME_CONFLICT =
+  "A Namespace with this name already exists or was deleted. Choose a different name.";
 
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {
@@ -308,6 +371,21 @@ export class IAMPolicyValidationError extends ScopeViolationError {
   }
 }
 
+/**
+ * A Secret value passed the request schema but not OCC's stricter rules: it holds an
+ * unpaired UTF-16 surrogate (not valid UTF-8) or exceeds 65536 UTF-8 bytes. HTTP reports
+ * it as an invalid `/value` instead of hiding it as a scope miss.
+ */
+export class SecretValueError extends ScopeViolationError {
+  readonly code: "INVALID_VALUE" | "TOO_LONG";
+
+  constructor(code: "INVALID_VALUE" | "TOO_LONG", message: string) {
+    super(message);
+    this.name = "SecretValueError";
+    this.code = code;
+  }
+}
+
 /** A Namespace Role cannot be deleted while AccessBindings still reference it. */
 export class IAMRoleInUseError extends ResourceConflictError {
   constructor() {
@@ -390,9 +468,14 @@ export class RuntimeLogsError extends Error {
 }
 
 export class PluginPolicyValidationError extends Error {
-  constructor(field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers") {
+  constructor(
+    field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers" | "aliasedPlugin",
+  ) {
     let message = "The supplied plugin policies are invalid.";
-    if (field === "approvers") {
+    if (field === "aliasedPlugin") {
+      message =
+        'Two plugin selections name the same plugin (a native ID and its driver-prefixed ID, such as "diffs" and "occ-plugin:diffs"). Keep one selection per plugin.';
+    } else if (field === "approvers") {
       message =
         "This Plugin Driver does not support plugin or tool approvers. Omit approvers from plugin selections and set Agent-wide pluginApprovers instead.";
     } else if (field === "toolDefaults.reviewer") {

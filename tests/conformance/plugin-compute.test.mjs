@@ -501,6 +501,20 @@ test("plugin-free revisions apply explicit Slack approvers for configured Slack 
       }),
       ["U456", "W789"],
     ],
+    [
+      revision({
+        harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+        pluginApprovers: [],
+      }),
+      [],
+    ],
+    [
+      revision({
+        harness: { id: "openclaw", version: "1.0.0", mode: "dedicated" },
+        pluginApprovers: rawSlackApprovers,
+      }),
+      ["U456", "W789"],
+    ],
   ]) {
     const runtime = pluginRuntimeSpecForRevision(candidate);
     assert.deepEqual(runtime.pluginApprovers, candidate.pluginApprovers);

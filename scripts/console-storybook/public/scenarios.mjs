@@ -803,7 +803,7 @@ export const scenarios = {
     path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
     description: "Recover from a stale Namespace URL using the selector inside the message.",
     steps: [
-      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Choose Engineering under Choose a valid Namespace; the URL changes and the warning disappears without leaving Namespaces.",
       "Use browser Back to return to the unavailable selection and recover again.",
     ],
   },
@@ -1983,6 +1983,16 @@ export const scenarios = {
     ],
     gap: "All credentials and API responses in this preview are simulated.",
   },
+  createPasswordPresetMissingModel: {
+    group: "Pages/Create Agent",
+    name: "Standard Codex missing model",
+    path: create,
+    standardCodexPreset: true,
+    actions: passwordPresetForm.filter((action) => action.selector !== "#preset-variable-model"),
+    description:
+      "Use Preset with an empty Model stops at the required Model field. Variables with defaults stay optional.",
+    gap: "All credentials and API responses in this preview are simulated.",
+  },
   createPasswordPresetDraft: {
     group: "Pages/Create Agent",
     name: "Standard Codex password draft",
@@ -2819,6 +2829,16 @@ export const scenarios = {
     candidateDeploymentStatus: "succeeded",
     description:
       "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsStartupWarnings: {
+    group: "Pages/Agent detail",
+    name: "Runtime status after a healthy first deploy",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    runtimePod: "startupWarnings",
+    description:
+      "The Gateway Pod is Ready with no restarts; its startup readiness-probe Event is listed in muted text as an earlier warning instead of in the warning color.",
   },
   runtimeLogsFilteredDownload: {
     group: "Pages/Agent detail",

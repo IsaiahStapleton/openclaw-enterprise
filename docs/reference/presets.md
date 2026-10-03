@@ -213,7 +213,9 @@ native settings and credentials required by your Installation before deploying.
   `password`; numbers must be finite. Optional `description` text labels inputs.
 - Defaults must match the declared type. Omitted inputs use defaults; `false`,
   `0`, and empty strings override them. Referenced variables without defaults
-  require input. Unknown names and wrong types fail.
+  require input. Unknown names and wrong types fail; the `400` message names the
+  template path, such as `Preset variables.model:`, and what that field accepts,
+  not the submitted value.
 - Whole-string tokens retain scalar type; embedded tokens require strings.
   `"{{ vars.count }}"` can become a JSON number; `"worker-{{ vars.name }}"` stays a string.
 - `configuration.values` keys, including model catalog keys, can use string

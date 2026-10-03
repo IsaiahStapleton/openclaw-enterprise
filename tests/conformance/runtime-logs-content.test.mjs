@@ -1119,6 +1119,44 @@ test("a cursor from a page with no lines reads only output newer than that page"
   const again = await reader.poll(burst, { elapsed: 11_000 });
   assert.deepEqual(messages(again), []);
   assert.equal(reader.admissions, 1);
+
+  // A burst of long lines on another quiet view: the Driver applies the tail before
+  // its byte cut, so a cut page holds fewer than `tailLines` lines but may still
+  // have lost the oldest lines of the burst.
+  const cutReader = pollReader();
+  await cutReader.poll([], { query: { sinceSeconds: 60 } });
+  const cut = await cutReader.poll(
+    [timedLog("retrying in 600s", 600), timedLog("retrying in 601s", 601), timedLog("retr", 602)],
+    { elapsed: 10_000, truncated: true, query: { tailLines: 5 } },
+  );
+  assert.deepEqual(
+    cut.records.map((record) => record.reason ?? record.message),
+    ["window_exceeded", "retrying in 600s", "retrying in 601s", "truncated"],
+  );
+});
+
+test("a resumed page cut by the byte limit still reports lines lost before it", async () => {
+  const reader = pollReader();
+  await reader.poll([timedLog("retrying in 0s", 0), timedLog("retrying in 1s", 1)]);
+  // A burst of long lines: the tail dropped second 1, then the byte limit cut the page
+  // to fewer than `tailLines` lines, ending in a partial line.
+  const cut = await reader.poll(
+    [timedLog("retrying in 600s", 600), timedLog("retrying in 601s", 601), timedLog("retr", 602)],
+    { elapsed: 600_000, truncated: true },
+  );
+  assert.deepEqual(
+    cut.records.map((record) => record.reason ?? record.message),
+    ["window_exceeded", "retrying in 600s", "retrying in 601s", "truncated"],
+  );
+  // A cut page that still re-reads the last delivered line lost nothing before it.
+  const overlap = await reader.poll(
+    [timedLog("retrying in 601s", 601), timedLog("retrying in 700s", 700), timedLog("retr", 701)],
+    { elapsed: 700_000, truncated: true },
+  );
+  assert.deepEqual(
+    overlap.records.map((record) => record.reason ?? record.message),
+    ["retrying in 700s", "truncated"],
+  );
 });
 
 test("runtime log cursor does not let an evicted same-time old END erase a later BEGIN", async () => {

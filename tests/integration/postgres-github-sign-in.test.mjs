@@ -19,8 +19,8 @@ import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mj
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
 import { assertReservedLane } from "../helpers/production-sign-in.mjs";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const email = "github-recovery@example.test";
 const password = "github-local-recovery-password";
 const authSecret = "github-composed-auth-test-secret-at-least-32-bytes";
@@ -31,9 +31,7 @@ const providerRefreshToken = "ghr_fixture_provider_refresh_token";
 // Fastify and the browser Console remain their ordinary implementations.
 test(
   "PostgreSQL GitHub sign-in preserves an existing account through the ordinary Console",
-  {
-    skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof.",
-  },
+  requiresPostgres,
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);

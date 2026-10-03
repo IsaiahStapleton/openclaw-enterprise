@@ -20,6 +20,7 @@ import {
   namespacePath,
   link,
   message,
+  rejectionMessage,
   assertReadableConfiguration,
 } from "./list.mjs";
 import {
@@ -92,13 +93,33 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// Next steps for failure codes whose cause the operator can act on directly.
+// Next steps for failure codes whose cause the operator can act on directly, and the
+// page that holds the setting to change. Model-probe codes come from the runtime
+// wrapper's startup model check (`runtime-entrypoints.ts`). OpenClaw classifies
+// transport errors (refused connection, DNS failure, "fetch failed") as a timeout, so
+// there an unreachable provider reports RUNTIME_MODEL_PROBE_TIMEOUT; Codex reports the
+// same failure as RUNTIME_MODEL_PROBE_FAILED unless the connection hangs until its cap.
 const DEPLOYMENT_FAILURE_GUIDANCE = {
-  RUNTIME_AUTHENTICATION_FAILED:
-    "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
+  RUNTIME_AUTHENTICATION_FAILED: {
+    text: "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
+    link: "credentials",
+  },
+  RUNTIME_MODEL_PROBE_FAILED: {
+    text: "The startup model check failed for a reason other than a rejected credential, such as an unknown model, invalid provider settings, a provider or TLS error, a rate limit or quota, or, with Codex, a provider the runtime cannot reach. Check the model and its provider settings (such as baseUrl and api) in the Configuration, the provider account, and that the runtime can reach the provider, then deploy a new version.",
+    link: "configuration",
+  },
+  RUNTIME_MODEL_PROBE_TIMEOUT: {
+    text: "The startup model check did not get a reply from the model provider in time. With OpenClaw this includes a provider the runtime cannot reach (refused connection or unknown host). Check that the runtime can reach the provider (network egress, proxy, or a custom baseUrl in the Configuration) and that the provider is responding, then deploy a new version.",
+    link: "configuration",
+  },
 };
 
-function deploymentFailure(error, credentialsHref = null, logs = null) {
+const DEPLOYMENT_FAILURE_LINK_LABELS = {
+  credentials: "Open Credentials",
+  configuration: "Open Configuration",
+};
+
+function deploymentFailure(error, hrefs = {}, logs = null) {
   if (!error) {
     return element("p", { className: "muted" }, "No persisted startup failure.");
   }
@@ -106,6 +127,7 @@ function deploymentFailure(error, credentialsHref = null, logs = null) {
   const guidance = Object.hasOwn(DEPLOYMENT_FAILURE_GUIDANCE, error.code)
     ? DEPLOYMENT_FAILURE_GUIDANCE[error.code]
     : null;
+  const guidanceHref = guidance ? (hrefs[guidance.link] ?? null) : null;
   return element(
     "div",
     {},
@@ -114,9 +136,11 @@ function deploymentFailure(error, credentialsHref = null, logs = null) {
       ? element(
           "p",
           { className: "hint deployment-failure-guidance" },
-          guidance,
-          credentialsHref ? " " : null,
-          credentialsHref ? element("a", { href: credentialsHref }, "Open Credentials") : null,
+          guidance.text,
+          guidanceHref ? " " : null,
+          guidanceHref
+            ? element("a", { href: guidanceHref }, DEPLOYMENT_FAILURE_LINK_LABELS[guidance.link])
+            : null,
         )
       : null,
     // A failed version may never become current, so link its output directly.
@@ -201,10 +225,18 @@ function createDeploymentStatusPanel(
   onStatusChange,
   credentialsHref = null,
   logsHref = null,
+  configurationHref = null,
 ) {
   const section = element("section", { className: "agent-card deployment-status" });
   const state = { loading: false, status: null, error: null, overviewError: false };
   let pollTimer = null;
+
+  // A poll that fired while the view was retained stopped; restoring the view re-arms it.
+  context.onResume?.(() => {
+    if (section.isConnected) {
+      schedulePoll();
+    }
+  });
 
   // Queued and running records are reread until they record a result or a read fails.
   function schedulePoll() {
@@ -337,7 +369,7 @@ function createDeploymentStatusPanel(
       element("p", { className: "deployment-outcome" }, `Recorded status: ${state.status.status}`),
       deploymentFailure(
         state.status.error,
-        credentialsHref,
+        { credentials: credentialsHref, configuration: configurationHref },
         logsHref ? { href: logsHref, revision: revision.revision } : null,
       ),
       state.status.warnings?.length
@@ -664,6 +696,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   context.setTitle(agent.name);
   let deleting = agent.status === "deleting";
   let currentRevisionId = agent.activeRevisionId;
+  let currentRuntimeState = agent.desiredRuntimeState;
   let visibleRevisions = [];
   // True once the readable version list loaded; until then nothing counts as hidden.
   let visibleRevisionsLoaded = false;
@@ -852,13 +885,14 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     tabs.append(control);
   }
   detailPane.append(detailHeading, versionEvidence, tabs, content);
+  const nativeAdmin = renderNativeAdminAccess(context, path);
   view.replaceChildren(
     header,
     identity,
     currentSummary,
     statusLine,
     deploymentStatus,
-    renderNativeAdminAccess(context, path),
+    nativeAdmin.section,
     // Sharing policy reads need Installation administration and a denial is audited, so
     // skip the panel when the session probe already showed that access is missing.
     ...(context.installationAdmin === false ? [] : [renderAgentAccess(context, agent)]),
@@ -1067,8 +1101,16 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       showDeleting();
       return;
     }
+    const servingChanged =
+      freshAgent.activeRevisionId !== currentRevisionId ||
+      freshAgent.desiredRuntimeState !== currentRuntimeState;
     currentRevisionId = freshAgent.activeRevisionId;
+    currentRuntimeState = freshAgent.desiredRuntimeState;
     stopPanel.updateAgent(freshAgent);
+    if (servingChanged) {
+      // Native admin access depends on the serving version, so a finished deployment rereads it.
+      nativeAdmin.refresh();
+    }
     renderOverview({ status: "fulfilled", value: revisions }, snapshot);
     renderDetailHeading();
     const notice = content.querySelector(".version-selection-notice");
@@ -1221,6 +1263,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               `agents/${agent.id}?revision=${encodeURIComponent(mostRecent.id)}&tab=logs`,
               namespaceId,
             ),
+            context.pageUrl(`agents/${agent.id}?revision=draft&tab=configuration`, namespaceId),
           )
         : element(
             "section",
@@ -1581,7 +1624,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               ? "Deployment denied. Check Agent deploy permission and access to selected Secrets. First deployment also needs Agent read and operate permissions to create connection credentials. Ask a Namespace administrator to confirm the required grants."
               : error.status === 409
                 ? "Deployment conflicts with the saved Agent state. Refresh this Agent to check for changed Configuration or missing connection credentials. If credentials are missing after an earlier version, ask an operator to restore them."
-                : message(error, submitted);
+                : rejectionMessage(error, submitted);
           if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
             deployPending = false;
           }
@@ -1902,7 +1945,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               error.name === "TypeError"
             ) {
               if (!configurationSaved) {
-                error.message = message(error, mutationStarted);
+                error.message = rejectionMessage(error, mutationStarted);
               }
             }
             error.outcomeUnknown =
@@ -2013,6 +2056,14 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         if (!form.reportValidity() || save.disabled) {
           return;
         }
+        let harnessAuth;
+        try {
+          harnessAuth = savedAuthentication?.harnessAuth ?? (await auth.readBinding());
+        } catch (error) {
+          // Incomplete fields (no Secret, unfinished ChatGPT sign-in) say what to do next.
+          feedback.textContent = error.message;
+          return;
+        }
         save.disabled = true;
         pending = true;
         reload.disabled = true;
@@ -2024,7 +2075,6 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           : "Saving authentication…";
         let mutationStarted = false;
         try {
-          const harnessAuth = savedAuthentication?.harnessAuth ?? (await auth.readBinding());
           const current = await request(path);
           if (!context.isCurrent()) {
             return;
@@ -2072,7 +2122,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status));
             feedback.textContent = error.outcomeUnknown
               ? error.message
-              : message(error, mutationStarted);
+              : rejectionMessage(error, mutationStarted);
             data.setAuthenticationPending(outcomeUnknown);
           }
         } finally {
@@ -2238,7 +2288,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         if (error.status === 401) {
           context.onExpired();
         } else {
-          feedback.textContent = message(error, mutationStarted);
+          feedback.textContent = rejectionMessage(error, mutationStarted);
           if (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status)) {
             saveState = "uncertain";
           }
@@ -2482,7 +2532,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           context.onExpired();
           return;
         }
-        feedback.textContent = message(error, mutationStarted);
+        feedback.textContent = rejectionMessage(error, mutationStarted);
         feedbackLocked = true;
         outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       } finally {

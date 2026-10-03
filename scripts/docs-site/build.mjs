@@ -392,12 +392,12 @@ function renderBreadcrumb(page) {
   );
 }
 
-for (const page of pages.values()) {
-  const tabLinks = tabs
+for (const activeTab of tabs) {
+  activeTab.linksHtml = tabs
     .map(
       (tab) =>
         "<a" +
-        (tab === page.tab ? ' aria-current="location"' : "") +
+        (tab === activeTab ? ' aria-current="location"' : "") +
         ' href="' +
         escape(tab.landing.route) +
         '">' +
@@ -405,6 +405,8 @@ for (const page of pages.values()) {
         "</a>",
     )
     .join("");
+}
+for (const page of pages.values()) {
   const sidebar = page.tab.groups
     .map(
       (group) =>
@@ -441,7 +443,7 @@ for (const page of pages.values()) {
     repository +
     '">GitHub</a><button id="theme" type="button" aria-label="Toggle theme">◐</button></div>' +
     '<nav class="tabs" aria-label="Documentation sections">' +
-    tabLinks +
+    page.tab.linksHtml +
     "</nav></header>" +
     '<div class="layout"><button id="menu" type="button" aria-expanded="false" aria-controls="sidebar">Browse pages</button><nav id="sidebar" aria-label="' +
     escape(page.tab.tab) +

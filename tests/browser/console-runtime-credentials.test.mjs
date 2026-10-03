@@ -13,6 +13,7 @@ import {
   newPage,
   secretOptionLabel,
   selectSecret,
+  waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
 
 function detailUrl(fixture, namespaceId, agentId, tab = "credentials") {
@@ -471,7 +472,7 @@ test("revision deployment blocks unavailable reads and does not replay a lost re
   const deploy = page.getByRole("button", { name: "Deploy new version" });
   await page
     .getByRole("alert")
-    .filter({ hasText: "Service unavailable. The read could not be completed. Please retry." })
+    .filter({ hasText: "Service unavailable. The read could not be completed. Try again." })
     .first()
     .waitFor();
   assert.equal(deploymentRequests, 0);
@@ -586,8 +587,8 @@ test("bound Slack credential fields show Secret references without reading value
   await appToken.waitFor();
   assert.equal(await appToken.evaluate((node) => node.tagName), "INPUT");
   assert.equal(await botToken.evaluate((node) => node.tagName), "INPUT");
-  assert.equal(await appToken.evaluate((node) => node.value), secretOptionLabel(appSecret));
-  assert.equal(await botToken.evaluate((node) => node.value), secretOptionLabel(botSecret));
+  await waitForInputValue(appToken, secretOptionLabel(appSecret));
+  await waitForInputValue(botToken, secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
   // The Agent sharing panel reads current policy; no credential or policy write occurs.
   assert.deepEqual(
@@ -691,14 +692,12 @@ test("Slack credential replacement switches only selected Secret references", as
       },
     ],
   );
-  assert.equal(
-    await page.getByLabel("Slack app token").evaluate((node) => node.value),
+  // Saving re-renders both pickers, which reload Secret metadata before showing names.
+  await waitForInputValue(
+    page.getByLabel("Slack app token"),
     secretOptionLabel(replacementAppSecret),
   );
-  assert.equal(
-    await page.getByLabel("Slack bot token").evaluate((node) => node.value),
-    secretOptionLabel(botSecret),
-  );
+  await waitForInputValue(page.getByLabel("Slack bot token"), secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });
 
@@ -737,10 +736,7 @@ test("partially bound Slack credentials save only the missing token", async (t) 
 
   await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
-  assert.equal(
-    await page.getByLabel("Slack app token").evaluate((node) => node.value),
-    secretOptionLabel(appSecret),
-  );
+  await waitForInputValue(page.getByLabel("Slack app token"), secretOptionLabel(appSecret));
   assert.equal(await page.getByLabel("Slack bot token").evaluate((node) => node.value), "");
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
   await selectSecret(page, "Slack bot token", botSecret);

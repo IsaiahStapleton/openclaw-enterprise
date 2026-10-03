@@ -41,6 +41,12 @@ another version or the draft. Its milestones use the persisted record:
 
 A `failed` result shows the stored error and an **Open vN Logs** link to that
 version's [Logs tab](../topics/agent-logs.md), which the draft does not have.
+For `RUNTIME_AUTHENTICATION_FAILED`, `RUNTIME_MODEL_PROBE_FAILED`, and
+`RUNTIME_MODEL_PROBE_TIMEOUT` it also states the next step and links
+**Credentials** or the draft **Configuration**. A provider the runtime cannot
+reach (refused connection, unknown host) usually reports
+`RUNTIME_MODEL_PROBE_TIMEOUT` with OpenClaw and `RUNTIME_MODEL_PROBE_FAILED`
+with Codex.
 Startup evidence may identify the runtime component, failed check, code, and
 check time. Plugin warnings describe that attempt. An unavailable record has
 unknown status. While the record is `queued` or `running`, the panel rereads it
@@ -89,7 +95,9 @@ read access to that version.
 and redacted container output. It can follow new lines, filter the loaded
 lines by level or text, and download the last 1000 lines. Status needs the same
 grants as diagnostics; log text needs Agent `administer` instead of `operate`.
-See [Agent logs](../topics/agent-logs.md).
+When a Pod is Ready and its containers have not restarted, its warning Events
+appear in muted text as earlier warnings, such as readiness probes that failed
+while it started. See [Agent logs](../topics/agent-logs.md).
 
 There is no rollback or redeploy-old-revision button. See
 [Agent Revisions](../topics/agent-revisions.md) for the lifecycle.

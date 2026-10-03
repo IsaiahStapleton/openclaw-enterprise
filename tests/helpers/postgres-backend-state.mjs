@@ -19,6 +19,9 @@ import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
 import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
+import { databaseUrl, requiresPostgres } from "./postgres-database.mjs";
+
+export { databaseUrl, requiresPostgres };
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const controllerEntrypoint = fileURLToPath(
@@ -29,10 +32,6 @@ export const serviceAccountDriverId = "chatgpt-service-accounts";
 export const workspaceId = "11111111-1111-4111-8111-111111111111";
 export const alternateWorkspaceId = "22222222-2222-4222-8222-222222222222";
 export const apiKeyPath = "/etc/openclaw/chatgpt/admin-key";
-export const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-export const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
 export function backendDefinition(options = {}) {
   return {
     id: backendId,

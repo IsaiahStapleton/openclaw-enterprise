@@ -1224,6 +1224,59 @@ test("credential source registration names the missing Credential Gateway", asyn
   assert.match(rejected.body.error.message, /no Credential Gateway.*credential-sources\.md/);
 });
 
+test("a duplicate Secret name answers 409 naming the taken Secret name", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "secret-duplicate-name");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Model API key", value: "first-value" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+
+  // The caller chose only the name, so the conflict says the name is taken here.
+  const duplicate = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Model API key", value: "second-value" },
+  });
+  assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    duplicate.body.error.message,
+    "A Secret with this name already exists in this Namespace. Choose a different name.",
+  );
+});
+
+test("Secret values with an unpaired surrogate are refused as an invalid value", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "secret-value-validation");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Valid value", value: "valid-secret-\u{1F511}" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+
+  // The request schema admits these strings; OCC refuses them because they are not UTF-8.
+  for (const value of ["\ud800", "prefix-\udfff-suffix"]) {
+    for (const [method, path, body] of [
+      ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Unpaired surrogate", value }],
+      ["PATCH", `/namespaces/${namespace.id}/secrets/${secret.body.data.id}`, { value }],
+    ]) {
+      const rejected = await controller.request(method, path, { body });
+      assert.equal(rejected.status, 400, `${method} ${JSON.stringify(rejected.body)}`);
+      assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+      assert.match(rejected.body.error.message, /Secret value must be nonempty UTF-8/);
+      assert.deepEqual(rejected.body.error.details, [{ path: "/value", code: "INVALID_VALUE" }]);
+    }
+  }
+});
+
 test("Namespace IAM routes bind humans enrolled after bootstrap through the live resolver", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
@@ -3239,9 +3292,20 @@ test("native ServiceAccounts keep private credential references and cannot admit
     [],
   );
 
+  // The caller holds delete on the account, so the conflict names what still depends on it.
   const boundDeletion = await controller.request("DELETE", accountPath);
   assert.equal(boundDeletion.status, 409);
   assert.equal(boundDeletion.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    boundDeletion.body.error.message,
+    "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+  );
+  // Authorization precedes the reference check: a caller without delete learns nothing about references.
+  const outsider = await controller.fixture.createAuthPrincipal("service-account-outsider");
+  controller.fixture.state.identities.push(outsider.principal);
+  const forbidden = await controller.request("DELETE", accountPath, { session: outsider.session });
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.body.error.code, "FORBIDDEN");
 
   const detached = await controller.request(
     "PATCH",
@@ -3313,6 +3377,12 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     { body: { name: "account-a" } },
   );
   assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  // The caller chose only the name, so the conflict says the name is taken here.
+  assert.equal(
+    duplicate.body.error.message,
+    "A ServiceAccount with this name already exists in this Namespace. Choose a different name.",
+  );
 
   // Account ownership participates in Namespace emptiness even before any Agent is created.
   const occupiedNamespace = await controller.request("DELETE", `/namespaces/${namespaceA.id}`);
@@ -3889,6 +3959,10 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   });
   assert.equal(duplicateNamespace.status, 409);
   assert.equal(duplicateNamespace.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    duplicateNamespace.body.error.message,
+    "A Namespace with this name already exists or was deleted. Choose a different name.",
+  );
 
   const invalidAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: { name: "" },
@@ -3901,6 +3975,11 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   });
   assert.equal(duplicateAgent.status, 409);
   assert.equal(duplicateAgent.body.error.code, "RESOURCE_CONFLICT");
+  // The caller chose only the name, so the conflict says the name is taken here.
+  assert.equal(
+    duplicateAgent.body.error.message,
+    "An Agent with this name already exists in this Namespace. Choose a different name.",
+  );
 
   for (const configurationId of [null, [], "invalid"]) {
     const invalidCreation = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
@@ -3977,9 +4056,32 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
 
   const malformedIdentifier = await controller.request("GET", "/namespaces/ns_not-a-uuid");
   assert.equal(malformedIdentifier.status, 400);
+  // Path-parameter failures name the parameter and its syntax, like body failures name fields.
+  assert.deepEqual(malformedIdentifier.body.error.details, [
+    { path: "/namespaceId", code: "INVALID_FORMAT" },
+  ]);
+  assert.match(malformedIdentifier.body.error.message, /params \/namespaceId .* expected ns_ /);
 
   const wrongResourceKind = await controller.request("GET", `/namespaces/${agent.id}`);
   assert.equal(wrongResourceKind.status, 400);
+
+  const nonV4Agent = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/agt_00000000-0000-0000-0000-000000000000`,
+  );
+  assert.equal(nonV4Agent.status, 400);
+  assert.deepEqual(nonV4Agent.body.error.details, [{ path: "/agentId", code: "INVALID_FORMAT" }]);
+
+  // A deployment is addressed by its revision ID, so the message names the rev_ prefix.
+  const malformedDeployment = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deployments/rev_bogus/runtime/logs?source=gateway`,
+  );
+  assert.equal(malformedDeployment.status, 400);
+  assert.deepEqual(malformedDeployment.body.error.details, [
+    { path: "/deploymentId", code: "INVALID_FORMAT" },
+  ]);
+  assert.match(malformedDeployment.body.error.message, /params \/deploymentId .* expected rev_ /);
 
   const oversized = await controller.request("POST", "/namespaces", {
     body: { name: "x".repeat(64 * 1024) },
@@ -5335,6 +5437,47 @@ test("Slack validation rejects swapped credentials and preserves authorization",
   response = { ok: true, bot_id: "B123", team_id: "T123" };
   const good = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
   assert.equal(good.status, 202, JSON.stringify(good.body));
+  // Named accounts do not hide the top-level tokens: OpenClaw starts them as the
+  // implicit default account, so they need Secret-backed refs too.
+  const namedAccounts = structuredClone(configuration);
+  namedAccounts.values.channels.slack.appToken = "xapp-plaintext-default";
+  namedAccounts.values.channels.slack.botToken = "xoxb-plaintext-default";
+  namedAccounts.values.channels.slack.accounts = {
+    work: {
+      appToken: { source: "env", provider: "default", id: "SLACK_WORK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_WORK_BOT_TOKEN" },
+    },
+  };
+  // OpenClaw also reads SLACK_BOT_TOKEN/SLACK_APP_TOKEN from the environment for the
+  // implicit account, so the named account uses other names.
+  namedAccounts.secretBindings = {
+    SLACK_WORK_APP_TOKEN: { source: app.ref, delivery: { type: "env" } },
+    SLACK_WORK_BOT_TOKEN: { source: bot.ref, delivery: { type: "env" } },
+  };
+  const provisionNamed = () =>
+    controller.request("POST", `${base}/agents/provision`, {
+      body: provisioningRequestBody(
+        namespace.id,
+        { modelApiKey: model, toolApiKey: model },
+        { configuration: namedAccounts },
+      ),
+    });
+  const plaintextDefault = await provisionNamed();
+  assert.equal(plaintextDefault.status, 400, JSON.stringify(plaintextDefault.body));
+  assert.equal(plaintextDefault.body.error.code, "CHANNEL_CREDENTIAL_BINDING_REQUIRED");
+  assert.equal(plaintextDefault.body.error.details[0].path, "/channels/slack/appToken");
+  // An account named "default" replaces the implicit one and inherits the top level.
+  namedAccounts.values.channels.slack.accounts.default = {};
+  const explicitDefault = await provisionNamed();
+  assert.equal(explicitDefault.status, 400, JSON.stringify(explicitDefault.body));
+  assert.equal(
+    explicitDefault.body.error.details[0].path,
+    "/channels/slack/accounts/default/appToken",
+  );
+  delete namedAccounts.values.channels.slack.accounts.default;
+  delete namedAccounts.values.channels.slack.appToken;
+  delete namedAccounts.values.channels.slack.botToken;
+  assert.equal((await provisionNamed()).body.error.code, "DEPENDENCY_UNAVAILABLE");
   const beforeDisabled = calls;
   configuration.values.channels.slack.enabled = false;
   configuration.secretBindings = {};

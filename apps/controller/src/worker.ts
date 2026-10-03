@@ -3768,7 +3768,15 @@ export class ControllerWorker {
       if (resolved.outcome === "success") {
         await queue.complete(claim);
       } else if (resolved.outcome === "pending") {
-        await queue.defer(claim, { code: resolved.code });
+        // The queue's reconcile evidence for this wait follows the lifecycle audit above.
+        await queue.defer(
+          claim,
+          { code: resolved.code },
+          pendingAudit !== undefined &&
+            this.auditedPendingLifecycle.get(claim.idempotencyKey) === pendingAudit
+            ? { recordEvidence: false }
+            : {},
+        );
       } else if (resolved.outcome === "permanent" || claim.attemptCount >= this.maxAttempts) {
         await queue.fail(claim, { code: resolved.code });
       } else {

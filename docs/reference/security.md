@@ -244,7 +244,10 @@ to the Collector, and responses carry `Cache-Control: no-store`.
 - **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
   Codex tracing and short plain-text lines. Codex message text is kept only from
   reviewed operational targets (app server, login, CA setup, plugin manifests)
-  and fixed messages. Other structured output, including
+  and reviewed fixed-format messages (model endpoint connection, network proxy
+  startup, retries) whose variable parts are a configured endpoint, a listener
+  address, counts, durations or a connection error (error kind, OS error, HTTP
+  status, proxy or TLS diagnostic). Other structured output, including
   Codex protocol traffic, payload keys such as `prompt` and `content`, and
   pretty-printed JSON spread over several lines, is withheld and counted. Retained text passes pattern redaction, which is
   best-effort. The `content` class has no producer.

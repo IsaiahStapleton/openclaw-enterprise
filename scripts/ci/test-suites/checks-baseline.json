@@ -22,7 +22,22 @@
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
+      "path": "tests/docs/docs-length.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-server.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-site.test.mjs"
+    },
+    {
+      "path": "tests/docs/generated-api-reference.test.mjs"
+    },
+    {
       "path": "tests/conformance/harness-device-auth.test.mjs"
+    },
+    {
+      "path": "tests/conformance/http-errors.test.mjs"
     },
     {
       "path": "tests/conformance/credential-source-occ.test.mjs"

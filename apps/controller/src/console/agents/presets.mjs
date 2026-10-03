@@ -1,5 +1,9 @@
 import { element, button } from "../dom.mjs";
-import { renderPresetTemplate, validatePresetTemplate } from "../preset-variables.mjs";
+import {
+  renderPresetTemplate,
+  requiredPresetVariables,
+  validatePresetTemplate,
+} from "../preset-variables.mjs";
 import { message, namespacePath } from "./list.mjs";
 
 const NEW_SECRET = "new";
@@ -273,13 +277,16 @@ export function createPresetFields(context, apply) {
         return;
       }
       selected = preset;
+      const required = requiredPresetVariables(preset.template);
       fields = Object.entries(preset.template.variables ?? {}).map(([name, definition]) => {
         const label = variableLabel(name);
+        // Password inputs stay required in every case; other types only when rendering needs them.
+        const needed = definition.type === "password" || required.has(name);
         const input =
           definition.type === "boolean"
             ? element(
                 "select",
-                { id: `preset-variable-${name}` },
+                { id: `preset-variable-${name}`, required: needed },
                 element("option", { value: "" }, "Choose a value"),
                 element("option", { value: "true" }, "True"),
                 element("option", { value: "false" }, "False"),
@@ -289,7 +296,8 @@ export function createPresetFields(context, apply) {
                 type: definition.type === "string" ? "text" : definition.type,
                 ...(definition.type === "number" ? { step: "any" } : {}),
                 autocomplete: "off",
-                ...(definition.type === "password" ? { spellcheck: "false", required: true } : {}),
+                required: needed,
+                ...(definition.type === "password" ? { spellcheck: "false" } : {}),
               });
         input.dataset.supplied = String(Object.hasOwn(definition, "default"));
         input.value = definition.default === undefined ? "" : String(definition.default);

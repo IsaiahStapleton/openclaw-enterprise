@@ -144,7 +144,9 @@ Harness transitions, then adds model routing. The module contains only the publi
 bundled definition; it does not expose installed Namespace templates.
 
 The user
-reviews prefilled scalar defaults and fills typed inputs. The bound password
+reviews prefilled scalar defaults and fills typed inputs. Inputs for referenced
+variables without defaults are required, so the browser flags an empty one
+before rendering; defaulted or unreferenced variables stay optional. The bound password
 variable offers a new masked token or an existing same-Namespace Secret. The
 chooser fetches only Secret metadata, validates the original template, and replaces
 the password token with the selected reference in a temporary copy. Mode changes

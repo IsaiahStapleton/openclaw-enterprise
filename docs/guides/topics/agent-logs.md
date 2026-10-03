@@ -124,8 +124,9 @@ returning it:
 - **codex**: Codex tracing records (level, target, message). Turns show as
   `turn started` and `turn completed` (info, with model, turn ID, tokens and
   busy time); tool calls keep their name and duration. Only app-server, login,
-  CA-setup, plugin-manifest and fixed retry messages keep their text; others, such as
-  `codex_core` (which can log chat text), read `Codex message withheld`. Other
+  CA-setup, plugin-manifest, model-connection, proxy-startup and retry messages
+  keep their text; others, such as `codex_core` (which logs chat text), read
+  `Codex message withheld`. Other
   span records are
   `debug`; below `logging.level: debug` the Harness drops them, readiness-probe
   connections and repeated remote-control retries (one per 10 minutes is kept).
@@ -288,8 +289,7 @@ grants `pods/log get` and `events get,list` to the tenant API and Gateway observ
 roles and sets `OCC_AGENT_RUNTIME_LOGS_ENABLED`. Set it to `false` to remove the
 grants; both routes then answer `501`. Tenant RoleBindings you create by hand
 need the same rules; see [production Agents](../deploy/production-agents.md).
-Two-cluster installs set the same value on the `openclaw-execution` chart, which
-also grants `pods get,list` to its tenant API role.
+Two-cluster installs set the same value on the `openclaw-execution` chart.
 
 These grants are read-only and namespace-scoped through your RoleBindings.
 Kubernetes RBAC cannot tell Agents apart, so OCC reads only Pods that carry the
