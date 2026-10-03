@@ -520,8 +520,9 @@ test("OpenShell moves a revision's create to a fresh request_id after the gatewa
   const admissions = new Map();
   const calls = [];
   let handlerError;
-  let refuseEverything = false;
+  let refuseEverything;
   let onRefusal;
+  let holdHandler;
   let nextId = 0;
   const refused = (reason) => new OpenShellRequestReplayRefusedError(reason, reason);
   gatewayClient.getSandbox = async ({ name }) => {
@@ -537,8 +538,8 @@ test("OpenShell moves a revision's create to a fresh request_id after the gatewa
     const payload = JSON.stringify({ ...request, requestId: undefined });
     const admitted = admissions.get(request.requestId);
     let refusal;
-    if (refuseEverything) {
-      refusal = refused("REQUEST_OUTCOME_UNCERTAIN");
+    if (refuseEverything !== undefined) {
+      refusal = refused(refuseEverything);
     } else if (admitted !== undefined) {
       if (admitted.payload !== payload) {
         refusal = refused("REQUEST_ID_PAYLOAD_MISMATCH");
@@ -560,6 +561,11 @@ test("OpenShell moves a revision's create to a fresh request_id after the gatewa
       const error = handlerError;
       handlerError = undefined;
       throw error;
+    }
+    if (holdHandler !== undefined) {
+      const held = holdHandler;
+      holdHandler = undefined;
+      await held;
     }
     // OpenShell keeps Sandbox names unique per Workspace.
     if (sandboxes.has(request.name)) {
@@ -692,13 +698,39 @@ test("OpenShell moves a revision's create to a fresh request_id after the gatewa
   assert.deepEqual(await provision(), first);
   assert.deepEqual(trace(), ["getSandbox", `createSandbox:${id0}`, "getSandbox", "getServiceUrl"]);
 
+  // Two concurrent passes: the later one is refused the held request_id, advances, and
+  // creates; the held create then loses the name and adopts the same Sandbox.
+  sandboxes.clear();
+  let release;
+  holdHandler = new Promise((resolve) => {
+    release = resolve;
+  });
+  const held = provision();
+  while (holdHandler !== undefined) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(await provision(), first);
+  release();
+  assert.deepEqual(await held, first);
+  assert.equal(sandboxes.size, 1);
+  const creates = trace().filter((call) => call.startsWith("createSandbox"));
+  // The held pass walks to request_id X; the other walks the same IDs, is refused X, and
+  // creates under the next one, Y.
+  const walked = (creates.length - 1) / 2;
+  assert.deepEqual(creates.slice(walked, -1), creates.slice(0, walked));
+  assert.equal(new Set(creates).size, walked + 1);
+
   // The request_ids are bounded; exhausting them never creates a Sandbox.
   sandboxes.clear();
-  refuseEverything = true;
+  refuseEverything = "REQUEST_OUTCOME_UNCERTAIN";
   await assert.rejects(provision(), /refused all 16 create request IDs .*deploy a new revision/);
   const exhausted = trace().filter((call) => call.startsWith("createSandbox"));
   assert.equal(exhausted.length, 16);
   assert.equal(new Set(exhausted).size, 16);
+  assert.equal(sandboxes.size, 0);
+  // Every ID refused as unreplayable also points at the gateway's key material.
+  refuseEverything = "REQUEST_REPLAY_UNAVAILABLE";
+  await assert.rejects(provision(), /refused all 16 .*key material is readable/);
   assert.equal(sandboxes.size, 0);
 });
 

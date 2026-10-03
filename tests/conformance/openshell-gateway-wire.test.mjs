@@ -259,7 +259,11 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
     type_url: `type.googleapis.com/google.rpc.${type}`,
     value: rpcStatus.lookupType(`google.rpc.${type}`).encode(message).finish(),
   });
-  const failure = (reason, domain = "openshell.nvidia.com") => {
+  const failure = (
+    reason,
+    domain = "openshell.nvidia.com",
+    code = grpc.status.FAILED_PRECONDITION,
+  ) => {
     const metadata = new grpc.Metadata();
     const Status = rpcStatus.lookupType("google.rpc.Status");
     metadata.set(
@@ -267,7 +271,7 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
       Buffer.from(
         Status.encode(
           Status.fromObject({
-            code: grpc.status.FAILED_PRECONDITION,
+            code,
             message: `refused ${reason}`,
             details: [
               any("RetryInfo", { seconds: 5 }),
@@ -282,11 +286,11 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
   const server = new grpc.Server();
   server.addService(OpenShell.service, {
     CreateSandbox(call, callback) {
-      const [reason, domain] = call.request.name.split("|");
+      const [reason, domain, code] = call.request.name.split("|");
       callback(
         reason === "PLAIN"
           ? { code: grpc.status.FAILED_PRECONDITION, details: "provider 'x' not found" }
-          : failure(reason, domain),
+          : failure(reason, domain || undefined, code === undefined ? undefined : Number(code)),
       );
     },
   });
@@ -323,7 +327,13 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
       });
     }
     // Only OpenShell's own replay reasons are refusals; anything else is the handler's error.
-    for (const name of ["REQUEST_OUTCOME_UNCERTAIN|example.com", "SANDBOX_INVALID", "PLAIN"]) {
+    for (const name of [
+      "REQUEST_OUTCOME_UNCERTAIN|example.com",
+      // The details envelope must carry the same status code.
+      `REQUEST_OUTCOME_UNCERTAIN||${grpc.status.ABORTED}`,
+      "SANDBOX_INVALID",
+      "PLAIN",
+    ]) {
       await assert.rejects(create(name), (error) => {
         assert.ok(!(error instanceof OpenShellRequestReplayRefusedError));
         assert.equal(error.code, grpc.status.FAILED_PRECONDITION);

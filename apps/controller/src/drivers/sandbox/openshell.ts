@@ -1212,8 +1212,14 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     let refusal: OpenShellRequestReplayRefusedError | undefined;
     for (let attempt = 0; existing === undefined; attempt++) {
       if (attempt === requestIds.length) {
+        // REQUEST_REPLAY_UNAVAILABLE on every ID also means unreadable gateway key material,
+        // which a new revision would not fix.
+        const remedy =
+          refusal?.reason === "REQUEST_REPLAY_UNAVAILABLE"
+            ? "check that the gateway's JWT or TLS key material is readable, or deploy a new revision"
+            : "deploy a new revision";
         throw new OpenShellSandboxConfigurationFailure(
-          `OpenShell refused all ${requestIds.length} create request IDs for Sandbox ${sandbox.resourceName} (last: ${refusal?.message}); deploy a new revision.`,
+          `OpenShell refused all ${requestIds.length} create request IDs for Sandbox ${sandbox.resourceName} (last: ${refusal?.message}); ${remedy}.`,
         );
       }
       let created;
