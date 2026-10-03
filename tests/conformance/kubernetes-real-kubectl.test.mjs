@@ -267,7 +267,8 @@ test("the inline probe's refused connection passes a deny check", async () => {
 test("an inline deny check fails unless the probe reports a denial", async () => {
   const source = await readFile(probeScript, "utf8");
   const port = await closedLoopbackPort();
-  // The check this replaced: it exits 1 on any socket error, a DNS error included.
+  // Reproduces the Gateway one-liner this replaced (not the inline probe): it
+  // exits 1 on any socket error, a DNS error included.
   const exitOnAnyError = `const s=require('node:net').connect({host:process.argv[1],port:Number(process.argv[2])}); s.on('connect',()=>process.exit(0)); s.on('error',()=>process.exit(1));`;
   for (const [reason, run] of [
     [

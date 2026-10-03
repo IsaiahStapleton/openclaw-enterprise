@@ -844,7 +844,9 @@ async function createDnsTrafficFixture(context, peer) {
   const query = (source, target, protocol, port) =>
     kubectlRead(...queryArguments(source, target, protocol, port));
   const assertQueryDenied = (description, source, target, protocol, port) =>
-    assertExecDenied(description, queryArguments(source, target, protocol, port));
+    assertProbeDenied(description, () =>
+      kubectl(...queryArguments(source, target, protocol, port)),
+    );
   return { selected, unselected, control, query, assertQueryDenied };
 }
 
@@ -3637,14 +3639,14 @@ test(
       await kubectlRead(...gatewayConnectArguments(new URL(transportUrl).hostname));
       // Finding 335: only the probe's own refused or unanswered connection is a
       // denial, never a DNS error or a dropped exec stream.
-      for (const forbidden of [
-        `${agentName(second.id)}.${dataTarget}.svc`,
-        `${agentName(separateTenant.id)}.${placements.get(namespaceIds[1])}.svc`,
+      for (const [description, forbidden] of [
+        ["same-tenant gateway-to-Agent traffic", `${agentName(second.id)}.${dataTarget}.svc`],
+        [
+          "cross-tenant gateway-to-Agent traffic",
+          `${agentName(separateTenant.id)}.${placements.get(namespaceIds[1])}.svc`,
+        ],
       ]) {
-        await assertExecDenied(
-          `Gateway connection to ${forbidden}`,
-          gatewayConnectArguments(forbidden),
-        );
+        await assertExecDenied(description, gatewayConnectArguments(forbidden));
       }
     }
 
