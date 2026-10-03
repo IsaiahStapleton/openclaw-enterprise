@@ -5,15 +5,12 @@ import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
   AuthorizationDeniedError,
-  NamespaceNotReadyError,
   OpenClawController,
-  ResourceConflictError,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
-import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 
 const installation = Object.freeze({
   id: "installation-read-test",
@@ -241,74 +238,6 @@ async function createFixture() {
     roles,
   };
 }
-
-test("selecting an existing namespace requires installation administration and completed provisioning", async () => {
-  const { controller, roles } = await createFixture();
-
-  // A principal allowed to create managed Namespaces cannot claim operator-owned infrastructure.
-  await assert.rejects(
-    controller.createNamespace("principal-admin", {
-      name: "Unauthorized existing tenant",
-      existingNamespace: "operator-owned",
-    }),
-    (error) =>
-      error instanceof AuthorizationDeniedError &&
-      error.authorization.action === "administer" &&
-      error.authorization.resource.kind === "installation" &&
-      error.authorization.resource.id === installation.id,
-  );
-
-  // Native IAM reads current roles, but an administrator still cannot adopt through another Driver.
-  roles[0].permissions.push({ action: "administer", resourceKind: "installation" });
-  const existingNamespaces = await controller.listNamespaces("principal-admin");
-  const pendingOperations = controller.pendingOperations().length;
-  await assert.rejects(
-    controller.createNamespace("principal-admin", {
-      name: "Unsupported existing tenant",
-      existingNamespace: "operator-owned",
-    }),
-    ResourceConflictError,
-  );
-  assert.deepEqual(await controller.listNamespaces("principal-admin"), existingNamespaces);
-  assert.equal(controller.pendingOperations().length, pendingOperations);
-
-  const kubernetes = createTestKubernetesComputeDriver("compute-existing-namespace");
-  controller.registerDriver(kubernetes);
-  controller.selectDriver("compute", kubernetes.id);
-  const selected = await controller.createNamespace("principal-admin", {
-    name: "Selected existing tenant",
-    existingNamespace: "operator-owned",
-  });
-  assert.equal(selected.existingNamespace, "operator-owned");
-
-  await assert.rejects(
-    controller.createConfiguration("principal-exact-a", {
-      namespaceId: selected.id,
-      kind: "agent",
-      values: {},
-    }),
-    AuthorizationDeniedError,
-  );
-
-  await assert.rejects(
-    controller.createConfiguration("principal-admin", {
-      namespaceId: selected.id,
-      kind: "agent",
-      values: {},
-    }),
-    NamespaceNotReadyError,
-  );
-
-  await controller.transact((state) =>
-    state.namespaces.transitionNamespaceStatus(selected.id, "provisioning", "ready"),
-  );
-  const configuration = await controller.createConfiguration("principal-admin", {
-    namespaceId: selected.id,
-    kind: "agent",
-    values: {},
-  });
-  assert.equal(configuration.namespaceId, selected.id);
-});
 
 test("installation and exact resource reads require their own explicit authorization", async () => {
   const { controller, namespaceA, agentA, revisionA } = await createFixture();

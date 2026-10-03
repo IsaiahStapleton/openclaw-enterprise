@@ -345,12 +345,17 @@ test("existing namespace adoption requires installation administration and waits
   assert.equal(denial.authorization.action, "administer");
   assert.deepEqual(denial.authorization.resource, { kind: "installation", id: installationId });
 
-  // Even an administrator cannot silently adopt through Docker or another unsupported Driver.
+  // Even an administrator cannot silently adopt through Docker or another unsupported Driver,
+  // and the refusal leaves no Namespace or pending operation behind.
+  const namespacesBefore = (await request(fixture.app, "/namespaces")).payload.data;
+  const operationsBefore = fixture.controller.pendingOperations().length;
   const unsupported = await request(fixture.app, "/namespaces", {
     body: { name: "Unsupported adoption", existingNamespace: "operator-owned" },
   });
   assert.equal(unsupported.response.status, 409);
   assert.equal(unsupported.payload.error.code, "RESOURCE_CONFLICT");
+  assert.deepEqual((await request(fixture.app, "/namespaces")).payload.data, namespacesBefore);
+  assert.equal(fixture.controller.pendingOperations().length, operationsBefore);
 
   const kubernetes = createTestKubernetesComputeDriver("compute-security-kubernetes");
   fixture.controller.registerDriver(kubernetes);
