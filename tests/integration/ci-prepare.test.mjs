@@ -1563,7 +1563,7 @@ test("prepareLane preserves an explicit logging Collector Node image over its de
   // Images are absent until pulled; the first pull of each hits a rate limit.
   // Both images are prepared concurrently, so the fake counts each image's
   // pulls in its own file: reading the shared call log while the other
-  // image's process appends to it can return a torn line.
+  // image's process creates or appends to it can return an empty or torn line.
   const dockerPath = join(root, "docker");
   await writeFile(
     dockerPath,
