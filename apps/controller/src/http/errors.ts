@@ -14,6 +14,7 @@ import {
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
+  ModelCredentialValueError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
@@ -33,7 +34,6 @@ import {
   ConfigurationOwnershipError,
   ConfigurationValidationError,
 } from "../drivers/configuration/kubernetes/index.ts";
-import { ModelCredentialValueError } from "../drivers/configuration/model-auth.ts";
 
 export interface ErrorDetail {
   readonly path: string;
