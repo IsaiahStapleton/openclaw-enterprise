@@ -3947,7 +3947,8 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
 });
 
 // Each workspace file loads on its own, and a restored copy of an old view keeps its editors
-// disabled, so an enabled editor is the signal that this file's current read has settled.
+// disabled until revalidation re-enables or replaces it, so an enabled editor is the signal
+// that this file's current read has settled.
 async function waitForWorkspaceEditors(page, names) {
   await page.waitForFunction(
     (filenames) =>
