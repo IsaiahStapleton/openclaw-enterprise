@@ -927,6 +927,103 @@ test(
 );
 
 test(
+  "provisioning status never pairs a job with a queue row from a later commit",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets),
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const { workId, url } = admitted.data.provisioning;
+    const claim = await claimProvisioningWork(fixture.pool, workId);
+    const failure = {
+      code: "PROVISIONING_REJECTED",
+      message: "Agent provisioning could not complete.",
+    };
+
+    // Stage the worker's permanent failure the way the worker writes it (job and queue row in
+    // one transaction) and hold its commit open.
+    let releaseCommit;
+    const commitGate = new Promise((resolve) => {
+      releaseCommit = resolve;
+    });
+    let staged;
+    const failureStaged = new Promise((resolve) => {
+      staged = resolve;
+    });
+    const committed = fixture.state.transact(async (unit) => {
+      const current = await unit.provisioning.findByWorkId(workId);
+      await unit.provisioning.recordFailure(
+        claim,
+        {
+          completedPhase: current.completedPhase,
+          progress: { ...current.progress, error: failure },
+        },
+        { disposition: "permanent", ...failure },
+      );
+      staged();
+      await commitGate;
+    });
+    await failureStaged;
+
+    // Commit the failure right after the status read's first statement on this job returns.
+    // The hook only delays that result; the controller's own queries produce the response.
+    // Reading the job and queue row in separate statements would now see a failed queue row
+    // next to the pre-failure job and report a generic failure.
+    let interleaved = false;
+    const query = pg.Client.prototype.query;
+    const hook = context.mock.method(
+      pg.Client.prototype,
+      "query",
+      function (config, values, callback) {
+        const result = query.call(this, config, values, callback);
+        if (
+          !interleaved &&
+          typeof config === "string" &&
+          config.includes("occ.agent_provisioning_work") &&
+          Array.isArray(values) &&
+          values[0] === workId &&
+          typeof result?.then === "function"
+        ) {
+          interleaved = true;
+          return result.then(async (rows) => {
+            releaseCommit();
+            await committed;
+            return rows;
+          });
+        }
+        return result;
+      },
+    );
+
+    let during;
+    try {
+      during = await fixture.request("GET", url);
+    } finally {
+      // Never leave the staged transaction open, even when the read fails.
+      hook.mock.restore();
+      releaseCommit();
+      await committed;
+    }
+    assert.equal(interleaved, true, "the failure must commit inside the status read");
+    assert.equal(during.status, 200, JSON.stringify(during.body));
+    assert.deepEqual(
+      { status: during.data.status, error: during.data.error },
+      { status: "running", error: undefined },
+      "a status read that started before the failure commit reports the state before it",
+    );
+
+    const after = await fixture.request("GET", url);
+    assert.equal(after.status, 200, JSON.stringify(after.body));
+    assert.equal(after.data.status, "failed");
+    assert.deepEqual(after.data.error, failure);
+  },
+);
+
+test(
   "provisioning worker reauthorizes after admission and revoked authority creates no backend effects",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {

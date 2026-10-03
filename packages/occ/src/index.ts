@@ -1937,8 +1937,12 @@ export class OpenClawController {
     workId: string,
   ): Promise<Readonly<ProvisionAgentResult>> {
     return this.mutate(async (state) => {
-      const record = await this.exactProvisioningWork(state, principalId, namespaceId, workId);
-      const work = await state.operations.findWork(record.workId);
+      const { record, work } = await this.exactProvisioningWork(
+        state,
+        principalId,
+        namespaceId,
+        workId,
+      );
       if (work === undefined) {
         throw new DependencyUnavailableError("The provisioning work is unavailable.");
       }
@@ -1953,7 +1957,12 @@ export class OpenClawController {
   ): Promise<Readonly<ProvisionAgentResult>> {
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
-      const record = await this.exactProvisioningWork(state, principalId, namespace.id, workId);
+      const { record, work: observed } = await this.exactProvisioningWork(
+        state,
+        principalId,
+        namespace.id,
+        workId,
+      );
       if (record.actorId !== principalId) {
         throw new AuthorizationDeniedError("Only the initiating actor can retry provisioning.");
       }
@@ -1982,8 +1991,7 @@ export class OpenClawController {
       }
       await this.authorizeProvisioningRecord(state, principalId, record);
       if (record.status === "queued" || record.status === "running") {
-        const work = await state.operations.findWork(record.workId);
-        return Object.freeze({ provisioning: provisioningProgress(record, work) });
+        return Object.freeze({ provisioning: provisioningProgress(record, observed) });
       }
       const retried = await state.provisioning.retryByWorkId(namespaceId, workId, principalId);
       const work = await state.operations.findWork(record.workId);
@@ -6440,22 +6448,23 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     workId: string,
-  ): Promise<Readonly<AgentProvisioningRecord>> {
+  ) {
     if (!isNonEmptyString(workId)) {
       throw new ScopeViolationError("The exact provisioning work identity is missing.");
     }
     await this.exactNamespace(state, namespaceId);
-    const record = await state.provisioning.findByWorkId(workId);
-    if (record === undefined || record.namespaceId !== namespaceId) {
+    // The job and its queue row come from one statement: status derives from both.
+    const found = await state.provisioning.findWithWork(workId);
+    if (found === undefined || found.record.namespaceId !== namespaceId) {
       throw new ScopeViolationError(
         "The provisioning work does not belong to the exact Namespace.",
       );
     }
-    if (record.actorId !== principalId) {
+    if (found.record.actorId !== principalId) {
       throw new AuthorizationDeniedError("Only the initiating actor can read provisioning status.");
     }
-    await this.authorizeProvisioningRecord(state, principalId, record);
-    return record;
+    await this.authorizeProvisioningRecord(state, principalId, found.record);
+    return found;
   }
 
   private async guardAgentProvisioning(
