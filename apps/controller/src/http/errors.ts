@@ -10,6 +10,7 @@ import {
   ConfigurationHarnessError,
   CredentialGatewayNotConfiguredError,
   DependencyUnavailableError,
+  DeviceAuthorizationStartError,
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
@@ -311,6 +312,17 @@ export function requestFailure(error: unknown): RequestFailure {
           "The provider model service is unavailable. Retry or enter a model ID manually.",
         );
     }
+  }
+  if (error instanceof DeviceAuthorizationStartError) {
+    // Device login starts at auth.openai.com from the API Pods, which the chart's default
+    // network policy does not allow, so name that cause when no connection was made.
+    return failure(
+      503,
+      "DEPENDENCY_UNAVAILABLE",
+      error.reason === "unreachable"
+        ? "OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs), then try again."
+        : "The sign-in service could not start device login. Try again.",
+    );
   }
   if (error instanceof PluginDiscoveryError) {
     switch (error.reason) {

@@ -113,6 +113,24 @@ export class ModelDiscoveryError extends Error {
   }
 }
 
+/**
+ * Device login could not start. `reason` is `unreachable` when the API could not open a
+ * connection to the sign-in service (DNS, refused, reset, timeout), else `unavailable`.
+ * `failure` is a bounded class for the server log only (an error code such as
+ * `ECONNREFUSED`, `TimeoutError` or `HTTP_503`); no provider body or message is kept.
+ */
+export class DeviceAuthorizationStartError extends Error {
+  readonly reason: "unreachable" | "unavailable";
+  readonly failure: string;
+
+  constructor(reason: DeviceAuthorizationStartError["reason"], failure = "unclassified") {
+    super("Device login could not start.");
+    this.name = "DeviceAuthorizationStartError";
+    this.reason = reason;
+    this.failure = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(failure) ? failure : "unclassified";
+  }
+}
+
 /** Safe discovery outcomes carry no upstream response, credential, or error cause. */
 export class PluginDiscoveryError extends Error {
   readonly reason: "credentials_rejected" | "rate_limited" | "unavailable" | "invalid_response";

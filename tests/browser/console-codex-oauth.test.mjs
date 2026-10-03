@@ -292,3 +292,36 @@ test("saving ChatGPT OAuth before sign-in names the missing step and sends nothi
   );
   assert.equal((await fixture.request("GET", agentPath)).data.harnessAuth.method, "api_key");
 });
+
+test("sign-in that cannot reach the sign-in service shows the API's cause once", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("OAuth egress", { ready: true });
+  const originalFetch = globalThis.fetch;
+  // The chart's default network policy: the API Pod cannot connect to auth.openai.com.
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (!url.startsWith("https://auth.openai.com/")) {
+      return originalFetch(input, init);
+    }
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Authentication method").selectOption("oauth");
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
+  await page
+    .getByText(
+      "Codex sign-in could not start. OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs), then try again.",
+      { exact: true },
+    )
+    .waitFor();
+  await expectNoText(page, /Service unavailable|The read could not be completed/);
+  assert.equal(
+    await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).isEnabled(),
+    true,
+  );
+});
