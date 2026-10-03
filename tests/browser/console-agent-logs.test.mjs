@@ -743,7 +743,13 @@ test("a status denial for one operator does not carry over to the next sign-in o
 
 test("Back restores a followed Logs view without replaying its reads and keeps polling", async (t) => {
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
-  computeDriver.state.lines = [line(1, "before leaving")];
+  // Enough earlier output that the pane scrolls: detaching it for Back's cache resets its
+  // offset, which must not leave follow paused as though the reader had scrolled up.
+  const earlier = Array.from({ length: 120 }, (_, index) => ({
+    time: `2026-09-30T11:59:00.${String(index + 1).padStart(9, "0")}Z`,
+    raw: `earlier output ${index + 1}`,
+  }));
+  computeDriver.state.lines = [...earlier, line(1, "before leaving")];
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
   // A recorded deployment result keeps the Agent view cacheable for Back.
@@ -773,15 +779,17 @@ test("Back restores a followed Logs view without replaying its reads and keeps p
   const pane = page.getByRole("log", { name: "Runtime log output" });
   await pane.getByText("before leaving").waitFor();
   await page.getByRole("button", { name: "Follow" }).click();
-  for (const tick of ["first poll", "second poll"]) {
-    computeDriver.state.lines = [
-      ...computeDriver.state.lines,
-      line(computeDriver.state.lines.length + 1, tick),
-    ];
+  for (const [second, tick] of [
+    [2, "first poll"],
+    [3, "second poll"],
+  ]) {
+    computeDriver.state.lines = [...computeDriver.state.lines, line(second, tick)];
     await page.clock.runFor(2_000);
     await pane.getByText(tick).waitFor();
   }
   const panel = await pane.elementHandle();
+  const overflowing = (node) => node.scrollHeight > node.clientHeight;
+  assert.equal(await panel.evaluate(overflowing), true);
   const logPaths = () =>
     requests.filter(({ path }) => path.includes("/runtime/logs")).map(({ path }) => path);
   const statusReads = () => requests.filter(({ path }) => path.endsWith("/runtime")).length;
@@ -804,6 +812,11 @@ test("Back restores a followed Logs view without replaying its reads and keeps p
   // The restored view resumes from its cursor; Back replays none of its earlier reads.
   await page.clock.runFor(2_000);
   await pane.getByText("after back").waitFor();
+  // The reader was at the bottom when leaving and stays there as new lines arrive.
+  assert.equal(
+    await panel.evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 24),
+    true,
+  );
   assert.ok(statusReads() > statusBeforeBack);
   const readAfterBack = logPaths().slice(logReadsBeforeLeaving);
   assert.ok(readAfterBack.length > 0);
