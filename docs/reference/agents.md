@@ -75,7 +75,8 @@ Responses include `deploymentId`, `namespaceId`, `agentId`, `status`, nullable
 - `queued`: no live claim, including after lease expiry.
 - `running`: a live worker claim.
 - `succeeded`: original work activated the revision or found it already active.
-- `failed`: terminal failure or completion without activation.
+- `failed`: terminal failure or completion without activation: `REVISION_SUPERSEDED`
+  when a newer revision won, `REVISION_STOPPED` when the Agent was stopped or deleted first.
 
 Pending `progress.lastAttempt` contains the latest exact-work result's
 allowlisted `code`, fixed `message`, and `at`, when first recorded; repeated
