@@ -1289,7 +1289,7 @@ test("a resumed view moves past a line longer than the read limit", async () => 
     gaps(recent).map(({ reason }) => reason),
     ["truncated"],
   );
-  assert.match(gaps(recent)[0].remedy, /longer than the 1 MiB read limit/);
+  assert.match(gaps(recent)[0].remedy, /longer than the rest of the 1 MiB read limit/);
   assert.equal(
     reader.codec.decode(reader.cursor, reader.binding).position.lastTime,
     timedLog("", 0).time,
@@ -1301,7 +1301,7 @@ test("a resumed view moves past a line longer than the read limit", async () => 
     gaps(skipped).map(({ reason, time }) => [reason, time]),
     [["window_exceeded", timedLog("", 599).time]],
   );
-  assert.match(gaps(skipped)[0].remedy, /longer than the 1 MiB read limit/);
+  assert.match(gaps(skipped)[0].remedy, /longer than the rest of the 1 MiB read limit/);
   assert.doesNotMatch(JSON.stringify(skipped.records), /fewer lines/);
   const position = reader.codec.decode(reader.cursor, reader.binding).position;
   assert.equal(position.lastTime, null);
@@ -1336,6 +1336,54 @@ test("a resumed view moves past a line longer than the read limit", async () => 
     timedLog("", 606).time,
   );
   assert.equal(reader.admissions, 1);
+});
+
+test("a resumed view skips a stalled read only when every poll would stall", async () => {
+  const reader = pollReader();
+  const summary = (page) =>
+    page.records.map((record) => [
+      record.reason ?? record.message,
+      ...(record.type === "gap" ? [/fewer lines/.test(record.remedy)] : []),
+    ]);
+  const lastTime = () => reader.codec.decode(reader.cursor, reader.binding).position.lastTime;
+  // `now` is second 600; the view has delivered second 596.
+  await reader.poll([timedLog("retrying in 590s", 590), timedLog("retrying in 596s", 596)]);
+  // A line older than the overlap every read covers is re-read only on some polls, so a
+  // later poll may get past the cut: keep the frontier and the usual remedy.
+  const partial = await reader.poll(
+    [timedLog("retrying in 593s", 593), timedLog("retrying in 596s", 596), timedLog("retr", 606)],
+    { elapsed: 8_000, truncated: true },
+  );
+  assert.deepEqual(summary(partial), [["truncated", true]]);
+  assert.equal(lastTime(), timedLog("", 596).time);
+  // Exactly at the guard the view stays put.
+  const atGuard = await reader.poll([timedLog("retrying in 596s", 596), timedLog("retr", 605)], {
+    elapsed: 8_000,
+    truncated: true,
+  });
+  assert.deepEqual(summary(atGuard), [["truncated", false]]);
+  assert.equal(lastTime(), timedLog("", 596).time);
+  // A cut line at the cursor time also stalls every poll; untimed lines are not progress.
+  const sameTime = await reader.poll(
+    [timedLog("retrying in 596s", 596), timedLog("untimed", null), timedLog("retr", 596)],
+    { elapsed: 8_001, truncated: true },
+  );
+  assert.deepEqual(summary(sameTime), [["untimed"], ["window_exceeded", false]]);
+  assert.equal(sameTime.records.at(-1).time, timedLog("", 596).time);
+  assert.equal(lastTime(), null);
+
+  // A stream replaced during the read is not a stalled read.
+  const replaced = pollReader();
+  await replaced.poll([timedLog("retrying in 0s", 0)]);
+  const page = await replaced.poll([timedLog("retr", 500)], {
+    elapsed: 2_000,
+    truncated: true,
+    stream: { restartCount: 1 },
+  });
+  assert.deepEqual(summary(page), [
+    ["stream_replaced", false],
+    ["truncated", true],
+  ]);
 });
 
 test("runtime log cursor does not let an evicted same-time old END erase a later BEGIN", async () => {

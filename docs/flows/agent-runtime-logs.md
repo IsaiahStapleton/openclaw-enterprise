@@ -102,10 +102,11 @@ Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 poll derives `sinceSeconds` from the cursor: from its newest delivered line, or,
 when the view has delivered nothing yet, from the previous read (a full or
 byte-cut tail then emits `window_exceeded`). When a resumed read delivers nothing
-new because the next line is longer than the 1 MiB limit, and that line is more
-than about 3 seconds older than the read, the cursor drops its delivered time and
+new on every poll because the next line does not fit in the 1 MiB limit (typically
+one oversized line), and that line is more than about 3 seconds older than the read,
+the cursor drops its delivered time and
 continues from this read, as a view that has delivered nothing yet does. The page
-emits `window_exceeded` dated at the oversized line: it and the lines logged after
+emits `window_exceeded` dated at that line: it and the lines logged after
 it until this read are lost. A carried PEM block then keeps no delivered frontier,
 so it stays masked for the rest of the view. OCC
 drops lines already delivered at the cursor time, emits `stream_replaced`,
