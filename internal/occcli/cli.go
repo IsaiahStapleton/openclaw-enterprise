@@ -1003,7 +1003,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Use:   "stop ID",
 		Short: "Stop an Agent while retaining its revision history and persistent state",
 		Long: "Stop an Agent while retaining its revision history and persistent state.\n" +
-			"The stop is asynchronous: the Agent's Pods shut down in the background.\n" +
+			"The stop is asynchronous: the Agent's runtime shuts down in the background.\n" +
 			"There is no start command; run \"occ agent deploy ID\" to start the Agent again with a new revision.",
 		Args: idArgs(agentIDArg),
 		RunE: func(command *cobra.Command, args []string) error {

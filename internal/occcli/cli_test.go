@@ -642,6 +642,21 @@ func TestAgentStopNamesTheDeployCommandThatStartsTheAgentAgain(t *testing.T) {
 	if want := "notice: stop requested; run \"occ agent deploy agt_1\" to start the Agent again\n"; errOut.String() != want {
 		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
 	}
+	// Structured output stays machine-readable: the notice goes to stderr only.
+	out.Reset()
+	errOut.Reset()
+	command = New(&out, &errOut)
+	command.SetArgs([]string{"agent", "stop", "agt_1", "-o", "json", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out.String()), &decoded); err != nil || decoded["id"] != "agt_1" {
+		t.Fatalf("json stdout = %q, %v", out.String(), err)
+	}
+	if want := "notice: stop requested; run \"occ agent deploy agt_1\" to start the Agent again\n"; errOut.String() != want {
+		t.Fatalf("json stderr = %q, want %q", errOut.String(), want)
+	}
 	stop, _, err := New(io.Discard, io.Discard).Find([]string{"agent", "stop"})
 	if err != nil || !strings.Contains(stop.Long, `run "occ agent deploy ID" to start the Agent again`) {
 		t.Fatalf("occ agent stop help = %q, %v", stop.Long, err)
