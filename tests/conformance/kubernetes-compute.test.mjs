@@ -11165,15 +11165,20 @@ test("rendered exec arguments and environment values stay within the per-string 
     state.ready = true;
     await driver.prepareRevision(revision, context);
     const workloads = [...objects.values()].filter(({ kind }) => kind === "Deployment");
+    const setupInits = [];
     // Every runtime wrapper runs under tini, so it is never PID 1: a Pod stop's
     // SIGTERM ends it in every startup phase, not only once it installs a handler.
     for (const { spec } of workloads) {
       assert.deepEqual(spec.template.spec.containers[0].command, [...RUNTIME_WRAPPER_COMMAND]);
       // Setup runs under tini too, so a Pod deleted mid-setup stops promptly.
-      for (const init of spec.template.spec.initContainers ?? []) {
+      const inits = spec.template.spec.initContainers ?? [];
+      for (const init of inits) {
         assert.deepEqual(init.command, [...SETUP_WRAPPER_COMMAND], init.name);
       }
+      setupInits.push(...inits.map(({ name }) => name));
     }
+    assert.ok(setupInits.includes("prepare-private-state"), setupInits.join());
+    assert.ok(setupInits.includes("initialize-workspace"), setupInits.join());
     assertExecStringsWithinBudget(workloads);
     for (const { spec } of workloads) {
       // Runtime programs travel as bounded pieces and arrive intact.
