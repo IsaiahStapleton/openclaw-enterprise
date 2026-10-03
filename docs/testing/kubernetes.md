@@ -321,9 +321,9 @@ CI keeps the project-pinned k3d 5.8.3 binary and passes a digest-pinned K3s
 1.35 node image (`defaultK3sImage` in `scripts/ci/prepare.mjs`) when it creates
 ordinary disposable clusters, so creation never depends on k3d's online
 release-channel lookup. Moving to a newer 1.35.z patch is a deliberate bump of
-that constant. Preparation rejects a server outside the 1.35 family. The CI `kubectl` client is pinned to 1.35.0. The
-separately prepared OpenShell lane retains its own pinned K3s and `kubectl`
-versions.
+that constant. Preparation rejects a server outside the 1.35 family. The CI
+`kubectl` client is pinned to 1.35.0. The separately prepared OpenShell lane
+retains its own pinned K3s and `kubectl` versions.
 
 ## Kubernetes real-runtime test environment
 

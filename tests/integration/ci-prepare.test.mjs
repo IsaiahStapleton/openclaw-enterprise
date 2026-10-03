@@ -271,6 +271,9 @@ if (command === "k3d") {
   if (equals(args.slice(0, 2), ["cluster", "create"]) && [13, 15, 16].includes(args.length)) {
     assert.match(args[2], /^openclaw-k8s-/);
     assert.deepEqual(args.slice(3, 5), ["--image", process.env.OPENCLAW_CI_K3S_IMAGE || ${JSON.stringify(defaultK3sImage)}]);
+    // A channel such as +v1.35 makes k3d query update.k3s.io on every cluster
+    // create; the forwarded node image must be a digest-pinned K3s 1.35 image.
+    assert.match(args[4], /:v1\.35\.\d+-k3s\d+@sha256:[a-f0-9]{64}$/);
     if (args.length >= 15) {
     assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "1", "--volume"]);
     const storage = args[10].split(":");
@@ -745,15 +748,6 @@ test("k3d preparation reuses only matching local immutable images and verifies f
       "cleanup must preserve the caller's immutable source image",
     );
   }
-});
-
-test("ordinary k3d preparation defaults to a digest-pinned K3s 1.35 image, not a release channel", () => {
-  // A channel such as +v1.35 makes k3d query update.k3s.io on every cluster
-  // create; the pinned default keeps cluster creation off that network path.
-  assert.match(
-    defaultK3sImage,
-    /^docker\.io\/rancher\/k3s:v1\.35\.\d+-k3s\d+@sha256:[a-f0-9]{64}$/,
-  );
 });
 
 test("ordinary k3d preparation forwards an immutable K3s override and retains the server version gate", async (t) => {
