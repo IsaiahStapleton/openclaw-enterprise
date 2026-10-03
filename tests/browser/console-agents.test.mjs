@@ -1985,7 +1985,8 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   });
   // Each accepted request fails in the worker: first a taken name (permanent), then an
   // unavailable dependency (transient). Its retry is then rejected after the job created
-  // the Agent, which only the job's retry can finish.
+  // the Agent, which only the job's retry can finish, and the next retry is refused
+  // because the Agent's lifecycle changed. The third request is cancelled (permanent).
   const failures = [
     {
       code: "PROVISIONING_REJECTED",
@@ -1995,6 +1996,8 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
       code: "PROVISIONING_DEPENDENCY_UNAVAILABLE",
       message: "Agent provisioning could not complete.",
     },
+    { code: "PROVISIONING_CANCELLED", message: "Provisioning was cancelled by Stop." },
+    { code: "PROVISIONING_REJECTED", message: "Agent provisioning could not complete." },
   ];
   const bodies = [];
   await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route, request) => {
@@ -2020,6 +2023,20 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   let retries = 0;
   await page.route(`**/namespaces/${namespace.id}/agents/provision/work_2/retry`, async (route) => {
     retries += 1;
+    if (retries > 1) {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "RESOURCE_CONFLICT",
+            message: "The requested platform resource already exists.",
+          },
+          meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+        }),
+      });
+      return;
+    }
     await route.fulfill(
       json(
         {
@@ -2094,6 +2111,35 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(retries, 1);
   assert.equal(await retry.isVisible(), true);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+
+  // A refused retry ends that job: Create Agent submits a new request ID instead of
+  // replaying the failed job.
+  await retry.click();
+  await page
+    .getByText(
+      "The provisioning job can no longer be retried. Select Create Agent to submit a new request.",
+    )
+    .waitFor();
+  assert.equal(retries, 2);
+  assert.equal(await retry.isVisible(), false);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByText("Provisioning was cancelled by Stop. Select Create Agent to submit a new request.")
+    .waitFor();
+  assert.equal(bodies.length, 3);
+  assert.notEqual(bodies[2].requestId, bodies[1].requestId);
+  // A cancelled job cannot be retried either; the next submit uses a new request ID.
+  assert.equal(await retry.isVisible(), false);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByText(
+      "Agent provisioning could not complete. Select Create Agent to submit a new request.",
+    )
+    .waitFor();
+  assert.equal(bodies.length, 4);
+  assert.notEqual(bodies[3].requestId, bodies[2].requestId);
 });
 
 test("Agent creation rejects non-object native Configuration JSON before Configuration or Agent writes", async (t) => {
