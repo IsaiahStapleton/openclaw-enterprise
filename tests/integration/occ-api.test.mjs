@@ -4037,6 +4037,17 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   assert.equal(nonV4Agent.status, 400);
   assert.deepEqual(nonV4Agent.body.error.details, [{ path: "/agentId", code: "INVALID_FORMAT" }]);
 
+  // A deployment is addressed by its revision ID, so the message names the rev_ prefix.
+  const malformedDeployment = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deployments/rev_bogus/runtime/logs?source=gateway`,
+  );
+  assert.equal(malformedDeployment.status, 400);
+  assert.deepEqual(malformedDeployment.body.error.details, [
+    { path: "/deploymentId", code: "INVALID_FORMAT" },
+  ]);
+  assert.match(malformedDeployment.body.error.message, /params \/deploymentId .* expected rev_ /);
+
   const oversized = await controller.request("POST", "/namespaces", {
     body: { name: "x".repeat(64 * 1024) },
   });
