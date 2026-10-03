@@ -179,8 +179,7 @@ test("startup constructs the bundled OpenShell SandboxDriver before constructing
 });
 
 test("startup composes both OpenShell members from one Backend", async (t) => {
-  // An explicit mandatory setting must compose just like the omitted secure default
-  // exercised above; rejecting every supplied value would prevent valid startup.
+  // An explicit hard_requirement composes like the omitted default above.
   const configuration = sandboxInstallation();
   configuration.drivers.sandbox.configuration.policy.landlockCompatibility = "hard_requirement";
   const createdDriver = await loadInstallationConfiguration({
@@ -611,7 +610,7 @@ test("startup refuses OpenShell filesystem modes that can weaken containment", a
         mode: "production",
         environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
       }),
-      /OpenShell Landlock compatibility must be hard_requirement/,
+      /OpenShell policy\.landlockCompatibility must be hard_requirement or omitted/,
     );
   }
 });

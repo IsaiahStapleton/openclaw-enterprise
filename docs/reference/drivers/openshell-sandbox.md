@@ -88,8 +88,9 @@ to a running Agent requires upstream support:
 | `filesystem` | Approved PVC subpath mounts and OpenShell filesystem policy for read-only/read-write paths.   |
 | `process`    | OpenShell process policy, including the configured run-as user and group.                     |
 
-The Driver sends `hard_requirement` for Landlock filesystem enforcement.
-Other `policy.landlockCompatibility` values fail Installation startup.
+The Driver sends `hard_requirement` for Landlock filesystem enforcement. Omit
+`policy.landlockCompatibility` or set it to `hard_requirement`; any other value,
+including `best_effort`, fails Installation startup.
 
 There is no `exec` facet. Command-level authorization and per-tool dynamic
 sandbox creation are deferred; `exec` remains a tool invocation that runs inside
