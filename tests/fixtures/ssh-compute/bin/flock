@@ -19,11 +19,17 @@ if not args:
 path, command = args[0], args[1:]
 fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
 deadline = None if timeout is None else time.monotonic() + timeout
+# Helpers run with the fixture state directory; record that one found the lock
+# held so tests can wait for that instead of sleeping.
+waiting = os.environ.get("OCC_SSH_FIXTURE_STATE")
 while True:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         break
     except BlockingIOError:
+        if waiting is not None:
+            open(os.path.join(waiting, "flock-waiting"), "a").close()
+            waiting = None
         if deadline is not None and time.monotonic() >= deadline:
             sys.exit(1)
         time.sleep(0.05)
