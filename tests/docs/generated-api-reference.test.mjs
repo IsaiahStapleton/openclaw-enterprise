@@ -28,8 +28,20 @@ test("generated API reference stays on the approved single page", async () => {
   );
 
   const page = outputs[0].content;
-  assert.match(page, /\| \[Agents\]\(#agents\) \| 20 operations \|/);
-  assert.match(page, /\| \[Backends\]\(#backends\) \| 1 operation \|/);
+  // The Resources table counts each tag's operations from the contract, singular for one.
+  const operationsByTag = new Map();
+  for (const operation of Object.values(document.paths).flatMap(Object.values)) {
+    const tag = operation.tags?.[0] ?? "Untagged";
+    operationsByTag.set(tag, (operationsByTag.get(tag) ?? 0) + 1);
+  }
+  assert.ok(operationsByTag.get("Agents") > 1);
+  for (const [tag, count] of operationsByTag) {
+    const label = count === 1 ? "1 operation" : `${count} operations`;
+    assert.match(
+      page,
+      new RegExp(`^\\| \\[${escapeRegExp(tag)}\\]\\(#[^)]+\\) \\| ${label} \\|$`, "m"),
+    );
+  }
   assert.match(
     page,
     /\[`GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}`\]\(#get-namespacesnamespaceidagentsagentidworkspacefilesname\)/,
