@@ -1599,7 +1599,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               ? "Deployment denied. Check Agent deploy permission and access to selected Secrets. First deployment also needs Agent read and operate permissions to create connection credentials. Ask a Namespace administrator to confirm the required grants."
               : error.status === 409
                 ? "Deployment conflicts with the saved Agent state. Refresh this Agent to check for changed Configuration or missing connection credentials. If credentials are missing after an earlier version, ask an operator to restore them."
-                : message(error, submitted);
+                : rejectionMessage(error, submitted);
           if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
             deployPending = false;
           }
@@ -1920,7 +1920,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               error.name === "TypeError"
             ) {
               if (!configurationSaved) {
-                error.message = message(error, mutationStarted);
+                error.message = rejectionMessage(error, mutationStarted);
               }
             }
             error.outcomeUnknown =
@@ -2097,7 +2097,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status));
             feedback.textContent = error.outcomeUnknown
               ? error.message
-              : message(error, mutationStarted);
+              : rejectionMessage(error, mutationStarted);
             data.setAuthenticationPending(outcomeUnknown);
           }
         } finally {
@@ -2263,7 +2263,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         if (error.status === 401) {
           context.onExpired();
         } else {
-          feedback.textContent = message(error, mutationStarted);
+          feedback.textContent = rejectionMessage(error, mutationStarted);
           if (mutationStarted && ![400, 403, 404, 409, 429].includes(error.status)) {
             saveState = "uncertain";
           }
