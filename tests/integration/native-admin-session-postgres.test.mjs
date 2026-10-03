@@ -929,6 +929,7 @@ test(
         );
         return result.rows[0];
       },
+      5_000,
     );
     assert.equal(
       latestConnect.details.nativeAdmin.revisionId,

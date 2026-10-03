@@ -340,7 +340,6 @@ async function json(path) {
 async function missing(path) {
   await assert.rejects(access(path), { code: "ENOENT" });
 }
-// Polls `read` until it returns a value other than undefined, failing after the deadline.
 function setOption(object, keys, value) {
   let target = object;
   for (const key of keys.slice(0, -1)) {
