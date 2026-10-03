@@ -284,3 +284,40 @@ func TestDeploymentStatusWithoutRevisionsExplainsHowToDeploy(t *testing.T) {
 		t.Fatalf("expected a deploy hint, got %v", err)
 	}
 }
+
+// Go maps have no order, so JSON output must sort object keys (as YAML does) to be
+// diffable from run to run, including nested objects in table cells.
+func TestJSONOutputAndTableCellsKeepAStableKeyOrder(t *testing.T) {
+	responses := map[string]string{
+		"GET /namespaces/" + testNamespaceID + "/agents/" + testAgentID: `{"status":"active","name":"a","id":"` + testAgentID + `","executionMode":"embedded","desiredRuntimeState":"running","createdAt":"2026-09-30T00:00:00.000Z","configurationId":"cfg_1","activeRevisionId":"rev_1","servicePrincipalId":"sp_1"}`,
+		"GET /namespaces/" + testNamespaceID + "/iam/roles/role_1":      `{"id":"role_1","permissions":[{"resourceKind":"agent","action":"read"}]}`,
+	}
+	want := `{
+  "activeRevisionId": "rev_1",
+  "configurationId": "cfg_1",
+  "createdAt": "2026-09-30T00:00:00.000Z",
+  "desiredRuntimeState": "running",
+  "executionMode": "embedded",
+  "id": "` + testAgentID + `",
+  "name": "a",
+  "servicePrincipalId": "sp_1",
+  "status": "active"
+}
+`
+	for range 20 {
+		out, _, err := runOCC(t, responses, "--namespace", testNamespaceID, "-o", "json", "agent", "get", testAgentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out != want {
+			t.Fatalf("JSON output must list keys in a stable, sorted order:\n%s", out)
+		}
+		out, _, err = runOCC(t, responses, "--namespace", testNamespaceID, "iam", "role", "get", "role_1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, `[{"action":"read","resourceKind":"agent"}]`) {
+			t.Fatalf("table cells must render nested objects with sorted keys:\n%s", out)
+		}
+	}
+}

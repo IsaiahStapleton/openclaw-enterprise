@@ -213,7 +213,7 @@ func (app *application) printItems(value any, collection bool, columns []column)
 func (app *application) printStructured(value any) error {
 	switch app.output {
 	case "json":
-		if err := json.MarshalWrite(app.out, value, jsontext.WithIndent("  ")); err != nil {
+		if err := json.MarshalWrite(app.out, value, jsontext.WithIndent("  "), json.Deterministic(true)); err != nil {
 			return err
 		}
 		_, err := fmt.Fprintln(app.out)
@@ -267,7 +267,7 @@ func displayValue(value any) string {
 	if text, ok := value.(string); ok {
 		return text
 	}
-	encoded, err := json.Marshal(value)
+	encoded, err := json.Marshal(value, json.Deterministic(true))
 	if err != nil {
 		return "-"
 	}
