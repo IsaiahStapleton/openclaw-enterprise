@@ -113,6 +113,7 @@ import {
   driverHasValidLifecycleHooks,
 } from "./driver-contract.ts";
 import {
+  AGENT_NAME_CONFLICT,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -2130,6 +2131,13 @@ export class OpenClawController {
           : "permanent";
       const authorizationDenied =
         error instanceof AuthorizationDeniedError && !(error instanceof DependencyUnavailableError);
+      // Only the shared duplicate-name text passes through; other error messages stay internal.
+      const message =
+        code === "PROVISIONING_REJECTED" &&
+        error instanceof ResourceStateConflictError &&
+        error.message === AGENT_NAME_CONFLICT
+          ? AGENT_NAME_CONFLICT
+          : "Agent provisioning could not complete.";
       await this.mutate(async (state) => {
         const current = await state.provisioning.findByWorkId(claim.idempotencyKey);
         if (current === undefined) {
@@ -2141,14 +2149,10 @@ export class OpenClawController {
             completedPhase: current.completedPhase,
             progress: {
               ...current.progress,
-              error: { code, message: "Agent provisioning could not complete." },
+              error: { code, message },
             },
           },
-          {
-            disposition,
-            code,
-            message: "Agent provisioning could not complete.",
-          },
+          { disposition, code, message },
         );
         await state.audit.append({
           id: `aud_${crypto.randomUUID()}`,
