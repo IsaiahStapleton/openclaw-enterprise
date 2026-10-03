@@ -23,6 +23,17 @@ function detailUrl(fixture, namespaceId, agentId, tab = "credentials") {
   return `${url.pathname}${url.search}`;
 }
 
+// Bound pickers show a placeholder until Secret metadata loads, so poll for the resolved name.
+async function waitForInputValue(locator, expected, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  let value = await locator.inputValue();
+  while (value !== expected && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    value = await locator.inputValue();
+  }
+  assert.equal(value, expected);
+}
+
 function nativeValues(marker, { slack = false } = {}) {
   const values = createHarnessConfiguration("codex", "gpt-5.1");
   return {
@@ -586,8 +597,8 @@ test("bound Slack credential fields show Secret references without reading value
   await appToken.waitFor();
   assert.equal(await appToken.evaluate((node) => node.tagName), "INPUT");
   assert.equal(await botToken.evaluate((node) => node.tagName), "INPUT");
-  assert.equal(await appToken.evaluate((node) => node.value), secretOptionLabel(appSecret));
-  assert.equal(await botToken.evaluate((node) => node.value), secretOptionLabel(botSecret));
+  await waitForInputValue(appToken, secretOptionLabel(appSecret));
+  await waitForInputValue(botToken, secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
   // The Agent sharing panel reads current policy; no credential or policy write occurs.
   assert.deepEqual(
@@ -737,10 +748,7 @@ test("partially bound Slack credentials save only the missing token", async (t) 
 
   await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
-  assert.equal(
-    await page.getByLabel("Slack app token").evaluate((node) => node.value),
-    secretOptionLabel(appSecret),
-  );
+  await waitForInputValue(page.getByLabel("Slack app token"), secretOptionLabel(appSecret));
   assert.equal(await page.getByLabel("Slack bot token").evaluate((node) => node.value), "");
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
   await selectSecret(page, "Slack bot token", botSecret);
