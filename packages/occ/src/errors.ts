@@ -236,7 +236,7 @@ export const NAMESPACE_NAME_CONFLICT =
   "A Namespace with this name already exists. Choose a different name.";
 /** A deleted Namespace's tombstone keeps its name, so a name can be taken by one no longer listed. */
 export const DELETED_NAMESPACE_NAME_CONFLICT =
-  "A deleted Namespace used this name, and a deleted Namespace's name cannot be reused. Choose a different name.";
+  "This name belongs to a deleted Namespace and cannot be reused. Choose a different name.";
 
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {

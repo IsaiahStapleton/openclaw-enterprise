@@ -4781,7 +4781,7 @@ test("two Namespaces become independently ready and deletion tombstones only its
   assert.equal(reused.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(
     reused.body.error.message,
-    "A deleted Namespace used this name, and a deleted Namespace's name cannot be reused. Choose a different name.",
+    "This name belongs to a deleted Namespace and cannot be reused. Choose a different name.",
   );
 });
 

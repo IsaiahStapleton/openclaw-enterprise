@@ -659,7 +659,7 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
     {
       name: "ResourceStateConflictError",
       message:
-        "A deleted Namespace used this name, and a deleted Namespace's name cannot be reused. Choose a different name.",
+        "This name belongs to a deleted Namespace and cannot be reused. Choose a different name.",
     },
   );
 

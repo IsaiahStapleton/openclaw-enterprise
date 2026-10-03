@@ -108,8 +108,8 @@ After teardown completes, the controller retains a durable internal tombstone;
 the Namespace disappears from list results and direct reads return `404`.
 `deleted` is not a public Namespace status. The tombstone keeps the Namespace's
 name reserved: creating a Namespace with that name returns
-`409 RESOURCE_CONFLICT` saying the name belongs to a deleted Namespace. Choose
-a new name; a deleted Namespace's name cannot be reused.
+`409 RESOURCE_CONFLICT` saying the name belongs to a deleted Namespace and
+cannot be reused; choose a new name.
 
 Deleting a tenant preserves its discovered, operator-owned Kubernetes namespace
 and external resources, removing only OCC-owned infrastructure. Driver-owned
