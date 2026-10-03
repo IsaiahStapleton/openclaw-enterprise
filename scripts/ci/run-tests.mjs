@@ -771,6 +771,7 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
 
   await writeSummary(resultsPath, summary);
   logFailures(files);
+  logIssues(allIssues);
   return summary.exitCode;
 }
 
@@ -790,6 +791,16 @@ function logFailures(files) {
         `run-tests: failed ${file.path}${at ? `:${at}` : ""} ${JSON.stringify(name)}${message ? `: ${message}` : ""}${error?.frame ? ` (${oneLine(error.frame)})` : ""}\n`,
       );
     }
+  }
+}
+
+// A lane can fail on runner issues alone, with every test passing: an expected
+// test that did not run, a file that hit the runner timeout, an unexpected skip.
+// Name those in the job log too. Issue messages are built by the runner from
+// manifest entries, paths and test names, never from test output.
+function logIssues(issues) {
+  for (const { code, message, file } of issues) {
+    process.stderr.write(`run-tests: issue ${code}${file ? ` ${file}` : ""}: ${message}\n`);
   }
 }
 
