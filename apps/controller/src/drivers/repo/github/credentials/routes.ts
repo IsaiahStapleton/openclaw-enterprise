@@ -59,7 +59,7 @@ function requestHeaders(head: RequestHead, selected: Route): Readonly<Record<str
   } else {
     headers.accept =
       selected.rawResponse ||
-      (selected.target === "/graphql" && head.headers.accept === nativeGraphqlAccept)
+      (selected.graphql === true && head.headers.accept === nativeGraphqlAccept)
         ? head.headers.accept!
         : "application/vnd.github+json";
     headers["x-github-api-version"] = "2026-03-10";
@@ -112,9 +112,7 @@ function planRequest(
       connectMs: options.limits.connectMs,
     }),
     responsePolicy: dependencies.responsePolicy(git, selected.target, selected.rawResponse),
-    ...(selected.kind === "api" && selected.target === "/graphql"
-      ? { inputPolicy: allowsGraphqlInput }
-      : {}),
+    ...(selected.graphql === true ? { inputPolicy: allowsGraphqlInput } : {}),
   }) as RequestPlan;
 }
 

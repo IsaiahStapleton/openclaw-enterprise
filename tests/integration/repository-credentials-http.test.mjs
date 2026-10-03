@@ -190,16 +190,20 @@ test(
       gateway: { listen: "127.0.0.1:0" },
     });
     const repository = 'repository(owner: "fixture", name: "repository")';
-    for (const query of [
-      `query { ${repository} { tempCloneToken } }`,
-      `query { ${repository} { clone: tempCloneToken } }`,
-      `query { ${repository} { ...Clone } } fragment Clone on Repository { tempCloneToken }`,
+    for (const [target, query] of [
+      ["/graphql", `query { ${repository} { tempCloneToken } }`],
+      ["/graphql", `query { ${repository} { clone: tempCloneToken } }`],
+      [
+        "/graphql",
+        `query { ${repository} { ...Clone } } fragment Clone on Repository { tempCloneToken }`,
+      ],
+      ["/graphql?", `query { ${repository} { tempCloneToken } }`],
     ]) {
-      const refused = await gatewayRequest(fixture, "/graphql", {
+      const refused = await gatewayRequest(fixture, target, {
         method: "POST",
         body: { query },
       });
-      assert.equal(refused.status, 400);
+      assert.equal(refused.status, 400, target);
       assert.doesNotMatch(refused.body, /synthetic-graphql-cloning-credential/);
     }
     assert.deepEqual(fixture.github.trace, []);

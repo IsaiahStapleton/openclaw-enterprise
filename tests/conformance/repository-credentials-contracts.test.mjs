@@ -350,6 +350,8 @@ test("GraphQL input policy refuses clone credential selections hidden by JSON en
     assert.equal(allows(text), false, text);
   }
   assert.equal(bound.plan(head("GET", "/repos/fixture/repository")).inputPolicy, undefined);
+  // An empty query string cannot select another spelling of the GraphQL route.
+  assert.equal(bound.plan(head("POST", "/graphql?")).kind, "denied");
 });
 test("response policy rewrites admitted machine links without changing human content or forwarding credential headers", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);

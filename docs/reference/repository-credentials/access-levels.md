@@ -51,7 +51,7 @@ endpoints, so comment authorization also depends on the provider's token check.
 
 All three levels admit GraphQL. GitHub enforces the token's repository and
 permission grant; OCE does not inspect mutations or node IDs. It refuses only
-requests that select `tempCloneToken`, the provider clone credential.
+request bodies that name `tempCloneToken`, the provider clone credential.
 GraphQL can also return independently public information. Every GraphQL POST
 retains possible-write accounting, including Read-only requests, and uncertain
 mutations are never automatically replayed.

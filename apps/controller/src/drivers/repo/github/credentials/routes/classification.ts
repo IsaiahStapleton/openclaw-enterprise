@@ -7,6 +7,7 @@ export type Route = Readonly<{
   effect: "read" | "write";
   target: string;
   rawResponse?: boolean;
+  graphql?: true;
 }>;
 const resourceNumber = /^[1-9][0-9]{0,14}$/;
 // Native gh 2.100.0 uses this JSON media profile for GraphQL and REST reads.
@@ -46,7 +47,9 @@ function parseTarget(raw: string, limit: number): ParsedTarget | undefined {
   const split = raw.indexOf("?");
   const path = split < 0 ? raw : raw.slice(0, split);
   const query = split < 0 ? "" : raw.slice(split + 1);
+  // A bare "?" would give one route two targets (for example "/graphql?").
   if (
+    (split >= 0 && query === "") ||
     path.includes("%") ||
     path.split("/").some((piece) => piece === "." || piece === "..") ||
     query.includes("?") ||
@@ -280,6 +283,7 @@ function classifyApiRoute(
     effect: head.method === "GET" ? "read" : "write",
     target: raw,
     rawResponse,
+    ...(path === "/graphql" ? { graphql: true as const } : {}),
   };
 }
 
