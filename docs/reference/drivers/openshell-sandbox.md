@@ -361,7 +361,7 @@ becomes `RUNTIME_LOGS_SANDBOX_NOT_FOUND`. See
 
 ## Troubleshooting
 
-Common fail-closed errors include:
+Common errors include:
 
 - `drivers.sandbox requires the bundled Kubernetes Compute Driver.`
 - `The bundled OpenShell drivers.sandbox requires a backend entry with type openshell.`

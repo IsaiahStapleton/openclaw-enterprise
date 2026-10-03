@@ -7552,9 +7552,10 @@ test(
   },
 );
 
-// The OpenShell gateway's admission-limit refusal is the real client error, not a stand-in:
-// it frees up only as completed admissions age out, so it must wait like any other
-// dependency instead of spending the attempt budget.
+// The admission-limit case uses the real OpenShellAdmissionLimitError class, thrown from a
+// stubbed Compute prepareRevision; the gateway wire test proves the client raises it. The
+// limit frees up as completed admissions age out, so it must wait like any other dependency
+// instead of spending the attempt budget.
 for (const { label, failure, code, message } of [
   {
     label: "Kubernetes API",

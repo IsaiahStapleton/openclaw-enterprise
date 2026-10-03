@@ -187,7 +187,7 @@ failure budget.
 
 Actual dependency failures instead use `retry()`, which also returns work to
 `queued` but retains the consumed attempt. Once `OCC_WORKER_MAX_ATTEMPTS` is
-exhausted, the operation becomes `failed_permanent`. A Compute dependency
+exhausted, the operation becomes `failed_permanent`. A Compute or Sandbox dependency
 failure that clears without a change to the revision is deferred like
 convergence instead: the Agent Gateway route refusing or dropping the worker's
 connection while it converges (`AGENT_GATEWAY_UNAVAILABLE`), a Kubernetes API

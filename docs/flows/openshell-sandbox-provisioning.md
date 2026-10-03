@@ -233,7 +233,8 @@ admission limit" message) on any method to `OpenShellAdmissionLimitError`, a
 `TransientDependencyError` with code `SANDBOX_ADMISSION_LIMIT_REACHED`. During
 revision provisioning the worker holds the revision pending without spending
 attempts and fails it with that code if the limit persists at the convergence
-deadline. Other `RESOURCE_EXHAUSTED` refusals, such as the gRPC rate limit or busy
+deadline. Namespace setup and cleanup still retry it as an ordinary failure within
+the attempt budget. Other `RESOURCE_EXHAUSTED` refusals, such as the gRPC rate limit or busy
 admission workers, stay the raw gRPC error and are retried as before. Codex
 requests one unnamed exposure for `APP_SERVER_PORT` and requires its
 `service_urls` entry. Native OpenClaw connects
