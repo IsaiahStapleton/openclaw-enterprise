@@ -11379,7 +11379,7 @@
                           "description": "`revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve."
                         },
                         "withdrawalInProgress": {
-                          "description": "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has run out of attempts; send the withdraw request again to retry it.",
+                          "description": "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it.",
                           "type": "boolean"
                         }
                       },
@@ -11545,7 +11545,7 @@
                           "description": "`revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve."
                         },
                         "withdrawalInProgress": {
-                          "description": "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has run out of attempts; send the withdraw request again to retry it.",
+                          "description": "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it.",
                           "type": "boolean"
                         }
                       },

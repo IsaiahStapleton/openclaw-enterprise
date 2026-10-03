@@ -334,9 +334,9 @@ export interface CredentialWithdrawal {
 
 /**
  * A withdrawal as the API reports it. `withdrawalInProgress` is true while an attempt is queued
- * or running. A `pending` withdrawal without one has run out of attempts: nothing retries it
- * until the withdraw request is sent again (or revision maintenance, where Compute or
- * repository credentials schedule it, queues another attempt).
+ * or running. A `pending` withdrawal without one has no attempt queued (attempts ran out or a
+ * permanent failure ended them): nothing retries it until the withdraw request is sent again,
+ * or revision maintenance, where Compute or repository credentials schedule it, queues one.
  */
 export interface CredentialWithdrawalStatus extends CredentialWithdrawal {
   readonly withdrawalInProgress: boolean;

@@ -5471,6 +5471,8 @@ export class OpenClawController {
         });
       }
       // A pending withdrawal now has an attempt queued or running, either earlier or just now.
+      // Like the read, this reflects the queue at commit: a claim that expired on its last
+      // attempt counts until recoverStale fails it.
       return Object.freeze({ ...withdrawal, withdrawalInProgress: withdrawal.state === "pending" });
     });
   }

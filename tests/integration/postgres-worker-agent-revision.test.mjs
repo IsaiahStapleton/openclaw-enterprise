@@ -3226,6 +3226,8 @@ test(
       request,
     );
     assert.equal(requested.withdrawalInProgress, true);
+    const read = () => fixture.controller.readAgentCredentialWithdrawal(fixture.actor.id, request);
+    assert.equal((await read()).withdrawalInProgress, true);
     const [first] = await withdrawalWork();
     await fixture.work(
       { id: active.id, idempotencyKey: first.idempotency_key },
@@ -3256,6 +3258,7 @@ test(
     await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, request);
     const work = await withdrawalWork();
     assert.equal(work.length, 2);
+    assert.equal((await read()).withdrawalInProgress, true);
     await fixture.work({ id: active.id, idempotencyKey: work[1].idempotency_key }, "succeeded");
     const revoked = await fixture.controller.readAgentCredentialWithdrawal(
       fixture.actor.id,
