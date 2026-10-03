@@ -198,7 +198,7 @@ function renderCard(section, state, provider) {
       element(
         "p",
         { className: "hint" },
-        state.copy.readOnlyCardMessage ?? "Read-only AgentRevision values cannot be edited.",
+        state.copy.readOnlyCardMessage ?? "Values in a deployed version cannot be edited.",
       ),
     );
   } else if (disabledByMode) {
@@ -477,9 +477,9 @@ export function renderChannelSection(
             { className: "muted" },
             readOnly
               ? (copy.readOnlyDescription ??
-                  "These are the viewed AgentRevision’s immutable channel settings.")
+                  "These are the viewed version’s immutable channel settings.")
               : (copy.editableDescription ??
-                  "Save and Disable update only the shared Configuration draft. They do not stop or disable a running Agent or change admitted revisions."),
+                  "Save and Disable update only the shared Configuration draft. They do not stop or disable a running Agent or change deployed versions."),
           ),
         ),
       ),
