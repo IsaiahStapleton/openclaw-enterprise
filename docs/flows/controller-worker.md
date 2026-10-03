@@ -339,7 +339,9 @@ On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, wai
 `worker.stopped`. Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
 work, failure of a still-provisioning Namespace targeted for `ready`, and audit
 evidence for expired claims and exhausted queued work, so final-attempt crashes
-cannot strand provisioning.
+cannot strand provisioning. A deployment whose last claim expires after it
+published its revision gets one more attempt (`ACTIVE_REVISION_RECOVERY`); a
+failed retry keeps the active runtime.
 
 ## Debugging and Verification
 
@@ -386,6 +388,8 @@ cannot strand provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 17:00: Finish published deployments after a last-attempt crash. (fix-recover-active-revision)
 
 - 2026-10-03 16:00: Bound worker queries and restart a stuck run loop. (fix-worker-liveness)
 
