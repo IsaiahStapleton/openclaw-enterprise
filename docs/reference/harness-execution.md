@@ -203,7 +203,7 @@ For level changes, collection, and backend verification, use the
 
 A trusted ComputeDriver can instead declare
 [driver-managed runtime logging](drivers/compute.md#runtime-logging-ownership)
-for new or adopted runtimes; admission then preserves its native configuration.
+for new or adopted runtimes; admission then preserves its native configuration without requiring the Driver to collect logs.
 The following rendering policy applies only to the default platform-owned path.
 
 Compute renders logging from the admitted revision. Kubernetes mounts the

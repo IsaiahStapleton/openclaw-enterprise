@@ -275,7 +275,7 @@ transport and runtime attestation are not implemented.
 Stop and revision retirement inspect both targets and retain durable claims.
 Agent deletion removes its owned claims. Namespace deletion deletes the exact
 managed Gateway namespace and any data namespace the driver created. From an
-adopted data namespace it removes only its exact-owned quota, limit, and three
+adopted data namespace it removes only its exact-owned quota, limit, and
 tenant NetworkPolicies; the namespace, ownership markers, RoleBindings, and
 unrelated resources remain. Neither operation may remove shared OCC
 infrastructure. A missing or foreign

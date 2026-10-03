@@ -97,8 +97,8 @@ Unavailable entries show the reported cause and a recovery link:
 | No recognized reason                                     | Review workspace plugin access without assuming a specific cause.                                   |
 | Unsupported native components or no concrete hosted apps | Check [native limits](#native-mappings-and-limits); changing ChatGPT access cannot add OCE support. |
 
-Catalog membership, visibility, and credentials do not grant access or establish
-native execution or policy enforcement. Startup independently resolves
+Catalog membership grants no access; catalog visibility and credentials do not
+establish native execution or policy enforcement. Startup independently resolves
 selections and still requires the Agent's projected credentials and provider
 access. Unknown configuration options, arbitrary sources or versions, and
 external PluginDriver packages are rejected.
@@ -263,7 +263,7 @@ Identity, integrity, or effective-policy verification failure prevents the
 replacement gateway from starting. A confirmed installation rejection can instead
 disable that optional selection and produce a warning. The previous revision
 record remains stored, but the worker does not restore the old active pointer:
-it retains the candidate pointer and retries, which may resolve a later curated
+it retains the candidate pointer and retries the same requested selections, which may resolve a later curated
 release. This does not promise uninterrupted availability or automatic rollback
 during replacement.
 Codex preparation writes native Codex configuration and the selected-only bridge

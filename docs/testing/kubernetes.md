@@ -25,7 +25,7 @@ See [two-cluster validation](two-cluster-local.md).
 ## Kubernetes HTTP fixture
 
 Requires Docker, k3d, `kubectl`, and the migrated `openclaw_k8s_local` database
-from [PostgreSQL](postgresql.md#postgresql). Create a new disposable cluster; if `oce` already exists,
+from [PostgreSQL](postgresql.md#other-postgresql-suites). Create a new disposable cluster; if `oce` already exists,
 use a new name throughout these commands.
 
 ```sh
@@ -57,7 +57,8 @@ case.
 An imported immutable `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` extends the
 API-plus-worker case through real runtime credential Secret and private-state
 claim deletion. The case uses synthetic, nonfunctional
-fixture credentials and performs no model turn.
+fixture credentials and performs no model turn. Channel runtime needs the
+real-runtime images and credentials below.
 
 The tests require an explicit loopback `k3d-*` context and enforcing
 NetworkPolicies. They create scoped RBAC and resources and use the stock
@@ -161,8 +162,9 @@ Pass `--harness openclaw` for the verification-only
 The development login is `admin@openclaw.local` with
 `openclaw-development-password`. Override it with `OPENCLAW_DEV_EMAIL` or
 `OPENCLAW_DEV_PASSWORD`; the database retains the account, so reset before
-restarting the demo after changing its password. `./scripts/k3d copy
-openclaw-password` copies the Control UI's **Gateway secret**. This separate
+restarting the demo after changing its password. `./scripts/k3d get
+openclaw-control-ui` prints the Control UI URL; `./scripts/k3d copy
+openclaw-password` copies its **Gateway secret**. This separate
 password preserves direct loopback access while OCC workspace files use
 trusted-proxy authentication.
 

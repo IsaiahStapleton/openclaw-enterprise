@@ -133,7 +133,7 @@ node uses when it restarts. Native workers and SandboxDriver Harnesses receive t
 their environment, keep it for restarts, and are replaced to attach the node.
 Installations that enrolled one node per revision enroll a new Agent device once,
 at the first replacement; retiring each earlier revision deletes its node Secret.
-Sessions stay on the private Gateway claim. Selected generated-image bytes return
+Sessions stay on the private Gateway claim, which the Harness never receives. Selected generated-image bytes return
 through the Codex remote-media reader; there is no shared image mount. Each image
 initializes its own bundled/plugin assets instead of mounting shared Skill trees.
 Embedded Agents use the private claim without creating this Harness claim.
@@ -262,7 +262,7 @@ The Agent's required [harnessAuth binding](../../agents.md#harness-authenticatio
 selects the model credential. API keys use the selected OCC Secret Driver's
 exact reference; account tokens use an account-owned CP source. Compute selects
 the explicit login mode during workload rendering. Only the combined embedded gateway/Harness or dedicated
-Codex consumer receives it; a dedicated gateway never receives model auth. A
+Codex consumer receives the model credential; a dedicated gateway never receives model auth. A
 [credential source](../../credential-sources.md) binding is the exception: Compute
 renders no model Secret and hands the Credential Gateway's attachments to the
 OpenShell Sandbox instead.
