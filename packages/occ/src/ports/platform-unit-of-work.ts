@@ -111,6 +111,7 @@ export function bindPlatformUnitOfWork(
       "deleteRole",
       "listAccessBindings",
       "getAccessBinding",
+      "listRestrictionsTargeting",
       "createAccessBinding",
       "deleteAccessBinding",
     ]),

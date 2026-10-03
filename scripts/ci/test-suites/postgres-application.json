@@ -180,7 +180,7 @@
     {
       "path": "tests/integration/postgres-agent-deletion-audit.test.mjs",
       "expectedTests": [
-        "Agent delete audit lists every AccessBinding the deletion finalizer removes"
+        "Agent delete audit lists every AccessBinding and Restriction the deletion finalizer removes"
       ]
     },
     {

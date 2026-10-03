@@ -43,7 +43,7 @@ async function ensureBootstrap(t) {
 }
 
 test(
-  "Agent delete audit lists every AccessBinding the deletion finalizer removes",
+  "Agent delete audit lists every AccessBinding and Restriction the deletion finalizer removes",
   requiresPostgres,
   async (t) => {
     await ensureBootstrap(t);
@@ -213,6 +213,61 @@ test(
       false,
     );
 
+    // OCC has no API that writes Restrictions (they come from the IAM seed), so insert them
+    // directly: one on the Agent and one on its revision in the Namespace, one on the Agent
+    // at Installation scope, and a kind-wide one the finalizer keeps. The application role
+    // cannot delete Restrictions, so they stay; each names only this test's Namespace or Agent.
+    const restrict = async (namespaceId, resourceKind, resourceId) => {
+      const id = `restriction_${randomUUID()}`;
+      await pool.query(
+        `INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind, resource_id)
+         VALUES ($1, $2, 'read_logs', $3, $4)`,
+        [id, namespaceId, resourceKind, resourceId],
+      );
+      return id;
+    };
+    await restrict(namespace.id, "agent", agent.id);
+    await restrict(namespace.id, "agent_revision", revision.id);
+    await restrict(null, "agent", agent.id);
+    const unrelatedRestriction = await restrict(namespace.id, "agent", null);
+
+    // The Restrictions the deletion finalizer deletes, queried with the exact predicate of
+    // occ.finalize_agent_deletion (migrations/0035). A migration that changes that DELETE
+    // must update this query and restrictionsRemovedWithAgent together.
+    const finalizerRestrictions = async () =>
+      (
+        await pool.query(
+          `SELECT restriction.id, restriction.namespace_id, restriction.action,
+                  restriction.resource_kind, restriction.resource_id, restriction.effect
+           FROM occ.iam_restrictions AS restriction
+           WHERE (restriction.resource_kind = 'agent' AND restriction.resource_id = $2)
+             OR (restriction.resource_kind = 'agent_revision' AND restriction.resource_id IN (
+               SELECT revision.id FROM occ.agent_revisions AS revision
+               WHERE revision.namespace_id = $1 AND revision.agent_id = $2
+             ))`,
+          [namespace.id, agent.id],
+        )
+      ).rows
+        .map((row) => ({
+          id: row.id,
+          ...(row.namespace_id === null ? {} : { namespaceId: row.namespace_id }),
+          action: row.action,
+          resourceKind: row.resource_kind,
+          ...(row.resource_id === null ? {} : { resourceId: row.resource_id }),
+          effect: row.effect,
+        }))
+        .sort(byId);
+    const expectedRestrictions = await finalizerRestrictions();
+    assert.equal(expectedRestrictions.length, 3);
+    assert.equal(
+      expectedRestrictions.some((restriction) => restriction.namespaceId === undefined),
+      true,
+    );
+    assert.equal(
+      expectedRestrictions.some((restriction) => restriction.id === unrelatedRestriction),
+      false,
+    );
+
     const deleting = await request("DELETE", `/namespaces/${namespace.id}/agents/${agent.id}`);
     assert.equal(deleting.status, 202, deleting.body);
     const event = await pool.query(
@@ -224,6 +279,10 @@ test(
     assert.deepEqual(
       [...event.rows[0].details.accessBindingsRemovedOnCompletion].sort(byId),
       expected,
+    );
+    assert.deepEqual(
+      [...event.rows[0].details.restrictionsRemovedOnCompletion].sort(byId),
+      expectedRestrictions,
     );
 
     // The deleting Agent admits no new binding the list would miss.
@@ -254,5 +313,6 @@ test(
       assert.equal(refused.json().error.details[0].path, path, resourceKind);
     }
     assert.deepEqual(await finalizerTargets(), expected);
+    assert.deepEqual(await finalizerRestrictions(), expectedRestrictions);
   },
 );
