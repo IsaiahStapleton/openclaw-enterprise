@@ -897,6 +897,36 @@ export async function accessBindingsTargeting(
 }
 
 /**
+ * Lists the AccessBindings that completing an Agent's deletion removes: those that target
+ * the Agent or one of its AgentRevisions, and those whose subject is the Agent's
+ * ServicePrincipal (the same three groups the deletion finalizer deletes). A deleting
+ * Agent refuses new bindings of each kind, so the list is final unless a binding is
+ * deleted explicitly first.
+ */
+export async function accessBindingsRemovedWithAgent(
+  state: Pick<PlatformReadView, "iamPolicy" | "revisions">,
+  agent: Pick<Agent, "namespaceId" | "id" | "servicePrincipalId">,
+): Promise<readonly RemovedAccessBinding[]> {
+  const revisionIds = new Set(
+    (await state.revisions.listRevisions(agent.namespaceId, agent.id)).map(
+      (revision) => revision.id,
+    ),
+  );
+  return Object.freeze(
+    (await state.iamPolicy.listAccessBindings(agent.namespaceId))
+      .filter(
+        (binding) =>
+          (binding.subjectKind === "identity" && binding.subjectId === agent.servicePrincipalId) ||
+          (binding.resourceKind === "agent" && binding.resourceId === agent.id) ||
+          (binding.resourceKind === "agent_revision" &&
+            binding.resourceId !== undefined &&
+            revisionIds.has(binding.resourceId)),
+      )
+      .map(removedAccessBinding),
+  );
+}
+
+/**
  * Removes a deleted Namespace's own policy (its AccessBindings, then its Roles) in the
  * tombstoning transaction, so no grant outlives the Namespace. Returns what was removed
  * for the lifecycle audit event.

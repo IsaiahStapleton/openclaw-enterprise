@@ -2295,10 +2295,16 @@ function repositories(
     },
   };
 
-  const agentRevisionExists = (namespaceId: string, revisionId: string): boolean =>
+  // A revision of a deleting Agent is removed with it, so it admits no new binding.
+  const liveAgentRevisionExists = (namespaceId: string, revisionId: string): boolean =>
     Array.from(snapshot.revisions.values())
       .flat()
-      .some((revision) => revision.namespaceId === namespaceId && revision.id === revisionId);
+      .some(
+        (revision) =>
+          revision.namespaceId === namespaceId &&
+          revision.id === revisionId &&
+          snapshot.agents.get(agentKey(namespaceId, revision.agentId))?.status === "active",
+      );
 
   const managedPolicyResourceExists = async (
     namespaceId: string,
@@ -2314,7 +2320,7 @@ function repositories(
       return (await agents.findAgent(namespaceId, resourceId))?.status === "active";
     }
     if (resourceKind === "agent_revision") {
-      return agentRevisionExists(namespaceId, resourceId);
+      return liveAgentRevisionExists(namespaceId, resourceId);
     }
     if (resourceKind === "configuration") {
       return (await configurations.findConfiguration(namespaceId, resourceId)) !== undefined;
@@ -2339,6 +2345,7 @@ function repositories(
       (agent) =>
         agent.namespaceId === namespaceId &&
         agent.servicePrincipalId === identityId &&
+        agent.status === "active" &&
         snapshot.namespaces.get(namespaceId)?.deletedAt === undefined,
     );
 
