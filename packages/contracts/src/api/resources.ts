@@ -694,6 +694,10 @@ export const CredentialWithdrawalSchema = Type.Object(
       }),
     ),
     lastAttemptAt: Type.Optional(Type.String({ format: "date-time" })),
+    withdrawalInProgress: Type.Boolean({
+      description:
+        "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it.",
+    }),
   },
   { additionalProperties: false },
 );

@@ -233,7 +233,7 @@ worker lifecycle and preservation guarantees.
 Open the Agent and find **Delete Agent** below the detail tabs. In the
 confirmation dialog, select **Permanently delete Agent**. This requires `delete`
 permission on that Agent; being able to read or operate it does not grant
-deletion. Deletion is permanent: it removes the Agent, its revision history, and its workspace data.
+deletion. Deletion is permanent: it removes the Agent, its version history, and its workspace data.
 Namespace-owned Configurations and Secrets remain. See the [Agent deletion
 reference](agents.md#deletion) for the complete cleanup behavior.
 

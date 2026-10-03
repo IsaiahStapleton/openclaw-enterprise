@@ -264,7 +264,7 @@ test("Diagnostics explain a missing Slack channel and keep the recorded failure 
   await login(page, fixture, url.pathname + url.search);
   await page.getByRole("heading", { name: "Version v1" }).waitFor();
   const observations = page.locator(".version-diagnostics");
-  await observations.getByText(/Gateway checks cover only the Slack channel/).waitFor();
+  await observations.getByText(/gateway checks cover only the Slack channel/).waitFor();
   await observations.getByRole("button", { name: "Run diagnostics for this version" }).click();
   await observations.getByText("gateway / authentication").waitFor();
   await observations.getByText(/NOT_CONFIGURED means this version has no Slack channel/).waitFor();

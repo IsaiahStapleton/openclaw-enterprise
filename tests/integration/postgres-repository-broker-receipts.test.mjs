@@ -402,6 +402,8 @@ test(
           bound: true,
           shutdownGraceMs: 100,
           namespaceId,
+          // A free slot lets the later admission open and then meet the lost journal.
+          ...(mode === "unavailable" ? { sessions: 2 } : {}),
         });
         const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
         context.after(() => pool.end());

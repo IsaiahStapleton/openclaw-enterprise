@@ -187,6 +187,19 @@ export class AgentProvisioningValidationError extends ScopeViolationError {
   }
 }
 
+/**
+ * Builds a message that names a Configuration field. The error contract caps messages at
+ * 256 characters; a long provider name shortens the path. The cut counts code points, so it
+ * never leaves half of a surrogate pair.
+ */
+function configurationFieldMessage(path: string, message: (path: string) => string): string {
+  const budget = 256 - message("").length;
+  const characters = Array.from(path);
+  return message(
+    characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
+  );
+}
+
 const modelCredentialMessage = (path: string): string =>
   `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
 
@@ -198,16 +211,29 @@ export class ModelCredentialValueError extends Error {
   readonly path: string;
 
   constructor(path: string) {
-    // The error contract caps messages at 256 characters; a long provider name shortens the
-    // path. The cut counts code points, so it never leaves half of a surrogate pair.
-    const budget = 256 - modelCredentialMessage("").length;
-    const characters = Array.from(path);
-    super(
-      modelCredentialMessage(
-        characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
-      ),
-    );
+    super(configurationFieldMessage(path, modelCredentialMessage));
     this.name = "ModelCredentialValueError";
+    this.path = path;
+  }
+}
+
+const modelProviderSettingMessages = {
+  baseUrl: (path: string): string =>
+    `Configuration field ${path} must be an absolute http or https URL.`,
+  api: (path: string): string =>
+    `Configuration field ${path} must name a model API the runtime supports, such as openai-responses, openai-completions or anthropic-messages.`,
+} as const;
+
+/**
+ * A model provider `baseUrl` or `api` in Configuration values that the runtime cannot
+ * use. The message names the field's JSON pointer and the expected form, never the value.
+ */
+export class ModelProviderSettingError extends Error {
+  readonly path: string;
+
+  constructor(path: string, setting: keyof typeof modelProviderSettingMessages) {
+    super(configurationFieldMessage(path, modelProviderSettingMessages[setting]));
+    this.name = "ModelProviderSettingError";
     this.path = path;
   }
 }
@@ -262,11 +288,21 @@ export class AgentDeletingError extends ResourceConflictError {
 export class NamespaceNotEmptyError extends ResourceConflictError {
   /** Public resource kinds that still occupy the Namespace, such as "Presets". */
   readonly contents: readonly string[];
+  /** IDs of the remaining resources of each kind, so an operator can delete them. */
+  readonly ids: Readonly<Record<string, readonly string[]>>;
 
-  constructor(contents: readonly string[] = []) {
+  constructor(
+    contents: readonly string[] = [],
+    ids: Readonly<Record<string, readonly string[]>> = {},
+  ) {
     super("The Namespace must be empty before deletion.");
     this.name = "NamespaceNotEmptyError";
     this.contents = Object.freeze([...contents]);
+    this.ids = Object.freeze(
+      Object.fromEntries(
+        Object.entries(ids).map(([kind, list]) => [kind, Object.freeze([...list])]),
+      ),
+    );
   }
 }
 
@@ -281,7 +317,7 @@ export class NamespaceNotReadyError extends ResourceConflictError {
 export class NativeWorkerSupportError extends Error {
   constructor() {
     super(
-      "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See docs/reference/harness-execution.md#native-worker-support.",
+      "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See https://docs-enterprise.openclaw.org/reference/harness-execution/#native-worker-support",
     );
     this.name = "NativeWorkerSupportError";
   }
@@ -414,7 +450,7 @@ export class IAMRoleInUseError extends ResourceConflictError {
 export class CredentialGatewayNotConfiguredError extends Error {
   constructor() {
     super(
-      "This Installation has no Credential Gateway, so credential sources are unavailable. An administrator must select the OpenShell Credential Gateway Driver; see docs/reference/credential-sources.md.",
+      "This Installation has no Credential Gateway, so credential sources are unavailable. An administrator must select the OpenShell Credential Gateway Driver; see https://docs-enterprise.openclaw.org/reference/credential-sources/",
     );
     this.name = "CredentialGatewayNotConfiguredError";
   }

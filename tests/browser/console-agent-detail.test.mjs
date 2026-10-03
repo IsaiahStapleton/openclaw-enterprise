@@ -158,7 +158,7 @@ test("Agent detail separates the current version, viewed version, and latest dep
     .waitFor();
   const observations = page.locator(".version-diagnostics");
   await observations
-    .getByText(/For Kubernetes Compute, Gateway checks cover only the Slack channel/)
+    .getByText(/For Kubernetes Compute, gateway checks cover only the Slack channel/)
     .waitFor();
   await observations
     .getByText("No current observation has been requested for this version.")
@@ -655,7 +655,7 @@ test("Gateway password access saves the generated reference without changing adm
   const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
   await login(page, fixture, url.pathname + url.search);
   requests.length = 0;
-  const enable = page.getByRole("button", { name: "Enable Gateway password access", exact: true });
+  const enable = page.getByRole("button", { name: "Enable gateway password access", exact: true });
   await enable.click();
   const expected = structuredClone(values);
   expected.gateway.auth.password = {
@@ -2138,7 +2138,7 @@ test("Agent delete confirmation can be canceled without sending a write request"
 
   await page.getByRole("button", { name: "Delete Agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Cancel Candidate?" });
-  await dialog.getByText(/Agent, its revision history, and its workspace data/i).waitFor();
+  await dialog.getByText(/Agent, its version history, and its workspace data/i).waitFor();
   // Deletion keeps the Agent's Configuration and model credential Secret, which the console
   // cannot list or delete, so the dialog gives the commands that remove them by ID.
   assert.equal(agent.harnessAuth.method, "api_key");
@@ -2184,7 +2184,7 @@ test("Agent delete confirmation sends the real delete API and leaves visible que
 
   await page.getByRole("button", { name: "Delete Agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Success Candidate?" });
-  await dialog.getByText(/Agent, its revision history, and its workspace data/i).waitFor();
+  await dialog.getByText(/Agent, its version history, and its workspace data/i).waitFor();
   const deleteResponse = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}` &&
@@ -2259,7 +2259,7 @@ test("Agent delete uncertainty requires refresh before another destructive reque
 
   await page.getByRole("button", { name: "Delete Agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Uncertain Candidate?" });
-  await dialog.getByText(/Agent, its revision history, and its workspace data/i).waitFor();
+  await dialog.getByText(/Agent, its version history, and its workspace data/i).waitFor();
   await dialog.getByRole("button", { name: "Permanently delete Agent" }).click();
 
   await page.getByText("Outcome unknown. Deletion may have started.").waitFor();
@@ -2424,7 +2424,7 @@ test("Agent delete denial keeps the Agent visible with permission feedback", asy
 
   await page.getByRole("button", { name: "Delete Agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Denied Candidate?" });
-  await dialog.getByText(/Agent, its revision history, and its workspace data/i).waitFor();
+  await dialog.getByText(/Agent, its version history, and its workspace data/i).waitFor();
   const denied = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}` &&
@@ -2614,7 +2614,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
   await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
   await page.getByRole("heading", { name: "Native admin Agent" }).waitFor();
-  await page.getByText("Native admin UI is available for this Agent’s active revision.").waitFor();
+  await page.getByText("Native admin UI is available for this Agent’s current version.").waitFor();
   const expectedAccess = await fixture.request(
     "GET",
     `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`,
@@ -2628,7 +2628,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
 
   // Viewing an older configuration snapshot must still open the current active gateway.
   await page.getByLabel("Available versions").selectOption(historicalRevisionId);
-  await page.getByText("Native admin UI is available for this Agent’s active revision.").waitFor();
+  await page.getByText("Native admin UI is available for this Agent’s current version.").waitFor();
   assertRevisionUrl(page, historicalRevisionId);
   assert.equal(
     await page.getByRole("link", { name: "Open native admin UI" }).getAttribute("href"),
@@ -3185,7 +3185,7 @@ test("Agent tabs replace only their content and preserve surrounding panels and 
   await page.getByRole("button", { name: "Workspace files", exact: true }).click();
   await page
     .getByText(
-      "Workspace files require a deployed Agent with an active revision and a reachable gateway.",
+      "Workspace files require a deployed Agent with a current version and a reachable gateway.",
     )
     .waitFor();
   assert.equal(await secretElement.evaluate((node) => node.isConnected), false);

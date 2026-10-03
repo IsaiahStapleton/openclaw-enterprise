@@ -11,13 +11,12 @@ The [local walkthrough](../../guides/first-agent.md) creates a separate Agent.
 
 ## Create an Agent
 
-Embedded and Dedicated starters enable native Control UI at
-`http://127.0.0.1:18789` and `http://localhost:18789`. Compute renders gateway
-authentication from Installation trust; starters supply no gateway token.
-Do not expose the gateway publicly. **Open native admin UI** requires
-[native admin setup](../../guides/deploy/native-admin.md): trusted-proxy authentication
-and the exact Agent HTTPS origin. Loopback origins alone are insufficient.
-Presets and edited Configuration JSON retain their settings.
+Starters enable native Control UI at `http://127.0.0.1:18789` and
+`http://localhost:18789`. Compute renders gateway authentication from Installation
+trust; starters supply no token. Do not expose the gateway publicly.
+**Open native admin UI** requires [native admin setup](../../guides/deploy/native-admin.md):
+trusted-proxy authentication and the exact Agent HTTPS origin. Loopback origins alone
+are insufficient. Presets and edited Configuration JSON retain their settings.
 
 Experimental Dedicated OpenClaw requires [native worker support](../harness-execution.md#native-worker-support)
 and full-facet Sandbox provisioning. The pinned runtime lacks this support;
@@ -29,7 +28,8 @@ still block initial workspace files and Secret-backed environment projection.
    **Create Agent**.
 2. Choose a [Preset](../presets.md), fill its variables, and select **Use Preset**.
    Review defaults and choose an existing or new model Secret.
-   Select **Start without Preset** for standard defaults.
+   **Start with default Preset** loads `default-codex`; **Start without Preset**
+   skips Presets.
 3. Enter a unique name within the Namespace. Choose **Provider**, then
    **Harness**. OpenAI offers **Codex** by default and **OpenClaw**;
    Anthropic offers only **OpenClaw**. **Execution mode** is Dedicated for Codex,
@@ -79,11 +79,10 @@ still block initial workspace files and Secret-backed environment projection.
    [workspace editor](../console.md#edit-workspace-files). Pending inputs have no
    update API; see [workspace recovery](../../guides/topics/workspace-files.md#set-files-when-creating-an-agent).
 
-Before saving, Preset variables and forms survive navigation; passwords clear.
-Leaving a form started without a Preset discards its unsaved state. Saved Agents and
-Secrets remain. **Start over** confirms discard. Reload, page exit, and sign-out
-clear local drafts. After saving begins, navigation does not retain partial-save
-or uncertain-outcome form state; follow save recovery below.
+Before saving, selected Preset forms keep variables across Back/Forward; passwords
+clear. Leaving a default or no-Preset form discards unsaved state. Saved Agents and Secrets remain. **Start over** confirms discard.
+Reload, page exit, and sign-out clear local drafts. Once saving begins, navigation
+does not retain partial-save or uncertain-outcome state; follow save recovery below.
 
 For Codex plugins, open **Configure plugins**. With the
 [OpenAI curated catalog](../drivers/plugin-bundled.md#selection-and-catalogs),
@@ -93,8 +92,8 @@ inventory and account access are unknown. In hosted mode, select **Service Accou
 (optional)**. **Previous page** and **Next page** fetch hosted pages; **Filter this
 page** filters locally. PAT catalog search is unavailable.
 Select a plugin to load tools, then **Add**. Use toggles and **Tool policy** for
-overrides. **Configured plugins** includes selections from other pages. **Done**
-closes the modal; **Create Agent** saves changes.
+overrides. **Configured plugins** includes selections from other pages. **Done** closes the modal;
+**Create Agent** saves changes.
 
 [Discovery](../../flows/agent-plugins.md#credential-scoped-discovery) requires
 permission to use any selected Secret. The server reads its value without returning
@@ -113,8 +112,8 @@ Presets fix the provider, including JSON edits; saved service account tokens als
 OpenClaw Presets retain their configured Harness independently of execution mode.
 Without model runtime policy, Presets keep the default Harness.
 Mode changes preserve provider transport settings.
-Operator-managed credentials fix OpenClaw across provider changes. Start without a
-Preset to change these choices, or edit authentication later in **Credentials**.
+Operator-managed credentials fix OpenClaw across provider changes. Start with
+`default-codex` to change these choices, or edit authentication later in **Credentials**.
 
 Provider changes reset Harness, credential, and model; authentication changes
 reset credential/model. Selecting OpenClaw clears an unsaved PAT and model and
@@ -180,7 +179,8 @@ merges, and the API contract. Edit saved drafts in **Create new version** >
 navigating away; returning to the tab can refresh the session and discard them.
 An interrupted save may still complete; inspect the saved draft before retrying.
 
-Failed rediscovery and navigation retain unsaved repository choices.
+Failed rediscovery retains unsaved repository choices for retry and across
+navigation in explicitly selected Preset forms.
 **Create Agent** stays blocked until discovery succeeds and filters choices against
 current policy. **Start over** discards selections.
 
@@ -234,11 +234,10 @@ approval policy; review both before demonstrating edits.
 
 ## Initial runtime credentials
 
-Select model authentication and bind any Slack tokens as Namespace Secrets.
-When Compute requires generated credentials, OCC creates missing transport
-credentials before first revision admission. Supported Dedicated Agent creation
-does so during provisioning. Neither path creates the selected `harnessAuth`
-model credential or channel tokens.
+Select model authentication and bind Slack tokens as Namespace Secrets. When
+Compute requires them, OCC creates missing transport credentials before first
+revision admission; supported Dedicated provisioning does so during creation.
+Neither path creates the selected `harnessAuth` model credential or channel tokens.
 
 The Kubernetes Driver generates an app-server token and local gateway password.
 Gateway authentication is trusted-proxy only. The password is projected only

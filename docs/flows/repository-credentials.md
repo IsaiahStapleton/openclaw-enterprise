@@ -104,7 +104,9 @@ Admission IDs bind the complete request: platform Namespace, repository referenc
 normalized profile, expected grant and absolute deadline. Registry mode requires
 this binding and independently resolves its fingerprint. A worker-owned private
 journal reserves the exact attempt before bearer delivery; recovery durably fences
-a missing admission. Known nondelivery closes the session. Reconciliation cannot
+a missing admission. The broker opens the session before reserving, so a capacity
+or shutdown refusal leaves no receipt and the same admission can retry or be
+fenced. Known nondelivery closes the session. Reconciliation cannot
 recover a bearer, change its binding or replay provider work.
 
 Factory failure or an invalid binding closes construction admission before
@@ -220,7 +222,9 @@ credential. Rejected material retains its cleanup owner.
 Its bounded credential transport,
 `apps/controller/src/drivers/repo/github/credentials/provider-transport.ts:createProviderTransport`,
 uses `apps/controller/src/drivers/repo/github/credentials/provider-transport/request.ts:sendProviderRequest`
-to dispatch and join the actual request close event. Opaque scope freezes
+to dispatch and join the actual request close event. It latches dispatch, after
+rechecking admission, only when TCP connects, so DNS and connection-refused
+failures are definite and only later failures are uncertain. Opaque scope freezes
 installation, repository and profile. The adapter can issue that scope or revoke
 a token, never supply arbitrary targets, bodies or headers. After authentication
 preparation, a synchronous gate rechecks admission, registers cancellation and

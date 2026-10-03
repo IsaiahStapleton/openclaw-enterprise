@@ -89,6 +89,11 @@ export function deploymentProgressForWork(
       code = attempt.code;
       message = "The previous worker claim expired. Reconciliation will resume.";
       break;
+    case "ACTIVE_REVISION_RECOVERY":
+      code = attempt.code;
+      message =
+        "The previous worker claim expired after this version was published. The controller will finish activating it.";
+      break;
   }
   return Object.freeze({
     lastAttempt:

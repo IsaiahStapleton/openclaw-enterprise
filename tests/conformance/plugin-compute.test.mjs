@@ -67,8 +67,8 @@ function pluginAppServerToken(baseToken, revisionId, startupId) {
     .digest("hex");
 }
 
-async function waitForCondition(description, condition) {
-  const deadline = Date.now() + 1_000;
+async function waitForCondition(description, condition, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const result = await condition();
     if (result !== undefined && result !== false) {
@@ -3754,6 +3754,7 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
     },
     peerAvailable: true,
     serving: true,
+    readinessProbes: [],
     children: [],
     exits: [],
     intervals: [],
@@ -3800,7 +3801,9 @@ async function startCodexGatewaySupervisor(t, { bindingDeviceId } = {}) {
   const gatewayPort = await listen((request, response) => {
     assert.equal(request.url, "/readyz");
     const live = fixture.children.at(-1);
-    response.writeHead(fixture.serving && live?.exited === undefined ? 200 : 503).end();
+    const status = fixture.serving && live?.exited === undefined ? 200 : 503;
+    fixture.readinessProbes.push({ child: fixture.children.length, status });
+    response.writeHead(status).end();
   });
   fixture.gatewayPort = gatewayPort;
   const sandbox = {
@@ -3970,8 +3973,15 @@ test("Codex gateway supervisor respawns OpenClaw in place for a changed Harness 
     second.config.plugins.entries.codex.config.codexPlugins.plugins.linear.enabled,
     true,
   );
-  // Spawned but not yet serving: still unready.
-  await new Promise((resolve) => setTimeout(resolve, 700));
+  // Spawned but not yet serving: still unready. The second refused probe shows
+  // that the supervisor handled the first one and kept waiting.
+  await waitForCondition(
+    "two refused readiness probes of the respawned Gateway",
+    () =>
+      gateway.readinessProbes.filter(({ child, status }) => child === 2 && status === 503).length >=
+      2,
+    10_000,
+  );
   assert.equal(gateway.status().phase, "starting");
 
   gateway.serving = true;

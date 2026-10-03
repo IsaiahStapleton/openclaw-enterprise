@@ -372,6 +372,7 @@ test(
     assert.deepEqual(presets.data.map(({ name }) => name).sort(), [
       "Standard Codex",
       "Standard OpenClaw",
+      "default-codex",
     ]);
     const catalog = await request(`/namespaces/${namespace.id}/agents/plugins`, {
       method: "POST",

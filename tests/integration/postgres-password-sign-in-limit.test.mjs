@@ -3,6 +3,7 @@ import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
+import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
   bootstrapProductionInstallation,
   composeProductionSignIn,
@@ -21,6 +22,11 @@ const ingress = "10.0.0.9";
 const wrongPassword = "wrong-guess-password";
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+
+// The production slow lane with its floor capped at 2 s instead of 8 s. Every paced attempt
+// waits its floor in real time, so the cap sets this suite's length; the 1 s first floor,
+// the doubling, the slots and the per-minute budgets stay the production values.
+const slowLane = { floorMs: passwordFailureBudget.slow.floorMs, maxFloorMs: 2000 };
 
 // The default install (no external provider), composed twice over one database: behind a
 // trusted ingress, where admission keys on the resolved client address and the email, and
@@ -52,6 +58,7 @@ test(
       settings: { ...defaultInstallSettings, OCC_AUTH_TRUSTED_PROXY_CIDRS: "10.0.0.0/24" },
       secrets,
       logger: proxiedLog.logger,
+      passwordSlowLaneFloors: slowLane,
     });
     const plainLog = memoryLogger();
     plainApp = await composeProductionSignIn(t, {
@@ -59,6 +66,7 @@ test(
       settings: { ...defaultInstallSettings },
       secrets,
       logger: plainLog.logger,
+      passwordSlowLaneFloors: slowLane,
     });
     // Without a trusted proxy every browser reaches the API from the ingress address.
     const plainSignIn = (account) =>
@@ -555,7 +563,7 @@ test(
           assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
         }
         // Strangers hold both of the email's slow-lane slots and queue behind them; each
-        // holds its slot for a floor of 1 s up to 8 s.
+        // holds its slot for a floor of 1 s up to the cap.
         const flood = Array.from({ length: 4 }, () =>
           plainSignIn({ ...knownAdmin, password: wrongPassword }),
         );
@@ -599,9 +607,9 @@ test(
           401,
         );
       }
-      // Exhausted client: its refusals are paced by a floor that doubles up to 8 s. Warm it
-      // to the cap, then ordinary, unknown and wrong administrator attempts all wait out the
-      // same floor and return the same 429.
+      // Exhausted client: its refusals are paced by a floor that doubles up to the cap. Warm
+      // it to the cap, then ordinary, unknown and wrong administrator attempts all wait out
+      // the same floor, no longer, and return the same 429.
       const warmUp = await Promise.all(
         [0, 1, 2].map((index) =>
           signIn(client, { email: `warm-${index}@example.test`, password: wrongPassword }),
@@ -626,7 +634,14 @@ test(
         }),
       );
       const elapsed = refusals.map((refusal) => refusal.elapsed);
-      assert.ok(Math.min(...elapsed) >= 7990, `refusal floor: ${elapsed.join(", ")}`);
+      assert.ok(
+        Math.min(...elapsed) >= slowLane.maxFloorMs - 10,
+        `refusal floor: ${elapsed.join(", ")}`,
+      );
+      assert.ok(
+        Math.max(...elapsed) < slowLane.maxFloorMs + 1000,
+        `refusal cap: ${elapsed.join(", ")}`,
+      );
       assert.ok(Math.max(...elapsed) - Math.min(...elapsed) < 400, `spread: ${elapsed.join(", ")}`);
       for (const { retryAfter } of refusals) {
         assert.ok(Number(retryAfter) >= 1 && Number(retryAfter) <= 60, `Retry-After ${retryAfter}`);

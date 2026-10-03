@@ -663,7 +663,7 @@ function createVersionDiagnosticsPanel(context, path, revisionId, recordedStatus
       element(
         "p",
         { className: "muted" },
-        "For Kubernetes Compute, Gateway checks cover only the Slack channel: its configuration, authentication, and connectivity. They do not test model credentials or run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
+        "For Kubernetes Compute, gateway checks cover only the Slack channel: its configuration, authentication, and connectivity. They do not test model credentials or run a model turn. Pod status, restarts, Events and container output are on this version's Logs tab.",
       ),
       ...(error
         ? [
@@ -2360,7 +2360,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         revision.configurationId === snapshot.id &&
         revision.configurationGeneration === snapshot.generation,
     );
-    const enableGatewayPassword = button("Enable Gateway password access", () => {
+    const enableGatewayPassword = button("Enable gateway password access", () => {
       // Stage the native reference through the same draft and save checks as JSON edits.
       // The Compute Driver delivers the generated value only after deployment.
       editor.value = JSON.stringify(
@@ -2554,7 +2554,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
               ? gatewayPasswordRevision
                 ? `Gateway password access is enabled in the saved Configuration and included in v${gatewayPasswordRevision.revision}.`
                 : "Gateway password access is enabled in the saved Configuration. Deploy a new version to apply it."
-              : "Use generated credentials for direct Gateway password access. Enable access, save Configuration, then deploy a new version.",
+              : "Use generated credentials for direct gateway password access. Enable access, save Configuration, then deploy a new version.",
           ),
           element(
             "div",
