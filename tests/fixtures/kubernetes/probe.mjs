@@ -17,6 +17,19 @@ function connectTimeout(message) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
 
+// Resolve before connecting so the connect timer covers only the connection:
+// a slow or failed lookup is a probe error, never a denial.
+async function resolveHost(host) {
+  let timer;
+  const { address } = await Promise.race([
+    lookup(host),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("DNS lookup timed out")), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  return address;
+}
+
 async function resolveTcp() {
   const question = Buffer.concat([
     ...hostname
@@ -27,8 +40,9 @@ async function resolveTcp() {
   const query = Buffer.concat([Buffer.from([0x53, 0x53, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]), question]);
   const length = Buffer.alloc(2);
   length.writeUInt16BE(query.length);
+  const address = await resolveHost(target);
   const response = await new Promise((resolve, reject) => {
-    const socket = createConnection({ host: target, port: Number(port) });
+    const socket = createConnection({ host: address, port: Number(port) });
     let received = Buffer.alloc(0);
     let connected = false;
     socket.setTimeout(timeoutMs, () =>
@@ -100,8 +114,9 @@ try {
       operation === "dns-udp" ? (await resolver.resolve4(hostname))[0] : await resolveTcp();
     process.stdout.write(JSON.stringify({ address }) + "\n");
   } else if (operation === "tcp") {
+    const address = await resolveHost(target);
     await new Promise((resolve, reject) => {
-      const socket = createConnection({ host: target, port: Number(port) });
+      const socket = createConnection({ host: address, port: Number(port) });
       socket.setTimeout(timeoutMs, () => socket.destroy(connectTimeout("connection timed out")));
       socket.once("connect", () => {
         socket.end();
