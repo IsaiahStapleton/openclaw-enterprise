@@ -336,6 +336,21 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     tabindex: "0",
     "aria-label": "Runtime log output",
   });
+  // Detaching the view for Back's cache resets the pane to the top; resume restores the
+  // reader's last position so follow neither stalls as "scrolled up" nor jumps. A reader
+  // at the bottom returns to the bottom, even if a late scroll event or resize moved it.
+  let paneScrollTop = 0;
+  let paneAtBottom = true;
+  pane.addEventListener(
+    "scroll",
+    () => {
+      if (pane.isConnected) {
+        paneScrollTop = pane.scrollTop;
+        paneAtBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 24;
+      }
+    },
+    { passive: true },
+  );
 
   let description = null;
   let cursor = null;
@@ -803,6 +818,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   // Timers that fired while Back's cache held this view stopped; pick both polls up again.
   context.onResume?.(() => {
     if (current()) {
+      pane.scrollTop = paneAtBottom ? pane.scrollHeight : paneScrollTop;
       void loadStatus();
       if (following) {
         scheduleFollow(0);
