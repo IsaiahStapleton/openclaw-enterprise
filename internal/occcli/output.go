@@ -46,7 +46,18 @@ func (app *application) printSecret(value any, collection bool) error {
 }
 
 func (app *application) printCredentialSource(value any, collection bool) error {
-	if app.output == "table" && !collection {
+	columns := []column{
+		{title: "ID", key: "id"},
+		{title: "NAME", key: "name"},
+		{title: "TYPE", key: "type"},
+		{title: "STATE", key: "state"},
+	}
+	// List responses carry no live gateway status (that takes a gateway call per source),
+	// so only single-resource tables get the column.
+	if collection {
+		return app.printItems(value, collection, columns)
+	}
+	if app.output == "table" {
 		if resource, ok := value.(map[string]any); ok {
 			if status, ok := resource["status"].(map[string]any); ok {
 				// Table output shows the live gateway state; structured output keeps the full status.
@@ -56,13 +67,7 @@ func (app *application) printCredentialSource(value any, collection bool) error 
 			}
 		}
 	}
-	return app.printItems(value, collection, []column{
-		{title: "ID", key: "id"},
-		{title: "NAME", key: "name"},
-		{title: "TYPE", key: "type"},
-		{title: "STATE", key: "state"},
-		{title: "GATEWAY STATUS", key: "gatewayStatus"},
-	})
+	return app.printItems(value, collection, append(columns, column{title: "GATEWAY STATUS", key: "gatewayStatus"}))
 }
 
 func (app *application) printCredentialWithdrawal(value any) error {
