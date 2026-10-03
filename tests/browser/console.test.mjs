@@ -423,6 +423,8 @@ test("an unchanged retained view without a Namespace selection selects the defau
   await login(page, fixture, "/console/backends");
   await page.getByText("openai-primary", { exact: true }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get("namespace"), null);
+  // A settled view is retained reusable, so returning to it takes the unchanged fast path.
+  await page.locator('.content [aria-live="polite"][aria-busy="false"]').waitFor();
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
