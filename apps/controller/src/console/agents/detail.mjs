@@ -95,18 +95,20 @@ function isPlainObject(value) {
 
 // Next steps for failure codes whose cause the operator can act on directly, and the
 // page that holds the setting to change. Model-probe codes come from the runtime
-// wrapper's startup model check (`runtime-entrypoints.ts`).
+// wrapper's startup model check (`runtime-entrypoints.ts`). OpenClaw classifies
+// transport errors (refused connection, DNS failure, "fetch failed") as a timeout,
+// so an unreachable provider usually reports RUNTIME_MODEL_PROBE_TIMEOUT.
 const DEPLOYMENT_FAILURE_GUIDANCE = {
   RUNTIME_AUTHENTICATION_FAILED: {
     text: "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
     link: "credentials",
   },
   RUNTIME_MODEL_PROBE_FAILED: {
-    text: "The startup model check failed for a reason other than a rejected credential, such as an unknown model, invalid provider settings, an unreachable provider, or a rate limit or quota. Check the model and its provider settings (such as baseUrl and api) in the Configuration, that the runtime can reach the provider, and the provider account, then deploy a new version.",
+    text: "The startup model check failed for a reason other than a rejected credential or a timeout, such as an unknown model, invalid provider settings, a provider server or TLS error, or a rate limit or quota. Check the model and its provider settings (such as baseUrl and api) in the Configuration and the provider account, then deploy a new version.",
     link: "configuration",
   },
   RUNTIME_MODEL_PROBE_TIMEOUT: {
-    text: "The startup model check did not get a reply from the model provider in time. Check that the runtime can reach the provider (network egress, proxy, or a custom baseUrl in the Configuration) and that the provider is responding, then deploy a new version.",
+    text: "The startup model check did not get a reply from the model provider in time. This includes a provider the runtime cannot reach (refused connection, unknown host, or blocked egress). Check that the runtime can reach the provider (network egress, proxy, or a custom baseUrl in the Configuration) and that the provider is responding, then deploy a new version.",
     link: "configuration",
   },
 };
