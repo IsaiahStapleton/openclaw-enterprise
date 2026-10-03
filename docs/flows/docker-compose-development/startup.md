@@ -185,6 +185,10 @@ Compose service with Docker-compatible engine access.
 `internal/occdev/gateway_k3d.go:installDevelopmentRoutingControllers`,
 `internal/occdev/repository_k3d.go:enableDevelopmentRepository`.
 
+Before tool discovery or state creation, `upK3d` requires the platform Namespace
+name to match a DNS label of at most 63 characters; recorded-state validation
+uses the same bound.
+
 Both k3d profiles use legacy iptables and honor an explicit IPv4 node resolver
 without changing host DNS;
 `internal/occdev/node_dns_k3d.go:checkDevelopmentNodeDNS` fails startup on

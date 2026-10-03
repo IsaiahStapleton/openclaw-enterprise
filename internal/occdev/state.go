@@ -13,7 +13,7 @@ const stateMarker = "openclaw-enterprise-development-v3\n"
 
 var clusterName = regexp.MustCompile(`^occ-dev-[a-z0-9][a-z0-9-]*$`)
 var projectName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-var namespaceName = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$`)
+var namespaceName = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // validateClusterName names the rejected OCC_DEVELOPMENT_KUBERNETES_CLUSTER
 // value and the rule it broke, so an operator can pick a valid name.
