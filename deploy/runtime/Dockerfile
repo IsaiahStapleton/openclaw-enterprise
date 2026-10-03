@@ -72,7 +72,7 @@ RUN --mount=type=secret,id=build-ca,required=false \
     case "$(node -p 'process.arch')" in \
       x64) library=matrix-sdk-crypto.linux-x64-gnu.node; sha256=aeb21029ac6bb29cd06493f67b19a5a75b3d0371a1ab452fe59f78249350f0f7 ;; \
       arm64) library=matrix-sdk-crypto.linux-arm64-gnu.node; sha256=c43c347f39786ee9f2d11b5ae3088d182c1a81636f2b68dc2297fe6716be2891 ;; \
-      *) exit 1 ;; \
+      *) echo "Unsupported architecture for matrix-sdk-crypto: $(node -p 'process.arch')" >&2; exit 1 ;; \
     esac; \
     mkdir -p /out/v0.6.6; \
     bash /tmp/download-pinned.sh \

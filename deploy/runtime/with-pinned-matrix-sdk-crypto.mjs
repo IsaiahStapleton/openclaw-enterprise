@@ -18,31 +18,35 @@ if (!directory || !command) {
 }
 
 const server = createServer((request, response) => {
-  const path = normalize(decodeURIComponent(new URL(request.url, "http://localhost").pathname));
-  const file = join(directory, path);
-  let found = false;
   try {
-    found = request.method === "GET" && !path.includes("..") && statSync(file).isFile();
+    const file = join(directory, normalize(new URL(request.url, "http://localhost").pathname));
+    const stats = statSync(file);
+    if (request.method === "GET" && stats.isFile()) {
+      response.writeHead(200, {
+        "content-length": stats.size,
+        "content-type": "application/octet-stream",
+      });
+      createReadStream(file).pipe(response);
+      return;
+    }
   } catch {}
-  if (!found) {
-    console.error(
-      `with-pinned-matrix-sdk-crypto: no pinned file for ${request.method} ${request.url}; update the matrix-sdk-crypto pin in deploy/runtime/Dockerfile`,
-    );
-    response.writeHead(404).end();
-    return;
-  }
-  response.writeHead(200, {
-    "content-length": statSync(file).size,
-    "content-type": "application/octet-stream",
-  });
-  createReadStream(file).pipe(response);
+  console.error(
+    `with-pinned-matrix-sdk-crypto: no pinned file for ${request.method} ${request.url}; update the matrix-sdk-crypto pin in deploy/runtime/Dockerfile`,
+  );
+  response.writeHead(404).end();
 });
 
 server.listen(0, "127.0.0.1", () => {
   const { port } = server.address();
   const child = spawn(command, commandArguments, {
     stdio: "inherit",
-    env: { ...process.env, MATRIX_SDK_CRYPTO_DOWNLOADS_BASE_URL: `http://127.0.0.1:${port}` },
+    env: {
+      ...process.env,
+      MATRIX_SDK_CRYPTO_DOWNLOADS_BASE_URL: `http://127.0.0.1:${port}`,
+      // Keep the loopback request off any configured proxy.
+      NO_PROXY: [process.env.NO_PROXY, "127.0.0.1"].filter(Boolean).join(","),
+      no_proxy: [process.env.no_proxy, "127.0.0.1"].filter(Boolean).join(","),
+    },
   });
   child.on("error", (error) => {
     console.error(error);
