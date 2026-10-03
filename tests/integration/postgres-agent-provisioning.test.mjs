@@ -404,6 +404,7 @@ async function createFixture(context, options = {}) {
     );
     assert.ok(result.rowCount > 0, "revocation must remove the exact administrator binding");
     revokedBindings.push(...result.rows);
+    return principal.id;
   }
 
   function cancelProvisioningAtTeardown(namespaceId, agentId) {
@@ -1093,8 +1094,8 @@ test(
   async (context) => {
     const fixture = await createFixture(context);
     const namespace = await fixture.bootstrapNamespace();
-    // A ready source, as registration leaves it once the gateway confirms its copy. The
-    // Installation selects no Credential Gateway: admission must refuse before it looks.
+    // The source row exists only so the request names a real, ready id; admission must refuse
+    // before it looks the source up, so its gateway and Secret details are irrelevant.
     const sourceId = `cs_${randomUUID()}`;
     await fixture.state.transact(async (unit) => {
       await unit.credentialSources.createCredentialSource({
@@ -1132,12 +1133,7 @@ test(
     // A caller who can create Agents and Configurations and administer the Installation, but
     // holds no credential_source:operate, must not bind an Agent to the source through
     // provisioning (the direct Agent path requires that grant).
-    const iam = await fixture.state.loadNativeIAMState();
-    const principal = iam.identities.find(
-      (identity) => identity.kind === "principal" && identity.issuer.endsWith(":better-auth"),
-    );
-    assert.ok(principal, "the bootstrapped administrator Principal must exist");
-    await fixture.revokeCurrentPrincipal();
+    const principalId = await fixture.revokeCurrentPrincipal();
     const roleId = `role-provisioning-${randomUUID()}`;
     const bindingId = `binding-provisioning-${randomUUID()}`;
     await fixture.pool.query(
@@ -1156,7 +1152,7 @@ test(
       `INSERT INTO occ.iam_access_bindings
        (id, namespace_id, identity_subject_id, group_subject_id, role_id, resource_kind, resource_id)
        VALUES ($1, NULL, $2, NULL, $3, NULL, NULL)`,
-      [bindingId, principal.id, roleId],
+      [bindingId, principalId, roleId],
     );
     try {
       assertRefused(await provision());
@@ -1165,8 +1161,7 @@ test(
       await fixture.pool.query("DELETE FROM occ.iam_roles WHERE id = $1", [roleId]);
     }
 
-    // Neither refusal stored a plan, queued work, created resources or recorded a denial,
-    // so nothing references the source and its deletion is not blocked.
+    // Neither refusal stored a plan, queued work, created resources or recorded a denial.
     const resources = await fixture.pool.query(
       `SELECT
        (SELECT count(*)::integer FROM occ.agent_provisioning_work WHERE namespace_id = $1) AS plans,
