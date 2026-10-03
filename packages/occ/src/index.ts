@@ -901,7 +901,9 @@ export async function accessBindingsTargeting(
  * the Agent or one of its AgentRevisions, and those whose subject is the Agent's
  * ServicePrincipal (the same three groups the deletion finalizer deletes). A deleting
  * Agent refuses new bindings of each kind, so the list is final unless a binding is
- * deleted explicitly first.
+ * deleted explicitly first. The finalizer's DELETE is not Namespace-scoped, but policy
+ * admission keeps every such binding in the Agent's Namespace, so reading that
+ * Namespace's bindings sees all of them.
  */
 export async function accessBindingsRemovedWithAgent(
   state: Pick<PlatformReadView, "iamPolicy" | "revisions">,

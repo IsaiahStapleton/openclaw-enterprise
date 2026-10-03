@@ -3435,7 +3435,9 @@ export class PostgresPlatformState implements PlatformStateStore {
         // non-Agent ServicePrincipal of the exact Namespace, or the ServicePrincipal of a
         // live Agent there. The Agent owner key is deferred, so it cannot vouch mid-unit.
         // Deleting the Agent removes bindings for its ServicePrincipal, so SHARE fences
-        // the active -> deleting transition until this policy transaction settles.
+        // the active -> deleting transition until this policy transaction settles (the
+        // Namespace lock above already serializes with deletion; this keeps the fence
+        // local to the Agent row, as lockTarget does for Agent targets).
         await client.query(
           `SELECT 1 FROM occ.agents
            WHERE namespace_id = $1 AND service_principal_id = $2 FOR SHARE`,

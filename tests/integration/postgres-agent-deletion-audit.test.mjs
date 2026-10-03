@@ -178,8 +178,9 @@ test(
     // A binding unrelated to the Agent survives its deletion and is not listed.
     const unrelated = await bind(principal.id, "secret", secretRef.id);
 
-    // The bindings the deletion finalizer deletes (migrations/0035
-    // finalize_agent_deletion), queried with its exact predicate.
+    // The bindings the deletion finalizer deletes, queried with the exact predicate of
+    // occ.finalize_agent_deletion (migrations/0035). A migration that changes that
+    // DELETE must update this query and accessBindingsRemovedWithAgent together.
     const finalizerTargets = async () =>
       (
         await pool.query(
@@ -226,10 +227,22 @@ test(
     );
 
     // The deleting Agent admits no new binding the list would miss.
-    for (const [subjectId, resourceKind, resourceId] of [
-      [principal.id, "agent", agent.id],
-      [principal.id, "agent_revision", revision.id],
-      [servicePrincipalId, "secret", secretRef.id],
+    const deletedTarget = [
+      "/resourceId",
+      "The IAM AccessBinding target does not exist in this Namespace or is being deleted.",
+    ];
+    for (const [subjectId, resourceKind, resourceId, [path, message]] of [
+      [principal.id, "agent", agent.id, deletedTarget],
+      [principal.id, "agent_revision", revision.id, deletedTarget],
+      [
+        servicePrincipalId,
+        "secret",
+        secretRef.id,
+        [
+          "/subjectId",
+          "The IAM AccessBinding subject must be a human Principal, a non-Agent ServicePrincipal of this Namespace, or the ServicePrincipal of a live Agent here.",
+        ],
+      ],
     ]) {
       const refused = await request(
         "POST",
@@ -237,6 +250,8 @@ test(
         bindingBody(subjectId, resourceKind, resourceId),
       );
       assert.equal(refused.status, 400, `${resourceKind} ${subjectId}: ${refused.body}`);
+      assert.equal(refused.json().error.message, message, resourceKind);
+      assert.equal(refused.json().error.details[0].path, path, resourceKind);
     }
     assert.deepEqual(await finalizerTargets(), expected);
   },
