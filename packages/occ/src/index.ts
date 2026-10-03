@@ -115,6 +115,7 @@ import {
 import {
   AGENT_NAME_CONFLICT,
   AgentDeletingError,
+  AgentProvisioningValidationError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
@@ -215,6 +216,7 @@ import type {
 export {
   ActivationPendingError,
   AgentDeletingError,
+  AgentProvisioningValidationError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
@@ -878,6 +880,25 @@ function removedAccessBinding(binding: Readonly<AccessBinding>): RemovedAccessBi
 }
 
 /**
+ * Rejects Agent provisioning Secret references (bindings and model authentication) that
+ * name another Namespace. It compares only the request against its route Namespace, so
+ * it reveals nothing about other Namespaces and can run before any Secret lookup.
+ */
+function rejectCrossNamespaceProvisioningSources(
+  namespaceId: string,
+  configuration: AgentProvisioningConfigurationInput,
+  harnessAuth: HarnessAuthBinding | null,
+): void {
+  const sources = Object.values(configuration.secretBindings ?? {}).map(({ source }) => source);
+  if (harnessAuth !== null && "source" in harnessAuth) {
+    sources.push(harnessAuth.source);
+  }
+  if (sources.some((source) => source.namespaceId !== namespaceId)) {
+    throw new AgentProvisioningValidationError("Secret references cannot cross Namespaces.");
+  }
+}
+
+/**
  * Lists the Namespace AccessBindings that target one exact resource. Deleting the resource
  * removes them, so callers record the list in that deletion's audit event.
  */
@@ -891,6 +912,38 @@ export async function accessBindingsTargeting(
     (await state.iamPolicy.listAccessBindings(namespaceId))
       .filter(
         (binding) => binding.resourceKind === resourceKind && binding.resourceId === resourceId,
+      )
+      .map(removedAccessBinding),
+  );
+}
+
+/**
+ * Lists the AccessBindings that completing an Agent's deletion removes: those that target
+ * the Agent or one of its AgentRevisions, and those whose subject is the Agent's
+ * ServicePrincipal (the same three groups the deletion finalizer deletes). A deleting
+ * Agent refuses new bindings of each kind, so the list is final unless a binding is
+ * deleted explicitly first. The finalizer's DELETE is not Namespace-scoped, but policy
+ * admission keeps every such binding in the Agent's Namespace, so reading that
+ * Namespace's bindings sees all of them.
+ */
+export async function accessBindingsRemovedWithAgent(
+  state: Pick<PlatformReadView, "iamPolicy" | "revisions">,
+  agent: Pick<Agent, "namespaceId" | "id" | "servicePrincipalId">,
+): Promise<readonly RemovedAccessBinding[]> {
+  const revisionIds = new Set(
+    (await state.revisions.listRevisions(agent.namespaceId, agent.id)).map(
+      (revision) => revision.id,
+    ),
+  );
+  return Object.freeze(
+    (await state.iamPolicy.listAccessBindings(agent.namespaceId))
+      .filter(
+        (binding) =>
+          (binding.subjectKind === "identity" && binding.subjectId === agent.servicePrincipalId) ||
+          (binding.resourceKind === "agent" && binding.resourceId === agent.id) ||
+          (binding.resourceKind === "agent_revision" &&
+            binding.resourceId !== undefined &&
+            revisionIds.has(binding.resourceId)),
       )
       .map(removedAccessBinding),
   );
@@ -1823,6 +1876,8 @@ export class OpenClawController {
         id: input.namespaceId,
         namespaceId: input.namespaceId,
       });
+      // Reject foreign references before channel validation can report them as a scope miss.
+      rejectCrossNamespaceProvisioningSources(input.namespaceId, configurationInput, harnessAuth);
       await this.validateChannelCredentials(principalId, input.namespaceId, configurationInput);
     }
     return this.mutate(async (state) => {
@@ -6920,7 +6975,16 @@ export class OpenClawController {
     readonly executionMode: HarnessExecutionMode;
   } {
     const plan = asRecord(record.plan);
-    const configuration = normalizeProvisioningConfiguration(plan?.configuration);
+    let configuration: AgentProvisioningConfigurationInput;
+    try {
+      configuration = normalizeProvisioningConfiguration(plan?.configuration);
+    } catch (error) {
+      // A stored plan that no longer validates is not the caller's invalid request.
+      if (error instanceof AgentProvisioningValidationError) {
+        throw new ScopeViolationError("The accepted provisioning plan is no longer valid.");
+      }
+      throw error;
+    }
     const executionMode = plan?.executionMode;
     if (!validExecutionMode(executionMode)) {
       throw new ScopeViolationError("The provisioning execution mode is invalid.");
@@ -7071,7 +7135,7 @@ export class OpenClawController {
     source: SecretReference,
   ): Promise<void> {
     if (source.namespaceId !== namespaceId) {
-      throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      throw new AgentProvisioningValidationError("Secret references cannot cross Namespaces.");
     }
     await this.authorize(principalId, "operate", source);
     const secret = await state.secrets.lockSecret(namespaceId, source.id);

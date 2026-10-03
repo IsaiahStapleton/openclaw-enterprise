@@ -17,7 +17,7 @@ import {
 } from "@openclaw-enterprise/contracts";
 import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 
-import { ScopeViolationError } from "./errors.ts";
+import { AgentProvisioningValidationError, ScopeViolationError } from "./errors.ts";
 import type { AgentProvisioningRecord } from "./state/agent-provisioning.ts";
 import type { ControllerWork } from "./state/controller-work.ts";
 
@@ -77,7 +77,7 @@ function configurationDocument(value: unknown): OpenClawConfigurationDocument {
 }
 
 function normalizeBindingError(error: unknown): never {
-  throw new ScopeViolationError(
+  throw new AgentProvisioningValidationError(
     error instanceof Error ? error.message : "Agent provisioning Secret bindings are invalid.",
   );
 }

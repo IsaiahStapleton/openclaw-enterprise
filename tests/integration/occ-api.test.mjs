@@ -290,7 +290,7 @@ function exactSecretRef(namespaceId, id) {
   return { kind: "secret", namespaceId, id };
 }
 
-function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
+function provisioningRequestBody(namespaceId, secrets, { configuration, ...overrides } = {}) {
   return {
     requestId: `req_${randomUUID()}`,
     name: `Provisioned Agent ${randomUUID().slice(0, 8)}`,
@@ -303,7 +303,7 @@ function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
           source: exactSecretRef(namespaceId, secrets.toolApiKey.id),
         },
       },
-      ...overrides.configuration,
+      ...configuration,
     },
     harnessAuth: {
       method: "api_key",
@@ -3964,7 +3964,7 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   assert.equal(duplicateNamespace.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(
     duplicateNamespace.body.error.message,
-    "A Namespace with this name already exists or was deleted. Choose a different name.",
+    "A Namespace with this name already exists. Choose a different name.",
   );
 
   const invalidAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
@@ -4196,6 +4196,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
         ...provisioningRequestBody(namespace.data.id, secrets),
         secrets: [{ name: "tool-api-key", value: `tool-key-${randomUUID()}` }],
       },
+      "The request does not match the operation contract: body /secrets is not an accepted field.",
     ],
     [
       "request-local Secret binding sources",
@@ -4208,6 +4209,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
+      "The request does not match the operation contract: body /configuration/secretBindings/TOOL_API_KEY/source/namespaceId is required.",
     ],
     [
       "request-local Harness Secret source",
@@ -4217,12 +4219,14 @@ test("Agent provisioning API validates inline configuration with existing Secret
           source: { kind: "provisioning-secret", name: "model-api-key" },
         },
       }),
+      /^The request does not match the operation contract: body \/harnessAuth\/source is not an accepted field;/,
     ],
     [
       "too many binding destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: { secretBindings: oversizedBindings },
       }),
+      "The request does not match the operation contract: body /configuration/secretBindings has an unsupported value (expected at most 64 fields).",
     ],
     [
       "non-env delivery",
@@ -4236,6 +4240,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
+      'The request does not match the operation contract: body /configuration/secretBindings/TOOL_API_KEY/delivery/type has an unsupported value (expected "env").',
     ],
     [
       "cross-Namespace Secret references",
@@ -4247,8 +4252,8 @@ test("Agent provisioning API validates inline configuration with existing Secret
             },
           },
         },
-        harnessAuth: { method: "runtime" },
       }),
+      "Secret references cannot cross Namespaces.",
     ],
     [
       "reserved environment destinations",
@@ -4260,20 +4265,26 @@ test("Agent provisioning API validates inline configuration with existing Secret
             },
           },
         },
-        harnessAuth: { method: "runtime" },
       }),
+      "A secret binding uses a reserved or invalid environment destination.",
     ],
   ];
 
-  for (const [description, body] of invalidBodies) {
+  // Each case must fail on its own rule (the exact message), not on an unrelated one.
+  for (const [description, body, message] of invalidBodies) {
     const result = await injectedRequest(
       fixture.app,
       "POST",
       `/namespaces/${namespace.data.id}/agents/provision`,
       { body },
     );
-    assert.equal(result.status, 400, description);
+    assert.equal(result.status, 400, `${description}: ${JSON.stringify(result.body)}`);
     assert.equal(result.body.error.code, "INVALID_REQUEST", description);
+    if (message instanceof RegExp) {
+      assert.match(result.body.error.message, message, description);
+    } else {
+      assert.equal(result.body.error.message, message, description);
+    }
   }
 
   const pluginDriver = new CodexPluginDriver();
@@ -4775,6 +4786,17 @@ test("two Namespaces become independently ready and deletion tombstones only its
   );
   const stillReady = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceA.data.id}`);
   assert.equal(stillReady.data.status, "ready");
+  // The tombstone keeps its name: a new Namespace cannot reuse it, and the 409 says the name
+  // belongs to a deleted Namespace rather than one the caller could find in the list.
+  const reused = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "lifecycle-b" },
+  });
+  assert.equal(reused.status, 409);
+  assert.equal(reused.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    reused.body.error.message,
+    "This name belongs to a deleted Namespace and cannot be reused. Choose a different name.",
+  );
 });
 
 test("bootstrap, mutations, and denials emit attributable private audit events", async () => {
@@ -5375,6 +5397,27 @@ test("Slack validation rejects swapped credentials and preserves authorization",
         { configuration },
       ),
     });
+  // A foreign channel Secret is an invalid request, not a scope miss from channel validation.
+  const foreignBot = { ...bot.ref, namespaceId: `ns_${randomUUID()}` };
+  const foreign = await controller.request("POST", `${base}/agents/provision`, {
+    body: provisioningRequestBody(
+      namespace.id,
+      { modelApiKey: model, toolApiKey: model },
+      {
+        configuration: {
+          ...configuration,
+          secretBindings: {
+            ...configuration.secretBindings,
+            SLACK_BOT_TOKEN: { source: foreignBot, delivery: { type: "env" } },
+          },
+        },
+      },
+    ),
+  });
+  assert.equal(foreign.status, 400, JSON.stringify(foreign.body));
+  assert.equal(foreign.body.error.code, "INVALID_REQUEST");
+  assert.equal(foreign.body.error.message, "Secret references cannot cross Namespaces.");
+  assert.equal(calls, 0);
   const swapped = await provision();
   assert.equal(swapped.status, 400, JSON.stringify(swapped.body));
   assert.equal(swapped.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");

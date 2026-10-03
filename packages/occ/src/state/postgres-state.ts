@@ -57,6 +57,7 @@ import { immutableCopy } from "@openclaw-enterprise/utils";
 import {
   AGENT_NAME_CONFLICT,
   CREDENTIAL_SOURCE_NAME_CONFLICT,
+  DELETED_NAMESPACE_NAME_CONFLICT,
   DependencyUnavailableError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
@@ -1785,6 +1786,18 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
       createNamespace: async (namespace) => {
         await this.requireInitialized(context);
+        // A tombstone keeps its name UNIQUE; say so instead of reporting a live Namespace.
+        const tombstoned = rows(
+          (
+            await client.query(
+              "SELECT EXISTS (SELECT 1 FROM occ.namespaces WHERE name = $1 AND deleted_at IS NOT NULL) AS present",
+              [namespace.name],
+            )
+          ).rows,
+        )[0];
+        if (tombstoned?.present === true) {
+          throw new ResourceStateConflictError(DELETED_NAMESPACE_NAME_CONFLICT);
+        }
         await client.query(
           `INSERT INTO occ.namespaces (id, name, existing_namespace, status, created_at)
            VALUES ($1, $2, $3, $4, $5)`,
@@ -3305,7 +3318,11 @@ export class PostgresPlatformState implements PlatformStateStore {
         // active -> deleting transition until the policy transaction settles.
         agent:
           "SELECT 1 FROM occ.agents WHERE namespace_id = $1 AND id = $2 AND status = 'active' FOR SHARE",
-        agent_revision: "SELECT 1 FROM occ.agent_revisions WHERE namespace_id = $1 AND id = $2",
+        // A revision of a deleting Agent is removed with it, so it admits no new binding.
+        agent_revision: `SELECT 1 FROM occ.agent_revisions AS r
+           JOIN occ.agents AS a ON a.namespace_id = r.namespace_id AND a.id = r.agent_id
+           WHERE r.namespace_id = $1 AND r.id = $2 AND a.status = 'active'
+           FOR SHARE OF a`,
         configuration:
           "SELECT 1 FROM occ.configurations WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
         preset: "SELECT 1 FROM occ.presets WHERE namespace_id = $1 AND id = $2 FOR KEY SHARE",
@@ -3430,6 +3447,15 @@ export class PostgresPlatformState implements PlatformStateStore {
         // Same subject rule as the in-memory adapter: a human without a Namespace, a
         // non-Agent ServicePrincipal of the exact Namespace, or the ServicePrincipal of a
         // live Agent there. The Agent owner key is deferred, so it cannot vouch mid-unit.
+        // Deleting the Agent removes bindings for its ServicePrincipal, so SHARE fences
+        // the active -> deleting transition until this policy transaction settles (the
+        // Namespace lock above already serializes with deletion; this keeps the fence
+        // local to the Agent row, as lockTarget does for Agent targets).
+        await client.query(
+          `SELECT 1 FROM occ.agents
+           WHERE namespace_id = $1 AND service_principal_id = $2 FOR SHARE`,
+          [namespace.id, binding.subjectId],
+        );
         const identity = await client.query(
           `SELECT 1 FROM occ.iam_identities AS i
            WHERE i.id = $2 AND (
@@ -3438,7 +3464,7 @@ export class PostgresPlatformState implements PlatformStateStore {
                i.agent_id IS NULL OR EXISTS (
                  SELECT 1 FROM occ.agents AS a
                  WHERE a.namespace_id = $1 AND a.id = i.agent_id
-                   AND a.service_principal_id = i.id
+                   AND a.service_principal_id = i.id AND a.status = 'active'
                )
              ))
            )`,

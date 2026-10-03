@@ -179,9 +179,12 @@ test("startup constructs the bundled OpenShell SandboxDriver before constructing
 });
 
 test("startup composes both OpenShell members from one Backend", async (t) => {
+  // An explicit hard_requirement composes like the omitted default above.
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.policy.landlockCompatibility = "hard_requirement";
   const createdDriver = await loadInstallationConfiguration({
     mode: "production",
-    environment: { OCC_CONFIG_PATH: await fixture(t, sandboxInstallation()) },
+    environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
   });
 
   assert.ok(createdDriver.credentialGatewayDriver instanceof OpenShellCredentialGatewayDriver);
@@ -368,6 +371,9 @@ test("OpenShell provisions native OpenClaw without exposing an inbound Harness s
   assert.deepEqual(requests[0].serviceExposures, []);
   assert.deepEqual(requests[0].spec.command, command);
   assert.deepEqual(requests[0].labels, labels);
+  // The real Gateway receives this mode with the Sandbox request; a weaker
+  // Landlock setting could let a ready Harness run without filesystem policy.
+  assert.equal(requests[0].spec.policy.landlock.compatibility, "hard_requirement");
 });
 
 test("OpenShell rejects Secret-backed Harness environment as a permanent revision failure", async () => {
@@ -592,6 +598,21 @@ test("startup rejects OpenShell network values outside the v0.1 protocol enums",
     }),
     /OpenShell network policy model-egress TLS mode must be one of: skip, terminate/,
   );
+});
+
+test("startup refuses OpenShell filesystem modes that can weaken containment", async (t) => {
+  for (const mode of ["best_effort", "hard-requirement"]) {
+    const configuration = sandboxInstallation();
+    configuration.drivers.sandbox.configuration.policy.landlockCompatibility = mode;
+
+    await assert.rejects(
+      loadInstallationConfiguration({
+        mode: "production",
+        environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+      }),
+      /OpenShell policy\.landlockCompatibility must be hard_requirement or omitted/,
+    );
+  }
 });
 
 test("startup rejects OpenShell network policies without binary identities", async (t) => {
