@@ -198,7 +198,7 @@ function renderCard(section, state, provider) {
       element(
         "p",
         { className: "hint" },
-        state.copy.readOnlyCardMessage ?? "Deployed version values cannot be edited.",
+        state.copy.readOnlyCardMessage ?? "Values in a deployed version cannot be edited.",
       ),
     );
   } else if (disabledByMode) {
