@@ -95,9 +95,9 @@ with `dev down` [deletes the installation and its Agents](quickstart.md#clean-up
 
 To remove only this Agent and keep the installation, delete the Agent and then
 the Configuration, Secret, and Role the command created for it. Set
-`OCC_NAMESPACE` to the `default` Namespace ID from step 1, and `AGENT_ID` to the
-Agent ID the command printed. If the command stopped before printing it, find
-the ID with `./bin/occ agent list`:
+`OCC_NAMESPACE` to the `ID` shown for `default` in step 1, and `AGENT_ID` to the
+Agent ID the command printed. If the command stopped before printing it, run the
+`export` line first, then find the ID with `./bin/occ agent list`:
 
 ```bash
 export OCC_NAMESPACE=<default-namespace-id>
