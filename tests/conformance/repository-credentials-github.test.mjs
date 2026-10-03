@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer as createNetServer } from "node:net";
 import {
   createGitHubDriverFactory,
   createGitHubKeyOwner,
@@ -692,6 +693,43 @@ test("refused and cancelled observations remain independently captured and token
   }
   assert.ok(fixture.tokenState().every((token) => token.revoked));
   assert.deepEqual(fixture.errors, []);
+});
+
+test("token issue failures before a connection are definite; after one they stay uncertain", async (t) => {
+  const clock = createControlledClock();
+  const fixture = await startGitHubFixture(t, { clock });
+  const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
+  t.after(() => key.close());
+  // A closed port refuses the connection; a raw TCP server accepts and then drops it.
+  const closed = createNetServer();
+  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
+  const refusedPort = closed.address().port;
+  await new Promise((resolve) => closed.close(resolve));
+  const dropping = createNetServer((socket) => socket.destroy());
+  await new Promise((resolve) => dropping.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => dropping.close(resolve)));
+  for (const { name, port, expected } of [
+    { name: "connection refused", port: refusedPort, expected: "not-dispatched" },
+    { name: "connection dropped", port: dropping.address().port, expected: "uncertain" },
+  ]) {
+    await t.test(name, async () => {
+      const origin = `https://127.0.0.1:${port}`;
+      const factory = createGitHubDriverFactory({
+        configuration: githubConfigurationData({ providerInstanceId: "fixture-instance" }),
+        key,
+        clock,
+        gatewayOrigin: config.gateway.publicOrigin,
+        limits: config.limits,
+        trustedEndpoints: { apiOrigin: origin, gitOrigin: origin, ca: fixture.tls.ca },
+      });
+      const owned = owner(factory, clock, "git-read", name);
+      const result = await owned.driver.acquire(owned.attempt("acquire"), undefined, 360000);
+      assert.equal(result.kind, expected);
+      await owned.driver.settle(result);
+      assert.equal(owned.records.size, 0);
+    });
+  }
+  assert.deepEqual(fixture.trace, []);
 });
 
 test("retirement uncertainty retains real custody after non-204 replies and lost responses", async (t) => {
