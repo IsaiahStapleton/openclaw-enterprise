@@ -476,7 +476,7 @@ test("Agent deployment shows the API's reason when it rejects the saved model", 
   // The generic "check the entered values" text cannot tell the user which setting to fix.
   await page
     .getByText(
-      "The configured Agent model must identify its provider and model, such as openai/gpt-5.1.",
+      "The configured Agent model must identify its provider and model as <provider>/<model>, such as openai/gpt-5.1 or codex/gpt-5.1.",
       { exact: true },
     )
     .waitFor();
