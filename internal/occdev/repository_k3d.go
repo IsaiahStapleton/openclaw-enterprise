@@ -393,8 +393,8 @@ func (r *runner) enableDevelopmentRepository(ctx context.Context, state *develop
 		}
 		expected[repository["repositoryRef"].(string)] = profiles
 	}
-	return poll(ctx, timeout, func(context.Context) (bool, error) {
-		options, err := client.ListRepositoryOptions(namespaceID)
+	return poll(ctx, timeout, func(ctx context.Context) (bool, error) {
+		options, err := client.WithContext(ctx).ListRepositoryOptions(namespaceID)
 		if err != nil {
 			return false, nil
 		}
