@@ -131,6 +131,15 @@ An empty queue waits within a bound. After work or idle, `health()` queries
 work, calls `onHealthy`, and emits `worker.health`. Both must succeed for readiness. Serialized failures emit `HEALTH_UNAVAILABLE` without
 consuming retries.
 
+Every finished pass, failed or not, and every renewed claim heartbeat calls
+`onProgress` (at most once per health interval). A database outage keeps the
+loop moving, so only a pass stuck on one await stops it; the packaged liveness
+probe restarts the worker when that marker is stale beyond
+`max(120 s, 240 polls, 6 leases)`. The worker pool's client-side
+`query_timeout` (`OCC_WORKER_DATABASE_TIMEOUT_MS`) and TCP keepalive usually
+unstick such a pass first: the abandoned connection is discarded and the next
+pass uses a fresh one.
+
 ### 4. Reload ownership and reauthorize before infrastructure effects
 
 `apps/controller/src/worker.ts:ControllerWorker.process`,

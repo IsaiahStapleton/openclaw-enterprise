@@ -66,6 +66,7 @@ async function setup(
     leaseDurationMs = 30_000,
     maxAttempts = 5,
     onHealthy,
+    onProgress,
     metrics,
     repoDriver,
     secretAuthMethod = "api_key",
@@ -396,6 +397,7 @@ async function setup(
       leaseDurationMs,
       maxAttempts,
       onHealthy,
+      onProgress,
       ...(drivers === undefined ? { computeDriver } : { drivers }),
       ...(convergenceTimeoutMs === undefined ? {} : { convergenceTimeoutMs }),
       emit,
@@ -976,6 +978,127 @@ test(
     await fixture.start(fixture.compute);
     await fixture.work(candidate, "succeeded");
     await waitFor("repository-disabled worker readiness", async () => (healthy ? true : undefined));
+  },
+);
+
+/**
+ * Relay PostgreSQL connections through a local proxy that can go silent: it stops relaying on
+ * every open connection without closing it, as a client sees after a failover or partition
+ * that sent no RST. New connections still reach the server.
+ */
+async function startSilenceableProxy(context, databaseUrl) {
+  const { createServer, connect } = await import("node:net");
+  const target = new URL(databaseUrl);
+  const pairs = new Set();
+  const server = createServer((client) => {
+    const upstream = connect(Number(target.port || 5432), target.hostname);
+    const pair = { client, upstream };
+    pairs.add(pair);
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const close = () => {
+      pairs.delete(pair);
+      client.destroy();
+      upstream.destroy();
+    };
+    for (const socket of [client, upstream]) {
+      socket.on("error", close);
+      socket.on("close", close);
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const close = () => {
+    for (const { client, upstream } of pairs) {
+      client.destroy();
+      upstream.destroy();
+    }
+    return new Promise((resolve) => server.close(resolve));
+  };
+  context.after(close);
+  const url = new URL(databaseUrl);
+  url.hostname = "127.0.0.1";
+  url.port = String(server.address().port);
+  return {
+    url: url.toString(),
+    silence() {
+      for (const { client, upstream } of pairs) {
+        client.unpipe(upstream);
+        upstream.unpipe(client);
+        client.pause();
+        upstream.pause();
+      }
+    },
+    close,
+  };
+}
+
+test(
+  "a worker abandons a query on a silent database connection and resumes work",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const [{ Pool }, { workerDatabasePoolOptions }] = await Promise.all([
+      import("pg"),
+      import("../../apps/controller/src/worker.ts"),
+    ]);
+    const fixture = await setup(context);
+    const proxy = await startSilenceableProxy(context, fixture.database.url);
+    const pool = new Pool({
+      connectionString: proxy.url,
+      ...workerDatabasePoolOptions(3_000),
+      max: 2,
+    });
+    fixture.database.pools.add(pool);
+    const first = await fixture.agent("before-silence");
+    const before = await fixture.revision(first, 1);
+    await fixture.start(fixture.compute, undefined, undefined, undefined, pool);
+    await fixture.work(before, "succeeded");
+
+    // Every pooled connection now swallows queries without an answer or an error.
+    proxy.silence();
+    const second = await fixture.agent("after-silence");
+    const after = await fixture.revision(second, 1);
+    await fixture.work(after, "succeeded", 30_000);
+    await fixture.stop();
+    await proxy.close();
+  },
+);
+
+test(
+  "worker progress continues through a database outage and stops when the loop is stuck",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const { Pool } = await import("pg");
+    let progressed = 0;
+    const fixture = await setup(context, {
+      onProgress: async () => {
+        progressed += 1;
+      },
+    });
+    const proxy = await startSilenceableProxy(context, fixture.database.url);
+    // No query timeout: this isolates the liveness signal from the timeout that would unstick it.
+    const pool = new Pool({ connectionString: proxy.url, max: 1 });
+    fixture.database.pools.add(pool);
+    pool.on("error", () => {});
+    await fixture.start(fixture.compute, undefined, undefined, undefined, pool);
+    await waitFor("idle worker progress", async () => (progressed >= 2 ? true : undefined));
+
+    proxy.silence();
+    // At most one report was already under way when the connection went silent.
+    await delay(1_500);
+    const stuck = progressed;
+    await delay(3_000);
+    assert.equal(
+      progressed,
+      stuck,
+      "a worker stuck on a silent query must stop reporting progress",
+    );
+
+    // Refused connections fail each pass fast; the loop still moves, so liveness holds.
+    await proxy.close();
+    await waitFor("progress through a database outage", async () =>
+      progressed >= stuck + 2 ? true : undefined,
+    );
+    await fixture.stop();
   },
 );
 

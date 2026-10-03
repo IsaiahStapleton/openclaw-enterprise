@@ -1550,13 +1550,20 @@ export class PostgresPlatformState implements PlatformStateStore {
       if (transportError !== undefined) {
         throw transportError;
       }
-      await client.query(
-        readOnly
-          ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
-          : readCommitted
-            ? "BEGIN ISOLATION LEVEL READ COMMITTED"
-            : "BEGIN",
-      );
+      try {
+        await client.query(
+          readOnly
+            ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            : readCommitted
+              ? "BEGIN ISOLATION LEVEL READ COMMITTED"
+              : "BEGIN",
+        );
+      } catch (error) {
+        // A BEGIN abandoned by a client query timeout may still be in flight on this
+        // connection; every later statement would queue behind it. Never reuse it.
+        discard = true;
+        throw error;
+      }
       started = true;
       if (transportError !== undefined) {
         throw transportError;
