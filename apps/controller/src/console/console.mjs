@@ -992,7 +992,9 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       }
       try {
         const result = await request(path, options);
-        if ((options.method ?? "GET") === "GET") {
+        // Live reads (runtime status, log pages) differ on every call; replaying them to
+        // revalidate a cached view would only spend the reader's rate limit.
+        if ((options.method ?? "GET") === "GET" && options.revalidate !== false) {
           viewState.reads.set(path, JSON.stringify(result));
         }
         return result;

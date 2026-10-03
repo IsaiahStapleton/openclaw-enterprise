@@ -337,6 +337,9 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   let lastStream = null;
 
   const current = () => context.isCurrent();
+  // Runtime reads are live and audited: a view restored by Back resumes them instead of
+  // having the console replay every one of them to revalidate the cached view.
+  const read = (path, options = {}) => context.request(path, { ...options, revalidate: false });
 
   function selectedSource() {
     return description?.sources.find(({ id }) => id === sourceSelect.value);
@@ -478,7 +481,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     if (!document.hidden) {
       try {
         const first = description === null;
-        description = await context.request(base);
+        description = await read(base);
         if (!current()) {
           return;
         }
@@ -567,7 +570,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     query.set("download", "true");
     downloadButton.disabled = true;
     try {
-      const text = await context.request(`${base}/logs?${query}`, { responseType: "text" });
+      const text = await read(`${base}/logs?${query}`, { responseType: "text" });
       if (!current()) {
         return;
       }
@@ -655,7 +658,7 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     }
     let retryAfter = FOLLOW_POLL_MS;
     try {
-      const page = await context.request(`${base}/logs?${query}`);
+      const page = await read(`${base}/logs?${query}`);
       if (!current() || restartPending) {
         return;
       }
@@ -782,6 +785,15 @@ export function renderAgentLogs(context, { agent, revisionId }) {
   if (logsDenied) {
     showLogError(runtimeErrorText({ status: 403 }, "logs"));
   }
+  // Timers that fired while Back's cache held this view stopped; pick both polls up again.
+  context.onResume?.(() => {
+    if (current()) {
+      void loadStatus();
+      if (following) {
+        scheduleFollow(0);
+      }
+    }
+  });
   applyFilters();
   void loadStatus();
   return section;
