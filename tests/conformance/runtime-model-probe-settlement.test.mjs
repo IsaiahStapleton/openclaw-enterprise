@@ -326,6 +326,17 @@ test("the upfront credential check runs only where OpenClaw would send the same 
     "https://api.openai.com/v1/chat/completions",
   );
   assert.equal(
+    upfrontCheck("openai", {
+      api: "openai-completions",
+      models: [{ id: "gpt-5", api: "openai-completions" }],
+    }).calls[0].options.env.U,
+    "https://api.openai.com/v1/chat/completions",
+  );
+  assert.equal(
+    upfrontCheck("openai", { api: "openai-responses" }).calls[0].options.env.U,
+    "https://api.openai.com/v1/responses",
+  );
+  assert.equal(
     upfrontCheck("anthropic", undefined, "sk-ant-api03-fixture").calls[0].options.env.U,
     "https://api.anthropic.com/v1/messages",
   );
@@ -351,6 +362,7 @@ test("the upfront credential check runs only where OpenClaw would send the same 
     ["openai", { request: { allowPrivateNetwork: true, proxy: { url: "http://proxy" } } }],
     ["openai", { models: [{ id: "gpt-5", headers: { "x-fixture": "1" } }] }],
     ["openai", { models: [{ id: "gpt-5", api: "openai-completions" }] }],
+    ["openai", { models: [{ id: "gpt-5", baseUrl: "https://gateway.example/v1" }] }],
     ["openai", { api: "__proto__" }],
     ["anthropic", { baseUrl: "https://api.openai.com/v1" }],
     ["anthropic", undefined, "sk-ant-oat01-fixture"],

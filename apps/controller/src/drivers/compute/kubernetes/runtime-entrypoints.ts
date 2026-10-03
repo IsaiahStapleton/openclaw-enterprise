@@ -1831,8 +1831,9 @@ function probeOpenClawAuthenticationFailureCode() {
 // authenticates before validating, so only 401 means rejection. Anything else
 // (400, an error, the 10 s limit) proves nothing and the full probe decides,
 // so acceptance still needs a real model turn. A configured endpoint, API,
-// headers or request option other than allowPrivateNetwork, a model with its own
-// API, or an Anthropic setup token, skips this request. The request goes to the
+// headers or request option other than allowPrivateNetwork, a model whose API or
+// endpoint differs from the provider's, or an Anthropic setup token, skips this
+// request. The request goes to the
 // path of the configured API: a key may be scoped to one endpoint, and OpenAI
 // answers 401 for a missing scope.
 const UPFRONT_ENDPOINTS = {
@@ -1848,7 +1849,7 @@ function credentialRejectedUpfront(provider, fragment, key, stage) {
     Object.keys(fragment.request ?? {}).some((name) => name !== "allowPrivateNetwork") ||
     String(fragment.baseUrl ?? base).replace(/\/+$/, "") !== base || !Object.hasOwn(paths, api) ||
     JSON.stringify(fragment.models ?? []).includes('"headers"') ||
-    (Array.isArray(fragment.models) && fragment.models.some((model) => model?.api !== undefined && model.api !== api))) return false;
+    (Array.isArray(fragment.models) && fragment.models.some((model) => (model?.api !== undefined && model.api !== api) || model?.baseUrl !== undefined))) return false;
   const path = paths[api];
   stage("preflight");
   return require("node:child_process").spawnSync(process.execPath, ["-e",
