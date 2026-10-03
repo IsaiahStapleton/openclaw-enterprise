@@ -614,3 +614,51 @@ func TestAgentRuntimePrintsPodsAndSources(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentStopNamesTheDeployCommandThatStartsTheAgentAgain(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"id":"agt_1","name":"stopped-agent","namespaceId":"ns_1","desiredRuntimeState":"stopped"},"meta":{"requestId":"req_1"}}`)
+	}))
+	t.Cleanup(server.Close)
+	keyFile := filepath.Join(t.TempDir(), "service-key.json")
+	if err := os.WriteFile(keyFile, []byte(`{"data":{"key":"test-key"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	command := New(&out, &errOut)
+	command.SetArgs([]string{"agent", "stop", "agt_1", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"POST /namespaces/ns_1/agents/agt_1/stop"}; !slices.Equal(requests, want) {
+		t.Fatalf("requests = %v, want %v", requests, want)
+	}
+	if !strings.Contains(out.String(), "stopped-agent") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+	if want := "notice: stop requested; run \"occ agent deploy agt_1\" to start the Agent again\n"; errOut.String() != want {
+		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
+	}
+	// Structured output stays machine-readable: the notice goes to stderr only.
+	out.Reset()
+	errOut.Reset()
+	command = New(&out, &errOut)
+	command.SetArgs([]string{"agent", "stop", "agt_1", "-o", "json", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out.String()), &decoded); err != nil || decoded["id"] != "agt_1" {
+		t.Fatalf("json stdout = %q, %v", out.String(), err)
+	}
+	if want := "notice: stop requested; run \"occ agent deploy agt_1\" to start the Agent again\n"; errOut.String() != want {
+		t.Fatalf("json stderr = %q, want %q", errOut.String(), want)
+	}
+	stop, _, err := New(io.Discard, io.Discard).Find([]string{"agent", "stop"})
+	if err != nil || !strings.Contains(stop.Long, `run "occ agent deploy ID" to start the Agent again`) {
+		t.Fatalf("occ agent stop help = %q, %v", stop.Long, err)
+	}
+}
