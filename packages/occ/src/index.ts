@@ -880,6 +880,25 @@ function removedAccessBinding(binding: Readonly<AccessBinding>): RemovedAccessBi
 }
 
 /**
+ * Rejects Agent provisioning Secret references (bindings and model authentication) that
+ * name another Namespace. It compares only the request against its route Namespace, so
+ * it reveals nothing about other Namespaces and can run before any Secret lookup.
+ */
+function rejectCrossNamespaceProvisioningSources(
+  namespaceId: string,
+  configuration: AgentProvisioningConfigurationInput,
+  harnessAuth: HarnessAuthBinding | null,
+): void {
+  const sources = Object.values(configuration.secretBindings ?? {}).map(({ source }) => source);
+  if (harnessAuth !== null && "source" in harnessAuth) {
+    sources.push(harnessAuth.source);
+  }
+  if (sources.some((source) => source.namespaceId !== namespaceId)) {
+    throw new AgentProvisioningValidationError("Secret references cannot cross Namespaces.");
+  }
+}
+
+/**
  * Lists the Namespace AccessBindings that target one exact resource. Deleting the resource
  * removes them, so callers record the list in that deletion's audit event.
  */
@@ -1825,6 +1844,8 @@ export class OpenClawController {
         id: input.namespaceId,
         namespaceId: input.namespaceId,
       });
+      // Reject foreign references before channel validation can report them as a scope miss.
+      rejectCrossNamespaceProvisioningSources(input.namespaceId, configurationInput, harnessAuth);
       await this.validateChannelCredentials(principalId, input.namespaceId, configurationInput);
     }
     return this.mutate(async (state) => {
@@ -6922,7 +6943,16 @@ export class OpenClawController {
     readonly executionMode: HarnessExecutionMode;
   } {
     const plan = asRecord(record.plan);
-    const configuration = normalizeProvisioningConfiguration(plan?.configuration);
+    let configuration: AgentProvisioningConfigurationInput;
+    try {
+      configuration = normalizeProvisioningConfiguration(plan?.configuration);
+    } catch (error) {
+      // A stored plan that no longer validates is not the caller's invalid request.
+      if (error instanceof AgentProvisioningValidationError) {
+        throw new ScopeViolationError("The accepted provisioning plan is no longer valid.");
+      }
+      throw error;
+    }
     const executionMode = plan?.executionMode;
     if (!validExecutionMode(executionMode)) {
       throw new ScopeViolationError("The provisioning execution mode is invalid.");

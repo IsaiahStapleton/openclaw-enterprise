@@ -5383,6 +5383,27 @@ test("Slack validation rejects swapped credentials and preserves authorization",
         { configuration },
       ),
     });
+  // A foreign channel Secret is an invalid request, not a scope miss from channel validation.
+  const foreignBot = { ...bot.ref, namespaceId: `ns_${randomUUID()}` };
+  const foreign = await controller.request("POST", `${base}/agents/provision`, {
+    body: provisioningRequestBody(
+      namespace.id,
+      { modelApiKey: model, toolApiKey: model },
+      {
+        configuration: {
+          ...configuration,
+          secretBindings: {
+            ...configuration.secretBindings,
+            SLACK_BOT_TOKEN: { source: foreignBot, delivery: { type: "env" } },
+          },
+        },
+      },
+    ),
+  });
+  assert.equal(foreign.status, 400, JSON.stringify(foreign.body));
+  assert.equal(foreign.body.error.code, "INVALID_REQUEST");
+  assert.equal(foreign.body.error.message, "Secret references cannot cross Namespaces.");
+  assert.equal(calls, 0);
   const swapped = await provision();
   assert.equal(swapped.status, 400, JSON.stringify(swapped.body));
   assert.equal(swapped.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
