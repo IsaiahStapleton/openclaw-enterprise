@@ -279,7 +279,7 @@ workspace writes apply immediately. Native JSON excludes Agent-owned Backend and
 execution mode. Slack channel `users: ["*"]` allows everyone; DMs remain separate. See
 [Agent revisions](../guides/topics/agent-revisions.md).
 
-**Enable Gateway password access** stages a reference. Cancel discards it; Save
+**Enable gateway password access** stages a reference. Cancel discards it; Save
 Configuration, then Deploy new version applies it. Compare **Gateway password access configured**, **Gateway
 password save denied**, and **Gateway password save in progress**. These simulated
 Agent detail stories do not prove credential delivery or login.

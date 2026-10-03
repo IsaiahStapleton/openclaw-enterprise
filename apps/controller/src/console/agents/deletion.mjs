@@ -27,7 +27,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     element(
       "p",
       { className: "muted" },
-      "Permanently delete this Agent, its revision history, and its workspace data. Namespace-owned Configurations and Secrets are kept. This cannot be undone.",
+      "Permanently delete this Agent, its version history, and its workspace data. Namespace-owned Configurations and Secrets are kept. This cannot be undone.",
     ),
     feedback,
     actions,
@@ -225,7 +225,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
       element(
         "p",
         { id: "agent-delete-confirm-description" },
-        "This permanently deletes the Agent, its revision history, and its workspace data. This cannot be undone.",
+        "This permanently deletes the Agent, its version history, and its workspace data. This cannot be undone.",
       ),
       element("p", { id: "agent-delete-confirm-kept" }, keptResourcesText()),
       element("div", { className: "form-actions" }, cancel, confirm),

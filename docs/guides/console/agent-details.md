@@ -140,7 +140,7 @@ deployment; nothing repairs them.
 | **Compute**                            | Revision's Compute Driver identifier and implementation.                                                         |
 | **View admitted native configuration** | Expands the revision's formatted native JSON. The draft uses **View native Configuration**.                      |
 
-In the draft, **Enable Gateway password access** stages the generated-password
+In the draft, **Enable gateway password access** stages the generated-password
 reference; authentication mode and proxy settings stay unchanged. The Compute
 Driver owns the password; the Console shows only its reference.
 
@@ -256,7 +256,7 @@ revision. See [Stop and resume](../../reference/agents/deployment.md#stop-and-re
 ## Delete Agent and error recovery
 
 **Delete Agent** opens a confirmation dialog. **Cancel** closes it without changes.
-**Permanently delete Agent** irreversibly removes the Agent, revision history,
+**Permanently delete Agent** irreversibly removes the Agent, version history,
 and workspace data; Namespace Configurations and Secrets remain. The dialog
 gives the commands that delete the Agent's Configuration and, if it has one, its
 model credential Secret: both are kept even when Create Agent made them, and the

@@ -594,7 +594,7 @@ test("console keeps loaded route families visible while return reads refresh", a
   await page.getByRole("heading", { name: "Retained route Agent", exact: true }).waitFor();
   await page.getByRole("button", { name: "Workspace files", exact: true }).click();
   const workspaceNotice =
-    "Workspace files require a deployed Agent with an active revision and a reachable gateway.";
+    "Workspace files require a deployed Agent with a current version and a reachable gateway.";
   await page.getByText(workspaceNotice, { exact: true }).waitFor();
   await page.locator(".native-admin-access").waitFor({ state: "attached" });
   const originalNativePanel = await page.locator(".native-admin-access").elementHandle();

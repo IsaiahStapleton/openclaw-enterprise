@@ -11,7 +11,7 @@ live connection indicator.
 Version cards are read-only. On the new version draft, **Configure** or **Edit** opens
 a drawer; **Disable** saves a disabled channel setting. These changes affect
 future deployments, including other Agents sharing that Configuration. They do
-not stop a running channel or modify an existing revision. Channels require
+not stop a running channel or modify an existing version. Channels require
 Dedicated execution; unsupported native settings can make the simple editor
 unavailable.
 

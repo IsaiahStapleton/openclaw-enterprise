@@ -1221,7 +1221,10 @@ test("credential source registration names the missing Credential Gateway", asyn
   );
   assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
   assert.equal(rejected.body.error.code, "CREDENTIAL_GATEWAY_NOT_CONFIGURED");
-  assert.match(rejected.body.error.message, /no Credential Gateway.*credential-sources\.md/);
+  assert.match(
+    rejected.body.error.message,
+    /no Credential Gateway.*docs-enterprise\.openclaw\.org\/reference\/credential-sources\//,
+  );
 });
 
 test("a duplicate Secret name answers 409 naming the taken Secret name", async () => {

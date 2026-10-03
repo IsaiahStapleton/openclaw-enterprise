@@ -3117,7 +3117,7 @@ test("Agent creation withholds Dedicated OpenClaw unless the Installation report
   assert.equal(deployed.body.error.code, "INVALID_REQUEST");
   assert.match(
     deployed.body.error.message,
-    /required worker placement \(cloudWorkers\.requiredProfile\).*docs\/reference\/harness-execution\.md#native-worker-support/,
+    /required worker placement \(cloudWorkers\.requiredProfile\).*docs-enterprise\.openclaw\.org\/reference\/harness-execution\/#native-worker-support/,
   );
   assert.equal(
     (await fixture.request("GET", "/installation")).data.capabilities?.nativeWorkers,
