@@ -4731,6 +4731,14 @@ test("dedicated OpenClaw renders an enrolled Harness without exposing model cred
   assert.doesNotThrow(() =>
     driver.validateHarnessAuth(revision.harness, revision.harnessAuth, revision.configuration),
   );
+  // A model ID may contain slashes: catalog entry `vendor/model` must satisfy `openai/vendor/model`.
+  assert.doesNotThrow(() =>
+    driver.validateHarnessAuth(
+      revision.harness,
+      revision.harnessAuth,
+      admitLoggingConfiguration(createHarnessConfiguration("openclaw", "vendor/model"), "info"),
+    ),
+  );
   assert.throws(
     () =>
       driver.validateHarnessAuth(revision.harness, revision.harnessAuth, {

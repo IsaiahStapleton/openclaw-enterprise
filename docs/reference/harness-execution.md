@@ -2,7 +2,6 @@
 
 A Harness calls the model and runs tools for an Agent. The bundled deployment
 paths run OpenClaw inside the Agent's gateway or Codex as a dedicated runtime.
-Dedicated native OpenClaw requires the experimental Sandbox integration below.
 Choose an execution mode on the Agent and a compatible model and Harness in its
 Configuration.
 
@@ -37,8 +36,7 @@ are not displaced. OpenShell contains the complete AgentRevision, not each sessi
 see [Agent runtime isolation](security/runtime-isolation.md#agent-runtime-isolation)
 for the resulting trust boundary.
 
-Dedicated Codex has no separate OCE session-count limit. Independent chats share
-one app server. Active top-level turns use OpenClaw's
+Dedicated Codex has no separate OCE session-count limit. Active top-level turns use OpenClaw's
 `agents.defaults.maxConcurrent`; absent an explicit Agent setting, OpenClaw
 defaults that turn concurrency to the greater of eight or four times its
 quota-aware available parallelism. That limit bounds active turns, not saved
@@ -67,9 +65,11 @@ models only when they retain the selected provider and an explicit matching
 Harness runtime. Model fallbacks under defaults or Agent entries must retain
 the primary provider and resolve through the same policy checks to the same
 Harness. A provider's native `models` array is limited to the resolved primary
-and fallback models. Nonempty native `agents.list` configurations remain
-unsupported. Admission preserves the fallback order in the immutable revision;
-it does not implement fallback execution or allow changing topology.
+and fallback models. Each entry's `id` is the full reference or the ID after
+its first slash; IDs may contain slashes. Nonempty native `agents.list`
+configurations remain unsupported. Admission preserves the fallback order in the
+immutable revision; it does not implement fallback execution or allow changing
+topology.
 
 ## Admission and immutable execution
 
@@ -110,8 +110,8 @@ model-auth selector. Kubernetes supports these combinations:
 | `credential_source`            | Dedicated Harness                  | The Harness receives only a placeholder; the Sandbox egress proxy inserts the key from the Credential Gateway.    |
 
 Kubernetes workload rendering prepares one explicit login mode and exact Secret
-projections. The selected Sandbox consumes the same already-rendered workload
-requirements. It does not resolve a second credential source.
+projections. The selected Sandbox consumes those rendered requirements and
+resolves no second credential source.
 
 A [`credential_source`](credential-sources.md) binding requires a selected
 Credential Gateway, the paired OpenShell Sandbox, a dedicated Codex or native
@@ -153,7 +153,7 @@ environment that keeps only the runtime's TLS trust variables (`SSL_CERT_FILE`,
 `SSL_CERT_DIR`), so a TLS-inspecting egress proxy can serve it. Dedicated Codex
 reaches its model over Responses WebSocket by default (embedded OpenClaw uses
 HTTP streaming), so an egress proxy or firewall in front of the model host must
-allow the WebSocket upgrade. Probes never log native output. Dedicated Codex retries a confirmed
+allow the WebSocket upgrade. Dedicated Codex retries a confirmed
 subprocess timeout once after one second. Each attempt has a 30-second cap within
 one 61-second budget, including the delay. Authentication rejection, malformed
 output, tool events, and external signals without timeout evidence do not retry.
