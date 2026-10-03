@@ -1068,7 +1068,8 @@ test(
     await clock.advance(1000);
     await eventually(() => disposed.length === 1);
     const { sessionId } = disposed[0];
-    // Another admission's open evicts the disposed session from the service.
+    // Another admission's open evicts the disposed session from the service. No
+    // worker attempt was prepared for it, so the journal then refuses that admission.
     assert.deepEqual(await send(inputFor("repo-b")), {
       status: 503,
       body: { error: "unavailable" },

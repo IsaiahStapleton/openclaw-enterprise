@@ -277,7 +277,9 @@ export function createControlAdmission(
       try {
         await record.ready;
       } catch (error) {
-        service.close(opened.session.sessionId);
+        if (service.status(opened.session.sessionId) !== undefined) {
+          service.close(opened.session.sessionId);
+        }
         throw error;
       }
       // Binding can outlive the session. Never hand out a bearer for a session
