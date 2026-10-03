@@ -154,6 +154,11 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Failed provisioning codes that a retry of the same job cannot fix: the worker records
+// these as permanent (a taken name, a scope or authorization rejection, a Namespace or Agent
+// lifecycle change) or the job was cancelled. Other codes are transient, so Retry stays.
+const PERMANENT_PROVISIONING_CODES = new Set(["PROVISIONING_REJECTED", "PROVISIONING_CANCELLED"]);
+
 async function waitForProvisioning({ request, status, first }) {
   let current = first.provisioning ?? first;
   const jobUrl = current?.url;
@@ -170,7 +175,8 @@ async function waitForProvisioning({ request, status, first }) {
   if (current?.status !== "succeeded") {
     const error = new Error(current?.error?.message ?? "Provisioning did not complete.");
     error.provisioningTerminal = true;
-    error.canRetryProvisioning = current?.status === "failed";
+    error.canRetryProvisioning =
+      current?.status === "failed" && !PERMANENT_PROVISIONING_CODES.has(current?.error?.code);
     error.provisioningUrl = current?.url ?? jobUrl;
     throw error;
   }
@@ -898,7 +904,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   let capabilityDiscoveryFailed = false;
   const provisionableExecutionModes = new Set();
   let nativeWorkersAvailable = false;
-  const provisioningRequestId = createClientRequestId();
+  let provisioningRequestId = createClientRequestId();
   let provisioningAttempt = null;
   const capabilityStatus = element(
     "p",
@@ -1545,9 +1551,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
             ? "Outcome unknown. Retry resubmits the same request ID and saved references."
             : error.provisioningTerminal && error.canRetryProvisioning
               ? `${error.message} Retry uses the accepted provisioning job.`
-              : error.status === undefined && error.message
-                ? error.message
-                : message(error, mutationStarted);
+              : error.provisioningTerminal
+                ? `${error.message} Change the settings and select Create Agent to submit a new request.`
+                : error.status === undefined && error.message
+                  ? error.message
+                  : message(error, mutationStarted);
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
       if (error.provisioningTerminal && error.canRetryProvisioning) {
         provisioningAttempt = {
@@ -1556,6 +1564,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         };
       } else if (!outcomeUnknown) {
         provisioningAttempt = null;
+        if (error.provisioningTerminal) {
+          // The failed job keeps this request ID; an edited form needs a new one.
+          provisioningRequestId = createClientRequestId();
+        }
       }
     } finally {
       if (context.isCurrent()) {

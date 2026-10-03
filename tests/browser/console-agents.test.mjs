@@ -1961,6 +1961,105 @@ test("Dedicated Agent creation reuses separately saved Secret references after p
   );
 });
 
+test("Dedicated Agent creation offers Retry only for a transient provisioning failure", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provision outcomes", { ready: true });
+  const { page } = await newPage(t, fixture);
+  await routeInstallationProvisioning(page, fixture);
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: [], meta: { requestId: "req_repository_choices" } }),
+    }),
+  );
+  const updatedAt = new Date().toISOString();
+  const json = (data, status = 200) => ({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify({
+      data,
+      meta: { requestId: "req_00000000-0000-4000-8000-000000000001" },
+    }),
+  });
+  // Each accepted request fails in the worker: first a taken name (permanent), then an
+  // unavailable dependency (transient).
+  const failures = [
+    {
+      code: "PROVISIONING_REJECTED",
+      message: "An Agent with this name already exists in this Namespace. Choose a different name.",
+    },
+    {
+      code: "PROVISIONING_DEPENDENCY_UNAVAILABLE",
+      message: "Agent provisioning could not complete.",
+    },
+  ];
+  const bodies = [];
+  await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route, request) => {
+    bodies.push(request.postDataJSON());
+    const url = `/namespaces/${namespace.id}/agents/provision/work_${bodies.length}`;
+    await route.fulfill(
+      json(
+        {
+          provisioning: {
+            workId: `work_${bodies.length}`,
+            status: "queued",
+            phase: "accepted",
+            attemptCount: 0,
+            updatedAt,
+            url,
+          },
+        },
+        202,
+      ),
+    );
+  });
+  await page.route(`**/namespaces/${namespace.id}/agents/provision/work_*`, async (route) => {
+    const index = Number(new URL(route.request().url()).pathname.split("_").at(-1));
+    await route.fulfill(
+      json({
+        workId: `work_${index}`,
+        status: "failed",
+        phase: "accepted",
+        attemptCount: 1,
+        updatedAt,
+        url: `/namespaces/${namespace.id}/agents/provision/work_${index}`,
+        error: failures[index - 1],
+      }),
+    );
+  });
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Taken name");
+  await page.getByLabel("Authentication method").selectOption("codex_pat");
+  await createModelCredentialSecret(page, "model-secret-value");
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByText(
+      "An Agent with this name already exists in this Namespace. Choose a different name. Change the settings and select Create Agent to submit a new request.",
+    )
+    .waitFor();
+  const retry = page.getByRole("button", { name: "Retry provisioning request" });
+  assert.equal(await retry.isVisible(), false);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
+
+  await page.getByLabel("Agent name").fill("Free name");
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByText("Agent provisioning could not complete. Retry uses the accepted provisioning job.")
+    .waitFor();
+  assert.equal(await retry.isVisible(), true);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].name, "Free name");
+  // The failed job keeps its request ID, so the edited form submits a new one.
+  assert.notEqual(bodies[1].requestId, bodies[0].requestId);
+});
+
 test("Agent creation rejects non-object native Configuration JSON before Configuration or Agent writes", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
