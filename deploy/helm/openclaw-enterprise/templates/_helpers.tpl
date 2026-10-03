@@ -366,7 +366,7 @@ capabilities:
 {{- end -}}
 
 {{- define "openclaw.secretEnv" -}}
-- name: {{ .name | quote }}
+- name: {{ .name }}
   valueFrom:
     secretKeyRef:
       name: {{ .secretName | quote }}
