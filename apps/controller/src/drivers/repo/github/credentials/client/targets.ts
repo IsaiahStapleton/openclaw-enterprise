@@ -81,9 +81,15 @@ function gitPushDestinations(
   } catch {
     return [];
   }
-  if (/[\s\\%?#]/.test(destination) || destination.includes("..") || url.password) {
-    // Git decodes a URL username before the credential helper matches it, so an
-    // irregular gateway destination can still receive the bearer.
+  if (
+    /[\s\\%?#]/.test(destination) ||
+    destination.includes("..") ||
+    url.password ||
+    url.pathname.startsWith("//")
+  ) {
+    // Git decodes a URL username and trims leading path slashes before the
+    // credential helper matches, so an irregular gateway destination can still
+    // receive the bearer.
     if (manifest.bindings.some(({ client }) => client.gatewayOrigin === url.origin)) {
       throw new Error("unsupported-push-destination");
     }

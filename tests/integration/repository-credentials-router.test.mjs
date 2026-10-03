@@ -282,6 +282,20 @@ test("push destination normalization retains exact repository and host boundarie
       ),
     /repository-not-admitted/,
   );
+  // Irregular gateway destinations fail closed; other hosts keep native behavior.
+  assert.equal(
+    selectGitPushDestination(manifest, "https://github.com/exa%6dple/project.git"),
+    undefined,
+  );
+  for (const destination of [
+    "https://credentials.example.test/exa%6dple/project.git",
+    "https://credentials.example.test//example/project.git",
+  ]) {
+    assert.throws(
+      () => selectGitPushDestination(manifest, destination),
+      /unsupported-push-destination/,
+    );
+  }
 });
 
 test("delegating an ordinary hook back to the managed dispatcher fails without recursion", async (t) => {
