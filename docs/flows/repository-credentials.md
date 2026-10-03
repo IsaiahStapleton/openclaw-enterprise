@@ -104,7 +104,9 @@ Admission IDs bind the complete request: platform Namespace, repository referenc
 normalized profile, expected grant and absolute deadline. Registry mode requires
 this binding and independently resolves its fingerprint. A worker-owned private
 journal reserves the exact attempt before bearer delivery; recovery durably fences
-a missing admission. Known nondelivery closes the session. Reconciliation cannot
+a missing admission. The broker opens the session before reserving, so a capacity
+or shutdown refusal leaves no receipt and the same admission can retry or be
+fenced. Known nondelivery closes the session. Reconciliation cannot
 recover a bearer, change its binding or replay provider work.
 
 Factory failure or an invalid binding closes construction admission before
