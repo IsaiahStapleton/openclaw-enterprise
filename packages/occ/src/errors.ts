@@ -216,9 +216,25 @@ export class ResourceStateConflictError extends ResourceConflictError {
   }
 }
 
-/** Shared by the memory and PostgreSQL stores so both report a duplicate Agent name alike. */
+/*
+ * Duplicate caller-chosen names, shared by the memory and PostgreSQL stores so both report
+ * them alike. Each is raised only after the caller was authorized to create (or rename) that
+ * resource kind in that scope, and the 409 already revealed that the name is taken, so naming
+ * the kind discloses nothing new.
+ */
 export const AGENT_NAME_CONFLICT =
   "An Agent with this name already exists in this Namespace. Choose a different name.";
+export const SECRET_NAME_CONFLICT =
+  "A Secret with this name already exists in this Namespace. Choose a different name.";
+export const PRESET_NAME_CONFLICT =
+  "A Preset with this name already exists in this Namespace. Choose a different name.";
+export const SERVICE_ACCOUNT_NAME_CONFLICT =
+  "A ServiceAccount with this name already exists in this Namespace. Choose a different name.";
+export const CREDENTIAL_SOURCE_NAME_CONFLICT =
+  "A credential source with this name already exists in this Namespace. Choose a different name.";
+/** Deleted Namespaces keep their name, so a name can be taken by one no longer listed. */
+export const NAMESPACE_NAME_CONFLICT =
+  "A Namespace with this name already exists or was deleted. Choose a different name.";
 
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {

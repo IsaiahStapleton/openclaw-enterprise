@@ -68,10 +68,17 @@ test("Preset CRUD keeps Namespace names unique and filters reads by exact Native
     body: { name: "Shared name", template: {} },
   });
   assert.equal(duplicate.status, 409);
+  // The caller chose only the name, so the conflict says the name is taken here.
+  const presetNameConflict =
+    "A Preset with this name already exists in this Namespace. Choose a different name.";
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(duplicate.body.error.message, presetNameConflict);
   const conflictingRename = await fixture.request("PATCH", `${collection(alpha.id)}/${hidden.id}`, {
     body: { name: "Shared name" },
   });
   assert.equal(conflictingRename.status, 409);
+  assert.equal(conflictingRename.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(conflictingRename.body.error.message, presetNameConflict);
 
   const limited = await fixture.createAccountWithPolicy("preset-reader", (principal) => {
     fixture.policy.roles.push({
