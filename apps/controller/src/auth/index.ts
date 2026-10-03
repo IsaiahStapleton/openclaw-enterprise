@@ -78,8 +78,11 @@ export {
  */
 export type PasswordSignInPolicy = "all" | "recovery-only";
 
-/** The slow-lane floors a composition may shorten (see `passwordSlowLaneFloors`). */
-export type PasswordSlowLaneFloors = Pick<PasswordSlowLaneOptions, "floorMs" | "maxFloorMs">;
+/** The slow-lane floors a composition may shorten or observe (see `passwordSlowLaneFloors`). */
+export type PasswordSlowLaneFloors = Pick<
+  PasswordSlowLaneOptions,
+  "floorMs" | "maxFloorMs" | "waitFloor"
+>;
 
 export interface HumanLoginConfiguration {
   readonly github?: GitHubLoginConfiguration;
@@ -203,7 +206,7 @@ export interface ControllerAuthOptions {
   /**
    * Replaces the default admission's slow-lane floors; budgets and slots stay
    * `passwordFailureBudget`. The server leaves it unset; tests shorten the floor cap so
-   * paced refusals do not wait the full eight seconds.
+   * paced refusals do not wait the full eight seconds, and observe when floors start.
    */
   readonly passwordSlowLaneFloors?: PasswordSlowLaneFloors;
   /**

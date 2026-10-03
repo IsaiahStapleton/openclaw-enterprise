@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
@@ -23,10 +24,56 @@ const wrongPassword = "wrong-guess-password";
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
+// A subtest sets this to see the slow-lane floors start and to keep them from ending.
+let floorWatch;
+
 // The production slow lane with its floor capped at 2 s instead of 8 s. Every paced attempt
 // waits its floor in real time, so the cap sets this suite's length; the 1 s first floor,
-// the doubling, the slots and the per-minute budgets stay the production values.
-const slowLane = { floorMs: passwordFailureBudget.slow.floorMs, maxFloorMs: 2000 };
+// the doubling, the slots and the per-minute budgets stay the production values. An attempt
+// holds its email's slot from the start of its floor, which floorWatch observes.
+const slowLane = {
+  floorMs: passwordFailureBudget.slow.floorMs,
+  maxFloorMs: 2000,
+  async waitFloor(floorMs) {
+    const watch = floorWatch;
+    watch?.started();
+    await delay(floorMs, undefined, { ref: false });
+    await watch?.released;
+  },
+};
+
+// Counts the floors that start from now on and holds each one past its time until release().
+function watchFloors() {
+  const release = Promise.withResolvers();
+  const watch = {
+    count: 0,
+    waiters: [],
+    released: release.promise,
+    started() {
+      watch.count += 1;
+      for (const waiter of watch.waiters.splice(0)) {
+        waiter();
+      }
+    },
+    async reached(count, deadlineMs) {
+      const deadline = performance.now() + deadlineMs;
+      while (watch.count < count) {
+        const left = deadline - performance.now();
+        assert.ok(left > 0, `${watch.count} of ${count} slow-lane floors started`);
+        await Promise.race([
+          new Promise((resolve) => watch.waiters.push(resolve)),
+          delay(left, undefined, { ref: false }),
+        ]);
+      }
+    },
+    release() {
+      floorWatch = undefined;
+      release.resolve();
+    },
+  };
+  floorWatch = watch;
+  return watch;
+}
 
 // The default install (no external provider), composed twice over one database: behind a
 // trusted ingress, where admission keys on the resolved client address and the email, and
@@ -562,17 +609,32 @@ test(
           const response = await plainSignIn({ ...knownAdmin, password: wrongPassword });
           assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
         }
-        // Strangers hold both of the email's slow-lane slots and queue behind them; each
-        // holds its slot for a floor of 1 s up to the cap.
-        const flood = Array.from({ length: 4 }, () =>
-          plainSignIn({ ...knownAdmin, password: wrongPassword }),
-        );
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const started = performance.now();
-        const response = await plainSignInWith(adminDevice, knownAdmin);
-        const elapsed = performance.now() - started;
-        assert.equal(response.statusCode, 200, response.body);
-        assert.ok(elapsed < 1000, `the known browser waited ${elapsed} ms`);
+        // Strangers hold both of the email's slow-lane slots and queue behind them. Each
+        // holds its slot from the start of its floor, and the watch keeps those floors from
+        // ending until the known browser has its answer.
+        const floors = watchFloors();
+        let flood;
+        let answered;
+        try {
+          flood = Array.from({ length: 4 }, () =>
+            plainSignIn({ ...knownAdmin, password: wrongPassword }),
+          );
+          await floors.reached(passwordFailureBudget.slow.concurrentPerEmail, 30_000);
+          // A browser that queued behind those slots, or was paced itself, would not answer
+          // while the floors are held; after the deadline they end and the test fails.
+          const signingIn = plainSignInWith(adminDevice, knownAdmin);
+          answered = await Promise.race([
+            signingIn.then((response) => ({ response, floors: floors.count })),
+            delay(30_000, undefined, { ref: false }),
+          ]);
+        } finally {
+          floors.release();
+        }
+        assert.ok(answered !== undefined, "the known browser waited for strangers' floors");
+        assert.equal(answered.response.statusCode, 200, answered.response.body);
+        // Only the two strangers holding the slots started floors: the others queued, and
+        // the known browser was not paced.
+        assert.equal(answered.floors, passwordFailureBudget.slow.concurrentPerEmail);
         assert.deepEqual(
           (await Promise.all(flood)).map((refused) => refused.statusCode),
           Array(4).fill(429),
