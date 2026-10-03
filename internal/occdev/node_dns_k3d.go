@@ -92,7 +92,11 @@ func (r *runner) checkDevelopmentNodeDNS(ctx context.Context, state *development
 		}
 		return developmentNodeDNSError(server, configured, hostUpstreamResolver(readHostResolverFile))
 	default:
-		fmt.Fprintf(r.opts.Err, "Warning: could not confirm that the k3d node %s resolves %s; continuing. If image pulls stall, see OCC_DEVELOPMENT_K3D_DNS_RESOLVER in the local Kubernetes development guide.\n", server, developmentNodeDNSName)
+		automatic := ""
+		if r.automaticNodeResolver != "" {
+			automatic = fmt.Sprintf(" The node uses this host's upstream resolver %s; OCC_DEVELOPMENT_K3D_DNS_RESOLVER=%s keeps k3d's default.", r.automaticNodeResolver, developmentResolverK3dDefault)
+		}
+		fmt.Fprintf(r.opts.Err, "Warning: could not confirm that the k3d node %s resolves %s; continuing.%s If image pulls stall, see OCC_DEVELOPMENT_K3D_DNS_RESOLVER in the local Kubernetes development guide.\n", server, developmentNodeDNSName, automatic)
 		return nil
 	}
 }

@@ -164,30 +164,25 @@ func TestPrepareDevelopmentResolverDefaultsToHostUpstreamOnLinuxDocker(t *testin
 		"/run/systemd/resolve/resolv.conf": "nameserver 168.63.129.16\n",
 		"/etc/resolv.conf":                 "nameserver 127.0.0.53\n",
 	}
-	prepare := func(t *testing.T, engine string, env map[string]string) (*runner, []string, string, error) {
+	// prepare returns the runner, its cluster arguments, the node resolv.conf it wrote (if any), and stdout.
+	prepare := func(t *testing.T, engine string, env map[string]string) (*runner, []string, string, string, error) {
 		t.Helper()
 		state := &developmentState{directory: t.TempDir()}
 		var out bytes.Buffer
 		r := &runner{engine: engine, env: env, opts: Options{Out: &out}}
 		args, err := r.prepareDevelopmentResolver(state)
-		if err != nil {
-			return r, args, out.String(), err
-		}
-		if len(args) != 0 {
-			data, readErr := os.ReadFile(filepath.Join(state.directory, "node-resolv.conf"))
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			return r, args, string(data), nil
-		}
-		return r, args, out.String(), nil
+		resolvConf, _ := os.ReadFile(filepath.Join(state.directory, "node-resolv.conf"))
+		return r, args, string(resolvConf), out.String(), err
 	}
 
 	t.Run("Linux Docker uses the systemd-resolved upstream, not the stub", func(t *testing.T) {
 		hostResolverFiles(t, "linux", systemdResolved)
-		r, args, resolvConf, err := prepare(t, "docker", map[string]string{})
+		r, args, resolvConf, out, err := prepare(t, "docker", map[string]string{})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !strings.Contains(out, "upstream DNS resolver 168.63.129.16") || !strings.Contains(out, "to k3d to keep k3d's default") {
+			t.Fatalf("startup did not say which resolver it chose: %q", out)
 		}
 		if len(args) != 2 || args[0] != "--volume" || !strings.HasSuffix(args[1], ":/etc/resolv.conf:ro@server:0") {
 			t.Fatalf("unexpected cluster arguments: %q", args)
@@ -205,7 +200,7 @@ func TestPrepareDevelopmentResolverDefaultsToHostUpstreamOnLinuxDocker(t *testin
 
 	t.Run("an explicit resolver wins", func(t *testing.T) {
 		hostResolverFiles(t, "linux", systemdResolved)
-		r, _, resolvConf, err := prepare(t, "docker", map[string]string{"OCC_DEVELOPMENT_K3D_DNS_RESOLVER": "192.0.2.53"})
+		r, _, resolvConf, _, err := prepare(t, "docker", map[string]string{"OCC_DEVELOPMENT_K3D_DNS_RESOLVER": "192.0.2.53"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +211,7 @@ func TestPrepareDevelopmentResolverDefaultsToHostUpstreamOnLinuxDocker(t *testin
 
 	t.Run("k3d keeps k3d's default resolver", func(t *testing.T) {
 		hostResolverFiles(t, "linux", systemdResolved)
-		r, args, _, err := prepare(t, "docker", map[string]string{"OCC_DEVELOPMENT_K3D_DNS_RESOLVER": "k3d"})
+		r, args, _, _, err := prepare(t, "docker", map[string]string{"OCC_DEVELOPMENT_K3D_DNS_RESOLVER": "k3d"})
 		if err != nil || len(args) != 0 || r.env["K3D_FIX_DNS"] != "" || r.automaticNodeResolver != "" {
 			t.Fatalf("k3d default not kept: %v %q %+v", err, args, r.env)
 		}
@@ -232,7 +227,7 @@ func TestPrepareDevelopmentResolverDefaultsToHostUpstreamOnLinuxDocker(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			hostResolverFiles(t, test.hostOS, test.files)
-			r, args, _, err := prepare(t, test.engine, map[string]string{})
+			r, args, _, _, err := prepare(t, test.engine, map[string]string{})
 			if err != nil || len(args) != 0 || r.env["K3D_FIX_DNS"] != "" || r.automaticNodeResolver != "" {
 				t.Fatalf("unexpected resolver change: %v %q %+v", err, args, r.env)
 			}
@@ -241,7 +236,7 @@ func TestPrepareDevelopmentResolverDefaultsToHostUpstreamOnLinuxDocker(t *testin
 
 	t.Run("invalid explicit resolver", func(t *testing.T) {
 		hostResolverFiles(t, "linux", systemdResolved)
-		if _, _, _, err := prepare(t, "docker", map[string]string{"OCC_DEVELOPMENT_K3D_DNS_RESOLVER": "127.0.0.53"}); err == nil {
+		if _, _, _, _, err := prepare(t, "docker", map[string]string{"OCC_DEVELOPMENT_K3D_DNS_RESOLVER": "127.0.0.53"}); err == nil {
 			t.Fatal("a loopback resolver was accepted")
 		}
 	})
