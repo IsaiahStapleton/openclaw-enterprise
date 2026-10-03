@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import {
   WORKSPACE_DEFAULTS,
@@ -2159,7 +2162,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
   // A 400 to the resend shows the request was never admitted, so the form unlocks.
   await retry.click();
-  await page.getByText(/^Check the entered values/).waitFor();
+  await page.getByText(/^The Agent name is invalid\./).waitFor();
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByLabel("Agent name").fill("Taken name");
@@ -2533,6 +2536,49 @@ test("Agent creation accepts a manual model outside the static list and saves th
   );
   assert.equal(configuration.data.values.agents.defaults.model, "codex/gpt-manual-account-model");
   assert.equal(JSON.stringify(configuration.data).includes("manual-model-key"), false);
+});
+
+test("Agent creation names the Configuration field that holds an inline model credential without showing it", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "occ-create-inline-credential-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Create inline credential", { ready: true });
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Inline credential Agent");
+  await enterManualModel(page, "inline-credential-model-key", "gpt-inline-credential");
+  await openAdvancedSettings(page);
+  // A pasted provider key is a value, not the Secret reference the field requires.
+  const sentinel = `synthetic-inline-key-${randomUUID()}`;
+  const configuration = page.getByLabel("Configuration JSON");
+  const edited = JSON.parse(await configuration.inputValue());
+  edited.models = {
+    ...edited.models,
+    providers: { ...edited.models?.providers, openai: { apiKey: sentinel } },
+  };
+  await configuration.fill(JSON.stringify(edited, null, 2));
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await rejected).status(), 400);
+  const feedback = page.getByRole("alert").filter({
+    hasText:
+      "Configuration field /models/providers/openai/apiKey holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.",
+  });
+  await feedback.waitFor();
+  // Only the editor holds the key; the explanation never repeats it.
+  assert.equal((await feedback.textContent()).includes(sentinel), false);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+  assert.equal(await configuration.isDisabled(), false);
 });
 
 test("Agent creation reports unavailable Secret storage before creating Configuration or Agent", async (t) => {
