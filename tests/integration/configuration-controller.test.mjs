@@ -407,6 +407,7 @@ test("Configuration HTTP names a model provider baseUrl or api the runtime canno
         },
         openai: { baseUrl: "" },
         gateway: { baseUrl: "${PRIVATE_GATEWAY_URL}", api: "${GATEWAY_MODEL_API}" },
+        fallback: { baseUrl: "${FALLBACK_URL:-https://models.example/v1}", api: "${API:-ollama}" },
       },
     },
   };

@@ -28,9 +28,9 @@ const pointer = (...segments: readonly (string | number)[]): string =>
     .map((segment) => `/${String(segment).replaceAll("~", "~0").replaceAll("/", "~1")}`)
     .join("");
 
-// The runtime resolves `${VAR}` environment references (uppercase names) before it validates
-// its configuration, so a value that holds one is left to the runtime.
-const environmentReference = /\$\{[A-Z_][A-Z0-9_]*\}/;
+// The runtime resolves `${VAR}` and `${VAR:-fallback}` environment references (uppercase
+// names) before it validates its configuration, so a value that holds one is left to it.
+const environmentReference = /\$\{[A-Z_][A-Z0-9_]*(?::-[^${}]*)?\}/;
 
 function validateSettings(
   settings: Record<string, unknown>,
