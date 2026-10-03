@@ -22,7 +22,8 @@ import { loadTestSuites } from "./test-suites.mjs";
 import { cleanupResourceIds } from "./cleanup.mjs";
 import { captureK3dDiagnostics, k3dHostMetrics } from "./k3d-diagnostics.mjs";
 import { prepareGatewayRouting } from "./routing.mjs";
-import { prepareLogging } from "./logging.mjs";
+import { prepareLogging, readDefaultCollectorImage } from "./logging.mjs";
+import { pullImage } from "./image-pull.mjs";
 import {
   prepareRepositoryCredentials,
   prepareRepositoryCredentialsFile,
@@ -1447,7 +1448,7 @@ async function ensureDockerSourceImage(state, image, envName) {
       throw error;
     }
   }
-  await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["pull", image]);
+  await pullImage(image, { execFile, docker: process.env.OCC_DOCKER_BIN ?? "docker" });
   if (!(await dockerImageHasRepoDigest(image))) {
     throw new Error(`${envName} pull did not materialize the requested registry digest.`);
   }
@@ -2252,8 +2253,29 @@ async function prepareLane({ lane, statePath }) {
       );
       break;
     }
+    case "logging-collector": {
+      // The tests start these containers themselves under a 120 s command
+      // timeout, so pull the pinned images here, where a slow or failed pull
+      // is retried. An unpinned local override is still pulled by the test.
+      const images = {
+        OCC_TEST_LOGGING_COLLECTOR_IMAGE: await readDefaultCollectorImage(),
+        OCC_TEST_LOGGING_NODE_IMAGE: effectiveLaneEnv(name, env).OCC_TEST_LOGGING_NODE_IMAGE,
+      };
+      await timedPreparation(name, "image-pulls", () =>
+        prepareTogether(
+          Object.entries(images)
+            .filter(([, image]) => immutableDigest(image))
+            .map(
+              ([variable, image]) =>
+                () =>
+                  ensureDockerSourceImage(state, image, variable),
+            ),
+          2,
+        ),
+      );
+      break;
+    }
     case "helper-timeout":
-    case "logging-collector":
       break;
   }
 

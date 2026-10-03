@@ -272,6 +272,9 @@
       "path": "tests/integration/ci-prepare.test.mjs"
     },
     {
+      "path": "tests/integration/ci-image-pull.test.mjs"
+    },
+    {
       "path": "tests/integration/k3d-launcher.test.mjs"
     },
     {
