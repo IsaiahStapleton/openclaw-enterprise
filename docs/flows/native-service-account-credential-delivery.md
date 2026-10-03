@@ -1,6 +1,6 @@
 ---
 created: 2026-08-24
-updated: 2026-09-30
+updated: 2026-10-02
 last_updated_session: codex/01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
@@ -209,7 +209,8 @@ Only successful validation starts the app-server and publishes readiness.
 
 Embedded OpenClaw consumes the selected provider's native API key and runs one bounded native
 primary-model probe in the actual gateway startup, with tools and fallback
-disabled. Its 16-token output limit meets the provider's minimum request size.
+disabled. Its 256-token output cap lets reasoning models answer within the
+15-second timeout.
 Initial and replacement deployments use this same startup path. For replacement,
 activation first updates the shared gateway's `Recreate` Deployment, which can
 stop the serving gateway before the new process validates credentials. Invalid

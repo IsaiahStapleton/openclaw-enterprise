@@ -6609,6 +6609,8 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           assert.equal(probeCall.environment.NODE_EXTRA_CA_CERTS, "/run/openshell/ca.crt");
           assert.equal(probeCall.environment.SSL_CERT_FILE, "/run/openshell/ca-bundle.crt");
           assert.equal(probeCall.args[probeCall.args.indexOf("--probe-provider") + 1], provider);
+          // Room for a reasoning model to finish thinking and still return text.
+          assert.equal(probeCall.args[probeCall.args.indexOf("--probe-max-tokens") + 1], "256");
           assert.equal(probeCall.environment[credentialName], "fixture-model-key");
           assert.equal(
             probeCall.environment[provider === "openai" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"],
