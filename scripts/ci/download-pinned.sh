@@ -11,7 +11,7 @@
 # eight attempts, or when the next retry would start more than 120 seconds
 # after the first attempt began (elapsed time plus the backoff delay). GitHub
 # release assets have answered 503 for over 30 seconds while other requests
-# succeeded, so the attempts fill the budget rather than end at 30 seconds.
+# succeeded, so retries continue for about 90 seconds rather than ending at 30.
 # The budget does not cut a running attempt short:
 # each attempt may take up to 300 seconds (curl --max-time), so a download
 # gives up within about seven minutes.

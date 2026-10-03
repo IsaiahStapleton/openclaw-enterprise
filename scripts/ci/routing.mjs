@@ -147,7 +147,7 @@ export async function fetchPinnedBytes(
   } = {},
 ) {
   const started = Date.now();
-  let delayMs = firstDelayMs;
+  let delayMs = Math.min(firstDelayMs, maxDelayMs);
   for (let attempt = 1; ; attempt += 1) {
     let failure;
     let cause;
