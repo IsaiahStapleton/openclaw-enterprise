@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,7 +12,13 @@ import {
   watchBrowserContext,
 } from "../helpers/browser-failure-diagnostics.mjs";
 import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
-import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import { createConsoleAppFixture as createBaseConsoleAppFixture } from "../helpers/console-app.mjs";
+
+const defaultCodexPreset = JSON.parse(
+  await readFile(new URL("../../deploy/presets/default-codex.json", import.meta.url), "utf8"),
+);
+const createConsoleAppFixture = (t, options = {}) =>
+  createBaseConsoleAppFixture(t, { defaultPresets: [defaultCodexPreset], ...options });
 
 const routeHoldTimeoutMs = 30_000;
 
@@ -621,7 +627,7 @@ test("console keeps loaded route families visible while return reads refresh", a
   await page.getByRole("link", { name: "← Agents", exact: true }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByRole("heading", { name: "Create Agent", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).fill("Retained draft Agent");
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
@@ -631,10 +637,10 @@ test("console keeps loaded route families visible while return reads refresh", a
   t.after(() => createSessionHold.release());
   await page.goBack();
   await createSessionHold.waitForRelease();
-  // The abandoned no-Preset form must not be shown even as an inert cached preview.
+  // The abandoned default starter form must not appear as an inert cached preview.
   assert.equal(await page.locator("#agent-name").count(), 0);
   createSessionHold.release();
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).waitFor();
   await createSessionHold.waitForCompletion();
   await page.unroute(sessionPattern);
   await page.getByLabel("Preset template").waitFor();
@@ -773,7 +779,7 @@ test("a session replaced by another tab signs this tab out instead of being adop
   const namespace = await fixture.createNamespace("Session replacement", { ready: true });
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).fill("Old session draft");
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
@@ -801,7 +807,7 @@ test("a session replaced by another tab signs this tab out instead of being adop
   await page.getByLabel("Username").fill(fixture.credentials.email);
   await page.getByLabel("Password").fill(fixture.credentials.password);
   await page.getByRole("button", { name: "Login" }).click();
-  await page.getByRole("button", { name: "Start without Preset", exact: true }).click();
+  await page.getByRole("button", { name: "Start with default Preset", exact: true }).click();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
 });
 

@@ -912,7 +912,12 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
   const namespace = await fixture.createNamespace("Default catalog", { ready: true });
   const list = await fixture.request("GET", collection(namespace.id));
   assert.equal(list.status, 200);
-  const defaultNames = [customPreset.name, "Standard Codex", "Standard OpenClaw"].sort();
+  const defaultNames = [
+    customPreset.name,
+    "default-codex",
+    "Standard Codex",
+    "Standard OpenClaw",
+  ].sort();
   assert.deepEqual(list.data.map((preset) => preset.name).sort(), defaultNames);
   const standardCodex = list.data.find((preset) => preset.name === "Standard Codex");
   assert.equal(standardCodex.template.variables.modelSecret.type, "password");
