@@ -633,6 +633,14 @@ function assertImmutableOptionalEnvImages(names, env = process.env) {
 
 async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   const name = laneName(lane);
+  // TODO: Remove this refusal once installed repository qualification can remove its
+  // remote branch and pull request only while they still match what the run created.
+  // Refuse before prerequisite checks so operators do not provision inputs for it.
+  if (name === "repository-credentials-installed") {
+    throw new Error(
+      "Installed repository qualification is temporarily unavailable until safe remote cleanup is supported.",
+    );
+  }
   const prepare = lanePrepare(name);
   const effectiveEnv = effectiveLaneEnv(name, env);
   if (prepare.k3d && name !== "openshell" && effectiveEnv.OPENCLAW_CI_K3S_IMAGE) {
@@ -736,9 +744,6 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
     if (gh && !isAbsolute(gh)) {
       throw new Error("OCC_TEST_REPOSITORY_CREDENTIALS_GH_BINARY must be absolute when supplied.");
     }
-    throw new Error(
-      "Installed repository qualification is temporarily unavailable until safe remote cleanup is supported.",
-    );
   }
 }
 
