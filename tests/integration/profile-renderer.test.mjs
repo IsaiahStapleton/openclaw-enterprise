@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { loadStartupConfigurationSnapshot } from "../../apps/controller/src/composition/installation-config.ts";
 import { KubernetesComputeDriver } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
+import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
 
 const digestA = "a".repeat(64);
 const digestB = "b".repeat(64);
@@ -685,7 +686,11 @@ test("profiles pass an optional observability URL to Installation startup YAML",
 
   for (const invalid of [
     "javascript:alert(1)",
-    "https://user:pass@grafana.example.internal",
+    syntheticCredentialUrl({
+      username: "user",
+      password: "pass",
+      host: "grafana.example.internal",
+    }),
     "https://grafana.example.internal/#fragment",
     "grafana.example.internal",
   ]) {

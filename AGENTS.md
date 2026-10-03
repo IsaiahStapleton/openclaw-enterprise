@@ -327,6 +327,8 @@ Tests must verify real, supported application behavior. A test that merely
 confirms behavior invented by its own mock, monkeypatch, fixture, or hand-written
 adapter is invalid and must be rewritten or deleted.
 
+Use `tests/fixtures/synthetic-credential-url.mjs` to construct synthetic credential-bearing URLs at runtime; do not commit complete credential-bearing URL literals, which TruffleHog treats as secrets.
+
 - Use actual API routes, request methods, server-owned resource scope, response
   envelopes, authorization rules, and lifecycle transitions. Never invent
   endpoints, caller-selected singleton Installation IDs, nonexistent response

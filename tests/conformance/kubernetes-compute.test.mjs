@@ -30,6 +30,7 @@ import {
   withComputeWorkWaiting,
 } from "../../apps/controller/src/drivers/compute/operation-context.ts";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
 
 const kubeconfigPath = "/tmp/openclaw-enterprise-conformance/kubeconfig";
 const contextName = "openclaw-enterprise-local";
@@ -3923,7 +3924,12 @@ test("the canonical Kubernetes runtime validates channel proxy configuration", (
     "http://proxy.internal:3128",
     "http://openclaw-enterprise-slack-proxy.openclaw-system.svc:3128",
     "https://192.0.2.15",
-    "https://operator:secret@10.42.0.15:3128",
+    syntheticCredentialUrl({
+      username: "operator",
+      password: "secret",
+      host: "10.42.0.15",
+      port: 3128,
+    }),
     "socks5://10.42.0.15:3128",
     "http://10.42.0.15:3128/unreviewed",
     "http://10.42.0.15:3128?token=secret",
@@ -6995,7 +7001,15 @@ test("the official Kubernetes client rejects ambiguous identity and insecure API
     { name: "missing-credential-identity", users: [] },
     { name: "plaintext-api-endpoint", server: "http://127.0.0.1:1" },
     { name: "unverified-tls", skipTLSVerify: true },
-    { name: "embedded-api-credentials", server: "https://user:password@127.0.0.1:1" },
+    {
+      name: "embedded-api-credentials",
+      server: syntheticCredentialUrl({
+        username: "user",
+        password: "password",
+        host: "127.0.0.1",
+        port: 1,
+      }),
+    },
     { name: "unexpected-api-path", server: "https://127.0.0.1:1/untrusted" },
   ]) {
     const path = join(directory, `${scenario.name}.json`);
