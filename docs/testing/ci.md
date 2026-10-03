@@ -142,10 +142,12 @@ A retry replaces its lane result artifact; other lanes keep theirs. Preserve fai
 
 ### Select immutable images for local preparation
 
-Set `OPENCLAW_CI_K3S_IMAGE` to an approved `image@sha256:<digest>` before
-`node scripts/ci/prepare.mjs --lane <lane> --state <private-state-file>`
-to bypass k3d's online release-channel lookup. Otherwise ordinary Kubernetes lanes
-default to `+v1.35`. Both paths require the API server to report Kubernetes 1.35.x;
+Ordinary Kubernetes lanes default to the digest-pinned K3s 1.35 image in
+`defaultK3sImage` (`scripts/ci/prepare.mjs`), so cluster creation never queries
+k3d's online release channel. Set `OPENCLAW_CI_K3S_IMAGE` to another approved
+`image@sha256:<digest>` before
+`node scripts/ci/prepare.mjs --lane <lane> --state <private-state-file>` to
+override it. Both paths require the API server to report Kubernetes 1.35.x;
 OpenShell retains its separately pinned image. Mutable overrides fail before
 resource creation. Clean up a failed run's owned resources before reusing its state path.
 
