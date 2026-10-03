@@ -14,6 +14,7 @@ import {
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
+  ModelCredentialValueError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
@@ -382,6 +383,10 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof PresetValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied Preset template is invalid.");
+  }
+  if (error instanceof ModelCredentialValueError) {
+    // The message names only the field; other Configuration validation stays generic.
+    return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof ConfigurationValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.");

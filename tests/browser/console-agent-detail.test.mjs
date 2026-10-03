@@ -400,6 +400,49 @@ test("Configuration save stops when fresh Agent settings become unreadable", asy
   assert.deepEqual(saved.data.values, nativeValues("saved"));
 });
 
+test("Configuration save names the field that holds an inline model credential without showing it", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "occ-inline-credential-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Inline credential", { ready: true });
+  const values = nativeValues("inline-credential");
+  const agent = await fixture.createAgent(namespace.id, "Inline credential Agent", values);
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("button", { name: "Edit Configuration" }).click();
+  await openAdvancedSettings(page);
+  // A pasted provider key is a value, not the Secret reference the field requires.
+  const sentinel = `synthetic-inline-key-${randomUUID()}`;
+  const edited = structuredClone(values);
+  edited.models = {
+    ...edited.models,
+    providers: { ...edited.models?.providers, openai: { apiKey: sentinel } },
+  };
+  await page.getByLabel("Configuration JSON").fill(JSON.stringify(edited, null, 2));
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      response.url().endsWith(`/configurations/${agent.configurationId}`),
+  );
+  await page.getByRole("button", { name: "Save Configuration", exact: true }).click();
+  assert.equal((await rejected).status(), 400);
+  const feedback = page.getByText(
+    "Configuration field /models/providers/openai/apiKey holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.",
+  );
+  await feedback.waitFor();
+  // Only the editor holds the key; the explanation never repeats it.
+  assert.equal((await feedback.textContent()).includes(sentinel), false);
+  const saved = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.deepEqual(saved.data.values, values);
+});
+
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-gateway-password-"));
   t.after(() => rm(root, { recursive: true, force: true }));
