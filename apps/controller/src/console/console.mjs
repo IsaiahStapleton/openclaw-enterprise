@@ -950,7 +950,10 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       if (!lifetime.isCurrent(active)) {
         return;
       }
+      // A shell restored without a URL selection has none; once a Namespace is readable,
+      // the full render below picks the default instead.
       const unchanged =
+        namespaceId === current.namespace &&
         validations.every((result) => result.status === "fulfilled") &&
         JSON.stringify(retainedState.user) === JSON.stringify(session.user) &&
         [...retainedState.reads].every(
