@@ -35,6 +35,10 @@ not edit `allowFrom`, and **No selected channels** describes the saved channel
 list; it does not by itself determine whether DMs work.
 See [Slack setup](../integrations/slack.md) for credentials and policy details.
 
+In any Secret picker, typing a Secret's exact name selects it when you press
+Enter or leave the field, as choosing its suggestion does; other text restores
+the bound Secret.
+
 **Create Secret** stores the value immediately. Cancelling the channel drawer
 discards token selections but does not delete that Namespace Secret. The modal
 never reads an existing value. If the name already exists in this Namespace,
@@ -61,9 +65,7 @@ the console. Use the operator workflow for those Agents.
 | **Operator-managed credentials** | Credentials configured on the runtime host; OCC does not validate them.                          |
 | **ChatGPT service account**      | Select an already issued account in this Namespace. This selector does not create an account.    |
 
-In a Secret picker, typing a Secret's exact name selects it when you press
-Enter or leave the field, as choosing its suggestion does; other text restores
-the bound Secret. **Save authentication source** saves the Agent binding for a future deployment.
+**Save authentication source** saves the Agent binding for a future deployment.
 For API keys and Service Accounts tokens, it also grants the Agent access to
 that exact Secret through your authorized Namespace IAM operations. If the
 binding saves but the grant fails, ask a Namespace administrator to confirm

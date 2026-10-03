@@ -653,11 +653,10 @@ export function createSecretReferenceField({
     }
     if (event.key === "Enter" && listboxOpen) {
       event.preventDefault();
-      const typed = typedSecret();
       if (activeOptionIndex >= 0) {
         selectOption(options[activeOptionIndex]);
-      } else if (typed !== undefined) {
-        selectOption({ kind: "secret", secret: typed });
+      } else if (typedSecret() !== undefined) {
+        selectOption({ kind: "secret", secret: typedSecret() });
       }
       return;
     }

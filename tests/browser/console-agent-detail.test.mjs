@@ -1262,6 +1262,8 @@ test("Agent credentials bind a Secret typed by its exact name without picking th
   await picker.fill(typedSecret.name);
   await save();
   assert.deepEqual(await savedSource(), typedSecret.ref);
+  // A successful save re-renders the tab; wait for its picker to load the Secrets again.
+  await page.getByText("Choose an existing Secret or create a new one.").waitFor();
   assert.equal(await picker.inputValue(), typedSecret.name);
 
   // Enter commits an exact name the same way, before any save.
