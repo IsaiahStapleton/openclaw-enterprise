@@ -1224,6 +1224,31 @@ test("credential source registration names the missing Credential Gateway", asyn
   assert.match(rejected.body.error.message, /no Credential Gateway.*credential-sources\.md/);
 });
 
+test("a duplicate Secret name answers 409 naming the taken Secret name", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "secret-duplicate-name");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Model API key", value: "first-value" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+
+  // The caller chose only the name, so the conflict says the name is taken here.
+  const duplicate = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Model API key", value: "second-value" },
+  });
+  assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    duplicate.body.error.message,
+    "A Secret with this name already exists in this Namespace. Choose a different name.",
+  );
+});
+
 test("Secret values with an unpaired surrogate are refused as an invalid value", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
@@ -3352,6 +3377,12 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     { body: { name: "account-a" } },
   );
   assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  // The caller chose only the name, so the conflict says the name is taken here.
+  assert.equal(
+    duplicate.body.error.message,
+    "A ServiceAccount with this name already exists in this Namespace. Choose a different name.",
+  );
 
   // Account ownership participates in Namespace emptiness even before any Agent is created.
   const occupiedNamespace = await controller.request("DELETE", `/namespaces/${namespaceA.id}`);
@@ -3928,6 +3959,10 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   });
   assert.equal(duplicateNamespace.status, 409);
   assert.equal(duplicateNamespace.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    duplicateNamespace.body.error.message,
+    "A Namespace with this name already exists or was deleted. Choose a different name.",
+  );
 
   const invalidAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: { name: "" },
