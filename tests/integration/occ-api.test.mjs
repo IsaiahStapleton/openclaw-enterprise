@@ -3275,6 +3275,12 @@ test("native ServiceAccounts keep private credential references and cannot admit
     boundDeletion.body.error.message,
     "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
   );
+  // Authorization precedes the reference check: a caller without delete learns nothing about references.
+  const outsider = await controller.fixture.createAuthPrincipal("service-account-outsider");
+  controller.fixture.state.identities.push(outsider.principal);
+  const forbidden = await controller.request("DELETE", accountPath, { session: outsider.session });
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.body.error.code, "FORBIDDEN");
 
   const detached = await controller.request(
     "PATCH",
