@@ -443,6 +443,50 @@ test("Configuration save names the field that holds an inline model credential w
   assert.deepEqual(saved.data.values, values);
 });
 
+test("Agent deployment shows the API's reason when it rejects the saved model", async (t) => {
+  const { fixture, namespace } = await createRuntimeAuthFixture(t, "Unqualified model");
+  const values = nativeValues("unqualified-model");
+  const agent = await fixture.createAgent(namespace.id, "Unqualified model Agent", values, {
+    harnessAuth: { method: "runtime" },
+  });
+  // The Configuration accepts a bare model name; only deployment requires provider/model form.
+  const saved = await fixture.request(
+    "PATCH",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+    {
+      body: {
+        values: {
+          ...values,
+          agents: { ...values.agents, defaults: { ...values.agents.defaults, model: "gpt-5.1" } },
+        },
+      },
+    },
+  );
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(`/agents/${agent.id}/deploy`),
+  );
+  await page.getByRole("button", { name: "Deploy new version" }).click();
+  assert.equal((await rejected).status(), 400);
+  // The generic "check the entered values" text cannot tell the user which setting to fix.
+  await page
+    .getByText(
+      "The configured Agent model must identify its provider and model as <provider>/<model>, such as openai/gpt-5.1 or codex/gpt-5.1.",
+      { exact: true },
+    )
+    .waitFor();
+  const revisions = await fixture.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/revisions`,
+  );
+  assert.deepEqual(revisions.data, []);
+});
+
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-gateway-password-"));
   t.after(() => rm(root, { recursive: true, force: true }));
