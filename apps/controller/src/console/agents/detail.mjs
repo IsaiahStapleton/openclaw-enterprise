@@ -95,18 +95,21 @@ function isPlainObject(value) {
 
 // Next steps for failure codes whose cause the operator can act on directly, and the
 // page that holds the setting to change. Model-probe codes come from the runtime
-// wrapper's startup model check (`runtime-entrypoints.ts`).
+// wrapper's startup model check (`runtime-entrypoints.ts`). OpenClaw classifies
+// transport errors (refused connection, DNS failure, "fetch failed") as a timeout, so
+// there an unreachable provider reports RUNTIME_MODEL_PROBE_TIMEOUT; Codex reports the
+// same failure as RUNTIME_MODEL_PROBE_FAILED unless the connection hangs until its cap.
 const DEPLOYMENT_FAILURE_GUIDANCE = {
   RUNTIME_AUTHENTICATION_FAILED: {
     text: "The model provider rejected this version's credential (HTTP 401 or 403). Check that the key is valid and can use the selected model, update or replace the model credential Secret, then deploy a new version.",
     link: "credentials",
   },
   RUNTIME_MODEL_PROBE_FAILED: {
-    text: "The startup model check failed for a reason other than a rejected credential, such as an unknown model, invalid provider settings, an unreachable provider, or a rate limit or quota. Check the model and its provider settings (such as baseUrl and api) in the Configuration, that the runtime can reach the provider, and the provider account, then deploy a new version.",
+    text: "The startup model check failed for a reason other than a rejected credential, such as an unknown model, invalid provider settings, a provider or TLS error, a rate limit or quota, or, with Codex, a provider the runtime cannot reach. Check the model and its provider settings (such as baseUrl and api) in the Configuration, the provider account, and that the runtime can reach the provider, then deploy a new version.",
     link: "configuration",
   },
   RUNTIME_MODEL_PROBE_TIMEOUT: {
-    text: "The startup model check did not get a reply from the model provider in time. Check that the runtime can reach the provider (network egress, proxy, or a custom baseUrl in the Configuration) and that the provider is responding, then deploy a new version.",
+    text: "The startup model check did not get a reply from the model provider in time. With OpenClaw this includes a provider the runtime cannot reach (refused connection or unknown host). Check that the runtime can reach the provider (network egress, proxy, or a custom baseUrl in the Configuration) and that the provider is responding, then deploy a new version.",
     link: "configuration",
   },
 };

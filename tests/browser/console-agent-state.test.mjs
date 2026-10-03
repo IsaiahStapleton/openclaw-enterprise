@@ -470,6 +470,8 @@ test("Agent detail reports a failed selected version as probably not serving", a
 
 // A startup model check that failed or timed out is not a rejected credential, so its
 // next step points at the Configuration and the failed version's Logs, not at Credentials.
+// OpenClaw reports an unreachable provider (refused connection, DNS failure) as a timeout and
+// Codex as a failure, so each text names the harness it applies to.
 test("Deployment activity guides a failed or timed-out startup model check", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -481,14 +483,16 @@ test("Deployment activity guides a failed or timed-out startup model check", asy
         code: "RUNTIME_MODEL_PROBE_FAILED",
         message: "Deployment runtime startup model check failed.",
       },
-      guidance: /^The startup model check failed for a reason other than a rejected credential/,
+      guidance:
+        /^The startup model check failed for a reason other than a rejected credential, .*, or, with Codex, a provider the runtime cannot reach\. .*and that the runtime can reach the provider, then deploy a new version\./,
     },
     {
       error: {
         code: "RUNTIME_MODEL_PROBE_TIMEOUT",
         message: "Deployment runtime startup model check timed out.",
       },
-      guidance: /^The startup model check did not get a reply from the model provider in time/,
+      guidance:
+        /^The startup model check did not get a reply from the model provider in time\. With OpenClaw this includes a provider the runtime cannot reach \(refused connection or unknown host\)\./,
     },
   ];
   for (const [index, { error, guidance }] of cases.entries()) {
