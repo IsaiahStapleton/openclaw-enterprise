@@ -3,6 +3,9 @@ import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
 
 export class ConfigurationValidationError extends Error {}
 
+const modelCredentialMessage = (path: string): string =>
+  `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
+
 /**
  * A literal credential in a known model credential field. Its message names the field's
  * JSON pointer within the Configuration values and never the value, so HTTP can return it.
@@ -11,9 +14,9 @@ export class ModelCredentialValueError extends ConfigurationValidationError {
   readonly path: string;
 
   constructor(path: string) {
-    super(
-      `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`,
-    );
+    // The error contract caps messages at 256 characters; a long provider name shortens the path.
+    const budget = 256 - modelCredentialMessage("").length;
+    super(modelCredentialMessage(path.length <= budget ? path : `${path.slice(0, budget - 1)}…`));
     this.name = "ModelCredentialValueError";
     this.path = path;
   }

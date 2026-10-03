@@ -741,8 +741,13 @@ test("Filesystem Configuration API rejects plaintext model writes without changi
   for (const [unsafeValues, field] of [
     [{ env: { vars: { OPENAI_API_KEY: sentinel } } }, "/env/vars/OPENAI_API_KEY"],
     [
-      { models: { providers: { "a/b": { headers: { Authorization: `Bearer ${sentinel}` } } } } },
-      "/models/providers/a~1b/headers/Authorization",
+      { models: { providers: { "a/b~c": { headers: { Authorization: `Bearer ${sentinel}` } } } } },
+      "/models/providers/a~1b~0c/headers/Authorization",
+    ],
+    // A long provider name shortens the path so the message stays within the 256-character contract.
+    [
+      { models: { providers: { ["p".repeat(300)]: { apiKey: sentinel } } } },
+      `/models/providers/p+…`,
     ],
   ]) {
     const named = await request(context.app, "PATCH", `${collection}/${id}`, {
@@ -750,6 +755,7 @@ test("Filesystem Configuration API rejects plaintext model writes without changi
     });
     assert.equal(named.status, 400);
     assert.match(named.body.error.message, new RegExp(`^Configuration field ${field} holds`));
+    assert.ok(named.body.error.message.length <= 256);
     assert.equal(JSON.stringify(named.body).includes(sentinel), false);
   }
   assert.equal(await readFile(path, "utf8"), original);
