@@ -110,6 +110,57 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   assert.equal(await page.getByRole("button", { name: "Logs", exact: true }).count(), 0);
 });
 
+test("a rejected cursor starts one new view and later restarts wait for it", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  computeDriver.state.lines = [line(1, "first view line")];
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  await pane.getByText("first view line").waitFor();
+
+  // Tamper with the first follow cursor, then hold the replacement view's read.
+  const held = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(() => release.resolve());
+  let state = "untouched";
+  const arrivedWhileHeld = [];
+  await page.route(`**/deployments/${revisionId}/runtime/logs?*`, async (route, request) => {
+    const target = new URL(request.url());
+    const cursor = target.searchParams.get("cursor");
+    if (state === "untouched" && cursor !== null) {
+      state = "tampered";
+      const last = cursor.at(-1) === "A" ? "B" : "A";
+      target.searchParams.set("cursor", `${cursor.slice(0, -1)}${last}`);
+      await route.continue({ url: target.href });
+      return;
+    }
+    if (state === "holding") {
+      arrivedWhileHeld.push(target.search);
+    } else if (state === "tampered" && cursor === null) {
+      state = "holding";
+      held.resolve();
+      await release.promise;
+      state = "released";
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Follow" }).click();
+  await held.promise;
+  // A restart while the replacement read is in flight waits for it.
+  computeDriver.state.lines = [line(1, "first view line"), line(2, "debug floor line")];
+  await page.getByLabel("Include debug").check();
+  await page.waitForTimeout(500);
+  assert.deepEqual(arrivedWhileHeld, []);
+  release.resolve();
+  await pane.getByText("debug floor line").waitFor();
+  // The queued restart read the new debug view.
+  const after = logRequests(requests, revisionId).at(-1);
+  assert.equal(new URL(after.path, fixture.origin).searchParams.has("minLevel"), false);
+  await page.getByRole("button", { name: "Following" }).click();
+});
+
 test("level chips and the text filter narrow only the loaded window; download saves the sanitized tail", async (t) => {
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
   const secret = `ghp_${randomUUID().replaceAll("-", "")}`;
