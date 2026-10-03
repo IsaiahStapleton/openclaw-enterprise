@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
 import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
@@ -2396,6 +2397,105 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   assert.doesNotMatch(nativeRequestCookie, /legacy-host-only/);
 
   assert.deepEqual([...deniedTabWrites, ...nonAuthWriteRequests(requests)], []);
+});
+
+test("Agent detail rereads native admin access once when a pending deployment activates", async (t) => {
+  const cookieDomain = "oce.example.test";
+  const consoleHost = `console.${cookieDomain}`;
+  const nativeDomain = `agents.${cookieDomain}`;
+  const fixture = await createConsoleAppFixture(t, {
+    originHost: consoleHost,
+    publicOrigin: true,
+    authCookieDomain: cookieDomain,
+    development: { enabled: false },
+    https: true,
+    authSecureCookies: true,
+    nativeAdmin: { enabled: true, domain: nativeDomain, sharedCookieDomain: cookieDomain },
+    nativeAdminGatewayApiKey: async () => "native-admin-gateway-api-key",
+    computeDriver: nativeAdminComputeDriver(
+      "wss://private-gateway.example.invalid/namespaces/native-admin/agents/agent",
+    ),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Native admin follow", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Native admin follow Agent",
+    nativeValues("follow-ui"),
+  );
+  // The first deployment requests running before any version is selected for service.
+  const pending = await fixture.deployAgent(namespace.id, agent.id);
+  const nativeAdminPath = `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`;
+  const { page } = await newPage(t, fixture, {
+    args: [...fixture.browserArgs, `--host-resolver-rules=MAP ${consoleHost} 127.0.0.1`],
+  });
+  const requests = apiRequests(page, fixture.origin);
+  // Deployment activity reads a recorded status the worker would write; the native admin
+  // reads stay on the real API so the card reflects the Agent's actual active revision.
+  let deploymentStatus = "running";
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${pending.id}`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            deploymentId: pending.id,
+            namespaceId: namespace.id,
+            agentId: agent.id,
+            status: deploymentStatus,
+            error: null,
+            warnings: [],
+            progress: null,
+          },
+          meta: { requestId: "req_test_native_admin_follow" },
+        }),
+      }),
+  );
+  await page.clock.install({ time: new Date("2026-10-03T12:00:00Z") });
+  const url = detailUrl(fixture, namespace.id, agent.id, pending.id, "configuration");
+  await login(page, fixture, `${url.pathname}${url.search}`);
+  await page.getByRole("heading", { name: "Native admin follow Agent" }).waitFor();
+  const activity = page.locator(".deployment-status");
+  const card = page.locator(".native-admin-access");
+  await activity.getByText("Recorded status: running").waitFor();
+  await card
+    .getByText(
+      "Native admin UI is unavailable because no version of this Agent is serving: a deployment is in progress or has failed. Check Deployment activity, then refresh access.",
+    )
+    .waitFor();
+  assert.equal(pathRequests(requests, "GET", nativeAdminPath).length, 1);
+
+  // The worker records success and selects the version for service while the page stays open.
+  await fixture.activateRevision(namespace.id, agent.id, pending.id);
+  deploymentStatus = "succeeded";
+  await page.clock.runFor(DEPLOYMENT_POLL_MS);
+  await activity.getByText("Recorded status: succeeded").waitFor();
+  await card
+    .getByText(
+      "Native admin UI is not enabled in this Agent’s current version. Someone who can edit its Configuration can enable it (see the native admin UI guide) and deploy a new version.",
+    )
+    .waitFor();
+  assert.equal(pathRequests(requests, "GET", nativeAdminPath).length, 2);
+
+  // Access is reread only when the serving version changes: Refresh deployment rereads the
+  // unchanged Agent through the same path without asking for native admin access again.
+  const agentReads = pathRequests(
+    requests,
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  ).length;
+  await activity.getByRole("button", { name: "Refresh deployment" }).click();
+  await waitForCondition(
+    () =>
+      pathRequests(requests, "GET", `/namespaces/${namespace.id}/agents/${agent.id}`).length >
+      agentReads,
+    "Refresh deployment did not reread the Agent",
+  );
+  // The button returns from "Refreshing..." only after the reread Agent was applied.
+  await activity.getByRole("button", { name: "Refresh deployment", disabled: false }).waitFor();
+  assert.equal(pathRequests(requests, "GET", nativeAdminPath).length, 2);
 });
 
 for (const [dmPolicy, groupPolicy, enterpriseOrgInstall] of [

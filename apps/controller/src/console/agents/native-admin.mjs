@@ -41,6 +41,8 @@ export function renderNativeAdminAccess(context, path) {
   // A failed read other than a denial keeps the card, its error and Refresh visible.
   let failed = false;
   let pending = false;
+  // A refresh that arrives during a read may predate the change it reports; read once more.
+  let rereadAfterPending = false;
 
   function updateControls() {
     reload.disabled = pending;
@@ -103,10 +105,24 @@ export function renderNativeAdminAccess(context, path) {
       if (context.isCurrent()) {
         pending = false;
         updateControls();
+        if (rereadAfterPending) {
+          rereadAfterPending = false;
+          void load();
+        }
       }
     }
   }
 
   void load();
-  return section;
+  return {
+    section,
+    // Rereads access once, for example after the active version or runtime state changes.
+    refresh() {
+      if (pending) {
+        rereadAfterPending = true;
+        return;
+      }
+      void load();
+    },
+  };
 }
