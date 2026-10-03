@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import test from "node:test";
 
-import { generateApiReferenceOutputs } from "../../scripts/generate-occ-api-reference.mjs";
+import {
+  generateApiReferenceOutputs,
+  httpMethods,
+} from "../../scripts/generate-occ-api-reference.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const contractPath = fileURLToPath(
@@ -18,8 +21,21 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A path item also holds path-level keys (`parameters`, `summary`); only HTTP
+// methods are operations, as in the generator.
+function contractOperations(document) {
+  return Object.values(document.paths).flatMap((pathItem) =>
+    Object.entries(pathItem)
+      .filter(([method]) => httpMethods.has(method))
+      .map(([, operation]) => operation),
+  );
+}
+
 test("generated API reference stays on the approved single page", async () => {
   const document = JSON.parse(await readFile(contractPath, "utf8"));
+  // Legal path-level keys are not operations and must not change the reference.
+  const [firstPath] = Object.keys(document.paths);
+  Object.assign(document.paths[firstPath], { summary: "Path-level summary", parameters: [] });
   const outputs = generateApiReferenceOutputs(document);
 
   assert.deepEqual(
@@ -30,11 +46,15 @@ test("generated API reference stays on the approved single page", async () => {
   const page = outputs[0].content;
   // The Resources table counts each tag's operations from the contract, singular for one.
   const operationsByTag = new Map();
-  for (const operation of Object.values(document.paths).flatMap(Object.values)) {
+  for (const operation of contractOperations(document)) {
     const tag = operation.tags?.[0] ?? "Untagged";
     operationsByTag.set(tag, (operationsByTag.get(tag) ?? 0) + 1);
   }
   assert.ok(operationsByTag.get("Agents") > 1);
+  assert.ok(
+    [...operationsByTag.values()].includes(1),
+    "No tag has exactly one operation, so the singular label is untested",
+  );
   for (const [tag, count] of operationsByTag) {
     const label = count === 1 ? "1 operation" : `${count} operations`;
     assert.match(
@@ -56,9 +76,7 @@ test("generated API reference stays on the approved single page", async () => {
   );
   assert.doesNotMatch(page, /api\/agents-workspace\.md/);
 
-  const operationIds = Object.values(document.paths)
-    .flatMap((operations) => Object.values(operations))
-    .map((operation) => operation.operationId);
+  const operationIds = contractOperations(document).map((operation) => operation.operationId);
   for (const operationId of operationIds) {
     const matches =
       page.match(new RegExp(`\\*\\*Operation ID:\\*\\* \`${escapeRegExp(operationId)}\``, "g")) ??
