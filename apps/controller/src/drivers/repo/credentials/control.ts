@@ -200,6 +200,8 @@ export function createControlAdmission(
         throw new Error("RECEIPT_UNAVAILABLE");
       }
       if (refused !== undefined) {
+        // Nothing will bind this reservation. Fence it so the admission answers missing.
+        await journal!.fence(id, admittedInput).catch(() => {});
         throw refused;
       }
     } else if (age >= admissionWindowMs) {
@@ -241,11 +243,29 @@ export function createControlAdmission(
       sweep,
     );
     if (isBoundInput(admittedInput)) {
+      const sessionId = opened.session.sessionId;
       record.ready = journal!.bind(id, admittedInput, opened.session);
       try {
         await record.ready;
       } catch (error) {
-        service.close(opened.session.sessionId);
+        if (service.status(sessionId) !== undefined) {
+          service.close(sessionId);
+        }
+        try {
+          // The bearer was never handed out. Fence the reservation so the admission
+          // answers missing rather than unavailable.
+          await journal!.fence(id, admittedInput);
+          record.cancel();
+          records.delete(id);
+          sessions.delete(sessionId);
+        } catch {
+          // The bind may have been recorded after all. Let the disposal follow it.
+          record.ready = Promise.resolve();
+          const current = service.status(sessionId);
+          if (current?.state === "DISPOSED") {
+            void persist(id, record, current).catch(() => {});
+          }
+        }
         throw error;
       }
       // Binding can outlive the session. Never hand out a bearer for a session

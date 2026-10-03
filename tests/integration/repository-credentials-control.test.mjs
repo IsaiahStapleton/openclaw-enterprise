@@ -1030,6 +1030,84 @@ test(
 );
 
 test(
+  "a reservation the broker cannot bind is fenced, so retry and recovery answer missing",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await boundControlFixture(t, {}, [
+      ...defaultRegistryRepositories,
+      { repositoryRef: "repo-c", repository: "fixture/third", repositoryId: "75" },
+    ]);
+    const { inputFor, send, freshId, receipts } = fixture;
+    const receipt = async (id) =>
+      receipts.state.read((view) => view.repositorySessions.findBrokerReceipt(id));
+    const prepared = async (input) => {
+      const id = freshId();
+      await receipts.prepare(id, input.repositoryRef, input.durationSeconds);
+      return id;
+    };
+    const missing = { status: 404, body: { error: "admission-missing" } };
+
+    // The journal reserves an admission the broker then refuses as invalid.
+    const invalid = { ...inputFor("repo-a"), durationSeconds: 172_801 };
+    const invalidId = await prepared(invalid);
+    assert.deepEqual(await send(invalid, invalidId), {
+      status: 400,
+      body: { error: "invalid-request" },
+    });
+    assert.equal((await receipt(invalidId)).state, "fenced");
+    assert.deepEqual(await send(invalid, invalidId), missing);
+    assert.deepEqual(await send({ ...invalid, recoverOnly: true }, invalidId), missing);
+
+    // The journal reserves, then fails to record the opened session.
+    const transact = receipts.state.transact;
+    t.after(() => {
+      receipts.state.transact = transact;
+    });
+    let calls = 0;
+    let outcome;
+    receipts.state.transact = async function (work) {
+      calls += 1;
+      if (calls === 2 && outcome === "refused") {
+        throw new Error("fixture-unavailable");
+      }
+      const result = await transact.call(this, work);
+      if (calls === 2 && outcome === "lost") {
+        throw new Error("fixture-response-lost");
+      }
+      return result;
+    };
+    const unbound = inputFor("repo-b");
+    const unboundId = await prepared(unbound);
+    calls = 0;
+    outcome = "refused";
+    assert.deepEqual(await send(unbound, unboundId), {
+      status: 503,
+      body: { error: "unavailable" },
+    });
+    assert.equal((await receipt(unboundId)).state, "fenced");
+    assert.deepEqual(await send(unbound, unboundId), missing);
+    assert.deepEqual(await send({ ...unbound, recoverOnly: true }, unboundId), missing);
+
+    // The bind is recorded but its answer is lost: the fence cannot apply, and the
+    // closed session's disposal is recorded instead.
+    const lost = inputFor("repo-c");
+    const lostId = await prepared(lost);
+    calls = 0;
+    outcome = "lost";
+    assert.deepEqual(await send(lost, lostId), { status: 503, body: { error: "unavailable" } });
+    outcome = undefined;
+    for (let i = 0; i < 300 && (await receipt(lostId)).state !== "disposed"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal((await receipt(lostId)).state, "disposed");
+    const recovered = await send({ ...lost, recoverOnly: true }, lostId);
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.body.state, "DISPOSED");
+    assert.equal(recovered.body.sessionId, (await receipt(lostId)).sessionId);
+  },
+);
+
+test(
   "admission recovery retains unresolved cleanup beyond freshness and session expiry",
   { timeout: 20000 },
   async (t) => {
