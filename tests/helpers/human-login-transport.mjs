@@ -173,16 +173,22 @@ export async function until(predicate) {
   }
 }
 
-// Sends only the provider's fixed URLs to `target`; any other destination fails. Real
-// fetch, cancellation, stream reads, response parsing and redirect handling stay
-// production behavior.
+// Sends only the provider's fixed URLs to `target`. Real fetch, cancellation, stream
+// reads, response parsing and redirect handling stay production behavior. Any other
+// destination fails the test, even when the product turns the refused fetch into a
+// provider-unavailable denial.
 export function redirectProviderFetch(t, allowedUrls, target) {
   const originalFetch = globalThis.fetch;
+  const unexpected = [];
   t.mock.method(globalThis, "fetch", (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
-    assert.ok(allowedUrls.has(url.href), `Unexpected provider request: ${url.href}`);
+    if (!allowedUrls.has(url.href)) {
+      unexpected.push(url.href);
+      throw new Error(`Unexpected provider request: ${url.href}`);
+    }
     return originalFetch(new URL(url.pathname, target), init);
   });
+  t.after(() => assert.deepEqual(unexpected, [], "unexpected provider requests"));
 }
 
 // A loopback HTTP server standing in for the provider. It records each request path

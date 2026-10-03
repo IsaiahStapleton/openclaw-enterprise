@@ -522,7 +522,13 @@ test(
     await t.test(
       "attempt cookie lifetime uses State duration despite controller clock skew",
       async () => {
-        const login = loginFixture();
+        // State's clock runs years ahead of the controller's.
+        const login = loginFixture({
+          createAttempt: async () => {
+            const createdAt = new Date("2030-01-01T00:00:00Z");
+            return { createdAt, expiresAt: new Date(createdAt.getTime() + 300_000) };
+          },
+        });
         const response = await login.start();
         assert.equal(response.status, 200);
         const cookie = response.headers.get("set-cookie");
