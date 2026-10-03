@@ -112,9 +112,7 @@ func TestReadinessContextCancelsRepositoryDiscovery(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	_, err := readinessClient(t, server.URL).WithContext(ctx).ListRepositoryOptions("proof")
+	err := waitForDevelopmentRepositories(context.Background(), readinessClient(t, server.URL), "proof", map[string]map[string]bool{}, 100*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline, got %v", err)
 	}
