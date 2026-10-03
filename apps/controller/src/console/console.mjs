@@ -572,9 +572,9 @@ function showLogin(message = "", returnPath = null) {
         }
         feedback.textContent =
           error.status === 429
-            ? "Too many attempts. Please try again later."
+            ? "Too many attempts. Try again later."
             : recoveryOnly
-              ? `${label} sign-in is unavailable. Please try again later.`
+              ? `${label} sign-in is unavailable. Try again later.`
               : `${label} sign-in is unavailable. Try again or use your password.`;
         pending = false;
         setDisabled(false);
@@ -639,12 +639,12 @@ function showLogin(message = "", returnPath = null) {
       }
       feedback.textContent =
         error.status === 429
-          ? "Too many attempts. Please try again later."
+          ? "Too many attempts. Try again later."
           : error.status === 400 || error.status === 401 || error.status === 403
             ? recoveryOnly
               ? "Could not sign in. Only the recovery account can use a password; other accounts continue with their external sign-in."
               : "Could not sign in. Check your username and password."
-            : "Sign-in is unavailable. Please retry.";
+            : "Sign-in is unavailable. Try again.";
     } finally {
       if (lifetime.isCurrent(active)) {
         pending = false;
@@ -1153,8 +1153,8 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       publicPanel(
         sessionResolved ? "Namespace access unavailable" : "Session unavailable",
         sessionResolved
-          ? "Could not check Namespace access. Please retry."
-          : "Could not check your session. Please retry.",
+          ? "Could not check Namespace access. Try again."
+          : "Could not check your session. Try again.",
         "Retry",
         () => void loadPage(),
       );
@@ -1367,8 +1367,8 @@ async function revalidateMountedAgent(current) {
       publicPanel(
         checking === "session" ? "Session unavailable" : "Namespace access unavailable",
         checking === "session"
-          ? "Could not check your session. Please retry."
-          : "Could not check Namespace access. Please retry.",
+          ? "Could not check your session. Try again."
+          : "Could not check Namespace access. Try again.",
         "Retry",
         () => void loadPage(),
       );
