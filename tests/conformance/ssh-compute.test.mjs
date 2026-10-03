@@ -708,6 +708,53 @@ test("SSH trusted-proxy omits gateway.env, and allocation spans Agents and Names
   assert.equal((await f.driver.deleteNamespace(other)).namespaceDeleted, true);
 });
 
+test("SSH Agent deletion frees the Agent's host port, unit, account, and state", async (t) => {
+  const f = await fixture(t);
+  const { start } = f.configured.network.gatewayPortRange;
+  const kept = await prepare(f);
+  const deleted = await prepare(f, revision(f.driver, 1, "agent-ssh-2"));
+  await prepare(f, revision(f.driver, 1, "agent-ssh-3"));
+  const dir = f.agentDir(deleted);
+  const { runtimeUser } = await json(join(dir, "agent.json"));
+  await writeFile(join(dir, "env"), "OPERATOR_OWNED=deleted with the Agent\n", { mode: 0o600 });
+  const binding = {
+    namespace: tenant,
+    agent: {
+      id: deleted.agentId,
+      namespaceId: tenant.id,
+      name: deleted.agentId,
+      configurationId: deleted.configurationId,
+      backendId: null,
+      executionMode: "embedded",
+      servicePrincipalId: deleted.servicePrincipalId,
+      createdAt: tenant.createdAt,
+    },
+  };
+  // The worker retires every revision, then deletes the Agent's durable runtime state.
+  await f.driver.retireRevision(deleted);
+  // An interrupted deletion leaves only the account; the retry finishes it.
+  await writeFile(join(f.state, "groupdel.fail"), "once");
+  await assert.rejects(f.driver.deleteAgentRuntimeCredentials(binding), /SSH host operation/);
+  await missing(dir);
+  await f.driver.deleteAgentRuntimeCredentials(binding);
+  await missing(join(f.units, f.unit(deleted)));
+  await missing(join(f.root, "accounts", `${runtimeUser}.json`));
+  await missing(join(f.state, "accounts", "users", runtimeUser));
+  await missing(join(f.state, "accounts", "groups", runtimeUser));
+  // Idempotent: a retried deletion with nothing left succeeds, as does an Agent never prepared.
+  await f.driver.deleteAgentRuntimeCredentials(binding);
+  await f.driver.deleteAgentRuntimeCredentials({
+    ...binding,
+    agent: { ...binding.agent, id: "agent-ssh-never", servicePrincipalId: "agent-ssh-never-p" },
+  });
+  assert.equal((await stat(join(f.units, f.unit(kept)))).isFile(), true);
+  assert.equal((await json(join(f.agentDir(kept), "agent.json"))).port, start);
+  // The full range is reusable: a new Agent receives the freed port.
+  const replacement = await prepare(f, revision(f.driver, 1, "agent-ssh-4"));
+  assert.equal((await json(join(f.agentDir(replacement), "agent.json"))).port, start + 1);
+  assert.equal((await f.driver.deleteNamespace(tenant)).namespaceDeleted, true);
+});
+
 test("SSH trusted-proxy can opt into direct loopback password authentication", async (t) => {
   const f = await fixture(t);
   const password = revision(f.driver, 1, "agent-ssh-string-password", {
