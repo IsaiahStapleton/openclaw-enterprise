@@ -149,7 +149,8 @@ function expectedBound(keyword: string, parameters: Record<string, unknown>): st
   if (keyword === "enum" && Array.isArray(parameters.allowedValues)) {
     return `one of ${parameters.allowedValues.map((value) => JSON.stringify(value)).join(", ")}`;
   }
-  const bound = LIMITS[keyword];
+  // Own keys only: an inherited name such as "constructor" is not a bound.
+  const bound = Object.hasOwn(LIMITS, keyword) ? LIMITS[keyword] : undefined;
   const limit = parameters.limit;
   if (bound === undefined || typeof limit !== "number") {
     return undefined;
