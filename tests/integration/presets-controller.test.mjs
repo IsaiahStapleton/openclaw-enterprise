@@ -739,6 +739,46 @@ test("standard OpenClaw Preset installs and creates an embedded Agent with nativ
   assert.equal(JSON.stringify(installed.body).includes("synthetic-model-key"), false);
 });
 
+test("default-codex Preset creates a Configuration that references the generated gateway password", async (t) => {
+  const { renderPresetTemplate } = await import("../../packages/contracts/src/index.ts");
+  const fixture = await createFixture(t);
+  const namespace = await fixture.createNamespace("Default Codex", { ready: true });
+  const gatewayPassword = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" };
+  // D381: a dedicated Codex Gateway acknowledges its workspace node through the
+  // in-Pod gateway CLI, which is refused without this password reference. Every
+  // bundled Preset carries it and none chooses the authentication mode, which
+  // stays with the Compute Driver (#314).
+  for (const file of [
+    "default-codex.json",
+    "standard-codex.json",
+    "standard-openclaw.json",
+    "swe-preset.json",
+  ]) {
+    const bundled = JSON.parse(
+      await readFile(new URL(`../../deploy/presets/${file}`, import.meta.url), "utf8"),
+    );
+    assert.deepEqual(
+      bundled.template.configuration.values.gateway.auth,
+      { password: gatewayPassword },
+      file,
+    );
+  }
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/default-codex.json", import.meta.url), "utf8"),
+  );
+  const installed = await fixture.request("POST", collection(namespace.id), { body: artifact });
+  assert.equal(installed.status, 201, JSON.stringify(installed.body));
+  const rendered = renderPresetTemplate(installed.data.template, {});
+  const configuration = await fixture.request(
+    "POST",
+    `/namespaces/${namespace.id}/configurations`,
+    { body: { kind: "agent", ...rendered.configuration } },
+  );
+  assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+  assert.equal(rendered.agent.executionMode, "dedicated");
+  assert.deepEqual(configuration.data.values.gateway.auth, { password: gatewayPassword });
+});
+
 test("SWE Agent Preset defaults to Astra and reuses an existing service-account Secret", async (t) => {
   const { renderPresetTemplate, validatePresetTemplate } =
     await import("../../packages/contracts/src/index.ts");
