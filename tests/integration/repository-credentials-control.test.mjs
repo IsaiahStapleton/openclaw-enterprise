@@ -5,7 +5,10 @@ import { request } from "node:http";
 import { createServer as createNetServer, connect } from "node:net";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { startRegistryCredentialServiceFixture } from "../fixtures/repository-credentials/registry.mjs";
+import {
+  defaultRegistryRepositories,
+  startRegistryCredentialServiceFixture,
+} from "../fixtures/repository-credentials/registry.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
 import { createResourceScope } from "../fixtures/repository-credentials/resources.mjs";
 import { createServer as createTlsServer, request as tlsRequest } from "node:https";
@@ -762,7 +765,7 @@ test(
   },
 );
 
-async function boundControlFixture(t, limits = {}) {
+async function boundControlFixture(t, limits = {}, repositories = undefined) {
   const fixture = await startRegistryCredentialServiceFixture(t, {
     namespaceId: `ns_${randomUUID()}`,
     autoOpen: false,
@@ -770,22 +773,30 @@ async function boundControlFixture(t, limits = {}) {
     durationSeconds: 600,
     gateway: { listen: "127.0.0.1:0" },
     limits,
+    ...(repositories === undefined ? {} : { repositories }),
   });
   const { resolveGitHubRepositoryBinding } = await githubProviderModule("registry");
-  const binding = resolveGitHubRepositoryBinding(fixture.registry, {
-    namespaceId: fixture.namespaceId,
-    repositoryRef: "repo-a",
-    profile: "git-full",
-  });
-  const input = {
-    namespaceId: fixture.namespaceId,
-    repositoryRef: binding.repositoryRef,
-    profile: binding.profile,
-    expectedBinding: binding.grant,
-    durationSeconds: 600,
-    deadlineWallMs: fixture.clock.wallNow() + 90_000,
+  const deadlineWallMs = fixture.clock.wallNow() + 90_000;
+  const bindings = (repositories ?? [{ repositoryRef: "repo-a" }]).map(({ repositoryRef }) =>
+    resolveGitHubRepositoryBinding(fixture.registry, {
+      namespaceId: fixture.namespaceId,
+      repositoryRef,
+      profile: "git-full",
+    }),
+  );
+  const inputFor = (repositoryRef) => {
+    const binding = bindings.find((entry) => entry.repositoryRef === repositoryRef);
+    return {
+      namespaceId: fixture.namespaceId,
+      repositoryRef: binding.repositoryRef,
+      profile: binding.profile,
+      expectedBinding: binding.grant,
+      durationSeconds: 600,
+      deadlineWallMs,
+    };
   };
-  const receipts = await startReceiptState(t, fixture, [binding], input.deadlineWallMs);
+  const input = inputFor(bindings[0].repositoryRef);
+  const receipts = await startReceiptState(t, fixture, bindings, deadlineWallMs);
   const freshId = () => `${fixture.clock.wallNow()}-${randomUUID()}`;
   const send = (value, id = freshId(), socketPath = fixture.config.gateway.controlSocket) =>
     control(
@@ -795,7 +806,7 @@ async function boundControlFixture(t, limits = {}) {
       { ...value, durableAdmission: true },
       { "x-admission-id": id },
     );
-  return { ...fixture, input, freshId, send, receipts };
+  return { ...fixture, input, inputFor, freshId, send, receipts };
 }
 
 test(
@@ -962,6 +973,52 @@ test(
     await fixture.restart();
     await clock.advance(60_001);
     assert.deepEqual(await send(input, id), { status: 404, body: { error: "admission-missing" } });
+  },
+);
+
+test(
+  "a refused bound open leaves no durable reservation, so retry and recovery converge",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await boundControlFixture(t, { sessions: 1 }, [
+      ...defaultRegistryRepositories,
+      { repositoryRef: "repo-c", repository: "fixture/third", repositoryId: "75" },
+    ]);
+    const { inputFor, send, freshId, clock } = fixture;
+    const prepared = async (input) => {
+      const id = freshId();
+      await fixture.receipts.prepare(id, input.repositoryRef, input.durationSeconds);
+      return id;
+    };
+    const [first, retried, recovered] = ["repo-a", "repo-b", "repo-c"].map(inputFor);
+    const opened = await send(first, await prepared(first));
+    assert.equal(opened.status, 201);
+    // Session capacity refuses these opens; neither may strand a durable reservation.
+    const retriedId = await prepared(retried);
+    const recoveredId = await prepared(recovered);
+    for (const [input, id] of [
+      [retried, retriedId],
+      [recovered, recoveredId],
+    ]) {
+      assert.deepEqual(await send(input, id), { status: 503, body: { error: "overloaded" } });
+    }
+    assert.deepEqual(await send({ ...recovered, recoverOnly: true }, recoveredId), {
+      status: 404,
+      body: { error: "admission-missing" },
+    });
+    fixture.service.close(opened.body.session.sessionId);
+    await clock.advance(0);
+    await eventually(
+      () => fixture.service.status(opened.body.session.sessionId).state === "DISPOSED",
+    );
+    // The fence stands; the session opened for this request is closed, not handed out.
+    assert.deepEqual(await send(recovered, recoveredId), {
+      status: 404,
+      body: { error: "admission-missing" },
+    });
+    const reopened = await send(retried, retriedId);
+    assert.equal(reopened.status, 201);
+    assert.equal(reopened.body.session.state, "OPEN");
   },
 );
 
