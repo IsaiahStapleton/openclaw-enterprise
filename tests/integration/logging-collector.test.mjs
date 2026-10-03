@@ -150,10 +150,10 @@ async function exportedRecords(out, mapRecord) {
 }
 
 // A test that checks what the Collector drops ends its OTLP request with this
-// sentinel, a record the Collector exports. The batch processor takes a request
-// whole and sends it in one export (these requests are far below
-// send_batch_max_size), so once the sentinel reaches the backend, so has every
-// earlier record of the request that survived filtering.
+// sentinel, a record the Collector exports. The logs pipeline is a single chain,
+// and its batch processor takes a request whole and sends it in one export (these
+// requests are far below send_batch_max_size), so once the sentinel reaches the
+// backend, so has every earlier record of the request that survived filtering.
 const sentinelPhase = "collector-sentinel";
 
 function sentinelLogs(resource) {
@@ -186,18 +186,30 @@ async function exportedThroughSentinel(out, mapRecord) {
   const isSentinel = (record) =>
     attributes(record.attributes)["occ.startup.phase"] === sentinelPhase;
   let exported = [];
-  await waitFor(async () => {
-    try {
-      exported = await exportedRecords(out, (resource, record) => ({ resource, record }));
-    } catch (error) {
-      // The backend may still be writing the export line.
-      if (error instanceof SyntaxError) {
-        return false;
+  let unreadable;
+  try {
+    await waitFor(async () => {
+      try {
+        exported = await exportedRecords(out, (resource, record) => ({ resource, record }));
+        unreadable = undefined;
+      } catch (error) {
+        // The backend may still be writing the export line.
+        if (error instanceof SyntaxError) {
+          unreadable = error;
+          return false;
+        }
+        throw error;
       }
-      throw error;
+      return exported.some(({ record }) => isSentinel(record));
+    });
+  } catch (error) {
+    if (unreadable !== undefined) {
+      throw new Error(`The Collector export never became readable: ${unreadable.message}`, {
+        cause: error,
+      });
     }
-    return exported.some(({ record }) => isSentinel(record));
-  });
+    throw error;
+  }
   return exported
     .filter(({ record }) => !isSentinel(record))
     .map(({ resource, record }) => mapRecord(resource, record));
