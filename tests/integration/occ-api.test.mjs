@@ -1471,6 +1471,75 @@ test("access removed by deleting its target or Namespace is audited and leaves n
   );
 });
 
+test("a state conflict names what blocks the request, after authorization only", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("state-conflict-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "state-conflict");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const deletion = await controller.request("DELETE", `/namespaces/${namespace.id}`);
+  assert.equal(deletion.status, 202, JSON.stringify(deletion.body));
+
+  // A plain conflict would answer "already exists"; the caller needs the actual reason.
+  for (const [path, body, message] of [
+    [
+      "configurations",
+      { kind: "agent", values: {} },
+      "The Namespace does not accept new Configurations.",
+    ],
+    [
+      "service-accounts",
+      { name: "late-account" },
+      "The Namespace does not accept new ServiceAccounts.",
+    ],
+    [
+      "agents",
+      { name: "late-agent", configurationId: "cfg_00000000-0000-4000-8000-000000000000" },
+      "The Namespace does not accept new Agents.",
+    ],
+  ]) {
+    const refused = await controller.request("POST", `/namespaces/${namespace.id}/${path}`, {
+      body,
+    });
+    assert.equal(refused.status, 409, `${path}: ${JSON.stringify(refused.body)}`);
+    assert.equal(refused.body.error.code, "RESOURCE_CONFLICT");
+    assert.equal(refused.body.error.message, message);
+  }
+
+  const options = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/repository-options`,
+  );
+  assert.equal(options.status, 409, JSON.stringify(options.body));
+  assert.equal(options.body.error.message, "The Namespace does not accept new Agents.");
+
+  // A caller without create permission learns nothing about the Namespace lifecycle.
+  const memberApp = fixture.createApp(member.principal);
+  for (const [method, path, body] of [
+    ["POST", "configurations", { kind: "agent", values: {} }],
+    ["POST", "service-accounts", { name: "late-account" }],
+    [
+      "POST",
+      "agents",
+      { name: "late-agent", configurationId: "cfg_00000000-0000-4000-8000-000000000000" },
+    ],
+    ["GET", "agents/repository-options"],
+  ]) {
+    const denied = await injectedRequest(
+      memberApp,
+      method,
+      `/namespaces/${namespace.id}/${path}`,
+      body === undefined ? {} : { body },
+    );
+    assert.equal(denied.status, 403, `${path}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+  }
+});
+
 test("Namespace IAM reports invalid policy input as 400 with the field and refuses inert Permissions", async () => {
   const fixture = await createInjectedFixture();
   const member = await fixture.createAuthPrincipal("policy-validation-member");
@@ -3219,6 +3288,10 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const missingCredential = await controller.request("POST", deploymentPath);
   assert.equal(missingCredential.status, 409);
   assert.equal(missingCredential.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    missingCredential.body.error.message,
+    "ChatGPT Harness authentication requires an issued account access-token credential.",
+  );
 
   const initialCredential = {
     kind: "api_key",
