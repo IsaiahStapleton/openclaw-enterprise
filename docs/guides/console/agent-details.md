@@ -256,7 +256,7 @@ revision. See [Stop and resume](../../reference/agents/deployment.md#stop-and-re
 ## Delete Agent and error recovery
 
 **Delete Agent** opens a confirmation dialog. **Cancel** closes it without changes.
-**Permanently delete Agent** irreversibly removes the Agent, revision history,
+**Permanently delete Agent** irreversibly removes the Agent, version history,
 and workspace data; Namespace Configurations and Secrets remain. Exact Agent
 `delete` permission is required. Accepted deletion starts asynchronous cleanup;
 the page checks it every few seconds and returns to Agents once the Agent is gone.

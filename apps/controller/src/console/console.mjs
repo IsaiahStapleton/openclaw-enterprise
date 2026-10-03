@@ -1394,7 +1394,7 @@ async function revalidateMountedAgent(current) {
           ? "Resource unavailable"
           : "Request unavailable",
       error.status === 403
-        ? "You do not have permission to read this Agent or its versions."
+        ? "You do not have permission to read this Agent, its versions, or its Configuration."
         : "The read could not be completed. Retry to check current access and saved state.",
       "Retry",
       () => void loadPage(),

@@ -43,7 +43,7 @@ export function renderAgentPlugins(
         "p",
         { className: "muted" },
         snapshot.pluginApprovers === undefined
-          ? "No Agent default was set when this version was deployed; the existing OpenClaw approval routing applies."
+          ? "No Agent default was set when this version was created; the existing OpenClaw approval routing applies."
           : snapshot.pluginApprovers.length === 0
             ? "Explicit empty list: no Slack user can approve plugins in this version by default."
             : "This version's Agent default approvers are immutable.",
