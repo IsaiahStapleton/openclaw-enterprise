@@ -22,18 +22,24 @@ var (
 	developmentNodeDNSAttemptTimeout = 20 * time.Second
 )
 
-// BusyBox nslookup (in the k3s image) and BIND nslookup both print this when no
-// configured server answered, whether it refused the query or timed out.
-var developmentNodeDNSUnanswered = regexp.MustCompile(`no servers could be reached`)
+// BusyBox nslookup (in the k3s image) and BIND nslookup both report a query that
+// no server answered, and name a refusal ("Connection refused") when nothing
+// listens at the resolver address. Only a refusal is fatal: a timeout can be a
+// network that drops public DNS on purpose (a proxy-only network), so it warns.
+var (
+	developmentNodeDNSUnanswered = regexp.MustCompile(`no servers could be reached`)
+	developmentNodeDNSRefused    = regexp.MustCompile(`(?i)connection refused`)
+)
 
 type developmentNodeDNSOutcome int
 
 const (
 	nodeDNSResolved developmentNodeDNSOutcome = iota
-	// The node's resolver did not answer: image pulls will time out.
-	nodeDNSUnanswered
-	// The lookup failed for another reason (no such name, no nslookup in a
-	// custom node image, an engine error). Not proof of a dead resolver.
+	// Nothing listens at the node's resolver address: image pulls will time out.
+	nodeDNSRefused
+	// The lookup failed for another reason (a timeout, no such name, no
+	// nslookup in a custom node image, an engine error). Not proof of a dead
+	// resolver.
 	nodeDNSInconclusive
 )
 
@@ -41,14 +47,14 @@ func classifyDevelopmentNodeDNS(output []byte, err error) developmentNodeDNSOutc
 	if err == nil {
 		return nodeDNSResolved
 	}
-	if developmentNodeDNSUnanswered.Match(output) {
-		return nodeDNSUnanswered
+	if developmentNodeDNSUnanswered.Match(output) && developmentNodeDNSRefused.Match(output) {
+		return nodeDNSRefused
 	}
 	return nodeDNSInconclusive
 }
 
-// checkDevelopmentNodeDNS fails fast when the new node's resolver does not
-// answer. On a Docker host using iptables-nft, k3d points the node at the
+// checkDevelopmentNodeDNS fails fast when the new node's resolver refuses
+// queries. On a Docker host using iptables-nft, k3d points the node at the
 // network gateway but its DNS forwarding rules are missing in the node's legacy
 // iptables mode; without this check the first image pull times out minutes
 // later. An inconclusive lookup only warns, so an unusual host is not blocked.
@@ -70,14 +76,14 @@ func (r *runner) checkDevelopmentNodeDNS(ctx context.Context, state *development
 			return ctx.Err()
 		}
 		outcome = classifyDevelopmentNodeDNS(output, err)
-		if outcome != nodeDNSUnanswered {
+		if outcome != nodeDNSRefused {
 			break
 		}
 	}
 	switch outcome {
 	case nodeDNSResolved:
 		return nil
-	case nodeDNSUnanswered:
+	case nodeDNSRefused:
 		return developmentNodeDNSError(server, r.env["OCC_DEVELOPMENT_K3D_DNS_RESOLVER"], hostUpstreamResolver(os.ReadFile))
 	default:
 		fmt.Fprintf(r.opts.Err, "Warning: could not confirm that the k3d node %s resolves %s; continuing. If image pulls stall, see OCC_DEVELOPMENT_K3D_DNS_RESOLVER in the local Kubernetes development guide.\n", server, developmentNodeDNSName)
@@ -87,13 +93,13 @@ func (r *runner) checkDevelopmentNodeDNS(ctx context.Context, state *development
 
 func developmentNodeDNSError(server, configured, upstream string) error {
 	if configured != "" {
-		return fmt.Errorf("the k3d node %s cannot resolve %s: OCC_DEVELOPMENT_K3D_DNS_RESOLVER=%s did not answer; set it to an IPv4 DNS server the node can reach, or unset it to keep k3d's default node resolver", server, developmentNodeDNSName, configured)
+		return fmt.Errorf("the k3d node %s cannot resolve %s: OCC_DEVELOPMENT_K3D_DNS_RESOLVER=%s refused the query; set it to an IPv4 DNS server the node can reach, or unset it to keep k3d's default node resolver", server, developmentNodeDNSName, configured)
 	}
 	hint := ""
 	if upstream != "" {
 		hint = fmt.Sprintf(" (for example OCC_DEVELOPMENT_K3D_DNS_RESOLVER=%s, this host's upstream resolver)", upstream)
 	}
-	return errors.New("the k3d node " + server + " cannot resolve " + developmentNodeDNSName + ": its DNS resolver did not answer, so image pulls would time out. " +
+	return errors.New("the k3d node " + server + " cannot resolve " + developmentNodeDNSName + ": its DNS resolver refused the query, so image pulls would time out. " +
 		"k3d forwards node DNS through the container network gateway, which fails on some hosts (for example Docker using iptables-nft). " +
 		"Set OCC_DEVELOPMENT_K3D_DNS_RESOLVER to an IPv4 DNS server the node can reach" + hint + " and run occ dev up again")
 }

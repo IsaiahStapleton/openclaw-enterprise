@@ -1413,7 +1413,7 @@ for (const scenario of [
       assert.match(result.stderr, /partial cluster creation/);
     }
     if (scenario === "node-dns-refused") {
-      // A node resolver nobody answers stops startup before the first image pull.
+      // A node resolver that refuses queries stops startup before the first image pull.
       assert.match(result.stderr, /cannot resolve registry-1\.docker\.io/);
       assert.match(result.stderr, /OCC_DEVELOPMENT_K3D_DNS_RESOLVER/);
       const commands = await readJsonLines(fixture.env.SAFETY_LOG);
@@ -1432,7 +1432,7 @@ for (const scenario of [
   });
 }
 
-test("Kubernetes-only dev-up stops and rolls back when the node resolver does not answer", async (t) => {
+test("Kubernetes-only dev-up stops and rolls back when the node resolver refuses queries", async (t) => {
   const fixture = await kubernetesFixture(t, "node-dns-refused");
   fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
   fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "none";

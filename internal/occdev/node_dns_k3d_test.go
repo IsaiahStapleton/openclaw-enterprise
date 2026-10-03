@@ -23,8 +23,10 @@ func TestClassifyDevelopmentNodeDNS(t *testing.T) {
 		want   developmentNodeDNSOutcome
 	}{
 		{"resolved", "Name:\tregistry-1.docker.io\nAddress: 192.0.2.10\n", nil, nodeDNSResolved},
-		{"refused", busyboxRefused, failed, nodeDNSUnanswered},
-		{"timed out", ";; connection timed out; no servers could be reached\n", failed, nodeDNSUnanswered},
+		{"refused", busyboxRefused, failed, nodeDNSRefused},
+		{"refused, BIND", ";; communications error to 172.18.0.1#53: connection refused\n;; no servers could be reached\n", failed, nodeDNSRefused},
+		// A network may drop public DNS on purpose; only a refusal stops startup.
+		{"timed out", ";; connection timed out; no servers could be reached\n", failed, nodeDNSInconclusive},
 		// A resolver that answers, even with an error, is not the gateway failure.
 		{"no such name", "** server can't find registry-1.docker.io: NXDOMAIN\n", failed, nodeDNSInconclusive},
 		{"no nslookup in a custom node image", `exec: "nslookup": executable file not found in $PATH`, failed, nodeDNSInconclusive},
@@ -40,7 +42,7 @@ func TestClassifyDevelopmentNodeDNS(t *testing.T) {
 
 func TestDevelopmentNodeDNSErrorNamesTheResolverSetting(t *testing.T) {
 	err := developmentNodeDNSError("k3d-occ-dev-test-server-0", "", "10.0.0.2")
-	for _, want := range []string{"k3d-occ-dev-test-server-0", "registry-1.docker.io", "did not answer", "iptables-nft", "OCC_DEVELOPMENT_K3D_DNS_RESOLVER=10.0.0.2"} {
+	for _, want := range []string{"k3d-occ-dev-test-server-0", "registry-1.docker.io", "refused the query", "iptables-nft", "OCC_DEVELOPMENT_K3D_DNS_RESOLVER=10.0.0.2"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not contain %q", err, want)
 		}
@@ -49,7 +51,7 @@ func TestDevelopmentNodeDNSErrorNamesTheResolverSetting(t *testing.T) {
 		t.Fatalf("unexpected error without an upstream hint: %q", err)
 	}
 	// An explicit resolver that does not answer is named as the cause.
-	if err := developmentNodeDNSError("node", "192.0.2.53", "10.0.0.2"); !strings.Contains(err.Error(), "OCC_DEVELOPMENT_K3D_DNS_RESOLVER=192.0.2.53 did not answer") {
+	if err := developmentNodeDNSError("node", "192.0.2.53", "10.0.0.2"); !strings.Contains(err.Error(), "OCC_DEVELOPMENT_K3D_DNS_RESOLVER=192.0.2.53 refused the query") {
 		t.Fatalf("unexpected error for a configured resolver: %q", err)
 	}
 }
@@ -102,7 +104,7 @@ func TestCheckDevelopmentNodeDNS(t *testing.T) {
 		}
 	})
 
-	t.Run("unanswered after retries", func(t *testing.T) {
+	t.Run("refused after retries", func(t *testing.T) {
 		fastNodeDNSRetries(t)
 		count := filepath.Join(t.TempDir(), "attempts")
 		fakeEngine(t, "docker", lookup+` echo x >> `+count+`; printf '%s' "`+busyboxRefused+`"; exit 1 ;;
@@ -121,7 +123,7 @@ func TestCheckDevelopmentNodeDNS(t *testing.T) {
 	t.Run("answers on retry", func(t *testing.T) {
 		fastNodeDNSRetries(t)
 		marker := filepath.Join(t.TempDir(), "seen")
-		fakeEngine(t, "podman", lookup+` if [ -e `+marker+` ]; then echo 'Name: registry-1.docker.io'; else touch `+marker+`; echo ';; connection timed out; no servers could be reached'; exit 1; fi ;;
+		fakeEngine(t, "podman", lookup+` if [ -e `+marker+` ]; then echo 'Name: registry-1.docker.io'; else touch `+marker+`; printf '%s' "`+busyboxRefused+`"; exit 1; fi ;;
 `)
 		r := &runner{engine: "podman", env: map[string]string{}}
 		if err := r.checkDevelopmentNodeDNS(context.Background(), state); err != nil {
