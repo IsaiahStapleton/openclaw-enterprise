@@ -131,15 +131,10 @@ An empty queue waits within a bound. After work or idle, `health()` queries
 work, calls `onHealthy`, and emits `worker.health`. Both must succeed for readiness. Serialized failures emit `HEALTH_UNAVAILABLE` without
 consuming retries.
 
-The start of every pass, including back-to-back claims, and every renewed
-claim heartbeat call `onProgress` (at most once per health interval); the
-process also writes the marker once at startup. A database outage keeps the
-loop moving, so only a pass stuck on one await stops it; the packaged liveness
-probe restarts the worker when that marker is stale beyond
-`max(120 s, 240 polls, 6 leases, 2 database timeouts)`. The worker pool's
-client-side `query_timeout` (`OCC_WORKER_DATABASE_TIMEOUT_MS`) usually unsticks
-such a pass first: the transaction owner discards the abandoned connection
-without a ROLLBACK, and the next pass uses a fresh one.
+Each pass start and claim renewal calls `onProgress`; the liveness probe
+restarts a worker whose marker goes stale. A client `query_timeout` usually
+frees a stuck pass first by discarding its connection. See
+[worker settings](../reference/settings/operations.md#controller-worker-environment).
 
 ### 4. Reload ownership and reauthorize before infrastructure effects
 
@@ -392,7 +387,7 @@ cannot strand provisioning.
 
 ## Changelog
 
-- 2026-10-03 16:00: Bound worker queries client-side and restart a worker whose run loop stops making progress. (fix-worker-liveness)
+- 2026-10-03 16:00: Bound worker queries and restart a stuck run loop. (fix-worker-liveness)
 
 - 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 

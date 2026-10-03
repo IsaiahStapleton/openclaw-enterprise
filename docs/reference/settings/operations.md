@@ -199,6 +199,11 @@ it does not use the API's listener or authentication settings.
 | `OCC_WORKER_READINESS_PATH`         | Optional absolute path.        | Writes a private freshness marker after real queue-health observations; required by packaged worker probes.                                                   |
 | `OCC_WORKER_LIVENESS_PATH`          | Optional absolute path.        | Writes a private marker as the run loop makes progress, even through database outages; the packaged liveness probe restarts a worker whose marker is stale.   |
 
+The run loop writes the liveness marker at startup, at the start of every pass
+and on every claim renewal. A database outage keeps it moving; the packaged
+liveness probe fails only when it is older than
+`max(120 s, 240 polls, 6 leases, 2 database timeouts)`.
+
 Start the worker only after the controller is healthy and the Installation exists:
 
 ```bash
