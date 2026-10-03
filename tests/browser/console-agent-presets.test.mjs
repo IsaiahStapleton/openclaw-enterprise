@@ -933,7 +933,7 @@ test("Plugin approval choices explain unsupported provider modes and preserve th
   );
   const { page } = await newPage(t, fixture);
   const url = detailUrl(fixture, namespace.id, agent.id, "draft", "plugins");
-  await login(page, fixture, `${url.pathname}${url.search}`);
+  await login(page, fixture, url);
   const json = page.locator("#agent-plugins");
   await page.locator("summary").filter({ hasText: "Plugin selections JSON" }).click();
   // A copied policy from another provider remains visible so the operator can correct it.
