@@ -52,10 +52,12 @@ test("production worker liveness fails once the run loop stops reporting progres
     });
 
   await live();
-  // A loop waiting out a database outage keeps moving, so a stale readiness marker alone
-  // must not restart it.
+  // A loop waiting out a database outage keeps moving, so a stale or missing readiness
+  // marker (a worker started during the outage never writes one) must not restart it.
   const outage = new Date(Date.now() - 600_000);
   await utimes(ready, outage, outage);
+  await live();
+  await rm(ready);
   await live();
   // A loop stuck on one await (a query on a silent connection) stops reporting progress.
   await utimes(alive, outage, outage);

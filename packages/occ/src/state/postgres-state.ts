@@ -763,6 +763,14 @@ function databaseError(error: unknown): Error {
   return error;
 }
 
+/**
+ * pg's client-side `query_timeout` rejects with this code-less error and leaves the statement
+ * running on the connection, so anything queued after it would wait for it.
+ */
+function queryAbandonedByClient(error: unknown): boolean {
+  return error instanceof Error && !("code" in error) && error.message === "Query read timeout";
+}
+
 function commitOutcomeUnknown(error: unknown): boolean {
   const code =
     error instanceof DatabaseError && typeof error.code === "string" ? error.code : undefined;
@@ -1539,6 +1547,9 @@ export class PostgresPlatformState implements PlatformStateStore {
     let acknowledged = false;
     let failed = false;
     let discard = false;
+    // A statement the client abandoned (query_timeout) may still run on this connection;
+    // a ROLLBACK would only queue behind it, so the connection is discarded instead.
+    let abandoned = false;
     let unit: PlatformUnitOfWork | undefined;
     try {
       try {
@@ -1576,7 +1587,13 @@ export class PostgresPlatformState implements PlatformStateStore {
             if (transportError !== undefined) {
               throw transportError;
             }
-            const result = await client.query(statement, parameters);
+            let result: Awaited<ReturnType<PostgresClient["query"]>>;
+            try {
+              result = await client.query(statement, parameters);
+            } catch (error) {
+              abandoned ||= queryAbandonedByClient(error);
+              throw error;
+            }
             lifetime.assertActive();
             if (transportError !== undefined) {
               throw transportError;
@@ -1629,10 +1646,10 @@ export class PostgresPlatformState implements PlatformStateStore {
       return result;
     } catch (error) {
       failed = true;
-      discard ||= committing || transportError !== undefined;
+      discard ||= committing || transportError !== undefined || abandoned;
       await lifetime.finish();
-      // An uncertain COMMIT or broken transport must not be queried again.
-      if (started && !committing && transportError === undefined) {
+      // An uncertain COMMIT, broken transport or abandoned statement must not be queried again.
+      if (started && !committing && transportError === undefined && !abandoned) {
         try {
           await client.query("ROLLBACK");
         } catch {

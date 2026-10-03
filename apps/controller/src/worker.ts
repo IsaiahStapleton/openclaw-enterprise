@@ -87,6 +87,7 @@ import {
  * every claim forever. `query_timeout` is client-side: it abandons the query, the transaction
  * owner discards the connection, and the loop retries on a fresh one. It is not sent to the
  * server, so poolers and migrations are unaffected. Size it well above any legitimate query.
+ * TCP keepalive only prunes dead idle connections eventually (kernel probe defaults apply).
  */
 export function workerDatabasePoolOptions(timeoutMs: number) {
   const timeout = positiveInteger(timeoutMs, "Worker database timeout");
@@ -113,9 +114,9 @@ export interface ControllerWorkerOptions {
   readonly emit?: (event: Readonly<Record<string, unknown>>) => void;
   readonly onHealthy?: () => Promise<void>;
   /**
-   * Called, at most once per health interval, when the run loop finishes a pass (even a failed
-   * one) or a claim heartbeat renews. It goes quiet only while the loop is stuck, so a liveness
-   * probe can tell a wedged worker from one waiting out a database outage.
+   * Called, at most once per health interval, when the run loop starts a pass or a claim
+   * heartbeat renews. It goes quiet only while the loop is stuck, so a liveness probe can tell
+   * a wedged worker from one waiting out a database outage (each pass then fails fast).
    */
   readonly onProgress?: () => Promise<void>;
 }
@@ -816,6 +817,8 @@ export class ControllerWorker {
 
   private async run(): Promise<void> {
     while (!this.stopping) {
+      // Every pass starts here, including back-to-back claims that skip the idle delay.
+      this.progress();
       try {
         await this.queue.recoverStale();
         const claim = await this.queue.claim();
@@ -858,7 +861,6 @@ export class ControllerWorker {
           code: error instanceof WorkClaimLostError ? "CLAIM_LOST" : "WORKER_UNAVAILABLE",
         });
       }
-      this.progress();
       try {
         await delay(this.pollIntervalMs, undefined, { signal: this.abort.signal });
       } catch (error) {
@@ -3084,6 +3086,7 @@ export class ControllerWorker {
     if ((await this.queue.heartbeat(claim)) === undefined) {
       throw new WorkClaimLostError();
     }
+    this.progress();
     let lost = false;
     let pending = Promise.resolve();
     const operation = new AbortController();

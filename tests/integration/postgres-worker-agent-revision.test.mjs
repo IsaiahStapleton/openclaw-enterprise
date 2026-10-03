@@ -1083,7 +1083,9 @@ test(
     await waitFor("idle worker progress", async () => (progressed >= 2 ? true : undefined));
 
     proxy.silence();
-    // At most one report was already under way when the connection went silent.
+    // A negative check needs a fixed window. Progress is reported at most once per second
+    // here (pollIntervalMs 15), so 1.5 s lets an in-flight pass settle and 3 s spans three
+    // reports a moving loop would have made.
     await delay(1_500);
     const stuck = progressed;
     await delay(3_000);

@@ -111,6 +111,11 @@ try {
       }
     }
   }
+  // Startup (Installation and IAM load, Compute preflight) counts against the liveness
+  // bound, and an unwritable path fails here rather than as a restart loop later.
+  if (livenessPath !== undefined) {
+    await writeFile(livenessPath, `${Date.now()}\n`, { encoding: "utf8", mode: 0o600 });
+  }
   const drivers = await loadInstallationConfiguration({ mode, startupConfiguration });
   let computeDriver;
   if (drivers === undefined && mode === "development") {
