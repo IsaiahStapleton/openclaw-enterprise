@@ -8,7 +8,7 @@ This record preserves the dated changes to the Agent plugin deployment flow. See
 
 ## Changelog
 
-- 2026-10-03 18:00: Create discovery rejects a Secret reference to another Namespace as an invalid request instead of not-found. (binding-400b)
+- 2026-10-03 18:00: Create discovery and existing-Agent `oauthLogin` discovery reject a Secret reference to another Namespace as an invalid request instead of not-found. (binding-400b)
 
 - 2026-09-28 00:02: Reconciled Codex startup policy verification with approval scopes. (01a0b17c-68b6-7e11-bedc-f74de7d606ed - b96eadc1)
 

@@ -460,6 +460,41 @@ test("a cross-Namespace Secret is an invalid request; a Secret the Namespace lac
       assert.deepEqual({ status, code, message }, expected, `${write}, ${description}`);
     }
   }
+  // Every reference is checked before any of them is authorized: a foreign second field wins
+  // over a first field the deployer may not operate.
+  const listSourceTypes = gateway.listSourceTypes.bind(gateway);
+  gateway.listSourceTypes = async (...args) => [
+    ...(await listSourceTypes(...args)),
+    {
+      type: "pair",
+      config: [],
+      secrets: [
+        { name: "first", required: true },
+        { name: "second", required: true },
+      ],
+      rotation: "none",
+    },
+  ];
+  const mixed = await controller
+    .createCredentialSource(deployer, {
+      namespaceId: namespace.id,
+      name: "pair",
+      type: "pair",
+      secrets: { first: secret.ref, second: foreign },
+    })
+    .then(
+      () => assert.fail("a foreign second field must be rejected"),
+      (error) => error,
+    );
+  const { status, code, message } = requestFailure(mixed);
+  assert.deepEqual(
+    { status, code, message },
+    {
+      status: 400,
+      code: "INVALID_REQUEST",
+      message: "Credential source Secrets cannot cross Namespaces.",
+    },
+  );
   assert.deepEqual(gateway.calls, []);
   assert.equal(secretDriver.calls.filter(({ operation }) => operation === "withValue").length, 0);
 });
