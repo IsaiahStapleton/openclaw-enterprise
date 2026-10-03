@@ -915,6 +915,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   const provisionableExecutionModes = new Set();
   let nativeWorkersAvailable = false;
   let provisioningRequestId = createClientRequestId();
+  // The API admitted (or may have admitted) a job under provisioningRequestId. Create Agent
+  // must then resend the same plan: the API answers an edited one with 409 "different plan".
+  let requestAdmitted = false;
   let provisioningAttempt = null;
   const capabilityStatus = element(
     "p",
@@ -1278,13 +1281,20 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   const shouldProvision = () =>
     mode.value === "dedicated" && provisionableExecutionModes.has(mode.value);
   const updateControls = () => {
-    const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
+    const saved = Boolean(
+      savedConfiguration || savedAgent || provisioningAttempt || requestAdmitted,
+    );
+    const planLocked =
+      pending ||
+      Boolean(savedAgent) ||
+      Boolean(provisioningAttempt) ||
+      outcomeUnknown ||
+      requestAdmitted;
     for (const node of form.querySelectorAll("button, input, select, textarea")) {
       if (repositories?.section.contains(node)) {
         continue;
       }
-      node.disabled =
-        pending || Boolean(savedAgent) || Boolean(provisioningAttempt) || outcomeUnknown;
+      node.disabled = planLocked;
     }
     // Unsaved Agent fields remain editable after a known rejection; reuse the saved Configuration.
     for (const node of [
@@ -1303,9 +1313,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       node.disabled = pending;
     }
     updatePluginDiscovery();
-    pluginFields.setDisabled(
-      pending || Boolean(savedAgent) || Boolean(provisioningAttempt) || outcomeUnknown,
-    );
+    pluginFields.setDisabled(planLocked);
     channelEditor.toggleAttribute("inert", pending || saved || outcomeUnknown);
     channelEditor.setAttribute("aria-busy", pending ? "true" : "false");
     const usesPat = (binding?.method ?? authMethod.value) === "codex_pat";
@@ -1439,13 +1447,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
     reloadRepositories.disabled = pending || outcomeUnknown;
     startNewDraft.disabled = pending || outcomeUnknown;
-    repositories.setDisabled(
-      pending ||
-        outcomeUnknown ||
-        Boolean(savedAgent) ||
-        Boolean(provisioningAttempt) ||
-        repositoryRetryLocked(),
-    );
+    repositories.setDisabled(planLocked || repositoryRetryLocked());
     submit.disabled =
       (!savedAgent &&
         (repositoryRetryLocked() ||
@@ -1525,8 +1527,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   async function submitProvisioningAttempt(attempt) {
     // A retry of a job known to have failed. Read before the request: an admitted first
     // attempt also gains a retry URL, and after an unknown outcome the job may have
-    // succeeded, so a refusal there must keep the request ID to recover it.
-    const retrying = attempt.retryUrl !== undefined && !outcomeUnknown;
+    // succeeded (recovering), so a refusal there must keep the request ID to recover it.
+    const viaRetry = attempt.retryUrl !== undefined;
+    const retrying = viaRetry && !outcomeUnknown;
+    const recovering = viaRetry && outcomeUnknown;
     pending = true;
     outcomeUnknown = false;
     updateControls();
@@ -1563,7 +1567,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       const retryRefused = retrying && error.status === 409;
       const detail =
         outcomeUnknown && attempt.acknowledged
-          ? "Outcome unknown after provisioning admission. Retry resubmits the same request ID and saved references so the API can recover the job."
+          ? "Outcome unknown after provisioning admission. Retry resumes the accepted provisioning job, or retries it if it failed. If the API refuses because the job finished, select Create Agent to resend the same request ID."
           : outcomeUnknown
             ? "Outcome unknown. Retry resubmits the same request ID and saved references."
             : error.provisioningTerminal && error.canRetryProvisioning
@@ -1574,8 +1578,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
                   ? "The provisioning job can no longer be retried. Select Create Agent to submit a new request."
                   : error.status === undefined && error.message
                     ? error.message
-                    : message(error, mutationStarted);
+                    : recovering && error.status === 409
+                      ? "The provisioning job can no longer be retried; it may have finished. Select Create Agent to resend the same request ID and open its result."
+                      : message(error, mutationStarted);
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
+      requestAdmitted ||= attempt.acknowledged || outcomeUnknown;
       if (error.provisioningTerminal && error.canRetryProvisioning) {
         provisioningAttempt = {
           ...attempt,
@@ -1586,6 +1593,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         if (error.provisioningFailed || retryRefused) {
           // The failed job keeps this request ID; an edited form needs a new one.
           provisioningRequestId = createClientRequestId();
+          requestAdmitted = false;
         }
       }
     } finally {

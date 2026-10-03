@@ -2188,13 +2188,28 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
-  await page.getByText(/^Outcome unknown after provisioning admission\./).waitFor();
+  // Retry calls the job's retry endpoint, which cannot recover a finished job; the text
+  // must point at Create Agent for that case.
+  await page
+    .getByText(
+      /^Outcome unknown after provisioning admission\. Retry resumes the accepted provisioning job, or retries it if it failed\. If the API refuses because the job finished, select Create Agent to resend the same request ID\./,
+    )
+    .waitFor();
   assert.equal(bodies.length, 4);
   assert.notEqual(bodies[3].requestId, bodies[2].requestId);
   // After an unknown outcome a refused retry may mean the job succeeded, so the request
   // ID is kept and Create Agent recovers the job instead of starting a new one.
   await retry.click();
-  await page.getByText(/^The request conflicts with the saved state\./).waitFor();
+  await page
+    .getByText(
+      /^The provisioning job can no longer be retried; it may have finished\. Select Create Agent to resend the same request ID and open its result\./,
+    )
+    .waitFor();
+  // The kept request ID names the admitted job, so the plan stays locked: an edited
+  // form would get 409 "different plan" from the API on every Create Agent.
+  assert.equal(await retry.isVisible(), false);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page.waitForURL(new RegExp(`/agents/${agentIds[2]}\\?`));
   assert.equal(bodies.length, 5);
