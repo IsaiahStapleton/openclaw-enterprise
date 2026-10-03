@@ -387,10 +387,17 @@ export class ActivationPendingError extends Error {
  * with `code`. The message stays in the controller; status shows a fixed text.
  */
 export class SandboxRevisionUnsupportedError extends Error {
-  readonly code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED" | "SANDBOX_HARNESS_UNSUPPORTED";
+  readonly code:
+    | "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED"
+    | "SANDBOX_HARNESS_UNSUPPORTED"
+    | "SANDBOX_ADMISSION_LIMIT_REACHED";
 
-  constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
-    super(message);
+  constructor(
+    code: SandboxRevisionUnsupportedError["code"],
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
     this.name = "SandboxRevisionUnsupportedError";
     this.code = code;
   }

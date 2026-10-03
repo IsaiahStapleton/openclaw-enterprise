@@ -7,8 +7,10 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   GrpcOpenShellGatewayClient,
+  OpenShellAdmissionLimitError,
   OpenShellRequestReplayRefusedError,
 } from "../../apps/controller/src/drivers/sandbox/openshell-gateway-client.ts";
+import { SandboxRevisionUnsupportedError } from "../../packages/occ/src/index.ts";
 
 const require = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
 const grpc = require("@grpc/grpc-js");
@@ -337,6 +339,78 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
       await assert.rejects(create(name), (error) => {
         assert.ok(!(error instanceof OpenShellRequestReplayRefusedError));
         assert.equal(error.code, grpc.status.FAILED_PRECONDITION);
+        return true;
+      });
+    }
+  } finally {
+    client.close();
+    await new Promise((resolve) => server.tryShutdown(resolve));
+  }
+});
+
+test("OpenShell client fails permanently only on the durable admission limit", async () => {
+  const proto = await loader.load(
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
+  );
+  const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
+  // The pinned gateway's exact refusal once a caller holds 1000 durable admissions.
+  const limit =
+    "caller has reached the durable mutation admission limit; unresolved requests require reconciliation";
+  const refuse = (details, callback) => callback({ code: grpc.status.RESOURCE_EXHAUSTED, details });
+  const server = new grpc.Server();
+  server.addService(OpenShell.service, {
+    CreateSandbox: (call, callback) => refuse(call.request.name, callback),
+    CreateProvider: (call, callback) => refuse(call.request.provider.metadata.name, callback),
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+  const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
+  const create = (name) =>
+    client.createSandbox(
+      {
+        name,
+        workspace: "tenant-workspace",
+        requestId: "7dfed2b8-8cef-4513-ab04-020baf3ccbf3",
+        labels: {},
+        annotations: {},
+        spec: {},
+        serviceExposures: [],
+      },
+      AbortSignal.timeout(2_000),
+    );
+  try {
+    // Unresolved admissions never expire and OpenShell has no reset API, so the worker
+    // must fail the revision at once instead of spending its attempt budget on retries.
+    for (const refused of [
+      create(limit),
+      client.createProvider(
+        { name: limit, type: "openai", workspace: "tenant-workspace", labels: {}, credentials: {} },
+        AbortSignal.timeout(2_000),
+      ),
+    ]) {
+      await assert.rejects(refused, (error) => {
+        assert.ok(error instanceof OpenShellAdmissionLimitError, String(error));
+        assert.ok(error instanceof SandboxRevisionUnsupportedError);
+        assert.equal(error.code, "SANDBOX_ADMISSION_LIMIT_REACHED");
+        assert.match(error.message, /limit of 1000 durable request admissions.*then redeploy/);
+        assert.equal(error.cause.code, grpc.status.RESOURCE_EXHAUSTED);
+        return true;
+      });
+    }
+    // OpenShell's other RESOURCE_EXHAUSTED refusals clear by themselves: they stay the raw
+    // gRPC error, which the worker retries as DEPENDENCY_UNAVAILABLE.
+    for (const details of [
+      "gRPC rate limit exceeded",
+      "mutation admission workers are busy; no work was started by this call",
+    ]) {
+      await assert.rejects(create(details), (error) => {
+        assert.ok(!(error instanceof SandboxRevisionUnsupportedError), String(error));
+        assert.equal(error.code, grpc.status.RESOURCE_EXHAUSTED);
+        assert.equal(error.details, details);
         return true;
       });
     }

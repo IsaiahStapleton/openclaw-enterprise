@@ -475,6 +475,8 @@ function deploymentErrorMessage(code: string): string {
       return "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.";
     case "SANDBOX_HARNESS_UNSUPPORTED":
       return "The Sandbox Driver does not support this revision's Harness.";
+    case "SANDBOX_ADMISSION_LIMIT_REACHED":
+      return "The Sandbox gateway refuses new requests from the controller: its request admission limit is reached and retrying cannot clear it.";
     default:
       return "Deployment reconciliation failed.";
   }

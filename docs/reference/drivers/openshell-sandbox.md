@@ -377,6 +377,13 @@ Common fail-closed errors include:
 - `OpenShell v0.1.3-pre.1 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   Deployment status reports `SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED` after one
   attempt; redeploying the same revision cannot succeed on stock `v0.1.3-pre.1`.
+- `OpenShell refused <method>: the controller's gateway identity reached OpenShell's limit of 1000 durable request admissions ...`
+  Deployment status reports `SANDBOX_ADMISSION_LIMIT_REACHED` after one attempt.
+  OpenShell keeps an admission record for each `request_id`; completed records free
+  up 24 hours after completion, but records whose request errored stay unresolved
+  forever and OpenShell has no reset API. Investigate the controller identity's
+  unresolved admissions in the OpenShell gateway database, then redeploy. Other
+  `RESOURCE_EXHAUSTED` refusals, such as rate limits, remain retryable.
 
 ## Related documentation
 
