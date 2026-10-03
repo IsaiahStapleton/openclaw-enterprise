@@ -718,7 +718,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List credential sources",
+		Short: "List credential sources without live gateway status",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
