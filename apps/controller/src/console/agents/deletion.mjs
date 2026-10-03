@@ -193,6 +193,16 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     }
   }
 
+  // Agent deletion keeps the Configuration and model key Secret, even ones Create Agent made
+  // for this Agent, and the console cannot list or delete them, so name them and the commands.
+  function keptResourcesText() {
+    const source = agent.harnessAuth?.source;
+    if (source?.kind !== "secret") {
+      return `Its Configuration ${agent.configurationId} is kept, even if it was created with this Agent. Delete it separately with occ configuration delete once nothing else uses it.`;
+    }
+    return `Its Configuration ${agent.configurationId} and model key Secret ${source.id} are kept, even if they were created with this Agent. Delete them separately with occ configuration delete and occ secret delete once nothing else uses them.`;
+  }
+
   function openConfirmation() {
     if (state.pending || state.deleting || state.needsRefresh) {
       return;
@@ -200,7 +210,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     const dialog = element("dialog", {
       className: "agent-delete-dialog",
       "aria-labelledby": "agent-delete-confirm-title",
-      "aria-describedby": "agent-delete-confirm-description",
+      "aria-describedby": "agent-delete-confirm-description agent-delete-confirm-kept",
     });
     const cancel = button("Cancel", () => dialog.close());
     const confirm = button(
@@ -217,6 +227,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
         { id: "agent-delete-confirm-description" },
         "This permanently deletes the Agent, its revision history, and its workspace data. This cannot be undone.",
       ),
+      element("p", { id: "agent-delete-confirm-kept" }, keptResourcesText()),
       element("div", { className: "form-actions" }, cancel, confirm),
     );
     dialog.addEventListener("cancel", (event) => {
