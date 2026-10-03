@@ -3946,6 +3946,20 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
   );
 });
 
+// Each workspace file loads on its own, and a restored copy of an old view keeps its editors
+// disabled until revalidation re-enables or replaces it, so an enabled editor is the signal
+// that this file's current read has settled.
+async function waitForWorkspaceEditors(page, names) {
+  await page.waitForFunction(
+    (filenames) =>
+      filenames.every((name) => {
+        const editor = globalThis.document.getElementById(`workspace-${name}`);
+        return editor && !editor.disabled;
+      }),
+    names,
+  );
+}
+
 test("live workspace drafts survive navigation, stay Agent-scoped, and clear on explicit reload or save", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "console-workspace-drafts-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -3998,10 +4012,7 @@ test("live workspace drafts survive navigation, stay Agent-scoped, and clear on 
   await page.getByLabel("USER.md", { exact: true }).fill("");
   await page.getByRole("button", { name: "Configuration", exact: true }).click();
   await page.getByRole("button", { name: "Workspace files", exact: true }).click();
-  await page.waitForFunction(() => {
-    const editor = globalThis.document.getElementById("workspace-AGENTS.md");
-    return editor && !editor.disabled;
-  });
+  await waitForWorkspaceEditors(page, ["AGENTS.md", "USER.md"]);
   assert.equal(await file.inputValue(), "# Unsaved instructions\n");
   assert.equal(await page.getByLabel("USER.md", { exact: true }).inputValue(), "");
   await page.getByRole("link", { name: "← Agents" }).click();
@@ -4013,10 +4024,7 @@ test("live workspace drafts survive navigation, stay Agent-scoped, and clear on 
   await page.getByLabel("Search Agents").fill("Workspace draft owner");
   await page.getByRole("link", { name: "Workspace draft owner", exact: true }).click();
   await page.getByRole("button", { name: "Workspace files", exact: true }).click();
-  await page.waitForFunction(() => {
-    const editor = globalThis.document.getElementById("workspace-AGENTS.md");
-    return editor && !editor.disabled;
-  });
+  await waitForWorkspaceEditors(page, ["AGENTS.md"]);
   assert.equal(await file.inputValue(), "# Unsaved instructions\n");
   assert.deepEqual(nonAuthWriteRequests(requests), []);
   const saved = page.waitForResponse(
@@ -4036,6 +4044,7 @@ test("live workspace drafts survive navigation, stay Agent-scoped, and clear on 
   await page.getByRole("link", { name: "← Agents" }).click();
   assert.equal(await page.getByLabel("Search Agents").inputValue(), "Workspace draft owner");
   await page.goBack();
+  await waitForWorkspaceEditors(page, ["AGENTS.md", "USER.md"]);
   await page.getByText("AGENTS.md loaded.", { exact: true }).waitFor();
   assert.equal(
     await page.getByRole("button", { name: "Save AGENTS.md", exact: true }).isDisabled(),
