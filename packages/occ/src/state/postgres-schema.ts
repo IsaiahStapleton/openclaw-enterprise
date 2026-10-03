@@ -1139,6 +1139,7 @@ export const controllerWork = occSchema.table(
           OR (
             ${table.state} = 'failed_permanent'
             AND ${table.reasonCode} = 'RUNTIME_MODEL_PROBE_FAILED'
+            AND ${table.resultData} ? 'runtimeFailure'
             AND (${table.resultData} - 'runtimeFailure') = '{}'::jsonb
             AND jsonb_typeof(${table.resultData}->'runtimeFailure') = 'object'
             AND (${table.resultData}->'runtimeFailure') ?& ARRAY['component', 'check', 'checkedAt', 'code']

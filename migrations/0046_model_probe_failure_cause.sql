@@ -39,6 +39,7 @@ ADD CONSTRAINT controller_work_result_data_state CHECK (
       OR (
         state = 'failed_permanent'
         AND reason_code = 'RUNTIME_MODEL_PROBE_FAILED'
+        AND result_data ? 'runtimeFailure'
         AND (result_data - 'runtimeFailure') = '{}'::jsonb
         AND jsonb_typeof(result_data->'runtimeFailure') = 'object'
         AND (result_data->'runtimeFailure') ?& ARRAY['component', 'check', 'checkedAt', 'code']

@@ -535,9 +535,11 @@ function convergenceDeadlineResultData(
   timeoutMs: number,
   runtimeFailure: RuntimeFailureEvidence | undefined,
 ): Readonly<Record<string, unknown>> {
+  // Deadline data never carries a cause; only RUNTIME_MODEL_PROBE_FAILED keeps one.
+  const { cause: _cause, ...evidence } = runtimeFailure ?? {};
   return Object.freeze({
     timeoutMs,
-    ...(runtimeFailure === undefined ? {} : { runtimeFailure }),
+    ...(runtimeFailure === undefined ? {} : { runtimeFailure: evidence }),
   });
 }
 

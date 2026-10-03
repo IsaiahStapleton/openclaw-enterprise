@@ -7236,6 +7236,7 @@ test(
     const [{ candidate: probeFailed }] = candidates.slice(1, 2);
     const evidence = failures.get(probeFailed.id);
     for (const invalid of [
+      {},
       { runtimeFailure: { ...evidence, cause: { kind: "PROBE_STATUS", detail: "HTTP 404 body" } } },
       { runtimeFailure: { ...evidence, cause: { kind: "PROVIDER_TEXT", detail: "format" } } },
       { runtimeFailure: { ...evidence, cause: { detail: "format" } } },
