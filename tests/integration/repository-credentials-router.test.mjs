@@ -207,6 +207,16 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
     ).code,
     0,
   );
+  // Git decodes URL usernames before asking the credential helper, so these
+  // gateway destinations still receive the bearer and must not skip the check.
+  for (const destination of [
+    namedDestination.replace("gateway-session@", "gateway%2Dsession@"),
+    namedDestination.replace("gateway-session@", "gateway-session:secret@"),
+  ]) {
+    const unparsed = await invoke({ OCE_REPOSITORY_REF: "restricted" }, destination);
+    assert.equal(unparsed.code, 1);
+    assert.equal(unparsed.stderr, "repository-pre-push-guard-failed\n");
+  }
   const selected = material.manifest.bindings.find(
     ({ repositoryRef }) => repositoryRef === "permitted",
   );

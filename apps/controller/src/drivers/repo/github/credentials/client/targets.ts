@@ -72,11 +72,7 @@ function gitPushDestinations(
   manifest: RuntimeRepositoryManifest,
   destination: string,
 ): readonly RuntimeRepositoryBinding[] {
-  if (
-    !destination.startsWith("https://") ||
-    /[\s\\%?#]/.test(destination) ||
-    destination.includes("..")
-  ) {
+  if (!destination.startsWith("https://")) {
     return [];
   }
   let url: URL;
@@ -85,8 +81,16 @@ function gitPushDestinations(
   } catch {
     return [];
   }
+  if (/[\s\\%?#]/.test(destination) || destination.includes("..") || url.password) {
+    // Git decodes a URL username before the credential helper matches it, so an
+    // irregular gateway destination can still receive the bearer.
+    if (manifest.bindings.some(({ client }) => client.gatewayOrigin === url.origin)) {
+      throw new Error("unsupported-push-destination");
+    }
+    return [];
+  }
   const path = gitRepositoryPath(url.pathname.slice(1));
-  if (url.password || path === undefined) {
+  if (path === undefined) {
     return [];
   }
   return manifest.bindings.filter(({ client }) => {
