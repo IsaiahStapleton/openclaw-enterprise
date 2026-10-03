@@ -1432,6 +1432,22 @@ for (const scenario of [
   });
 }
 
+test("Kubernetes-only dev-up stops and rolls back when the node resolver does not answer", async (t) => {
+  const fixture = await kubernetesFixture(t, "node-dns-refused");
+  fixture.env.OCC_DEVELOPMENT_CONTROL_PLANE = "kubernetes";
+  fixture.env.OCC_DEVELOPMENT_SANDBOX_DRIVER = "none";
+  fixture.env.DEV_UP_EXISTING_CONTROLLER_IMAGE = "1";
+  fixture.env.DEV_UP_EXISTING_RUNTIME_IMAGE = "1";
+  const result = runDevUp([], fixture.env);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot resolve registry-1\.docker\.io/);
+  assert.match(result.stderr, /OCC_DEVELOPMENT_K3D_DNS_RESOLVER/);
+  await assert.rejects(stat(fixture.env.OCC_DEVELOPMENT_STATE_DIRECTORY), { code: "ENOENT" });
+  assert.deepEqual(JSON.parse(await readFile(fixture.env.DEV_UP_RESOURCE_STATE, "utf8")).clusters, [
+    "occ-dev-unrelated",
+  ]);
+});
+
 test("Kubernetes dev-down preserves recovery state after incomplete cleanup and can retry", async (t) => {
   const fixture = await kubernetesFixture(t, "cluster-delete-failed");
   const started = fixture.start();
