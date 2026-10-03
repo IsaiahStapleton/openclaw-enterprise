@@ -1530,8 +1530,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         mutationStarted &&
         !error.provisioningTerminal &&
         ![400, 403, 404, 409, 429].includes(error.status);
-      // The API refuses to retry a job whose Namespace or Agent lifecycle changed, or
-      // that was cancelled or handed off; that job can never finish.
+      // The API refuses to retry a job whose Namespace or Agent lifecycle changed, that was
+      // cancelled or handed off, or whose Secret was deleted; that job can never finish. Its
+      // message names the reason (for example the deleted Secret).
       const retryRefused = retrying && error.status === 409;
       const detail =
         outcomeUnknown && attempt.acknowledged
@@ -1543,7 +1544,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
               : error.provisioningFailed
                 ? `${error.message} Select Create Agent to submit a new request.`
                 : retryRefused
-                  ? "The provisioning job can no longer be retried. Select Create Agent to submit a new request."
+                  ? `${error.serverMessage ?? "The provisioning job can no longer be retried."} Select Create Agent to submit a new request.`
                   : error.status === undefined && error.message
                     ? error.message
                     : recovering && error.status === 409

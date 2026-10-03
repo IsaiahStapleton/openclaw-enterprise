@@ -2065,6 +2065,9 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
     );
   });
   let retries = 0;
+  // The API refuses to retry a failed job whose Secret was deleted, and names that Secret.
+  const deletedSecretRetry =
+    "Secret sec_00000000-0000-4000-8000-00000000dead, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.";
   await page.route(`**/namespaces/${namespace.id}/agents/provision/work_2/retry`, async (route) => {
     retries += 1;
     if (retries > 1) {
@@ -2074,7 +2077,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
         body: JSON.stringify({
           error: {
             code: "RESOURCE_CONFLICT",
-            message: "The requested platform resource already exists.",
+            message: deletedSecretRetry,
           },
           meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
         }),
@@ -2214,12 +2217,12 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await retry.isVisible(), true);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
 
-  // A refused retry ends that job: Create Agent submits a new request ID instead of
-  // replaying the failed job.
+  // A refused retry ends that job and shows the API's reason: Create Agent submits a new
+  // request ID instead of replaying the failed job.
   await retry.click();
   await page
     .getByText(
-      "The provisioning job can no longer be retried. Select Create Agent to submit a new request.",
+      `${deletedSecretRetry} Select Create Agent to submit a new request. Request ID: req_00000000-0000-4000-8000-000000000409`,
     )
     .waitFor();
   assert.equal(retries, 2);
