@@ -230,6 +230,11 @@ async function fixture(t, selection = {}) {
         continue;
       }
       const pid = Number(await readFile(join(state, name), "utf8"));
+      // A pid file read between create and write is empty (0): kill(0) would signal
+      // this runner's own process group.
+      if (!Number.isSafeInteger(pid) || pid <= 0) {
+        continue;
+      }
       try {
         process.kill(pid, "SIGTERM");
       } catch (error) {
