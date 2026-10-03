@@ -1092,6 +1092,15 @@ test("a cursor from a page with no lines reads only output newer than that page"
     reader.requests.map(({ sinceSeconds }) => sinceSeconds),
     [60, 6, 7],
   );
+  // The first line the view sees is delivered once, and a full tail is labelled.
+  const burst = Array.from({ length: 3 }, (_, i) => timedLog(`retrying in ${i}s`, 600 + i));
+  const full = await reader.poll(burst, { elapsed: 10_000, query: { tailLines: 3 } });
+  assert.deepEqual(
+    full.records.map((record) => record.reason ?? record.message),
+    ["window_exceeded", "retrying in 0s", "retrying in 1s", "retrying in 2s"],
+  );
+  const again = await reader.poll(burst, { elapsed: 11_000 });
+  assert.deepEqual(messages(again), []);
   assert.equal(reader.admissions, 1);
 });
 

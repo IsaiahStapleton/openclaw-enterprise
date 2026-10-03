@@ -329,8 +329,8 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
         .filter((line) => line.time !== null)
         .map((line) => ({ time: line.time!, hash: sandboxLogLineHash(line) })),
     ],
-    // A first page that saw nothing keeps its requested window start, so a cursor poll
-    // without `sinceSeconds` does not read lines older than the view's window.
+    // A view's first page floors the resume time at its requested window start, so a
+    // cursor poll without `sinceSeconds` (after an empty page) reads nothing older.
     gapFloor ?? (continuing ? resume.lastTime : (sinceTime ?? null)),
   );
   const records = [

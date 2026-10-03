@@ -100,7 +100,8 @@ action, before any log read. The Driver re-checks
 Pod ownership, calls `readNamespacedPodLog` with `tailLines`, `sinceSeconds`,
 `previous`, a 1 MiB `limitBytes` and timestamps, and re-reads the Pod. A cursor
 poll derives `sinceSeconds` from the cursor: from its newest delivered line, or,
-when the view has delivered nothing yet, from the cursor's issue time. OCC
+when the view has delivered nothing yet, from the previous read (a full tail then
+emits `window_exceeded`). OCC
 drops lines already delivered at the cursor time, emits `stream_replaced`,
 `window_exceeded`, `cursor_expired` or `truncated` gaps, and passes the rest to
 `runtime-logs/sanitize.ts:sanitizeRuntimeLogChunk`, the only producer of
@@ -140,8 +141,8 @@ exposes nothing else. OpenShell stamps supervisor lines when recorded but
 batches them, and filters `since_time` by that stamp, so a resume sends a time
 `SANDBOX_LOG_OVERLAP_MS` (5 s) behind the newest delivered line; the cursor
 keeps one hash per line delivered since then (up to 48), and each re-read line
-consumes one. A first page that saw nothing keeps its requested window start as
-the resume time. If no remembered line came back and nothing older did, OCC emits
+consumes one. A view's first page floors its resume time at the requested window
+start. If no remembered line came back and nothing older did, OCC emits
 `buffer_lost` or, when the window was full, `window_exceeded`; more than 48
 lines in one millisecond also emit `window_exceeded`. gRPC `NOT_FOUND` (absent
 Sandbox, or concealed from a non-member) maps to

@@ -223,6 +223,8 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   // A view that has delivered no line yet (a quiet container, or an empty
   // `sinceSeconds` window) continues from its previous page, not from the whole tail:
   // cursor polls need not repeat `sinceSeconds`, and a cursor reads newer lines only.
+  // The bound starts at the previous read, not the end of its page: the cursor's
+  // `issuedAt` is taken before the Driver read.
   const quiet = sameStream && prior.lastTime === null ? prior : undefined;
   // A view is audited once, before its first Driver read. Cursor polls inside a
   // view are not re-audited; an expired cursor starts a new view, and so does a
@@ -248,6 +250,7 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
       : quiet !== undefined
         ? secondsSince(quiet.issuedAt)
         : query.sinceSeconds;
+  const readStartedAt = now();
   const chunk = validChunk(
     await input.readLogs({
       source: sourceId,
@@ -288,10 +291,19 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
   // The byte limit cuts the final line; a partial line may end inside a token.
   const completeLines = chunk.truncated ? chunk.lines.slice(0, -1) : chunk.lines;
   let lines = completeLines;
+  const earliest = lines.find((line) => line.time !== null)?.time ?? null;
+  // A full tail since a quiet view's previous read may have dropped its oldest lines.
+  if (
+    quiet !== undefined &&
+    !replacedDuringRead &&
+    chunk.lines.length >= query.tailLines &&
+    earliest !== null
+  ) {
+    leading.push(runtimeLogGap("window_exceeded", observedStream, earliest));
+  }
   if (resume !== undefined && !replacedDuringRead) {
     const lastTime = resume.lastTime!;
     const seen = new Set(resume.lastHashes);
-    const earliest = lines.find((line) => line.time !== null)?.time ?? null;
     if (
       chunk.lines.length >= query.tailLines &&
       earliest !== null &&
@@ -405,7 +417,7 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     lastTime,
     lastHashes: lastHashes.slice(-16),
     ...(sanitized.pemOpen === undefined ? {} : { pemOpen: sanitized.pemOpen, pemAfterTime }),
-    issuedAt: now(),
+    issuedAt: readStartedAt,
   };
   return Object.freeze({
     revisionId: description.revisionId,
