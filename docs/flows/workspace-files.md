@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-10-01
-last_updated_session: authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c
+updated: 2026-10-03
+last_updated_session: authoring-run/264cfb8c-8627-40cb-8ac4-0b67ef3134dc
 ---
 
 # Agent Workspace Files Flow
@@ -106,7 +106,7 @@ instead of writing outside the Agent's managed storage. Provider-owned Sandbox
 startup cannot carry this init container and rejects workspace setup rather than
 dropping initialization.
 
-The runner validates identity, paths, OpenClaw `2026.9.6`, and the rendered
+The runner validates identity, paths, OpenClaw `2026.9.7`, and the rendered
 template digest against Console defaults.
 Defaults identities must match; links and conflicts fail. Without a completion
 marker, native `setup` initializes the workspace and Git without starting the Gateway.
@@ -353,6 +353,8 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 16:19: Align the documented workspace version with the OpenClaw `2026.9.7` pin. (authoring-run/264cfb8c-8627-40cb-8ac4-0b67ef3134dc - 8193ad3cadec560e3f97401fb999e672b1517aec)
 
 - 2026-10-01 15:11: Query Gateway workspace binding state through bounded SDK calls. (authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c - 521549df)
 
