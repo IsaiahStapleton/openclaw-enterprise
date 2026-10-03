@@ -5380,6 +5380,41 @@ test("Slack validation rejects swapped credentials and preserves authorization",
   response = { ok: true, bot_id: "B123", team_id: "T123" };
   const good = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
   assert.equal(good.status, 202, JSON.stringify(good.body));
+  // Named accounts do not hide the top-level tokens: OpenClaw starts them as the
+  // implicit default account, so they need Secret-backed refs too.
+  const namedAccounts = structuredClone(configuration);
+  namedAccounts.values.channels.slack.appToken = "xapp-plaintext-default";
+  namedAccounts.values.channels.slack.botToken = "xoxb-plaintext-default";
+  namedAccounts.values.channels.slack.accounts = {
+    work: {
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    },
+  };
+  const provisionNamed = () =>
+    controller.request("POST", `${base}/agents/provision`, {
+      body: provisioningRequestBody(
+        namespace.id,
+        { modelApiKey: model, toolApiKey: model },
+        { configuration: namedAccounts },
+      ),
+    });
+  const plaintextDefault = await provisionNamed();
+  assert.equal(plaintextDefault.status, 400, JSON.stringify(plaintextDefault.body));
+  assert.equal(plaintextDefault.body.error.code, "CHANNEL_CREDENTIAL_BINDING_REQUIRED");
+  assert.equal(plaintextDefault.body.error.details[0].path, "/channels/slack/appToken");
+  // An account named "default" replaces the implicit one and inherits the top level.
+  namedAccounts.values.channels.slack.accounts.default = {};
+  const explicitDefault = await provisionNamed();
+  assert.equal(explicitDefault.status, 400, JSON.stringify(explicitDefault.body));
+  assert.equal(
+    explicitDefault.body.error.details[0].path,
+    "/channels/slack/accounts/default/appToken",
+  );
+  delete namedAccounts.values.channels.slack.accounts.default;
+  delete namedAccounts.values.channels.slack.appToken;
+  delete namedAccounts.values.channels.slack.botToken;
+  assert.equal((await provisionNamed()).body.error.code, "DEPENDENCY_UNAVAILABLE");
   const beforeDisabled = calls;
   configuration.values.channels.slack.enabled = false;
   configuration.secretBindings = {};
