@@ -3583,9 +3583,13 @@ test("Agent creation saves native models for dedicated and embedded harnesses", 
       "GET",
       `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
     );
-    // Starters leave gateway authentication to the selected Compute Driver while
-    // preserving the separate credentials for dedicated Codex execution.
-    assert.equal(Object.hasOwn(configuration.data.values.gateway, "auth"), false);
+    // Starters leave the gateway authentication mode to the selected Compute Driver
+    // (no mode or token, #314) and reference only its generated password, which the
+    // in-Pod gateway CLI needs (D381), while preserving the separate credentials for
+    // dedicated Codex execution.
+    assert.deepEqual(configuration.data.values.gateway.auth, {
+      password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+    });
     assert.deepEqual(configuration.data.values.gateway.controlUi, STARTER_CONTROL_UI);
     if (harness === "codex") {
       assert.equal(
