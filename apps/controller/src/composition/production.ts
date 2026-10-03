@@ -17,9 +17,9 @@ import {
   type GitHubLoginConfiguration,
   type GoogleSignInConfiguration,
   type OidcSignInConfiguration,
+  type PasswordSlowLaneFloors,
   type PreparedAuthAccount,
 } from "../auth/index.ts";
-import type { PasswordSlowLaneOptions } from "../auth/admission.ts";
 import { createFastifyApp } from "../index.ts";
 import { SlackChannelDriver } from "../drivers/channel/slack.ts";
 import type {
@@ -54,7 +54,7 @@ export interface ProductionConfig {
   readonly passwordSignIn?: "recovery-only";
   readonly clientAddress?: ClientAddressConfiguration;
   /** Test seam: shortens password sign-in pacing; unset in the server (see auth/index.ts). */
-  readonly passwordSlowLane?: PasswordSlowLaneOptions;
+  readonly passwordSlowLaneFloors?: PasswordSlowLaneFloors;
   readonly poolMax?: number;
   readonly drivers: InstallationRuntimeDrivers;
   readonly logger?: OccLogger;
@@ -136,9 +136,9 @@ export async function composeProduction(config: ProductionConfig) {
         ? {}
         : { onWarning: (warning) => emitOccLogEvent(config.logger!, warning) }),
       ...(config.clientAddress === undefined ? {} : { clientAddress: config.clientAddress }),
-      ...(config.passwordSlowLane === undefined
+      ...(config.passwordSlowLaneFloors === undefined
         ? {}
-        : { passwordSlowLane: config.passwordSlowLane }),
+        : { passwordSlowLaneFloors: config.passwordSlowLaneFloors }),
       ...(config.logger === undefined
         ? {}
         : { onOperationalEvent: (event) => emitOccLogEvent(config.logger!, event) }),

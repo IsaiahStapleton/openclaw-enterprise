@@ -26,7 +26,7 @@ const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.l
 // The production slow lane with its floor capped at 2 s instead of 8 s. Every paced attempt
 // waits its floor in real time, so the cap sets this suite's length; the 1 s first floor,
 // the doubling, the slots and the per-minute budgets stay the production values.
-const slowLane = { ...passwordFailureBudget.slow, maxFloorMs: 2000 };
+const slowLane = { floorMs: passwordFailureBudget.slow.floorMs, maxFloorMs: 2000 };
 
 // The default install (no external provider), composed twice over one database: behind a
 // trusted ingress, where admission keys on the resolved client address and the email, and
@@ -58,7 +58,7 @@ test(
       settings: { ...defaultInstallSettings, OCC_AUTH_TRUSTED_PROXY_CIDRS: "10.0.0.0/24" },
       secrets,
       logger: proxiedLog.logger,
-      passwordSlowLane: slowLane,
+      passwordSlowLaneFloors: slowLane,
     });
     const plainLog = memoryLogger();
     plainApp = await composeProductionSignIn(t, {
@@ -66,7 +66,7 @@ test(
       settings: { ...defaultInstallSettings },
       secrets,
       logger: plainLog.logger,
-      passwordSlowLane: slowLane,
+      passwordSlowLaneFloors: slowLane,
     });
     // Without a trusted proxy every browser reaches the API from the ingress address.
     const plainSignIn = (account) =>

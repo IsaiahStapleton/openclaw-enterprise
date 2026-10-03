@@ -78,6 +78,9 @@ export {
  */
 export type PasswordSignInPolicy = "all" | "recovery-only";
 
+/** The slow-lane floors a composition may shorten (see `passwordSlowLaneFloors`). */
+export type PasswordSlowLaneFloors = Pick<PasswordSlowLaneOptions, "floorMs" | "maxFloorMs">;
+
 export interface HumanLoginConfiguration {
   readonly github?: GitHubLoginConfiguration;
   readonly google?: GoogleSignInConfiguration;
@@ -198,11 +201,11 @@ export interface ControllerAuthOptions {
   /** Replaces the in-memory failure-counting password admission (both profiles). */
   readonly passwordAdmission?: PasswordSignInAdmission;
   /**
-   * Replaces the default admission's slow-lane floors and slots. Production composition
-   * leaves it unset (`passwordFailureBudget.slow`); tests shorten the floor cap so paced
-   * refusals do not wait the full eight seconds.
+   * Replaces the default admission's slow-lane floors; budgets and slots stay
+   * `passwordFailureBudget`. The server leaves it unset; tests shorten the floor cap so
+   * paced refusals do not wait the full eight seconds.
    */
-  readonly passwordSlowLane?: PasswordSlowLaneOptions;
+  readonly passwordSlowLaneFloors?: PasswordSlowLaneFloors;
   /**
    * The password-only profile's known-device account state (see known-device.ts). Without
    * it, and without an external provider, entries are bound to the user and a hash of its
@@ -1065,7 +1068,9 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
     options.passwordAdmission ??
     passwordFailureAdmission({
       ...passwordFailureBudget,
-      ...(options.passwordSlowLane === undefined ? {} : { slow: options.passwordSlowLane }),
+      ...(options.passwordSlowLaneFloors === undefined
+        ? {}
+        : { slow: { ...passwordFailureBudget.slow, ...options.passwordSlowLaneFloors } }),
       countsAsFailure: countsAsSignInFailure,
       ...(options.onOperationalEvent === undefined
         ? {}

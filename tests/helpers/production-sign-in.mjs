@@ -219,7 +219,7 @@ function resolveSettings(settings, secrets) {
  */
 export async function composeProductionSignIn(
   context,
-  { databaseUrl, settings, secrets, logger, passwordSlowLane },
+  { databaseUrl, settings, secrets, logger, passwordSlowLaneFloors },
 ) {
   const environment = resolveSettings(settings, secrets);
   // The chart mounts the gateway service key Secret at this path; use a private file.
@@ -258,7 +258,7 @@ export async function composeProductionSignIn(
         }
       : {}),
     ...(logger === undefined ? {} : { logger }),
-    ...(passwordSlowLane === undefined ? {} : { passwordSlowLane }),
+    ...(passwordSlowLaneFloors === undefined ? {} : { passwordSlowLaneFloors }),
     drivers: {
       installation,
       defaultPresets: runtime.defaultPresets,
