@@ -1546,8 +1546,11 @@ test(
     // OpenClaw promotes its last-known-good backup just after it reports ready,
     // and only then releases its post-ready work. That work includes the remote
     // model catalog refresh, which fails at once without a network. Its log line
-    // therefore comes after any promotion failure would have been logged.
+    // therefore comes after any promotion failure would have been logged. This
+    // ordering is OpenClaw's (checked at the pinned source): re-check it when the
+    // pin moves, since a promotion moved after post-ready work would pass here.
     const logs = await waitForDockerLog(containerName, /remote model catalog refresh failed/);
+    assert.match(logs, /heartbeat: started/);
     assert.doesNotMatch(logs, /last-known-good|EROFS/);
   },
 );
