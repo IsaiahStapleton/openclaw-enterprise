@@ -1110,13 +1110,14 @@ test("Namespace deletion removes unmodified default Presets and names what still
     body: { template: { agent: { name: "Operator customization" } } },
   });
   assert.equal(patched.status, 200);
-  await fixture.createSecret(edited.id, "blocking-secret", "value");
+  const blockingSecret = await fixture.createSecret(edited.id, "blocking-secret", "value");
   const blocked = await fixture.request("DELETE", `/namespaces/${edited.id}`);
   assert.equal(blocked.status, 409);
   assert.equal(blocked.body.error.code, "NAMESPACE_NOT_EMPTY");
+  // Only the edited default is named; unmodified defaults are deleted with the Namespace.
   assert.equal(
     blocked.body.error.message,
-    "The requested Namespace is not empty. It still contains: Presets, Secrets.",
+    `The requested Namespace is not empty. It still contains: Presets (${first.id}), Secrets (${blockingSecret.id}).`,
   );
   assert.equal((await fixture.request("GET", collection(edited.id))).data.length, rest.length + 1);
 });

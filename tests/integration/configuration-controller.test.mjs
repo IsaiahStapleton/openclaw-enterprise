@@ -329,6 +329,37 @@ test("Configuration HTTP requires native supported requests and rejects immutabl
   assert.deepEqual(unchanged.body.data, created.body.data);
 });
 
+test("Namespace deletion names the Configuration IDs that keep it occupied", async () => {
+  const context = await fixture();
+  const namespace = await bootstrapAndCreateNamespace(context);
+  const collection = `/namespaces/${namespace.id}/configurations`;
+  const ids = [];
+  for (let index = 0; index < 3; index += 1) {
+    const created = await request(context.app, "POST", collection, {
+      body: { kind: "agent", values: createOpenClawConfiguration() },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    ids.push(created.body.data.id);
+  }
+  // Configurations have no list route, so the 409 is where an operator learns which IDs
+  // to delete. Configurations created in the same millisecond may be named in any order.
+  const named = async () => {
+    const blocked = await request(context.app, "DELETE", `/namespaces/${namespace.id}`);
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.body.error.code, "NAMESPACE_NOT_EMPTY");
+    const listed =
+      /^The requested Namespace is not empty\. It still contains: Configurations \((.+)\)\.$/.exec(
+        blocked.body.error.message,
+      );
+    assert.ok(listed, blocked.body.error.message);
+    return listed[1].split(", ").sort();
+  };
+  assert.deepEqual(await named(), [...ids].sort());
+  const removed = await request(context.app, "DELETE", `${collection}/${ids[0]}`);
+  assert.equal(removed.status, 204);
+  assert.deepEqual(await named(), ids.slice(1).sort());
+});
+
 test("Configuration HTTP routes reject foreign Namespace ownership and missing admission", async () => {
   const context = await fixture();
   const namespace = await bootstrapAndCreateNamespace(context);

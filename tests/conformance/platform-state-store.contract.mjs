@@ -115,6 +115,9 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       configuration,
     );
     assert.equal(await transaction.namespaces.hasConfigurations(namespace.id), true);
+    assert.deepEqual(await transaction.namespaces.listConfigurationIds(namespace.id), [
+      configuration.id,
+    ]);
     await transaction.secrets.createSecret(harnessSecret);
     assert.deepEqual(await transaction.agents.createAgent(agent), agent);
     assert.deepEqual(await transaction.revisions.createRevision(revision), revision);
