@@ -108,6 +108,11 @@ function podCard(pod) {
   }
   add("Age", age(pod.createdAt));
   const warnings = pod.events.filter(({ type }) => type === "Warning").slice(0, 5);
+  // A Ready Pod whose containers are ready and never restarted has recovered from its
+  // warnings (typically startup readiness probes or a scheduling retry). Show them as
+  // history so a healthy first deploy does not read as a fault.
+  const settled =
+    pod.ready && pod.containers.every(({ ready, restartCount }) => ready && restartCount === 0);
   return element(
     "article",
     { className: "runtime-pod", "aria-label": `${SOURCE_LABELS[pod.role]} Pod ${pod.name}` },
@@ -118,10 +123,20 @@ function podCard(pod) {
     ),
     element("p", { className: "muted" }, pod.name),
     details,
+    warnings.length && settled
+      ? element(
+          "p",
+          { className: "muted runtime-events-note" },
+          "Earlier warnings. The Pod is Ready now and has not restarted.",
+        )
+      : null,
     warnings.length
       ? element(
           "ul",
-          { className: "runtime-events", "aria-label": "Recent warning Events" },
+          {
+            className: settled ? "runtime-events runtime-events-settled" : "runtime-events",
+            "aria-label": settled ? "Earlier warning Events" : "Recent warning Events",
+          },
           ...warnings.map((event) =>
             element(
               "li",

@@ -75,6 +75,9 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   await card.getByText("OOMKilled · exit 137", { exact: false }).waitFor();
   // Events name the container they concern.
   await card.getByText("gateway · BackOff ×3: Back-off restarting failed container").waitFor();
+  // A container that restarted keeps its warnings styled as current.
+  await card.getByRole("list", { name: "Recent warning Events" }).waitFor();
+  assert.equal(await card.getByText("Earlier warnings.", { exact: false }).count(), 0);
   const pane = page.getByRole("log", { name: "Runtime log output" });
   await pane.getByText("runtime.startup_phase").waitFor();
   await pane.getByText("pushing with [redacted:token]").waitFor();
@@ -108,6 +111,45 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   await page.goto(detailUrl(fixture, namespace.id, agent.id, "draft", "logs").href);
   await page.getByRole("button", { name: "Configuration", exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Logs", exact: true }).count(), 0);
+});
+
+test("startup warnings on a Ready Pod without restarts read as history", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  // A healthy first deploy: readiness probes failed while the Gateway started, then it
+  // became Ready with no restarts.
+  computeDriver.state.events = [
+    {
+      type: "Warning",
+      container: "gateway",
+      reason: "Unhealthy",
+      message: "Readiness probe failed: Gateway /readyz unavailable: ECONNREFUSED",
+      count: 8,
+      lastObservedAt: "2026-09-30T11:00:20Z",
+    },
+  ];
+  computeDriver.state.lines = [line(1, "gateway ready")];
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+
+  const card = page.locator(".runtime-pod");
+  const earlier = card.getByRole("list", { name: "Earlier warning Events" });
+  await earlier
+    .getByText("gateway · Unhealthy ×8: Readiness probe failed: Gateway /readyz unavailable")
+    .waitFor();
+  await card.getByText("Earlier warnings. The Pod is Ready now and has not restarted.").waitFor();
+  assert.equal(await card.getByRole("list", { name: "Recent warning Events" }).count(), 0);
+  // The muted text color, not the warning color, marks them as recovered.
+  const colors = await earlier.evaluate((list) => {
+    const view = list.ownerDocument.defaultView;
+    const probe = list.ownerDocument.createElement("span");
+    probe.style.color = "var(--warning)";
+    list.append(probe);
+    const warning = view.getComputedStyle(probe).color;
+    probe.remove();
+    return { list: view.getComputedStyle(list).color, warning };
+  });
+  assert.notEqual(colors.list, colors.warning);
 });
 
 test("a rejected cursor starts one new view and later restarts wait for it", async (t) => {
