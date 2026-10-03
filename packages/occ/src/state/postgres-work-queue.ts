@@ -510,9 +510,11 @@ const INSERT_EVIDENCE_SQL = `${INSERT_EVIDENCE_CTE_SQL}
  * A deployment waiting for its runtime defers every few seconds with the same code. Only a
  * change is recorded: a deferral whose outcome and reason code match the latest evidence for the
  * same revision work item adds no row. Retries, failures, and completions are always recorded.
- * The lookup matches the `audit_events_work_attempt_idx` partial index.
+ * The lookup matches the `audit_events_work_attempt_idx` partial index, which covers revision
+ * work only; other callers that know a deferral repeats one already recorded pass `$9` false.
  */
 const INSERT_DEFER_EVIDENCE_SQL = `${insertEvidenceCteSql(`
+      AND $9::boolean
       AND NOT EXISTS (
         SELECT 1 FROM (
           SELECT prior.outcome, prior.details->>'reasonCode' AS reason_code
@@ -980,14 +982,21 @@ export class PostgresWorkQueue {
     return "completed";
   }
 
+  /**
+   * `recordEvidence: false` is for a caller that knows this deferral repeats the waiting state it
+   * already recorded for the same work item (the evidence lookup covers revision work only).
+   */
   async defer(
     claim: WorkClaim,
     pending: RetryableFailure,
-    options: { readonly delayMs?: number } = {},
+    options: { readonly delayMs?: number; readonly recordEvidence?: boolean } = {},
   ): Promise<void> {
     validateClaim(claim);
     if (options.delayMs !== undefined && !isPositiveSafeInteger(options.delayMs)) {
       throw new ScopeViolationError("The deferred Work delay is invalid.");
+    }
+    if (options.recordEvidence !== undefined && typeof options.recordEvidence !== "boolean") {
+      throw new ScopeViolationError("The deferred Work evidence option is invalid.");
     }
     const deferred = await this.client.query(
       `WITH transitioned AS (
@@ -1018,6 +1027,7 @@ export class PostgresWorkQueue {
         INITIAL_BACKOFF_MS,
         this.nextRandom(),
         options.delayMs ?? null,
+        options.recordEvidence ?? true,
       ],
     );
     if (deferred.rows.length === 0) {

@@ -4640,6 +4640,68 @@ test(
         { outcome: "success", namespaceDeleted: true, convergencePending: undefined },
       ],
     );
+    // The queue's own reconcile evidence follows the same rule: one row for the
+    // unchanged waiting state, one for completion.
+    const reconcile = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS code FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'reconcile' AND resource_kind = 'namespace'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      reconcile.rows.map(({ outcome, code }) => ({ outcome, code })),
+      [
+        { outcome: "success", code: "NAMESPACE_INCOMPLETE" },
+        { outcome: "success", code: "RECONCILE_SUCCEEDED" },
+      ],
+    );
+  },
+);
+
+test(
+  "Namespace teardown records the same waiting state again after a retry in between",
+  requiresPostgres,
+  async (context) => {
+    const fixture = await setup(context);
+    const namespace = {
+      id: `ns_${randomUUID()}`,
+      name: `delete-retry-audit-${randomUUID()}`,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    await fixture.state.transact((unit) => unit.namespaces.createNamespace(namespace));
+    let deleteAttempts = 0;
+    await fixture.start({
+      ...fixture.compute,
+      async deleteNamespace(target) {
+        deleteAttempts += 1;
+        // waiting, waiting, retryable failure, waiting, waiting, deleted
+        return deleteAttempts === 3
+          ? { namespaceId: target.id, namespaceDeleted: false, failure: "retryable" }
+          : { namespaceId: target.id, namespaceDeleted: deleteAttempts >= 6 };
+      },
+    });
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(
+      { id: namespace.id, idempotencyKey: `namespace:${namespace.id}:reconcile:deleted` },
+      "succeeded",
+    );
+    assert.equal(deleteAttempts, 6);
+    const { rows } = await fixture.observerPool.query(
+      `SELECT outcome, details->>'reasonCode' AS code FROM occ.audit_events
+       WHERE namespace_id = $1 AND action = 'reconcile' AND resource_kind = 'namespace'
+       ORDER BY occurred_at, id`,
+      [namespace.id],
+    );
+    assert.deepEqual(
+      rows.map(({ outcome, code }) => ({ outcome, code })),
+      [
+        { outcome: "success", code: "NAMESPACE_INCOMPLETE" },
+        { outcome: "failure", code: "NAMESPACE_INCOMPLETE" },
+        { outcome: "success", code: "NAMESPACE_INCOMPLETE" },
+        { outcome: "success", code: "RECONCILE_SUCCEEDED" },
+      ],
+    );
   },
 );
 
