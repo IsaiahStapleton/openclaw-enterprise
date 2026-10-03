@@ -3805,6 +3805,10 @@ test("authentication drafts retain Secret references and their original save bas
   });
   assert.equal(changed.status, 200);
   await page.goBack();
+  // Back first restores a disabled copy of the old view, whose picker still shows the Secret.
+  await page.waitForFunction(
+    () => globalThis.document.querySelector("#harness-auth-method")?.disabled === false,
+  );
   await waitForInputValue(
     page.getByLabel("API key Secret", { exact: true }),
     secretOptionLabel(secret),
