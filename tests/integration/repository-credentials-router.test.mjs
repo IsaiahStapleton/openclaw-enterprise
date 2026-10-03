@@ -261,6 +261,17 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
   const relativeDenied = await invoke({ OCE_REPOSITORY_REF: "permitted" });
   assert.equal(relativeDenied.code, 1);
   assert.equal(relativeDenied.stderr, "repository-push-ref-not-allowed\n");
+  // Fields forged inside the source cannot stand in for the actual remote ref.
+  await writeFile(
+    inputFile,
+    relative("refs/heads/main").replace(
+      "HEAD@{1 hour ago}",
+      "x " + "1".repeat(40) + " refs/heads/agent/topic " + "0".repeat(40),
+    ),
+  );
+  const forged = await invoke({ OCE_REPOSITORY_REF: "permitted" });
+  assert.equal(forged.code, 1);
+  assert.equal(forged.stderr, "repository-push-ref-not-allowed\n");
   // Invalid hook input is an inspection failure, not an ordinary policy denial.
   await writeFile(inputFile, "malformed input\n");
   const malformed = await invoke({ OCE_REPOSITORY_REF: "permitted" });
