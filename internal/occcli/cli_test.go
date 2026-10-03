@@ -676,11 +676,11 @@ func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 		want     string
 	}{
 		{
-			name:     "absolute",
-			location: target.URL + "/installation",
-			want:     "redirected to " + target.URL + "/installation; occ does not follow redirects, so set OCC_URL (or --url) to " + target.URL + " ",
+			name:     "other origin",
+			location: "https://user:pass@" + strings.TrimPrefix(target.URL, "http://") + "/installation?code=secret#frag",
+			want:     "redirected to https://" + strings.TrimPrefix(target.URL, "http://") + "/installation; occ does not follow redirects, so set OCC_URL (or --url) to https://" + strings.TrimPrefix(target.URL, "http://") + " ",
 		},
-		{name: "relative", location: "/elsewhere/installation", want: "/elsewhere/installation; occ does not follow redirects"},
+		{name: "same origin", location: "/elsewhere/installation", want: "/elsewhere/installation; occ does not follow redirects, and OCC_URL must be the origin that serves the OCC API directly"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			var sawKey string
@@ -703,7 +703,10 @@ func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 			if !strings.Contains(err.Error(), "HTTP 308") || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("error = %q, want it to contain HTTP 308 and %q", err, testCase.want)
 			}
-			if testCase.name == "relative" && !strings.Contains(err.Error(), origin.URL+"/elsewhere/installation") {
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "pass") {
+				t.Fatalf("error echoed redirect credentials: %q", err)
+			}
+			if testCase.name == "same origin" && !strings.Contains(err.Error(), origin.URL+"/elsewhere/installation") {
 				t.Fatalf("relative Location was not resolved against the request: %q", err)
 			}
 			if sawKey != "test-key" || followed {

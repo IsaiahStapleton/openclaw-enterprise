@@ -47,25 +47,30 @@ type responseEnvelope struct {
 }
 
 // APIError is an OCC error response. RetryAfter is set when OCC sent Retry-After.
-// Location is the absolute redirect target of a 3xx response; occ never follows
-// redirects, so the service key is only ever sent to the configured origin.
+// Location is the absolute redirect target of a 3xx response, without userinfo,
+// query, or fragment; occ never follows redirects, so the service key is only
+// ever sent to the configured origin.
 type APIError struct {
 	Status     int
 	Code       string
 	Message    string
 	RetryAfter time.Duration
 	Location   string
+	// redirectOrigin is the Location's scheme://host when it differs from OCC_URL.
+	redirectOrigin string
 }
 
 func (err *APIError) Error() string {
 	if err.Location != "" {
-		hint := err.Location
-		if target, parseErr := url.Parse(err.Location); parseErr == nil && target.Scheme != "" && target.Host != "" {
-			hint = target.Scheme + "://" + target.Host
+		if err.redirectOrigin == "" {
+			return fmt.Sprintf(
+				"OCC operation failed (HTTP %d): the server redirected to %s; occ does not follow redirects, and OCC_URL must be the origin that serves the OCC API directly, without a path prefix",
+				err.Status, err.Location,
+			)
 		}
 		return fmt.Sprintf(
 			"OCC operation failed (HTTP %d): the server redirected to %s; occ does not follow redirects, so set OCC_URL (or --url) to %s if that is the OCC endpoint",
-			err.Status, err.Location, hint,
+			err.Status, err.Location, err.redirectOrigin,
 		)
 	}
 	if err.Code == "" {
@@ -418,7 +423,7 @@ func (client *Client) GetAgentRuntimeLogs(
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, apiErrorWithHeader(status, header, responseBody)
+		return nil, client.apiError(status, header, responseBody)
 	}
 	var envelope responseEnvelope
 	if err := json.Unmarshal(responseBody, &envelope); err != nil || len(envelope.Data) == 0 {
@@ -459,7 +464,7 @@ func (client *Client) send(method string, segments []string, body any) (any, err
 		return nil, err
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return nil, apiErrorWithHeader(status, header, responseBody)
+		return nil, client.apiError(status, header, responseBody)
 	}
 
 	var envelope responseEnvelope
@@ -479,7 +484,7 @@ func (client *Client) sendEmpty(method string, segments []string) error {
 		return err
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return apiErrorWithHeader(status, header, responseBody)
+		return client.apiError(status, header, responseBody)
 	}
 	if status != http.StatusNoContent || len(responseBody) != 0 {
 		return fmt.Errorf("OCC returned an invalid empty response (HTTP %d)", status)
@@ -570,7 +575,7 @@ func resourceURL(baseURL *url.URL, segments []string) (*url.URL, error) {
 	return resource, nil
 }
 
-func apiErrorWithHeader(status int, header http.Header, body []byte) error {
+func (client *Client) apiError(status int, header http.Header, body []byte) error {
 	result := &APIError{Status: status}
 	var envelope errorEnvelope
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Code != "" {
@@ -581,7 +586,18 @@ func apiErrorWithHeader(status int, header http.Header, body []byte) error {
 		result.RetryAfter = time.Duration(seconds) * time.Second
 	}
 	if status >= http.StatusMultipleChoices && status < http.StatusBadRequest {
-		result.Location = header.Get("location")
+		// Drop userinfo, query, and fragment: a sign-in redirect can carry tokens there.
+		if target, err := url.Parse(header.Get("location")); err == nil && target.Scheme != "" && target.Host != "" {
+			target.User = nil
+			target.RawQuery = ""
+			target.ForceQuery = false
+			target.Fragment = ""
+			target.RawFragment = ""
+			result.Location = target.String()
+			if target.Scheme != client.baseURL.Scheme || target.Host != client.baseURL.Host {
+				result.redirectOrigin = target.Scheme + "://" + target.Host
+			}
+		}
 	}
 	return result
 }
