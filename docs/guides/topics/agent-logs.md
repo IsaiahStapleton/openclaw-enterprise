@@ -124,8 +124,9 @@ returning it:
 - **codex**: Codex tracing records (level, target, message). Turns show as
   `turn started` and `turn completed` (info, with model, turn ID, tokens and
   busy time); tool calls keep their name and duration. Only app-server, login,
-  CA-setup, plugin-manifest and fixed retry messages keep their text; others, such as
-  `codex_core` (which can log chat text), read `Codex message withheld`. Other
+  CA-setup, plugin-manifest, model-connection, proxy-startup and retry messages
+  keep their text; others, such as `codex_core` (which logs chat text), read
+  `Codex message withheld`. Other
   span records are
   `debug`; below `logging.level: debug` the Harness drops them, readiness-probe
   connections and repeated remote-control retries (one per 10 minutes is kept).
