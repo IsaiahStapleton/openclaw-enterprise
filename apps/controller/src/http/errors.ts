@@ -137,7 +137,11 @@ function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly Con
     if (union.keyword !== "anyOf" || typeof union.schemaPath !== "string") {
       continue;
     }
-    const members = entries.filter((entry) => entry.schemaPath.startsWith(`${union.schemaPath}/`));
+    const members = entries.filter(
+      (entry) =>
+        entry.schemaPath.startsWith(`${union.schemaPath}/`) &&
+        entry.instancePath.startsWith(union.instancePath),
+    );
     if (
       members.length === 0 ||
       !members.every(
@@ -148,11 +152,26 @@ function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly Con
     ) {
       continue;
     }
-    const literals = members.every((entry) => entry.keyword === "const");
-    const accepted = members.map((entry) => {
-      const parameters = entry.params as Record<string, unknown>;
-      return literals ? JSON.stringify(parameters.allowedValue) : expectedType(parameters);
-    });
+    // A literal member can fail on both its JSON type and its value; name it by its value.
+    const branches = new Map<string, ValidationEntry[]>();
+    for (const member of members) {
+      const branch = member.schemaPath.slice(union.schemaPath.length + 1).split("/")[0] ?? "";
+      branches.set(branch, [...(branches.get(branch) ?? []), member]);
+    }
+    const accepted = [
+      ...new Set(
+        [...branches.values()].map((failures) => {
+          const literal = failures.find((entry) => entry.keyword === "const");
+          return literal === undefined
+            ? expectedType(failures[0]!.params as Record<string, unknown>)
+            : JSON.stringify((literal.params as Record<string, unknown>).allowedValue);
+        }),
+      ),
+    ];
+    if (accepted.some((value) => value === undefined)) {
+      continue;
+    }
+    const literals = members.some((entry) => entry.keyword === "const");
     collapsed.set(union, {
       detail: { path: union.instancePath, code: literals ? "INVALID_VALUE" : "INVALID_TYPE" },
       expected: `one of ${accepted.join(", ")}`,
@@ -231,8 +250,10 @@ function contractMessage(error: FastifyError, found: readonly ContractProblem[])
 }
 
 // The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+// Control characters from submitted object keys are replaced, and the cut keeps whole characters.
 function capped(message: string): string {
-  return message.length <= 256 ? message : `${message.slice(0, 255)}…`;
+  const characters = Array.from(message.replace(/\p{Cc}/gu, "?"));
+  return characters.length <= 256 ? characters.join("") : `${characters.slice(0, 255).join("")}…`;
 }
 
 function errorName(error: unknown): string | undefined {
@@ -448,7 +469,8 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof PresetValidationError && error instanceof Error) {
-    // Preset messages name the template path and rule, never a submitted value.
+    // Preset messages name the template path (including submitted object keys) and the
+    // rule, not submitted values.
     return failure(400, "INVALID_REQUEST", capped(error.message));
   }
   if (error instanceof ConfigurationValidationError) {

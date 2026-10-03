@@ -393,6 +393,12 @@ test("Preset write errors name the template field and the shape it expects", asy
       `${contract} body /template/variables/model/type has an unsupported value (expected one of "string", "number", "boolean", "password").`,
       [{ path: "/template/variables/model/type", code: "INVALID_VALUE" }],
     ],
+    // A number fails each string literal on both type and value; the accepted values are still named once.
+    [
+      { variables: { model: { type: 5 } } },
+      `${contract} body /template/variables/model/type has an unsupported value (expected one of "string", "number", "boolean", "password").`,
+      [{ path: "/template/variables/model/type", code: "INVALID_VALUE" }],
+    ],
     [
       { variables: { model: { type: "string", default: { nested: true } } } },
       `${contract} body /template/variables/model/default has the wrong type (expected one of string, number, boolean).`,

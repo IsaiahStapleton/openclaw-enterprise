@@ -172,7 +172,7 @@ native settings and credentials required by your Installation before deploying.
   explicit `false`, `0`, and an empty string override defaults. Referenced
   variables without a default need an input. Unknown names and wrong types fail;
   the `400` message names the template path, such as `Preset variables.model:`,
-  and what that field accepts, never the submitted value.
+  and what that field accepts, not the submitted value.
 - A token occupying the entire string retains its scalar type. A token inside
   a longer string requires a string variable. For example, `"{{ vars.count }}"`
   can become a JSON number; `"worker-{{ vars.name }}"` stays a string.
