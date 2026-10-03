@@ -61,39 +61,26 @@ test("AccessBinding creation documents request body target read permissions", as
     document.paths["/namespaces/{namespaceId}/iam/access-bindings"]?.post ?? undefined;
   assert.ok(operation, "createIAMAccessBinding OpenAPI operation is missing");
 
+  // Every bindable target kind requires read on the exact request body target.
+  const targets = [
+    "agent",
+    "agent_revision",
+    "configuration",
+    "credential_source",
+    "namespace",
+    "preset",
+    "secret",
+    "service_account",
+  ];
   assert.deepEqual(operation["x-openclaw-permissions"], [
     { action: "administer", resourceKind: "installation", scope: "requested" },
     { action: "read", resourceKind: "namespace", scope: "requested" },
-    {
+    ...targets.map((resourceKind) => ({
       action: "read",
-      resourceKind: "agent",
+      resourceKind,
       scope: "request_body",
       condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "agent_revision",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "configuration",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "secret",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "service_account",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
+    })),
   ]);
 });
 
