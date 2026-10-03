@@ -290,7 +290,7 @@ function exactSecretRef(namespaceId, id) {
   return { kind: "secret", namespaceId, id };
 }
 
-function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
+function provisioningRequestBody(namespaceId, secrets, { configuration, ...overrides } = {}) {
   return {
     requestId: `req_${randomUUID()}`,
     name: `Provisioned Agent ${randomUUID().slice(0, 8)}`,
@@ -303,7 +303,7 @@ function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
           source: exactSecretRef(namespaceId, secrets.toolApiKey.id),
         },
       },
-      ...overrides.configuration,
+      ...configuration,
     },
     harnessAuth: {
       method: "api_key",
@@ -4193,6 +4193,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
         ...provisioningRequestBody(namespace.data.id, secrets),
         secrets: [{ name: "tool-api-key", value: `tool-key-${randomUUID()}` }],
       },
+      "The request does not match the operation contract: body /secrets is not an accepted field.",
     ],
     [
       "request-local Secret binding sources",
@@ -4205,6 +4206,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
+      "The request does not match the operation contract: body /configuration/secretBindings/TOOL_API_KEY/source/namespaceId is required.",
     ],
     [
       "request-local Harness Secret source",
@@ -4214,12 +4216,14 @@ test("Agent provisioning API validates inline configuration with existing Secret
           source: { kind: "provisioning-secret", name: "model-api-key" },
         },
       }),
+      /^The request does not match the operation contract: body \/harnessAuth\/source is not an accepted field;/,
     ],
     [
       "too many binding destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: { secretBindings: oversizedBindings },
       }),
+      "The request does not match the operation contract: body /configuration/secretBindings has an unsupported value (expected at most 64 fields).",
     ],
     [
       "non-env delivery",
@@ -4233,6 +4237,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
+      'The request does not match the operation contract: body /configuration/secretBindings/TOOL_API_KEY/delivery/type has an unsupported value (expected "env").',
     ],
     [
       "cross-Namespace Secret references",
@@ -4244,8 +4249,8 @@ test("Agent provisioning API validates inline configuration with existing Secret
             },
           },
         },
-        harnessAuth: { method: "runtime" },
       }),
+      "Secret references cannot cross Namespaces.",
     ],
     [
       "reserved environment destinations",
@@ -4257,20 +4262,26 @@ test("Agent provisioning API validates inline configuration with existing Secret
             },
           },
         },
-        harnessAuth: { method: "runtime" },
       }),
+      "A secret binding uses a reserved or invalid environment destination.",
     ],
   ];
 
-  for (const [description, body] of invalidBodies) {
+  // Each case must fail on its own rule (the exact message), not on an unrelated one.
+  for (const [description, body, message] of invalidBodies) {
     const result = await injectedRequest(
       fixture.app,
       "POST",
       `/namespaces/${namespace.data.id}/agents/provision`,
       { body },
     );
-    assert.equal(result.status, 400, description);
+    assert.equal(result.status, 400, `${description}: ${JSON.stringify(result.body)}`);
     assert.equal(result.body.error.code, "INVALID_REQUEST", description);
+    if (message instanceof RegExp) {
+      assert.match(result.body.error.message, message, description);
+    } else {
+      assert.equal(result.body.error.message, message, description);
+    }
   }
 
   const pluginDriver = new CodexPluginDriver();

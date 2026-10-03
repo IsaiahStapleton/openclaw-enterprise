@@ -173,6 +173,20 @@ export class ConfigurationHarnessError extends ScopeViolationError {
   }
 }
 
+/**
+ * An Agent provisioning request names an invalid Secret binding: a reserved or invalid
+ * environment destination, an unsupported binding shape, or a Secret reference to
+ * another Namespace. Messages are static, so HTTP reports them as an invalid request
+ * instead of hiding them as a scope miss; Secret existence is still checked later
+ * and stays a scope miss.
+ */
+export class AgentProvisioningValidationError extends ScopeViolationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentProvisioningValidationError";
+  }
+}
+
 const modelCredentialMessage = (path: string): string =>
   `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
 

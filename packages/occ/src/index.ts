@@ -115,6 +115,7 @@ import {
 import {
   AGENT_NAME_CONFLICT,
   AgentDeletingError,
+  AgentProvisioningValidationError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
@@ -215,6 +216,7 @@ import type {
 export {
   ActivationPendingError,
   AgentDeletingError,
+  AgentProvisioningValidationError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
@@ -7071,7 +7073,7 @@ export class OpenClawController {
     source: SecretReference,
   ): Promise<void> {
     if (source.namespaceId !== namespaceId) {
-      throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      throw new AgentProvisioningValidationError("Secret references cannot cross Namespaces.");
     }
     await this.authorize(principalId, "operate", source);
     const secret = await state.secrets.lockSecret(namespaceId, source.id);
