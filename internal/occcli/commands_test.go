@@ -96,6 +96,9 @@ func TestResourceCommandsRejectNamesWithAHintBeforeCallingOCC(t *testing.T) {
 		{[]string{"namespace", "get", "default"}, "occ namespace list"},
 		{[]string{"--namespace", testNamespaceID, "secret", "get", "model-key"}, "occ secret list"},
 		{[]string{"--namespace", testNamespaceID, "agent", "deployment-status", testAgentID, "1"}, "occ agent revisions"},
+		{[]string{"--namespace", testNamespaceID, "credential-source", "update", "openai"}, "occ credential-source list"},
+		{[]string{"--namespace", testNamespaceID, "agent", "credential-withdrawal", "request", "dogfood-agent", "cs_1"}, "occ agent list"},
+		{[]string{"--namespace", testNamespaceID, "agent", "credential-withdrawal", "get", testAgentID, "openai"}, "occ credential-source list"},
 	}
 	for _, testCase := range cases {
 		_, requested, err := runOCC(t, map[string]string{}, testCase.args...)
