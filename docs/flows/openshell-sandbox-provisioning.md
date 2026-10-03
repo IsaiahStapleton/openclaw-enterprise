@@ -226,13 +226,17 @@ spends at most one new ID. The Sandbox name is unique per Workspace, so these
 attempts never yield two Sandboxes. Unresolved IDs never expire. Once the controller
 identity holds 1000 unresolved or unexpired admission records, OpenShell rejects
 every new `request_id` with `RESOURCE_EXHAUSTED`, so repeated server-side create
-failures count against that quota. `unary` maps that exact refusal (status plus its
-"durable mutation admission limit" message) on any method to
-`OpenShellAdmissionLimitError`, a `SandboxRevisionUnsupportedError` with code
-`SANDBOX_ADMISSION_LIMIT_REACHED`, so the worker fails the revision at once rather
-than spending its attempts. Other `RESOURCE_EXHAUSTED` refusals, such as the gRPC
-rate limit or busy admission workers, stay the raw gRPC error and are retried. Codex requests one unnamed exposure for
-`APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
+failures count against that quota. Completed records free up 24 hours after
+completion; records of requests that never completed stay until an operator
+reconciles them. `unary` maps that exact refusal (status plus its "durable mutation
+admission limit" message) on any method to `OpenShellAdmissionLimitError`, a
+`TransientDependencyError` with code `SANDBOX_ADMISSION_LIMIT_REACHED`. During
+revision provisioning the worker holds the revision pending without spending
+attempts and fails it with that code if the limit persists at the convergence
+deadline. Other `RESOURCE_EXHAUSTED` refusals, such as the gRPC rate limit or busy
+admission workers, stay the raw gRPC error and are retried as before. Codex
+requests one unnamed exposure for `APP_SERVER_PORT` and requires its
+`service_urls` entry. Native OpenClaw connects
 outbound, so it requests no exposure and rejects any returned URL. The Driver
 calls `getSandbox` first and creates only an absent Sandbox; it adopts an
 existing or `ALREADY_EXISTS` Sandbox only when its annotations name this

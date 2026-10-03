@@ -324,8 +324,12 @@ export class NativeWorkerSupportError extends Error {
   }
 }
 
-/** A platform dependency a Compute Driver reaches while it reconciles a revision. */
-export type TransientDependency = "agent_gateway" | "kubernetes_api";
+/**
+ * A platform dependency a Compute Driver, or the Sandbox Driver it calls, reaches while
+ * it reconciles a revision. `sandbox_admission` is the Sandbox gateway's per-caller
+ * request admission quota, which frees up as completed requests age out.
+ */
+export type TransientDependency = "agent_gateway" | "kubernetes_api" | "sandbox_admission";
 
 /** Why the dependency failed, from a closed set that carries no provider text. */
 export type TransientDependencyReason = "unreachable" | "timeout" | "unavailable";
@@ -333,12 +337,14 @@ export type TransientDependencyReason = "unreachable" | "timeout" | "unavailable
 const TRANSIENT_DEPENDENCY_CODES: Readonly<Record<TransientDependency, string>> = Object.freeze({
   agent_gateway: "AGENT_GATEWAY_UNAVAILABLE",
   kubernetes_api: "KUBERNETES_API_UNAVAILABLE",
+  sandbox_admission: "SANDBOX_ADMISSION_LIMIT_REACHED",
 });
 
 /**
  * A Compute dependency failed in a way that clears without a change to the
- * revision: the Kubernetes API timed out or answered 429/5xx, or the Agent
- * Gateway's route refused or dropped a connection while it converged. The
+ * revision: the Kubernetes API timed out or answered 429/5xx, the Agent
+ * Gateway's route refused or dropped a connection while it converged, or the
+ * Sandbox gateway refused new requests at its request admission limit. The
  * worker retries it within the deployment's convergence deadline instead of
  * spending the attempt budget, and records `code`, which names the dependency.
  * The message stays in the controller; status shows a fixed text.
@@ -387,17 +393,10 @@ export class ActivationPendingError extends Error {
  * with `code`. The message stays in the controller; status shows a fixed text.
  */
 export class SandboxRevisionUnsupportedError extends Error {
-  readonly code:
-    | "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED"
-    | "SANDBOX_HARNESS_UNSUPPORTED"
-    | "SANDBOX_ADMISSION_LIMIT_REACHED";
+  readonly code: "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED" | "SANDBOX_HARNESS_UNSUPPORTED";
 
-  constructor(
-    code: SandboxRevisionUnsupportedError["code"],
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
+  constructor(code: SandboxRevisionUnsupportedError["code"], message: string) {
+    super(message);
     this.name = "SandboxRevisionUnsupportedError";
     this.code = code;
   }

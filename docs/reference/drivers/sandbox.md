@@ -112,10 +112,8 @@ cannot run an exact revision and a retry cannot change that, it throws
 `SandboxRevisionUnsupportedError` from `@openclaw-enterprise/occ` with a closed
 code. The worker then fails the deployment with that code and a fixed message
 at once. The driver's own message stays in the controller:
-`SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED` (Secret-backed environment),
-`SANDBOX_HARNESS_UNSUPPORTED` (unsupported Harness), and
-`SANDBOX_ADMISSION_LIMIT_REACHED` (the provider refuses every new request from the
-controller until an operator intervenes).
+`SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED` (Secret-backed environment) and
+`SANDBOX_HARNESS_UNSUPPORTED` (unsupported Harness).
 
 ## Limits
 

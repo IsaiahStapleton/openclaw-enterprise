@@ -1,4 +1,4 @@
-import { SandboxRevisionUnsupportedError } from "@openclaw-enterprise/occ";
+import { TransientDependencyError } from "@openclaw-enterprise/occ";
 import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -299,23 +299,25 @@ export class OpenShellRequestReplayRefusedError extends Error {
   }
 }
 
-// OpenShell's exact refusal once the caller holds its 1000 durable request admissions
+// OpenShell's exact refusal once the caller holds 1000 durable request admissions
 // (crates/openshell-server/src/grpc/mutation_replay.rs). Other RESOURCE_EXHAUSTED
-// refusals, such as the rate limit or busy admission workers, clear by themselves.
+// refusals, such as the rate limit or busy admission workers, stay the raw gRPC error.
 const ADMISSION_LIMIT_DETAILS = "caller has reached the durable mutation admission limit";
 
 /**
- * OpenShell refused a mutation because OCC's gateway identity holds the maximum of
- * 1000 durable request admissions. Unresolved admissions never expire and OpenShell
- * has no reset API, so a retry cannot succeed; the worker fails the revision at once.
+ * OpenShell refused a mutation because OCC's gateway identity holds its maximum of 1000
+ * durable request admissions. Completed admissions free up 24 h after completion, so the
+ * worker holds the revision pending without spending attempts; admissions left unresolved
+ * never expire, so a limit still reached at the deployment deadline fails it.
  */
-export class OpenShellAdmissionLimitError extends SandboxRevisionUnsupportedError {
+export class OpenShellAdmissionLimitError extends TransientDependencyError {
   constructor(method: string, cause: unknown) {
     super(
-      "SANDBOX_ADMISSION_LIMIT_REACHED",
-      `OpenShell refused ${method}: the controller's gateway identity reached OpenShell's limit of 1000 durable request admissions. ` +
-        "Completed admissions free up 24 h after completion, but unresolved ones never expire and OpenShell has no reset API; " +
-        "investigate the unresolved admissions in the OpenShell gateway database, then redeploy.",
+      "sandbox_admission",
+      "unavailable",
+      `OpenShell refused ${method}: the controller's gateway identity holds OpenShell's limit of 1000 durable request admissions. ` +
+        "Completed admissions free up 24 h after completion; unresolved ones never expire and OpenShell has no reset API, " +
+        "so if the limit persists, investigate the unresolved admissions in the OpenShell gateway database, then redeploy.",
       { cause },
     );
     this.name = "OpenShellAdmissionLimitError";

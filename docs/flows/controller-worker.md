@@ -354,11 +354,11 @@ failed retry keeps the active runtime.
   configuration, then inspect `worker.completed` and `worker.error`. Check current
   IAM state for `ACTOR_REVOKED` or `AUTHORIZATION_DENIED`; `DEPENDENCY_UNAVAILABLE`
   is retryable within `OCC_WORKER_MAX_ATTEMPTS`; `CLAIM_LOST` ends publication ownership.
-  A revision pass that fails on a dependency logs it: `AGENT_GATEWAY_UNAVAILABLE`
-  or `KUBERNETES_API_UNAVAILABLE` with `dependency` and `cause` (`unreachable`,
-  `timeout` or `unavailable`) is deferred until the convergence deadline without
-  spending an attempt; any other failure logs its error class in `cause` and, for
-  an HTTP error, `status`.
+  A revision pass that fails on a dependency logs it: `AGENT_GATEWAY_UNAVAILABLE`,
+  `KUBERNETES_API_UNAVAILABLE`, or `SANDBOX_ADMISSION_LIMIT_REACHED` with `dependency`
+  and `cause` (`unreachable`, `timeout` or `unavailable`) is deferred until the
+  convergence deadline without spending an attempt; any other failure logs its error
+  class in `cause` and, for an HTTP error, `status`.
 - [Revision](../../tests/integration/postgres-worker-agent-revision.test.mjs) and
   [stale-claim](../../tests/integration/postgres-worker-stale-claim.test.mjs) tests
   require PostgreSQL; neither proves real model execution.
