@@ -155,11 +155,9 @@ form retains saved resources.
 
 If provisioning admission loses its response, **Retry provisioning request** resubmits
 the same request ID and saved Secret references. An acknowledged job is retried through
-its returned job URL; accepted inputs remain fixed. If that retry is refused after an
-unknown outcome, the job may have finished: the form stays fixed and **Create Agent**
-resends the same request ID to open its result. Secrets saved before a later
-failure remain available and are reused, never deleted automatically. A lost Secret
-save response requires checking existing Namespace Secrets before starting again.
+its job URL; if that retry is refused after an unknown outcome, **Create Agent** resends
+the same request. Saved Secrets are reused, never deleted automatically. After a lost
+Secret save, check existing Namespace Secrets before starting again.
 See the [provisioning flow](../../flows/agent-provisioning.md) for the API sequence.
 
 Repository discovery is independent of model authentication. Select up to 16 approved
