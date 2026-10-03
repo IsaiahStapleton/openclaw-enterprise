@@ -5387,9 +5387,15 @@ test("Slack validation rejects swapped credentials and preserves authorization",
   namedAccounts.values.channels.slack.botToken = "xoxb-plaintext-default";
   namedAccounts.values.channels.slack.accounts = {
     work: {
-      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
-      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      appToken: { source: "env", provider: "default", id: "SLACK_WORK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_WORK_BOT_TOKEN" },
     },
+  };
+  // OpenClaw also reads SLACK_BOT_TOKEN/SLACK_APP_TOKEN from the environment for the
+  // implicit account, so the named account uses other names.
+  namedAccounts.secretBindings = {
+    SLACK_WORK_APP_TOKEN: { source: app.ref, delivery: { type: "env" } },
+    SLACK_WORK_BOT_TOKEN: { source: bot.ref, delivery: { type: "env" } },
   };
   const provisionNamed = () =>
     controller.request("POST", `${base}/agents/provision`, {
