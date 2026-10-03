@@ -1233,6 +1233,10 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   await page.getByRole("button", { name: "Save authentication source" }).click();
   assert.equal((await saveResponse).status(), 200);
   // The saved source re-renders the picker, which reloads the Secret list before naming it.
+  // The old, disabled picker already shows the staged Secret, so wait for the rebuilt form.
+  await page.waitForFunction(
+    () => globalThis.document.querySelector("#harness-auth-method")?.disabled === false,
+  );
   await waitForInputValue(page.getByLabel("API key Secret"), secretOptionLabel(replacementSecret));
 
   const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
@@ -3758,6 +3762,9 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
   // Explicit reload recovers the committed source; saving it again confirms the missing grant.
   await page.unroute(`**${agentPath}`);
   await page.getByRole("button", { name: "Reload authentication source", exact: true }).click();
+  await page.waitForFunction(
+    () => globalThis.document.querySelector("#harness-auth-method")?.disabled === false,
+  );
   await waitForInputValue(page.getByLabel("API key Secret"), secretOptionLabel(replacement));
   await page.getByRole("button", { name: "Save authentication source" }).click();
   await page.waitForFunction(
@@ -3894,8 +3901,12 @@ test("authentication drafts retain Secret references and their original save bas
   });
   assert.equal(changed.status, 200);
   await page.goBack();
-  assert.equal(
-    await page.getByLabel("API key Secret", { exact: true }).evaluate((node) => node.value),
+  // Back first restores a disabled copy of the old view, whose picker still shows the Secret.
+  await page.waitForFunction(
+    () => globalThis.document.querySelector("#harness-auth-method")?.disabled === false,
+  );
+  await waitForInputValue(
+    page.getByLabel("API key Secret", { exact: true }),
     secretOptionLabel(secret),
   );
   await page.getByRole("button", { name: "Save authentication source" }).click();
