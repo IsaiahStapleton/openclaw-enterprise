@@ -297,7 +297,7 @@ function capped(message: string): string {
 
 /**
  * Names each remaining kind and as many of its resource IDs as fit the 256-character
- * message contract, in kind order; a kind whose IDs do not all fit says how many are left.
+ * message contract; a kind whose IDs do not all fit says how many are left.
  */
 function namespaceNotEmptyMessage(error: NamespaceNotEmptyError): string {
   const prefix = "The requested Namespace is not empty.";
@@ -320,13 +320,20 @@ function namespaceNotEmptyMessage(error: NamespaceNotEmptyError): string {
     });
     return `${prefix} It still contains: ${parts.join(", ")}.`;
   };
-  for (const kind of error.contents) {
-    const total = error.ids[kind]?.length ?? 0;
-    for (let count = 1; count <= total; count += 1) {
-      shown.set(kind, count);
-      if (Array.from(render()).length > 256) {
-        shown.set(kind, count - 1);
-        break;
+  // Add one ID per kind in turn, so a kind with many IDs cannot crowd out the ones after it
+  // (Configurations, the kind with no list route). Adding only lengthens the message, so a
+  // kind whose next ID does not fit is done.
+  const done = new Set<string>();
+  while (done.size < error.contents.length) {
+    for (const kind of error.contents) {
+      const count = shown.get(kind) ?? 0;
+      if (done.has(kind)) {
+        continue;
+      }
+      shown.set(kind, count + 1);
+      if (count + 1 > (error.ids[kind]?.length ?? 0) || Array.from(render()).length > 256) {
+        shown.set(kind, count);
+        done.add(kind);
       }
     }
   }
