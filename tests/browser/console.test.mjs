@@ -374,20 +374,23 @@ test("console ignores stale collection successes and errors while switching Name
     response ? route.fulfill({ response }) : route.continue(),
   );
   t.after(() => slowSuccess.release());
+  // Changed data makes the held read rebuild the view if the console still treats it as current.
+  await fixture.createAgent(slow.id, "Slow new agent");
 
   await chooseNamespace(page, "Slow");
   await slowSuccess.waitForRelease();
   const slowSuccessRead = (await settledFetches(page, slowAgentsPath)) + 1;
   await expectRetainedPreview(page, "Slow agent");
-  // The selector stays disabled while the retained preview revalidates. The held read ends at the
-  // console's 15 s request timeout, so this needs more than the shared 10 s action timeout.
-  await chooseNamespace(page, "Current", { timeout: 30_000 });
+  // Namespace admission has finished, so switching away does not wait for the held read.
+  await chooseNamespace(page, "Current");
   await page.getByText("Current agent").waitFor();
   slowSuccess.release();
   await slowSuccess.waitForCompletion();
   // The page has settled the stale read (aborted or answered) and run its handler.
   await waitForSettledFetches(page, slowAgentsPath, slowSuccessRead);
-  await expectNoText(page, /Slow agent|unavailable|failed/i);
+  await expectNoText(page, /Slow (new )?agent|unavailable|failed|interrupted/i);
+  assert.equal(await page.getByText("Current agent").isVisible(), true);
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), current.id);
 
   await page.unroute(slowAgents);
   const slowError = await holdRoute(t, page, slowAgents, (route) => route.abort("failed"));
@@ -401,7 +404,8 @@ test("console ignores stale collection successes and errors while switching Name
   await slowError.waitForCompletion();
   await waitForSettledFetches(page, slowAgentsPath, slowErrorRead);
   // A failed read the console still treated as current would show "Request interrupted".
-  await expectNoText(page, /Slow agent|unavailable|failed|interrupted/i);
+  await expectNoText(page, /Slow (new )?agent|unavailable|failed|interrupted/i);
+  assert.equal(await page.getByText("Current agent").isVisible(), true);
 });
 
 async function releaseHeldRoute(page, pattern, hold) {
