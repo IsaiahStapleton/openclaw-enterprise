@@ -12,8 +12,8 @@ import {
   memoryLogger,
   signedInHeaders,
 } from "../helpers/production-sign-in.mjs";
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "limit-admin@example.test";
 const authSecret = "password-limit-auth-test-secret-at-least-32-bytes";
 const secrets = { "occ-auth/secret": authSecret };
@@ -28,7 +28,7 @@ const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.l
 // failures count; once the budget is spent, administrators are slowed, never refused.
 test(
   "password-only sign-in limits failures per client and email with a reserved administrator lane",
-  { skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof." },
+  requiresPostgres,
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
