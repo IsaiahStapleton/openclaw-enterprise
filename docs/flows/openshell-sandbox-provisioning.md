@@ -216,8 +216,10 @@ enrollment CA.
 The client sends the Sandbox identity, spec, Namespace Workspace scope, and
 revision UUID as `request_id`. Codex requests one unnamed exposure for
 `APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
-outbound, so it requests no exposure and rejects any returned URL. A replay
-returns the same result; a Sandbox that predates replayable creation fails.
+outbound, so it requests no exposure and rejects any returned URL. The Driver
+calls `getSandbox` first and creates only an absent Sandbox; it adopts an
+existing or `ALREADY_EXISTS` Sandbox only when its annotations name this
+revision and, for Codex, `getServiceUrl` finds the unnamed endpoint.
 
 For each unary Gateway call, the client checks cancellation after client setup
 and credential-metadata preparation and before dispatch. An abort during setup
