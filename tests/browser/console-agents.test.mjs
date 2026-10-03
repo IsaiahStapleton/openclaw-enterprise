@@ -2153,6 +2153,8 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await createModelCredentialSecret(page, "model-secret-value");
   await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
   const retry = page.getByRole("button", { name: "Retry provisioning request" });
+  // Longer than the API's 200-character limit, so a resend that reaches validation fails.
+  await page.getByLabel("Agent name").fill("n".repeat(201));
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
     .getByText(/^Outcome unknown\. Retry resubmits the same request ID and saved references\./)
@@ -2163,6 +2165,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await page.getByText(/^Check the entered values/).waitFor();
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
+  await page.getByLabel("Agent name").fill("Taken name");
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
     .getByText(
@@ -2240,6 +2243,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
   assert.equal(await page.getByLabel("Service account token Secret").isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), false);
+  assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page.waitForURL(new RegExp(`/agents/${agentIds[2]}\\?`));
   assert.equal(bodies.length, 5);
