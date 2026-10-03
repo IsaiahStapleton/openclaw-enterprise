@@ -68,7 +68,7 @@ async function waitForRevocation(github) {
 // grace runs on the fixture clock. The provider marks the token revoked before
 // that service reads the reply, so advance the clock only after the shutdown has
 // cancelled its grace timer; an earlier jump expires the grace and blocks lookups.
-// These tests start no other timer on the clock, so none pending means it finished.
+// No other timer on that clock outlives a lookup, so none pending means it finished.
 async function waitForRetiredLookup(github, clock) {
   await waitForRevocation(github);
   const deadline = Date.now() + 5000;
