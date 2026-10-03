@@ -2065,9 +2065,6 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
     );
   });
   let retries = 0;
-  // The API refuses to retry a failed job whose Secret was deleted, and names that Secret.
-  const deletedSecretRetry =
-    "Secret sec_00000000-0000-4000-8000-00000000dead, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.";
   await page.route(`**/namespaces/${namespace.id}/agents/provision/work_2/retry`, async (route) => {
     retries += 1;
     if (retries > 1) {
@@ -2077,7 +2074,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
         body: JSON.stringify({
           error: {
             code: "RESOURCE_CONFLICT",
-            message: deletedSecretRetry,
+            message: "The requested platform resource already exists.",
           },
           meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
         }),
@@ -2217,12 +2214,12 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await retry.isVisible(), true);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
 
-  // A refused retry ends that job and shows the API's reason: Create Agent submits a new
-  // request ID instead of replaying the failed job.
+  // A refused retry ends that job: Create Agent submits a new request ID instead of
+  // replaying the failed job.
   await retry.click();
   await page
     .getByText(
-      `${deletedSecretRetry} Select Create Agent to submit a new request. Request ID: req_00000000-0000-4000-8000-000000000409`,
+      "The provisioning job can no longer be retried. Select Create Agent to submit a new request.",
     )
     .waitFor();
   assert.equal(retries, 2);
@@ -2268,6 +2265,111 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await page.waitForURL(new RegExp(`/agents/${agentIds[2]}\\?`));
   assert.equal(bodies.length, 5);
   assert.equal(bodies[4].requestId, bodies[3].requestId);
+});
+
+test("Dedicated Agent creation shows the API's named reason when a provisioning retry is refused", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provision retry refusals", { ready: true });
+  const { page } = await newPage(t, fixture);
+  await routeInstallationProvisioning(page, fixture);
+  await page.route(`**/namespaces/${namespace.id}/agents/repository-options`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: [], meta: { requestId: "req_repository_choices" } }),
+    }),
+  );
+  const updatedAt = new Date().toISOString();
+  const meta = { requestId: "req_00000000-0000-4000-8000-000000000001" };
+  const jobUrl = (work) => `/namespaces/${namespace.id}/agents/provision/work_${work}`;
+  // Each job fails transiently, then the API refuses its retry: first with the generic
+  // conflict text, which names no reason, then naming the Secret that was deleted.
+  const refusals = [
+    "The requested platform resource already exists.",
+    "Secret sec_00000000-0000-4000-8000-00000000dead, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.",
+  ];
+  let jobs = 0;
+  await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route) => {
+    jobs += 1;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          provisioning: {
+            workId: `work_${jobs}`,
+            status: "queued",
+            phase: "accepted",
+            attemptCount: 0,
+            updatedAt,
+            url: jobUrl(jobs),
+          },
+        },
+        meta,
+      }),
+    });
+  });
+  const routeJob = async (route) => {
+    const work = Number(new URL(route.request().url()).pathname.split("/")[5].split("_")[1]);
+    await route.fulfill(
+      route.request().method() === "POST"
+        ? {
+            status: 409,
+            contentType: "application/json",
+            body: JSON.stringify({
+              error: { code: "RESOURCE_CONFLICT", message: refusals[work - 1] },
+              meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+            }),
+          }
+        : {
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              data: {
+                workId: `work_${work}`,
+                status: "failed",
+                phase: "accepted",
+                attemptCount: 1,
+                updatedAt,
+                url: jobUrl(work),
+                error: {
+                  code: "PROVISIONING_DEPENDENCY_UNAVAILABLE",
+                  message: "Agent provisioning could not complete.",
+                },
+              },
+              meta,
+            }),
+          },
+    );
+  };
+  await page.route(`**/namespaces/${namespace.id}/agents/provision/work_*`, routeJob);
+  await page.route(`**/namespaces/${namespace.id}/agents/provision/work_*/retry`, routeJob);
+
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("heading", { name: "Create Agent" }).waitFor();
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Refused retry");
+  await page.getByLabel("Authentication method").selectOption("codex_pat");
+  await createModelCredentialSecret(page, "model-secret-value");
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
+  const retry = page.getByRole("button", { name: "Retry provisioning request" });
+  for (const expected of ["The provisioning job can no longer be retried.", refusals[1]]) {
+    await page.getByRole("button", { name: "Create Agent" }).click();
+    await page
+      .getByText("Agent provisioning could not complete. Retry uses the accepted provisioning job.")
+      .waitFor();
+    await retry.click();
+    await page
+      .getByText(
+        `${expected} Select Create Agent to submit a new request. Request ID: req_00000000-0000-4000-8000-000000000409`,
+        { exact: true },
+      )
+      .waitFor();
+    assert.equal(await retry.isVisible(), false);
+    assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
+  }
+  assert.equal(jobs, 2);
 });
 
 test("Agent creation rejects non-object native Configuration JSON before Configuration or Agent writes", async (t) => {
