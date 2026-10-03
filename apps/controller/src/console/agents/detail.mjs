@@ -2506,7 +2506,11 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           context.onExpired();
           return;
         }
-        feedback.textContent = message(error, mutationStarted);
+        // A rejected save names the field to fix (for example an inline model credential).
+        feedback.textContent =
+          error.status === 400 && error.serverMessage !== undefined
+            ? error.serverMessage
+            : message(error, mutationStarted);
         feedbackLocked = true;
         outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       } finally {
