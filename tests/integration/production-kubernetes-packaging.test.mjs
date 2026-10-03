@@ -2766,6 +2766,38 @@ test(
 );
 
 test(
+  "Gateway membership selectors keep a numeric-looking route label a string",
+  tooling,
+  async () => {
+    // sha256("tenant-407/oce-agent-gateways") starts with 8006922111e0, which YAML
+    // reads as a float unless the template quotes it; the API rejects a non-string label.
+    const namespace = "tenant-407";
+    const label = routeNamespaceLabel(namespace, "oce-agent-gateways");
+    assert.match(label, /^[0-9]+e[0-9]+$/);
+    const objects = await resources(
+      (await render({ ...gatewayRoutingValues, ...slackProxyValues }, { namespace })).stdout,
+    );
+    const values = [];
+    const collect = (value) => {
+      if (Array.isArray(value)) {
+        value.forEach(collect);
+      } else if (value !== null && typeof value === "object") {
+        for (const [key, nested] of Object.entries(value)) {
+          if (key === "openclaw-enterprise.io/gateway") {
+            values.push(nested);
+          } else {
+            collect(nested);
+          }
+        }
+      }
+    };
+    collect(objects);
+    assert.ok(values.length >= 5);
+    assert.deepEqual(new Set(values), new Set([label]));
+  },
+);
+
+test(
   "private Envoy Gateway routing renders automatic CA and deterministic default hostnames",
   tooling,
   async () => {
