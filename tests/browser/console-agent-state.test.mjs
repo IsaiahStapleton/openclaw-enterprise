@@ -136,7 +136,7 @@ test("Deployment activity keeps following after Back restores the cached Agent v
   );
   await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
   const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
-  await login(page, fixture, url);
+  await login(page, fixture, url.pathname + url.search);
   await page.getByRole("heading", { name: "Version v1" }).waitFor();
   const activity = page.locator(".deployment-status");
   await activity.getByText("Recorded status: running").waitFor();

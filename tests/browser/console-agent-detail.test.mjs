@@ -2557,7 +2557,7 @@ test("Agent detail opens native admin UI only after real API access checks pass"
   await page.close();
   page = await browserContext.newPage();
   requests = apiRequests(page, fixture.origin);
-  await page.goto(detail().href);
+  await page.goto(`${fixture.origin}${detail().pathname}${detail().search}`);
   await page.getByRole("heading", { name: "Native admin UI" }).waitFor();
 
   const stopped = await fixture.request(
