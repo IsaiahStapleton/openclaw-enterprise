@@ -1224,6 +1224,34 @@ test("credential source registration names the missing Credential Gateway", asyn
   assert.match(rejected.body.error.message, /no Credential Gateway.*credential-sources\.md/);
 });
 
+test("Secret values with an unpaired surrogate are refused as an invalid value", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "secret-value-validation");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Valid value", value: "valid-secret-\u{1F511}" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+
+  // The request schema admits these strings; OCC refuses them because they are not UTF-8.
+  for (const value of ["\ud800", "prefix-\udfff-suffix"]) {
+    for (const [method, path, body] of [
+      ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Unpaired surrogate", value }],
+      ["PATCH", `/namespaces/${namespace.id}/secrets/${secret.body.data.id}`, { value }],
+    ]) {
+      const rejected = await controller.request(method, path, { body });
+      assert.equal(rejected.status, 400, `${method} ${JSON.stringify(rejected.body)}`);
+      assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+      assert.match(rejected.body.error.message, /Secret value must be nonempty UTF-8/);
+      assert.deepEqual(rejected.body.error.details, [{ path: "/value", code: "INVALID_VALUE" }]);
+    }
+  }
+});
+
 test("Namespace IAM routes bind humans enrolled after bootstrap through the live resolver", async () => {
   const fixture = await createInjectedFixture();
   const controller = {

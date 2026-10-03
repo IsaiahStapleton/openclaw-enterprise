@@ -139,6 +139,7 @@ import {
   RuntimeLogsForbiddenByClusterError,
   RuntimeLogsSandboxNotFoundError,
   ScopeViolationError,
+  SecretValueError,
 } from "./errors.ts";
 import {
   readRuntimeLogPage,
@@ -239,6 +240,7 @@ export {
   RuntimeLogsSandboxNotFoundError,
   SandboxRevisionUnsupportedError,
   ScopeViolationError,
+  SecretValueError,
   TransientDependencyError,
   type ActivationPendingCode,
   type RuntimeLogsErrorCode,
@@ -7221,16 +7223,18 @@ export class OpenClawController {
   }
 
   private validateSecretValue(value: unknown): asserts value is string {
+    const message =
+      "The Secret value must be nonempty UTF-8, without NUL, and at most 65536 bytes.";
     if (
       typeof value !== "string" ||
       value.length === 0 ||
       value.includes("\u0000") ||
-      /[\uD800-\uDFFF]/u.test(value) ||
-      Buffer.byteLength(value, "utf8") > 65_536
+      /[\uD800-\uDFFF]/u.test(value)
     ) {
-      throw new ScopeViolationError(
-        "The Secret value must be nonempty UTF-8, without NUL, and at most 65536 bytes.",
-      );
+      throw new SecretValueError("INVALID_VALUE", message);
+    }
+    if (Buffer.byteLength(value, "utf8") > 65_536) {
+      throw new SecretValueError("TOO_LONG", message);
     }
   }
 
