@@ -3288,7 +3288,7 @@ test("native ServiceAccounts keep private credential references and cannot admit
   assert.equal(boundDeletion.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(
     boundDeletion.body.error.message,
-    "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+    "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
   );
   // Authorization precedes the reference check: a caller without delete learns nothing about references.
   const outsider = await controller.fixture.createAuthPrincipal("service-account-outsider");
