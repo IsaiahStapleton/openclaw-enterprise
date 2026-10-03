@@ -88,12 +88,8 @@ to a running Agent requires upstream support:
 | `filesystem` | Approved PVC subpath mounts and OpenShell filesystem policy for read-only/read-write paths.   |
 | `process`    | OpenShell process policy, including the configured run-as user and group.                     |
 
-The bundled Driver sends `hard_requirement` for Landlock filesystem enforcement.
-If the runtime cannot apply that policy, Sandbox startup must fail. The optional
-`policy.landlockCompatibility` setting accepts only `hard_requirement`; a
-weaker or misspelled value fails Installation startup. This setting does not
-resolve the stock gateway's workload-projection blockers or prove the policy was
-applied before untrusted code started.
+The Driver sends `hard_requirement` for Landlock filesystem enforcement.
+Other `policy.landlockCompatibility` values fail Installation startup.
 
 There is no `exec` facet. Command-level authorization and per-tool dynamic
 sandbox creation are deferred; `exec` remains a tool invocation that runs inside
@@ -101,15 +97,14 @@ the selected Harness sandbox.
 
 ## Configuration
 
-Select `drivers.sandbox` in the trusted Installation startup YAML. The bundled
-OpenShell SandboxDriver can only be composed with the bundled Kubernetes Compute
-Driver; selecting any installed Compute Driver with `drivers.sandbox` fails
-startup. It also requires an [`openshell` Backend](../backends.md#openshell-gateway)
-whose `drivers.sandbox` matches this ID, and the Backend's
-[Credential Gateway](openshell-credential-gateway.md#configure-the-driver) member
-must be selected too. The Backend owns the gateway connection; the Sandbox
-rejects `endpoint`, `scheme`, `serviceName`, `port`, `auth`,
-`requestTimeoutMs`, and `rootCertificatePath` in its `gateway` block.
+Select `drivers.sandbox` in trusted Installation YAML. OpenShell requires the
+bundled Kubernetes Compute Driver; installed Compute Drivers fail startup.
+Select an [`openshell` Backend](../backends.md#openshell-gateway) whose
+`drivers.sandbox` matches this ID and its
+[Credential Gateway](openshell-credential-gateway.md#configure-the-driver) member.
+The Backend owns the connection; Sandbox configuration rejects `endpoint`,
+`scheme`, `serviceName`, `port`, `auth`, `requestTimeoutMs`, and
+`rootCertificatePath` in `gateway`.
 
 ```yaml
 drivers:
@@ -172,10 +167,9 @@ namespace. A deployment-paired Gateway normally uses an explicit Backend
 `endpoint` instead. A configured timeout and polling interval must be positive safe
 integers, and cancellation stops the wait.
 
-The OpenShell gateway must be installed separately. The bundled driver does not
-install it. `gateway.workspaceMode` is required and accepts `operator` or
-`managed`. Managed mode is reserved for the future and currently fails before
-the Driver mutates Kubernetes or calls the Gateway. Configure the Gateway's
+Install the OpenShell gateway separately. Required `gateway.workspaceMode`
+accepts `operator` or `managed`; deferred managed mode fails before Kubernetes
+mutations or Gateway calls. Configure the Gateway's
 Kubernetes driver with `workspaceMode: operator` and a namespace selector
 matching `operatorNamespaceLabels`. In this mode the OpenShell Workspace name
 must equal its pre-provisioned Kubernetes namespace, so OCC uses a stable
@@ -207,11 +201,9 @@ ownership metadata before server-side apply. Configure this field only for
 `operator` mode; managed mode never applies it. Do not include Secrets or
 cluster-scoped objects.
 
-`gateway.networkPolicyResources` accepts namespace-scoped Kubernetes resource
-objects for provider networking. They are applied into the OpenClaw Namespace
-during `ensureNamespace`. Do not include Secrets in this array; the driver
-rejects Secret resources because OpenShell credentials must not be embedded in
-startup YAML.
+`gateway.networkPolicyResources` accepts namespace-scoped Kubernetes objects
+for provider networking, applied during `ensureNamespace`. Secrets are rejected;
+OpenShell credentials must not appear in startup YAML.
 
 `kubernetes.sandboxDataMount` must match exactly one approved dedicated Harness
 workspace mount. It may not mount the PVC root, may not use `..`, and must mount
