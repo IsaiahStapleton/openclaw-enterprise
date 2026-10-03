@@ -2,16 +2,16 @@ import { setTimeout as delay } from "node:timers/promises";
 
 // Bounded retry for `docker pull`, the image counterpart of
 // scripts/ci/download-pinned.sh. A transient failure is a registry 5xx or
-// 429 (toomanyrequests), a connection reset, a TLS handshake timeout, an I/O
-// or client timeout, an unexpected EOF, or the attempt outliving its own
-// timeout. Anything else fails on the first attempt, and the permanent
+// 429 (toomanyrequests), a refused or reset connection, a DNS lookup
+// failure, a TLS handshake, I/O or client timeout, an unexpected EOF, or the
+// attempt outliving its own timeout. Anything else fails on the first attempt, and the permanent
 // patterns win when both match: a missing manifest or repository, denied or
 // unauthorized access, a digest mismatch, a bad reference, or a missing
 // Docker binary. The caller still verifies the pulled repository digest.
 const permanentPullFailure =
   /manifest unknown|not found|unauthorized|denied|authentication required|verification failed|digest mismatch|unexpected commit digest|invalid reference format/i;
 const transientPullFailure =
-  /toomanyrequests|too many requests|(?:HTTP|status)(?: code)?:? (?:429|5\d\d)\b|internal server error|bad gateway|service unavailable|gateway timeout|connection reset|TLS handshake timeout|i\/o timeout|Client\.Timeout exceeded|deadline exceeded|unexpected EOF|: EOF\b/i;
+  /toomanyrequests|too many requests|(?:HTTP|status)(?: code)?:? (?:429|5\d\d)\b|internal server error|bad gateway|service unavailable|gateway timeout|connection reset|connection refused|no such host|server misbehaving|name resolution|TLS handshake timeout|i\/o timeout|Client\.Timeout exceeded|deadline exceeded|unexpected EOF|: EOF\b/i;
 
 export function isTransientPullFailure(error) {
   if (error?.timedOut === true) {

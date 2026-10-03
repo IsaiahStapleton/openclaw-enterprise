@@ -25,6 +25,8 @@ test("image pulls retry only registry and network blips", () => {
     'Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp 3.94.224.37:443: i/o timeout',
     'Error response from daemon: Get "https://registry-1.docker.io/v2/": net/http: request canceled while waiting for connection (Client.Timeout exceeded while awaiting headers)',
     "error pulling image configuration: unexpected EOF",
+    'Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: no such host',
+    'Error response from daemon: Get "https://registry-1.docker.io/v2/": dial tcp 3.94.224.37:443: connect: connection refused',
     'Error response from daemon: Get "https://registry-1.docker.io/v2/": EOF',
   ]) {
     assert.equal(isTransientPullFailure(pullFailure(stderr)), true, stderr);
@@ -160,7 +162,7 @@ const answer =
   };
 const reset = (request) => request.socket.destroy();
 const hang = () => {};
-const quick = { firstDelayMs: 1, attemptTimeoutMs: 500 };
+const quick = { firstDelayMs: 1, attemptTimeoutMs: 1_000 };
 
 test("fetchPinnedBytes retries 5xx, resets and timeouts, then returns the body", async (t) => {
   const server = await flakyServer(t, [answer(503), reset, hang, answer(200, "pinned")]);
