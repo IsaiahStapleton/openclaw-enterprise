@@ -1293,6 +1293,10 @@ test("Gateway launch binds the enrolled node without expanding owner writes or c
       (name) => "/home/node/workspace/" + name,
     ),
     "/home/node/workspace/skills",
+    "/home/node/workspace/skills/**",
+    "/home/node/workspace/.clawhub/lock.json",
+    "/home/node/workspace/.clawdhub/lock.json",
+    "/home/node/workspace/.openclaw/skill-installs/**",
     "/home/node/workspace/media/inbound/openclaw-staged-*/**",
   ]);
   assert.deepEqual(transfer.nodes["enrolled-node"].allowReadPaths, [
@@ -1320,7 +1324,15 @@ test("Gateway launch binds the enrolled node without expanding owner writes or c
   assert.equal(effective.gateway.nodes.commands.allow.includes("workspace.skills"), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].args[1], "gateway");
-  const explicit = { nodes: { "*": { ask: "off", allowReadPaths: ["/chosen/AGENTS.md"] } } };
+  const explicit = {
+    nodes: {
+      "*": {
+        ask: "off",
+        allowReadPaths: ["/chosen/AGENTS.md"],
+        allowWritePaths: ["/chosen/SOUL.md"],
+      },
+    },
+  };
   const configured = await runOpenClawRuntimeHelper(undefined, [], {
     baseConfig: {
       ...baseConfig,

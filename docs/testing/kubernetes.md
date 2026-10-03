@@ -251,31 +251,37 @@ OCC_TEST_HARNESS_K3D_REAL=1 OCC_TEST_SLACK_LIVE=0 \
   node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-real.test.mjs
 ```
 
-Three non-Slack runtime cases must pass: dedicated Codex, embedded OpenClaw,
-and the extended Secret lifecycle case. Both topologies use OCC Secret-backed
-Agent `harnessAuth` bindings. The Secret API case verifies native SecretRefs, exact grants and denial,
-shared Secrets, rotation, and redeployment. It prepares those Secrets and grants
-itself. Routing, Slack and OTLP cases live in separate files, so this invocation
-contains only its three required runtime cases.
+Non-Slack cases cover dedicated Codex, embedded OpenClaw, and Secret lifecycle.
+Both topologies use OCC Secret-backed Agent `harnessAuth` bindings. The Secret API
+case covers native SecretRefs, grants, denial, sharing, rotation, and redeployment.
 
-The ordinary suite uses the real production API and worker in the Node test
-process. The gateway-routing suite runs the API as a Kubernetes Deployment so
-it reaches Envoy through the normal ClusterIP Service endpoint; its worker and
-test coordinator remain in the Node test process. Neither suite installs the
-controller with Helm. Missing selected-suite
-prerequisites fail; an unselected suite skips. Default Codex version expectation
-is `0.158.0`; see [runtime settings](#kubernetes-real-runtime-test-environment)
-for version assertions and alternate image variables.
+The ordinary suite runs the production API and worker in Node. Gateway-routing
+deploys the API in Kubernetes for normal Envoy-to-Service routing; its worker
+and coordinator run in Node. Neither installs the controller with Helm.
+Selected suites fail on missing prerequisites; unselected suites skip.
+Codex defaults to `0.158.0`; see [runtime settings](#kubernetes-real-runtime-test-environment)
+for version assertions and alternate images.
+
+### Candidate Skill source lifecycle
+
+Use candidate images supporting paired-node Skill uploads and local `zip`:
+
+```sh
+OCC_TEST_SKILL_SOURCE_LIFECYCLE=1 node --env-file="$TEST_ENV_FILE" --test \
+  --test-name-pattern='candidate dedicated Skill source' \
+  tests/integration/harness-topology-k3d-real.test.mjs
+```
+
+Verifies source replacement, denied writes preserving bytes/lockfiles, and recovery
+through OCC redeploy. No conversation turn; unsupported runtime images fail.
 
 ### Transcript persistence
 
-Both Harness topologies require a gateway image that stores transcripts in
-SQLite. The persistence cases query the test conversation through
-`session_nodes` and `transcript_events`, then verify its history and media after
-gateway Pod replacement. An older image that writes JSONL transcripts cannot
-exercise this storage path, even if it uses SQLite for authentication or memory.
-Setting `OCC_TEST_KUBERNETES_OPENCLAW_VERSION` alone does not verify transcript
-storage behavior.
+Both Harness topologies require SQLite transcripts. Persistence cases query
+`session_nodes` and `transcript_events`, then verify conversation history and media
+after gateway Pod replacement. Images with JSONL transcripts cannot exercise
+this path, even with SQLite authentication or memory.
+`OCC_TEST_KUBERNETES_OPENCLAW_VERSION` alone does not verify transcript storage.
 
 For Secret changes, run the API and PostgreSQL suites as well as the real
 Kubernetes runtime cases. Route/schema checks and documentation checks alone do
