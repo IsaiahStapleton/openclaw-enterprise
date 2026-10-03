@@ -404,6 +404,7 @@ async function createFixture(context, options = {}) {
     );
     assert.ok(result.rowCount > 0, "revocation must remove the exact administrator binding");
     revokedBindings.push(...result.rows);
+    return principal.id;
   }
 
   function cancelProvisioningAtTeardown(namespaceId, agentId) {
@@ -1083,6 +1084,101 @@ test(
       configurations: 0,
       revisions: 0,
       secrets: 4,
+    });
+  },
+);
+
+test(
+  "provisioning refuses credential-source Harness authentication before authorization or writes",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    // The source row exists only so the request names a real, ready id; admission must refuse
+    // before it looks the source up, so its gateway and Secret details are irrelevant.
+    const sourceId = `cs_${randomUUID()}`;
+    await fixture.state.transact(async (unit) => {
+      await unit.credentialSources.createCredentialSource({
+        id: sourceId,
+        namespaceId: namespace.id,
+        name: `provisioning-source-${randomUUID()}`,
+        type: "openai",
+        config: {},
+        secrets: {},
+        driverId: "credential-gateway-provisioning",
+        state: "registering",
+        createdAt: new Date().toISOString(),
+      });
+      await unit.credentialSources.markCredentialSourceReady(namespace.id, sourceId);
+    });
+    const provision = () =>
+      fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+        body: {
+          requestId: requestId(),
+          name: `Credential source ${randomUUID().slice(0, 8)}`,
+          executionMode: "dedicated",
+          configuration: { kind: "agent", values: { agents: { defaults: agentDefaults() } } },
+          harnessAuth: { method: "credential_source", sourceId },
+        },
+      });
+    const assertRefused = (response) => {
+      assert.equal(response.status, 400, JSON.stringify(response.body));
+      assert.equal(response.error.code, "INVALID_REQUEST");
+      assert.match(response.error.message, /does not support credential-source Harness/);
+    };
+
+    // The documented contract: even a caller who may operate the source is refused.
+    assertRefused(await provision());
+
+    // A caller who can create Agents and Configurations and administer the Installation, but
+    // holds no credential_source:operate, must not bind an Agent to the source through
+    // provisioning (the direct Agent path requires that grant).
+    const principalId = await fixture.revokeCurrentPrincipal();
+    const roleId = `role-provisioning-${randomUUID()}`;
+    const bindingId = `binding-provisioning-${randomUUID()}`;
+    await fixture.pool.query(
+      "INSERT INTO occ.iam_roles (id, namespace_id, name, permissions) VALUES ($1, NULL, $2, $3::jsonb)",
+      [
+        roleId,
+        `Provisioning without credential sources ${randomUUID()}`,
+        JSON.stringify([
+          { action: "administer", resourceKind: "installation" },
+          { action: "create", resourceKind: "agent" },
+          { action: "create", resourceKind: "configuration" },
+        ]),
+      ],
+    );
+    await fixture.pool.query(
+      `INSERT INTO occ.iam_access_bindings
+       (id, namespace_id, identity_subject_id, group_subject_id, role_id, resource_kind, resource_id)
+       VALUES ($1, NULL, $2, NULL, $3, NULL, NULL)`,
+      [bindingId, principalId, roleId],
+    );
+    try {
+      assertRefused(await provision());
+    } finally {
+      await fixture.pool.query("DELETE FROM occ.iam_access_bindings WHERE id = $1", [bindingId]);
+      await fixture.pool.query("DELETE FROM occ.iam_roles WHERE id = $1", [roleId]);
+    }
+
+    // Neither refusal stored a plan, queued work, created resources or recorded a denial.
+    const resources = await fixture.pool.query(
+      `SELECT
+       (SELECT count(*)::integer FROM occ.agent_provisioning_work WHERE namespace_id = $1) AS plans,
+       (SELECT count(*)::integer FROM occ.controller_work
+        WHERE namespace_id = $1 AND work_kind = 'provisioning') AS work,
+       (SELECT count(*)::integer FROM occ.agents WHERE namespace_id = $1) AS agents,
+       (SELECT count(*)::integer FROM occ.configurations WHERE namespace_id = $1) AS configurations,
+       (SELECT count(*)::integer FROM occ.audit_events
+        WHERE namespace_id = $1 AND action LIKE 'openclaw.agents.provision%') AS audits`,
+      [namespace.id],
+    );
+    assert.deepEqual(resources.rows[0], {
+      plans: 0,
+      work: 0,
+      agents: 0,
+      configurations: 0,
+      audits: 0,
     });
   },
 );
