@@ -45,8 +45,18 @@ function canaries() {
     GITHUB_PAT: `github_pat_${randomString(40)}`,
     RPC: `rpc-canary-${randomUUID()}`,
     CODEX_PROMPT: `codex-prompt-${randomUUID()}`,
+    // Chat text that codex_core interpolates into a warning message.
+    CODEX_CHAT: `codex-chat-${randomUUID()}`,
     WRAPPER_EXTRA: `wrapper-extra-${randomUUID()}`,
     MALFORMED: `malformed-canary-${randomUUID()}`,
+    ARGV_PASSWORD: `argv${randomString(12)}`,
+    HF_TOKEN: `hf_${randomString(34)}`,
+    STRIPE_KEY: `sk_live_${randomString(24)}`,
+    BASIC: Buffer.from(`user:${randomString(12)}`).toString("base64"),
+    NETRC_PASSWORD: `netrc${randomString(12)}`,
+    SERVICE_KEY: randomBytes(16).toString("hex"),
+    // A chat reply that the agent command prints through `runtime.log` (no subsystem).
+    REPLY: `reply-canary-${randomUUID()}`,
   };
 }
 
@@ -150,7 +160,7 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
     assert.equal(download.text.includes(value), false, `canary ${name} leaked into the download`);
   }
   assert.match(download.text, /\[redacted:/);
-  assert.match(download.text, / WITHHELD 2 unrecognised_structured$/m);
+  assert.match(download.text, / WITHHELD 3 unrecognised_structured$/m);
   assert.match(download.text, / GAP truncated: /);
   const controls = [...download.text].filter((character) => {
     const code = character.codePointAt(0);
@@ -176,9 +186,19 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
     ms: 12,
     sinceStartMs: 40,
   });
-  const codex = lines.find((record) => record.kind === "codex");
-  assert.equal(codex.message, "retrying model request");
-  assert.equal(codex.subsystem, "codex_core::client");
+  const codex = lines.filter((record) => record.kind === "codex");
+  assert.deepEqual(
+    codex.map(({ level, message, subsystem }) => ({ level, message, subsystem })),
+    [
+      {
+        level: "warn",
+        message: "stream connection failed; waiting to retry",
+        subsystem: "codex_core::responses_retry",
+      },
+      // codex_core text outside the reviewed messages keeps its level and target only.
+      { level: "warn", message: "Codex message withheld", subsystem: "codex_core::event_mapping" },
+    ],
+  );
   const openclaw = lines.find((record) => record.message === "turn started");
   assert.deepEqual(openclaw.fields, { agent_id: "main" });
   assert.ok(lines.some((record) => record.message.includes("[redacted:userinfo]@github.com")));
@@ -188,15 +208,100 @@ test("runtime log route bodies never contain planted credentials, prompts or pro
   assert.deepEqual(
     withheld.map(({ reason, count }) => ({ reason, count })),
     [
-      { reason: "unrecognised_structured", count: 2 },
+      { reason: "unrecognised_structured", count: 3 },
       { reason: "malformed", count: 2 },
     ],
   );
-  assert.equal(logs.data.withheld, 4);
+  assert.equal(logs.data.withheld, 5);
   // The byte cut is labelled, never silent.
   assert.equal(logs.data.truncated, true);
   assert.equal(logs.data.records.at(-1).type, "gap");
   assert.equal(logs.data.records.at(-1).reason, "truncated");
+});
+
+test("OpenClaw console records without a subsystem are withheld below warn", () => {
+  const stream = { source: "gateway", pod: "gateway-0", container: "gateway" };
+  const reply = `reply-canary-${randomUUID()}`;
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: JSON.stringify({ level: "info", message: reply }) },
+      { time: lineTime(2), raw: JSON.stringify({ level: "debug", message: reply, subsystem: "" }) },
+      {
+        time: lineTime(3),
+        raw: JSON.stringify({
+          level: "error",
+          message: "Gateway failed to start: gateway.bind=custom requires gateway.customBindHost",
+        }),
+      },
+      { time: lineTime(4), raw: JSON.stringify({ level: "warn", message: "config reloaded" }) },
+      {
+        time: lineTime(5),
+        raw: JSON.stringify({ level: "info", subsystem: "gateway", message: "listening" }),
+      },
+    ],
+  });
+  assert.deepEqual(
+    records.map((record) =>
+      record.type === "withheld"
+        ? `withheld ${record.reason} ${record.count}`
+        : `${record.level} ${record.message}`,
+    ),
+    [
+      "withheld unrecognised_structured 2",
+      "error Gateway failed to start: gateway.bind=custom requires gateway.customBindHost",
+      "warn config reloaded",
+      "info listening",
+    ],
+  );
+});
+
+test("credential shapes outside key names are masked in messages and kept fields", () => {
+  const stream = { source: "agent", pod: "gateway-0", container: "agent" };
+  const password = `pw${randomString(14)}`;
+  const hf = `hf_${randomString(34)}`;
+  const stripe = `sk_live_${randomString(24)}`;
+  const restricted = `rk_test_${randomString(24)}`;
+  const basic = Buffer.from(`svc:${randomString(12)}`).toString("base64");
+  const netrc = `n${randomString(15)}`;
+  const serviceKey = randomBytes(16).toString("hex");
+  const turn = `curl --user ops:${password} https://x.example.invalid`;
+  const { records } = sanitizeRuntimeLogChunk({
+    stream,
+    truncated: false,
+    lines: [
+      { time: lineTime(1), raw: `curl -u admin:${password} https://x.example.invalid` },
+      { time: lineTime(2), raw: `token ${hf} ${stripe} ${restricted}` },
+      { time: lineTime(3), raw: `Proxy auth Basic ${basic}` },
+      { time: lineTime(4), raw: `machine github.com login bob password ${netrc}` },
+      { time: lineTime(5), raw: `MY_SERVICE_KEY=${serviceKey}` },
+      {
+        time: lineTime(6),
+        raw: JSON.stringify({
+          level: "warn",
+          target: "codex_core::tools::parallel",
+          fields: { message: "tool failed", turn_id: turn },
+        }),
+      },
+      {
+        time: lineTime(7),
+        raw: JSON.stringify({ level: "warn", subsystem: "x", message: "m", code: stripe }),
+      },
+      // Prose and identifiers stay readable.
+      { time: lineTime(8), raw: "basic authentication failed; see hf_hub_download and sort -u" },
+    ],
+  });
+  const text = JSON.stringify(records);
+  for (const value of [password, hf, stripe, restricted, basic, netrc, serviceKey]) {
+    assert.equal(text.includes(value), false, `${value.slice(0, 6)}... leaked`);
+  }
+  assert.equal(
+    records.at(-1).message,
+    "basic authentication failed; see hf_hub_download and sort -u",
+  );
+  assert.match(records[0].message, /^curl -u \[redacted:argv\] https:/);
+  assert.equal(records[4].message, "MY_SERVICE_KEY=[redacted:key-value]");
 });
 
 test("the wrapper's fixed plain-text failure line is a wrapper error, not unknown text", () => {
@@ -218,6 +323,86 @@ test("the wrapper's fixed plain-text failure line is a wrapper error, not unknow
         level: "unknown",
         message: "Harness model authentication probe failed. extra",
       },
+    ],
+  );
+});
+
+test("a failed startup phase keeps its fixed cause code", () => {
+  const { records } = sanitizeRuntimeLogChunk({
+    stream: { source: "agent", pod: "agent-0", container: "agent" },
+    truncated: false,
+    lines: [
+      {
+        time: lineTime(1),
+        raw: '{"event":"runtime.startup_phase","container":"agent","phase":"plugin-install","outcome":"failed","ms":60000,"sinceStartMs":62000,"code":"PLUGIN_NOT_IN_CATALOG"}',
+      },
+    ],
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message, fields }) => ({ kind, level, message, fields })),
+    [
+      {
+        kind: "wrapper",
+        level: "error",
+        message: "runtime.startup_phase",
+        fields: {
+          container: "agent",
+          phase: "plugin-install",
+          outcome: "failed",
+          ms: 60000,
+          sinceStartMs: 62000,
+          code: "PLUGIN_NOT_IN_CATALOG",
+        },
+      },
+    ],
+  );
+});
+
+test("a Gateway settings override keeps its setting names, never values (D322)", () => {
+  const event = (settings) =>
+    JSON.stringify({
+      event: "runtime.gateway_settings_overridden",
+      container: "gateway",
+      settings,
+    });
+  const { records, withheld } = sanitizeRuntimeLogChunk({
+    stream: { source: "gateway", pod: "gateway-0", container: "gateway" },
+    truncated: false,
+    lines: [
+      {
+        time: lineTime(1),
+        raw: event([
+          "cron.triggers.enabled",
+          "models.providers.codex.baseUrl",
+          "models.providers.codex.apiKey",
+          "models.providers.codex.models[].headers",
+        ]),
+      },
+      // An item that is not a key path drops the list, never the event.
+      { time: lineTime(2), raw: event(["cron.triggers.enabled", "models.providers.sk-live x"]) },
+      { time: lineTime(3), raw: event("cron.triggers.enabled") },
+    ],
+  });
+  assert.equal(withheld, 0);
+  assert.deepEqual(
+    records.map(({ kind, level, message, fields }) => ({ kind, level, message, fields })),
+    [
+      {
+        kind: "wrapper",
+        level: "warn",
+        message: "runtime.gateway_settings_overridden",
+        fields: {
+          container: "gateway",
+          settings:
+            "cron.triggers.enabled, models.providers.codex.baseUrl, models.providers.codex.apiKey, models.providers.codex.models[].headers",
+        },
+      },
+      ...[2, 3].map(() => ({
+        kind: "wrapper",
+        level: "warn",
+        message: "runtime.gateway_settings_overridden",
+        fields: { container: "gateway" },
+      })),
     ],
   );
 });
@@ -252,7 +437,12 @@ test("the sanitizer drops a partial final line and bounds oversized input", () =
   const long = sanitizeRuntimeLogChunk({
     stream,
     truncated: false,
-    lines: [{ time: lineTime(1), raw: `{"level":"info","message":"${"z ".repeat(6000)}"}` }],
+    lines: [
+      {
+        time: lineTime(1),
+        raw: `{"level":"info","subsystem":"gateway","message":"${"z ".repeat(6000)}"}`,
+      },
+    ],
   });
   assert.equal(long.records[0].truncated, true);
   assert.ok(Buffer.byteLength(long.records[0].message) <= 8 * 1024);
@@ -788,7 +978,12 @@ test("Codex span lifecycle records: turns are info events, other spans are debug
         subsystem: "codex_exec_server::local_file_system",
       },
       { kind: "codex", level: "debug", message: "span new span", subsystem: "codex_core::client" },
-      { kind: "codex", level: "info", message: "close", subsystem: "codex_core::client" },
+      {
+        kind: "codex",
+        level: "info",
+        message: "Codex message withheld",
+        subsystem: "codex_core::client",
+      },
     ],
   );
   assert.equal(JSON.stringify(records).includes(canary), false, "no span payload or call ID leaks");
@@ -813,10 +1008,12 @@ function pollReader() {
   let cursor;
   let reads = 0;
   let admissions = 0;
+  const requests = [];
   const now = Date.parse("2026-09-30T12:10:00Z");
   return {
     codec,
     binding,
+    requests,
     get cursor() {
       return cursor;
     },
@@ -842,8 +1039,9 @@ function pollReader() {
         admitView: async () => {
           admissions += 1;
         },
-        readLogs: async () => {
+        readLogs: async (request) => {
           reads += 1;
+          requests.push(request);
           return {
             stream: {
               source: "gateway",
@@ -897,6 +1095,29 @@ test("runtime log cursor carries PEM context over three polls and empty polls", 
   assert.ok(
     messages(await reader.poll([timedLog(syntheticPemTail, 5)])).includes(syntheticPemTail),
   );
+  assert.equal(reader.admissions, 1);
+});
+
+test("a cursor from a page with no lines reads only output newer than that page", async () => {
+  const reader = pollReader();
+  // `occ agent logs --since 1m --follow` on a quiet container: the first page is empty.
+  await reader.poll([], { query: { sinceSeconds: 60 } });
+  // Follow polls send only the cursor; the read must not fall back to the whole tail.
+  await reader.poll([], { elapsed: 4_000 });
+  await reader.poll([], { elapsed: 9_000 });
+  assert.deepEqual(
+    reader.requests.map(({ sinceSeconds }) => sinceSeconds),
+    [60, 6, 7],
+  );
+  // The first line the view sees is delivered once, and a full tail is labelled.
+  const burst = Array.from({ length: 3 }, (_, i) => timedLog(`retrying in ${i}s`, 600 + i));
+  const full = await reader.poll(burst, { elapsed: 10_000, query: { tailLines: 3 } });
+  assert.deepEqual(
+    full.records.map((record) => record.reason ?? record.message),
+    ["window_exceeded", "retrying in 0s", "retrying in 1s", "retrying in 2s"],
+  );
+  const again = await reader.poll(burst, { elapsed: 11_000 });
+  assert.deepEqual(messages(again), []);
   assert.equal(reader.admissions, 1);
 });
 

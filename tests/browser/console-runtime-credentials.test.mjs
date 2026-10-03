@@ -2,77 +2,18 @@ import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { SshComputeDriver } from "../../apps/controller/src/drivers/compute/ssh/index.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { chromium } from "playwright";
-
-import { watchBrowserContext } from "../helpers/browser-failure-diagnostics.mjs";
-import { keepRequestInterceptionEnabled } from "../helpers/browser-request-interception.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
-
-async function artifactDirectory(t) {
-  const configured = process.env.OCC_TEST_CONSOLE_ARTIFACT_DIR;
-  const directory =
-    configured === undefined || configured.length === 0
-      ? await mkdtemp(join(tmpdir(), "openclaw-console-runtime-credentials-browser-"))
-      : configured;
-  t.diagnostic(`console runtime credential browser artifacts: ${directory}`);
-  return directory;
-}
-
-async function launchBrowser() {
-  const browserExecutable =
-    process.env.OCC_TEST_BROWSER_EXECUTABLE === undefined ||
-    process.env.OCC_TEST_BROWSER_EXECUTABLE.length === 0
-      ? undefined
-      : process.env.OCC_TEST_BROWSER_EXECUTABLE;
-  const browser = await chromium.launch({
-    ...(browserExecutable === undefined ? {} : { executablePath: browserExecutable }),
-    headless: true,
-  });
-  return browser;
-}
-
-async function newPage(t, fixture) {
-  const artifacts = await artifactDirectory(t);
-  const browser = await launchBrowser();
-  let context;
-  let diagnostics;
-  fixture.registerCleanupBeforeAppClose(async () => {
-    let cleanupError;
-    try {
-      await diagnostics?.capture();
-      await context?.close();
-    } catch (error) {
-      cleanupError ??= error;
-    } finally {
-      try {
-        await browser.close();
-      } catch (error) {
-        cleanupError ??= error;
-      }
-    }
-    if (cleanupError) {
-      throw cleanupError;
-    }
-  });
-  context = await browser.newContext();
-  diagnostics = await watchBrowserContext(t, context);
-  await keepRequestInterceptionEnabled(context);
-  return { page: await context.newPage(), artifacts };
-}
-
-async function login(page, fixture, path) {
-  await page.goto(`${fixture.origin}${path}`);
-  await page.getByLabel("Username").fill(fixture.credentials.email);
-  await page.getByLabel("Password").fill(fixture.credentials.password);
-  await page.getByRole("button", { name: "Login" }).click();
-  await page.waitForURL(/\/console\/(agents|backends|namespaces|settings)/);
-}
+import {
+  expectNoText,
+  login,
+  newPage,
+  secretOptionLabel,
+  selectSecret,
+} from "./console-agents-browser-helpers.mjs";
 
 function detailUrl(fixture, namespaceId, agentId, tab = "credentials") {
   const url = new URL(`/console/agents/${agentId}`, fixture.origin);
@@ -80,23 +21,6 @@ function detailUrl(fixture, namespaceId, agentId, tab = "credentials") {
   url.searchParams.set("revision", "draft");
   url.searchParams.set("tab", tab);
   return `${url.pathname}${url.search}`;
-}
-
-async function expectNoText(page, pattern) {
-  await assert.rejects(
-    page.getByText(pattern).waitFor({ state: "visible", timeout: 300 }),
-    /Timeout/,
-  );
-}
-
-function secretOptionLabel(secret) {
-  return secret.name;
-}
-
-async function selectSecret(scope, label, secret, options = {}) {
-  const field = scope.getByLabel(label, { exact: true });
-  await field.fill(options.query ?? secret.name);
-  await scope.getByRole("option", { name: secretOptionLabel(secret), exact: true }).click();
 }
 
 function nativeValues(marker, { slack = false } = {}) {

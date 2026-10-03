@@ -153,15 +153,17 @@ grafana:
   test -s "$OBS_FILES/cluster-uid"
   test "$(kubectl --context "$HELM_KUBECONTEXT" get namespace kube-system -o jsonpath='{.metadata.uid}')" = "$(cat "$OBS_FILES/cluster-uid")"
   rm -f "$OBS_FILES/demo-installed"
-  helm install demo deploy/helm/openclaw-observability-demo \
+  helm upgrade --install demo deploy/helm/openclaw-observability-demo \
     -n oce-observability-demo -f "$OBS_FILES/demo.yaml" --wait --timeout 10m
   touch "$OBS_FILES/demo-installed"
 )
 ```
 
 The first install pulls three images; the 10-minute wait allows for a cold
-image cache. A failed or interrupted install can reserve the name and create resources without
-a marker; follow [recovery](demo-cleanup.md#recover-an-incomplete-setup).
+image cache. If it fails with `context deadline exceeded`, rerun this block
+unchanged: Helm upgrades the failed release in place. Any other error, or an
+interrupted run (Helm reports `another operation ... is in progress`), can
+leave resources without a marker; follow [recovery](demo-cleanup.md#recover-an-incomplete-setup).
 
 Services use `ClusterIP`. Prometheus reads Pod metadata, not Secrets. Grafana
 bundles plugins; startup downloads are disabled. Its disposable database is
@@ -393,7 +395,7 @@ growth. The log endpoint is `/otlp/v1/logs`, not `/v1/logs`.
 
 ## Recover an incomplete setup
 
-Do not rerun failed or interrupted commands. Follow [recover an incomplete setup](demo-cleanup.md#recover-an-incomplete-setup).
+Except for a demo install wait timeout (see above), do not rerun failed or interrupted commands. Follow [recover an incomplete setup](demo-cleanup.md#recover-an-incomplete-setup).
 
 ## Remove only the demo
 

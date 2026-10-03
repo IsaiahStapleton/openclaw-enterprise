@@ -15,7 +15,6 @@ import {
   newPage,
   pathRequests,
   repositoryCheckbox,
-  unusedPort,
   waitForCondition,
 } from "./console-agents-browser-helpers.mjs";
 import {
@@ -726,7 +725,7 @@ test("Repository descriptions arrive without interrupting a selection", async (t
     namespaceId: namespace.id,
     backendId: repositoryBackendFixture.id,
     autoOpen: false,
-    gateway: { listen: `127.0.0.1:${await unusedPort()}` },
+    gateway: { listen: "127.0.0.1:0" },
     repositories: [
       {
         repositoryRef: "application",
