@@ -13,8 +13,9 @@ mode, the container engine hosts k3d and builds or imports images without
 running OCE application services.
 
 K3s requires the `cpuset` cgroup controller, which systemd does not delegate to
-a rootless session. On Podman, run as root, delegate `cpuset` to your user
-session, or use a rootful Podman machine. On macOS:
+a rootless session. On Podman, run as root or use a rootful Podman machine;
+native rootless Podman cannot start this profile even with `cpuset` delegated.
+On macOS:
 
 ```bash
 podman machine stop

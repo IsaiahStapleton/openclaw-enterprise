@@ -9,7 +9,9 @@ or several Agents are affected. For a problem with one Agent, start with
 If the k3d server logs report `failed to find cpuset cgroup (v2)`, inspect
 `/sys/fs/cgroup/cgroup.controllers` inside that server. Docker running inside a
 containerized development host needs the outer host to delegate `cpuset`;
-a running Docker daemon does not prove delegation. For Podman, check the
+a running Docker daemon does not prove delegation. On native rootless Podman,
+delegating `cpuset` is not enough: k3d still fails with
+`mkdir /var/run/docker.sock: permission denied`. Use the
 [rootful setup requirements](../deploy/local-kubernetes-development.md#start-the-profile).
 
 Use the host management service's documented delegation procedure. If delegation
