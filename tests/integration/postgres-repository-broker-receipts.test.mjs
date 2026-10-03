@@ -219,6 +219,13 @@ test(
       { code: "42501" },
     );
     await assert.rejects(
+      pool.query(
+        "UPDATE occ.repository_broker_receipts SET state='fenced' WHERE admission_id = $1",
+        [admissionId],
+      ),
+      { code: "23514" },
+    );
+    await assert.rejects(
       pool.query("DELETE FROM occ.repository_broker_receipts WHERE admission_id = $1", [
         admissionId,
       ]),

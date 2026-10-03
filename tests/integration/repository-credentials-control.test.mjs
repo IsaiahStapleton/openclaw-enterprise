@@ -1036,6 +1036,7 @@ test(
     const fixture = await boundControlFixture(t, {}, [
       ...defaultRegistryRepositories,
       { repositoryRef: "repo-c", repository: "fixture/third", repositoryId: "75" },
+      { repositoryRef: "repo-d", repository: "fixture/fourth", repositoryId: "76" },
     ]);
     const { inputFor, send, freshId, receipts } = fixture;
     const receipt = async (id) =>
@@ -1067,7 +1068,7 @@ test(
     let outcome;
     receipts.state.transact = async function (work) {
       calls += 1;
-      if (calls === 2 && outcome === "refused") {
+      if ((calls === 2 && outcome === "refused") || (calls >= 2 && calls <= 3 && outcome === "away")) {
         throw new Error("fixture-unavailable");
       }
       const result = await transact.call(this, work);
@@ -1087,6 +1088,18 @@ test(
     assert.equal((await receipt(unboundId)).state, "fenced");
     assert.deepEqual(await send(unbound, unboundId), missing);
     assert.deepEqual(await send({ ...unbound, recoverOnly: true }, unboundId), missing);
+
+    // The journal is away for the bind and the fence; a retry fences instead.
+    const away = inputFor("repo-d");
+    const awayId = await prepared(away);
+    calls = 0;
+    outcome = "away";
+    assert.deepEqual(await send(away, awayId), { status: 503, body: { error: "unavailable" } });
+    assert.equal((await receipt(awayId)).state, "reserved");
+    outcome = undefined;
+    assert.deepEqual(await send(away, awayId), missing);
+    assert.equal((await receipt(awayId)).state, "fenced");
+    assert.deepEqual(await send({ ...away, recoverOnly: true }, awayId), missing);
 
     // The bind is recorded but its answer is lost: the fence cannot apply, and the
     // closed session's disposal is recorded instead.
