@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import {
   assertProbeDenied,
+  inlineProbeCommand,
   isTransientKubectlFailure,
   PROBE_DENIED_EXIT_CODE,
   probeDenial,
@@ -240,5 +242,55 @@ test("only the probe's denial exit code with its stdout report is a denial", () 
     Object.assign(kubectlFailure("command terminated with exit code 1\n"), { stdout: report }),
   ]) {
     assert.equal(probeDenial(error), undefined, error.message);
+  }
+});
+
+// The Gateway container does not mount the probe fixture, so the Gateway
+// connect check (finding 335) runs probe.mjs from its source text.
+async function fakeKubectlExecInline(source, ...probeArguments) {
+  const [node, ...args] = inlineProbeCommand(source, ...probeArguments);
+  assert.equal(node, "node");
+  return fakeKubectlExec(...args);
+}
+
+test("the inline probe's refused connection passes a deny check", async () => {
+  const source = await readFile(probeScript, "utf8");
+  const port = await closedLoopbackPort();
+  const denial = await assertProbeDenied(
+    "refused inline loopback traffic",
+    () => fakeKubectlExecInline(source, "tcp", "127.0.0.1", port),
+    quiet,
+  );
+  assert.deepEqual(denial, { denied: true, code: "ECONNREFUSED" });
+});
+
+test("an inline deny check fails unless the probe reports a denial", async () => {
+  const source = await readFile(probeScript, "utf8");
+  const port = await closedLoopbackPort();
+  // Reproduces the Gateway one-liner this replaced (not the inline probe): it
+  // exits 1 on any socket error, a DNS error included.
+  const exitOnAnyError = `const s=require('node:net').connect({host:process.argv[1],port:Number(process.argv[2])}); s.on('connect',()=>process.exit(0)); s.on('error',()=>process.exit(1));`;
+  for (const [reason, run] of [
+    [
+      "exec stream dropped on every attempt",
+      async () => {
+        throw kubectlFailure(execStreamDropped);
+      },
+    ],
+    [
+      "missing probe script",
+      () => fakeKubectlExecInline('import "./missing-probe.mjs";', "tcp", "127.0.0.1", port),
+    ],
+    ["DNS failure", () => fakeKubectlExecInline(source, "tcp", "probe.invalid", 18790)],
+    [
+      "a script that exits 1 on any error",
+      () => fakeKubectlExec("-e", exitOnAnyError, "127.0.0.1", String(port)),
+    ],
+  ]) {
+    await assert.rejects(
+      assertProbeDenied(reason, run, quiet),
+      (error) => error.code !== "ERR_ASSERTION" && /did not report a denial/.test(error.message),
+      reason,
+    );
   }
 });
