@@ -12,8 +12,8 @@ choices, [Agent Revisions](../guides/topics/agent-revisions.md) for changes, or
 [Troubleshoot](../guides/topics/agent-troubleshoot.md) if a deployment stalls.
 
 Creating an Agent saves its identity and exact Namespace-owned Configuration
-reference with `active` status and `stopped` desired runtime state. No workload,
-model, or revision starts until an authorized caller requests
+reference with `active` status and `stopped` desired runtime state. No revision is
+created and no workload or model starts until an authorized caller requests
 [deployment](#identity-and-deployment).
 
 ## Supported operations
@@ -49,8 +49,8 @@ for credential permissions and [authorization](authorization.md) for grants.
 For unreadable saved settings, Agent and revision list/detail GETs omit them
 without defaults, keep readable metadata and siblings, and add
 `configurationReadError` with `code: "SAVED_CONFIGURATION_UNREADABLE"` and the
-affected `field`. Authorization, strict mutation/runtime validation, and
-query-failure behavior are unchanged. See the
+affected `field`. Authorization and strict mutation/runtime validation are unchanged;
+query failures still fail requests. See the
 [Console warning](../guides/console/agent-details.md#unreadable-saved-settings).
 
 ## Deployment status
@@ -369,7 +369,7 @@ its compatibility limits before planning deployment.
 - `401`: The session cookie is missing, invalid, expired, or revoked.
 - `403`: Your principal lacks the exact permission for the Agent or Namespace.
 - `404`: The Namespace or Agent does not exist under the requested parent, or
-  the selected Configuration or associated service account belongs to another
+  the selected Configuration or associated service account is not in the Agent's
   Namespace.
 - `409 RESOURCE_CONFLICT`: Harness authentication is missing, the selected
   account has no issued access token, or its Backend binding or topology is incompatible.

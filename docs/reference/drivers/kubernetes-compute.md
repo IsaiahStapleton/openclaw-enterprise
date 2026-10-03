@@ -72,7 +72,7 @@ With OpenShell sandboxing enabled, the optional `SandboxDriver.ensureNamespace`
 hook uses the Compute Driver's Kubernetes access directly; there is no separate
 SandboxDriver Kubernetes access adapter. The hook applies approved
 namespace-scoped OpenShell labels and NetworkPolicy resources, checks OpenShell
-Gateway readiness, and creates or adopts the Namespace Workspace. Harness
+gateway readiness, and creates or adopts the Namespace Workspace. Harness
 provisioning and cleanup follow the [SandboxDriver lifecycle](sandbox.md#admission-and-lifecycle):
 revision cleanup runs even when Compute's ordinary Harness Deployment is absent,
 and a failed provider Namespace cleanup keeps the Kubernetes namespace.
@@ -269,8 +269,8 @@ credential, closing the interval before its next status poll.
 The worker records warnings with successful deployment completion under its live
 claim; a runtime restart recomputes status instead of preserving the first
 failure. There are no plugin receipt ConfigMaps, Pod finalizers, failure latches,
-or post-commit acknowledgment steps. Nothing changes requested revision
-selections, uninstalls account-wide plugins, or rolls back.
+or post-commit acknowledgment steps. This behavior does not change requested revision
+selections, uninstall account-wide plugins, or promise rollback.
 
 ### Current runtime diagnostics
 

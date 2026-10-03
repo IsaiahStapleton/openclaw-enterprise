@@ -159,7 +159,7 @@ deployments.
 
 Before saving, Agent and Configuration reads verify association and generation;
 concurrent changes can still race the PATCH. Refresh after a conflict. An
-unconfirmed PATCH may have succeeded: it shows **Outcome unknown** and disables
+unconfirmed PATCH may have succeeded and is never replayed automatically: it shows **Outcome unknown** and disables
 channel writes until Refresh loads saved state. **Disable Slack** changes only
 the draft, not access, execution, or admitted revisions.
 
@@ -270,13 +270,13 @@ and reachable gateway; selection alone does not prove access. Files are never
 copied into a Configuration or revision.
 
 Each file has its own **Save** and **Reload**. A save creates or replaces only
-that file through the [workspace file API](agents.md#workspace-files), within
-the API's 16 KiB UTF-8 and Unicode limits. Loading requires Agent `read`; saving
+that file through the [workspace file API](agents.md#workspace-files); the editor
+enforces the API's 16 KiB UTF-8 and Unicode limits. Loading requires Agent `read`; saving
 requires `operate`. Writes have no version check: the last writer wins. Reload
 replaces unsaved edits with the current file.
 
 A failed write preserves the editor contents. An unknown outcome disables that
-file's Save until a successful reload; review the loaded contents before
+file's Save until a successful reload, so it is never replayed automatically; review the loaded contents before
 writing again. Files load and
 save independently, so one file's result says nothing about another's. For
 unavailable gateways, follow the
