@@ -87,7 +87,7 @@ export async function login(
   path = "/console/agents",
   credentials = fixture.credentials,
 ) {
-  await page.goto(`${fixture.origin}${path}`);
+  await page.goto(new URL(path, fixture.origin).href);
   await page.getByLabel("Username").fill(credentials.email);
   await page.getByLabel("Password").fill(credentials.password);
   await page.getByRole("button", { name: "Login" }).click();
