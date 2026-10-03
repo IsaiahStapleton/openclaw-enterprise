@@ -648,7 +648,7 @@ export const ProvisionAgentBody = Type.Object(
     harnessAuth: Type.Optional(
       Type.Union([HarnessAuthBindingSchema, Type.Null()], {
         description:
-          "Dedicated Harness authentication. `credential_source` is refused with 400 INVALID_REQUEST: create the Agent, then deploy it with the source.",
+          "Dedicated Harness authentication. `credential_source` is refused with 400 INVALID_REQUEST: create the Agent with the source, then deploy it.",
       }),
     ),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
