@@ -24,8 +24,8 @@ import {
   backendDefinition,
   requiresPostgres,
   seedBackendBinding,
-  waitFor,
 } from "../helpers/postgres-backend-state.mjs";
+import { waitFor } from "../helpers/wait-for.mjs";
 
 async function prepareDatabase(context) {
   assert.ok(
