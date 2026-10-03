@@ -1383,7 +1383,9 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   );
   await save.click();
   assert.equal((await conflict).status(), 409);
-  await page.getByText(/conflicts with the saved state/).waitFor();
+  await page
+    .getByText("An Agent with this name already exists in this Namespace. Choose a different name.")
+    .waitFor();
   assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
   await page.getByLabel("Agent name", { exact: true }).fill("Preset Agent");
@@ -1542,7 +1544,9 @@ test("standard Codex password Preset creates one scoped Secret and reuses it aft
   );
   await save.click();
   assert.equal((await conflict).status(), 409);
-  await page.getByText(/conflicts with the saved state/).waitFor();
+  await page
+    .getByText("An Agent with this name already exists in this Namespace. Choose a different name.")
+    .waitFor();
   assert.equal(await apiKey.inputValue(), "");
   assert.equal(await page.getByRole("button", { name: "Start over" }).isDisabled(), true);
   await page.getByLabel("Agent name", { exact: true }).fill("Password Agent");
@@ -1758,7 +1762,9 @@ test("codex_pat password Preset creates one Secret and reuses it after an Agent 
   );
   await save.click();
   assert.equal((await conflict).status(), 409);
-  await page.getByText(/conflicts with the saved state/).waitFor();
+  await page
+    .getByText("An Agent with this name already exists in this Namespace. Choose a different name.")
+    .waitFor();
   assert.equal(await token.inputValue(), "");
   await page.getByLabel("Agent name", { exact: true }).fill("Codex PAT Agent");
   const createdResponse = page.waitForResponse(
@@ -1983,7 +1989,9 @@ test("Create Agent reuses its PAT Secret and resumes plugin prefetch after an Ag
   assert.equal(pathRequests(requests, "POST", catalogPath).length, 0);
   submitRelease.resolve();
   assert.equal((await conflict).status(), 409);
-  await page.getByText(/conflicts with the saved state/).waitFor();
+  await page
+    .getByText("An Agent with this name already exists in this Namespace. Choose a different name.")
+    .waitFor();
   assert.equal(secretPostRequests(requests, namespace.id).length, 1);
   const prefetched = page.waitForResponse(
     (response) =>

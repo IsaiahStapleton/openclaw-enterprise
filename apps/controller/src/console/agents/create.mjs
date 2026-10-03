@@ -11,6 +11,11 @@ import { createSlackApproverField } from "./slack-approvers.mjs";
 import { renderChannels } from "../channels.mjs";
 import { link, message, namespacePath, rejectionMessage } from "./list.mjs";
 
+// The API's duplicate-name sentence. Other Agent conflicts reach the client as generic text,
+// so only this one is shown as sent.
+const AGENT_NAME_CONFLICT =
+  "An Agent with this name already exists in this Namespace. Choose a different name.";
+
 // TODO: This starter list is intentionally hardcoded for the initial Console release.
 // Revisit catalog refresh and credential-aware discovery after the basic creation flow ships.
 const MODEL_CHOICES = {
@@ -1784,7 +1789,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         : error.status === 409 && creatingSecret && error.code !== "NAMESPACE_NOT_READY"
           ? `A Secret named "${body.name}" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over, choose the Preset again, and set its Secret source to Use existing Secret.`
           : error.status === 409 && savedConfiguration
-            ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
+            ? error.serverMessage === AGENT_NAME_CONFLICT
+              ? AGENT_NAME_CONFLICT
+              : "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
             : rejectionMessage(error, mutationStarted);
       outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       const knownRejection = [400, 403, 404, 409, 429].includes(error.status);
