@@ -10,7 +10,9 @@ import { createServiceConfiguration } from "../fixtures/repository-credentials/s
 // unresolved alternate-provider callback must never defeat finite process exit.
 test(
   "process shutdown reports unresolved ownership and exits within grace",
-  { timeout: 10000 },
+  // Longer than the 10 s drain window below, so waiting for it fails on the
+  // elapsed-time assertion rather than on the test timeout.
+  { timeout: 20_000 },
   async (t) => {
     const tls = await createTlsMaterial(t);
     const original = await createServiceConfiguration(t, { shutdownGraceMs: 100 });
