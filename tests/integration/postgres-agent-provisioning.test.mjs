@@ -1090,6 +1090,65 @@ test(
   },
 );
 
+test(
+  "provisioning a duplicate Agent name fails permanently and says the name is taken",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const name = `Duplicate ${randomUUID().slice(0, 8)}`;
+    const first = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets, { name }),
+    });
+    assert.equal(first.status, 202, JSON.stringify(first.body));
+    await fixture.startWorker();
+    const created = await waitFor("first Agent provisioning to succeed", async () => {
+      const observed = await fixture.request("GET", first.data.provisioning.url);
+      assert.equal(observed.status, 200, JSON.stringify(observed.body));
+      return observed.data.status === "succeeded" ? observed.data : undefined;
+    });
+    fixture.cancelProvisioningAtTeardown(namespace.id, created.agentId);
+
+    // Admission does not check names; the worker's Agent insert hits the unique name
+    // constraint. The job must report that cause instead of the generic failure text.
+    const duplicate = await fixture.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents/provision`,
+      { body: provisioningBody(namespace.id, secrets, { name }) },
+    );
+    assert.equal(duplicate.status, 202, JSON.stringify(duplicate.body));
+    await waitFor("duplicate-name Agent provisioning to fail", async () => {
+      const observed = await fixture.request("GET", duplicate.data.provisioning.url);
+      assert.equal(observed.status, 200, JSON.stringify(observed.body));
+      return observed.data.status === "failed" ? observed.data : undefined;
+    });
+    // The status read takes the job and the queue row in separate statements, so the
+    // poll that first sees the failure can miss the recorded error. Read the settled job.
+    const failed = await fixture.request("GET", duplicate.data.provisioning.url);
+    assert.equal(failed.status, 200, JSON.stringify(failed.body));
+    assert.equal(failed.data.status, "failed");
+    assert.deepEqual(failed.data.error, {
+      code: "PROVISIONING_REJECTED",
+      message: "An Agent with this name already exists in this Namespace. Choose a different name.",
+    });
+    const work = await fixture.pool.query(
+      "SELECT state, reason_code FROM occ.controller_work WHERE work_kind = 'provisioning' AND namespace_id = $1 AND idempotency_key = $2",
+      [namespace.id, duplicate.data.provisioning.workId],
+    );
+    assert.deepEqual(work.rows, [
+      { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED" },
+    ]);
+    const agents = await fixture.pool.query("SELECT id FROM occ.agents WHERE namespace_id = $1", [
+      namespace.id,
+    ]);
+    assert.deepEqual(
+      agents.rows.map(({ id }) => id),
+      [created.agentId],
+    );
+  },
+);
+
 async function createFailedPreHandoffAgent(fixture) {
   const namespace = await fixture.bootstrapNamespace();
   const secrets = await createProvisioningSecrets(fixture, namespace.id);
