@@ -153,8 +153,8 @@ maps the `x-api-key` to the Installation-scoped service administrator. The
 startup proof succeeds only when the returned resource ID matches the copied
 key response's `meta.installationId`. The
 [service-key flow](../service-api-keys.md#3-verify-the-credential-and-enforce-its-fixed-identity-scope)
-owns admission, `401` rejection without cookie fallback, and per-operation IAM
-authorization.
+owns admission and `401` rejection without cookie fallback; current IAM policy
+still authorizes each resource operation.
 
 When `OCC_CONFIG_PATH` is absent, PostgreSQL-backed development selects the
 filesystem Configuration Driver from `OCC_DEVELOPMENT_CONFIGURATION_ROOT`.

@@ -8,8 +8,8 @@ last_updated_session: authoring-run/afd78df4-12de-4f41-b2df-7ebb53ed3213
 
 ## Overview
 
-Fresh native-IAM bootstrap creates human and service administrators, binds each
-to one Role, and commits them with the Installation. It writes
+Fresh native-IAM bootstrap creates human and service administrators, binds both
+to one shared Role, and commits them with the Installation. It writes
 the initial service key, and in production a generated human password, to
 protected storage; development uses its configured password. Human sign-in
 then reaches exact IAM authorization. The
@@ -158,7 +158,7 @@ a wrong password writes no unstructured console warning.
 cookie session resolves, in `ControllerAdmissionVerifier.verify` (protected API
 and native admin proxy), `session`, `resolveSession`, and `signOut`. An absent
 header changes nothing; a malformed, duplicated, or foreign key returns `401`
-and makes sign-out revoke nothing, so the header narrows but never selects a
+and makes sign-out revoke or clear nothing, so the header narrows but never selects a
 session. The native admin proxy strips the header upstream.
 
 When GitHub is configured, `apps/controller/src/auth/github.ts:createHumanLogin`

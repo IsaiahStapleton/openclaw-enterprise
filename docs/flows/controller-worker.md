@@ -93,7 +93,7 @@ Agent deployment keeps the validated `deploy` authorization request and decision
 with the admitted revision until the API appends its audit event, which uses that
 decision's IAM Driver, principal, exact Agent target and evidence even if Driver
 selection changes first; the API neither reauthorizes nor relabels it. Audit
-failure rolls back the revision and desired runtime state with the work; an
+failure rolls back the revision, desired runtime state and queued work; an
 unknown PostgreSQL commit outcome remains unknown and is not retried.
 
 The queue freezes actor, Namespace owner, lifecycle target, and exact Agent and
@@ -106,7 +106,8 @@ For an already-deleting Agent, `OpenClawController.deleteAgent` leaves active
 work unchanged. After terminal failure, `operations.retryFailedAgentDeletion`
 checks delete permission and resets only the stopped, deleting Agent's terminal
 work, keeping prior audits; [Agent deletion](../reference/agents.md#deletion)
-defines who can retry, including `takeover`. The worker reauthorizes normally.
+defines who can retry; a takeover becomes the work's actor, audited as
+`takeover`. The worker reauthorizes normally.
 `deleteNamespace` recovers Namespace teardown the same way via
 `retryFailedNamespaceDeletion`.
 
