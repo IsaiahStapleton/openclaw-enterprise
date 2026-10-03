@@ -1017,7 +1017,7 @@ async function smoke() {
     OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS: "900",
   };
   delete environment.OPENAI_API_KEY;
-  if (!environment.OCC_DEVELOPMENT_K3D_DNS_RESOLVER) {
+  if (process.env.OCC_SMOKE_KEEP_DEFAULT_NODE_RESOLVER !== "0" && false) {
     const resolver = await upstreamResolver();
     if (resolver) {
       environment.OCC_DEVELOPMENT_K3D_DNS_RESOLVER = resolver;
