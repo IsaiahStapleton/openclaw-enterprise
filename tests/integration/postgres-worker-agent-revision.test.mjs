@@ -1782,6 +1782,115 @@ test(
   },
 );
 
+for (const crashes of [1, 2]) {
+  test(
+    crashes === 1
+      ? "a deployment whose lease expires on its last attempt after publishing its revision gets one more attempt"
+      : "a published deployment that loses its lease again fails without retiring the active runtime",
+    requiresPostgres,
+    async (context) => {
+      const repository = repositoryBoundary();
+      const fixture = await setup(context, { repoDriver: repository.driver, maxAttempts: 1 });
+      const owner = await fixture.agent(`publish-crash-${crashes}`);
+      const first = await fixture.revision(owner, 1, undefined, repository.snapshot);
+      const stopped = [];
+      const retired = [];
+      const compute = {
+        ...fixture.compute,
+        async stopRevision(revision) {
+          stopped.push(revision.id);
+          return fixture.compute.stopRevision(revision);
+        },
+        async retireRevision(revision) {
+          retired.push(revision.id);
+          return fixture.compute.retireRevision(revision);
+        },
+      };
+      await fixture.start(compute);
+      await fixture.work(first, "succeeded");
+      await fixture.stop();
+
+      // A worker claims the replacement on its last attempt, publishes the active pointer and
+      // crashes before activation, predecessor retirement and completion.
+      const second = await fixture.revision(owner, 2, undefined, repository.snapshot);
+      const queue = new fixture.PostgresWorkQueue(fixture.observerPool, {
+        leaseDurationMs: 30_000,
+        maxAttempts: 1,
+        random: () => 0,
+      });
+      const crash = async () => {
+        const claim = await queue.claim();
+        assert.equal(claim?.idempotencyKey, second.idempotencyKey);
+        await fixture.observerPool.query(
+          `UPDATE occ.controller_work
+           SET lease_expires_at = clock_timestamp() - interval '1 second'
+           WHERE idempotency_key = $1 AND claim_token = $2::uuid`,
+          [claim.idempotencyKey, claim.claimToken],
+        );
+        assert.equal((await queue.recoverStale()).recovered, 1);
+      };
+      await fixture.state.transact((unit) =>
+        unit.agents.compareAndSetActiveRevision(
+          fixture.namespace.id,
+          owner.id,
+          first.id,
+          second.id,
+        ),
+      );
+      for (let crash_ = 0; crash_ < crashes; crash_ += 1) {
+        await crash();
+      }
+      const row = async () =>
+        (
+          await fixture.observerPool.query(
+            "SELECT state, reason_code, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+            [second.idempotencyKey],
+          )
+        ).rows[0];
+      const retirement = await fixture.observerPool.query(
+        "SELECT 1 FROM occ.controller_work WHERE idempotency_key LIKE $1",
+        [`agent_revision:${second.id}:repository_cleanup:retire:%`],
+      );
+      assert.equal(retirement.rowCount, 0, "recovery must not retire the active runtime");
+      const evidence = await fixture.observerPool.query(
+        `SELECT details->>'reasonCode' AS reason_code FROM occ.audit_events
+         WHERE kind = 'mutation' AND action = 'reconcile' AND details->>'workId' = $1
+         ORDER BY occurred_at, id`,
+        [second.idempotencyKey],
+      );
+      if (crashes === 2) {
+        // The extra attempt is granted once; a second loss ends the deployment.
+        assert.deepEqual(await row(), {
+          state: "failed_permanent",
+          reason_code: "LEASE_EXPIRED",
+          attempt_count: 1,
+        });
+        assert.deepEqual(evidence.rows.map(({ reason_code }) => reason_code).slice(-2), [
+          "ACTIVE_REVISION_RECOVERY",
+          "LEASE_EXPIRED",
+        ]);
+        assert.deepEqual(stopped, []);
+        assert.deepEqual(retired, []);
+        return;
+      }
+      assert.deepEqual(await row(), { state: "queued", reason_code: null, attempt_count: 0 });
+      assert.equal(evidence.rows.at(-1).reason_code, "ACTIVE_REVISION_RECOVERY");
+
+      // A worker finishes the published deployment through the already-active path.
+      await fixture.start(compute);
+      await fixture.work(second, "succeeded");
+      await fixture.stop();
+      assert.equal((await row()).reason_code, "REVISION_ALREADY_ACTIVE");
+      assert.deepEqual(retired, [first.id], "the predecessor must be retired");
+      assert.deepEqual(stopped, [], "the active revision must keep running");
+      const agent = await fixture.state.read((view) =>
+        view.agents.findAgent(fixture.namespace.id, owner.id),
+      );
+      assert.equal(agent.activeRevisionId, second.id);
+    },
+  );
+}
+
 for (const loss of ["missing", "closed-repair"]) {
   test(
     loss === "missing"

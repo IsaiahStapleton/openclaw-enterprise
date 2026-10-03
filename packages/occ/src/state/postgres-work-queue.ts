@@ -100,6 +100,8 @@ const REPOSITORY_CLEANUP_KEY = new RegExp(
 const MAINTENANCE_KEY = new RegExp(
   `^agent_revision:(${REVISION_ID_PATTERN}):maintenance:(0|[1-9][0-9]*)$`,
 );
+/** Recovery evidence that a published deployment got its one extra attempt. */
+const ACTIVE_REVISION_RECOVERY = "ACTIVE_REVISION_RECOVERY";
 
 /** Cleanup dispatch and retry exemption require an exact immutable revision target. */
 export function repositoryCleanupRevisionId(
@@ -285,8 +287,10 @@ function transferRepositoryCleanupSql(continuingRevision = "false"): string {
 // Recovery counterpart of fail(..., { continuingRevision: true }): an exhausted
 // maintenance item of the active running revision whose worker lost its lease
 // (crash or restart) must not retire that runtime or end its maintenance
-// chain. `candidates` holds locked work keys; `$2` is maxAttempts. Locks follow
-// the cleanup transfer's order (Namespace, then Agent).
+// chain. The same holds for the revision's own deployment (`:reconcile`) when its
+// worker lost the lease after publishing the active pointer: see
+// RECOVERING_ACTIVATIONS_SQL. `candidates` holds locked work keys; `$2` is
+// maxAttempts. Locks follow the cleanup transfer's order (Namespace, then Agent).
 function continuingMaintenanceSql(candidates: string): string {
   return `
     continuing_sources AS MATERIALIZED (
@@ -296,8 +300,9 @@ function continuingMaintenanceSql(candidates: string): string {
       WHERE work.attempt_count >= $2::integer
         AND work.namespace_target IS NULL AND work.agent_target IS NULL
         AND work.agent_id IS NOT NULL AND work.revision_id IS NOT NULL
-        AND work.idempotency_key ~
-          ('^agent_revision:' || work.revision_id || ':maintenance:(0|[1-9][0-9]*)$')
+        AND (work.idempotency_key ~
+            ('^agent_revision:' || work.revision_id || ':maintenance:(0|[1-9][0-9]*)$')
+          OR work.idempotency_key = 'agent_revision:' || work.revision_id || ':reconcile')
     ), continuing_namespaces AS MATERIALIZED (
       SELECT namespace.id, namespace.status, namespace.deleted_at
       FROM occ.namespaces AS namespace
@@ -348,6 +353,7 @@ function continueMaintenanceSql(delayParameter: string): string {
         0, clock_timestamp(), clock_timestamp()
       FROM transitioned AS source
       WHERE source.state = 'failed_permanent'
+        AND source.idempotency_key ~ ':maintenance:(0|[1-9][0-9]*)$'
         AND source.idempotency_key IN (SELECT idempotency_key FROM continuing_maintenance)
       ON CONFLICT (idempotency_key) DO NOTHING
       RETURNING idempotency_key
@@ -356,6 +362,31 @@ function continueMaintenanceSql(delayParameter: string): string {
 
 const CONTINUING_MAINTENANCE_SOURCE_SQL =
   "source.idempotency_key IN (SELECT idempotency_key FROM continuing_maintenance)";
+
+// A deployment whose worker lost its lease on the last counted attempt after publishing the
+// active pointer has an active, running revision but has not activated it, retired its
+// predecessors, or completed. Failing it would report a failed deployment for the active
+// revision. Recovery instead requeues it once with one more attempt, so a worker finishes it
+// through the already-active path; ACTIVE_REVISION_RECOVERY evidence bounds this to once per
+// deployment, after which an expired claim fails without retiring the active runtime.
+// Requires continuingMaintenanceSql; the evidence lookup matches audit_events_work_attempt_idx.
+const RECOVERING_ACTIVATIONS_SQL = `
+    recovering_activations AS MATERIALIZED (
+      SELECT work.idempotency_key
+      FROM occ.controller_work AS work
+      JOIN continuing_maintenance AS continuing
+        ON continuing.idempotency_key = work.idempotency_key
+      WHERE work.idempotency_key = 'agent_revision:' || work.revision_id || ':reconcile'
+        AND NOT EXISTS (
+          SELECT 1 FROM occ.audit_events AS prior
+          WHERE prior.kind = 'mutation' AND prior.action = 'reconcile'
+            AND prior.resource_kind = 'agent_revision'
+            AND prior.details->>'workId' = work.idempotency_key
+            AND prior.namespace_id = work.namespace_id
+            AND prior.occurred_at >= work.created_at
+            AND prior.details->>'reasonCode' = '${ACTIVE_REVISION_RECOVERY}'
+        )
+    ),`;
 
 export class WorkClaimLostError extends Error {
   constructor() {
@@ -462,7 +493,7 @@ const FAIL_EXHAUSTED_NAMESPACES_SQL = `
  * Queue transitions append `reconcile` evidence in the same statement. `filter` narrows which
  * transitioned rows get a row; it is appended to the evidence SELECT's WHERE clause.
  */
-const insertEvidenceCteSql = (filter = "") => `
+const insertEvidenceCteSql = (filter = "", reasonCode = "$4::text") => `
   evidence_targets AS (
     SELECT transitioned.*,
       CASE WHEN ${repositoryCleanupSql("transitioned")} THEN
@@ -497,7 +528,7 @@ const insertEvidenceCteSql = (filter = "") => `
         transitioned.namespace_id
       ),
       $3::text,
-      jsonb_build_object('reasonCode', $4::text, 'attemptCount', transitioned.attempt_count,
+      jsonb_build_object('reasonCode', ${reasonCode}, 'attemptCount', transitioned.attempt_count,
         'workId', transitioned.idempotency_key)
     FROM evidence_targets AS transitioned
     WHERE true ${filter}
@@ -1181,7 +1212,9 @@ export class PostgresWorkQueue {
     if (requestedLimit > MAX_RECOVERY_LIMIT) {
       throw new ScopeViolationError(`Recovery limit cannot exceed ${MAX_RECOVERY_LIMIT}.`);
     }
-    const exhaustedClaim = `(work.attempt_count >= $2::integer AND NOT ${repositoryCleanupSql("work")})`;
+    const recovering =
+      "work.idempotency_key IN (SELECT idempotency_key FROM recovering_activations)";
+    const exhaustedClaim = `(work.attempt_count >= $2::integer AND NOT ${repositoryCleanupSql("work")} AND NOT ${recovering})`;
     const stale = await this.client.query(
       `WITH candidates AS (
          SELECT idempotency_key
@@ -1192,11 +1225,15 @@ export class PostgresWorkQueue {
          ORDER BY lease_expires_at, idempotency_key
          FOR UPDATE SKIP LOCKED
          LIMIT $1::integer
-       ), ${continuingMaintenanceSql("candidates")} transitioned AS (
+       ), ${continuingMaintenanceSql("candidates")} ${RECOVERING_ACTIVATIONS_SQL} transitioned AS (
          UPDATE occ.controller_work AS work
          SET state = CASE
                WHEN ${exhaustedClaim} THEN 'failed_permanent'
                ELSE 'queued'
+             END,
+             attempt_count = CASE
+               WHEN ${recovering} THEN GREATEST($2::integer - 1, 0)
+               ELSE work.attempt_count
              END,
              available_at = CASE
                WHEN ${exhaustedClaim} THEN work.available_at
@@ -1224,7 +1261,12 @@ export class PostgresWorkQueue {
        ), ${continueMaintenanceSql("$5")} ${FAIL_EXHAUSTED_NAMESPACES_SQL},
        ${transferRepositoryCleanupSql(CONTINUING_MAINTENANCE_SOURCE_SQL)}
        ${SETTLE_PROVISIONING_FAILURE_SQL}
-       ${INSERT_EVIDENCE_SQL}`,
+       ${insertEvidenceCteSql(
+         "",
+         `CASE WHEN transitioned.idempotency_key IN (SELECT idempotency_key FROM recovering_activations)
+            THEN '${ACTIVE_REVISION_RECOVERY}' ELSE $4::text END`,
+       )}
+       SELECT transitioned.* FROM transitioned`,
       [
         requestedLimit,
         this.maxAttempts,

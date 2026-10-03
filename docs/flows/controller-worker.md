@@ -334,7 +334,14 @@ On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, wai
 `worker.stopped`. Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
 work, failure of a still-provisioning Namespace targeted for `ready`, and audit
 evidence for expired claims and exhausted queued work, so final-attempt crashes
-cannot strand provisioning.
+cannot strand provisioning. A deployment whose claim expires on its last attempt
+after it published its revision as active (the Agent still runs that revision in
+a ready Namespace) is not failed: recovery requeues it once with one more attempt
+and `ACTIVE_REVISION_RECOVERY` evidence, and the next worker finishes it through
+the already-active path (activation, predecessor retirement,
+`REVISION_ALREADY_ACTIVE`). If that attempt loses its lease too, the deployment
+fails with `LEASE_EXPIRED` but, like exhausted maintenance, never retires the
+active runtime.
 
 ## Debugging and Verification
 
@@ -381,6 +388,8 @@ cannot strand provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 17:00: Give a published deployment that lost its lease on its last attempt one more attempt instead of failing it. (fix-recover-active-revision)
 
 - 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 
