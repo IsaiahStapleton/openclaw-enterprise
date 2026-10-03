@@ -1041,7 +1041,8 @@ test("startup seeds default Presets with an administrator who can create them wh
     await import("../../apps/controller/src/composition/installation-config.ts");
   const { createInstallationDriverConfiguration } =
     await import("../helpers/installation-driver-configuration.mjs");
-  const { AuthorizationDeniedError } = await import("../../packages/occ/src/index.ts");
+  const { AuthorizationDeniedError, DependencyUnavailableError } =
+    await import("../../packages/occ/src/index.ts");
   const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "installation.yaml");
@@ -1121,7 +1122,31 @@ test("startup seeds default Presets with an administrator who can create them wh
       [scoped.principal],
       runtime.defaultPresets,
     ),
-    /can create Presets in every Namespace/,
+    (error) =>
+      /can create Presets in every Namespace/.test(error.message) &&
+      error.cause instanceof AuthorizationDeniedError,
+  );
+  assert.deepEqual((await fixture.request("GET", collection(unseeded.id))).data, []);
+
+  // An authorization outage is not a denial: startup stops with it instead of trying others.
+  const authorize = iam.authorize.bind(iam);
+  iam.authorize = async (request) => {
+    if (request.action === "create" && request.resource.kind === "preset") {
+      throw new Error("IAM outage");
+    }
+    return authorize(request);
+  };
+  t.after(() => {
+    iam.authorize = authorize;
+  });
+  await assert.rejects(
+    initializeInstallationPresets(
+      fixture.controller,
+      iam,
+      [principal, scoped.principal],
+      runtime.defaultPresets,
+    ),
+    DependencyUnavailableError,
   );
   assert.deepEqual((await fixture.request("GET", collection(unseeded.id))).data, []);
 });

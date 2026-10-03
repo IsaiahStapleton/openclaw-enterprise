@@ -25,6 +25,7 @@ import type {
 import { NativeIAMDriver, type NativeIAMStateStore } from "@openclaw-enterprise/iam";
 import {
   AuthorizationDeniedError,
+  DependencyUnavailableError,
   validateBackendDefinitions,
   type NativeWorkerSupport,
   type OpenClawController,
@@ -129,6 +130,7 @@ export async function initializeInstallationPresets(
   if (defaults.length === 0) {
     return;
   }
+  let denied: AuthorizationDeniedError | undefined;
   for (const identity of identities) {
     if (identity.kind !== "principal") {
       continue;
@@ -148,13 +150,19 @@ export async function initializeInstallationPresets(
       // An administrator whose grant stops at the Installation (for example the admin Role
       // bound to the installation resource only) cannot create Presets in a Namespace. Each
       // attempt is one rolled-back transaction, so the next administrator starts clean.
-      if (!(error instanceof AuthorizationDeniedError)) {
+      // Outages are not denials: they stop startup with their own error.
+      if (
+        !(error instanceof AuthorizationDeniedError) ||
+        error instanceof DependencyUnavailableError
+      ) {
         throw error;
       }
+      denied = error;
     }
   }
   throw new Error(
     "Default Preset initialization requires an Installation administrator who can create Presets in every Namespace.",
+    denied === undefined ? undefined : { cause: denied },
   );
 }
 
