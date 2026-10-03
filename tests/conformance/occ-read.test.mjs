@@ -6,6 +6,7 @@ import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
   AuthorizationDeniedError,
   OpenClawController,
+  ResourceConflictError,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
@@ -238,6 +239,24 @@ async function createFixture() {
     roles,
   };
 }
+
+// The HTTP fixture in occ-api-security.test.mjs records no operations, so the
+// controller-level proof that a refused adoption queues nothing stays here.
+test("a refused existing-namespace adoption leaves Namespaces and pending operations unchanged", async () => {
+  const { controller, roles } = await createFixture();
+  roles[0].permissions.push({ action: "administer", resourceKind: "installation" });
+  const existingNamespaces = await controller.listNamespaces("principal-admin");
+  const pendingOperations = controller.pendingOperations().length;
+  await assert.rejects(
+    controller.createNamespace("principal-admin", {
+      name: "Unsupported existing tenant",
+      existingNamespace: "operator-owned",
+    }),
+    ResourceConflictError,
+  );
+  assert.deepEqual(await controller.listNamespaces("principal-admin"), existingNamespaces);
+  assert.equal(controller.pendingOperations().length, pendingOperations);
+});
 
 test("installation and exact resource reads require their own explicit authorization", async () => {
   const { controller, namespaceA, agentA, revisionA } = await createFixture();
