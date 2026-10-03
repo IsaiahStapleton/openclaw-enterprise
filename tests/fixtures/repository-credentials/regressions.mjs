@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { run, temporaryDirectory } from "./process.mjs";
@@ -9,6 +9,30 @@ import { registerResourceCleanup, closeAndDispose } from "./cleanup.mjs";
 import { appModule } from "./runtime.mjs";
 import { startCredentialServiceFixture, gatewayRequest } from "./service.mjs";
 import { runInFixtureContainer } from "./container.mjs";
+
+async function runningProcessesMentioning(marker) {
+  const running = [];
+  for (const entry of await readdir("/proc")) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+    try {
+      const commandLine = await readFile(`/proc/${entry}/cmdline`, "utf8");
+      if (
+        commandLine.includes(marker) &&
+        !/\) Z /.test(await readFile(`/proc/${entry}/stat`, "utf8"))
+      ) {
+        running.push(Number(entry));
+      }
+    } catch (error) {
+      // procfs may lose the task during lookup (ENOENT) or the read (ESRCH).
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
+  return running;
+}
 
 export function registerCredentialFixtureRegressions() {
   for (const reason of ["timeout", "output overflow", "cancelled"]) {
@@ -69,22 +93,28 @@ export function registerCredentialFixtureRegressions() {
         if (readinessError) {
           throw readinessError;
         }
-        const pid = Number(await readFile(pidFile, "utf8"));
-        assert.ok(Number.isSafeInteger(pid) && pid > 0, "descendant PID must be valid");
         // A killed orphan may await the container init's reap; a zombie cannot
-        // execute or retain pipes. No running descendant may survive completion.
-        let running = false;
-        try {
-          running = !/\) Z /.test(await readFile(`/proc/${pid}/stat`, "utf8"));
-        } catch (error) {
-          // procfs may lose the task during lookup (ENOENT) or the read (ESRCH).
-          if (error.code !== "ENOENT" && error.code !== "ESRCH") {
-            throw error;
-          }
+        // execute or retain pipes. No running launcher or descendant may survive
+        // completion. Both carry the unique PID file path in their command lines,
+        // so this also covers a descendant killed before it published its PID: a
+        // slow start can outlast the 250 ms timeout (no PID file) or be killed
+        // between creating and writing the file (empty PID file).
+        assert.deepEqual(
+          await runningProcessesMentioning(pidFile),
+          [],
+          "owned descendant remains running",
+        );
+        if (reason !== "timeout") {
+          // Overflow output and cancellation readiness both follow the PID write.
+          const pid = Number(await readFile(pidFile, "utf8"));
+          assert.ok(Number.isSafeInteger(pid) && pid > 0, "descendant PID must be valid");
         }
-        assert.equal(running, false, "owned descendant remains running");
         if (reason === "cancelled") {
-          assert.equal(pid, cancelledPid, "cancellation must observe the owned descendant");
+          assert.equal(
+            Number(await readFile(pidFile, "utf8")),
+            cancelledPid,
+            "cancellation must observe the owned descendant",
+          );
           // Natural expiry cannot substitute for termination, even after delayed startup.
           assert.equal(existsSync(naturalExitFile), false, "descendant exited naturally");
         }
@@ -220,19 +250,24 @@ export function registerCredentialFixtureRegressions() {
         auxiliaryPending: false,
       },
     };
+    const pending = { ...resolved, state: "CLOSED", cleanup: { ...resolved.cleanup, pending: 1 } };
     let response = { error: "unavailable" };
-    let calls = 0;
     let statusUnavailable = false;
+    let pendingStatusReads = 0;
+    let statusReads = 0;
     const server = createServer((request, reply) => {
       request.resume();
-      calls++;
-      reply
-        .writeHead(200, { "content-type": "application/json" })
-        .end(
-          JSON.stringify(
-            statusUnavailable && request.method === "GET" ? { error: "unavailable" } : response,
-          ),
-        );
+      let body = response;
+      if (request.method === "GET") {
+        statusReads++;
+        if (statusUnavailable) {
+          body = { error: "unavailable" };
+        } else if (pendingStatusReads > 0) {
+          pendingStatusReads--;
+          body = pending;
+        }
+      }
+      reply.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
     });
     await new Promise((resolve) => server.listen(socket, resolve));
     t.after(() => new Promise((resolve) => server.close(resolve)));
@@ -247,13 +282,21 @@ export function registerCredentialFixtureRegressions() {
         /local closure unconfirmed/,
       );
     }
-    response = { ...resolved, state: "CLOSED", cleanup: { ...resolved.cleanup, pending: 1 } };
-    calls = 0;
+    response = pending;
     await assert.rejects(
       closeAndDispose(callControl, socket, sessionId, { timeoutMs: 60, pollMs: 10 }),
       /local closure confirmed; disposal pending/,
     );
-    assert.ok(calls > 2, "pending cleanup must be polled within its deadline");
+    // Pending cleanup is polled until it resolves. Counting status reads, not the
+    // round trips that happen to fit in a short deadline, keeps this load-independent.
+    response = resolved;
+    pendingStatusReads = 2;
+    statusReads = 0;
+    assert.deepEqual(await closeAndDispose(callControl, socket, sessionId, { pollMs: 10 }), {
+      localClosure: "confirmed",
+      disposal: "confirmed",
+    });
+    assert.equal(statusReads, 3, "pending cleanup must be polled until it resolves");
     response = { ...resolved, cleanup: { ...resolved.cleanup, uncertain: 1 } };
     await assert.rejects(
       closeAndDispose(callControl, socket, sessionId, { timeoutMs: 30, pollMs: 10 }),
