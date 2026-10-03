@@ -263,5 +263,3 @@ export function copyProvisioningRecord(
 ): Readonly<AgentProvisioningRecord> {
   return immutableCopy(record);
 }
-
-export const provisioningPhaseOrder = Object.freeze({ ...PHASE_ORDER });

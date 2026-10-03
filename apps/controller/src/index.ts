@@ -3600,5 +3600,3 @@ export function createControllerApp(options: ControllerAppOptions): ControllerAp
     },
   };
 }
-
-export const createOccApi = createControllerApp;
