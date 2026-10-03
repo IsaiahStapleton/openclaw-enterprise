@@ -119,6 +119,7 @@ import {
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   DependencyUnavailableError,
+  DeviceAuthorizationStartError,
   DriverSelectionError,
   ModelDiscoveryError,
   PluginDiscoveryError,
@@ -218,6 +219,7 @@ export {
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   DependencyUnavailableError,
+  DeviceAuthorizationStartError,
   DriverSelectionError,
   ModelDiscoveryError,
   PluginDiscoveryError,
@@ -4095,8 +4097,10 @@ export class OpenClawController {
     let started: HarnessDeviceAuthorization;
     try {
       started = await compute.startHarnessDeviceAuthorization(harnessId);
-    } catch {
-      throw new DependencyUnavailableError("Could not start device login. Try again.");
+    } catch (error) {
+      throw error instanceof DeviceAuthorizationStartError
+        ? error
+        : new DeviceAuthorizationStartError("unavailable");
     }
     // Repeat authority checks after provider I/O, before persisting a credential session.
     await this.authorizeDeviceAuthorizationScope(principalId, namespaceId, agentId);

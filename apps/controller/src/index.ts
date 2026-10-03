@@ -49,6 +49,7 @@ import {
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   createRuntimeLogCursorCodec,
   DependencyUnavailableError,
+  DeviceAuthorizationStartError,
   ResourceConflictError,
   RuntimeLogsError,
   UserAlreadyExistsError,
@@ -3573,6 +3574,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           mapped = requestFailure(auditError);
         }
       }
+    }
+    if (error instanceof DeviceAuthorizationStartError) {
+      app.log.warn({
+        event: "device_authorization.start_failed",
+        requestId: request.id,
+        route: request.routeOptions.url ?? "unmatched",
+        host: "auth.openai.com",
+        reason: error.reason,
+        failure: error.failure,
+      });
     }
     if (mapped.code === "INTERNAL_ERROR") {
       app.log.error({
