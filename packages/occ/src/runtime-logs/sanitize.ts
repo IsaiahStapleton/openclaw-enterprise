@@ -350,14 +350,39 @@ function codexSpanLifecycle(
   };
 }
 
+// Codex messages shown as written. `codex_core` formats can interpolate chat text and
+// model-proposed values (`event_mapping` logs `Output text in user message: <text>`),
+// so only reviewed operational targets (app-server and its listener and remote-control
+// loops, login, CA setup, plugin manifests) and reviewed fixed `codex_core` messages
+// keep their text. Every other target, `codex_otel` included, shows a fixed message.
+// The Collector keeps message text only from `codex_app_server`.
+const CODEX_MESSAGE_TARGET =
+  /^(?:codex_app_server|codex_app_server_transport::transport::(?:websocket|remote_control)|codex_login|codex_http_client::custom_ca|codex_core_plugins)(?:::|$)/;
+const CODEX_FIXED_MESSAGES: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
+  "codex_core::responses_retry": new Set([
+    "stream connection failed; waiting to retry",
+    "remote compaction v2 stream failed; retrying request after delay",
+  ]),
+  "codex_core::tools::parallel": new Set(["tool call completed"]),
+});
+const CODEX_WITHHELD_MESSAGE = "Codex message withheld";
+
+function codexMessage(target: string, message: string): string {
+  const fixed = Object.hasOwn(CODEX_FIXED_MESSAGES, target)
+    ? CODEX_FIXED_MESSAGES[target]!.has(message)
+    : false;
+  return CODEX_MESSAGE_TARGET.test(target) || fixed ? message : CODEX_WITHHELD_MESSAGE;
+}
+
 function codexRecord(value: Readonly<Record<string, unknown>>, message: string): Classified {
   const fields = pickFields(value, [...STRUCTURED_FIELDS, ...CODEX_FIELDS]);
+  const target = value.target as string;
   return {
     type: "line",
     kind: "codex",
     level: level(value.level),
-    message,
-    subsystem: value.target as string,
+    message: codexMessage(target, message),
+    subsystem: target,
     ...(fields === undefined ? {} : { fields }),
   };
 }
