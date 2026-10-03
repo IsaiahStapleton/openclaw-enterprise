@@ -849,7 +849,7 @@ function sandboxSpec(
     policy: {
       version: 1,
       filesystem: filesystemPolicy(options, requirements, dataMount),
-      landlock: { compatibility: options.policy.landlockCompatibility ?? "hard_requirement" },
+      landlock: { compatibility: "hard_requirement" },
       process: {
         run_as_user: options.policy.process.runAsUser,
         run_as_group: options.policy.process.runAsGroup,
@@ -930,7 +930,7 @@ function validateOptions(options: OpenShellSandboxDriverOptions): void {
     options.policy.landlockCompatibility !== "hard_requirement"
   ) {
     throw new OpenShellSandboxConfigurationFailure(
-      "OpenShell Landlock compatibility must be hard_requirement.",
+      "OpenShell policy.landlockCompatibility must be hard_requirement or omitted; best_effort is not supported.",
     );
   }
   nonempty(options.policy.process.runAsUser, "OpenShell process runAsUser");
