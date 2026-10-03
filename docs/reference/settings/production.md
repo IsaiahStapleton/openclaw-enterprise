@@ -257,7 +257,9 @@ and delivery checks, use
 When enabled, the chart requires a digest-pinned image, an exact exporter
 destination (IPv4 `/32` or paired namespace/Pod selectors), a TCP port, and
 nonempty dedicated configuration and environment Secret names. Neither Secret
-may reuse the Installation, database, auth, or ChatGPT Backend Secret. The named
+may reuse the Installation, database, auth, or ChatGPT Backend Secret, or, when
+the feature is enabled, a GitHub, Google, or OIDC sign-in Secret, the gateway API
+key, a repository-credentials Secret, or an execution-cluster kubeconfig. The named
 Secrets must be in the control-plane namespace:
 
 - `configSecretName` supplies `collector.yaml`, `kubernetes.yaml`, and
