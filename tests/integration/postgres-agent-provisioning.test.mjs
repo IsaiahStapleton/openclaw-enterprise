@@ -999,10 +999,15 @@ test(
       },
     );
 
-    const during = await fixture.request("GET", url);
-    hook.mock.restore();
-    releaseCommit();
-    await committed;
+    let during;
+    try {
+      during = await fixture.request("GET", url);
+    } finally {
+      // Never leave the staged transaction open, even when the read fails.
+      hook.mock.restore();
+      releaseCommit();
+      await committed;
+    }
     assert.equal(interleaved, true, "the failure must commit inside the status read");
     assert.equal(during.status, 200, JSON.stringify(during.body));
     assert.deepEqual(
