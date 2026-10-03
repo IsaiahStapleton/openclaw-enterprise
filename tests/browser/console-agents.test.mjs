@@ -1989,7 +1989,8 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   // because the Agent's lifecycle changed. The third job is cancelled by Stop after it
   // created its Agent (permanent). The fourth job's status is first unreadable, then it
   // has succeeded.
-  const agentId = "agt_00000000-0000-4000-8000-00000000c0de";
+  // Each job that gets far enough creates its own Agent.
+  const agentIds = [2, 3, 4].map((job) => `agt_00000000-0000-4000-8000-00000000c0d${job}`);
   const failures = [
     {
       code: "PROVISIONING_REJECTED",
@@ -2002,7 +2003,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
     {
       code: "PROVISIONING_CANCELLED",
       message: "Provisioning was cancelled. Create a new Agent to provision again.",
-      agentId,
+      agentId: agentIds[1],
     },
   ];
   const bodies = [];
@@ -2055,7 +2056,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
             phase: "transport",
             attemptCount: 2,
             updatedAt,
-            agentId,
+            agentId: agentIds[0],
             url: `/namespaces/${namespace.id}/agents/provision/work_2`,
             error: {
               code: "PROVISIONING_REJECTED",
@@ -2103,7 +2104,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
               phase: "handoff",
               attemptCount: 1,
               updatedAt,
-              agentId,
+              agentId: agentIds[2],
               revisionId: "rev_00000000-0000-4000-8000-00000000c0de",
               url,
             }),
@@ -2195,7 +2196,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await retry.click();
   await page.getByText(/^The request conflicts with the saved state\./).waitFor();
   await page.getByRole("button", { name: "Create Agent" }).click();
-  await page.waitForURL(new RegExp(`/agents/${agentId}\\?`));
+  await page.waitForURL(new RegExp(`/agents/${agentIds[2]}\\?`));
   assert.equal(bodies.length, 5);
   assert.equal(bodies[4].requestId, bodies[3].requestId);
 });
