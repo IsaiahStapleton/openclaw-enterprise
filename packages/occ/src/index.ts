@@ -3981,7 +3981,7 @@ export class OpenClawController {
       }
       if (await state.serviceAccounts.hasReferences(namespace.id, account.id)) {
         throw new ResourceStateConflictError(
-          "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+          "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
         );
       }
       const driver = this.serviceAccountDriver();
@@ -6527,8 +6527,8 @@ export class OpenClawController {
       configuration: plan.configuration.values,
     });
     if (record.status === "failed") {
-      // A failed plan does not keep its Secrets from deletion; say which one is gone.
-      await this.assertProvisioningSecretsExist(state, namespaceId, plan);
+      // A failed plan does not keep its Secrets or ServiceAccount from deletion; say which is gone.
+      await this.assertProvisioningSourcesExist(state, namespaceId, plan);
     }
     await this.authorizeProvisioningSecretSources(
       state,
@@ -7077,7 +7077,7 @@ export class OpenClawController {
     });
   }
 
-  private async assertProvisioningSecretsExist(
+  private async assertProvisioningSourcesExist(
     state: PlatformUnitOfWork,
     namespaceId: string,
     plan: ReturnType<OpenClawController["provisioningPlan"]>,
@@ -7095,6 +7095,15 @@ export class OpenClawController {
           `Secret ${id}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
         );
       }
+    }
+    if (
+      auth?.method === "chatgpt_service_account" &&
+      (await state.serviceAccounts.findServiceAccount(namespaceId, auth.serviceAccountId)) ===
+        undefined
+    ) {
+      throw new ResourceStateConflictError(
+        `ServiceAccount ${auth.serviceAccountId}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
+      );
     }
   }
 

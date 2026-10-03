@@ -1490,6 +1490,95 @@ async function assertConfigurationDeletionRefused(fixture, namespaceId, configur
 }
 
 test(
+  "pending provisioning blocks deleting its ServiceAccount; a failed plan's retry names the deleted one",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const created = await fixture.request("POST", `/namespaces/${namespace.id}/service-accounts`, {
+      body: { name: `provisioning-account-${randomUUID().slice(0, 8)}` },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const account = created.data;
+    // Admission would reject this account, which has no Backend-issued credential, so store
+    // the plan directly; the worker fails it for the same reason before any effect.
+    const iam = await fixture.state.loadNativeIAMState();
+    const principal = iam.identities.find(
+      (identity) => identity.kind === "principal" && identity.issuer.endsWith(":better-auth"),
+    );
+    assert.ok(principal, "the bootstrapped administrator Principal must exist");
+    const body = provisioningBody(namespace.id, secrets);
+    const workId = `agent-provisioning:${randomUUID().replaceAll("-", "")}`;
+    await fixture.state.transact((unit) =>
+      unit.provisioning.create({
+        workId,
+        namespaceId: namespace.id,
+        actorId: principal.id,
+        requestId: body.requestId,
+        requestFingerprint: "0".repeat(64),
+        plan: {
+          name: body.name,
+          configuration: body.configuration,
+          harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+          executionMode: body.executionMode,
+          drivers: {
+            compute: fixture.computeDriver.id,
+            configuration: fixture.configurationDriver.id,
+            iam: "native-iam",
+          },
+        },
+      }),
+    );
+    const provisioningUrl = `/namespaces/${namespace.id}/agents/provision/${workId}`;
+    const accountPath = `/namespaces/${namespace.id}/service-accounts/${account.id}`;
+
+    // Queued: no Agent names this account yet, only the accepted plan.
+    const refused = await fixture.request("DELETE", accountPath);
+    assert.equal(refused.status, 409, `DELETE ${JSON.stringify(refused.body)}`);
+    assert.equal(
+      refused.body.error.message,
+      "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
+    );
+
+    // The account has no issued credential, so the worker fails the plan before any effect.
+    await fixture.startWorker();
+    await waitFor("Agent provisioning to fail before its Configuration", async () => {
+      const { rows } = await fixture.pool.query(
+        "SELECT status FROM occ.agent_provisioning_work WHERE work_id = $1",
+        [workId],
+      );
+      return rows[0]?.status === "failed" ? true : undefined;
+    });
+    await fixture.stopWorker();
+    const workState = async () =>
+      (
+        await fixture.pool.query(
+          "SELECT state FROM occ.controller_work WHERE idempotency_key = $1",
+          [workId],
+        )
+      ).rows;
+    const failedWork = await workState();
+
+    // A failed plan has no owner that would ever remove it, so it does not block deletion.
+    const deleted = await fixture.request("DELETE", accountPath);
+    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+
+    const gone = `ServiceAccount ${account.id}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`;
+    for (const [method, path] of [
+      ["GET", provisioningUrl],
+      ["POST", `${provisioningUrl}/retry`],
+    ]) {
+      const answered = await fixture.request(method, path);
+      assert.equal(answered.status, 409, `${method} ${JSON.stringify(answered.body)}`);
+      assert.equal(answered.body.error.code, "RESOURCE_CONFLICT");
+      assert.equal(answered.body.error.message, gone);
+    }
+    assert.deepEqual(await workState(), failedWork, "a refused retry queues nothing");
+  },
+);
+
+test(
   "a provisioned Agent's first Configuration is deletable after the Agent switches away",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {

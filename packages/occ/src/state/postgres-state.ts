@@ -2816,6 +2816,14 @@ export class PostgresPlatformState implements PlatformStateStore {
                  WHERE w.namespace_id = $1
                    AND w.state IN ('queued', 'claimed')
                    AND r.admitted_spec #>> '{harness_auth,serviceAccountId}' = $2
+               ) OR EXISTS (
+                 -- A queued or running guided provisioning plan creates its Agent from this
+                 -- account later. A failed plan does not block: nothing removes it, and
+                 -- reading or retrying it then names the deleted ServiceAccount.
+                 SELECT 1 FROM occ.agent_provisioning_work AS p
+                 WHERE p.namespace_id = $1 AND p.status IN ('queued', 'running')
+                   AND p.plan #>> '{harnessAuth,method}' = 'chatgpt_service_account'
+                   AND p.plan #>> '{harnessAuth,serviceAccountId}' = $2
                ) AS present`,
               [namespaceId, serviceAccountId],
             )
