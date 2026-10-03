@@ -803,6 +803,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("heading", { name: "Namespaces", exact: true }).waitFor();
   await page.goBack();
+  await waitForLiveControls(page, ["configuration-json"]);
   assert.match(await editor.inputValue(), /stale-client/);
   await page.getByRole("button", { name: "Save Configuration" }).click();
   await page.getByText("The saved Configuration changed while you were editing.").waitFor();
@@ -824,10 +825,12 @@ test("Agent detail preserves admitted revision history while draft edits change 
   assert.deepEqual(JSON.parse(await editor.inputValue()), editedValues);
   await page.getByLabel("Available versions").selectOption(second.revision.id);
   await page.getByRole("button", { name: "Edit current Configuration" }).click();
+  await waitForLiveControls(page, ["configuration-json"]);
   assert.deepEqual(JSON.parse(await editor.inputValue()), editedValues);
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("heading", { name: "Namespaces", exact: true }).waitFor();
   await page.goBack();
+  await waitForLiveControls(page, ["configuration-json"]);
   assert.deepEqual(JSON.parse(await editor.inputValue()), editedValues);
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), true);
   assert.deepEqual(configurationPatchRequests(requests, namespace.id, agent.configurationId), []);
@@ -871,6 +874,7 @@ test("Agent detail preserves admitted revision history while draft edits change 
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("heading", { name: "Namespaces", exact: true }).waitFor();
   await page.goBack();
+  await waitForLiveControls(page, ["harness-auth-method"]);
   assert.equal(await page.getByLabel("Authentication source").inputValue(), "");
   const saved = page.waitForResponse(
     (response) =>
@@ -3946,17 +3950,25 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
   );
 });
 
-// Each workspace file loads on its own, and a restored copy of an old view keeps its editors
-// disabled until revalidation re-enables or replaces it, so an enabled editor is the signal
-// that this file's current read has settled.
-async function waitForWorkspaceEditors(page, names) {
+// Back restores a copy of the old view with its controls disabled, and Agent navigation keeps
+// the old view inert, until revalidation re-enables it or replaces it with a rebuilt view. Only
+// a live control shows the current view, including any draft it restored.
+async function waitForLiveControls(page, ids) {
   await page.waitForFunction(
-    (filenames) =>
-      filenames.every((name) => {
-        const editor = globalThis.document.getElementById(`workspace-${name}`);
-        return editor && !editor.disabled;
+    (controlIds) =>
+      controlIds.every((id) => {
+        const control = globalThis.document.getElementById(id);
+        return control && !control.disabled && !control.closest("[inert]");
       }),
-    names,
+    ids,
+  );
+}
+
+// Each workspace file loads on its own, so wait for every editor the assertions read.
+async function waitForWorkspaceEditors(page, names) {
+  await waitForLiveControls(
+    page,
+    names.map((name) => `workspace-${name}`),
   );
 }
 
@@ -4078,9 +4090,7 @@ test("authentication drafts retain Secret references and their original save bas
   assert.equal(changed.status, 200);
   await page.goBack();
   // Back first restores a disabled copy of the old view, whose picker still shows the Secret.
-  await page.waitForFunction(
-    () => globalThis.document.querySelector("#harness-auth-method")?.disabled === false,
-  );
+  await waitForLiveControls(page, ["harness-auth-method"]);
   await waitForInputValue(
     page.getByLabel("API key Secret", { exact: true }),
     secretOptionLabel(secret),
