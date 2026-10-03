@@ -253,13 +253,11 @@
         "datasource readiness retries a transient HTTP 400",
         "non-retryable Grafana health failures retain their stage and status",
         "non-retryable Grafana datasource failures retain their stage and status",
-        "malformed Grafana datasource responses retain their stage and status",
         "datasource readiness retries an interrupted response body",
-        "invalid Grafana datasource response shapes retain their stage and status",
+        "malformed or invalid Grafana datasource responses retain their stage and status",
         "a timed-out Prometheus response body retries and accepts a later valid query",
         "Prometheus readiness retries an interrupted response body",
-        "a null Prometheus response retains its stage and status",
-        "malformed Prometheus responses remain query errors"
+        "null or malformed Prometheus responses retain their stage and status"
       ]
     },
     {
