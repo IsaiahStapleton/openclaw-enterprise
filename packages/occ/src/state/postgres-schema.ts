@@ -1277,7 +1277,7 @@ export const agentProvisioningWork = occSchema.table(
     ),
     check(
       "agent_provisioning_success_requires_handoff",
-      sql`${table.status} <> 'succeeded' OR (${table.completedPhase} = 'handoff' AND ${table.agentId} IS NOT NULL AND ${table.configurationId} IS NOT NULL AND ${table.revisionId} IS NOT NULL)`,
+      sql`${table.status} <> 'succeeded' OR (${table.completedPhase} = 'handoff' AND ${table.agentId} IS NOT NULL AND ${table.revisionId} IS NOT NULL)`,
     ),
     check(
       "agent_provisioning_failed_before_handoff",

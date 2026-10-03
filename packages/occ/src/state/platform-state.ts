@@ -2563,6 +2563,7 @@ function repositories(
       cancel: provisioningUnavailable,
       cancelByAgent: async () => undefined,
       retryByWorkId: provisioningUnavailable,
+      releaseConfiguration: async () => false,
     },
     audit: {
       async append(event) {
