@@ -319,6 +319,16 @@ test("the upfront credential check runs only where OpenClaw would send the same 
     authorization: "Bearer fixture-key",
     "content-type": "application/json",
   });
+  // The request goes to the configured API's own path: OpenAI answers 401 to a key
+  // that lacks the scope of an endpoint OpenClaw would never call.
+  assert.equal(
+    upfrontCheck("openai", { api: "openai-completions" }).calls[0].options.env.U,
+    "https://api.openai.com/v1/chat/completions",
+  );
+  assert.equal(
+    upfrontCheck("anthropic", undefined, "sk-ant-api03-fixture").calls[0].options.env.U,
+    "https://api.anthropic.com/v1/messages",
+  );
   // Only the provider's 401 (exit 3) is a rejection.
   for (const status of [0, 1, null]) {
     assert.equal(upfrontCheck("openai", undefined, "fixture-key", status).rejected, false);
@@ -340,6 +350,8 @@ test("the upfront credential check runs only where OpenClaw would send the same 
     ["openai", { authHeader: false }],
     ["openai", { request: { allowPrivateNetwork: true, proxy: { url: "http://proxy" } } }],
     ["openai", { models: [{ id: "gpt-5", headers: { "x-fixture": "1" } }] }],
+    ["openai", { models: [{ id: "gpt-5", api: "openai-completions" }] }],
+    ["openai", { api: "__proto__" }],
     ["anthropic", { baseUrl: "https://api.openai.com/v1" }],
     ["anthropic", undefined, "sk-ant-oat01-fixture"],
     ["codex", undefined],
