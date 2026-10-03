@@ -79,6 +79,45 @@ A production node uses the separate
 [Codex sandbox profile](../deploy/codex-sandbox.md) procedure. Do not copy this
 sysctl change onto a shared cluster.
 
+## Open the console from another machine
+
+Kubernetes-only startup without OpenShell prints an HTTPS console URL such as
+`https://console.<cluster>.oce.localhost:8443/console/`. `<cluster>` is the k3d
+cluster name from startup. `8443` is the default `OCC_DEVELOPMENT_BROWSER_PORT`;
+use the printed port when it differs. Kubernetes-only startup with OpenShell
+prints `Console: <apiURL>/console/` and does not print this browser URL or CA.
+
+Open that URL on the machine that ran `occ dev up`. The hostname ends in
+`.localhost`, so the computer that looks it up resolves it to its own loopback
+address. The launcher publishes the console port on `127.0.0.1` of the startup
+machine only. A browser on another computer reports a connection error, such as
+`ERR_CONNECTION_REFUSED`, because nothing is listening there.
+
+From the computer that will run the browser, forward the printed port to the
+startup machine's loopback and bind the local listener to loopback. Leave this
+session open:
+
+```bash
+ssh -N -L localhost:8443:127.0.0.1:8443 <user>@<startup-host>
+```
+
+Replace `8443` in both places when startup printed a different port. The
+`localhost` bind keeps the forwarded port on the browser machine's loopback
+even when that machine's SSH configuration sets `GatewayPorts yes`.
+
+Copy only the printed public CA to that same computer, then import the local
+copy if the browser does not already trust it:
+
+```bash
+scp <user>@<startup-host>:<printed-ca-path> ./browser-ca.crt
+```
+
+`<printed-ca-path>` is the `browser-ca.crt` path from startup. Leave the CA
+private key and the state directory on the startup machine. Open the printed
+URL. The console sign-in page loads. Stop the forward when you are done. Do
+not publish the console port on an address other than loopback. This name and
+certificate are for the private development installation.
+
 ## The Helm installation did not complete
 
 Run production commands from an operator shell with Helm and `kubectl`, read
