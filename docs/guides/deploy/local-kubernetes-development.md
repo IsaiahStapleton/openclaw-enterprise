@@ -365,17 +365,27 @@ removing the cluster. For a persistent Helm-installed k3d environment, complete 
 
 ## Resolve node DNS failures
 
-If the k3d node cannot resolve image registries, identify a DNS server reachable
-from the container engine's node network. Set its IPv4 address for a fresh
-startup:
+On Linux with Docker, the launcher gives its owned k3d node this host's first
+non-loopback IPv4 upstream resolver: systemd-resolved's upstream list in
+`/run/systemd/resolve/resolv.conf`, otherwise `/etc/resolv.conf`, skipping
+loopback stubs such as `127.0.0.53`. k3d's default node resolver forwards
+through the container network gateway, which refuses queries on Docker hosts
+using iptables-nft (for example stock Ubuntu 22.04 and 24.04) because the node
+runs iptables in legacy mode. Podman and Docker on other systems keep k3d's
+default.
+
+If the k3d node still cannot resolve image registries, identify a DNS server
+reachable from the container engine's node network. Set its IPv4 address for a
+fresh startup:
 
 ```bash
 OCC_DEVELOPMENT_K3D_DNS_RESOLVER='<reachable-dns-ip>' ./scripts/dev-up
 ```
 
 The launcher uses this resolver inside its owned node and disables k3d's DNS
-rewriting for that node. It does not change the host resolver. Leave the setting
-unset when the default node resolver works.
+rewriting for that node. It does not change the host resolver. Set
+`OCC_DEVELOPMENT_K3D_DNS_RESOLVER=k3d` to keep k3d's default node resolver on
+any host.
 
 ## Stop and clean up
 
