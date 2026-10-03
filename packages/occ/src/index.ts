@@ -4124,7 +4124,7 @@ export class OpenClawController {
         !(await state.provisioning.releaseConfiguration(namespace.id, configuration.id))
       ) {
         throw new ResourceStateConflictError(
-          "An Agent provisioning request that has not succeeded still references the Configuration.",
+          "An Agent provisioning request that has not succeeded still references the Configuration. Let it finish or retry it, or delete the Agent it provisioned, first.",
         );
       }
       const previous = this.exactConfiguration(
