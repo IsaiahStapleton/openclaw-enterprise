@@ -9,6 +9,7 @@ import type {
 import {
   newRuntimeLogViewId,
   runtimeLogLineHash,
+  runtimeLogTimeKey,
   validRuntimeLogFrontierTime,
   type RuntimeLogCursorBinding,
   type RuntimeLogCursorCodec,
@@ -106,14 +107,9 @@ export class RuntimeLogReadError extends Error {
   }
 }
 
-/** Kubelet RFC 3339 times trim trailing zeros; pad the fraction before comparing. */
 export function compareRuntimeLogTime(left: string, right: string): number {
-  const normal = (value: string) => {
-    const match = /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
-    return match === null ? value : `${match[1]}.${(match[2] ?? "").padEnd(9, "0")}Z`;
-  };
-  const a = normal(left);
-  const b = normal(right);
+  const a = runtimeLogTimeKey(left);
+  const b = runtimeLogTimeKey(right);
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
