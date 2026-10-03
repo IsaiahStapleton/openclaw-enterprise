@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
-import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import {
   WORKSPACE_DEFAULTS,
@@ -2597,10 +2595,8 @@ test("Agent creation accepts a manual model outside the static list and saves th
 });
 
 test("Agent creation names the Configuration field that holds an inline model credential without showing it", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-create-inline-credential-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
+    filesystemConfiguration: true,
   });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Create inline credential", { ready: true });

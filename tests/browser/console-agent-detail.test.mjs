@@ -6,7 +6,6 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
-import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { WORKSPACE_DEFAULTS } from "../../packages/contracts/src/workspace-defaults.mjs";
@@ -402,10 +401,8 @@ test("Configuration save stops when fresh Agent settings become unreadable", asy
 });
 
 test("Configuration save names the field that holds an inline model credential without showing it", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-inline-credential-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
+    filesystemConfiguration: true,
   });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Inline credential", { ready: true });
@@ -632,10 +629,8 @@ test("Agent sharing shows a rejected write's reason, but generic text after an a
 });
 
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-gateway-password-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
+    filesystemConfiguration: true,
   });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Gateway password", { ready: true });
