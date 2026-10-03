@@ -28,6 +28,7 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 import {
@@ -1433,11 +1434,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
   await page.getByLabel("Service account token Secret").waitFor();
   assert.equal(await page.getByLabel("Authentication source").inputValue(), "codex_pat");
-  await page.waitForFunction(
-    (name) => globalThis.document.querySelector("#harness-auth-secret")?.value === name,
-    secret.name,
-  );
-  assert.equal(await page.getByLabel("Service account token Secret").inputValue(), secret.name);
+  await waitForInputValue(page.getByLabel("Service account token Secret"), secret.name);
   const patched = page.waitForResponse(
     (response) =>
       response.url().endsWith(`/agents/${created.data.id}`) &&
