@@ -89,7 +89,7 @@ export function createDeviceLogin({ context, agentId, initial, onChange, hint })
               ? "ChatGPT sign-in is unavailable for this Installation. Choose another authentication method."
               : !login && failure.status === 503 && failure.code === "DEPENDENCY_UNAVAILABLE"
                 ? // Starting reaches the sign-in service from the API; its reply names the cause.
-                  `Codex sign-in could not start. ${failure.serverMessage ?? "A required service is unavailable. Try again."}`
+                  `Codex sign-in failed. ${failure.serverMessage ?? "A required service is unavailable. Try again."}`
                 : `Codex login could not be completed. ${message(failure)} ${login ? "Cancel this login and sign in again." : "Try signing in again."}`;
     }
   }

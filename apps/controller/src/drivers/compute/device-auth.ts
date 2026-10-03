@@ -73,22 +73,24 @@ function post(
   });
 }
 
-// A rejected fetch never reached an HTTP response: DNS, connect, TLS or the request
-// timeout. Keep only the error code (`ECONNREFUSED`, `ENOTFOUND`, `TimeoutError`) for
-// the server log; messages can name addresses or carry provider text.
+// A rejected fetch with a connection error code (DNS, refused, reset, TLS) or the request
+// timeout means the API could not get a reply from the sign-in service, which is what a
+// blocked egress looks like (a dropping policy ends in the timeout). A rejection without a
+// code, such as a refused redirect, reached the service. Keep only the code for the server
+// log; messages can name addresses or carry provider text.
 function unreachable(error: unknown): DeviceAuthorizationStartError {
+  // Only a caller's signal aborts; OCC passes none today.
   if (error instanceof Error && error.name === "AbortError") {
     return new DeviceAuthorizationStartError("unavailable", "AbortError");
   }
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return new DeviceAuthorizationStartError("unreachable", "TimeoutError");
+  }
   const cause =
     error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined;
-  const code =
-    typeof cause?.code === "string"
-      ? cause.code
-      : error instanceof Error && error.name !== "TypeError"
-        ? error.name
-        : "fetch_failed";
-  return new DeviceAuthorizationStartError("unreachable", code);
+  return typeof cause?.code === "string"
+    ? new DeviceAuthorizationStartError("unreachable", cause.code)
+    : new DeviceAuthorizationStartError("unavailable", "fetch_failed");
 }
 
 /** Begin the supported Codex device flow without exposing provider authorization state. */

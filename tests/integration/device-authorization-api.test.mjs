@@ -518,7 +518,7 @@ test("a device login start that cannot reach the sign-in service says so and log
   assert.equal(response.body.error.code, "DEPENDENCY_UNAVAILABLE");
   assert.equal(
     response.body.error.message,
-    "OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs), then try again.",
+    "OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs or the cluster's egress policy), then try again.",
   );
   const warning = lines.find((line) => line.event === "device_authorization.start_failed");
   assert.ok(warning, "the API logs why device login could not start");

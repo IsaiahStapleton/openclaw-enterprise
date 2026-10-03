@@ -173,6 +173,12 @@ test("a failed device login start names whether the sign-in service was reachabl
       "unreachable",
       "TimeoutError",
     ],
+    // A refused redirect rejects without a connection code: the service answered.
+    redirected: [
+      () => Promise.reject(new TypeError("fetch failed", { cause: new Error(sensitive) })),
+      "unavailable",
+      "fetch_failed",
+    ],
     rejected: [
       async () => Response.json({ error: sensitive }, { status: 503 }),
       "unavailable",

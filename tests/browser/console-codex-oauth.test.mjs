@@ -315,7 +315,7 @@ test("sign-in that cannot reach the sign-in service shows the API's cause once",
   await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
   await page
     .getByText(
-      "Codex sign-in could not start. OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs), then try again.",
+      "Codex sign-in failed. OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs or the cluster's egress policy), then try again.",
       { exact: true },
     )
     .waitFor();

@@ -105,9 +105,10 @@ default network policy grants them no such egress: add its IPv4 `/32` addresses 
 Helm `api.modelDiscoveryCidrs` (see
 [model discovery](../../reference/console/create-and-deploy.md#create-an-agent)) or
 allow it in your cluster's egress controls. Without it, **Sign in with OAuth**
-fails at once with `503 DEPENDENCY_UNAVAILABLE` ("OCC could not reach the sign-in
-service…"), and the API logs a `device_authorization.start_failed` warning with the
-connection error code.
+fails with `503 DEPENDENCY_UNAVAILABLE` ("OCC could not reach the sign-in
+service…"), at once when the connection is refused or after about 10 seconds when
+the network drops it, and the API logs a `device_authorization.start_failed`
+warning with the error code (for example `ECONNREFUSED` or `TimeoutError`).
 OCE stores the resulting native bundle in its Secret backend; the browser receives
 only a source reference. Use that login to search and select plugins, then create
 and deploy the Agent. Starting login requires Agent-create and Secret-create
