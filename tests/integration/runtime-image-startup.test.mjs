@@ -1543,18 +1543,12 @@ test(
     assert.ok(
       (await gatewayProcessEnvironment(containerName)).includes("OPENCLAW_CONFIG_READONLY=1"),
     );
-    // OpenClaw promotes its last-known-good backup just after it reports ready.
-    const deadline = Date.now() + 20_000 * imageSmokeTimeoutMultiplier;
-    let logs = "";
-    while (!logs.includes("heartbeat: started") && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const output = await runDocker(["logs", containerName]);
-      logs = `${output.stdout}\n${output.stderr}`;
-    }
-    assert.match(logs, /heartbeat: started/);
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    const output = await runDocker(["logs", containerName]);
-    assert.doesNotMatch(`${output.stdout}\n${output.stderr}`, /last-known-good|EROFS/);
+    // OpenClaw promotes its last-known-good backup just after it reports ready,
+    // and only then releases its post-ready work. That work includes the remote
+    // model catalog refresh, which fails at once without a network. Its log line
+    // therefore comes after any promotion failure would have been logged.
+    const logs = await waitForDockerLog(containerName, /remote model catalog refresh failed/);
+    assert.doesNotMatch(logs, /last-known-good|EROFS/);
   },
 );
 
