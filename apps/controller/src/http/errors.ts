@@ -116,24 +116,83 @@ function validationCode(keyword: string): ErrorDetail["code"] {
   }
 }
 
-function validationDetails(error: FastifyError): readonly ErrorDetail[] {
-  if (!Array.isArray(error.validation)) {
-    return [];
+type ValidationEntry = NonNullable<FastifyError["validation"]>[number];
+
+interface ContractProblem {
+  readonly detail: ErrorDetail;
+  /** The accepted type or values, taken from the schema, never from the request. */
+  readonly expected?: string;
+}
+
+function expectedType(parameters: Record<string, unknown>): string | undefined {
+  const type = Array.isArray(parameters.type) ? parameters.type.join(", ") : parameters.type;
+  return typeof type === "string" && type.length > 0 ? type : undefined;
+}
+
+// A union of literals or scalar types fails once per member, at the same field. Report that
+// field once with the accepted members instead of one contradictory problem per member.
+function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly ContractProblem[] {
+  const collapsed = new Map<ValidationEntry, ContractProblem | null>();
+  for (const union of entries) {
+    if (union.keyword !== "anyOf" || typeof union.schemaPath !== "string") {
+      continue;
+    }
+    const members = entries.filter((entry) => entry.schemaPath.startsWith(`${union.schemaPath}/`));
+    if (
+      members.length === 0 ||
+      !members.every(
+        (entry) =>
+          entry.instancePath === union.instancePath &&
+          (entry.keyword === "const" || entry.keyword === "type"),
+      )
+    ) {
+      continue;
+    }
+    const literals = members.every((entry) => entry.keyword === "const");
+    const accepted = members.map((entry) => {
+      const parameters = entry.params as Record<string, unknown>;
+      return literals ? JSON.stringify(parameters.allowedValue) : expectedType(parameters);
+    });
+    collapsed.set(union, {
+      detail: { path: union.instancePath, code: literals ? "INVALID_VALUE" : "INVALID_TYPE" },
+      expected: `one of ${accepted.join(", ")}`,
+    });
+    for (const member of members) {
+      collapsed.set(member, null);
+    }
   }
-  return error.validation.slice(0, 32).map((detail): ErrorDetail => {
-    const parameters = detail.params as Record<string, unknown>;
-    let path = typeof detail.instancePath === "string" ? detail.instancePath : "";
-    if (detail.keyword === "required" && typeof parameters.missingProperty === "string") {
+  return entries.flatMap((entry) => {
+    const replacement = collapsed.get(entry);
+    if (replacement !== undefined) {
+      return replacement === null ? [] : [replacement];
+    }
+    const parameters = entry.params as Record<string, unknown>;
+    let path = typeof entry.instancePath === "string" ? entry.instancePath : "";
+    if (entry.keyword === "required" && typeof parameters.missingProperty === "string") {
       path += `/${jsonPointer(parameters.missingProperty)}`;
     }
     if (
-      detail.keyword === "additionalProperties" &&
+      entry.keyword === "additionalProperties" &&
       typeof parameters.additionalProperty === "string"
     ) {
       path += `/${jsonPointer(parameters.additionalProperty)}`;
     }
-    return { path, code: validationCode(detail.keyword) };
+    const expected =
+      entry.keyword === "type"
+        ? expectedType(parameters)
+        : entry.keyword === "const"
+          ? JSON.stringify(parameters.allowedValue)
+          : undefined;
+    const detail = { path, code: validationCode(entry.keyword) };
+    return [expected === undefined ? { detail } : { detail, expected }];
   });
+}
+
+function validationProblems(error: FastifyError): readonly ContractProblem[] {
+  if (!Array.isArray(error.validation)) {
+    return [];
+  }
+  return collapseScalarUnions(error.validation).slice(0, 32);
 }
 
 const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({
@@ -148,8 +207,8 @@ const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.fr
 
 // Names the first few offending fields so clients that print only the message, such as
 // occ, still show which field to fix. The full list stays in `details`.
-function contractMessage(error: FastifyError, details: readonly ErrorDetail[]): string {
-  if (details.length === 0) {
+function contractMessage(error: FastifyError, found: readonly ContractProblem[]): string {
+  if (found.length === 0) {
     return "The request does not match the operation contract.";
   }
   const context =
@@ -158,13 +217,21 @@ function contractMessage(error: FastifyError, details: readonly ErrorDetail[]): 
       : "";
   const problems = [
     ...new Set(
-      details.map((detail) => `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}`),
+      found.map(
+        ({ detail, expected }) =>
+          `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}${
+            expected === undefined ? "" : ` (expected ${expected})`
+          }`,
+      ),
     ),
   ];
   const shown = problems.slice(0, 3).join("; ");
   const more = problems.length > 3 ? `; and ${problems.length - 3} more` : "";
-  const message = `The request does not match the operation contract: ${shown}${more}.`;
-  // The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+  return capped(`The request does not match the operation contract: ${shown}${more}.`);
+}
+
+// The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+function capped(message: string): string {
   return message.length <= 256 ? message : `${message.slice(0, 255)}…`;
 }
 
@@ -380,8 +447,9 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof PluginPolicyValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
-  if (error instanceof PresetValidationError) {
-    return failure(400, "INVALID_REQUEST", "The supplied Preset template is invalid.");
+  if (error instanceof PresetValidationError && error instanceof Error) {
+    // Preset messages name the template path and rule, never a submitted value.
+    return failure(400, "INVALID_REQUEST", capped(error.message));
   }
   if (error instanceof ConfigurationValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.");
@@ -476,12 +544,12 @@ export function requestFailure(error: unknown): RequestFailure {
       candidate.code === "FST_ERR_CTP_INVALID_JSON_BODY" ||
       candidate.statusCode === 400
     ) {
-      const details = validationDetails(candidate);
+      const problems = validationProblems(candidate);
       return failure(
         400,
         "INVALID_REQUEST",
-        contractMessage(candidate, details),
-        details.length > 0 ? details : undefined,
+        contractMessage(candidate, problems),
+        problems.length > 0 ? problems.map(({ detail }) => detail) : undefined,
       );
     }
     if (error.name === "AdmissionFailure") {
