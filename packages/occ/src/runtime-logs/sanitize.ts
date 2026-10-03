@@ -121,6 +121,15 @@ const GAP_REMEDIES: Readonly<Record<RuntimeLogGapReason, string>> = Object.freez
     "The source no longer holds the lines after the previous page: its in-memory buffer rolled over or restarted. Showing what it still holds.",
 });
 
+// A resumed view whose next line is longer than the 1 MiB read limit: requesting fewer
+// lines cannot reach the lines behind it, so these remedies say what is lost instead.
+const OVERSIZED_LINE_REMEDIES = Object.freeze({
+  window_exceeded:
+    "A line longer than the 1 MiB read limit could not be read. It and the lines logged after it, up to this page, were skipped.",
+  truncated:
+    "A line longer than the 1 MiB read limit fills this page and cannot be read. A following page skips it and the lines logged right after it.",
+} satisfies Partial<Record<RuntimeLogGapReason, string>>);
+
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 type LineRecord = Extract<RuntimeLogRecord, { type: "line" }>;
 
@@ -853,11 +862,15 @@ export function sanitizeSandboxLogLines(
   return Object.freeze({ records: Object.freeze(records), withheld });
 }
 
-/** A labelled gap for loss the API observed. Remedy text is fixed. */
+/**
+ * A labelled gap for loss the API observed. Remedy text is fixed; `oversizedLine`
+ * selects the text for loss behind one line longer than the read limit.
+ */
 export function runtimeLogGap(
   reason: RuntimeLogGapReason,
   stream: RuntimeLogStream,
   time: string | null = null,
+  oversizedLine = false,
 ): SanitizedRuntimeLogRecord {
   return brand({
     type: "gap",
@@ -865,9 +878,11 @@ export function runtimeLogGap(
     stream: cleanStream(stream),
     reason,
     remedy:
-      reason === "stream_replaced" && stream.source === "sandbox"
-        ? "The Sandbox was recreated; showing the new one."
-        : GAP_REMEDIES[reason],
+      oversizedLine && (reason === "window_exceeded" || reason === "truncated")
+        ? OVERSIZED_LINE_REMEDIES[reason]
+        : reason === "stream_replaced" && stream.source === "sandbox"
+          ? "The Sandbox was recreated; showing the new one."
+          : GAP_REMEDIES[reason],
   });
 }
 

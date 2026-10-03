@@ -335,6 +335,34 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     }
     delivered.push(line);
   }
+  // A resumed read starts RESUME_OVERLAP_SECONDS before the newest delivered line, so
+  // when the next line is longer than the byte limit every later read re-reads the
+  // overlap, spends the limit on that line and delivers nothing new: the cursor would
+  // never move. `oversizedLine` is that line's time. Once it is older than where a
+  // poll from this read starts (overlap plus one second of rounding), drop the
+  // frontier and continue in the form a fresh view already takes after one oversized
+  // line: no delivered time, reading from this read (`issuedAt`). There is no cursor
+  // format change. Bounded costs:
+  // - the lines logged after the oversized line until this read are lost (no read
+  //   could reach them past the limit); the window_exceeded gap says so;
+  // - a carried PEM context keeps no delivered frontier (`pemAfterTime` null), so an
+  //   open block cannot close and a later BEGIN stays open for the rest of the view:
+  //   more masking, never less;
+  // - the new read has no time de-duplication, so kubelet clock skew behind OCC by
+  //   more than the guard can re-deliver lines near the old frontier;
+  // - until the line is past the guard (up to about 3 s) the view stays put.
+  const cutLine = chunk.truncated ? chunk.lines.at(-1) : undefined;
+  const oversizedLine =
+    resume !== undefined &&
+    !replacedDuringRead &&
+    delivered.every((line) => line.time === null) &&
+    validRuntimeLogFrontierTime(cutLine?.time) &&
+    compareRuntimeLogTime(cutLine.time, resume.lastTime!) > 0
+      ? cutLine.time
+      : undefined;
+  const skipOversized =
+    oversizedLine !== undefined &&
+    Date.parse(oversizedLine) < readStartedAt - (RESUME_OVERLAP_SECONDS + 1) * 1000;
   // Context belongs AFTER the authenticated delivered frontier, never before the
   // fetched overlap. Hashes and equal timestamps cannot prove a new closing line.
   const pemPrior =
@@ -389,17 +417,33 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
       }
     }
   }
+  if (skipOversized) {
+    pemAfterTime = null;
+  }
   const truncated = chunk.truncated || pageCut;
   const records = [
-    ...leading,
+    // The oversized line's own gap replaces the window_exceeded gap it already dated.
+    ...(skipOversized
+      ? leading.filter((record) => record.type !== "gap" || record.reason !== "window_exceeded")
+      : leading),
     ...sanitized.records,
-    ...(truncated
-      ? [runtimeLogGap("truncated", observedStream, delivered.at(-1)?.time ?? null)]
-      : []),
+    ...(skipOversized
+      ? [runtimeLogGap("window_exceeded", observedStream, oversizedLine, true)]
+      : truncated
+        ? [
+            runtimeLogGap(
+              "truncated",
+              observedStream,
+              delivered.at(-1)?.time ?? null,
+              oversizedLine !== undefined,
+            ),
+          ]
+        : []),
   ];
   const last = [...delivered].reverse().find((line) => line.time !== null);
-  let lastTime = resume !== undefined && !replacedDuringRead ? resume.lastTime : null;
-  let lastHashes = resume !== undefined && !replacedDuringRead ? [...resume.lastHashes] : [];
+  const kept = resume !== undefined && !replacedDuringRead && !skipOversized;
+  let lastTime = kept ? resume.lastTime : null;
+  let lastHashes = kept ? [...resume.lastHashes] : [];
   if (last !== undefined) {
     if (lastTime === null || compareRuntimeLogTime(last.time!, lastTime) !== 0) {
       lastHashes = [];
