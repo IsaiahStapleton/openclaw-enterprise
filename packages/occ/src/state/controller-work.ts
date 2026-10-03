@@ -460,6 +460,8 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment runtime failed a startup check.";
     case "REVISION_SUPERSEDED":
       return "Deployment was superseded by a newer revision.";
+    case "REVISION_STOPPED":
+      return "Deployment ended because the Agent was stopped.";
     case "AGENT_GATEWAY_UNAVAILABLE":
       return "The Agent Gateway was still not reachable through its route at the deployment deadline.";
     case "KUBERNETES_API_UNAVAILABLE":

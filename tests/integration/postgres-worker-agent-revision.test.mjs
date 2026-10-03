@@ -5490,6 +5490,18 @@ test(
       [fixture.namespace.id, candidate.id],
     );
     assert.deepEqual(activation.rows, []);
+    // The deployment did not activate, and its error says why instead of a generic failure.
+    const status = await fixture.controller.getDeploymentStatus(
+      fixture.actor.id,
+      fixture.namespace.id,
+      owner.id,
+      candidate.id,
+    );
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, {
+      code: "REVISION_STOPPED",
+      message: "Deployment ended because the Agent was stopped.",
+    });
   },
 );
 
