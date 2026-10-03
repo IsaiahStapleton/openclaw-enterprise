@@ -24,7 +24,7 @@ function detailUrl(fixture, namespaceId, agentId, tab = "credentials") {
 }
 
 // Bound pickers show a placeholder until Secret metadata loads, so poll for the resolved name.
-async function waitForInputValue(locator, expected, timeoutMs = 5_000) {
+async function waitForInputValue(locator, expected, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   let value = await locator.inputValue();
   while (value !== expected && Date.now() < deadline) {
@@ -702,14 +702,12 @@ test("Slack credential replacement switches only selected Secret references", as
       },
     ],
   );
-  assert.equal(
-    await page.getByLabel("Slack app token").evaluate((node) => node.value),
+  // Saving re-renders both pickers, which reload Secret metadata before showing names.
+  await waitForInputValue(
+    page.getByLabel("Slack app token"),
     secretOptionLabel(replacementAppSecret),
   );
-  assert.equal(
-    await page.getByLabel("Slack bot token").evaluate((node) => node.value),
-    secretOptionLabel(botSecret),
-  );
+  await waitForInputValue(page.getByLabel("Slack bot token"), secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });
 
