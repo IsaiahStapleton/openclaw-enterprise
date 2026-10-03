@@ -1222,6 +1222,59 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   );
 });
 
+test("Agent credentials bind a Secret typed by its exact name without picking the suggestion", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Typed Secret name", { ready: true });
+  const originalSecret = await fixture.createSecret(namespace.id, "Original key", "hidden-a");
+  const typedSecret = await fixture.createSecret(namespace.id, "Typed key", "hidden-b");
+  const enteredSecret = await fixture.createSecret(namespace.id, "Entered key", "hidden-c");
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Typed Secret Agent",
+    nativeValues("typed-secret", { harnessId: "codex" }),
+    { harnessAuth: { method: "api_key", source: originalSecret.ref }, executionMode: "dedicated" },
+  );
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "credentials");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByText("Choose an existing Secret or create a new one.").waitFor();
+  const picker = page.getByLabel("API key Secret", { exact: true });
+  const savedSource = async () =>
+    (await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).data
+      .harnessAuth.source;
+  const save = async () => {
+    const saved = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/namespaces/${namespace.id}/agents/${agent.id}`) &&
+        response.request().method() === "PATCH",
+    );
+    await page.getByRole("button", { name: "Save authentication source" }).click();
+    assert.equal((await saved).status(), 200);
+  };
+
+  // Clicking Save straight after typing the full name used to keep the old Secret silently.
+  await picker.fill(typedSecret.name);
+  await save();
+  assert.deepEqual(await savedSource(), typedSecret.ref);
+  // A successful save re-renders the tab; wait for its picker to load the Secrets again.
+  await page.getByText("Choose an existing Secret or create a new one.").waitFor();
+  assert.equal(await picker.inputValue(), typedSecret.name);
+
+  // Enter commits an exact name the same way, before any save.
+  await picker.fill(`  ${enteredSecret.name} `);
+  await picker.press("Enter");
+  await page.getByText("Secret binding staged. Save changes to apply it.").waitFor();
+  assert.equal(await picker.inputValue(), enteredSecret.name);
+  await save();
+  assert.deepEqual(await savedSource(), enteredSecret.ref);
+
+  // A partial name is not a choice: leaving the field restores the bound Secret.
+  await picker.fill("Origin");
+  await picker.blur();
+  assert.equal(await picker.inputValue(), enteredSecret.name);
+});
+
 test("Agent credential Secret picker distinguishes action labels from Secret names", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
