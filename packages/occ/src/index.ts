@@ -4123,13 +4123,15 @@ export class OpenClawController {
           "An Agent still references the Configuration. Delete the Agent or select another Configuration first.",
         );
       }
-      // Guided provisioning keeps its record, which references the Configuration it created,
-      // until the provisioned Agent is deleted, even after that Agent selects another one.
+      // A provisioning record references the Configuration it created. Once its Agent has
+      // succeeded and selects another Configuration (checked above), the record releases it.
       if (
-        (await state.provisioning.findByConfiguration(namespace.id, configuration.id)) !== undefined
+        (await state.provisioning.findByConfiguration(namespace.id, configuration.id)) !==
+          undefined &&
+        !(await state.provisioning.releaseConfiguration(namespace.id, configuration.id))
       ) {
         throw new ResourceStateConflictError(
-          "An Agent provisioning record still references the Configuration. Delete the Agent it provisioned first.",
+          "An Agent provisioning request that has not succeeded still references the Configuration. Let it finish or retry it, or delete the Agent it provisioned, first.",
         );
       }
       const previous = this.exactConfiguration(
