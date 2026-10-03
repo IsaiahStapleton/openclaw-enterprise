@@ -288,9 +288,7 @@ grants `pods/log get` and `events get,list` to the tenant API and Gateway observ
 roles and sets `OCC_AGENT_RUNTIME_LOGS_ENABLED`. Set it to `false` to remove the
 grants; both routes then answer `501`. Tenant RoleBindings you create by hand
 need the same rules; see [production Agents](../deploy/production-agents.md).
-Two-cluster installs set the same value on the `openclaw-execution` chart. Its
-tenant API role always grants `pods get,list` and `pods/proxy get` for runtime
-diagnostics, like the Gateway observer role.
+Two-cluster installs set the same value on the `openclaw-execution` chart.
 
 These grants are read-only and namespace-scoped through your RoleBindings.
 Kubernetes RBAC cannot tell Agents apart, so OCC reads only Pods that carry the
