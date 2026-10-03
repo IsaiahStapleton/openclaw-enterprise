@@ -1986,7 +1986,10 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   // Each accepted request fails in the worker: first a taken name (permanent), then an
   // unavailable dependency (transient). Its retry is then rejected after the job created
   // the Agent, which only the job's retry can finish, and the next retry is refused
-  // because the Agent's lifecycle changed. The third request is cancelled (permanent).
+  // because the Agent's lifecycle changed. The third job is cancelled by Stop after it
+  // created its Agent (permanent). The fourth job's status is first unreadable, then it
+  // has succeeded.
+  const agentId = "agt_00000000-0000-4000-8000-00000000c0de";
   const failures = [
     {
       code: "PROVISIONING_REJECTED",
@@ -1996,13 +1999,20 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
       code: "PROVISIONING_DEPENDENCY_UNAVAILABLE",
       message: "Agent provisioning could not complete.",
     },
-    { code: "PROVISIONING_CANCELLED", message: "Provisioning was cancelled by Stop." },
-    { code: "PROVISIONING_REJECTED", message: "Agent provisioning could not complete." },
+    {
+      code: "PROVISIONING_CANCELLED",
+      message: "Provisioning was cancelled. Create a new Agent to provision again.",
+      agentId,
+    },
   ];
   const bodies = [];
   await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route, request) => {
-    bodies.push(request.postDataJSON());
-    const url = `/namespaces/${namespace.id}/agents/provision/work_${bodies.length}`;
+    const body = request.postDataJSON();
+    // Like the API, a known request ID returns its existing job.
+    const work =
+      bodies.findIndex((earlier) => earlier.requestId === body.requestId) + 1 || bodies.length + 1;
+    bodies.push(body);
+    const url = `/namespaces/${namespace.id}/agents/provision/work_${work}`;
     await route.fulfill(
       json(
         {
@@ -2019,7 +2029,6 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
       ),
     );
   });
-  const agentId = "agt_00000000-0000-4000-8000-00000000c0de";
   let retries = 0;
   await page.route(`**/namespaces/${namespace.id}/agents/provision/work_2/retry`, async (route) => {
     retries += 1;
@@ -2058,8 +2067,50 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
       ),
     );
   });
+  // The job succeeded while its status was unreadable, so the API refuses its retry.
+  await page.route(`**/namespaces/${namespace.id}/agents/provision/work_4/retry`, (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "RESOURCE_CONFLICT",
+          message: "The requested platform resource already exists.",
+        },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+      }),
+    }),
+  );
+  let work4Reads = 0;
   await page.route(`**/namespaces/${namespace.id}/agents/provision/work_*`, async (route) => {
     const index = Number(new URL(route.request().url()).pathname.split("_").at(-1));
+    const url = `/namespaces/${namespace.id}/agents/provision/work_${index}`;
+    if (index === 4) {
+      work4Reads += 1;
+      await route.fulfill(
+        work4Reads === 1
+          ? {
+              status: 503,
+              contentType: "application/json",
+              body: JSON.stringify({
+                error: { code: "DEPENDENCY_UNAVAILABLE", message: "Unavailable." },
+                meta: { requestId: "req_00000000-0000-4000-8000-000000000503" },
+              }),
+            }
+          : json({
+              workId: "work_4",
+              status: "succeeded",
+              phase: "handoff",
+              attemptCount: 1,
+              updatedAt,
+              agentId,
+              revisionId: "rev_00000000-0000-4000-8000-00000000c0de",
+              url,
+            }),
+      );
+      return;
+    }
+    const { agentId: createdAgentId, ...error } = failures[index - 1];
     await route.fulfill(
       json({
         workId: `work_${index}`,
@@ -2067,8 +2118,9 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
         phase: "accepted",
         attemptCount: 1,
         updatedAt,
-        url: `/namespaces/${namespace.id}/agents/provision/work_${index}`,
-        error: failures[index - 1],
+        ...(createdAgentId === undefined ? {} : { agentId: createdAgentId }),
+        url,
+        error,
       }),
     );
   });
@@ -2125,7 +2177,9 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
-    .getByText("Provisioning was cancelled by Stop. Select Create Agent to submit a new request.")
+    .getByText(
+      "Provisioning was cancelled. Create a new Agent to provision again. Select Create Agent to submit a new request.",
+    )
     .waitFor();
   assert.equal(bodies.length, 3);
   assert.notEqual(bodies[2].requestId, bodies[1].requestId);
@@ -2133,13 +2187,17 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
-  await page
-    .getByText(
-      "Agent provisioning could not complete. Select Create Agent to submit a new request.",
-    )
-    .waitFor();
+  await page.getByText(/^Outcome unknown after provisioning admission\./).waitFor();
   assert.equal(bodies.length, 4);
   assert.notEqual(bodies[3].requestId, bodies[2].requestId);
+  // After an unknown outcome a refused retry may mean the job succeeded, so the request
+  // ID is kept and Create Agent recovers the job instead of starting a new one.
+  await retry.click();
+  await page.getByText(/^The request conflicts with the saved state\./).waitFor();
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page.waitForURL(new RegExp(`/agents/${agentId}\\?`));
+  assert.equal(bodies.length, 5);
+  assert.equal(bodies[4].requestId, bodies[3].requestId);
 });
 
 test("Agent creation rejects non-object native Configuration JSON before Configuration or Agent writes", async (t) => {

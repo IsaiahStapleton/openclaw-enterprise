@@ -1523,8 +1523,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   }
   void loadInstallationCapabilities();
   async function submitProvisioningAttempt(attempt) {
-    // Read before the request: an admitted first attempt also gains a retry URL.
-    const retrying = attempt.retryUrl !== undefined;
+    // A retry of a job known to have failed. Read before the request: an admitted first
+    // attempt also gains a retry URL, and after an unknown outcome the job may have
+    // succeeded, so a refusal there must keep the request ID to recover it.
+    const retrying = attempt.retryUrl !== undefined && !outcomeUnknown;
     pending = true;
     outcomeUnknown = false;
     updateControls();
