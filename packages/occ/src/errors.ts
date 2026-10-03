@@ -174,17 +174,31 @@ export class ConfigurationHarnessError extends ScopeViolationError {
 }
 
 /**
- * An Agent provisioning request names an invalid Secret binding: a reserved or invalid
- * environment destination, an unsupported binding shape, or a Secret reference to
- * another Namespace. Messages are static, so HTTP reports them as an invalid request
- * instead of hiding them as a scope miss; Secret existence is still checked later
- * and stays a scope miss.
+ * A request names an invalid Secret binding: Agent provisioning or a Configuration write
+ * with a reserved or invalid environment destination or an unsupported binding shape, or
+ * either of those or an Agent's Harness authentication naming a Secret in another
+ * Namespace. Messages are static, so HTTP reports them as an invalid request instead of
+ * hiding them as a scope miss; Secret existence is still checked later and stays a scope
+ * miss.
  */
-export class AgentProvisioningValidationError extends ScopeViolationError {
+export class SecretBindingValidationError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
-    this.name = "AgentProvisioningValidationError";
+    this.name = "SecretBindingValidationError";
   }
+}
+
+/**
+ * Builds a message that names a Configuration field. The error contract caps messages at
+ * 256 characters; a long provider name shortens the path. The cut counts code points, so it
+ * never leaves half of a surrogate pair.
+ */
+function configurationFieldMessage(path: string, message: (path: string) => string): string {
+  const budget = 256 - message("").length;
+  const characters = Array.from(path);
+  return message(
+    characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
+  );
 }
 
 const modelCredentialMessage = (path: string): string =>
@@ -198,16 +212,29 @@ export class ModelCredentialValueError extends Error {
   readonly path: string;
 
   constructor(path: string) {
-    // The error contract caps messages at 256 characters; a long provider name shortens the
-    // path. The cut counts code points, so it never leaves half of a surrogate pair.
-    const budget = 256 - modelCredentialMessage("").length;
-    const characters = Array.from(path);
-    super(
-      modelCredentialMessage(
-        characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
-      ),
-    );
+    super(configurationFieldMessage(path, modelCredentialMessage));
     this.name = "ModelCredentialValueError";
+    this.path = path;
+  }
+}
+
+const modelProviderSettingMessages = {
+  baseUrl: (path: string): string =>
+    `Configuration field ${path} must be an absolute http or https URL.`,
+  api: (path: string): string =>
+    `Configuration field ${path} must name a model API the runtime supports, such as openai-responses, openai-completions or anthropic-messages.`,
+} as const;
+
+/**
+ * A model provider `baseUrl` or `api` in Configuration values that the runtime cannot
+ * use. The message names the field's JSON pointer and the expected form, never the value.
+ */
+export class ModelProviderSettingError extends Error {
+  readonly path: string;
+
+  constructor(path: string, setting: keyof typeof modelProviderSettingMessages) {
+    super(configurationFieldMessage(path, modelProviderSettingMessages[setting]));
+    this.name = "ModelProviderSettingError";
     this.path = path;
   }
 }

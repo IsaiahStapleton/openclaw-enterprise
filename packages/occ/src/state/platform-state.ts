@@ -2447,6 +2447,9 @@ function repositories(
       const binding = snapshot.bindings.get(iamPolicyKey(namespaceId, bindingId));
       return binding === undefined ? undefined : immutableCopy(binding);
     },
+    // In memory, Restrictions live in the IAM driver's seed, not in platform state, and
+    // no deletion removes them.
+    listRestrictionsTargeting: async () => Object.freeze([]),
     createAccessBinding: async (binding) => {
       assertInitialized(snapshot);
       const namespaceId = binding.namespaceId ?? "";

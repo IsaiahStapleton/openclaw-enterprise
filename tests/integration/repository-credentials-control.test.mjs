@@ -1030,6 +1030,71 @@ test(
 );
 
 test(
+  "a session disposed and evicted while its admission awaits the journal still settles the receipt",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await boundControlFixture(t, { sessions: 2 }, defaultRegistryRepositories);
+    const { inputFor, send, freshId, clock, receipts } = fixture;
+    const input = { ...inputFor("repo-a"), durationSeconds: 1 };
+    const id = freshId();
+    await receipts.prepare(id, input.repositoryRef, input.durationSeconds);
+    // Hold the journal's reservation until the opened session is disposed and evicted.
+    const transact = receipts.state.transact;
+    let held = false;
+    let entered;
+    let release;
+    const reached = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    receipts.state.transact = async function (work) {
+      if (!held) {
+        held = true;
+        entered();
+        await gate;
+      }
+      return transact.call(this, work);
+    };
+    t.after(() => {
+      receipts.state.transact = transact;
+      release();
+    });
+    const disposed = [];
+    t.after(fixture.service.observeDisposal((status) => disposed.push(status)));
+    const pending = send(input, id);
+    await reached;
+    await clock.advance(1000);
+    await eventually(() => disposed.length === 1);
+    const { sessionId } = disposed[0];
+    // Another admission's open evicts the disposed session from the service. No
+    // worker attempt was prepared for it, so the journal then refuses that admission.
+    assert.deepEqual(await send(inputFor("repo-b")), {
+      status: 503,
+      body: { error: "unavailable" },
+    });
+    assert.equal(fixture.service.status(sessionId), undefined);
+    release();
+    const answered = await pending;
+    assert.equal(answered.status, 200);
+    assert.equal(answered.body.sessionId, sessionId);
+    assert.equal(answered.body.state, "DISPOSED");
+    assert.equal(answered.body.bearer, undefined);
+    const receipt = await receipts.state.read((view) =>
+      view.repositorySessions.findBrokerReceipt(id),
+    );
+    assert.equal(receipt.state, "disposed");
+    assert.equal(receipt.sessionId, sessionId);
+    assert.deepEqual(await send({ ...input, recoverOnly: true }, id), answered);
+    assert.deepEqual(
+      await control(fixture.config.gateway.controlSocket, "GET", `/v1/sessions/${sessionId}`),
+      answered,
+    );
+  },
+);
+
+test(
   "a reservation the broker cannot bind is fenced, so retry and recovery answer missing",
   { timeout: 15000 },
   async (t) => {
@@ -1068,7 +1133,10 @@ test(
     let outcome;
     receipts.state.transact = async function (work) {
       calls += 1;
-      if ((calls === 2 && outcome === "refused") || (calls >= 2 && calls <= 3 && outcome === "away")) {
+      if (
+        (calls === 2 && outcome === "refused") ||
+        (calls >= 2 && calls <= 3 && outcome === "away")
+      ) {
         throw new Error("fixture-unavailable");
       }
       const result = await transact.call(this, work);

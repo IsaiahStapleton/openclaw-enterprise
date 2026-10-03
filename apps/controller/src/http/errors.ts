@@ -3,7 +3,6 @@ import { PresetValidationError } from "@openclaw-enterprise/contracts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
-  AgentProvisioningValidationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   ChannelDirectoryError,
@@ -17,6 +16,7 @@ import {
   IAMRoleInUseError,
   ModelCredentialValueError,
   ModelDiscoveryError,
+  ModelProviderSettingError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
@@ -28,6 +28,7 @@ import {
   ResourceStateConflictError,
   RuntimeLogsError,
   ScopeViolationError,
+  SecretBindingValidationError,
   SecretValueError,
   type RuntimeLogsErrorCode,
 } from "@openclaw-enterprise/occ";
@@ -547,7 +548,7 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof ConfigurationHarnessError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
-  if (error instanceof AgentProvisioningValidationError) {
+  if (error instanceof SecretBindingValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof NativeWorkerSupportError) {
@@ -561,7 +562,7 @@ export function requestFailure(error: unknown): RequestFailure {
     // rule, not submitted values.
     return failure(400, "INVALID_REQUEST", capped(error.message));
   }
-  if (error instanceof ModelCredentialValueError) {
+  if (error instanceof ModelCredentialValueError || error instanceof ModelProviderSettingError) {
     // The message names only the field; other Configuration validation stays generic.
     // The field's path includes a submitted provider name, so it is capped like other
     // messages that name submitted object keys.

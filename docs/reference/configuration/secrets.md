@@ -38,7 +38,11 @@ use reserved process-control prefixes such as `OPENCLAW_`, `CODEX_`, `OCC_`,
 authentication destinations are reserved for `harnessAuth`.
 
 OCC rejects cross-Namespace references and missing or foreign backend objects
-even if IAM would otherwise allow the operation. Creating or updating a
+even if IAM would otherwise allow the operation. When a Configuration write or Agent
+provisioning submits bindings, a reserved or invalid destination or a Secret
+reference to another Namespace fails with `400 INVALID_REQUEST` and a message
+naming the rule; so does an Agent `harnessAuth` source in another Namespace. A
+reference to a Secret the Namespace does not hold fails with `404`. Creating or updating a
 Configuration whose resulting document contains bindings requires the normal
 Configuration mutation permission and `operate` on every selected Secret,
 including retained bindings when PATCH omits `secretBindings`. Creating or

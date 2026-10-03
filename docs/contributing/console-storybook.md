@@ -31,11 +31,11 @@ artifact without publishing the documentation site.
 
 ## Appearance review
 
-Use **Pages/Agents → Populated** to review the shared shell and controls.
-Check desktop (1440 × 1000), tablet (768 × 1024), and mobile (390 × 844);
-use keyboard focus, search, navigation, and an open dialog. Include empty,
-loading, error, permission-denied, and missing-credential stories. The console
-stays light with either system appearance preference.
+Use **Pages/Agents → Populated** to review the shared shell and controls at
+desktop (1440 × 1000), tablet (768 × 1024), and mobile (390 × 844) sizes.
+Check keyboard focus, search, navigation, an open dialog, and empty, loading,
+error, permission-denied, and missing-credential stories. The console stays light
+with either system appearance preference.
 
 The console's Claw palette, type scale, and surface geometry reference
 [OpenClaw `6e8d06876fd166064abbec4928fb3bb109ebe999`](https://github.com/openclaw/openclaw/tree/6e8d06876fd166064abbec4928fb3bb109ebe999/ui),
@@ -57,22 +57,22 @@ OpenClaw's disconnected gateway screen at the revision above.
 
 Stories reach error states through real controls after loading fixture data.
 
-| Group                   | Coverage                                                                                                                                                                                                                                                                                                                                                                   |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sign in                 | Password and GitHub sign-in, discovery failure, GitHub errors, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                         |
-| Agents                  | Populated and empty collections, no search matches, inaccessible Namespace, no readable Namespaces, permission denial, read failure, loading.                                                                                                                                                                                                                              |
-| Backends                | Configured, empty, and discovery failure.                                                                                                                                                                                                                                                                                                                                  |
-| Namespaces              | Ready and provisioning, empty, permission denial.                                                                                                                                                                                                                                                                                                                          |
-| Settings and navigation | Signed-in account and unknown route.                                                                                                                                                                                                                                                                                                                                       |
-| Create Agent            | Preset variables, no Presets, fixed model choices before credential entry and manual model IDs, OpenAI Codex/OpenClaw and Anthropic OpenClaw harnesses, Service Accounts switching and bound Presets, seeded workspace files, storage/grant denial, repository selection/discovery and rejected-grant recovery, invalid JSON, partial save/conflict, unknown save outcome. |
-| Agent detail            | First and later drafts, version details, native JSON and plugin editors, immutable plugin snapshot, queued/running/succeeded/failed activity, exact-version diagnostics, error and permission states.                                                                                                                                                                      |
-| Navigation components   | Account menu, Namespace switcher, mobile drawer, admin link and denial, OCE branding, simulated OCC revision, missing development metadata, debug runtime image identities and unavailable metadata.                                                                                                                                                                       |
-| Channels                | Unconfigured cards, Slack editor with pairing/open/disabled policies, everyone and restricted channel sender access, incomplete sender access, unsupported mixed sender lists, unsupported wildcard channel maps, read-only snapshot, save conflict.                                                                                                                       |
-| Credentials             | Named Secret selection and creation, API-key and Slack Secret switching, denied metadata and grants, partially missing tokens, missing authentication, operator-managed credentials, issued ChatGPT account, model Secret replacement, pending grants, and unknown authentication saves.                                                                                   |
-| Native admin            | Available launch, stopped or unsupported runtime, denied panel hidden. The launch target is an explanatory fixture page.                                                                                                                                                                                                                                                   |
-| Workspace               | Four editable deployed files, undeployed Agent, denied reads, missing file, unknown write outcome.                                                                                                                                                                                                                                                                         |
-| Stop Agent              | Confirmation, stopped requested state, permission denial, unknown outcome requiring refresh.                                                                                                                                                                                                                                                                               |
-| Deletion                | Confirmation, pending cleanup, permission denial, conflict, unknown outcome.                                                                                                                                                                                                                                                                                               |
+| Group                   | Coverage                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sign in                 | Password and GitHub sign-in, discovery failure, GitHub errors, rejected login, expired session, session-read failure, loading, unconfirmed logout.                                                                                                                                                                                                                                                                |
+| Agents                  | Populated and empty collections, no search matches, inaccessible Namespace, no readable Namespaces, permission denial, read failure, loading.                                                                                                                                                                                                                                                                     |
+| Backends                | Configured, empty, and discovery failure.                                                                                                                                                                                                                                                                                                                                                                         |
+| Namespaces              | Ready and provisioning, empty, permission denial.                                                                                                                                                                                                                                                                                                                                                                 |
+| Settings and navigation | Signed-in account and unknown route.                                                                                                                                                                                                                                                                                                                                                                              |
+| Create Agent            | Installed default, missing/loading/denied Presets, Preset variables, fixed model choices before credential entry and manual model IDs, OpenAI Codex/OpenClaw and Anthropic OpenClaw harnesses, Service Accounts switching and bound Presets, seeded workspace files, storage/grant denial, repository selection/discovery and rejected-grant recovery, invalid JSON, partial save/conflict, unknown save outcome. |
+| Agent detail            | First and later drafts, version details, native JSON and plugin editors, immutable plugin snapshot, queued/running/succeeded/failed activity, exact-version diagnostics, error and permission states.                                                                                                                                                                                                             |
+| Navigation components   | Account menu, Namespace switcher, mobile drawer, admin link and denial, OCE branding, simulated OCC revision, missing development metadata, debug runtime image identities and unavailable metadata.                                                                                                                                                                                                              |
+| Channels                | Unconfigured cards, Slack editor with pairing/open/disabled policies, everyone and restricted channel sender access, incomplete sender access, unsupported mixed sender lists, unsupported wildcard channel maps, read-only snapshot, save conflict.                                                                                                                                                              |
+| Credentials             | Named Secret selection and creation, API-key and Slack Secret switching, denied metadata and grants, partially missing tokens, missing authentication, operator-managed credentials, issued ChatGPT account, model Secret replacement, pending grants, and unknown authentication saves.                                                                                                                          |
+| Native admin            | Available launch, stopped or unsupported runtime, denied panel hidden. The launch target is an explanatory fixture page.                                                                                                                                                                                                                                                                                          |
+| Workspace               | Four editable deployed files, undeployed Agent, denied reads, missing file, unknown write outcome.                                                                                                                                                                                                                                                                                                                |
+| Stop Agent              | Confirmation, stopped requested state, permission denial, unknown outcome requiring refresh.                                                                                                                                                                                                                                                                                                                      |
+| Deletion                | Confirmation, pending cleanup, permission denial, conflict, unknown outcome.                                                                                                                                                                                                                                                                                                                                      |
 
 Pending-read stories use the real client's 15-second timeout; reset them to replay
 loading.
@@ -119,12 +119,12 @@ generation is simulated.
 Choose a Preset, fill its variables, review seeded workspace files, and create
 an Agent with the Codex harness. The Console submits inline Configuration and
 Secret references, then follows simulated provisioning. A separate flow
-starts without a Preset, selects OpenAI with Codex, creates or selects a model
+loads the default Preset, selects OpenAI with Codex, creates or selects a model
 Secret, selects a model, edits IDENTITY.md, and clears USER.md before creation.
 OpenClaw and unsupported-runtime stories retain the draft workflow: provision
 credentials and deploy from Agent detail.
 
-DevDay previews SWE Agent and standard presets with models, workspace templates,
+DevDay previews default-codex, SWE Agent, and standard presets with models, workspace templates,
 model Secrets, Linear, and repository choices. SWE Agent starts without configured
 Slack channels; the rehearsal adds a simulated channel explicitly. The simulated catalog works with any Preset or Secret choice.
 **Plugins Curated** exercises token-free discovery with simulated Driver responses;
@@ -151,21 +151,19 @@ Teams credentials remain operator-managed; the console blocks deployment while T
 See [Create and deploy in the console](../reference/console/create-and-deploy.md)
 for the supported installation workflow and prerequisites.
 
-Repository previews cover shared access levels, empty or pending discovery,
-setup guidance when choices are unavailable, denied or unverified authorization,
-and reselection after a rejected save. In **Repository choices unavailable**, follow
-the setup link or retry discovery; creation without repository access remains available.
-The recovery story retains its saved Configuration and
-requires a current nonempty repository selection before retrying. GitHub App
-setup, Namespace approvals, runtime images, and credential-service networking
-remain operator prerequisites; the fixture does not verify them.
+Repository previews cover access levels, empty or pending discovery, unavailable
+choices, denied or unverified authorization, and reselection after a rejected save.
+In **Repository choices unavailable**, follow the setup link or retry; creation
+without repository access remains available. The recovery story retains its saved
+Configuration and requires a current nonempty repository selection before retrying.
+GitHub App setup, Namespace approvals, runtime images, and credential-service
+networking remain operator prerequisites; the fixture does not verify them.
 
 ### Return to loaded pages
 
-Use **Pages/Navigation → Return to loaded pages** to revisit loaded pages during
-delayed reads. Exercise Back/Forward, Refresh, refocus, and Namespace switches.
-Agent refocus keeps its editor mounted after successful access checks; first
-visits may load.
+Use **Pages/Navigation → Return to loaded pages** during delayed reads. Exercise
+Back/Forward, Refresh, refocus, and Namespace switches. Agent refocus keeps its
+editor mounted after successful access checks; first visits may load.
 
 **Return Backend access denied** checks Installation-wide denial. **Return access denied** and **Return session expired** must remove retained private
 content when the response arrives. These fixtures prove presentation; the
@@ -181,7 +179,7 @@ or Namespaces, and return with Back/Forward. Check empty and invalid text, then
 explicit Cancel or Reload. The Configuration story keeps deployment disabled;
 workspace Save changes only the selected simulated file.
 
-Use **Flows → Restart Agent creation** to enter a no-Preset form, leave it, and
+Use **Flows → Restart Agent creation** to enter a default starter form, leave it, and
 confirm re-entry shows the initial choices with an empty new form.
 
 Use **Pages/Create Agent → Keep Preset variables** before applying a Preset and
@@ -192,17 +190,17 @@ bypass the editor's access or recovery controls.
 
 ### Choose and switch revision Secrets
 
-In **Components / Credentials / Slack tokens stored**, inspect references,
-cancel creation, then switch app tokens; the bot binding stays unchanged.
-The API-key switch offers another model Secret.
+In **Components / Credentials / Slack tokens stored**, inspect references, cancel
+creation, then switch app tokens; the bot binding stays unchanged. The API-key
+switch offers another model Secret.
 
 **Secret list denied** retains IDs. **Slack grant denied** preserves the
 reference but requires access recovery before deployment.
 
-In **Components/Channels → Slack Secret menu**, search names/IDs; select with
+In **Components/Channels → Slack Secret menu**, search names/IDs and select with
 arrows and Enter. **Slack create Secret modal** shows Name and masked value.
-In **Slack duplicate Secret name**, rename and retry without reentering the value.
-Browser tests cover controller rejection.
+In **Slack duplicate Secret name**, rename and retry without reentering the value;
+browser tests cover controller rejection.
 
 ### Inspect bound Secrets in revisions
 
@@ -217,17 +215,16 @@ switch to **Configuration** for Harness authentication. Values never appear.
 
 **Create Agent / Discover plugins with a service account token** uses simulated
 discovery. Open **Configure plugins**, select Calendar, then **Add Calendar**;
-expand a tool to edit its policy. **Done** returns to the form;
-**Plugin selections JSON** shows the draft. **Search plugins** queries the
-catalog; **Filter tools** filters locally. Credential, provider, or Harness
-changes clear the catalog and preserve selections.
+expand a tool to edit its policy. **Done** returns to the form; **Plugin selections
+JSON** shows the draft. **Search plugins** queries the catalog; **Filter tools**
+filters locally. Credential, provider, or Harness changes clear the catalog but
+preserve selections.
 
 **Preload plugins after entering a service account token** starts with the picker
-closed. Open it to reuse the background request. **Plugin search loading** holds
-the search response: loading should start while typing, preserve input focus,
-and replace empty-result feedback. **Plugin tools loading** holds Calendar's
-details: check its loading status and disabled **Add Calendar**. Reset to replay
-pending states before timeout.
+closed; open it to reuse the background request. **Plugin search loading** holds
+the response: loading starts while typing, preserves focus, and replaces empty-result
+feedback. **Plugin tools loading** holds Calendar's details: check its loading
+status and disabled **Add Calendar**. Reset to replay pending states before timeout.
 
 **Discover plugins with a selected PAT Secret** uses simulated Secret metadata.
 Choose Calendar, then change the Secret to clear discovery.
@@ -238,22 +235,21 @@ not prove invocation access.
 **Components/Plugins → Unavailable reason popover** covers keyboard access,
 dismissal, compact rows, help links, detail guidance, and disabled **Add**.
 
-**Components/Plugins** uses simulated catalogs and capabilities.
-Expand a tool to inspect inherited enablement
-and approval. Its reviewer shortcut opens the plugin default when per-tool review
-is unsupported. New plugins omit tool defaults; an omitted reviewer inherits the
-Harness reviewer. Codex offers reviewer selection at the plugin default scope
-only. **Unsupported saved tool reviewer** remains visible and can be cleared to
-inherit. Tool IDs under names match the JSON keys.
+**Components/Plugins** uses simulated catalogs and capabilities. Expand a tool
+to inspect inherited enablement and approval. Its reviewer shortcut opens the plugin
+default when per-tool review is unsupported. New plugins omit tool defaults; an
+omitted reviewer inherits the Harness reviewer. Codex offers reviewer selection
+only at plugin default scope. **Unsupported saved tool reviewer** remains visible
+and can be cleared to inherit. Tool IDs match the JSON keys.
 
 **Create Agent / Edit existing plugin policies** exercises the form with simulated
 policy capabilities; it does not verify installation or runtime enforcement.
 
 **Pages/Agent detail → Edit plugins in new version** starts with Calendar saved.
-Opening **Plugins** preloads the catalog using its Service Accounts Secret.
-In **Configure plugins**, add Documents and change Calendar's policy, then save
-and deploy. **Plugins in admitted revision** shows the frozen snapshot.
-Fixtures do not prove installation or live Agent turns.
+**Plugins** preloads the catalog using its Service Accounts Secret. In **Configure
+plugins**, add Documents, change Calendar's policy, save, and deploy. **Plugins in
+admitted revision** shows the frozen snapshot. Fixtures do not prove installation
+or live Agent turns.
 
 ### Update
 

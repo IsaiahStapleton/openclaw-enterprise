@@ -4150,6 +4150,150 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   assertOnlyDefaultNamespace(untouched);
 });
 
+test("Configuration and Agent writes reject invalid Secret bindings as invalid requests", async () => {
+  const fixture = await createInjectedFixture();
+  const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Binding validation installation" },
+  });
+  assert.equal(installation.status, 201);
+  const namespace = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "binding-validation" },
+  });
+  assert.equal(namespace.status, 201);
+  const namespaceId = namespace.data.id;
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespaceId, "ready");
+  const secret = await injectedRequest(fixture.app, "POST", `/namespaces/${namespaceId}/secrets`, {
+    body: { name: "tool-api-key", value: `tool-key-${randomUUID()}` },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+  const own = exactSecretRef(namespaceId, secret.data.id);
+  const foreign = exactSecretRef(`ns_${randomUUID()}`, secret.data.id);
+  const missing = exactSecretRef(namespaceId, `sec_${randomUUID()}`);
+  const values = { agents: { defaults: { model: "codex/gpt-6-astra" } } };
+  const bindingsTo = (name, source) => ({ [name]: { source, delivery: { type: "env" } } });
+
+  const configuration = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceId}/configurations`,
+    { body: { kind: "agent", values, secretBindings: bindingsTo("TOOL_API_KEY", own) } },
+  );
+  assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+  const configurationPath = `/namespaces/${namespaceId}/configurations/${configuration.data.id}`;
+  const agent = await injectedRequest(fixture.app, "POST", `/namespaces/${namespaceId}/agents`, {
+    body: { name: "binding-validation-agent", configurationId: configuration.data.id },
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  const agentPath = `/namespaces/${namespaceId}/agents/${agent.data.id}`;
+
+  const reserved = "A secret binding uses a reserved or invalid environment destination.";
+  const crossNamespace = "Secret references cannot cross Namespaces.";
+  const writes = [
+    [
+      "Configuration create",
+      "POST",
+      `/namespaces/${namespaceId}/configurations`,
+      (bindings) => ({
+        kind: "agent",
+        values,
+        secretBindings: bindings,
+      }),
+    ],
+    [
+      "Configuration update",
+      "PATCH",
+      configurationPath,
+      (bindings) => ({
+        values,
+        secretBindings: bindings,
+      }),
+    ],
+  ];
+  // Each invalid case must fail on its own rule (the exact message); a Secret the Namespace
+  // does not hold stays a not-found.
+  for (const [path, method, url, body] of writes) {
+    for (const [description, bindings, status, message] of [
+      ["reserved destination", bindingsTo("OPENCLAW_TOKEN", own), 400, reserved],
+      ["cross-Namespace Secret", bindingsTo("TOOL_API_KEY", foreign), 400, crossNamespace],
+      ["missing Secret", bindingsTo("TOOL_API_KEY", missing), 404, undefined],
+    ]) {
+      const result = await injectedRequest(fixture.app, method, url, { body: body(bindings) });
+      const label = `${path}, ${description}: ${JSON.stringify(result.body)}`;
+      assert.equal(result.status, status, label);
+      assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
+      if (message !== undefined) {
+        assert.equal(result.body.error.message, message, label);
+      }
+    }
+  }
+
+  // Agents select Secrets only through their Harness authentication source.
+  for (const [path, method, url, body] of [
+    [
+      "Agent create",
+      "POST",
+      `/namespaces/${namespaceId}/agents`,
+      (harnessAuth) => ({
+        name: `binding-validation-${randomUUID().slice(0, 8)}`,
+        configurationId: configuration.data.id,
+        harnessAuth,
+      }),
+    ],
+    [
+      "Agent update",
+      "PATCH",
+      agentPath,
+      (harnessAuth) => ({
+        configurationId: configuration.data.id,
+        harnessAuth,
+      }),
+    ],
+  ]) {
+    for (const [description, source, status, message] of [
+      ["cross-Namespace Secret", foreign, 400, crossNamespace],
+      ["missing Secret", missing, 404, undefined],
+    ]) {
+      const result = await injectedRequest(fixture.app, method, url, {
+        body: body({ method: "api_key", source }),
+      });
+      const label = `${path}, ${description}: ${JSON.stringify(result.body)}`;
+      assert.equal(result.status, status, label);
+      assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
+      if (message !== undefined) {
+        assert.equal(result.body.error.message, message, label);
+      }
+    }
+  }
+
+  // A resource the caller cannot find stays a not-found even when the request is invalid.
+  for (const [path, url, body] of [
+    [
+      "Configuration update",
+      `/namespaces/${namespaceId}/configurations/cfg_${randomUUID()}`,
+      { values, secretBindings: bindingsTo("OPENCLAW_TOKEN", own) },
+    ],
+    [
+      "Agent update",
+      `/namespaces/${namespaceId}/agents/agt_${randomUUID()}`,
+      {
+        configurationId: configuration.data.id,
+        harnessAuth: { method: "api_key", source: foreign },
+      },
+    ],
+  ]) {
+    const result = await injectedRequest(fixture.app, "PATCH", url, { body });
+    assert.equal(result.status, 404, `${path}: ${JSON.stringify(result.body)}`);
+    assert.equal(result.body.error.code, "NOT_FOUND", path);
+  }
+
+  // The rejected writes changed nothing.
+  const stored = await injectedRequest(fixture.app, "GET", configurationPath);
+  assert.equal(stored.data.generation, 1);
+  assert.deepEqual(stored.data.secretBindings, bindingsTo("TOOL_API_KEY", own));
+  const storedAgent = await injectedRequest(fixture.app, "GET", agentPath);
+  assert.deepEqual(storedAgent.data.harnessAuth, agent.data.harnessAuth);
+});
+
 test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
   const fixture = await createInjectedFixture({
     computeDriver: createProvisioningCapableComputeDriver(),
@@ -4286,6 +4430,29 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
+
+  // A model provider baseUrl the runtime cannot use is refused at admission with the field
+  // named, instead of surfacing later as an unexplained startup model check failure.
+  const badBaseUrl = provisioningRequestBody(namespace.data.id, secrets);
+  badBaseUrl.configuration.values = {
+    ...badBaseUrl.configuration.values,
+    models: { providers: { codex: { baseUrl: "not a url", api: "openai-responses" } } },
+  };
+  const refusedBaseUrl = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: badBaseUrl },
+  );
+  assert.equal(refusedBaseUrl.status, 400, JSON.stringify(refusedBaseUrl.body));
+  assert.equal(
+    refusedBaseUrl.body.error.message,
+    "Configuration field /models/providers/codex/baseUrl must be an absolute http or https URL.",
+  );
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.data.id)),
+    [],
+  );
 
   const pluginDriver = new CodexPluginDriver();
   fixture.controller.registerDriver(pluginDriver);

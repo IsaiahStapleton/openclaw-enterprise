@@ -10,6 +10,7 @@ import {
   accessBindingsRemovedWithAgent,
   NamespaceNotReadyError,
   RepositoryOptionsUnavailableError,
+  restrictionsRemovedWithAgent,
   type AgentProvisioningProgress,
   type CreateAgentInput,
   type HarnessResolver,
@@ -303,10 +304,19 @@ export function createAgentHandlers(options: AgentHandlerOptions) {
         // ServicePrincipal, so these are exactly the AccessBindings that completing the
         // deletion removes (unless deleted explicitly first).
         const pending = await accessBindingsRemovedWithAgent(unit, deleting);
+        // The finalizer also deletes the Restrictions on the Agent and its AgentRevisions.
+        const restrictions = await restrictionsRemovedWithAgent(unit, deleting);
         await unit.audit.append(
           mutationEvent(
             { kind: "agent", id: deleting.id, namespaceId },
-            pending.length === 0 ? undefined : { accessBindingsRemovedOnCompletion: pending },
+            pending.length === 0 && restrictions.length === 0
+              ? undefined
+              : {
+                  ...(pending.length === 0 ? {} : { accessBindingsRemovedOnCompletion: pending }),
+                  ...(restrictions.length === 0
+                    ? {}
+                    : { restrictionsRemovedOnCompletion: restrictions }),
+                },
           ),
         );
         return clientAgent(deleting);

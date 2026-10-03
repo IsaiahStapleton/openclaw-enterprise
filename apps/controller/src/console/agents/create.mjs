@@ -1,3 +1,4 @@
+import defaultCodexPreset from "../default-codex-preset.mjs";
 import { element, button } from "../dom.mjs";
 import { WORKSPACE_DEFAULTS, WORKSPACE_DEFAULTS_ID } from "../workspace-defaults.mjs";
 import { configuredHarnessId, harnessAuthDescription } from "./harness-auth.mjs";
@@ -87,16 +88,9 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
     },
   };
 
+  const { plugins, ...base } = structuredClone(defaultCodexPreset.template.configuration.values);
   return {
-    gateway: {
-      mode: "local",
-      bind: "lan",
-      controlUi: {
-        enabled: true,
-        allowedOrigins: ["http://127.0.0.1:18789", "http://localhost:18789"],
-      },
-      http: { endpoints: { chatCompletions: { enabled: true } } },
-    },
+    ...base,
     ...(providerModel
       ? {
           agents: {
@@ -108,29 +102,8 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
           models: { providers: provider },
         }
       : {}),
-    ...(harnessId === "codex"
-      ? {
-          // Codex model transport must use its authenticated app server, never direct HTTP.
-          plugins: {
-            allow: ["codex"],
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    mode: "guardian",
-                    approvalPolicy: "on-request",
-                    sandbox: "read-only",
-                    transport: "websocket",
-                    url: "${APP_SERVER_URL}",
-                    authToken: "${APP_SERVER_TOKEN}",
-                  },
-                },
-              },
-            },
-          },
-        }
-      : {}),
+    // Codex model transport must use its authenticated app server, never direct HTTP.
+    ...(harnessId === "codex" ? { plugins } : {}),
   };
 }
 
@@ -236,6 +209,9 @@ export function renderCreateAgent(context, draft) {
   }
   context.setDiscardOnExit(false);
   context.setDraftCapture(null);
+  const presets = createPresetFields(context, (rendered, options, draft) =>
+    renderAgentForm(context, rendered, options, draft),
+  );
   context.view.replaceChildren(
     link("← Agents", "agents", context),
     element(
@@ -247,12 +223,13 @@ export function renderCreateAgent(context, draft) {
         { className: "muted" },
         "Choose a model, connect repositories, and give your Agent a place to work.",
       ),
-      button(
-        "Start without Preset",
-        () => renderAgentForm(context, {}, {}, { withoutPreset: true }),
-        {
-          className: "primary",
-        },
+      element(
+        "div",
+        { className: "launch-actions" },
+        presets.startDefault,
+        button("Start without Preset", () =>
+          renderAgentForm(context, {}, {}, { discardOnExit: true }),
+        ),
       ),
     ),
     element(
@@ -264,16 +241,12 @@ export function renderCreateAgent(context, draft) {
         { className: "muted" },
         "Start from a Preset to reuse your team's configuration.",
       ),
-      createPresetFields(context, (rendered, options) =>
-        renderAgentForm(context, rendered, options),
-      ),
+      presets.section,
     ),
   );
 }
 
 function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
-  context.setDiscardOnExit(Boolean(draft.withoutPreset));
-  context.drafts.forget("preset");
   const { view, request, namespaceId } = context;
   const agent = rendered.agent ?? {};
   const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -1130,8 +1103,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
   }
   manualModel = draft.manualModel ?? manualModel;
-  context.setDraftCapture(() => ({
-    withoutPreset: Boolean(draft.withoutPreset),
+  const captureDraft = () => ({
+    discardOnExit: Boolean(draft.discardOnExit),
     rendered,
     presetOptions,
     // Keep raw editor text, including invalid JSON. Password controls are deliberately excluded.
@@ -1149,7 +1122,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     modelCredentialSecret,
     oauthLogin: oauthLogin.capture(),
     repositoryAccess: repositories.access(),
-  }));
+  });
   function parseObject(input, reportInvalid = false) {
     try {
       const values = JSON.parse(input.value);
@@ -1834,4 +1807,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     recovery,
     actions,
   );
+  context.setDraftCapture(captureDraft);
+  context.drafts.forget("preset");
+  context.setDiscardOnExit(Boolean(draft.discardOnExit));
 }
