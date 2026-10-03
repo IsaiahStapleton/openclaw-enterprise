@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { startAgentNamespaceCapture } from "./k3d-diagnostics.mjs";
-import { redactFailureFields } from "./reporter.mjs";
+import { failureSecrets, redactFailure } from "./failure-redaction.mjs";
 import { loadTestSuites } from "./test-suites.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -441,12 +441,6 @@ function parseReporter(stdout) {
   return events;
 }
 
-// The test child lacks the OCC_TEST_* variables this job did not pass on, so
-// redact the reporter's text again with this process's env.
-function failureError(error) {
-  return error ? redactFailureFields(error) : error;
-}
-
 function isRealTestEvent(event, absolutePath) {
   return (
     ["test:pass", "test:fail"].includes(event.type) &&
@@ -586,6 +580,10 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       );
 
       const events = parseReporter(nodeResult.stdout);
+      // The job env holds OCC_TEST_* values the child never got; the child env
+      // holds prepared values (database URLs) the job never had. Redact both.
+      const secrets = failureSecrets([process.env, env]);
+      const failureError = (error) => redactFailure(error, secrets, root);
       const rootFailure = events.find(
         (event) =>
           event.type === "test:fail" &&

@@ -1,4 +1,4 @@
-import { stripVTControlCharacters } from "node:util";
+import { failureInputLimit } from "./failure-redaction.mjs";
 
 const safeOccErrorCodes = new Set([
   "INVALID_REQUEST",
@@ -512,113 +512,10 @@ function upstreamDiagnostic(value) {
   return { kind: "chatgpt-admin-http", operation, status };
 }
 
-// Failure messages and the top stack frame make flakes attributable from the
-// results artifact, which anyone who can read the run may download. Keep them
-// short and strip every environment value (credentials, private image names,
-// database URLs) plus common token shapes before they leave the test process.
-// run-tests repeats the pass with the job env, which keeps variables the test
-// child never received.
-const failureMessageLimit = 600;
-const failureFrameLimit = 240;
-const failureInputLimit = 16_384;
-const minimumRedactedEnvLength = 8;
-// Runner and checkout metadata is public and shows up in ordinary messages
-// (owner "openclaw", paths); everything else in the env is treated as private.
-const publicEnvNames = new Set([
-  "CI",
-  "HOME",
-  "HOSTNAME",
-  "ImageOS",
-  "ImageVersion",
-  "LANG",
-  "LOGNAME",
-  "OLDPWD",
-  "PATH",
-  "PWD",
-  "SHELL",
-  "TERM",
-  "TMPDIR",
-  "USER",
-]);
-
-function isPublicEnvName(name) {
-  return (
-    !/TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL|AUTH/iu.test(name) &&
-    (publicEnvNames.has(name) ||
-      name.startsWith("GITHUB_") ||
-      name.startsWith("RUNNER_") ||
-      name.startsWith("LC_") ||
-      name.endsWith("_HOME"))
-  );
-}
-const secretShapes = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
-  /\b(?:[Bb]earer|BEARER|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gu,
-  /\b(eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*)/gu,
-  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}/gu,
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gu,
-  /\b(?:xox[abposr]|xapp)-[A-Za-z0-9-]{8,}/gu,
-  /\bA[KS]IA[A-Z0-9]{16}\b/gu,
-];
-const secretAssignment =
-  /\b([A-Za-z_-]{0,40}(?:password|passwd|secret|token|(?:api|private|client)[_-]?key|authorization|cookie|credential)s?["']?\s*[:=]\s*["']?)[^\s"',;}&]+/giu;
-
-let environmentSecrets;
-function environmentValues() {
-  if (environmentSecrets) {
-    return environmentSecrets;
-  }
-  const values = new Map();
-  for (const [name, value] of Object.entries(process.env)) {
-    if (typeof value !== "string" || isPublicEnvName(name)) {
-      continue;
-    }
-    if (value.length >= minimumRedactedEnvLength) {
-      values.set(value, name);
-    }
-    // A database or proxy URL can surface its password on its own.
-    try {
-      const password = decodeURIComponent(new URL(value).password);
-      if (password.length >= 4) {
-        values.set(password, name);
-      }
-    } catch {
-      // Not a URL.
-    }
-  }
-  // Longest first, so a value containing another is replaced whole.
-  environmentSecrets = [...values].sort(([a], [b]) => b.length - a.length);
-  return environmentSecrets;
-}
-
-export function redactFailureText(text, limit) {
-  if (typeof text !== "string" || text.length === 0) {
-    return undefined;
-  }
-  // Bound the work; only the first `limit` characters survive anyway.
-  let result = stripVTControlCharacters(text.slice(0, failureInputLimit));
-  const root = process.cwd();
-  if (root.length > 1) {
-    result = result.replaceAll(`file://${root}/`, "").replaceAll(`${root}/`, "");
-  }
-  for (const [value, name] of environmentValues()) {
-    result = result.replaceAll(value, `[env:${name}]`);
-  }
-  for (const shape of secretShapes) {
-    result = result.replace(shape, "[redacted]");
-  }
-  result = result
-    .replace(secretAssignment, "$1[redacted]")
-    .replace(/:\/\/[^/\s@]+@/gu, "://[redacted]@")
-    .replace(/[^\P{Cc}\n\t]/gu, "");
-  if (text.length > failureInputLimit) {
-    // The cut can split a value so no rule matches it; drop that tail.
-    const longest = environmentValues()[0]?.[0].length ?? 0;
-    result = result.slice(0, Math.max(0, result.length - Math.max(256, longest)));
-  }
-  return result.length > limit ? `${result.slice(0, limit)}... [truncated]` : result;
-}
-
+// Failure messages and the top stack frame make flakes attributable. They are
+// raw here and travel only over the pipe to run-tests, which redacts and
+// truncates them (failure-redaction.mjs) before anything reaches an artifact
+// or the job log.
 function failureText(cause) {
   const message =
     typeof cause === "string" ? cause : typeof cause?.message === "string" ? cause.message : "";
@@ -631,14 +528,9 @@ function failureText(cause) {
     .split("\n")
     .find((line) => /^\s+at\s/u.test(line))
     ?.trim();
-  return redactFailureFields({ message, frame });
-}
-
-export function redactFailureFields(error) {
   return {
-    ...error,
-    message: redactFailureText(error?.message, failureMessageLimit),
-    frame: redactFailureText(error?.frame, failureFrameLimit),
+    message: message ? message.slice(0, failureInputLimit) : undefined,
+    frame: frame ? frame.slice(0, failureInputLimit) : undefined,
   };
 }
 
