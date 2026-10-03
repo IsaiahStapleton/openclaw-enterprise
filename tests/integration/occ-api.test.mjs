@@ -3267,9 +3267,14 @@ test("native ServiceAccounts keep private credential references and cannot admit
     [],
   );
 
+  // The caller holds delete on the account, so the conflict names what still depends on it.
   const boundDeletion = await controller.request("DELETE", accountPath);
   assert.equal(boundDeletion.status, 409);
   assert.equal(boundDeletion.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    boundDeletion.body.error.message,
+    "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+  );
 
   const detached = await controller.request(
     "PATCH",
