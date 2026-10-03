@@ -516,20 +516,52 @@ function upstreamDiagnostic(value) {
 // results artifact, which anyone who can read the run may download. Keep them
 // short and strip every environment value (credentials, private image names,
 // database URLs) plus common token shapes before they leave the test process.
+// run-tests repeats the pass with the job env, which keeps variables the test
+// child never received.
 const failureMessageLimit = 600;
 const failureFrameLimit = 240;
+const failureInputLimit = 16_384;
 const minimumRedactedEnvLength = 8;
+// Runner and checkout metadata is public and shows up in ordinary messages
+// (owner "openclaw", paths); everything else in the env is treated as private.
+const publicEnvNames = new Set([
+  "CI",
+  "HOME",
+  "HOSTNAME",
+  "ImageOS",
+  "ImageVersion",
+  "LANG",
+  "LOGNAME",
+  "OLDPWD",
+  "PATH",
+  "PWD",
+  "SHELL",
+  "TERM",
+  "TMPDIR",
+  "USER",
+]);
+
+function isPublicEnvName(name) {
+  return (
+    !/TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL|AUTH/iu.test(name) &&
+    (publicEnvNames.has(name) ||
+      name.startsWith("GITHUB_") ||
+      name.startsWith("RUNNER_") ||
+      name.startsWith("LC_") ||
+      name.endsWith("_HOME"))
+  );
+}
 const secretShapes = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
   /\b(?:[Bb]earer|BEARER|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gu,
   /\b(eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*)/gu,
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}/gu,
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gu,
-  /\bxox[abposr]-[A-Za-z0-9-]{8,}/gu,
+  /\b(?:xox[abposr]|xapp)-[A-Za-z0-9-]{8,}/gu,
   /\bA[KS]IA[A-Z0-9]{16}\b/gu,
 ];
 const secretAssignment =
-  /\b([A-Za-z_-]{0,40}(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)s?["']?\s*[:=]\s*["']?)[^\s"',;}&]+/giu;
+  /\b([A-Za-z_-]{0,40}(?:password|passwd|secret|token|(?:api|private|client)[_-]?key|authorization|cookie|credential)s?["']?\s*[:=]\s*["']?)[^\s"',;}&]+/giu;
 
 let environmentSecrets;
 function environmentValues() {
@@ -538,7 +570,7 @@ function environmentValues() {
   }
   const values = new Map();
   for (const [name, value] of Object.entries(process.env)) {
-    if (typeof value !== "string") {
+    if (typeof value !== "string" || isPublicEnvName(name)) {
       continue;
     }
     if (value.length >= minimumRedactedEnvLength) {
@@ -559,12 +591,12 @@ function environmentValues() {
   return environmentSecrets;
 }
 
-function redactFailureText(text, limit) {
+export function redactFailureText(text, limit) {
   if (typeof text !== "string" || text.length === 0) {
     return undefined;
   }
   // Bound the work; only the first `limit` characters survive anyway.
-  let result = stripVTControlCharacters(text.slice(0, 16_384));
+  let result = stripVTControlCharacters(text.slice(0, failureInputLimit));
   const root = process.cwd();
   if (root.length > 1) {
     result = result.replaceAll(`file://${root}/`, "").replaceAll(`${root}/`, "");
@@ -577,24 +609,36 @@ function redactFailureText(text, limit) {
   }
   result = result
     .replace(secretAssignment, "$1[redacted]")
-    .replace(/:\/\/[^/\s:@]+:[^/\s@]+@/gu, "://[redacted]@")
+    .replace(/:\/\/[^/\s@]+@/gu, "://[redacted]@")
     .replace(/[^\P{Cc}\n\t]/gu, "");
+  if (text.length > failureInputLimit) {
+    // The cut can split a value so no rule matches it; drop that tail.
+    const longest = environmentValues()[0]?.[0].length ?? 0;
+    result = result.slice(0, Math.max(0, result.length - Math.max(256, longest)));
+  }
   return result.length > limit ? `${result.slice(0, limit)}... [truncated]` : result;
 }
 
 function failureText(cause) {
   const message =
     typeof cause === "string" ? cause : typeof cause?.message === "string" ? cause.message : "";
-  const frame =
-    typeof cause?.stack === "string"
-      ? cause.stack
-          .split("\n")
-          .find((line) => /^\s+at\s/u.test(line))
-          ?.trim()
-      : undefined;
+  const stack = typeof cause?.stack === "string" ? cause.stack : "";
+  // The stack starts with the message, which can quote another process's stack.
+  const messageEnd =
+    message && stack.includes(message) ? stack.indexOf(message) + message.length : 0;
+  const frame = stack
+    .slice(messageEnd)
+    .split("\n")
+    .find((line) => /^\s+at\s/u.test(line))
+    ?.trim();
+  return redactFailureFields({ message, frame });
+}
+
+export function redactFailureFields(error) {
   return {
-    message: redactFailureText(message, failureMessageLimit),
-    frame: redactFailureText(frame, failureFrameLimit),
+    ...error,
+    message: redactFailureText(error?.message, failureMessageLimit),
+    frame: redactFailureText(error?.frame, failureFrameLimit),
   };
 }
 

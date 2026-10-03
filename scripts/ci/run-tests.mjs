@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { startAgentNamespaceCapture } from "./k3d-diagnostics.mjs";
+import { redactFailureFields } from "./reporter.mjs";
 import { loadTestSuites } from "./test-suites.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -440,6 +441,12 @@ function parseReporter(stdout) {
   return events;
 }
 
+// The test child lacks the OCC_TEST_* variables this job did not pass on, so
+// redact the reporter's text again with this process's env.
+function failureError(error) {
+  return error ? redactFailureFields(error) : error;
+}
+
 function isRealTestEvent(event, absolutePath) {
   return (
     ["test:pass", "test:fail"].includes(event.type) &&
@@ -587,7 +594,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       );
       if (rootFailure) {
         fileFailure = {
-          error: rootFailure.data.error,
+          error: failureError(rootFailure.data.error),
           ...(events.some(
             (event) =>
               event.type === "test:diagnostic" && event.data?.kind === "post-test-async-activity",
@@ -609,7 +616,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
           column: event.data.column,
           skip: event.data.skip,
           todo: event.data.todo,
-          error: event.data.error,
+          error: failureError(event.data.error),
           durationMs: event.data.durationMs,
         }));
     }
