@@ -67,7 +67,7 @@ test("docs build renders every authored page and preserves repository ownership"
   );
   assert.match(
     specifications,
-    /github\.com\/openclaw\/openclaw-enterprise\/blob\/main\/specs\/README\.md/,
+    /href="https:\/\/github\.com\/openclaw\/openclaw-enterprise\/blob\/main\/specs\/README\.md"/,
   );
   const api = await readFile(join(root, "dist/docs/reference/api/index.html"), "utf8");
   assert.match(api, /Development OCC API reference/);
