@@ -7,7 +7,11 @@
 # failures are retried the same way everywhere. A transient failure is a
 # connection, TLS, timeout or truncated-transfer error, or HTTP 408, 429 or
 # 5xx. Other failures (HTTP 404, a bad URL, a write error) fail on the first
-# attempt. Retries stop after five attempts or once 120 seconds have passed.
+# attempt. Retries stop after five attempts, or when the next retry would
+# start more than 120 seconds after the first attempt began (elapsed time
+# plus the backoff delay). The budget does not cut a running attempt short:
+# each attempt may take up to 300 seconds (curl --max-time), so a download
+# gives up within about seven minutes.
 # The checksum is checked once, on the final file, and a mismatch is never
 # retried.
 set -euo pipefail

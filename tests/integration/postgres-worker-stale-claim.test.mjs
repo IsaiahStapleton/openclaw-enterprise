@@ -1,22 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { createOccMetrics } from "../../apps/controller/src/metrics/index.ts";
 import { PostgresMetricsSnapshot } from "../../packages/occ/src/index.ts";
 import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
-
-async function waitFor(description, read, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await read();
-    if (value !== undefined) {
-      return value;
-    }
-    await delay(20);
-  }
-  assert.fail(`Timed out waiting for ${description}.`);
-}
+import { waitFor } from "../helpers/wait-for.mjs";
 
 async function ensureInstallation(state, createDevelopmentIAMState, createAuthPrincipalSeed) {
   const existing = await state.loadInstallation();

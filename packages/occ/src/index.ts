@@ -390,11 +390,13 @@ export {
   CREDENTIAL_WITHDRAWAL_TARGET,
   credentialWithdrawalWorkKey,
   isCredentialWithdrawalWork,
+  runtimeFailureCause,
   validateRuntimeFailureEvidence,
   type DeploymentStatus,
   type DeploymentStatusError,
   type DeploymentStatusResult,
   type PluginDeploymentWarning,
+  type RuntimeFailureCause,
   type RuntimeFailureEvidence,
 } from "./state/controller-work.ts";
 export {
@@ -1867,6 +1869,13 @@ export class OpenClawController {
     if (harnessAuth === null || harnessAuth.method === "runtime") {
       throw new ScopeViolationError(
         "Agent provisioning requires dedicated Harness authentication.",
+      );
+    }
+    // Refuse before any lookup, authorization or write: the worker cannot hand off a
+    // credential-source plan, and admission does not authorize the source.
+    if (harnessAuth.method === "credential_source") {
+      throw new SecretBindingValidationError(
+        "Agent provisioning does not support credential-source Harness authentication. Create the Agent, then deploy it.",
       );
     }
     const acceptedInput = Object.freeze({
@@ -3406,7 +3415,7 @@ export class OpenClawController {
       }
       if (await state.secrets.hasReferences(namespace.id, secret.id)) {
         throw new ResourceStateConflictError(
-          "A Configuration, credential source, Agent draft, active revision, or pending deployment still references the Secret. Remove those references first.",
+          "A Configuration, credential source, Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the Secret. Remove those references, or let provisioning finish, first.",
         );
       }
       const removed = await accessBindingsTargeting(state, namespace.id, "secret", secret.id);
@@ -3972,7 +3981,7 @@ export class OpenClawController {
       }
       if (await state.serviceAccounts.hasReferences(namespace.id, account.id)) {
         throw new ResourceStateConflictError(
-          "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+          "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
         );
       }
       const driver = this.serviceAccountDriver();
@@ -4112,6 +4121,15 @@ export class OpenClawController {
       if (agents.some((agent) => agent.configurationId === configuration.id)) {
         throw new ResourceStateConflictError(
           "An Agent still references the Configuration. Delete the Agent or select another Configuration first.",
+        );
+      }
+      // Guided provisioning keeps its record, which references the Configuration it created,
+      // until the provisioned Agent is deleted, even after that Agent selects another one.
+      if (
+        (await state.provisioning.findByConfiguration(namespace.id, configuration.id)) !== undefined
+      ) {
+        throw new ResourceStateConflictError(
+          "An Agent provisioning record still references the Configuration. Delete the Agent it provisioned first.",
         );
       }
       const previous = this.exactConfiguration(
@@ -6506,6 +6524,10 @@ export class OpenClawController {
       executionMode: plan.executionMode,
       configuration: plan.configuration.values,
     });
+    if (record.status === "failed") {
+      // A failed plan does not keep its Secrets or ServiceAccount from deletion; say which is gone.
+      await this.assertProvisioningSourcesExist(state, namespaceId, plan);
+    }
     await this.authorizeProvisioningSecretSources(
       state,
       principalId,
@@ -7051,6 +7073,36 @@ export class OpenClawController {
         progress: {},
       });
     });
+  }
+
+  private async assertProvisioningSourcesExist(
+    state: PlatformUnitOfWork,
+    namespaceId: string,
+    plan: ReturnType<OpenClawController["provisioningPlan"]>,
+  ): Promise<void> {
+    const ids = Object.values(plan.configuration.secretBindings ?? {}).map(
+      (binding) => binding.source.id,
+    );
+    const auth = plan.harnessAuth;
+    if (auth?.method === "api_key" || auth?.method === "codex_pat" || auth?.method === "oauth") {
+      ids.push(auth.source.id);
+    }
+    for (const id of ids) {
+      if ((await state.secrets.findSecret(namespaceId, id)) === undefined) {
+        throw new ResourceStateConflictError(
+          `Secret ${id}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
+        );
+      }
+    }
+    if (
+      auth?.method === "chatgpt_service_account" &&
+      (await state.serviceAccounts.findServiceAccount(namespaceId, auth.serviceAccountId)) ===
+        undefined
+    ) {
+      throw new ResourceStateConflictError(
+        `ServiceAccount ${auth.serviceAccountId}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
+      );
+    }
   }
 
   private provisioningPlan(record: Readonly<AgentProvisioningRecord>): {

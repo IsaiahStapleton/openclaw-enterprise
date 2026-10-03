@@ -89,7 +89,7 @@ for the supported topology.
 
 While a Credential Gateway is selected, deployment rejects `api_key`,
 `codex_pat`, and `chatgpt_service_account` bindings with `409`. Guided Agent
-provisioning does not yet accept credential sources; create the Agent, then
+provisioning rejects credential sources with `400`; create the Agent, then
 deploy it.
 
 ## Update a source

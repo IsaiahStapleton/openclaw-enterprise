@@ -374,20 +374,23 @@ test("console ignores stale collection successes and errors while switching Name
     response ? route.fulfill({ response }) : route.continue(),
   );
   t.after(() => slowSuccess.release());
+  // Changed data makes the held read rebuild the view if the console still treats it as current.
+  await fixture.createAgent(slow.id, "Slow new agent");
 
   await chooseNamespace(page, "Slow");
   await slowSuccess.waitForRelease();
   const slowSuccessRead = (await settledFetches(page, slowAgentsPath)) + 1;
   await expectRetainedPreview(page, "Slow agent");
-  // The selector stays disabled while the retained preview revalidates. The held read ends at the
-  // console's 15 s request timeout, so this needs more than the shared 10 s action timeout.
-  await chooseNamespace(page, "Current", { timeout: 30_000 });
+  // Namespace admission has finished, so switching away does not wait for the held read.
+  await chooseNamespace(page, "Current");
   await page.getByText("Current agent").waitFor();
   slowSuccess.release();
   await slowSuccess.waitForCompletion();
   // The page has settled the stale read (aborted or answered) and run its handler.
   await waitForSettledFetches(page, slowAgentsPath, slowSuccessRead);
-  await expectNoText(page, /Slow agent|unavailable|failed/i);
+  await expectNoText(page, /Slow (new )?agent|unavailable|failed|interrupted/i);
+  assert.equal(await page.getByText("Current agent").isVisible(), true);
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), current.id);
 
   await page.unroute(slowAgents);
   const slowError = await holdRoute(t, page, slowAgents, (route) => route.abort("failed"));
@@ -401,7 +404,47 @@ test("console ignores stale collection successes and errors while switching Name
   await slowError.waitForCompletion();
   await waitForSettledFetches(page, slowAgentsPath, slowErrorRead);
   // A failed read the console still treated as current would show "Request interrupted".
-  await expectNoText(page, /Slow agent|unavailable|failed|interrupted/i);
+  await expectNoText(page, /Slow (new )?agent|unavailable|failed|interrupted/i);
+  assert.equal(await page.getByText("Current agent").isVisible(), true);
+});
+
+test("an unchanged retained view without a Namespace selection selects the default once one is readable", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  await fixture.createNamespace("Granted later", { ready: true });
+  const denyAll = {
+    id: "deny-all-namespace-read",
+    resourceKind: "namespace",
+    action: "read",
+    effect: "deny",
+  };
+  fixture.policy.restrictions.push(denyAll);
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, "/console/backends");
+  await page.getByText("openai-primary", { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), null);
+  // A settled view is retained reusable, so returning to it takes the unchanged fast path.
+  await page.locator('.content [aria-live="polite"][aria-busy="false"]').waitFor();
+
+  await openShellMenu(page);
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  await page.getByText(fixture.credentials.email.toLowerCase(), { exact: true }).waitFor();
+  fixture.policy.restrictions.splice(fixture.policy.restrictions.indexOf(denyAll), 1);
+  // The retained Backends view revalidates unchanged, but its shell was built without a selection.
+  await page.goBack();
+  await page.waitForFunction(
+    () =>
+      globalThis.document.querySelector('.content [aria-live="polite"]:not([inert])') &&
+      globalThis.document.querySelector("#namespace-selector")?.disabled === false,
+  );
+  await page.getByText("openai-primary", { exact: true }).waitFor();
+  const selection = new URL(page.url()).searchParams.get("namespace");
+  assert.notEqual(selection, null);
+  assert.equal(
+    await page.getByRole("combobox", { name: "Namespace", exact: true }).inputValue(),
+    selection,
+  );
+  await expectNoText(page, /No readable Namespaces/);
 });
 
 async function releaseHeldRoute(page, pattern, hold) {

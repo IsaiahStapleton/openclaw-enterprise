@@ -175,7 +175,8 @@ export class ConfigurationHarnessError extends ScopeViolationError {
 
 /**
  * A request names an invalid Secret binding: Agent provisioning or a Configuration write
- * with a reserved or invalid environment destination or an unsupported binding shape, or
+ * with a reserved or invalid environment destination or an unsupported binding shape
+ * (including credential-source Harness authentication in Agent provisioning), or
  * any of those, an Agent's Harness authentication, a credential source, or plugin discovery
  * naming a Secret in another Namespace. Messages are static, so HTTP reports them as an
  * invalid request instead of hiding them as a scope miss; Secret existence is still checked

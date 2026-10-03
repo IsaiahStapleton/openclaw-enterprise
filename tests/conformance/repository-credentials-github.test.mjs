@@ -18,6 +18,7 @@ import {
   requestHead,
   serviceConfigurationData,
 } from "../fixtures/repository-credentials/builders.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
 
 const config = validateServiceConfig(serviceConfigurationData());
 function owner(factory, clock, profile, id, captured = () => {}, observeDispatch = () => {}) {
@@ -702,10 +703,7 @@ test("token issue failures before a connection are definite; after one they stay
   const key = createGitHubKeyOwner({ privateKey: fixture.privateKey, appId: "12345", clock });
   t.after(() => key.close());
   // A closed port refuses the connection; a raw TCP server accepts and then drops it.
-  const closed = createNetServer();
-  await new Promise((resolve) => closed.listen(0, "127.0.0.1", resolve));
-  const refused = `https://127.0.0.1:${closed.address().port}`;
-  await new Promise((resolve) => closed.close(resolve));
+  const refused = `https://127.0.0.1:${await availablePort()}`;
   const dropping = createNetServer((socket) => socket.destroy());
   await new Promise((resolve) => dropping.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => dropping.close(resolve)));

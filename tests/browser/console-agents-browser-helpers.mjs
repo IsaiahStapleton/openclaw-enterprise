@@ -87,24 +87,11 @@ export async function login(
   path = "/console/agents",
   credentials = fixture.credentials,
 ) {
-  await page.goto(`${fixture.origin}${path}`);
+  await page.goto(new URL(path, fixture.origin).href);
   await page.getByLabel("Username").fill(credentials.email);
   await page.getByLabel("Password").fill(credentials.password);
   await page.getByRole("button", { name: "Login" }).click();
   await page.waitForURL(/\/console\/(agents|backends|namespaces|settings)/);
-}
-
-export async function routeRuntimeCredentials(page, fixture, namespaceId, agentId, data) {
-  await page.route(
-    `${fixture.origin}/namespaces/${namespaceId}/agents/${agentId}/runtime-credentials`,
-    async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data, meta: { requestId: "req_test_runtime_credentials" } }),
-      });
-    },
-  );
 }
 
 // Browser storage the console wrote, except the tab-scoped Installation-access probe answer

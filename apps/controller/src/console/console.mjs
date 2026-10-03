@@ -892,6 +892,12 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
     );
     const agentsNamespaceUnavailable =
       current.feature === "agents" && !namespaces.some((item) => item.id === namespaceId);
+    if (retained && current.namespace !== null) {
+      // Namespace admission is done, so the header selector is usable while the retained
+      // view revalidates, as on first loads. A switch resets the lifetime, discarding these reads.
+      // Without a URL selection the shell has none; the full render below picks the default.
+      shellUI.updateNamespaces(namespaces);
+    }
     let retainedItems = null;
     let retainedAgent = null;
     if (
@@ -944,7 +950,10 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       if (!lifetime.isCurrent(active)) {
         return;
       }
+      // A shell restored without a URL selection has none; once a Namespace is readable,
+      // the full render below picks the default instead.
       const unchanged =
+        namespaceId === current.namespace &&
         validations.every((result) => result.status === "fulfilled") &&
         JSON.stringify(retainedState.user) === JSON.stringify(session.user) &&
         [...retainedState.reads].every(

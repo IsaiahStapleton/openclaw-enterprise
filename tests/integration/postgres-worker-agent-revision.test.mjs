@@ -25,8 +25,8 @@ import {
   backendDefinition,
   requiresPostgres,
   seedBackendBinding,
-  waitFor,
 } from "../helpers/postgres-backend-state.mjs";
+import { waitFor } from "../helpers/wait-for.mjs";
 
 async function prepareDatabase(context) {
   assert.ok(
@@ -7157,6 +7157,16 @@ test(
         "MODEL_PROBE_FAILED",
         "RUNTIME_MODEL_PROBE_FAILED",
         "Deployment runtime startup model check failed.",
+        // The runtime's classified cause is persisted with the failure it explains.
+        { kind: "PROBE_STATUS", detail: "format" },
+      ],
+      [
+        "agent",
+        "model-probe",
+        "MODEL_PROBE_FAILED",
+        "RUNTIME_MODEL_PROBE_FAILED",
+        "Deployment runtime startup model check failed.",
+        { kind: "WRAPPER_ERROR" },
       ],
       [
         "agent",
@@ -7175,7 +7185,7 @@ test(
     ];
     const failures = new Map();
     const candidates = [];
-    for (const [index, [component, check, runtimeCode]] of cases.entries()) {
+    for (const [index, [component, check, runtimeCode, , , cause]] of cases.entries()) {
       const owner = await fixture.agent(`held-runtime-${index}`);
       const candidate = await fixture.revision(owner, 1);
       failures.set(candidate.id, {
@@ -7183,6 +7193,7 @@ test(
         check,
         checkedAt: "2026-10-01T08:00:00.000Z",
         code: runtimeCode,
+        ...(cause === undefined ? {} : { cause }),
       });
       candidates.push({ owner, candidate });
     }
@@ -7205,7 +7216,12 @@ test(
         "SELECT reason_code, result_data FROM occ.controller_work WHERE idempotency_key = $1",
         [candidate.idempotencyKey],
       );
-      assert.deepEqual(result.rows, [{ reason_code: code, result_data: null }]);
+      // Only a failed model probe keeps its runtime failure evidence.
+      const data =
+        code === "RUNTIME_MODEL_PROBE_FAILED"
+          ? { runtimeFailure: failures.get(candidate.id) }
+          : undefined;
+      assert.deepEqual(result.rows, [{ reason_code: code, result_data: data ?? null }]);
       const status = await fixture.controller.getDeploymentStatus(
         fixture.actor.id,
         fixture.namespace.id,
@@ -7213,7 +7229,32 @@ test(
         candidate.id,
       );
       assert.equal(status.status, "failed");
-      assert.deepEqual(status.error, { code, message });
+      assert.deepEqual(status.error, { code, message, ...(data === undefined ? {} : { data }) });
+    }
+
+    // The database admits only the classified shape: no extra fields, no
+    // unknown kind, no free text in the detail, and no cause on another code.
+    const [{ candidate: probeFailed }] = candidates.slice(1, 2);
+    const evidence = failures.get(probeFailed.id);
+    for (const invalid of [
+      {},
+      { runtimeFailure: { ...evidence, cause: { kind: "PROBE_STATUS", detail: "HTTP 404 body" } } },
+      { runtimeFailure: { ...evidence, cause: { kind: "PROVIDER_TEXT", detail: "format" } } },
+      { runtimeFailure: { ...evidence, cause: { detail: "format" } } },
+      { runtimeFailure: { ...evidence, cause: { kind: "PROBE_STATUS", message: "raw" } } },
+      { runtimeFailure: { ...evidence, error: "raw provider response" } },
+      { runtimeFailure: { ...evidence, code: "AUTHENTICATION_FAILED" } },
+      { runtimeFailure: evidence, timeoutMs: 1 },
+    ]) {
+      await assert.rejects(
+        fixture.observerPool.query(
+          "UPDATE occ.controller_work SET result_data = $2::jsonb WHERE idempotency_key = $1",
+          [probeFailed.idempotencyKey, JSON.stringify(invalid)],
+        ),
+        (error) =>
+          error.code === "23514" && error.constraint === "controller_work_result_data_state",
+        JSON.stringify(invalid),
+      );
     }
   },
 );

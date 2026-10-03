@@ -718,7 +718,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List credential sources",
+		Short: "List credential sources without live gateway status",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			namespace, err := app.requiredNamespace()
@@ -782,7 +782,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 	update := &cobra.Command{
 		Use:   "update ID",
 		Short: "Push current or replacement Secret values to the gateway copy",
-		Args:  cobra.ExactArgs(1),
+		Args:  idArgs(credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -1118,7 +1118,7 @@ func (app *application) agentCredentialWithdrawalCommand() *cobra.Command {
 	request := &cobra.Command{
 		Use:   "request AGENT_ID SOURCE_ID",
 		Short: "Request revocation; the worker revokes it from the running revision",
-		Args:  cobra.ExactArgs(2),
+		Args:  idArgs(agentIDArg, credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {
@@ -1139,7 +1139,7 @@ func (app *application) agentCredentialWithdrawalCommand() *cobra.Command {
 	get := &cobra.Command{
 		Use:   "get AGENT_ID SOURCE_ID",
 		Short: "Show whether the source is revoked and why a revocation is still pending",
-		Args:  cobra.ExactArgs(2),
+		Args:  idArgs(agentIDArg, credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, err := app.requiredNamespace()
 			if err != nil {

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createServer } from "node:net";
 import { randomUUID, createHash, X509Certificate } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createServer as createHttpsServer } from "node:https";
@@ -22,6 +21,7 @@ import { authenticatedHeaders, signInWithEmailPassword } from "./auth-session.mj
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
 import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
+import { availablePort } from "./available-port.mjs";
 
 export const backendFixtures = Object.freeze([
   Object.freeze({
@@ -68,24 +68,11 @@ function computeDriver({
   });
 }
 
-async function availableLoopbackPort() {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  assert.equal(typeof address, "object");
-  assert.notEqual(address, null);
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
-
 export async function createConsoleAppFixture(t, options = {}) {
   const installationId = `ins_${randomUUID()}`;
-  const port = await availableLoopbackPort();
+  const port = await availablePort();
   const originHost = options.originHost ?? "127.0.0.1";
-  const browserPort = options.https === true ? await availableLoopbackPort() : port;
+  const browserPort = options.https === true ? await availablePort() : port;
   const origin = `${options.https === true ? "https" : "http"}://${originHost}:${browserPort}`;
   const browserArgs = [];
   const transportOrigin = `http://127.0.0.1:${port}`;
@@ -191,9 +178,13 @@ export async function createConsoleAppFixture(t, options = {}) {
     ? options.secretDriver
     : createTestSecretDriver({ id: "console-secret" });
   let configurationDriver = options.configurationDriver;
-  if (configurationDriver === undefined && options.defaultPresets?.length) {
-    // Preset seeding requires native value validation, so use the real storage Driver.
-    const root = await mkdtemp(join(tmpdir(), "occ-console-presets-"));
+  if (
+    configurationDriver === undefined &&
+    (options.filesystemConfiguration === true || options.defaultPresets?.length)
+  ) {
+    // Native value validation (Preset seeding, inline credential checks) needs the
+    // real storage Driver; the in-memory test Driver accepts any values.
+    const root = await mkdtemp(join(tmpdir(), "occ-console-configuration-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     configurationDriver = new FilesystemConfigurationDriver(root);
   }

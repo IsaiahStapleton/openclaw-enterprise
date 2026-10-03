@@ -48,7 +48,9 @@ reach (refused connection, unknown host) usually reports
 `RUNTIME_MODEL_PROBE_TIMEOUT` with OpenClaw and `RUNTIME_MODEL_PROBE_FAILED`
 with Codex.
 Startup evidence may identify the runtime component, failed check, code, and
-check time. Plugin warnings describe that attempt. An unavailable record has
+check time. A failed startup model check may also show its **Cause**, such as
+the provider reporting a rate limit or the check process exiting with an error
+([causes](../../reference/agents/deployment.md#model-check-failure-cause)). Plugin warnings describe that attempt. An unavailable record has
 unknown status. While the record is `queued` or `running`, the panel rereads it
 every few seconds and stops at `succeeded`, `failed`, or a read error.
 **Refresh deployment** rereads it, the selected version, and that version's

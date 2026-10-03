@@ -1339,11 +1339,23 @@ export interface PluginDeploymentWarning {
   readonly pluginId: string;
 }
 
+/**
+ * Why a runtime startup model check failed, classified by the runtime from a
+ * closed vocabulary. It never carries native output, provider responses or
+ * credentials: `detail` is a short token such as `exit-1` or `rate_limit`.
+ */
+export interface RuntimeFailureCause {
+  readonly kind: "PROCESS_EXIT" | "PROBE_STATUS" | "INVALID_OUTPUT" | "WRAPPER_ERROR";
+  readonly detail?: string;
+}
+
 export interface RuntimeFailureEvidence {
   readonly component: string;
   readonly check: string;
   readonly checkedAt: string;
   readonly code: string;
+  /** Present only with code MODEL_PROBE_FAILED. */
+  readonly cause?: RuntimeFailureCause;
 }
 
 /**

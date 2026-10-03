@@ -20,6 +20,7 @@ import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
 import { assertReservedLane } from "../helpers/production-sign-in.mjs";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
 
 const email = "github-recovery@example.test";
 const password = "github-local-recovery-password";
@@ -69,10 +70,7 @@ test(
       computeDriver: createDevelopmentComputeDriver(),
       configurationDriver,
     });
-    const reservation = createServer();
-    await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
-    const port = reservation.address().port;
-    await new Promise((resolve) => reservation.close(resolve));
+    const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
     const base = {
       mode: "development",

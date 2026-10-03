@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { createServer } from "node:net";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
@@ -33,6 +32,7 @@ import {
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
@@ -42,19 +42,6 @@ const uuidV4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{
 const identifier = (prefix) => new RegExp(`^${prefix}_${uuidV4}$`);
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
 const missingAgentId = "agt_6f1c9b2d-8e34-4a1f-9c57-2d0b8e4a71c3";
-
-async function availableLoopbackPort() {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  assert.equal(typeof address, "object");
-  assert.notEqual(address, null);
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
 
 function childEnvironment(port, overrides = {}) {
   const environment = {
@@ -134,7 +121,7 @@ async function assertUnsafeStartupRejected() {
     ["missing development email", { ...configuredDatabase, OPENCLAW_DEV_EMAIL: "" }],
     ["missing development password", { ...configuredDatabase, OPENCLAW_DEV_PASSWORD: "" }],
   ]) {
-    const port = await availableLoopbackPort();
+    const port = await availablePort();
     const processState = startChild(port, overrides);
     let deadline;
 
@@ -3301,7 +3288,7 @@ test("native ServiceAccounts keep private credential references and cannot admit
   assert.equal(boundDeletion.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(
     boundDeletion.body.error.message,
-    "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+    "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
   );
   // Authorization precedes the reference check: a caller without delete learns nothing about references.
   const outsider = await controller.fixture.createAuthPrincipal("service-account-outsider");

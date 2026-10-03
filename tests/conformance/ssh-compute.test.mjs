@@ -21,7 +21,6 @@ import { createServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   SshComputeDriver,
@@ -30,6 +29,7 @@ import {
 import { SystemSshCommandExecutor } from "../../apps/controller/src/drivers/compute/ssh/executor.ts";
 import { withComputeAbortSignal } from "../../apps/controller/src/drivers/compute/operation-context.ts";
 import { admitLoggingConfiguration } from "../../packages/contracts/src/index.ts";
+import { waitFor } from "../helpers/wait-for.mjs";
 
 const require = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
 const { Check } = require("typebox/value");
@@ -340,21 +340,6 @@ async function json(path) {
 async function missing(path) {
   await assert.rejects(access(path), { code: "ENOENT" });
 }
-// Polls `read` until it returns a value other than undefined, failing after the deadline.
-async function waitFor(description, read, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const value = await read();
-    if (value !== undefined) {
-      return value;
-    }
-    if (Date.now() >= deadline) {
-      assert.fail(`Timed out waiting for ${description}.`);
-    }
-    await delay(10);
-  }
-}
-
 function setOption(object, keys, value) {
   let target = object;
   for (const key of keys.slice(0, -1)) {

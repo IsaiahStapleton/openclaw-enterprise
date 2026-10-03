@@ -535,9 +535,11 @@ function convergenceDeadlineResultData(
   timeoutMs: number,
   runtimeFailure: RuntimeFailureEvidence | undefined,
 ): Readonly<Record<string, unknown>> {
+  // Deadline data never carries a cause; only RUNTIME_MODEL_PROBE_FAILED keeps one.
+  const { cause: _cause, ...evidence } = runtimeFailure ?? {};
   return Object.freeze({
     timeoutMs,
-    ...(runtimeFailure === undefined ? {} : { runtimeFailure }),
+    ...(runtimeFailure === undefined ? {} : { runtimeFailure: evidence }),
   });
 }
 
@@ -3284,7 +3286,12 @@ export class ControllerWorker {
       runtimeFailure === undefined ? undefined : heldRuntimeFailureCode(runtimeFailure.code);
     let resolved: RevisionDispatchResult;
     if (heldFailureCode !== undefined) {
-      resolved = { outcome: "permanent", code: heldFailureCode };
+      resolved = {
+        outcome: "permanent",
+        code: heldFailureCode,
+        // A failed model probe keeps its evidence and the runtime's classified cause.
+        ...(heldFailureCode === "RUNTIME_MODEL_PROBE_FAILED" ? { data: { runtimeFailure } } : {}),
+      };
     } else if (expired && result.dependencyFailure !== undefined) {
       // The dependency was still failing at the deadline: name it, not the deadline.
       resolved = { outcome: "permanent", code: result.code };

@@ -114,6 +114,22 @@ const DEPLOYMENT_FAILURE_GUIDANCE = {
   },
 };
 
+// The runtime classifies a failed startup model check into one of these kinds and
+// a fixed detail token such as exit-1, rate_limit or no-reply.
+const RUNTIME_FAILURE_CAUSE_LABELS = {
+  PROCESS_EXIT: "The check process exited with an error",
+  PROBE_STATUS: "The model provider check reported a failure",
+  INVALID_OUTPUT: "The check returned unexpected output",
+  WRAPPER_ERROR: "The runtime could not run the check",
+};
+
+function runtimeFailureCauseText(cause) {
+  const label = Object.hasOwn(RUNTIME_FAILURE_CAUSE_LABELS, cause.kind)
+    ? RUNTIME_FAILURE_CAUSE_LABELS[cause.kind]
+    : cause.kind;
+  return cause.detail ? `${label} (${cause.detail})` : label;
+}
+
 const DEPLOYMENT_FAILURE_LINK_LABELS = {
   credentials: "Open Credentials",
   configuration: "Open Configuration",
@@ -161,6 +177,12 @@ function deploymentFailure(error, hrefs = {}, logs = null) {
           element("dd", {}, runtimeFailure.check ?? "Unknown"),
           element("dt", {}, "Code"),
           element("dd", {}, runtimeFailure.code ?? "Unknown"),
+          ...(runtimeFailure.cause && typeof runtimeFailure.cause === "object"
+            ? [
+                element("dt", {}, "Cause"),
+                element("dd", {}, runtimeFailureCauseText(runtimeFailure.cause)),
+              ]
+            : []),
           element("dt", {}, "Checked"),
           element("dd", {}, displayDate(runtimeFailure.checkedAt)),
         )

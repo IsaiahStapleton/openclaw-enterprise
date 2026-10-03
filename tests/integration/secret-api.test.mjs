@@ -898,7 +898,7 @@ for (const [model, method, executionMode] of [
     assert.equal(blocked.status, 409);
     assert.equal(
       blocked.body.error.message,
-      "A Configuration, credential source, Agent draft, active revision, or pending deployment still references the Secret. Remove those references first.",
+      "A Configuration, credential source, Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the Secret. Remove those references, or let provisioning finish, first.",
     );
     // Authorization precedes the reference check: a caller without delete learns nothing about references.
     const { app: outsiderApp } = await fixture.createPrincipal("secret-outsider");
