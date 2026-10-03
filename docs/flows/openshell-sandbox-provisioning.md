@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: 2026-09-30
-last_updated_session: authoring-run/b158c89c-3010-42ae-95b4-350b05de7441
+last_updated_session: authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -183,6 +183,9 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 
 OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
+It always sends `hard_requirement` Landlock compatibility; Installation startup
+rejects any other `policy.landlockCompatibility` value. On a node that cannot
+enforce Landlock, the OpenShell supervisor refuses to launch the workload.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
 allowlists before they are converted to the exact `v0.1.3-pre.1` protobuf enums.
 It rejects inherited object names and the old `passthrough` TLS spelling,
@@ -322,6 +325,8 @@ Kubernetes Compute delete the Kubernetes namespace.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 23:45: Required hard Landlock compatibility in the OpenShell Sandbox request and rejected weaker Installation settings. (authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a - 129723ab)
 
 - 2026-09-30 21:14: Updated the OpenShell source, images, charts, and wire fixture to v0.1.3-pre.1 while preserving the default service authorization and fail-closed projection boundaries. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 

@@ -3,6 +3,7 @@ import { PresetValidationError } from "@openclaw-enterprise/contracts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
+  AgentProvisioningValidationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   ChannelDirectoryError,
@@ -500,6 +501,9 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(400, "INVALID_REQUEST", error.message, [{ path: "/value", code: error.code }]);
   }
   if (error instanceof ConfigurationHarnessError) {
+    return failure(400, "INVALID_REQUEST", error.message);
+  }
+  if (error instanceof AgentProvisioningValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof NativeWorkerSupportError) {

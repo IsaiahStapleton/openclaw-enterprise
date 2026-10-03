@@ -9,6 +9,7 @@ import { PresetValidationError } from "../../packages/contracts/src/index.ts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
+  AgentProvisioningValidationError,
   AuthorizationDeniedError,
   ChannelCredentialError,
   ChannelDirectoryError,
@@ -172,6 +173,15 @@ const cases = [
       status: 400,
       code: "INVALID_REQUEST",
       message: "The Configuration does not select a supported Harness.",
+    },
+  ],
+  [
+    "an invalid Agent provisioning Secret binding",
+    new AgentProvisioningValidationError("Secret references cannot cross Namespaces."),
+    {
+      status: 400,
+      code: "INVALID_REQUEST",
+      message: "Secret references cannot cross Namespaces.",
     },
   ],
   [

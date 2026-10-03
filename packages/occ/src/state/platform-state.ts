@@ -61,6 +61,7 @@ import { immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
   AGENT_NAME_CONFLICT,
   CREDENTIAL_SOURCE_NAME_CONFLICT,
+  DELETED_NAMESPACE_NAME_CONFLICT,
   DependencyUnavailableError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
@@ -1148,12 +1149,13 @@ function repositories(
       if (snapshot.namespaces.has(key)) {
         throw new ResourceConflictError("The server generated an existing Namespace identity.");
       }
-      if (
-        Array.from(snapshot.namespaces.values()).some(
-          (existing) => existing.name === namespace.name,
-        )
-      ) {
-        throw new ResourceStateConflictError(NAMESPACE_NAME_CONFLICT);
+      const named = Array.from(snapshot.namespaces.values()).find(
+        (existing) => existing.name === namespace.name,
+      );
+      if (named !== undefined) {
+        throw new ResourceStateConflictError(
+          named.deletedAt === undefined ? NAMESPACE_NAME_CONFLICT : DELETED_NAMESPACE_NAME_CONFLICT,
+        );
       }
       if (
         namespace.existingNamespace !== undefined &&
@@ -2295,10 +2297,16 @@ function repositories(
     },
   };
 
-  const agentRevisionExists = (namespaceId: string, revisionId: string): boolean =>
+  // A revision of a deleting Agent is removed with it, so it admits no new binding.
+  const liveAgentRevisionExists = (namespaceId: string, revisionId: string): boolean =>
     Array.from(snapshot.revisions.values())
       .flat()
-      .some((revision) => revision.namespaceId === namespaceId && revision.id === revisionId);
+      .some(
+        (revision) =>
+          revision.namespaceId === namespaceId &&
+          revision.id === revisionId &&
+          snapshot.agents.get(agentKey(namespaceId, revision.agentId))?.status === "active",
+      );
 
   const managedPolicyResourceExists = async (
     namespaceId: string,
@@ -2314,7 +2322,7 @@ function repositories(
       return (await agents.findAgent(namespaceId, resourceId))?.status === "active";
     }
     if (resourceKind === "agent_revision") {
-      return agentRevisionExists(namespaceId, resourceId);
+      return liveAgentRevisionExists(namespaceId, resourceId);
     }
     if (resourceKind === "configuration") {
       return (await configurations.findConfiguration(namespaceId, resourceId)) !== undefined;
@@ -2339,6 +2347,7 @@ function repositories(
       (agent) =>
         agent.namespaceId === namespaceId &&
         agent.servicePrincipalId === identityId &&
+        agent.status === "active" &&
         snapshot.namespaces.get(namespaceId)?.deletedAt === undefined,
     );
 
