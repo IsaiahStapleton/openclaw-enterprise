@@ -191,9 +191,13 @@ export async function createConsoleAppFixture(t, options = {}) {
     ? options.secretDriver
     : createTestSecretDriver({ id: "console-secret" });
   let configurationDriver = options.configurationDriver;
-  if (configurationDriver === undefined && options.defaultPresets?.length) {
-    // Preset seeding requires native value validation, so use the real storage Driver.
-    const root = await mkdtemp(join(tmpdir(), "occ-console-presets-"));
+  if (
+    configurationDriver === undefined &&
+    (options.filesystemConfiguration === true || options.defaultPresets?.length)
+  ) {
+    // Native value validation (Preset seeding, inline credential checks) needs the
+    // real storage Driver; the in-memory test Driver accepts any values.
+    const root = await mkdtemp(join(tmpdir(), "occ-console-configuration-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     configurationDriver = new FilesystemConfigurationDriver(root);
   }

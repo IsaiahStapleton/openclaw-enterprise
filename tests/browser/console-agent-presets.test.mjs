@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import {
   CodexPluginDriver,
   OCCPluginDriver,
@@ -49,15 +46,13 @@ import {
 const defaultCodexPreset = JSON.parse(
   await readFile(new URL("../../deploy/presets/default-codex.json", import.meta.url), "utf8"),
 );
+// Default Presets also select the filesystem Configuration Driver (native value validation).
 const createConsoleAppFixture = (t, options = {}) =>
   createBaseConsoleAppFixture(t, { defaultPresets: [defaultCodexPreset], ...options });
 
 test("Runtime-auth Presets retain OpenClaw when changing from Anthropic to OpenAI", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-runtime-provider-preset-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const { fixture, namespace } = await createRuntimeAuthFixture(t, "Runtime Preset providers", {
     defaultPresets: [defaultCodexPreset],
-    configurationDriver: new FilesystemConfigurationDriver(root),
   });
   const primary = "anthropic/claude-runtime-model";
   const values = nativeValues("runtime-preset");
@@ -1062,11 +1057,7 @@ test("API-key Presets keep their credential provider fixed while allowing model 
 });
 
 test("Dedicated OpenClaw Presets preserve custom provider transport across execution mode changes", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-dedicated-openclaw-preset-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
-  });
+  const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Dedicated OpenClaw Preset", { ready: true });
   const secret = await fixture.createSecret(namespace.id, "OpenAI model key", "dedicated-key");
@@ -1149,11 +1140,7 @@ test("Dedicated OpenClaw Presets preserve custom provider transport across execu
 });
 
 test("Partial Presets without a model policy retain the default Codex harness", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-partial-preset-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
-  });
+  const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Partial model Preset", { ready: true });
   const preset = await fixture.request("POST", `/namespaces/${namespace.id}/presets`, {
@@ -1580,11 +1567,7 @@ test("standard Codex password Preset creates one scoped Secret and reuses it aft
 });
 
 test("Preset marks referenced variables without defaults as required before rendering", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-required-preset-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
-  });
+  const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Required Preset variables", { ready: true });
   const artifact = JSON.parse(
@@ -1806,11 +1789,7 @@ test("codex_pat password Preset creates one Secret and reuses it after an Agent 
 });
 
 test("password Preset names the taken Secret when an earlier Agent left one with the same name", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-secret-name-conflict-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const fixture = await createConsoleAppFixture(t, {
-    configurationDriver: new FilesystemConfigurationDriver(root),
-  });
+  const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Secret name conflict", { ready: true });
   // Deleting an Agent keeps its model Secret, which is named after the Agent.
@@ -2489,11 +2468,9 @@ test("unsaved Preset drafts retain unfinished edits across navigation until expl
 });
 
 test("an empty Namespace can create an Agent without a Preset", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-console-empty-presets-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = await createConsoleAppFixture(t, {
     defaultPresets: [],
-    configurationDriver: new FilesystemConfigurationDriver(root),
+    filesystemConfiguration: true,
   });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("No Presets", { ready: true });
@@ -2690,11 +2667,9 @@ test("denied Preset reads do not automatically start an Agent form", async (t) =
 });
 
 test("The console requires a readable installed default for quick-start and still allows other Presets", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "occ-console-no-default-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = await createConsoleAppFixture(t, {
     defaultPresets: [],
-    configurationDriver: new FilesystemConfigurationDriver(root),
+    filesystemConfiguration: true,
   });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("No installed starter", { ready: true });
