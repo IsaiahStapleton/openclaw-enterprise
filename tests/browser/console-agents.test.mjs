@@ -32,6 +32,7 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  settlePageRequests,
   repositoryCheckbox,
   waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
@@ -740,7 +741,7 @@ test("Agent creation blocks selective Agent-create IAM unavailability even when 
   await page.getByLabel("Agent name").fill("Authorization unavailable Agent");
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(100);
+  await settlePageRequests(page);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
   fixture.controller.selectDriver("iam", originalIAM.id);
@@ -800,7 +801,7 @@ for (const failure of [
     await page.locator('.repository-options[aria-busy="false"]').waitFor({ state: "attached" });
     assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
     await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-    await page.waitForTimeout(100);
+    await settlePageRequests(page);
     assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
     assert.equal(agentPostRequests(requests, namespace.id).length, 0);
     assert.doesNotMatch(await page.locator("body").innerText(), /untrusted-server-detail/);
@@ -978,7 +979,7 @@ test("Agent creation recovers from stale authoritative admission without replaci
     .waitFor();
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(100);
+  await settlePageRequests(page);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   await page.unroute(repositoryOptionsPath, optionalRepositoryOutage);
 
@@ -1013,7 +1014,7 @@ test("Agent creation recovers from stale authoritative admission without replaci
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Start a new draft" }).isVisible(), true);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(100);
+  await settlePageRequests(page);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
   await repositoryCheckbox(page, "example/application").click();
@@ -1023,7 +1024,7 @@ test("Agent creation recovers from stale authoritative admission without replaci
   await page.getByRole("button", { name: "Remove example/application" }).click();
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(100);
+  await settlePageRequests(page);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   await repositoryCheckbox(page, "example/application").click();
   await page.locator("#repository-default-git-read").check();
@@ -1092,7 +1093,7 @@ test("Agent creation does not expose recovery actions after an unknown admission
   );
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(100);
+  await settlePageRequests(page);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
 });
 
@@ -1148,7 +1149,7 @@ test("Agent repository recovery with empty current policy requires an explicit n
   assert.equal(await page.locator(".repository-options input").count(), 0);
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   await page.locator("#create-agent-form").evaluate((form) => form.requestSubmit());
-  await page.waitForTimeout(100);
+  await settlePageRequests(page);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
   assert.equal(agentPostRequests(requests, namespace.id).length, 1);
   page.once("dialog", (dialog) => dialog.accept());
