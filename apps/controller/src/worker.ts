@@ -78,6 +78,7 @@ import {
 import type { OccMetrics, WorkKind, WorkOutcome } from "./metrics/index.ts";
 import {
   RepositoryCredentialAuthorityError,
+  repositoryCleanupFailureCode,
   RepositoryCredentialLifecycle,
 } from "./worker/repository-credentials.ts";
 
@@ -120,6 +121,23 @@ const REVISION_READINESS_CODES: ReadonlySet<string> = new Set([
   "WORKSPACE_NODE_BINDING_PENDING",
   ...Object.values(REVISION_PENDING_CODES),
 ]);
+
+// A repository cleanup that another pass cannot settle (an invalidated attempt or a cleanup
+// error) still rechecks so its obligation stays visible, but the delay grows with the work's
+// age, as for long readiness rechecks: the configured interval for the first 20 minutes at
+// 30 s, then age / 40, up to 10 minutes.
+const REPOSITORY_CLEANUP_RECHECK_MAX_MS = 600_000;
+const REPOSITORY_CLEANUP_RECHECK_AGE_DIVISOR = 40;
+
+function repositoryCleanupRecheckMs(intervalMs: number, ageMs: number): number {
+  return Math.max(
+    intervalMs,
+    Math.min(
+      REPOSITORY_CLEANUP_RECHECK_MAX_MS,
+      Math.round(ageMs / REPOSITORY_CLEANUP_RECHECK_AGE_DIVISOR),
+    ),
+  );
+}
 
 const LOGGED_ERROR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
 
@@ -572,6 +590,8 @@ export class ControllerWorker {
     { readonly stoppedAt: number; readonly restopAfterMs: number }
   >();
   private readonly deployTimings = new Map<string, DeployTiming>();
+  /** The last stuck-cleanup cause logged per repository cleanup work item. */
+  private readonly repositoryCleanupCauses = new Map<string, string>();
   /**
    * The last pending Namespace lifecycle observation this process audited, by work
    * key. A teardown waits for Kubernetes namespaces to terminate over many passes;
@@ -1218,6 +1238,7 @@ export class ControllerWorker {
 
   private async processRepositoryCleanup(claim: ClaimedWork): Promise<void> {
     let complete = false;
+    let cause: string | undefined;
     const cleanupRevisionId = repositoryCleanupRevisionId(claim);
     if (cleanupRevisionId === undefined) {
       await this.finalize(claim, undefined, { outcome: "permanent", code: "INVALID_TARGET" });
@@ -1232,7 +1253,9 @@ export class ControllerWorker {
       });
       if (revision !== undefined) {
         const retireRuntime = isRepositoryRuntimeRetirementWork(claim);
-        complete = await this.repositoryCredentials.cleanup(claim, revision, { retireRuntime });
+        ({ settled: complete, cause } = await this.repositoryCredentials.cleanup(claim, revision, {
+          retireRuntime,
+        }));
         if (retireRuntime) {
           if (
             revision.compute.id !== this.compute.id ||
@@ -1265,13 +1288,17 @@ export class ControllerWorker {
             (attempt) => attempt.revisionId === cleanupRevisionId,
           ),
         );
-        complete = await this.repositoryCredentials.cleanupRetained(claim, attempts);
+        ({ settled: complete, cause } = await this.repositoryCredentials.cleanupRetained(
+          claim,
+          attempts,
+        ));
       }
     } catch (error) {
       if (error instanceof WorkClaimLostError) {
         throw error;
       }
       complete = false;
+      cause = repositoryCleanupFailureCode(error);
     }
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
@@ -1292,16 +1319,34 @@ export class ControllerWorker {
           (attempt) => attempt.phase === "closing" || attempt.phase === "invalidated",
         );
       }
+      if (
+        !complete &&
+        cause === undefined &&
+        attempts.some(({ phase }) => phase === "invalidated")
+      ) {
+        cause = "REPOSITORY_ATTEMPT_INVALIDATED";
+      }
       if (complete) {
         await queue.complete(claim);
       } else {
+        // A session awaiting disposal keeps the configured cadence. A stuck cleanup keeps its
+        // obligation visible but slows down with age, like long readiness rechecks.
         await queue.defer(
           claim,
           { code: "REPOSITORY_CLEANUP_PENDING" },
-          { delayMs: this.repositoryCleanupRetryMs },
+          {
+            delayMs:
+              cause === undefined
+                ? this.repositoryCleanupRetryMs
+                : repositoryCleanupRecheckMs(
+                    this.repositoryCleanupRetryMs,
+                    Date.now() - claim.createdAt.getTime(),
+                  ),
+          },
         );
       }
     }, this.queueOptions);
+    this.reportRepositoryCleanupCause(claim, complete ? undefined : cause);
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -1310,6 +1355,36 @@ export class ControllerWorker {
       revisionId: cleanupRevisionId,
       outcome: complete ? "success" : "pending",
       code: complete ? "REPOSITORY_CLEANUP_COMPLETE" : "REPOSITORY_CLEANUP_PENDING",
+    });
+  }
+
+  /** Log a stuck cleanup's cause once per work item and cause, not on every recheck. */
+  private reportRepositoryCleanupCause(claim: ClaimedWork, cause: string | undefined): void {
+    const key = claim.idempotencyKey;
+    if (cause === undefined) {
+      this.repositoryCleanupCauses.delete(key);
+      return;
+    }
+    if (this.repositoryCleanupCauses.get(key) === cause) {
+      return;
+    }
+    this.repositoryCleanupCauses.delete(key);
+    this.repositoryCleanupCauses.set(key, cause);
+    if (this.repositoryCleanupCauses.size > MAX_STOPPED_PREDECESSOR_RECORDS) {
+      // Forgetting a record only costs one repeated warning.
+      const oldest = this.repositoryCleanupCauses.keys().next().value;
+      if (oldest !== undefined) {
+        this.repositoryCleanupCauses.delete(oldest);
+      }
+    }
+    this.emit({
+      event: "worker.repository-cleanup-warning",
+      ...workLogFields(claim),
+      namespaceId: claim.namespaceId,
+      agentId: claim.agentId,
+      revisionId: repositoryCleanupRevisionId(claim),
+      code: "REPOSITORY_CLEANUP_STALLED",
+      cause,
     });
   }
 

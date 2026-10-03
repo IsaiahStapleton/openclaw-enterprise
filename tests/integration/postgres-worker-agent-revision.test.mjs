@@ -3923,6 +3923,79 @@ test(
 );
 
 test(
+  "a repository cleanup stuck on an invalidated attempt logs its cause once and backs off",
+  requiresPostgres,
+  async (context) => {
+    const repository = repositoryBoundary();
+    // The production default; the fixture's hour-long interval would hide the backoff.
+    repository.driver.maintenanceIntervalMs = 30_000;
+    const fixture = await setup(context, { repoDriver: repository.driver });
+    const owner = await fixture.agent("cleanup-invalidated");
+    const candidate = await fixture.revision(owner, 1, undefined, repository.snapshot);
+    const events = [];
+    await fixture.start(fixture.compute, (event) => events.push(event));
+    await fixture.work(candidate, "succeeded");
+    const [attempt] = await repositoryAttempts(fixture, candidate);
+    // An invalidated attempt has no outgoing transition, so no pass can settle this cleanup.
+    await fixture.observerPool.query(
+      `UPDATE occ.repository_session_attempts
+       SET phase = 'invalidated', updated_at = clock_timestamp()
+       WHERE admission_id = $1`,
+      [attempt.admissionId],
+    );
+    const cleanupKey = `agent_revision:${candidate.id}:repository_cleanup:${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+    await fixture.observerPool.query(
+      `INSERT INTO occ.controller_work
+         (idempotency_key, namespace_id, agent_id, revision_id, actor_id,
+          namespace_target, agent_target, state, available_at, attempt_count, created_at,
+          updated_at)
+       VALUES ($1, $2, $3, $4, $5, NULL, NULL, 'queued',
+          clock_timestamp(), 0, clock_timestamp() - interval '1 day', clock_timestamp())`,
+      [cleanupKey, fixture.namespace.id, owner.id, candidate.id, fixture.actor.id],
+    );
+    const deferred = async (passes) =>
+      waitFor(`cleanup pass ${passes} to defer`, async () => {
+        const completed = events.filter(
+          (event) => event.event === "worker.completed" && event.workId === cleanupKey,
+        );
+        if (completed.length < passes) {
+          return undefined;
+        }
+        const { rows } = await fixture.observerPool.query(
+          `SELECT state, EXTRACT(EPOCH FROM (available_at - updated_at)) * 1000 AS delay_ms
+           FROM occ.controller_work WHERE idempotency_key = $1`,
+          [cleanupKey],
+        );
+        return rows[0]?.state === "queued" ? rows[0] : undefined;
+      });
+    // A day-old stuck cleanup rechecks every 10 minutes, not every 30 s.
+    const first = await deferred(1);
+    assert.ok(Number(first.delay_ms) >= 590_000, `delay ${first.delay_ms} ms`);
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+      [cleanupKey],
+    );
+    await deferred(2);
+    // The cause is logged once, not on every recheck.
+    assert.deepEqual(
+      events
+        .filter(
+          (event) =>
+            event.event === "worker.repository-cleanup-warning" && event.workId === cleanupKey,
+        )
+        .map(({ code, cause }) => ({ code, cause })),
+      [{ code: "REPOSITORY_CLEANUP_STALLED", cause: "REPOSITORY_ATTEMPT_INVALIDATED" }],
+    );
+    // Retain the unsettled obligation while keeping it out of later scheduling.
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",
+      [cleanupKey],
+    );
+    await fixture.stop();
+  },
+);
+
+test(
   "Agent deletion completes with unresolved repository sessions retained as evidence",
   requiresPostgres,
   async (context) => {
