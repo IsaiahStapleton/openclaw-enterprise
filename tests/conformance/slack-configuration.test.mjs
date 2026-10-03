@@ -58,3 +58,13 @@ test("bundled Slack presets supply threaded replies", async () => {
     );
   }
 });
+
+test("the Slack editor steers named accounts away from the default account's token names", () => {
+  const support = slack.support({ channels: { slack: { accounts: { work: {} } } } });
+  assert.equal(support.supported, false);
+  // OpenClaw starts an implicit default account from SLACK_APP_TOKEN/SLACK_BOT_TOKEN.
+  assert.match(
+    support.reason,
+    /own token environment names, not SLACK_APP_TOKEN or SLACK_BOT_TOKEN/,
+  );
+});
