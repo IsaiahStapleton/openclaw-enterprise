@@ -5,7 +5,6 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { NativeIAMDriver, createAuthPrincipalSeed } from "../../packages/iam/src/index.ts";
@@ -17,6 +16,7 @@ import { createInstallationDriverConfiguration } from "./installation-driver-con
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
 import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
+import { waitFor } from "./wait-for.mjs";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
 import { databaseUrl, requiresPostgres } from "./postgres-database.mjs";
 
@@ -44,18 +44,6 @@ export function backendDefinition(options = {}) {
     },
     drivers: { service_account: options.serviceAccountDriverId ?? serviceAccountDriverId },
   };
-}
-
-export async function waitFor(description, read, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await read();
-    if (value !== undefined) {
-      return value;
-    }
-    await delay(20);
-  }
-  assert.fail(`Timed out waiting for ${description}.`);
 }
 
 export function authorizedPrincipal(iam, required = [["deploy", "agent"]]) {
