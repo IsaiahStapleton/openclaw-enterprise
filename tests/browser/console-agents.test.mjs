@@ -2615,6 +2615,51 @@ test("Agent creation reports unavailable Secret storage before creating Configur
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
 });
 
+test("Agent creation shows the API's duplicate-name conflict and keeps the form usable", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Duplicate Agent name", { ready: true });
+  await fixture.createAgent(namespace.id, "Taken Agent");
+  const { page } = await newPage(t, fixture);
+  // The regular create path, which skips the provisioning job.
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Taken Agent");
+  await enterManualModel(page, "duplicate-name-model-key", "gpt-duplicate-name");
+  const agentPost = (response) =>
+    response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
+    response.request().method() === "POST";
+  const rejected = page.waitForResponse(agentPost);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await rejected).status(), 409);
+  const sentence =
+    "An Agent with this name already exists in this Namespace. Choose a different name.";
+  const feedback = page.getByRole("alert").filter({ hasText: sentence });
+  await feedback.waitFor();
+  assert.match(
+    await feedback.textContent(),
+    /^An Agent with this name already exists in this Namespace\. Choose a different name\.( Request ID: req_[0-9a-f-]+)?$/,
+  );
+  const name = page.getByLabel("Agent name");
+  const create = page.getByRole("button", { name: "Create Agent" });
+  await page.getByRole("button", { name: "Create Agent", disabled: false }).waitFor();
+  assert.equal(await name.isDisabled(), false);
+  assert.equal(await create.isDisabled(), false);
+
+  // A new name saves through the same Configuration.
+  await name.fill("Free Agent");
+  const saved = page.waitForResponse(agentPost);
+  await create.click();
+  const response = await saved;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  assert.equal(agent.name, "Free Agent");
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
+});
+
 test("Agent creation reuses its saved Secret and Configuration after an Agent creation conflict", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -2721,7 +2766,9 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
   await page
     .getByText(`Configuration saved: ${savedConfiguration.data.id}.`, { exact: false })
     .waitFor();
-  await page.getByText(/conflicts with the saved state/i).waitFor();
+  await page
+    .getByText("An Agent with this name already exists in this Namespace. Choose a different name.")
+    .waitFor();
   assert.equal(
     await page
       .getByRole("heading", {
