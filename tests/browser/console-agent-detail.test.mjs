@@ -3222,6 +3222,53 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
   assert.equal(denials("openclaw.configurations.read"), 2);
 });
 
+test("a failed native admin status read keeps the card, its error and Refresh access", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Native admin outage", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Outage Agent", nativeValues("outage"));
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const nativeAdminPath = `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`;
+  let failures = 1;
+  await page.route(`${fixture.origin}${nativeAdminPath}`, async (route) => {
+    if (failures > 0) {
+      failures -= 1;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "DEPENDENCY_UNAVAILABLE",
+            message: "A required platform dependency is unavailable.",
+          },
+          meta: { requestId: "req_test_native_admin_outage" },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  await page.getByRole("heading", { name: "Outage Agent" }).waitFor();
+
+  // An outage is not a denial: the card stays, names the failure and can be retried.
+  const card = page.locator(".native-admin-access");
+  await card.getByRole("alert").getByText("Service unavailable", { exact: false }).waitFor();
+  assert.equal(await card.isVisible(), true);
+  const reload = card.getByRole("button", { name: "Refresh access" });
+  assert.equal(await reload.isEnabled(), true);
+
+  // A later answer still decides visibility: this Installation has native admin disabled.
+  const reads = () => requests.filter((request) => request.path === nativeAdminPath).length;
+  const before = reads();
+  await reload.click();
+  await waitForCondition(() => reads() === before + 1, "native admin status reread");
+  await card.waitFor({ state: "hidden" });
+  await expectNativeAdminHidden(page);
+});
+
 test("Agent sharing rejects emails locally and names an unknown Principal ID", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();

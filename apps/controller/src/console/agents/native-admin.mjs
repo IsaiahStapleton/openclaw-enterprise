@@ -38,6 +38,8 @@ export function renderNativeAdminAccess(context, path) {
   );
 
   let current;
+  // A failed read other than a denial keeps the card, its error and Refresh visible.
+  let failed = false;
   let pending = false;
 
   function updateControls() {
@@ -49,7 +51,8 @@ export function renderNativeAdminAccess(context, path) {
       launch.href = current.url;
     }
     section.hidden =
-      current === undefined || current.status === "disabled" || current.status === "denied";
+      !failed &&
+      (current === undefined || current.status === "disabled" || current.status === "denied");
   }
 
   async function load() {
@@ -59,6 +62,7 @@ export function renderNativeAdminAccess(context, path) {
     // Native admin needs Agent administer; a 403 is audited, so this tab asks once per Agent.
     if (context.deniedReads?.has(statusPath)) {
       current = undefined;
+      failed = false;
       status.textContent = "";
       updateControls();
       return;
@@ -72,6 +76,7 @@ export function renderNativeAdminAccess(context, path) {
       if (!context.isCurrent()) {
         return;
       }
+      failed = false;
       if (current.status === "available") {
         status.textContent = "Native admin UI is available for this Agent’s active revision.";
       } else if (current.status === "disabled" || current.status === "denied") {
@@ -90,6 +95,7 @@ export function renderNativeAdminAccess(context, path) {
       if (cause.status === 403) {
         context.deniedReads?.remember(statusPath);
       }
+      failed = cause.status !== 403;
       current = undefined;
       status.textContent = "";
       error.textContent = message(cause);
