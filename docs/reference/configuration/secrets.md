@@ -136,12 +136,15 @@ matching `secretBindings` entry for each:
 }
 ```
 
-Do not bind `SLACK_APP_TOKEN` or `SLACK_BOT_TOKEN` for a named account.
-OpenClaw also reads those two names from the gateway environment as an implicit
-`default` account. That account opens a second Socket Mode connection, receives
-a share of the Slack app's events, and applies the top-level `channels.slack`
-policy (`dmPolicy`, `allowFrom`) instead of the named account's restrictions.
-The console edits only the default account.
+With named accounts, remove any `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`
+bindings unless you also want a top-level default account (or name an account
+`default`). OpenClaw reads those two names from the gateway environment as an
+implicit `default` account. That account opens a second Socket Mode connection,
+receives a share of the Slack app's events, and applies the top-level
+`channels.slack` policy (`dmPolicy`, `allowFrom`) instead of the named account's
+restrictions. The console's Slack editor handles only the default account; for
+named accounts its Credentials tab checks the keys the document references, and
+you bind them through the Configuration API.
 
 The console's new Slack setup and bundled Slack Presets set
 `channels.slack.replyToModeByChatType.channel: "all"`, which threads channel
