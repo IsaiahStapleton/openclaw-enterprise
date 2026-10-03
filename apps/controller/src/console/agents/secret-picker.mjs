@@ -381,6 +381,13 @@ export function createSecretReferenceField({
     }
   }
 
+  // Typing a Secret's exact name selects it, as clicking its suggestion would; names are
+  // unique in a Namespace. Anything else still restores the current binding.
+  function typedSecret() {
+    const query = searchQuery.trim();
+    return query === "" ? undefined : secrets.find((secret) => secret.name === query);
+  }
+
   function selectOption(option) {
     if (option.kind === "create") {
       closeListbox({ restoreSelection: true });
@@ -646,8 +653,11 @@ export function createSecretReferenceField({
     }
     if (event.key === "Enter" && listboxOpen) {
       event.preventDefault();
+      const typed = typedSecret();
       if (activeOptionIndex >= 0) {
         selectOption(options[activeOptionIndex]);
+      } else if (typed !== undefined) {
+        selectOption({ kind: "secret", secret: typed });
       }
       return;
     }
@@ -658,6 +668,11 @@ export function createSecretReferenceField({
     }
   });
   input.addEventListener("blur", () => {
+    const typed = listboxOpen && !manuallyDisabled ? typedSecret() : undefined;
+    if (typed !== undefined) {
+      selectOption({ kind: "secret", secret: typed });
+      return;
+    }
     closeListbox({ restoreSelection: true });
   });
 

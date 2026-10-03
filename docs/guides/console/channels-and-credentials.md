@@ -61,7 +61,9 @@ the console. Use the operator workflow for those Agents.
 | **Operator-managed credentials** | Credentials configured on the runtime host; OCC does not validate them.                          |
 | **ChatGPT service account**      | Select an already issued account in this Namespace. This selector does not create an account.    |
 
-**Save authentication source** saves the Agent binding for a future deployment.
+In a Secret picker, typing a Secret's exact name selects it when you press
+Enter or leave the field, as choosing its suggestion does; other text restores
+the bound Secret. **Save authentication source** saves the Agent binding for a future deployment.
 For API keys and Service Accounts tokens, it also grants the Agent access to
 that exact Secret through your authorized Namespace IAM operations. If the
 binding saves but the grant fails, ask a Namespace administrator to confirm
