@@ -633,6 +633,15 @@ function assertImmutableOptionalEnvImages(names, env = process.env) {
 
 async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   const name = laneName(lane);
+  // TODO: Remove this refusal once installed repository qualification can remove its
+  // remote branch and pull request only while they still match what the run created.
+  // Refuse before prerequisite checks so operators do not provision inputs for it. When
+  // removing it, restore the input-validation cases this refusal replaced in ci-prepare.test.mjs.
+  if (name === "repository-credentials-installed") {
+    throw new Error(
+      "Installed repository qualification is temporarily unavailable until safe remote cleanup is supported.",
+    );
+  }
   const prepare = lanePrepare(name);
   const effectiveEnv = effectiveLaneEnv(name, env);
   if (prepare.k3d && name !== "openshell" && effectiveEnv.OPENCLAW_CI_K3S_IMAGE) {
