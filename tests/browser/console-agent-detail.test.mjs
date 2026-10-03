@@ -31,6 +31,7 @@ import {
   secretPostRequests,
   selectSecret,
   waitForCondition,
+  waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 import {
@@ -1188,11 +1189,8 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   );
   await page.getByRole("button", { name: "Save authentication source" }).click();
   assert.equal((await saveResponse).status(), 200);
-  await page.getByLabel("API key Secret").waitFor({ state: "visible" });
-  assert.equal(
-    await page.getByLabel("API key Secret").evaluate((node) => node.value),
-    secretOptionLabel(replacementSecret),
-  );
+  // The saved source re-renders the picker, which reloads the Secret list before naming it.
+  await waitForInputValue(page.getByLabel("API key Secret"), secretOptionLabel(replacementSecret));
 
   const current = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
   assert.deepEqual(current.data.harnessAuth, {
@@ -1205,10 +1203,7 @@ test("Agent credentials choose existing Secrets for harness authentication", asy
   const serviceAccountSecret = page.getByLabel("Service account token Secret");
   assert.equal(await serviceAccountSecret.evaluate((node) => node.value), "");
   await page.getByLabel("Authentication source").selectOption("api_key");
-  assert.equal(
-    await page.getByLabel("API key Secret").evaluate((node) => node.value),
-    secretOptionLabel(replacementSecret),
-  );
+  await waitForInputValue(page.getByLabel("API key Secret"), secretOptionLabel(replacementSecret));
 
   await page.route(`**/namespaces/${namespace.id}/secrets`, async (route) => {
     await route.fulfill({ status: 403, contentType: "application/json", body: "{}" });
@@ -3667,11 +3662,7 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
   // Explicit reload recovers the committed source; saving it again confirms the missing grant.
   await page.unroute(`**${agentPath}`);
   await page.getByRole("button", { name: "Reload authentication source", exact: true }).click();
-  await page.getByLabel("API key Secret").waitFor();
-  assert.equal(
-    await page.getByLabel("API key Secret").evaluate((node) => node.value),
-    secretOptionLabel(replacement),
-  );
+  await waitForInputValue(page.getByLabel("API key Secret"), secretOptionLabel(replacement));
   await page.getByRole("button", { name: "Save authentication source" }).click();
   await page.waitForFunction(
     () => globalThis.document.querySelector("#harness-auth-method")?.disabled === false,

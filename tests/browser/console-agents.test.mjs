@@ -30,6 +30,7 @@ import {
   secretPostRequests,
   selectSecret,
   repositoryCheckbox,
+  waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
 import {
   STARTER_CONTROL_UI,
@@ -402,11 +403,7 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
   const savedSecretInput = page.getByLabel("API key Secret");
   assert.equal(await savedSecretInput.evaluate((node) => node.tagName), "INPUT");
-  await page.waitForFunction(
-    (name) => globalThis.document.querySelector("#harness-auth-secret")?.value === name,
-    secret.name,
-  );
-  assert.equal(await savedSecretInput.inputValue(), secret.name);
+  await waitForInputValue(savedSecretInput, secret.name);
   const deniedBinding = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${created.data.id}` &&
