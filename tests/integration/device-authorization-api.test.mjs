@@ -359,6 +359,7 @@ test("device login is bound to its initiating actor, Namespace, and exact Agent 
     body: { harnessId: "codex" },
   });
   assert.equal(unsupportedLogin.status, 501);
+  assert.equal(unsupportedLogin.body.error.message, "Device login requires a dedicated Agent.");
   const unsupportedDiscovery = await fixture.request("POST", `${embeddedPath}/plugins`, {
     body: { oauthLogin: login.source, q: "knowledge" },
   });
@@ -368,6 +369,10 @@ test("device login is bound to its initiating actor, Namespace, and exact Agent 
     body: { harnessId: "openclaw" },
   });
   assert.equal(otherHarness.status, 501);
+  assert.equal(
+    otherHarness.body.error.message,
+    "Device login is available only for the Codex Harness.",
+  );
   assert.equal(fixture.requests.length, before);
 
   const savedLogin = await fixture.start(agentPath);
