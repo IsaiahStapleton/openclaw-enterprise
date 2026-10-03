@@ -51,33 +51,31 @@ async function launchBrowser(options = {}) {
   return browser;
 }
 
-// One Chromium per test file and launch-argument set. Each test still gets its own
-// browser context, so cookies, storage, cache and routes stay isolated per test.
-const browsers = new Map();
+// Tests without custom launch arguments share one Chromium per test file. Each test still
+// gets its own browser context, so cookies, storage, cache and routes stay isolated.
+let defaultBrowser;
 
-async function sharedBrowser(options = {}) {
-  const key = JSON.stringify(options.args ?? []);
-  const launched = browsers.get(key);
-  if (launched !== undefined) {
-    const browser = await launched.catch(() => undefined);
-    if (browser?.isConnected()) {
-      return browser;
-    }
+async function sharedBrowser() {
+  const browser = await defaultBrowser?.catch(() => undefined);
+  if (browser?.isConnected()) {
+    return browser;
   }
-  const launching = launchBrowser(options);
-  browsers.set(key, launching);
-  return launching;
+  defaultBrowser = launchBrowser();
+  return defaultBrowser;
 }
 
 after(async () => {
-  const launched = [...browsers.values()];
-  browsers.clear();
-  await Promise.allSettled(launched.map(async (browser) => (await browser).close()));
+  const browser = defaultBrowser;
+  defaultBrowser = undefined;
+  await (await browser?.catch(() => undefined))?.close();
 });
 
 export async function newPage(t, fixture, options = {}) {
   const artifacts = await artifactDirectory(t);
-  const browser = await sharedBrowser(options);
+  // Custom arguments (per-fixture host resolver and certificate rules) get a browser of
+  // their own that closes with the test.
+  const dedicated = options.args !== undefined;
+  const browser = dedicated ? await launchBrowser(options) : await sharedBrowser();
   let context;
   let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
@@ -91,6 +89,13 @@ export async function newPage(t, fixture, options = {}) {
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
+    }
+    if (dedicated) {
+      try {
+        await browser.close();
+      } catch (error) {
+        cleanupError ??= error;
+      }
     }
     if (cleanupError) {
       throw cleanupError;
