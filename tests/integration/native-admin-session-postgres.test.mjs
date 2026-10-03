@@ -973,7 +973,7 @@ test(
 // show the results artifact keeps the test name, a redacted message and a frame.
 function throwawayHelperFailure() {
   throw new Error(
-    `throwaway helper failed for ${process.env.GITHUB_SHA} with Bearer abcdefghijklmnopqrstuv`,
+    `throwaway helper failed for ${process.env.GITHUB_SHA} at ${process.env.OCC_TEST_DATABASE_URL} (password ${new URL(process.env.OCC_TEST_DATABASE_URL ?? "postgres://u:p@h/d").password}) with Bearer abcdefghijklmnopqrstuv`,
   );
 }
 
