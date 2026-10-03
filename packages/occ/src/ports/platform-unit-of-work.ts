@@ -126,6 +126,7 @@ export function bindPlatformUnitOfWork(
       "lockAttempt",
       "createBrokerReceipt",
       "advanceBrokerReceipt",
+      "fenceBrokerReceipt",
     ]),
     provisioning: bindRepository(repositories.provisioning, lifetime, [
       "findByWorkId",

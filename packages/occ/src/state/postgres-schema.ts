@@ -794,7 +794,7 @@ export const repositoryBrokerReceipts = occSchema.table(
     check(
       "repository_broker_receipts_state_valid",
       sql`
-      (${table.state} = 'fenced' AND ${table.generation} IS NULL AND ${table.sessionId} IS NULL AND ${table.deadlineWallMs} IS NULL AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
+      (${table.state} = 'fenced' AND ${table.sessionId} IS NULL AND ${table.deadlineWallMs} IS NULL AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
       OR (${table.state} = 'reserved' AND ${table.generation} IS NOT NULL AND ${table.sessionId} IS NULL AND ${table.deadlineWallMs} IS NULL AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
       OR (${table.state} = 'active' AND ${table.generation} IS NOT NULL AND ${table.sessionId} IS NOT NULL AND ${table.deadlineWallMs} IS NOT NULL AND ${table.deadlineWallMs} BETWEEN 1 AND 9007199254740991 AND ${table.revoked} IS NULL AND ${table.expired} IS NULL)
       OR (${table.state} = 'disposed' AND ${table.generation} IS NOT NULL AND ${table.sessionId} IS NOT NULL AND ${table.deadlineWallMs} IS NOT NULL AND ${table.deadlineWallMs} BETWEEN 1 AND 9007199254740991 AND ${table.revoked} IS NOT NULL AND ${table.revoked} BETWEEN 0 AND 9007199254740991 AND ${table.expired} IS NOT NULL AND ${table.expired} BETWEEN 0 AND 9007199254740991)

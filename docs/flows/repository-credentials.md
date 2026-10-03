@@ -106,8 +106,9 @@ this binding and independently resolves its fingerprint. A worker-owned private
 journal reserves the exact attempt before bearer delivery; recovery durably fences
 a missing admission. The broker opens the session before reserving, so a capacity
 or shutdown refusal leaves no receipt and the same admission can retry or be
-fenced. Known nondelivery closes the session. Reconciliation cannot
-recover a bearer, change its binding or replay provider work.
+fenced. When the broker refuses a reserved admission as invalid, or cannot record
+its session, it fences its own reservation. Known nondelivery closes the session.
+Reconciliation cannot recover a bearer, change its binding or replay provider work.
 
 Factory failure or an invalid binding closes construction admission before
 `apps/controller/src/drivers/repo/credentials/custody.ts:disposeAllRenewal`.

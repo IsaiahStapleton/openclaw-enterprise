@@ -34,6 +34,8 @@ interface AdmissionRecord {
   ready: Promise<void>;
   // A durable admission's observed disposal; the service may evict the session.
   terminal: SessionStatus | undefined;
+  // Bind failed and the reservation is not yet known to be fenced.
+  unbound: boolean;
   saved: boolean;
   writing: Promise<void> | undefined;
   cancel(): void;
@@ -84,6 +86,21 @@ export function createControlAdmission(
         }
       }
     }
+  };
+  // Fences a reservation no bearer was handed out for, then forgets its record so
+  // the journal answers missing for retries and recovery.
+  const fenced = async (id: string, record: AdmissionRecord) => {
+    try {
+      await journal!.fence(id, record.input as RepositoryCredentialBoundSessionInput);
+    } catch {
+      return false;
+    }
+    record.cancel();
+    records.delete(id);
+    if (record.sessionId !== undefined) {
+      sessions.delete(record.sessionId);
+    }
+    return true;
   };
   const persist = async (id: string, record: AdmissionRecord, status: SessionStatus) => {
     if (!record.durable || record.saved) {
@@ -161,6 +178,20 @@ export function createControlAdmission(
       if (!sameSessionInput(previous.input, admittedInput)) {
         throw new Error("ADMISSION_CONFLICT");
       }
+      // A failed bind left the reservation unfenced, so retry the fence. If the bind
+      // was recorded after all, the fence fails and only a recorded disposal is
+      // reported; the session is never exposed while its receipt is unknown.
+      if (previous.unbound && !previous.saved) {
+        if (await fenced(id, previous)) {
+          throw new Error("ADMISSION_MISSING");
+        }
+        const current = localStatus(previous.sessionId!);
+        if (current?.state !== "DISPOSED") {
+          throw new Error("RECEIPT_UNAVAILABLE");
+        }
+        await persist(id, previous, current);
+        return { result: current, sessionId: current.sessionId, created: false };
+      }
       const status =
         previous.sessionId === undefined ? undefined : await readStatus(previous.sessionId);
       if (!status) {
@@ -230,6 +261,8 @@ export function createControlAdmission(
         throw new Error("RECEIPT_UNAVAILABLE");
       }
       if (refused !== undefined) {
+        // Nothing will bind this reservation. Fence it so the admission answers missing.
+        await journal!.fence(id, admittedInput).catch(() => {});
         throw refused;
       }
     } else if (age >= admissionWindowMs) {
@@ -244,6 +277,7 @@ export function createControlAdmission(
         durable: false,
         ready: Promise.resolve(),
         terminal: undefined,
+        unbound: false,
         saved: false,
         writing: undefined,
         cancel: () => {},
@@ -262,6 +296,7 @@ export function createControlAdmission(
       durable: isBoundInput(admittedInput),
       ready: Promise.resolve(),
       terminal: early,
+      unbound: false,
       saved: false,
       writing: undefined,
       cancel: () => {},
@@ -273,12 +308,25 @@ export function createControlAdmission(
       sweep,
     );
     if (isBoundInput(admittedInput)) {
+      const sessionId = opened.session.sessionId;
       record.ready = journal!.bind(id, admittedInput, opened.session);
       try {
         await record.ready;
       } catch (error) {
-        if (service.status(opened.session.sessionId) !== undefined) {
-          service.close(opened.session.sessionId);
+        if (service.status(sessionId) !== undefined) {
+          service.close(sessionId);
+        }
+        // The bearer was never handed out. Fence the reservation so the admission
+        // answers missing rather than unavailable.
+        if (!(await fenced(id, record))) {
+          // The bind may have been recorded after all, or the journal is away. A
+          // retry fences again; otherwise the disposal follows a recorded bind.
+          record.unbound = true;
+          record.ready = Promise.resolve();
+          const current = localStatus(sessionId);
+          if (current?.state === "DISPOSED") {
+            void persist(id, record, current).catch(() => {});
+          }
         }
         throw error;
       }
