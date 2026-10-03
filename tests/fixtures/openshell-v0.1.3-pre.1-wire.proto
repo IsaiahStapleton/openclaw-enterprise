@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Independent wire oracle extracted from NVIDIA OpenShell commit
-// 496ebba293f5cc2bb2753444dddd534f0b4aeb6a. Keep this fixture pinned to that
+// dde8a9a57f34f9d998618b3d35821608165c980f. Keep this fixture pinned to that
 // upstream contract; do not derive it from the production client proto.
 syntax = "proto3";
 
@@ -18,6 +18,9 @@ service OpenShell {
   rpc GetSandboxProviderStatus(GetSandboxProviderStatusRequest)
       returns (GetSandboxProviderStatusResponse);
   rpc CreateProvider(CreateProviderRequest) returns (ProviderResponse);
+  rpc UpdateProvider(UpdateProviderRequest) returns (ProviderResponse);
+  rpc DetachSandboxProvider(DetachSandboxProviderRequest)
+      returns (DetachSandboxProviderResponse);
   rpc ImportProviderProfiles(ImportProviderProfilesRequest)
       returns (ImportProviderProfilesResponse);
 }
@@ -53,6 +56,13 @@ message CreateSandboxRequest {
 message SandboxServiceExposure {
   string service = 1;
   uint32 target_port = 2;
+  ServiceAuthorizationMode authorization_mode = 3;
+}
+
+enum ServiceAuthorizationMode {
+  SERVICE_AUTHORIZATION_MODE_UNSPECIFIED = 0;
+  SERVICE_AUTHORIZATION_MODE_STRIP = 1;
+  SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH = 2;
 }
 
 message DeleteSandboxRequest {
@@ -152,6 +162,44 @@ message ProviderResponse {
   string mutation_id = 3;
 }
 
+message UpdateProviderRequest {
+  WorkspaceSelector workspace_scope = 3;
+  reserved 2;
+  reserved "credential_expires_at_ms";
+  Provider provider = 1;
+  repeated string clear_credential_expiration_keys = 103;
+  string request_id = 4;
+}
+
+message DetachSandboxProviderRequest {
+  WorkspaceSelector workspace_scope = 4;
+  string sandbox = 1;
+  string provider = 2;
+  uint64 expected_resource_version = 3;
+  string request_id = 5;
+}
+
+message DetachSandboxProviderResponse {
+  Sandbox sandbox = 1;
+  bool detached = 2;
+  ProviderMutationReceipt receipt = 3;
+}
+
+enum ProviderMutationKind {
+  PROVIDER_MUTATION_KIND_UNSPECIFIED = 0;
+  PROVIDER_MUTATION_KIND_ATTACH = 1;
+  PROVIDER_MUTATION_KIND_DETACH = 2;
+  PROVIDER_MUTATION_KIND_UPDATE = 3;
+}
+
+message ProviderMutationReceipt {
+  string receipt_id = 1;
+  string mutation_id = 2;
+  string provider = 3;
+  string workspace = 4;
+  ProviderMutationKind kind = 5;
+}
+
 enum ProviderProfileCategory {
   PROVIDER_PROFILE_CATEGORY_UNSPECIFIED = 0;
   PROVIDER_PROFILE_CATEGORY_OTHER = 1;
@@ -226,6 +274,7 @@ message GetSandboxProviderStatusResponse {
 }
 
 message ProviderReadinessStatus {
+  ProviderMutationReceipt receipt = 1;
   ProviderReadinessState state = 2;
   ProviderReadinessReason reason = 3;
   string network_instance_id = 5;

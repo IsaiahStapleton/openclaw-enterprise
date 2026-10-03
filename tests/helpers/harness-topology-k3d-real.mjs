@@ -34,6 +34,7 @@ import {
   createOtelLogObservation,
   OTEL_RESOURCE,
 } from "../helpers/logging-otel-observation.mjs";
+import { assertDedicatedSkillSourceLifecycle } from "./dedicated-skill-source-lifecycle.mjs";
 
 const kubeconfigPath = process.env.OCC_TEST_KUBERNETES_KUBECONFIG;
 const kubernetesContext = process.env.OCC_TEST_KUBERNETES_CONTEXT;
@@ -95,7 +96,7 @@ const startupFailurePluginId = "codex-plugin:linear@openai-curated-remote";
 const deniedPort = 18791;
 const sharedWorkspaceVolumeName = "openclaw-workspace";
 const harnessWorkspaceClaimSize = "40Gi";
-const harnessWorkspaceSubPaths = Object.freeze(["generated-images", "workspace"]);
+const harnessWorkspaceSubPaths = Object.freeze(["codex-sessions", "generated-images", "workspace"]);
 const executeFile = promisify(execFile);
 const {
   kubectl,
@@ -2968,7 +2969,6 @@ async function assertKubernetesOtelLogs(topology) {
                 [OTEL_RESOURCE.revisionId]: topology.revision.id,
               },
               attributes: { "event.name": "codex.operational" },
-              body: "codex.operational",
             },
           ]),
     ],
@@ -3155,6 +3155,77 @@ async function gatewayCall(topology, method, params) {
     throw new Error(result.error.message, { cause: result.error });
   }
   return result;
+}
+
+async function assertDedicatedSkillSources(topology) {
+  const configurationPath = `/namespaces/${topology.agent.namespaceId}/configurations/${topology.agent.configurationId}`;
+  const original = await topology.request("GET", configurationPath);
+  assert.equal(original.status, 200);
+  const enabled = structuredClone(original.data.values);
+  (enabled.skills ??= {}).install ??= {};
+  enabled.skills.install.allowUploadedArchives = true;
+  async function deploy(values) {
+    const updated = await topology.request("PATCH", configurationPath, { values });
+    assert.equal(updated.status, 200, JSON.stringify(updated.error));
+    const revision = await topology.request(
+      "POST",
+      `/namespaces/${topology.agent.namespaceId}/agents/${topology.agent.id}/deploy`,
+    );
+    assert.equal(revision.status, 202, JSON.stringify(revision.error));
+    await waitFor(`Skill policy deployment ${revision.data.id}`, () =>
+      topology.events.find(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === revision.data.id &&
+          event.outcome === "success",
+      ),
+    );
+    topology.gatewayPod = await waitForReadyGatewayPod(topology, revision.data.id);
+    topology.harnessPod = await waitForReadyAgentPod(topology, revision.data.id);
+    topology.revision = revision.data;
+  }
+  async function readFileOrMissing(namespace, pod, path) {
+    return JSON.parse(
+      await execNode(
+        namespace,
+        pod,
+        `try { process.stdout.write(JSON.stringify(require("node:fs").readFileSync(${JSON.stringify(path)}, "utf8"))); }
+         catch (error) { if (error.code !== "ENOENT") throw error; process.stdout.write("null"); }`,
+      ),
+    );
+  }
+  try {
+    await deploy(enabled);
+    return await assertDedicatedSkillSourceLifecycle({
+      callGateway: (method, params) => gatewayCall(topology, method, params),
+      readHarnessFile: (path) =>
+        readFileOrMissing(topology.placement, topology.harnessPod.metadata.name, path),
+      readGatewayFile: (path) =>
+        readFileOrMissing(topology.gatewayPlacement, topology.gatewayPod.metadata.name, path),
+      withNodeWritesDenied: async (run) => {
+        const snapshot = await gatewayCall(topology, "config.get", {});
+        const effective = snapshot.config.plugins.entries["file-transfer"].config;
+        const nodeId = effective.workspaces.main.nodeId;
+        assert.equal(typeof nodeId, "string");
+        const policy = effective.nodes[nodeId] ?? effective.nodes["*"];
+        assert.ok(policy, "the workspace must have an effective node policy");
+        const denied = structuredClone(enabled);
+        const transfer = (denied.plugins.entries["file-transfer"] ??= {});
+        transfer.enabled = true;
+        (transfer.config ??= {}).nodes = {
+          "*": { ...structuredClone(policy), allowWritePaths: [] },
+        };
+        try {
+          await deploy(denied);
+          await run();
+        } finally {
+          await deploy(enabled);
+        }
+      },
+    });
+  } finally {
+    await deploy(original.data.values);
+  }
 }
 
 async function assertGatewayEffectiveDefaultModel(context, topology, expectedModel) {
@@ -3538,6 +3609,39 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
     );
   }
 
+  // A dedicated Gateway runs OpenClaw tools in its own Pod, whose workspace is empty; the
+  // thread must offer no tool that would list, edit or run commands there instead of the Harness.
+  // Earlier cases started other threads; this session's thread is the one holding its nonce.
+  const rolloutsBefore =
+    topology.harnessPod === undefined
+      ? undefined
+      : (await codexRollouts(topology)).filter(({ text }) => text.includes(nonce));
+  if (rolloutsBefore !== undefined) {
+    assert.equal(rolloutsBefore.length, 1, "the session must own exactly one Codex rollout");
+    assert.deepEqual(
+      rolloutsBefore[0].dynamicTools.filter((name) => gatewayLocalCodexTools.includes(name)),
+      [],
+      "Codex must not receive OpenClaw tools that act on the Gateway Pod",
+    );
+    // Stop/start replaces both Pods. The rollout lives on the Harness claim, so the Gateway's
+    // bound thread resumes instead of silently starting a new one.
+    const previousHarnessUid = topology.harnessPod.metadata.uid;
+    await kubectl(
+      "delete",
+      "pod",
+      topology.harnessPod.metadata.name,
+      "--namespace",
+      topology.placement,
+      "--wait=true",
+      "--timeout=120s",
+    );
+    topology.harnessPod = await waitForReadyAgentPod(
+      topology,
+      topology.revision.id,
+      previousHarnessUid,
+    );
+  }
+
   // Deleting the Pod destroys emptyDir state; only the owning durable claim can preserve these outcomes.
   const previousUid = topology.gatewayPod.metadata.uid;
   await kubectl(
@@ -3603,9 +3707,68 @@ async function assertGatewayPodContinuity(context, topology, privateClaim) {
       `the post-restart ${role} turn must write to the retained session transcript`,
     );
   }
+  if (rolloutsBefore !== undefined) {
+    const rolloutsAfter = (await codexRollouts(topology)).filter(({ text }) =>
+      text.includes(afterNonce),
+    );
+    assert.deepEqual(
+      rolloutsAfter.map(({ file, threadId }) => ({ file, threadId })),
+      rolloutsBefore.map(({ file, threadId }) => ({ file, threadId })),
+      "the post-restart turn must resume the retained Codex thread, not start a new one",
+    );
+    assert.ok(
+      rolloutsAfter[0].text.includes(afterNonce),
+      "the resumed Codex thread must record the post-restart turn",
+    );
+  }
   context.diagnostic(
     `Gateway transcript, PNG ${artifactId}, and SQLite integrity survived Pod UID ${previousUid} -> ${topology.gatewayPod.metadata.uid}.`,
   );
+}
+
+// Matches the Gateway entrypoint's exclusions for a workspace-node Gateway.
+const gatewayLocalCodexTools = Object.freeze([
+  "ls",
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "gateway_exec",
+  "gateway_process",
+  "terminal",
+  "openclaw",
+]);
+
+// Every Codex rollout in the Harness, with its thread ID and the dynamic tools it was given.
+async function codexRollouts(topology) {
+  const output = await execNode(
+    topology.placement,
+    topology.harnessPod.metadata.name,
+    `
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const files = [];
+    const walk = (directory) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else if (entry.name.endsWith(".jsonl")) files.push(file);
+      }
+    };
+    walk("/home/node/.codex/sessions");
+    process.stdout.write(JSON.stringify(files.sort().map((file) => {
+      const text = fs.readFileSync(file, "utf8");
+      const meta = JSON.parse(text.split("\\n")[0]).payload;
+      const names = (meta.dynamic_tools ?? []).flatMap((tool) =>
+        tool.type === "namespace" ? tool.tools.map(({ name }) => name) : [tool.name],
+      );
+      return { file, threadId: meta.id, dynamicTools: names, text };
+    })));
+  `,
+  );
+  return JSON.parse(output);
 }
 
 async function assertEmbeddedCreatesNoHarnessWorkspaceClaim(topology) {
@@ -5354,6 +5517,7 @@ export {
   assertLegacyModelSecretBindingDenied,
   assertDedicatedWorkspaceResources,
   assertDedicatedWorkspaceRuntime,
+  assertDedicatedSkillSources,
   assertDeniedConnection,
   assertEmbeddedCreatesNoHarnessWorkspaceClaim,
   assertGatewayPodContinuity,

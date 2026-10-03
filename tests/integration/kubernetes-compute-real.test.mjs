@@ -2,7 +2,7 @@ import { sha256Hex } from "../../packages/utils/src/index.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -305,6 +305,13 @@ async function createProvisioningApiFixture(context, computeDriver, authenticati
 
   return {
     bootstrapNamespaceIds,
+    async readWork(idempotencyKey) {
+      const result = await pool.query(
+        "SELECT state, reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+        [idempotencyKey],
+      );
+      return result.rows[0];
+    },
     request,
     startWorker,
     stopWorker,
@@ -693,6 +700,126 @@ async function assertDeniedTraffic(description, namespaceName, podName, operatio
     }
     assert.equal(error.code, 1, `${description} must be denied by enforced NetworkPolicies`);
   }
+}
+
+async function createDnsTrafficFixture(context, peer) {
+  const namespace = peer.namespace;
+  const name = `dns-traffic-${hash(randomUUID())}`;
+  const directory = await mkdtemp(join(tmpdir(), "oce-dns-traffic-"));
+  const manifestPath = join(directory, "resources.json");
+  const image = (await resource("deployment", "coredns", "kube-system")).spec.template.spec
+    .containers[0].image;
+  const dnsService = await resource("service", "kube-dns", namespace);
+  assert.equal(dnsService.spec.publishNotReadyAddresses ?? false, false);
+  const items = [
+    {
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: { name, namespace },
+      data: {
+        Corefile: [5353, 5354]
+          .map(
+            (port) => `.:${port} {\n  hosts {\n    192.0.2.53 openshift-dns.example.test\n  }\n}`,
+          )
+          .join("\n"),
+      },
+    },
+    ...["selected", "unselected", "control"].map((role) => ({
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name: `${name}-${role}`,
+        namespace,
+        labels: role === "selected" ? peer.podLabels : { "app.kubernetes.io/name": name },
+      },
+      spec: {
+        automountServiceAccountToken: false,
+        securityContext: {
+          runAsNonRoot: true,
+          runAsUser: 1000,
+          seccompProfile: { type: "RuntimeDefault" },
+        },
+        ...(role === "control"
+          ? {}
+          : {
+              // Keep these selected DNS peers out of the cluster DNS Service's ready endpoints.
+              // Their container readiness still verifies that the DNS listener is available.
+              readinessGates: [{ conditionType: "openclaw.dev/dns-fixture" }],
+              volumes: [{ name: "config", configMap: { name } }],
+            }),
+        containers: [
+          {
+            name: role,
+            image: role === "control" ? fixtureImage : image,
+            command:
+              role === "control"
+                ? ["node", "-e", "setInterval(() => {}, 1000)"]
+                : ["/coredns", "-conf", "/config/Corefile"],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: true,
+              capabilities: {
+                drop: ["ALL"],
+                // CoreDNS's binary has this file capability even when listening above port 1024.
+                ...(role === "control" ? {} : { add: ["NET_BIND_SERVICE"] }),
+              },
+            },
+            resources: {
+              requests: { cpu: "10m", memory: "32Mi" },
+              limits: { cpu: "100m", memory: "64Mi" },
+            },
+            ...(role === "control"
+              ? {}
+              : {
+                  volumeMounts: [{ name: "config", mountPath: "/config", readOnly: true }],
+                  readinessProbe: { tcpSocket: { port: 5353 }, periodSeconds: 1 },
+                }),
+          },
+        ],
+      },
+    })),
+  ];
+  await writeFile(manifestPath, JSON.stringify({ apiVersion: "v1", kind: "List", items }));
+  context.after(async () => {
+    try {
+      await kubectl("delete", "-f", manifestPath, "--ignore-not-found=true", "--wait=true");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  await kubectl("create", "-f", manifestPath);
+  const [selected, unselected, control] = await Promise.all(
+    ["selected", "unselected", "control"].map((role) =>
+      waitFor(`DNS ${role} fixture listener`, async () => {
+        const pod = await resource("pod", `${name}-${role}`, namespace);
+        return pod.status.podIP !== undefined && pod.status.containerStatuses?.[0].ready
+          ? pod
+          : undefined;
+      }),
+    ),
+  );
+  const script = await readFile(
+    new URL("../fixtures/kubernetes/probe.mjs", import.meta.url),
+    "utf8",
+  );
+  const query = (source, target, protocol, port) =>
+    kubectl(
+      "exec",
+      source.metadata.name,
+      "-n",
+      source.metadata.namespace,
+      "--",
+      "node",
+      "--input-type=module",
+      "-e",
+      script,
+      "probe.mjs",
+      `dns-${protocol}`,
+      target.status.podIP,
+      String(port),
+      "openshift-dns.example.test",
+    );
+  return { selected, unselected, control, query };
 }
 
 async function assertExplicitNetworkProfile(context, namespaceName, sourcePod) {
@@ -2047,6 +2174,15 @@ test(
             verbs: ["get", "list", "create", "patch", "update", "delete"],
           },
         },
+        // Final deletion checks routes even when deployment failed before creating them.
+        ...[
+          ["gateway.networking.k8s.io", "httproutes"],
+          ["gateway.envoyproxy.io", "securitypolicies"],
+        ].map(([group, resource]) => ({
+          op: "add",
+          path: "/rules/-",
+          value: { apiGroups: [group], resources: [resource], verbs: ["get", "delete"] },
+        })),
       ]),
     );
     const gatewayRouting = {
@@ -2323,6 +2459,182 @@ test(
         "canonical credentials must not be stored in the Harness namespace",
       );
     }
+
+    // Seed an owned pre-upgrade RWX workspace without altering any supported Agent.
+    // No RWX provisioner is needed: rejection must happen before mounting the claim.
+    const legacyConfiguration = await fixture.request(
+      "POST",
+      `/namespaces/${namespaceOwner.id}/configurations`,
+      {
+        kind: "agent",
+        values: {
+          gateway: body.configuration.values.gateway,
+          agents: body.configuration.values.agents,
+        },
+      },
+    );
+    assert.equal(legacyConfiguration.status, 201, JSON.stringify(legacyConfiguration.body));
+    const legacy = await fixture.request("POST", `/namespaces/${namespaceOwner.id}/agents`, {
+      name: `legacy-rwx-${randomUUID()}`,
+      configurationId: legacyConfiguration.data.id,
+      executionMode: "dedicated",
+      harnessAuth: body.harnessAuth,
+    });
+    assert.equal(legacy.status, 201, JSON.stringify(legacy.body));
+    const legacyPath = `/namespaces/${namespaceOwner.id}/agents/${legacy.data.id}`;
+    const role = await fixture.request("POST", `/namespaces/${namespaceOwner.id}/iam/roles`, {
+      name: `legacy-rwx-secrets-${randomUUID()}`,
+      permissions: [{ action: "operate", resourceKind: "secret" }],
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    for (const secret of [modelSecret]) {
+      const grant = await fixture.request(
+        "POST",
+        `/namespaces/${namespaceOwner.id}/iam/access-bindings`,
+        {
+          subjectKind: "identity",
+          subjectId: legacy.data.servicePrincipalId,
+          roleId: role.data.id,
+          resourceKind: "secret",
+          resourceId: secret.data.id,
+        },
+      );
+      assert.equal(grant.status, 201, JSON.stringify(grant.body));
+    }
+    const credentials = await fixture.request("POST", `${legacyPath}/runtime-credentials`, {});
+    assert.equal(credentials.status, 200, JSON.stringify(credentials.body));
+    const workspaceName = harnessWorkspaceClaimName(legacy.data.id);
+    const gatewayStateName = `gateway-state-${hash(legacy.data.id)}`;
+    const claimDirectory = await mkdtemp(join(tmpdir(), "openclaw-legacy-rwx-"));
+    context.after(() => rm(claimDirectory, { recursive: true, force: true }));
+    for (const [name, namespace, accessMode, storage] of [
+      [workspaceName, placement, "ReadWriteMany", "40Gi"],
+      [gatewayStateName, gatewayPlacement, "ReadWriteOnce", "10Gi"],
+    ]) {
+      const claimPath = join(claimDirectory, `${name}.json`);
+      await writeFile(
+        claimPath,
+        JSON.stringify({
+          apiVersion: "v1",
+          kind: "PersistentVolumeClaim",
+          metadata: {
+            name,
+            namespace,
+            labels: {
+              "app.kubernetes.io/managed-by": "openclaw-enterprise",
+              "openclaw.dev/namespace": namespaceOwner.id,
+              "openclaw.dev/agent": legacy.data.id,
+            },
+            annotations: {
+              "openclaw.dev/namespace-id": namespaceOwner.id,
+              "openclaw.dev/agent-id": legacy.data.id,
+            },
+          },
+          spec: {
+            accessModes: [accessMode],
+            volumeMode: "Filesystem",
+            storageClassName: "local-path",
+            resources: { requests: { storage } },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      await kubectl("apply", "--filename", claimPath);
+    }
+    const originalWorkspace = await resource("persistentvolumeclaim", workspaceName, placement);
+    const originalGatewayState = await resource(
+      "persistentvolumeclaim",
+      gatewayStateName,
+      gatewayPlacement,
+    );
+    // Observe the real Driver failure without replacing its Kubernetes client or behavior.
+    // A generic worker failure alone could otherwise pass for an unrelated configuration error.
+    const prepareRevision = driver.prepareRevision.bind(driver);
+    const preparationFailures = [];
+    const preparation = context.mock.method(driver, "prepareRevision", async (...args) => {
+      try {
+        return await prepareRevision(...args);
+      } catch (error) {
+        if (args[0].agentId === legacy.data.id) {
+          preparationFailures.push(error.message);
+        }
+        throw error;
+      }
+    });
+    const deployment = await fixture.request("POST", `${legacyPath}/deploy`);
+    assert.equal(deployment.status, 202, JSON.stringify(deployment.body));
+    await fixture.startWorker();
+    const failedDeployment = await waitFor("legacy RWX deployment to fail", async () => {
+      const work = await fixture.readWork(`agent_revision:${deployment.data.id}:reconcile`);
+      return work?.state === "failed_permanent" ? work : undefined;
+    });
+    preparation.mock.restore();
+    assert.deepEqual(
+      new Set(preparationFailures),
+      new Set([`Refusing invalid PersistentVolumeClaim ${workspaceName}.`]),
+    );
+    assert.equal(failedDeployment.reason_code, "DEPENDENCY_UNAVAILABLE");
+    const undeployed = await fixture.request("GET", legacyPath);
+    assert.equal(undeployed.status, 200, JSON.stringify(undeployed.body));
+    assert.equal(undeployed.data.activeRevisionId, undefined);
+    assert.equal(await missing("deployment", revisionName(deployment.data), placement), true);
+    assert.equal(await missing("deployment", gatewayName(legacy.data.id), gatewayPlacement), true);
+    assert.equal(
+      (await resource("persistentvolumeclaim", gatewayStateName, gatewayPlacement)).metadata.uid,
+      originalGatewayState.metadata.uid,
+    );
+    const beforeDelete = await resource("persistentvolumeclaim", workspaceName, placement);
+    assert.equal(beforeDelete.metadata.uid, originalWorkspace.metadata.uid);
+    assert.deepEqual(beforeDelete.spec, originalWorkspace.spec);
+
+    const deleting = await fixture.request("DELETE", legacyPath);
+    assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
+    const failedDeletion = await waitFor(
+      "legacy RWX deletion to exhaust its retry budget",
+      async () => {
+        const work = await fixture.readWork(`agent:${legacy.data.id}:reconcile:deleted`);
+        return work?.state === "failed_permanent" ? work : undefined;
+      },
+    );
+    assert.equal(failedDeletion.reason_code, "DEPENDENCY_UNAVAILABLE");
+    await fixture.stopWorker();
+    const retained = await fixture.request("GET", legacyPath);
+    assert.equal(retained.status, 200, JSON.stringify(retained.body));
+    assert.equal(retained.data.status, "deleting");
+    assert.equal(retained.data.desiredRuntimeState, "stopped");
+    const rejectedWorkspace = await resource("persistentvolumeclaim", workspaceName, placement);
+    assert.equal(rejectedWorkspace.metadata.uid, originalWorkspace.metadata.uid);
+    assert.deepEqual(rejectedWorkspace.spec, originalWorkspace.spec);
+    assert.equal(rejectedWorkspace.metadata.deletionTimestamp, undefined);
+    // Final deletion is not atomic: CP state is removed before Harness validation.
+    // This is why the legacy Agent must be discarded with a compatible release.
+    assert.equal(
+      await missing("persistentvolumeclaim", gatewayStateName, gatewayPlacement),
+      true,
+      "Gateway state is removed before final deletion rejects the RWX claim",
+    );
+    assert.equal(
+      await missing("secret", `transport-${hash(legacy.data.id)}`, gatewayPlacement),
+      true,
+    );
+    assert.equal(
+      await missing("secret", `gateway-password-${hash(legacy.data.id)}`, gatewayPlacement),
+      true,
+    );
+    // The unrelated Agent and its canonical credentials are not deleted.
+    assert.equal(
+      (
+        await fixture.request(
+          "GET",
+          `/namespaces/${namespaceOwner.id}/agents/${provisioned.agentId}`,
+        )
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await resource("secret", transportName, gatewayPlacement)).metadata.uid,
+      transport.metadata.uid,
+    );
   },
 );
 
@@ -3069,6 +3381,68 @@ test(
       }),
     );
 
+    // Use the API-deployed embedded runtime, dedicated Harness, and dedicated Gateway.
+    // Reachable CoreDNS listeners outside the peer/port grant distinguish CNI denial from an absent server.
+    const dns = await createDnsTrafficFixture(
+      context,
+      configuration.drivers.compute.configuration.network.dns,
+    );
+    const dnsSources = await Promise.all([
+      workloadPod(
+        placements.get(namespaceIds[0]),
+        `app.kubernetes.io/name=${revisionName(admitted[0])}`,
+      ),
+      workloadPod(
+        kubernetesGatewayNamespaceName(namespaceIds[0]),
+        `app.kubernetes.io/name=${gatewayName(first.id)}`,
+      ),
+      workloadPod(
+        placements.get(namespaceIds[1]),
+        `app.kubernetes.io/name=${gatewayName(embeddedDelete.id)}`,
+      ),
+    ]);
+    assert.ok(dnsSources.every(Boolean), "all API-deployed DNS source Pods must be running");
+    for (const protocol of ["udp", "tcp"]) {
+      for (const [target, port] of [
+        [dns.selected, 5353],
+        [dns.selected, 5354],
+        [dns.unselected, 5353],
+      ]) {
+        assert.equal(
+          JSON.parse(await dns.query(dns.control, target, protocol, port)).address,
+          "192.0.2.53",
+        );
+      }
+    }
+    for (const protocol of ["udp", "tcp"]) {
+      for (const source of dnsSources) {
+        assert.equal(
+          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+          "192.0.2.53",
+          `${source.metadata.name} must resolve over ${protocol} port 5353`,
+        );
+        for (const [target, port] of [
+          [dns.selected, 5354],
+          [dns.unselected, 5353],
+        ]) {
+          await assert.rejects(
+            dns.query(source, target, protocol, port),
+            (error) => {
+              assert.equal(error.code, 1);
+              assert.match(error.stderr, /ETIMEOUT|ETIMEDOUT|timed out|ECONNREFUSED/);
+              return true;
+            },
+            `${source.metadata.name} must not reach ${target.metadata.name} over ${protocol} port ${port}`,
+          );
+        }
+        assert.equal(
+          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+          "192.0.2.53",
+          "the allowed DNS control must still work after denied queries",
+        );
+      }
+    }
+
     const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;
     const persistedBefore = await waitFor("first revision deployment to settle", async () => {
       const observed = await request("GET", deploymentPath);
@@ -3455,6 +3829,38 @@ test(
     worker = undefined;
     workerPool = undefined;
     const replacementPlacement = kubernetesNamespaceName(namespaceIds[0]);
+    // A controller upgrade leaves ready Namespaces and their old DNS grants in place.
+    // Preparing one replacement must add backend ports without narrowing access for other Agents.
+    const readyNamespace = await request("GET", `/namespaces/${namespaceIds[0]}`);
+    assert.equal(readyNamespace.data.status, "ready");
+    const legacyDnsPolicies = [];
+    for (const target of [replacementPlacement, kubernetesGatewayNamespaceName(namespaceIds[0])]) {
+      await kubectl(
+        "patch",
+        "networkpolicy",
+        "allow-dns",
+        "-n",
+        target,
+        "--type=json",
+        "-p",
+        JSON.stringify([
+          { op: "replace", path: "/spec/podSelector", value: {} },
+          {
+            op: "replace",
+            path: "/spec/egress/0/ports",
+            value: [
+              { protocol: "UDP", port: 53 },
+              { protocol: "TCP", port: 53 },
+            ],
+          },
+        ]),
+      );
+      legacyDnsPolicies.push(await resource("networkpolicy", "allow-dns", target));
+    }
+    const otherAgentPods = (await resources("pods", replacementPlacement))
+      .filter(({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === second.id)
+      .map(({ metadata }) => metadata.uid)
+      .sort();
     const replacementClaim = await assertHarnessWorkspaceClaim(
       replacementPlacement,
       namespaceIds[0],
@@ -3475,6 +3881,28 @@ test(
     const replacement = await deploy(namespaceIds[0], first.id);
     await startWorker();
     await waitForActive(namespaceIds[0], first.id, replacement.id);
+    for (const previous of legacyDnsPolicies) {
+      const current = await resource("networkpolicy", "allow-dns", previous.metadata.namespace);
+      const expected = structuredClone(previous.spec);
+      expected.egress[0].ports.push(
+        { protocol: "UDP", port: 5353 },
+        { protocol: "TCP", port: 5353 },
+      );
+      assert.equal(current.metadata.uid, previous.metadata.uid);
+      assert.deepEqual(
+        current.spec,
+        expected,
+        "DNS upgrade must preserve the old selectors and other rules",
+      );
+    }
+    assert.deepEqual(
+      (await resources("pods", replacementPlacement))
+        .filter(({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === second.id)
+        .map(({ metadata }) => metadata.uid)
+        .sort(),
+      otherAgentPods,
+      "preparing one Agent must not restart another Agent's Pods",
+    );
     const placement = kubernetesNamespaceName(namespaceIds[0]);
     await waitFor(`old revision deployment ${revisionName(admitted[0])} to be deleted`, () =>
       missing("deployment", revisionName(admitted[0]), placement),

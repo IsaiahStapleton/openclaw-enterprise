@@ -10,7 +10,7 @@ const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-0000000
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
 const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
-const startOAuthLogin = [...oauthForm, click("Sign in with ChatGPT")];
+const startOAuthLogin = [...oauthForm, click("Sign in with OAuth")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
   { selector: "#create-provider-credential-secret-value", value },
@@ -327,7 +327,7 @@ const createProvisioningSecrets = [
 ];
 const devdayCreateCheckpoint = [
   click("Create Agent"),
-  { selector: "#agent-preset", value: "pre_devday_codex" },
+  { selector: "#agent-preset", value: "pre_swe_codex" },
   { selector: "#preset-variable-name", value: "devday claw" },
   click("Use Preset"),
   { selector: "#provider-credential-secret", value: "sec_devday_model_token" },
@@ -343,8 +343,11 @@ const devdayCreateCheckpoint = [
   { selector: 'select[aria-label="Create issue require approval for"]', value: "all_actions" },
   click("Done"),
   { selector: devdayRepositorySelector, click: true },
-  { selector: "#repository-profile-git-write", click: true },
+  { selector: "#repository-default-git-full", click: true },
+  { selector: ".repository-customize summary", click: true },
+  { selector: "#repository-default-issues", click: true },
   click("Edit Slack"),
+  { selector: "#slack-channel-ids-search", value: "CDEMO123", key: "Enter" },
   { selector: "#slack-channel-access", value: "selected" },
   { selector: "#slack-allowed-user-ids-search", value: "UDEMO123", key: "Enter" },
   { selector: "#slack-secret-slack-app-token", value: "sec_devday_slack_app_token" },
@@ -430,6 +433,9 @@ export const scenarios = {
     githubEnabled: true,
     description:
       "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    steps: [
+      "Check the GitHub icon and label, then select the button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
   },
   githubUnavailable: {
@@ -517,6 +523,9 @@ export const scenarios = {
     googleEnabled: true,
     description:
       "Provider discovery adds Continue with Google beside the password form and any other configured provider. Clicking it demonstrates an unavailable provider; this fixture never navigates to Google.",
+    steps: [
+      "Check the Google and GitHub icons and labels, then select either button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the Google subject identifier to an existing account through the API. Email addresses never match an account. OAuth navigation and session issuance require backend verification.",
   },
   googleUnavailable: {
@@ -2145,7 +2154,7 @@ export const scenarios = {
     agentPlugins: JSON.parse(pluginSelections),
     pluginCapabilities,
     pluginDiscovery,
-    actions: [click("Sign in with ChatGPT")],
+    actions: [click("Sign in with OAuth")],
     description:
       "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
   },
@@ -2155,7 +2164,7 @@ export const scenarios = {
     path: `${draft}&tab=credentials`,
     deployed: true,
     auth: "oauth",
-    actions: [click("Sign in with ChatGPT")],
+    actions: [click("Sign in with OAuth")],
     description:
       "The current Agent login is preserved by default. A completed new login only replaces the saved source when Save authentication source is chosen; deployment remains separate.",
   },
@@ -2663,7 +2672,7 @@ export const scenarios = {
     description:
       "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
     steps: [
-      "Read the pending reason and Last checked time in Deployment activity.",
+      "Read the pending reason and Since time in Deployment activity.",
       "Click Refresh deployment; the simulated pending result remains visible.",
       "View v6 and confirm the latest deployment still describes v7.",
     ],
@@ -3905,7 +3914,7 @@ export const scenarios = {
     slackChannels: { COPENCLAWFEEDBACK: { requireMention: true, users: ["UDEMO123"] } },
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
-    devdayPreset: true,
+    swePreset: true,
     pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
     fixturePluginCatalog: true,
@@ -3942,11 +3951,11 @@ export const scenarios = {
       "DevDay create-flow rehearsal using real Console controls with fake service-account and Slack Secret data. Provisioning and deployment progress are simulated in the Storybook fixture.",
     steps: [
       "Start on the Agents list with the already deployed oceclaw seed, then click Create Agent.",
-      "The picker includes SWE Agent, Community Agent, Q&A Agent, and Oncall Agent. Select SWE Agent and enter devday claw for its name.",
+      "The picker includes SWE Agent, Standard Codex, and Standard OpenClaw. Select SWE Agent and enter devday claw for its name.",
       "Keep the default gpt-6-astra model and click Use Preset. Choose the existing DevDay Codex service account (simulated) Secret, or explicitly create a new simulated Secret. No credential is preselected. Review AGENTS.md: its opening sentence now says You are devday claw. Workspace defaults remain editable.",
       "Open Configure plugins. The simulated curated catalog is available for every Preset and Secret choice in this Storybook flow; add Linear, set Linear default reviewer to Automatic review, and set Create issue approval to Ask for approval.",
-      "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access.",
-      "Open Edit Slack. Confirm the six prefilled channels: oce-feedback (C0C49E7CS4A), oce-team (C0C43A2QA11), oce-feedback-test (C0C569NN9ME), oce-team-test (C0C4A0JH2BG), oce-community (C0C5KF0JLSC), and oce-community-test (C0C5KF0DWLQ); mentions are not required. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
+      "Repository access offers openclaw/openclaw-enterprise and openclaw/openclaw. Select either or both with Contributor access, then turn off issue management to match the approved profiles.",
+      "Open Edit Slack. Confirm no channels are prefilled. Add the simulated channel CDEMO123. Allow simulated user UDEMO123, then bind the existing simulated DevDay Slack Secrets and apply settings.",
       "Create Agent and wait for provisioning to open Agent details. Inspect Deployment activity; it finishes simulated activation after a few seconds, or use Refresh deployment.",
       "Use ← Agents and open oceclaw in the same fixture to continue segment 2. The next-segment link starts an independent resettable fixture.",
     ],
@@ -3962,7 +3971,7 @@ export const scenarios = {
     slackChannels: { COPENCLAWFEEDBACK: { requireMention: true, users: ["UDEMO123"] } },
     nativeAdmin: "available",
     nativeAdminUrl: "/storybook-fixtures/devday-admin.html?agent=oceclaw&channel=openclaw-feedback",
-    devdayPreset: true,
+    swePreset: true,
     pluginDiscovery: devdayPluginDiscovery,
     pluginCapabilities,
     fixturePluginCatalog: true,

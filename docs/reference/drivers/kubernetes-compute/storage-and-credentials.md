@@ -95,8 +95,6 @@ Pod-local temporary `emptyDir` and mounts that subdirectory at `/tmp`. This
 preserves private temp-workspace ancestry for Gateway and Harness processes;
 the fsGroup-writable volume root is never exposed as their runtime temp root.
 
-The same nonroot initializer creates a private temporary directory in each
-Pod's `emptyDir`, mounted at `/tmp` for native safe temporary-file operations.
 OCE disables OpenClaw automatic package updates in the Gateway and workspace
 node; runtime upgrades use the operator-selected image and ordinary redeployment.
 
@@ -110,6 +108,7 @@ from the default StorageClass, mounted only by its Harness:
 | `codex-home` ([OAuth](codex-oauth-storage.md)) | `/home/node/.codex`                  |
 | `workspace`                                    | `/home/node/workspace`               |
 | `generated-images`                             | `/home/node/.codex/generated_images` |
+| `codex-sessions`                               | `/home/node/.codex/sessions`         |
 | `workspace-node-<agent-hash>-<harness-hash>`   | `/home/node/.openclaw-node`          |
 
 This directory keeps node identity across Pod and revision replacement.
@@ -145,6 +144,11 @@ initializes its own bundled/plugin assets instead of mounting shared Skill trees
 The Harness never receives the Gateway claim. Embedded Agents use the private
 claim without creating this Harness claim.
 
+Default node writes include workspace `skills/**`, `.clawhub/lock.json`,
+`.clawdhub/lock.json`, and `.openclaw/skill-installs/**`; explicit policies remain
+unchanged. Skill lifecycle operations require a compatible runtime. See the
+[workspace flow](../../../flows/workspace-files.md) for authorization boundaries.
+
 The worker stops all earlier revisions and waits for their Pods to terminate
 before preparing a dedicated replacement. This includes failed candidates and
 Sandbox-owned workloads. Replacement has a downtime window; it does not need
@@ -155,9 +159,10 @@ OCC does not restart a lower revision automatically or roll back filesystem writ
 made by a failed candidate. The last committed active
 revision is not proof that its Pod still runs during replacement.
 
-Existing owned `ReadWriteMany` workspace claims remain usable without changing
-their spec, identity, or data. New claims use RWO; Gateway private claims still
-require RWO. No revision stop or retirement replaces a PVC with ephemeral storage.
+Harness and Gateway claims must use `ReadWriteOnce`; existing RWX claims are
+rejected during reconciliation and final Agent deletion. Follow the
+[upgrade prerequisite](../../../guides/deploy/upgrade-checklist.md#remove-legacy-rwx-workspaces).
+Revision stop and retirement retain PVCs.
 
 RWO does not fence writers on a partitioned node. Pod termination and the storage
 provider's safe detach/attach behavior remain required; the Driver never force

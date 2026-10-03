@@ -114,6 +114,11 @@ export const CredentialSourceParams = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentCredentialSourceParams = Type.Object(
+  { namespaceId: NamespaceId, agentId: AgentId, credentialSourceId: CredentialSourceId },
+  { additionalProperties: false },
+);
+
 export const IAMRoleParams = Type.Object(
   { namespaceId: NamespaceId, roleId: IAMRoleId },
   { additionalProperties: false },
@@ -153,6 +158,15 @@ export const AgentRuntimeLogsQuery = Type.Object(
         pattern: "^(?:[1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$",
         description: "Only lines newer than this many seconds, 1 to 86400.",
       }),
+    ),
+    minLevel: Type.Optional(
+      Type.Union(
+        [Type.Literal("error"), Type.Literal("warn"), Type.Literal("info"), Type.Literal("debug")],
+        {
+          description:
+            "Return only lines at this level or above; lines of unknown level, gaps and withheld counts are always returned. Default: every level.",
+        },
+      ),
     ),
     cursor: Type.Optional(
       Type.String({
@@ -283,6 +297,17 @@ export const CreateCredentialSourceBody = Type.Object(
     secrets: Type.Optional(CredentialSourceSecrets),
   },
   { additionalProperties: false },
+);
+
+export const UpdateCredentialSourceBody = Type.Object(
+  {
+    secrets: Type.Optional(CredentialSourceSecrets),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Re-reads the source's Secret values, or those of replacement Secret references, and updates the Credential Gateway copy. Non-secret config is immutable.",
+  },
 );
 
 export const SecretDelivery = Type.Object(
@@ -729,6 +754,7 @@ export const ERROR_CODES = Object.freeze([
   "NOT_IMPLEMENTED",
   "INTERNAL_ERROR",
   "DEPENDENCY_UNAVAILABLE",
+  "CREDENTIAL_GATEWAY_NOT_CONFIGURED",
   "REPOSITORY_OPTIONS_UNAVAILABLE",
   "MODEL_DISCOVERY_CREDENTIALS_REJECTED",
   "MODEL_DISCOVERY_RATE_LIMITED",
@@ -798,6 +824,10 @@ export const ErrorResponse = Type.Object(
           Type.Literal("NOT_IMPLEMENTED"),
           Type.Literal("INTERNAL_ERROR"),
           Type.Literal("DEPENDENCY_UNAVAILABLE"),
+          Type.Literal("CREDENTIAL_GATEWAY_NOT_CONFIGURED", {
+            description:
+              "The Installation selects no Credential Gateway, so credential sources cannot be registered.",
+          }),
           Type.Literal("REPOSITORY_OPTIONS_UNAVAILABLE", {
             description:
               "Only repository-option discovery is unavailable after Agent create authorization. An Agent without repository bindings may be submitted and is authorized again. Other dependency failures do not carry this meaning.",
@@ -889,6 +919,8 @@ export type ProvisionAgentBody = Type.Static<typeof ProvisionAgentBody>;
 export type UpdateAgentBody = Type.Static<typeof UpdateAgentBody>;
 export type ChannelDirectoryLookupBody = Type.Static<typeof ChannelDirectoryLookupBody>;
 export type UpdateWorkspaceFileBody = Type.Static<typeof UpdateWorkspaceFileBody>;
+export type UpdateCredentialSourceBody = Type.Static<typeof UpdateCredentialSourceBody>;
+export type AgentCredentialSourceParams = Type.Static<typeof AgentCredentialSourceParams>;
 export type ErrorDetail = Type.Static<typeof ErrorDetail>;
 export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];

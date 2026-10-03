@@ -13,9 +13,6 @@ authorize every exact resource operation through the selected IAM Driver, and
 emit attributable audit evidence for bootstrap, successful mutations, and
 authorization denials.
 
-Preserve Git history, registered worktrees, ignored local `.env` files, and
-existing root or nested `node_modules/` directories.
-
 The authoritative architecture is the repository's
 [platform design](docs/design.md).
 Read its [implementation status](docs/design.md#implementation-status) before
@@ -252,6 +249,8 @@ an ordinary document does not exempt that document.
 Use [technical-writing](.agents/skills/technical-writing/SKILL.md) when creating,
 editing, or reviewing documentation and specifications. It bundles the relevant
 writing guidance locally; no personal skill installation is required.
+Follow its [page-scope guidance](.agents/skills/technical-writing/SKILL.md#choose-the-smallest-useful-page)
+to keep main guides focused and route edge-case diagnostics to troubleshooting.
 
 - Give each fact one owning page: concepts define terms, references define
   behavior, guides give procedures, and flows explain implementation. Other pages
@@ -400,6 +399,10 @@ and PostgreSQL, tenant-local RoleBindings, model turns before and after revision
 cutover, and allowed/denied NetworkPolicy checks. Configure API egress for its
 actual translated `/32` endpoint and port. The fixture suite's scoped RBAC does
 not verify shared-cluster admission guardrails.
+
+## Browser automation
+
+On a devbox without an X server, run Playwright with `headless: true`.
 
 ## Console Storybook
 

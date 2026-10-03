@@ -1,7 +1,7 @@
 ---
 created: 2026-08-31
-updated: 2026-09-29
-last_updated_session: authoring-run/5e3ebbae-97b8-4709-8c03-6a032657e102
+updated: 2026-10-01
+last_updated_session: authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c
 ---
 
 # Agent Workspace Files Flow
@@ -205,14 +205,46 @@ Other Harnesses are replaced, restarting their Gateway.
   managed PATH; the node waits for a complete code. Neither gets OCC's key.
 - With the status proxy, a Codex Gateway hot-loads `file-transfer` from an
   Agent-owned ConfigMap (replacing the Codex plugin runtime); activation awaits
-  OpenClaw's report or fails with its cause. Otherwise the ID is set at Gateway
-  start. Losing it fails.
+  OpenClaw's report or fails with its cause. The wrapper queries `plugins.list`
+  through the public Gateway SDK, without starting a CLI process. Each query has
+  an eight-second deadline and cancels its connection on timeout; later polls
+  can retry. An active plugin in the newly loaded registry is still required
+  before acknowledging the binding. Otherwise the ID is set at Gateway start.
+  Losing it fails.
+- The Gateway's own `/home/node/workspace` stays empty. It withholds from Codex
+  the OpenClaw tools that would act on it or run commands in the Gateway Pod
+  (`ls`, `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
+  `gateway_exec`, `gateway_process`, `terminal`), and `openclaw`, whose
+  configuration changes could drop this list, through `codexDynamicToolsExclude`,
+  keeping owner entries. It sets `cron.triggers.enabled: false`, because stream
+  schedules and trigger scripts run in the Gateway; timed automations still run
+  Codex turns. Codex's native tools act in the Harness; the file-transfer tools
+  reach it through the node.
+- The Harness reaches the model itself, so the Gateway's `codex` and `openai`
+  provider rows keep only their models: overrides (`request`, `headers`,
+  `params`, `localService`) are dropped, and an authored transport (always for
+  `codex`) becomes the `http://127.0.0.1:9` stub. A
+  session an operator switches to OpenClaw's built-in runtime with
+  `/model <ref> --runtime openclaw` runs in the Gateway with no reachable model,
+  and Codex never hands that runtime a turn.
+- At each start the Gateway logs one `runtime.gateway_settings_overridden`
+  event naming (never valuing) the owner settings it replaced or dropped.
+  `occ agent logs` shows it as a warning with the setting names; the Collector
+  exports only the event name.
+  Deployment admission rejects the shapes it cannot rewrite: a non-list
+  `codexDynamicToolsExclude`, a non-object Codex plugin `config`, `cron`,
+  `cron.triggers`, `models` or `models.providers`, and a `codex` or `openai`
+  row that is not an object or whose `models` is not a list of objects. The
+  deploy request fails with `400 INVALID_REQUEST` naming the setting path, and
+  no revision is created.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill
   roots. Symlinks are not followed; explicit policies remain authoritative. This
   serves previews, browsing, bootstrap and outputs.
-- Writes remain restricted to owner documents, memory, skills, and staged inbound
-  files. `file.create` preserves existing files. Reads above 16 MiB retain caller
-  and node limits; command admission does not replace path authorization.
+- `runtime-entrypoints.ts:configureWorkspaceNodePlugins` defaults writes to
+  owner documents, memory, `skills/**`, the two ClawHub lockfiles,
+  `.openclaw/skill-installs/**`, and staged inbound files. It leaves explicit
+  node and wildcard policies unchanged. `file.create` preserves existing files.
+  Reads above 16 MiB retain caller and node limits; command admission does not replace path authorization.
 
 The chart supplies worker credentials/public trust and Compute installs node
 access to Envoy. Memory uses node duplex with existing native file workers;
@@ -222,11 +254,16 @@ image assets; Gateway-provided Skills stay local. See the
 [ownership table](../../specs/plans/30-storage-split-integration.md#where-data-lives).
 Remote channel menus remain deferred to [#241](https://github.com/openclaw/openclaw-enterprise/issues/241).
 
-Only Harness mounts dedicated workspace/generated-image storage. Gateway sessions
+Only Harness mounts dedicated workspace, generated-image and Codex rollout
+storage. The rollouts let the Gateway resume its bound Codex thread after
+stop/start or Pod replacement; the rest of `CODEX_HOME` stays Pod-local unless
+OAuth keeps it on the claim. Gateway sessions
 use its private PVC; Codex's existing remote-media reader transfers reply artifacts
-before cleanup. Embedded storage is unchanged. New Harness PVCs use RWO; owned
-existing RWX claims retain their data. The worker stops predecessors before dedicated preparation and suppresses their
-maintenance. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)
+before cleanup. Embedded storage is unchanged. New and reused Harness PVCs require
+RWO. `KubernetesComputeDriver.verifyPersistentVolumeClaim` rejects RWX during
+reconciliation and final Agent deletion without mutating the unsupported claim.
+The worker still stops predecessors before dedicated preparation and suppresses
+their maintenance. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)
 owns downtime and recovery limits. These contracts require matching runtime
 images; local checks do not prove deployed acceptance.
 
@@ -287,10 +324,9 @@ replays it. The native client closes in the operation's cleanup path.
 - A stale `workspaceDefaultsId` rejects creation with `409 RESOURCE_CONFLICT`;
   reload the Console create form before submitting again. A create response alone
   does not prove runtime initialization; verify active revision and live content.
-- The implementation gates initialization before execution. Structural checks,
-  Driver fixtures, and runtime setup checks each prove different boundaries;
-  the required first-use, retry, and redeploy scenarios need the real workflow
-  integration evidence described in the [feature spec](../../specs/plans/34-agent-workspace-files-setup.md#verification).
+- Initialization precedes execution. Structural and Driver checks do not replace
+  the [required real-workflow proof](../../specs/plans/34-agent-workspace-files-setup.md#verification)
+  for first use, retry, and redeploy.
 - For `503 DEPENDENCY_UNAVAILABLE`, check the Compute routing settings and key
   mount, then the Gateway, Certificate, SecurityPolicy, and HTTPRoute status.
   Check DNS/CA trust and exact NetworkPolicy peers before changing native auth.
@@ -317,6 +353,12 @@ replays it. The native client closes in the operation's cleanup path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-01 15:11: Query Gateway workspace binding state through bounded SDK calls. (authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c - 521549df)
+
+- 2026-10-01 11:27: Authorize dedicated Skill source trees and lifecycle metadata in the default node policy. (authoring-run/944b9f5c-dd07-45f4-8179-ed96b2ba3e79 - 836a88e048dc79dfb42066fd0cf868e7405a2f98)
+
+- 2026-09-30 16:29: Require RWO for new and reused Harness claims, including final deletion. (authoring-run/e062d2c6-e51f-42eb-8046-fd6ec6d6b3c4 - 4baeb8f6d21ff0d73102e0800c4e6cc0ed6a6366)
 
 - 2026-09-29 08:09: Align the documented workspace version. (authoring-run/5e3ebbae-97b8-4709-8c03-6a032657e102 - 395c735c3915135e4d5fe533041b3d2c04e995ea)
 

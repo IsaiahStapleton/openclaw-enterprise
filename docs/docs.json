@@ -456,11 +456,15 @@
                   },
                   {
                     "page": "guides/deploy/auth-maintenance",
-                    "label": "Sign-in Maintenance"
+                    "label": "External Sign-in Maintenance"
                   },
                   {
                     "page": "guides/deploy/google-sign-in",
                     "label": "Google Sign-in"
+                  },
+                  {
+                    "page": "guides/deploy/oidc-sign-in",
+                    "label": "OIDC Sign-in"
                   },
                   {
                     "page": "guides/deploy/local-k3d-image-upgrade",
@@ -805,6 +809,10 @@
                         "label": "CI"
                       },
                       {
+                        "page": "testing/first-agent-smoke",
+                        "label": "First Agent Smoke"
+                      },
+                      {
                         "page": "testing/ci-manual-integration",
                         "label": "Manual Integration Lanes"
                       },
@@ -897,6 +905,7 @@
               "flows/workspace-files",
               "flows/pr-24-ssh-compute",
               "flows/github-actions-testing",
+              "flows/clawsweeper-dispatch",
               "flows/container-package-bootstrap",
               "flows/container-publication",
               "flows/cli-publication",

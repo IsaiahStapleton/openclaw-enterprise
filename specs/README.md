@@ -50,6 +50,7 @@ recorded status is not proof of current implementation or release availability.
 | Common OpenTelemetry logging                                | —                                                           | [Plan / record](plans/20-common-otel-logging/index.md)                          |
 | ComputeDriver matrix refresh                                | —                                                           | [Plan / record](plans/2026-09-16-compute-driver-matrix.md)                |
 | Console Agent plugin selection                              | —                                                           | [Plan / record](plans/27-console-agent-plugins.md)                        |
+| Contributor recognition                                     | —                                                           | [Plan](plans/0042-contributor-recognition.md)                                      |
 | Control-plane Gateway placement execution plan              | —                                                           | [Plan / record](plans/36-control-plane-gateways-plan.md)                  |
 | Credential Gateway Driver for Sandbox-injected credentials  | [Decision](rfcs/39-sandbox-credential-injection.md)         | —                                                                               |
 | Dedicated Harness RWO workspace execution plan              | —                                                           | [Plan / record](plans/38-harness-rwo-workspace-plan.md)                   |
@@ -59,6 +60,7 @@ recorded status is not proof of current implementation or release availability.
 | First Enterprise container release                          | —                                                           | [Plan / record](plans/32-first-container-release.md)                      |
 | Gateway–Harness storage split                               | [Decision](rfcs/28-gateway-harness-storage-split.md)        | —                                                                               |
 | GitHub Actions integration and test coverage for Enterprise | —                                                           | [Plan / record](plans/19-github-actions-test-coverage/index.md)                 |
+| Generic OIDC sign-in for existing accounts                  | [Decision](rfcs/0042-oidc-sign-in.md)                       | —                                                                               |
 | GitHub sign-in for existing accounts                        | [Decision](rfcs/31-human-federated-sign-in/index.md)              | —                                                                               |
 | Harness authentication bindings                             | [Decision](rfcs/30-harness-auth-binding.md)                 | —                                                                               |
 | Independent image and chart publication                     | —                                                           | [Plan / record](plans/41-independent-image-chart-publication.md)          |

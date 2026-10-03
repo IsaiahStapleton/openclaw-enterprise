@@ -40,6 +40,9 @@
       "path": "tests/conformance/kubernetes-compute.test.mjs"
     },
     {
+      "path": "tests/conformance/node-enrollment-client.test.mjs"
+    },
+    {
       "path": "tests/conformance/kubernetes-preflight.test.mjs"
     },
     {
@@ -65,6 +68,9 @@
     },
     {
       "path": "tests/conformance/runtime-logs-replay.test.mjs"
+    },
+    {
+      "path": "tests/conformance/codex-stderr-filter.test.mjs"
     },
     {
       "path": "tests/conformance/occ-read.test.mjs"
@@ -200,7 +206,8 @@
       "path": "tests/integration/first-agent-startup.test.mjs",
       "expectedTests": [
         "first-Agent accepts current Compose-backed Kubernetes development state",
-        "first-Agent rejects OpenShell development state before external calls"
+        "first-Agent rejects OpenShell development state before external calls",
+        "first-Agent runs psql through the k3d PostgreSQL StatefulSet"
       ]
     },
     {
@@ -477,6 +484,12 @@
     },
     {
       "path": "tests/integration/google-login-transport.test.mjs"
+    },
+    {
+      "path": "tests/integration/oidc-id-token.test.mjs"
+    },
+    {
+      "path": "tests/integration/oidc-login-transport.test.mjs"
     },
     {
       "path": "tests/integration/password-sign-in-policy.test.mjs"

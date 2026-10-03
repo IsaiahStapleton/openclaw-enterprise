@@ -11,6 +11,12 @@ internal Kubernetes `ClusterIP` Service and a default-deny ingress
 selectors. The cluster must enforce NetworkPolicies. Do not expose the listener
 through a `NodePort`, `LoadBalancer`, `hostNetwork`, or public endpoint.
 
+The Helm charts allow DNS egress on UDP/TCP ports `53` and `5353` to their
+configured `dns.namespace` and `dns.podLabels` peers. Port `5353` supports
+OpenShift DNS backends after Service address translation. These grants cover
+API, worker, initialization, collector, Slack proxy, Envoy, and observability
+demo workloads.
+
 The trusted-operator native admin pilot is the only documented public-ingress
 exception: the console host and Agent wildcard hosts route to OCC through the
 procedure in [Deploy native admin UI access](../../guides/deploy/native-admin.md).
@@ -179,6 +185,27 @@ allows `0.0.0.0/0`; narrow it with an egress proxy. Rendering fails on incomplet
 Google values, a Secret shared with GitHub or any other chart Secret,
 `agentNativeAdmin.enabled` with Google, an HTTP base URL, or an allowed domain that
 is not a DNS name.
+
+### OIDC sign-in
+
+These optional variables also apply to the API only, with the same guarded profile and
+recovery user; see [OIDC sign-in](../../guides/deploy/oidc-sign-in.md).
+
+| Variable                                                     | Helm value                                          | Behavior                                                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `OCC_AUTH_OIDC_ISSUER`                                       | `auth.oidc.issuer`                                  | The exact `iss`; with the client ID it determines the provider instance.                    |
+| `OCC_AUTH_OIDC_AUTHORIZATION_URL`, `_TOKEN_URL`, `_JWKS_URL` | `auth.oidc.authorizationUrl`, `tokenUrl`, `jwksUrl` | `https:` on 443 on the issuer's DNS host, no userinfo, query or fragment. Never discovered. |
+| `OCC_AUTH_OIDC_CLIENT_ID`, `OCC_AUTH_OIDC_CLIENT_SECRET`     | `auth.oidc` Secret keys                             | Read from the dedicated `auth.oidc.secretName` Secret. All required values or none.         |
+| `OCC_AUTH_OIDC_TOKEN_AUTH`                                   | `auth.oidc.tokenAuth`                               | `client_secret_post` (default, not rendered) or `client_secret_basic`.                      |
+| `OCC_AUTH_OIDC_DISPLAY_NAME`                                 | `auth.oidc.displayName`                             | Optional Console label, 1–40 printable characters.                                          |
+
+With `auth.oidc.enabled`, the chart adds the API-only egress policy
+`openclaw-enterprise-api-oidc-login-egress` on TCP 443. Empty `auth.oidc.egressCidrs`
+allows any address except `169.254.0.0/16`. The port is the destination Pod's port; an
+IdP inside the cluster on another target port needs
+[its own egress policy](../../guides/deploy/oidc-sign-in.md#configure-the-chart). Rendering fails on values the API refuses,
+a Secret shared with GitHub, Google or any other chart Secret, `agentNativeAdmin.enabled`
+with OIDC, or an HTTP base URL.
 
 ### Production Installation bootstrap environment
 
