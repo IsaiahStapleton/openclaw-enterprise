@@ -220,6 +220,10 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
     leading.push(runtimeLogGap("stream_replaced", stream));
   }
   const resume = sameStream && prior.lastTime !== null ? prior : undefined;
+  // A view that has delivered no line yet (a quiet container, or an empty
+  // `sinceSeconds` window) continues from its previous page, not from the whole tail:
+  // cursor polls need not repeat `sinceSeconds`, and a cursor reads newer lines only.
+  const quiet = sameStream && prior.lastTime === null ? prior : undefined;
   // A view is audited once, before its first Driver read. Cursor polls inside a
   // view are not re-audited; an expired cursor starts a new view, and so does a
   // cursor whose Pod is gone (the audit row names the Pod that is read).
@@ -236,16 +240,14 @@ export async function readRuntimeLogPage(input: ReadRuntimeLogPageInput): Promis
       tailLines: query.tailLines,
     });
   }
+  const secondsSince = (time: number) =>
+    Math.min(86_400, Math.max(1, Math.ceil((now() - time) / 1000) + RESUME_OVERLAP_SECONDS));
   const sinceSeconds =
     resume !== undefined
-      ? Math.min(
-          86_400,
-          Math.max(
-            1,
-            Math.ceil((now() - Date.parse(resume.lastTime!)) / 1000) + RESUME_OVERLAP_SECONDS,
-          ),
-        )
-      : query.sinceSeconds;
+      ? secondsSince(Date.parse(resume.lastTime!))
+      : quiet !== undefined
+        ? secondsSince(quiet.issuedAt)
+        : query.sinceSeconds;
   const chunk = validChunk(
     await input.readLogs({
       source: sourceId,

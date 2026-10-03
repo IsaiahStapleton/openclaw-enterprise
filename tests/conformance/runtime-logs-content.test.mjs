@@ -991,10 +991,12 @@ function pollReader() {
   let cursor;
   let reads = 0;
   let admissions = 0;
+  const requests = [];
   const now = Date.parse("2026-09-30T12:10:00Z");
   return {
     codec,
     binding,
+    requests,
     get cursor() {
       return cursor;
     },
@@ -1020,8 +1022,9 @@ function pollReader() {
         admitView: async () => {
           admissions += 1;
         },
-        readLogs: async () => {
+        readLogs: async (request) => {
           reads += 1;
+          requests.push(request);
           return {
             stream: {
               source: "gateway",
@@ -1074,6 +1077,20 @@ test("runtime log cursor carries PEM context over three polls and empty polls", 
   assert.ok(messages(final).includes("retrying in 5s"));
   assert.ok(
     messages(await reader.poll([timedLog(syntheticPemTail, 5)])).includes(syntheticPemTail),
+  );
+  assert.equal(reader.admissions, 1);
+});
+
+test("a cursor from a page with no lines reads only output newer than that page", async () => {
+  const reader = pollReader();
+  // `occ agent logs --since 1m --follow` on a quiet container: the first page is empty.
+  await reader.poll([], { query: { sinceSeconds: 60 } });
+  // Follow polls send only the cursor; the read must not fall back to the whole tail.
+  await reader.poll([], { elapsed: 4_000 });
+  await reader.poll([], { elapsed: 9_000 });
+  assert.deepEqual(
+    reader.requests.map(({ sinceSeconds }) => sinceSeconds),
+    [60, 6, 7],
   );
   assert.equal(reader.admissions, 1);
 });

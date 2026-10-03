@@ -329,7 +329,9 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
         .filter((line) => line.time !== null)
         .map((line) => ({ time: line.time!, hash: sandboxLogLineHash(line) })),
     ],
-    gapFloor ?? (continuing ? resume.lastTime : null),
+    // A first page that saw nothing keeps its requested window start, so a cursor poll
+    // without `sinceSeconds` does not read lines older than the view's window.
+    gapFloor ?? (continuing ? resume.lastTime : (sinceTime ?? null)),
   );
   const records = [
     ...leading,
