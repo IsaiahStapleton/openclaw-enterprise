@@ -1557,10 +1557,46 @@ test("prepareLane preserves an explicit logging Collector Node image over its de
   const githubEnv = join(root, "github.env");
   const customNodeImage =
     "docker.io/library/node:24-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const collectorImage = loadYaml(
+    await readFile(join(repositoryRoot, "compose.logging.yaml"), "utf8"),
+  ).services.collector.image;
+  // Images are absent until pulled; the first pull of each hits a rate limit.
+  const dockerPath = join(root, "docker");
+  await writeFile(
+    dockerPath,
+    `#!${process.execPath}
+const { appendFileSync, existsSync, readFileSync } = require("node:fs");
+const log = ${JSON.stringify(join(root, "docker.jsonl"))};
+const args = process.argv.slice(2);
+const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\\n").map(JSON.parse) : [];
+appendFileSync(log, JSON.stringify(args) + "\\n");
+const image = args.at(-1);
+const pulls = calls.filter((call) => call[0] === "pull" && call[1] === image).length;
+if (args[0] === "pull") {
+  if (pulls === 0) {
+    process.stderr.write("Error response from daemon: toomanyrequests: rate limit\\n");
+    process.exit(1);
+  }
+  process.exit(0);
+}
+if (args[0] === "image" && args[1] === "inspect") {
+  if (pulls < 2) {
+    process.stderr.write("Error response from daemon: No such image: " + image + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(args[3] === "{{.Id}}" ? "sha256:${"e".repeat(64)}\\n" : JSON.stringify([image]));
+  process.exit(0);
+}
+process.stderr.write("unexpected docker " + args.join(" ") + "\\n");
+process.exit(2);
+`,
+    { mode: 0o700 },
+  );
 
   const result = runPrepare(
     ["--lane", "logging-collector", "--state", statePath, "--github-env", githubEnv],
     {
+      OCC_DOCKER_BIN: dockerPath,
       OCC_TEST_LOGGING_NODE_IMAGE: customNodeImage,
     },
   );
@@ -1569,6 +1605,21 @@ test("prepareLane preserves an explicit logging Collector Node image over its de
   const exported = await readFile(githubEnv, "utf8");
   assert.match(exported, /OCC_TEST_LOGGING_COLLECTOR=1/);
   assert.match(exported, new RegExp(`OCC_TEST_LOGGING_NODE_IMAGE=${customNodeImage}`));
+  // Both pinned images are pulled before the tests run, the rate limit retried.
+  const pulls = (await readFile(join(root, "docker.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((args) => args[0] === "pull")
+    .map((args) => args[1]);
+  assert.deepEqual(
+    pulls.toSorted(),
+    [collectorImage, collectorImage, customNodeImage, customNodeImage].toSorted(),
+  );
+  assert.match(
+    result.stderr,
+    /Transient image pull failure \(Error response from daemon: toomanyrequests/,
+  );
 });
 
 test("images packaging lane prepares Codex seccomp before native runtime smoke tests", () => {
