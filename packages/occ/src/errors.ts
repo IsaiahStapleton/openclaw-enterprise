@@ -184,9 +184,15 @@ export class ModelCredentialValueError extends Error {
   readonly path: string;
 
   constructor(path: string) {
-    // The error contract caps messages at 256 characters; a long provider name shortens the path.
+    // The error contract caps messages at 256 characters; a long provider name shortens the
+    // path. The cut counts code points, so it never leaves half of a surrogate pair.
     const budget = 256 - modelCredentialMessage("").length;
-    super(modelCredentialMessage(path.length <= budget ? path : `${path.slice(0, budget - 1)}…`));
+    const characters = Array.from(path);
+    super(
+      modelCredentialMessage(
+        characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
+      ),
+    );
     this.name = "ModelCredentialValueError";
     this.path = path;
   }

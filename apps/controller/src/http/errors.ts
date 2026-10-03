@@ -483,7 +483,9 @@ export function requestFailure(error: unknown): RequestFailure {
   }
   if (error instanceof ModelCredentialValueError) {
     // The message names only the field; other Configuration validation stays generic.
-    return failure(400, "INVALID_REQUEST", error.message);
+    // The field's path includes a submitted provider name, so it is capped like other
+    // messages that name submitted object keys.
+    return failure(400, "INVALID_REQUEST", capped(error.message));
   }
   if (error instanceof ConfigurationValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.");
