@@ -232,9 +232,11 @@ export const SERVICE_ACCOUNT_NAME_CONFLICT =
   "A ServiceAccount with this name already exists in this Namespace. Choose a different name.";
 export const CREDENTIAL_SOURCE_NAME_CONFLICT =
   "A credential source with this name already exists in this Namespace. Choose a different name.";
-/** Deleted Namespaces keep their name, so a name can be taken by one no longer listed. */
 export const NAMESPACE_NAME_CONFLICT =
-  "A Namespace with this name already exists or was deleted. Choose a different name.";
+  "A Namespace with this name already exists. Choose a different name.";
+/** A deleted Namespace's tombstone keeps its name, so a name can be taken by one no longer listed. */
+export const DELETED_NAMESPACE_NAME_CONFLICT =
+  "A deleted Namespace used this name, and a deleted Namespace's name cannot be reused. Choose a different name.";
 
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {

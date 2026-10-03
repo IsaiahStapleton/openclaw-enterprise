@@ -3961,7 +3961,7 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   assert.equal(duplicateNamespace.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(
     duplicateNamespace.body.error.message,
-    "A Namespace with this name already exists or was deleted. Choose a different name.",
+    "A Namespace with this name already exists. Choose a different name.",
   );
 
   const invalidAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
@@ -4772,6 +4772,17 @@ test("two Namespaces become independently ready and deletion tombstones only its
   );
   const stillReady = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceA.data.id}`);
   assert.equal(stillReady.data.status, "ready");
+  // The tombstone keeps its name: a new Namespace cannot reuse it, and the 409 says the name
+  // belongs to a deleted Namespace rather than one the caller could find in the list.
+  const reused = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "lifecycle-b" },
+  });
+  assert.equal(reused.status, 409);
+  assert.equal(reused.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    reused.body.error.message,
+    "A deleted Namespace used this name, and a deleted Namespace's name cannot be reused. Choose a different name.",
+  );
 });
 
 test("bootstrap, mutations, and denials emit attributable private audit events", async () => {

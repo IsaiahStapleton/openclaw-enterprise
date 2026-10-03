@@ -229,7 +229,9 @@ func (app *application) namespaceCommand() *cobra.Command {
 	deleteCommand := &cobra.Command{
 		Use:   "delete ID",
 		Short: "Begin deleting an empty Namespace",
-		Args:  idArgs(namespaceIDArg),
+		Long: "Begin deleting an empty Namespace. A deleted Namespace's name stays reserved:\n" +
+			"a new Namespace cannot reuse it.",
+		Args: idArgs(namespaceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			client, err := app.client()
 			if err != nil {
