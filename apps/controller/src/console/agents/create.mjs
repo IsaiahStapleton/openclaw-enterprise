@@ -507,6 +507,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     createDialogTitle: "Create model credential Secret",
     metadataLabel: "View model credential Secret metadata",
     noSecretLabel: "Choose a model credential Secret",
+    stagedHint: "Secret selected. Create Agent binds it.",
     required: !binding && !passwordAuth,
     disabled: Boolean(binding || passwordAuth),
   });
