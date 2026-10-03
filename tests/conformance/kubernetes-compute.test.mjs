@@ -10824,6 +10824,9 @@ for (const dualCluster of [false, true]) {
     );
     assert.equal(seedPod.containers[0].securityContext.readOnlyRootFilesystem, true);
     assert.deepEqual(seedPod.containers[0].securityContext.capabilities.drop, ["ALL"]);
+    // The idle seed writer and its init step run under tini, never as PID 1, so deleting
+    // the bootstrap Pod stops them on SIGTERM instead of waiting for SIGKILL.
+    assert.deepEqual(seedPod.containers[0].command, [...SETUP_WRAPPER_COMMAND]);
     // The process holding the seed sees only codex-home, never the rest of the Harness claim.
     const seedClaim = seedPod.volumes.find(({ persistentVolumeClaim }) => persistentVolumeClaim);
     const claimMounts = seedPod.containers[0].volumeMounts.filter(
@@ -10851,6 +10854,7 @@ for (const dualCluster of [false, true]) {
       { name: seedClaim.name, mountPath: "/harness-workspace-state" },
     ]);
     assert.equal(prepare.env, undefined);
+    assert.deepEqual(prepare.command, [...SETUP_WRAPPER_COMMAND]);
     assert.match(prepare.args[0], /chmodSync\(path, 0o700\)/);
     assert.match(prepare.args[0], /isDirectory\(\) === false/);
     assert.equal(prepare.securityContext.readOnlyRootFilesystem, true);
