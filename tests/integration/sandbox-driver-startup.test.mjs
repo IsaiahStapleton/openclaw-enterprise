@@ -489,6 +489,16 @@ test("OpenShell adopts its revision's existing Sandbox instead of re-sending Cre
     ...sandboxes.get(name),
     annotations: { ...sandboxes.get(name).annotations, "openclaw.dev/revision-id": revision.id },
   });
+  // A Sandbox on its way out is never adopted as this revision's Harness.
+  for (const [phase, message] of [
+    ["SANDBOX_PHASE_DELETING", /is being deleted; it is created again/],
+    ["SANDBOX_PHASE_STOPPED", /has stopped; remove the stale Sandbox/],
+    ["SANDBOX_PHASE_COMPLETED", /has stopped; remove the stale Sandbox/],
+  ]) {
+    sandboxes.set(name, { ...sandboxes.get(name), phase });
+    await assert.rejects(provision(), message);
+  }
+  sandboxes.set(name, { ...sandboxes.get(name), phase: "SANDBOX_PHASE_READY" });
   services.delete(name);
   await assert.rejects(provision(), /exists without its Harness service; remove the stale Sandbox/);
 });

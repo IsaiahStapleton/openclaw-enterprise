@@ -219,7 +219,9 @@ revision UUID as `request_id`. Codex requests one unnamed exposure for
 outbound, so it requests no exposure and rejects any returned URL. The Driver
 calls `getSandbox` first and creates only an absent Sandbox; it adopts an
 existing or `ALREADY_EXISTS` Sandbox only when its annotations name this
-revision and, for Codex, `getServiceUrl` finds the unnamed endpoint.
+revision, it is not deleting or stopped, and, for Codex, `getServiceUrl` finds
+the unnamed endpoint. Workspace `sandbox:write` is the trust boundary here: a
+holder could already delete and replace the Sandbox.
 
 For each unary Gateway call, the client checks cancellation after client setup
 and credential-metadata preparation and before dispatch. An abort during setup

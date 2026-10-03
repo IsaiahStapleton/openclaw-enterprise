@@ -316,6 +316,16 @@ function harnessPort(requirements: HarnessWorkloadRequirements): number {
   return port(Number(entry.value), "OpenShell APP_SERVER_PORT");
 }
 
+// A Sandbox in one of these phases never serves the revision again.
+const STOPPED_SANDBOX_PHASES: ReadonlySet<string | number> = new Set([
+  "SANDBOX_PHASE_STOPPING",
+  "SANDBOX_PHASE_STOPPED",
+  "SANDBOX_PHASE_COMPLETED",
+  6,
+  7,
+  9,
+]);
+
 function requestId(revisionId: string): string {
   const match = /^rev_([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(revisionId);
   if (match === null) {
@@ -1199,13 +1209,20 @@ export class OpenShellSandboxDriver implements SandboxDriver {
         );
       }
     }
-    // Adopt only this revision's own Sandbox, with its Harness service in place.
-    if (
-      existing.name !== sandbox.resourceName ||
-      Object.entries(annotations).some(([key, value]) => existing.annotations[key] !== value)
-    ) {
+    // Adopt only this revision's own live Sandbox, with its Harness service in place.
+    if (Object.entries(annotations).some(([key, value]) => existing.annotations[key] !== value)) {
       throw new OpenShellSandboxConfigurationFailure(
         `OpenShell Sandbox ${sandbox.resourceName} exists but belongs to another revision; remove the stale Sandbox before retrying.`,
+      );
+    }
+    if (existing.phase === "SANDBOX_PHASE_DELETING" || existing.phase === 4) {
+      throw new OpenShellSandboxConfigurationFailure(
+        `OpenShell Sandbox ${sandbox.resourceName} is being deleted; it is created again after deletion finishes.`,
+      );
+    }
+    if (STOPPED_SANDBOX_PHASES.has(existing.phase ?? "")) {
+      throw new OpenShellSandboxConfigurationFailure(
+        `OpenShell Sandbox ${sandbox.resourceName} has stopped; remove the stale Sandbox before retrying.`,
       );
     }
     if (codex) {
