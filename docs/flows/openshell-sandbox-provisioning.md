@@ -184,8 +184,8 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
 It always sends `hard_requirement` Landlock compatibility; Installation startup
-rejects any other `policy.landlockCompatibility` value. OpenShell then refuses
-to start a Sandbox on a node that cannot enforce Landlock.
+rejects any other `policy.landlockCompatibility` value. On a node that cannot
+enforce Landlock, the OpenShell supervisor refuses to launch the workload.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
 allowlists before they are converted to the exact `v0.1.3-pre.1` protobuf enums.
 It rejects inherited object names and the old `passthrough` TLS spelling,
