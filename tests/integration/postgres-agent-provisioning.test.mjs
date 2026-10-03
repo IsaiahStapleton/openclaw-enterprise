@@ -1246,6 +1246,67 @@ test(
 );
 
 test(
+  "a provisioned Agent's first Configuration is refused for deletion with 409 after a switch",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const configurationDriver = createProvisioningConfigurationDriver({
+      id: "configuration-provisioning",
+    });
+    const deleted = [];
+    const deleteStored = configurationDriver.delete.bind(configurationDriver);
+    configurationDriver.delete = async (reference) => {
+      deleted.push(reference.id);
+      return deleteStored(reference);
+    };
+    const fixture = await createFixture(context, { configurationDriver });
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets),
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    await fixture.startWorker();
+    let created;
+    try {
+      created = await waitFor("Agent provisioning to succeed", async () => {
+        const observed = await fixture.request("GET", admitted.data.provisioning.url);
+        assert.equal(observed.status, 200, JSON.stringify(observed.body));
+        return observed.data.status === "succeeded" ? observed.data : undefined;
+      });
+    } finally {
+      await fixture.stopWorker();
+    }
+    fixture.cancelProvisioningAtTeardown(namespace.id, created.agentId);
+
+    // Move the Agent to another Configuration, so no Agent references the first one.
+    const replacement = await fixture.request(
+      "POST",
+      `/namespaces/${namespace.id}/configurations`,
+      { body: { kind: "agent", values: { agents: { defaults: agentDefaults() } } } },
+    );
+    assert.equal(replacement.status, 201, JSON.stringify(replacement.body));
+    const switched = await fixture.request(
+      "PATCH",
+      `/namespaces/${namespace.id}/agents/${created.agentId}`,
+      { body: { configurationId: replacement.data.id } },
+    );
+    assert.equal(switched.status, 200, JSON.stringify(switched.body));
+
+    // The provisioning record still names the first Configuration until the Agent is
+    // deleted, so deletion is a state conflict, not a missing resource, and the stored
+    // document is never touched.
+    const configurationPath = `/namespaces/${namespace.id}/configurations/${created.configurationId}`;
+    const refused = await fixture.request("DELETE", configurationPath);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal(refused.body.error.code, "RESOURCE_CONFLICT");
+    assert.match(refused.body.error.message, /provision/);
+    assert.deepEqual(deleted, []);
+    const kept = await fixture.request("GET", configurationPath);
+    assert.equal(kept.status, 200, JSON.stringify(kept.body));
+  },
+);
+
+test(
   "a Namespace is deletable after provisioning fails with its Configuration effect settled",
   { ...requiresPostgres, timeout: 90_000 },
   async (context) => {
