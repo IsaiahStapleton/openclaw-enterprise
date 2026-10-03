@@ -765,7 +765,8 @@ function databaseError(error: unknown): Error {
 
 /**
  * pg's client-side `query_timeout` rejects with this code-less error and leaves the statement
- * running on the connection, so anything queued after it would wait for it.
+ * running on the connection, so anything queued after it would wait for it. The message comes
+ * from pg/lib/client.js (`query_timeout` handling); recheck it when upgrading pg.
  */
 function queryAbandonedByClient(error: unknown): boolean {
   return error instanceof Error && !("code" in error) && error.message === "Query read timeout";
