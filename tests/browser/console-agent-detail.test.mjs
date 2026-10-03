@@ -487,7 +487,7 @@ test("Agent deployment shows the API's reason when it rejects the saved model", 
   assert.deepEqual(revisions.data, []);
 });
 
-test("Plugin save shows the API's reason when it rejects the selections", async (t) => {
+test("Plugin save shows the API's reason when it rejects the selections, else the plugin text", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const driver = new CodexPluginDriver();
@@ -508,12 +508,38 @@ test("Plugin save shows the API's reason when it rejects the selections", async 
   await page
     .getByLabel("Plugin selections JSON", { exact: true })
     .fill(JSON.stringify({ [pluginId]: { enabled: "yes" } }));
-  const rejected = page.waitForResponse(
-    (response) =>
-      response.request().method() === "PATCH" &&
-      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}`,
-  );
-  await page.getByRole("button", { name: "Save plugin selections", exact: true }).click();
+  const agentUrl = `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}`;
+  const patched = (response) =>
+    response.request().method() === "PATCH" && response.url() === agentUrl;
+  const save = page.getByRole("button", { name: "Save plugin selections", exact: true });
+
+  // A 400 without a server sentence keeps the plugin-specific text, not the generic one.
+  const unexplained = async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "INVALID_REQUEST" } }),
+    });
+  };
+  await page.route(agentUrl, unexplained);
+  const unexplainedResponse = page.waitForResponse(patched);
+  await save.click();
+  assert.equal((await unexplainedResponse).status(), 400);
+  await page
+    .getByText("Plugin selections were rejected. Check plugin IDs and policy JSON, then retry.", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await page.getByText("Check the entered values", { exact: false }).count(), 0);
+  await page.unroute(agentUrl, unexplained);
+  await page.getByRole("button", { name: "Save plugin selections", disabled: false }).waitFor();
+
+  const rejected = page.waitForResponse(patched);
+  await save.click();
   const response = await rejected;
   assert.equal(response.status(), 400);
   // The API's sentence names the field; the generic text only says the selections were rejected.
@@ -532,7 +558,7 @@ test("Plugin save shows the API's reason when it rejects the selections", async 
 });
 
 test("Agent sharing shows a rejected write's reason, but generic text after an accepted write", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
+  const fixture = await createConsoleAppFixture(t, { provisionedPeople: ["sharing-recipient"] });
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Sharing rejection");
   const agent = await fixture.createAgent(namespace.id, "Sharing Agent", nativeValues("sharing"));
@@ -543,7 +569,7 @@ test("Agent sharing shows a rejected write's reason, but generic text after an a
   const reason = "The request does not match the operation contract: body /name is too long.";
   // The real API accepts these writes, so a 400 naming a field is simulated for one request.
   const reject = async (route) => {
-    if (route.request().method() !== "POST") {
+    if (route.request().method() === "GET") {
       await route.continue();
       return;
     }
@@ -559,7 +585,7 @@ test("Agent sharing shows a rejected write's reason, but generic text after an a
   const panel = page.getByRole("region", { name: "Share Agent", exact: true });
   await panel
     .getByLabel("Existing person’s Principal ID")
-    .fill("prn_00000000-0000-4000-8000-000000000001");
+    .fill(fixture.provisionedAccounts[0].principal.id);
   await panel.getByRole("checkbox").check();
 
   // The first write (the discovery Role) is rejected: its reason is shown.
@@ -579,6 +605,29 @@ test("Agent sharing shows a rejected write's reason, but generic text after an a
   assert.equal(await panel.getByText(reason, { exact: false }).count(), 0);
   const roles = await fixture.request("GET", `/namespaces/${namespace.id}/iam/roles`);
   assert.equal(roles.data.length, 1);
+
+  // The discovery Role now exists, so its rejected binding is the first write: reason shown.
+  await panel.getByRole("button", { name: "Refresh sharing" }).click();
+  await panel.getByText("Current policy loaded.", { exact: false }).waitFor();
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText(reason, { exact: false }).waitFor();
+  assert.equal(await panel.getByText("Check the entered values", { exact: false }).count(), 0);
+  await page.unroute(`${policyPath}/access-bindings`, reject);
+
+  // A rejected binding removal also shows its reason, and the binding stays.
+  await panel.getByRole("button", { name: "Refresh sharing" }).click();
+  await panel.getByText("Current policy loaded.", { exact: false }).waitFor();
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("Agent access is shared.", { exact: false }).waitFor();
+  await page.route(`${policyPath}/access-bindings/*`, reject);
+  await panel.getByRole("button", { name: "Remove binding", exact: true }).click();
+  await panel.getByText(reason, { exact: false }).waitFor();
+  assert.equal(await panel.getByText("Check the entered values", { exact: false }).count(), 0);
+  assert.equal(await panel.getByText("Binding removed.", { exact: false }).count(), 0);
+  const bindings = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.equal(bindings.data.length, 2);
 });
 
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {

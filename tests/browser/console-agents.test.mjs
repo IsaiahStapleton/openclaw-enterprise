@@ -2622,7 +2622,7 @@ test("Agent creation reports unavailable Secret storage before creating Configur
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
 });
 
-test("Agent creation shows the API's duplicate-name conflict and keeps the form usable", async (t) => {
+test("Agent creation shows the API's duplicate-name conflict, generic text for other conflicts, and keeps the form usable", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Duplicate Agent name", { ready: true });
@@ -2635,9 +2635,44 @@ test("Agent creation shows the API's duplicate-name conflict and keeps the form 
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByLabel("Agent name").fill("Taken Agent");
   await enterManualModel(page, "duplicate-name-model-key", "gpt-duplicate-name");
+  const agentsUrl = `${fixture.origin}/namespaces/${namespace.id}/agents`;
   const agentPost = (response) =>
-    response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
-    response.request().method() === "POST";
+    response.url() === agentsUrl && response.request().method() === "POST";
+
+  // Any other conflict keeps the generic text: plain conflicts reach the client as "The
+  // requested platform resource already exists.", which would mislead on this form.
+  const otherConflict = async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "RESOURCE_CONFLICT",
+          message: "The requested platform resource already exists.",
+        },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+      }),
+    });
+  };
+  await page.route(agentsUrl, otherConflict);
+  const conflicted = page.waitForResponse(agentPost);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await conflicted).status(), 409);
+  await page
+    .getByRole("alert")
+    .filter({
+      hasText:
+        "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again. Request ID: req_00000000-0000-4000-8000-000000000409",
+    })
+    .waitFor();
+  assert.equal(await page.getByText("The requested platform resource already exists.").count(), 0);
+  await page.unroute(agentsUrl, otherConflict);
+  await page.getByRole("button", { name: "Create Agent", disabled: false }).waitFor();
+
   const rejected = page.waitForResponse(agentPost);
   await page.getByRole("button", { name: "Create Agent" }).click();
   assert.equal((await rejected).status(), 409);
