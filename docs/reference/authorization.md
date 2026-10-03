@@ -247,7 +247,11 @@ remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
 one binding preserves equivalent and unrelated bindings. Deleting an Agent,
 Configuration, Preset, Secret, credential source, or ServiceAccount removes the
 bindings that target it in the same transaction, and its delete audit event lists
-them (`removedAccessBindings`; for an Agent, `accessBindingsRemovedOnCompletion`).
+them (`removedAccessBindings`). Agent deletion completes asynchronously and also
+removes the bindings that target its AgentRevisions or name its ServicePrincipal as
+subject; its accepted delete event lists all of them in
+`accessBindingsRemovedOnCompletion`. A deleting Agent admits no new binding of
+those kinds.
 Namespace teardown removes the Namespace's bindings and Roles with the tombstone
 and records them in the lifecycle event. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings

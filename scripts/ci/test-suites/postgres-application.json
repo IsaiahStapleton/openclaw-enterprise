@@ -178,6 +178,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-agent-deletion-audit.test.mjs",
+      "expectedTests": [
+        "Agent delete audit lists every AccessBinding the deletion finalizer removes"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-agent-runtime-logs.test.mjs",
       "expectedTests": [
         "runtime log views and downloads persist audit rows before the read and fail closed without them"
