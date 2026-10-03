@@ -163,10 +163,12 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
   permitted.client.pushRefAllowlist = ["refs/heads/agent/*"];
   const other = opened("other", "example/other");
   other.client.pushRefAllowlist = ["refs/heads/main"];
+  const unrestricted = opened("unrestricted", "example/open");
   const material = await createNativeClientMaterial(t, [
     { opened: restricted, repositoryRef: "restricted" },
     { opened: permitted, repositoryRef: "permitted" },
     { opened: other, repositoryRef: "other" },
+    { opened: unrestricted, repositoryRef: "unrestricted" },
   ]);
   const work = await temporaryDirectory(t);
   await run("/usr/bin/git", ["init", work]);
@@ -217,6 +219,15 @@ test("native pre-push uses the exact pinned binding and actual destination", asy
     assert.equal(unparsed.code, 1);
     assert.equal(unparsed.stderr, "repository-pre-push-guard-failed\n");
   }
+  // A repository without a policy keeps its pushes, even beside restricted ones.
+  const unrestrictedDestination = unrestricted.client.gitRemote.replace(
+    "https://",
+    "https://gateway%2Dsession@",
+  );
+  assert.equal(
+    (await invoke({ OCE_REPOSITORY_REF: "unrestricted" }, unrestrictedDestination)).code,
+    0,
+  );
   const selected = material.manifest.bindings.find(
     ({ repositoryRef }) => repositoryRef === "permitted",
   );

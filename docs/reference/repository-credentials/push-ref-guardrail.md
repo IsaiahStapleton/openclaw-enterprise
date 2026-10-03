@@ -29,7 +29,7 @@ it does not add token permissions or change GraphQL access.
   slashes, or the configured Git username. Host and repository matching remains
   exact; a username cannot select among duplicate repository bindings. A
   gateway destination with an encoded username, embedded password, query or
-  fragment fails the guard instead of skipping it.
+  fragment fails the guard when a repository it may name has a policy.
 - Entries are sorted and deduplicated into the admitted grant fingerprint.
   There is no separate entry-count or per-entry byte cap; the complete serialized
   client metadata must fit its existing 16 KiB limit.

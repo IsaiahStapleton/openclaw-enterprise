@@ -87,10 +87,24 @@ function gitPushDestinations(
     url.password ||
     url.pathname.startsWith("//")
   ) {
-    // Git decodes a URL username and trims leading path slashes before the
-    // credential helper matches, so an irregular gateway destination can still
-    // receive the bearer.
-    if (manifest.bindings.some(({ client }) => client.gatewayOrigin === url.origin)) {
+    // Git decodes the URL and trims leading path slashes before the credential
+    // helper matches, so an irregular gateway destination can still receive the
+    // bearer. Fail closed when a repository it may name has a push-ref policy.
+    let decoded: string | undefined;
+    try {
+      decoded = gitRepositoryPath(decodeURIComponent(url.pathname).replace(/^\/+/, ""));
+    } catch {
+      decoded = undefined;
+    }
+    const restricted = manifest.bindings.some(({ client }) => {
+      const repository = client.repository.toLowerCase();
+      return (
+        client.gatewayOrigin === url.origin &&
+        client.pushRefAllowlist !== undefined &&
+        (decoded === undefined || [repository, repository + ".git"].includes(decoded))
+      );
+    });
+    if (restricted) {
       throw new Error("unsupported-push-destination");
     }
     return [];
