@@ -470,8 +470,8 @@ test("Agent detail reports a failed selected version as probably not serving", a
 
 // A startup model check that failed or timed out is not a rejected credential, so its
 // next step points at the Configuration and the failed version's Logs, not at Credentials.
-// OpenClaw reports an unreachable provider (refused connection, DNS failure) as a timeout,
-// so only the timeout guidance names it.
+// OpenClaw reports an unreachable provider (refused connection, DNS failure) as a timeout and
+// Codex as a failure, so each text names the harness it applies to.
 test("Deployment activity guides a failed or timed-out startup model check", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -484,8 +484,7 @@ test("Deployment activity guides a failed or timed-out startup model check", asy
         message: "Deployment runtime startup model check failed.",
       },
       guidance:
-        /^The startup model check failed for a reason other than a rejected credential or a timeout,/,
-      absent: /unreachable|cannot reach/,
+        /^The startup model check failed for a reason other than a rejected credential, .*, or, with Codex, a provider the runtime cannot reach\. .*and that the runtime can reach the provider, then deploy a new version\./,
     },
     {
       error: {
@@ -493,10 +492,10 @@ test("Deployment activity guides a failed or timed-out startup model check", asy
         message: "Deployment runtime startup model check timed out.",
       },
       guidance:
-        /^The startup model check did not get a reply from the model provider in time\. This includes a provider the runtime cannot reach \(refused connection, unknown host, or blocked egress\)\./,
+        /^The startup model check did not get a reply from the model provider in time\. With OpenClaw this includes a provider the runtime cannot reach \(refused connection or unknown host\)\./,
     },
   ];
-  for (const [index, { error, guidance, absent }] of cases.entries()) {
+  for (const [index, { error, guidance }] of cases.entries()) {
     const agent = await fixture.createAgent(namespace.id, `Agent ${index}`, nativeValues("v1"));
     const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
     await routeDeploymentStatus(page, fixture, namespace, agent, revision, "failed", error);
@@ -510,12 +509,6 @@ test("Deployment activity guides a failed or timed-out startup model check", asy
     const activity = page.locator(".deployment-status");
     await activity.getByText(`${error.code}: ${error.message}`).waitFor();
     await activity.locator(".deployment-failure-guidance").getByText(guidance).waitFor();
-    if (absent) {
-      assert.doesNotMatch(
-        await activity.locator(".deployment-failure-guidance").innerText(),
-        absent,
-      );
-    }
     assert.match(
       await activity.getByRole("link", { name: "Open Configuration" }).getAttribute("href"),
       new RegExp(`agents/${agent.id}\\?revision=draft&tab=configuration`),

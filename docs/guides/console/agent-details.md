@@ -45,7 +45,8 @@ For `RUNTIME_AUTHENTICATION_FAILED`, `RUNTIME_MODEL_PROBE_FAILED`, and
 `RUNTIME_MODEL_PROBE_TIMEOUT` it also states the next step and links
 **Credentials** or the draft **Configuration**. A provider the runtime cannot
 reach (refused connection, unknown host) usually reports
-`RUNTIME_MODEL_PROBE_TIMEOUT`, not `RUNTIME_MODEL_PROBE_FAILED`.
+`RUNTIME_MODEL_PROBE_TIMEOUT` with OpenClaw and `RUNTIME_MODEL_PROBE_FAILED`
+with Codex.
 Startup evidence may identify the runtime component, failed check, code, and
 check time. Plugin warnings describe that attempt. An unavailable record has
 unknown status. While the record is `queued` or `running`, the panel rereads it
