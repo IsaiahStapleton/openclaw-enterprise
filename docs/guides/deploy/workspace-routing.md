@@ -339,12 +339,12 @@ keep normal CA and hostname verification while the issuing CA remains trusted.
 
 Automatic setup does not coordinate CA rollover: preserve the CA Secret, plan
 backups, and control trust changes. For a CA key replacement, distribute an
-overlapping old/new public trust bundle before switching Envoy's certificate,
-and remove the old root only after no serving certificate depends on it.
-Restart the API after replacing a private root bundle; Node reads
-`NODE_EXTRA_CA_CERTS` only at process startup. This integration uses API-key
-authentication over WSS; the pinned native client does not expose mTLS
-client-certificate options.
+overlapping old/new public trust bundle and restart the API to load it before
+switching Envoy's certificate. Remove the old root only after no serving
+certificate depends on it. Any private root bundle change requires an API
+restart because Node reads `NODE_EXTRA_CA_CERTS` only at process startup. This
+integration uses API-key authentication over WSS; the pinned native client does
+not expose mTLS client-certificate options.
 
 ### Troubleshooting
 
