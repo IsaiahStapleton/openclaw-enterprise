@@ -17,6 +17,10 @@ export const fullIntegrationLanes = Object.freeze([
 
 const lanes = new Set(fullIntegrationLanes);
 const branchEligibleLanes = new Set(["k3d-model", "openshell"]);
+// TODO: include qa-matrix in `all` once the protected integration-qa
+// environment and its QA secrets exist; until then only an explicit qa-matrix
+// dispatch requires it, so `all` keeps passing preflight.
+const explicitOnlyLanes = new Set(["qa-matrix"]);
 const providerAccountEnvironment = "integration-provider-account";
 const laneEnvironments = Object.freeze({
   "qa-matrix": "integration-qa",
@@ -53,7 +57,9 @@ export function requiredEnvironmentsForLane(selected) {
   return [
     ...new Set(
       Object.entries(laneEnvironments)
-        .filter(([lane]) => selected === "all" || selected === lane)
+        .filter(
+          ([lane]) => (selected === "all" && !explicitOnlyLanes.has(lane)) || selected === lane,
+        )
         .map(([, environment]) => environment),
     ),
   ];

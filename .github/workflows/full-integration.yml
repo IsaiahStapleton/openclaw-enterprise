@@ -488,8 +488,11 @@ jobs:
             }
           } else if (lane === "logging-collector") {
             out["logging-collector"] = needs["logging-collector"] ?? { result: "missing" };
+          } else if (lane === "qa-matrix") {
+            // TODO: move qa-matrix into the `all` list once integration-qa exists.
+            out["qa-matrix"] = needs["qa-matrix"] ?? { result: "missing" };
           }
-          for (const name of ["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "k3d-otel", "qa-matrix"]) {
+          for (const name of ["docker-model", "k3d-model", "gateway-routing", "production-tui", "slack", "provider-account", "openshell", "helper-timeout", "k3d-otel"]) {
             if (lane === "all" || lane === name) {
               out[name] = needs[name] ?? { result: "missing" };
             }
@@ -507,7 +510,7 @@ jobs:
     name: Shipped Installation QA Matrix
     runs-on: blacksmith-16vcpu-ubuntu-2404
     needs: [preflight, slack]
-    if: always() && needs.preflight.result == 'success' && (needs.slack.result == 'success' || needs.slack.result == 'skipped') && (inputs.lane == 'all' || inputs.lane == 'qa-matrix')
+    if: always() && needs.preflight.result == 'success' && (needs.slack.result == 'success' || needs.slack.result == 'skipped') && inputs.lane == 'qa-matrix'
     timeout-minutes: 240
     environment: integration-qa
     env:

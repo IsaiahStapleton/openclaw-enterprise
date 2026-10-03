@@ -121,13 +121,14 @@ without `OCC_TEST_QA_MATRIX=1` is not a matrix pass.
 
 ## CI, evidence, and recovery
 
-The `qa-matrix` lane belongs to the `full` group and is selectable in the
-**Full Integration** workflow. It uses the protected `integration-qa` environment;
-configure independent reviewers and the approved main branch before dispatch.
+The `qa-matrix` lane runs only when **Full Integration** is dispatched with
+`lane: qa-matrix`; `all` and the `full` group exclude it until the protected
+`integration-qa` environment and its QA secrets exist. That environment needs
+independent reviewers and the approved main branch before dispatch.
 The workflow materializes file-backed credentials in runner temporary storage and
 uploads only the outcome/evidence JSON files. It does not upload private state or
-raw command logs. In a full run, this job follows the focused Slack job so they
-cannot compete for Socket Mode delivery.
+raw command logs. The job is ordered after the focused Slack job so they
+cannot compete for Socket Mode delivery once `all` includes it.
 `scripts/ci/test-suites/qa-matrix.json` owns lane registration.
 
 Replay through the credentialed runner with the same environment:

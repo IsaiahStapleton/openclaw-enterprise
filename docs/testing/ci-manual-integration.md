@@ -26,7 +26,8 @@ manual lanes do not run as part of automatic `CI Required`.
 
 These files run only when selected in
 [Full Integration](../../.github/workflows/full-integration.yml), using the listed
-lane or `all`. Model/service lanes require configured credentials and infrastructure.
+lane or `all` (`all` excludes `qa-matrix` until its environment exists).
+Model/service lanes require configured credentials and infrastructure.
 `helper-timeout` is separate because it spends five minutes testing the helper deadline.
 
 | Lane               | Integration test file                                                                                                  | Coverage absent from automatic CI                                                                                                                                 |
