@@ -6266,7 +6266,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
     }
   }
 
-  /** Overridable in tests; an owner cancellation ends the wait with its reason. */
+  /** Waits before a retry; an owner cancellation ends the wait with its reason. */
   private async waitBeforeRetry(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
     try {
       await delay(delayMs, undefined, { signal });
@@ -6604,23 +6604,27 @@ export class KubernetesComputeDriver implements ComputeDriver {
       return undefined;
     }
     const containerId = this.podContainerId(pod, container);
-    let parsed: unknown;
-    try {
-      const clients = await this.clients(namespace.plane);
-      const raw = await this.request(() =>
-        clients.core.connectGetNamespacedPodProxyWithPath({
+    const clients = await this.clients(namespace.plane);
+    // 404/503 mean the status port is not serving yet: an answer, not an outage to retry.
+    const notServing = Symbol("not serving");
+    const raw = await this.request(async () => {
+      try {
+        return await clients.core.connectGetNamespacedPodProxyWithPath({
           name: `${podName}:${PLUGIN_RUNTIME_STATUS_PORT}`,
           namespace: namespace.name,
           path: path.slice(1),
-        }),
-      );
-      parsed = this.boundedRuntimeStatusResponse(raw);
-    } catch (error) {
-      if (numericErrorStatus(error) === 404 || numericErrorStatus(error) === 503) {
-        return undefined;
+        });
+      } catch (error) {
+        if (numericErrorStatus(error) === 404 || numericErrorStatus(error) === 503) {
+          return notServing;
+        }
+        throw error;
       }
-      throw error;
+    });
+    if (raw === notServing) {
+      return undefined;
     }
+    const parsed = this.boundedRuntimeStatusResponse(raw);
     const latestPods = (await this.revisionPods(revision, namespace, container)).filter(
       (candidate) => asRecord(candidate.metadata)?.deletionTimestamp === undefined,
     );
