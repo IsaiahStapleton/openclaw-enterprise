@@ -125,7 +125,15 @@ Additional consumer kinds are reserved for future approved resources and are
 not accepted. `values` must be a JSON object. It can contain the nested objects,
 arrays, strings, finite numbers, booleans, and nulls used by native OpenClaw
 configuration. OCC preserves the native document without interpreting its
-fields or resolving SecretRefs. Agent deployment separately validates supported
+fields or resolving SecretRefs, except that each model provider's `baseUrl` and
+`api`, and those of its `models` entries, are checked on create and update:
+`baseUrl` must be an absolute `http` or `https` URL, and `api` must be a model
+API the pinned OpenClaw runtime supports (`openai-responses`,
+`openai-completions`, `openai-chatgpt-responses`, `anthropic-messages`,
+`google-generative-ai`, `google-interactions`, `google-vertex`,
+`github-copilot`, `bedrock-converse-stream`, `ollama`, `pi-messages`, or
+`azure-openai-responses`). The `400` names the field as a JSON pointer within
+`values`. Agent deployment separately validates supported
 runtime selection, topology, and Secret binding ownership before admission.
 Creation requires `create` permission for Configurations in the
 exact parent Namespace. Reads, updates, and deletes require the corresponding
@@ -192,7 +200,8 @@ The Kubernetes Configuration Driver stores live native documents in tenant Confi
   verify every selected implementation is available.
 - **Configuration create or update returns `400`:** Create with
   `kind: "agent"` and provide a JSON object in `values`. Do not send `kind`,
-  `generation`, or ownership fields in an update.
+  `generation`, or ownership fields in an update. When the message names a
+  `baseUrl` or `api` field, correct that model provider setting.
 - **Configuration operation returns `403`:** Verify exact-Namespace `create`
   or exact-Configuration `read`, `update`, or `delete` permission; check the
   selected Kubernetes identity's namespaced ConfigMap Role separately.

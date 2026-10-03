@@ -15,6 +15,7 @@ import {
   IAMPolicyValidationError,
   IAMRoleInUseError,
   ModelCredentialValueError,
+  ModelProviderSettingError,
   ModelDiscoveryError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
@@ -512,7 +513,7 @@ export function requestFailure(error: unknown): RequestFailure {
     // rule, not submitted values.
     return failure(400, "INVALID_REQUEST", capped(error.message));
   }
-  if (error instanceof ModelCredentialValueError) {
+  if (error instanceof ModelCredentialValueError || error instanceof ModelProviderSettingError) {
     // The message names only the field; other Configuration validation stays generic.
     // The field's path includes a submitted provider name, so it is capped like other
     // messages that name submitted object keys.

@@ -329,6 +329,83 @@ test("Configuration HTTP requires native supported requests and rejects immutabl
   assert.deepEqual(unchanged.body.data, created.body.data);
 });
 
+test("Configuration HTTP names a model provider baseUrl or api the runtime cannot use", async () => {
+  const configurationDriver = createConfigurationBackend();
+  const context = await fixture({ configurationDriver });
+  const namespace = await bootstrapAndCreateNamespace(context);
+  const collection = `/namespaces/${namespace.id}/configurations`;
+  const provider = (settings) => ({ models: { providers: { openai: settings } } });
+  const baseUrlMessage = (field) =>
+    `Configuration field ${field} must be an absolute http or https URL.`;
+  const apiMessage = (field) =>
+    `Configuration field ${field} must name a model API the runtime supports, such as openai-responses, openai-completions or anthropic-messages.`;
+  // These values used to save and then fail deployment as an unexplained model probe
+  // failure; the save now answers a 400 naming the field and stores nothing.
+  for (const [values, message] of [
+    [
+      provider({ baseUrl: "not a url", api: "openai-responses" }),
+      baseUrlMessage("/models/providers/openai/baseUrl"),
+    ],
+    [
+      provider({ baseUrl: "ftp://models.example/v1" }),
+      baseUrlMessage("/models/providers/openai/baseUrl"),
+    ],
+    [
+      provider({ baseUrl: "https://api.openai.com/v1", api: "openai-bogus" }),
+      apiMessage("/models/providers/openai/api"),
+    ],
+    [
+      provider({
+        models: [
+          { id: "a", name: "a" },
+          { id: "b", name: "b", baseUrl: "/v1" },
+        ],
+      }),
+      baseUrlMessage("/models/providers/openai/models/1/baseUrl"),
+    ],
+  ]) {
+    const rejected = await request(context.app, "POST", collection, {
+      body: { kind: "agent", values },
+    });
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.equal(rejected.body.error.message, message);
+  }
+  assert.deepEqual(configurationDriver.storedConfigurations(), []);
+
+  const values = createOpenClawConfiguration();
+  const created = await request(context.app, "POST", collection, {
+    body: { kind: "agent", values },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const item = `${collection}/${created.body.data.id}`;
+  const failedUpdate = await request(context.app, "PATCH", item, {
+    body: { values: provider({ models: [{ id: "a", name: "a", api: 7 }] }) },
+  });
+  assert.equal(failedUpdate.status, 400);
+  assert.equal(
+    failedUpdate.body.error.message,
+    apiMessage("/models/providers/openai/models/0/api"),
+  );
+  const unchanged = await request(context.app, "GET", item);
+  assert.deepEqual(unchanged.body.data, created.body.data);
+  // Any API id the pinned runtime accepts, on a provider or a model, still saves.
+  const local = {
+    models: {
+      providers: {
+        local: {
+          baseUrl: "http://127.0.0.1:11434",
+          api: "ollama",
+          models: [{ id: "m", name: "m", api: "openai-completions", baseUrl: "http://[::1]:9/v1" }],
+        },
+      },
+    },
+  };
+  const updated = await request(context.app, "PATCH", item, { body: { values: local } });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.deepEqual(updated.body.data.values, local);
+});
+
 test("Configuration HTTP routes reject foreign Namespace ownership and missing admission", async () => {
   const context = await fixture();
   const namespace = await bootstrapAndCreateNamespace(context);

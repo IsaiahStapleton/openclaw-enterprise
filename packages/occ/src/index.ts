@@ -143,6 +143,7 @@ import {
   ScopeViolationError,
   SecretValueError,
 } from "./errors.ts";
+import { validateModelProviderSettings } from "./model-provider-settings.ts";
 import {
   readRuntimeLogPage,
   readSandboxLogPage,
@@ -231,6 +232,7 @@ export {
   IAMPolicyValidationError,
   IAMRoleInUseError,
   ModelCredentialValueError,
+  ModelProviderSettingError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -1869,6 +1871,7 @@ export class OpenClawController {
         configurationInput.secretBindings,
         harnessAuth,
       );
+      validateModelProviderSettings(configurationInput.values);
       await configurationDriver.validate({
         id: "cfg_00000000-0000-4000-8000-000000000000",
         namespaceId: namespace.id,
@@ -3723,6 +3726,7 @@ export class OpenClawController {
         values,
         createdAt: this.timestamp(),
       });
+      validateModelProviderSettings(values);
       await driver.validate(configuration);
       const metadata = await state.configurations.createConfiguration({
         id: configuration.id,
@@ -3979,6 +3983,7 @@ export class OpenClawController {
         values,
         createdAt: advanced.createdAt,
       });
+      validateModelProviderSettings(values);
       await driver.validate(configuration);
       const updated = await this.driverOperation(() => driver.update(configuration));
       this.registerRollback(async () => {
