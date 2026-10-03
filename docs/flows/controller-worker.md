@@ -131,6 +131,11 @@ An empty queue waits within a bound. After work or idle, `health()` queries
 work, calls `onHealthy`, and emits `worker.health`. Both must succeed for readiness. Serialized failures emit `HEALTH_UNAVAILABLE` without
 consuming retries.
 
+Each pass start and claim renewal calls `onProgress`; the liveness probe
+restarts a worker whose marker goes stale. A client `query_timeout` usually
+frees a stuck pass first by discarding its connection. See
+[worker settings](../reference/settings/operations.md#controller-worker-environment).
+
 ### 4. Reload ownership and reauthorize before infrastructure effects
 
 `apps/controller/src/worker.ts:ControllerWorker.process`,
@@ -381,6 +386,8 @@ cannot strand provisioning.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 16:00: Bound worker queries and restart a stuck run loop. (fix-worker-liveness)
 
 - 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 
