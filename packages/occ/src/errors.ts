@@ -173,6 +173,10 @@ export class ResourceStateConflictError extends ResourceConflictError {
   }
 }
 
+/** Shared by the memory and PostgreSQL stores so both report a duplicate Agent name alike. */
+export const AGENT_NAME_CONFLICT =
+  "An Agent with this name already exists in this Namespace. Choose a different name.";
+
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {
     super(message);
