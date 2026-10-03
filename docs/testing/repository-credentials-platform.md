@@ -199,7 +199,7 @@ The installed case additionally uses these variables with prefix
 
 | Suffix            | Required value                                                                            |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| `AUTHORIZED`      | `1`, explicitly permitting temporary branch/PR writes and cleanup                         |
+| `AUTHORIZED`      | `1`, explicitly permitting temporary branch/PR writes                                     |
 | `REPOSITORY`      | Exact authorized `owner/repository`                                                       |
 | `APP_CONFIG_FILE` | Protected mode-0600 JSON with only string `appId`, `githubInstallationId`, `repositoryId` |
 | `APP_KEY_FILE`    | Protected mode-0600 App PEM key                                                           |

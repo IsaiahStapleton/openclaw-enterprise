@@ -1042,8 +1042,8 @@ test("installed repository preparation is refused before prerequisite checks or 
   assert.doesNotMatch(unprepared.stderr, /Missing required CI input/);
   await assert.rejects(() => stat(statePath), { code: "ENOENT" });
 
-  // Even complete, valid inputs cannot create a preparation state while remote
-  // cleanup lacks a safe ownership boundary.
+  // Inputs that previously passed the early checks cannot create a preparation state
+  // while remote cleanup lacks a safe ownership boundary.
   const blocked = runPrepare(args, {
     OPENAI_API_KEY: "test-only-model-key",
     OCC_TEST_OPENAI_MODEL: "test-model",
@@ -1062,6 +1062,15 @@ test("installed repository preparation is refused before prerequisite checks or 
   });
   assert.equal(blocked.status, 1);
   assert.match(blocked.stderr, /Installed repository qualification is temporarily unavailable/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  // Per-file preparation, which the test runner uses, is refused the same way.
+  const perFile = runPrepare(
+    [...args, "--file", "tests/integration/repository-credentials-k3d-real.test.mjs"],
+    {},
+  );
+  assert.equal(perFile.status, 1);
+  assert.match(perFile.stderr, /Installed repository qualification is temporarily unavailable/);
   await assert.rejects(() => stat(statePath), { code: "ENOENT" });
 });
 
