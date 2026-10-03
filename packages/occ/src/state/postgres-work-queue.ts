@@ -100,6 +100,7 @@ const REPOSITORY_CLEANUP_KEY = new RegExp(
 const MAINTENANCE_KEY = new RegExp(
   `^agent_revision:(${REVISION_ID_PATTERN}):maintenance:(0|[1-9][0-9]*)$`,
 );
+const REVISION_RECONCILE_KEY = new RegExp(`^agent_revision:${REVISION_ID_PATTERN}:reconcile$`);
 /** Recovery evidence that a published deployment got its one extra attempt. */
 const ACTIVE_REVISION_RECOVERY = "ACTIVE_REVISION_RECOVERY";
 
@@ -492,6 +493,7 @@ const FAIL_EXHAUSTED_NAMESPACES_SQL = `
 /**
  * Queue transitions append `reconcile` evidence in the same statement. `filter` narrows which
  * transitioned rows get a row; it is appended to the evidence SELECT's WHERE clause.
+ * `reasonCode` is a raw SQL expression: pass parameters or constants, never input.
  */
 const insertEvidenceCteSql = (filter = "", reasonCode = "$4::text") => `
   evidence_targets AS (
@@ -1133,10 +1135,11 @@ export class PostgresWorkQueue {
     const maintenanceKey = MAINTENANCE_KEY.exec(claim.idempotencyKey);
     if (
       continuingRevision &&
-      (maintenanceKey === null || maintenanceKey[0] !== claim.idempotencyKey)
+      (maintenanceKey === null || maintenanceKey[0] !== claim.idempotencyKey) &&
+      !REVISION_RECONCILE_KEY.test(claim.idempotencyKey)
     ) {
       throw new ScopeViolationError(
-        "Only ordinary revision maintenance can continue after failure.",
+        "Only an active revision's deployment or maintenance can continue after failure.",
       );
     }
     const failed = await this.client.query(
@@ -1163,8 +1166,9 @@ export class PostgresWorkQueue {
              WHERE source.revision_id = revision.id AND source.namespace_target IS NULL
                AND source.agent_target IS NULL AND agent.desired_runtime_state = 'running'
                AND namespace.status = 'ready' AND namespace.deleted_at IS NULL
-               AND source.idempotency_key ~
+               AND (source.idempotency_key ~
                  ('^agent_revision:' || revision.id || ':maintenance:(0|[1-9][0-9]*)$')
+                 OR source.idempotency_key = 'agent_revision:' || revision.id || ':reconcile')
                AND (revision.admitted_spec->'repository_credentials' IS NULL OR
                  (revision.admitted_spec #>> '{repository_credentials,deadlineWallMs}')::bigint >
                    EXTRACT(EPOCH FROM clock_timestamp()) * 1000)
@@ -1237,6 +1241,9 @@ export class PostgresWorkQueue {
              END,
              available_at = CASE
                WHEN ${exhaustedClaim} THEN work.available_at
+               -- The runtime already runs: nothing to back off from.
+               WHEN ${recovering} THEN clock_timestamp() +
+                 $6::double precision * $7::double precision * interval '1 millisecond'
                ELSE clock_timestamp() +
                  LEAST($5::double precision,
                    $6::double precision * POWER(2::double precision,
