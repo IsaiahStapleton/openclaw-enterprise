@@ -487,6 +487,100 @@ test("Agent deployment shows the API's reason when it rejects the saved model", 
   assert.deepEqual(revisions.data, []);
 });
 
+test("Plugin save shows the API's reason when it rejects the selections", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const driver = new CodexPluginDriver();
+  fixture.controller.registerDriver(driver);
+  fixture.controller.selectDriver("plugin", driver.id);
+  const namespace = await fixture.createNamespace("Plugin rejection", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Plugin rejection Agent",
+    nativeValues("plugin-rejection", { harnessId: "codex" }),
+    { executionMode: "dedicated", harnessAuth: null },
+  );
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "plugins");
+  await login(page, fixture, url.pathname + url.search);
+  const pluginId = "codex-plugin:linear@openai-curated-remote";
+  await page.locator("summary").filter({ hasText: "Plugin selections JSON" }).click();
+  await page
+    .getByLabel("Plugin selections JSON", { exact: true })
+    .fill(JSON.stringify({ [pluginId]: { enabled: "yes" } }));
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  await page.getByRole("button", { name: "Save plugin selections", exact: true }).click();
+  const response = await rejected;
+  assert.equal(response.status(), 400);
+  // The API's sentence names the field; the generic text only says the selections were rejected.
+  const reason = (await response.json()).error.message;
+  assert.equal(
+    reason,
+    `The request does not match the operation contract: body /plugins/${pluginId}/enabled has the wrong type (expected boolean).`,
+  );
+  await page.getByText(reason, { exact: true }).waitFor();
+  assert.equal(
+    await page.getByText("Plugin selections were rejected.", { exact: false }).count(),
+    0,
+  );
+  const saved = await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`);
+  assert.deepEqual(saved.data.plugins ?? {}, {});
+});
+
+test("Agent sharing shows a rejected write's reason, but generic text after an accepted write", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Sharing rejection");
+  const agent = await fixture.createAgent(namespace.id, "Sharing Agent", nativeValues("sharing"));
+  const { page } = await newPage(t, fixture);
+  const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+  await login(page, fixture, `${detail.pathname}${detail.search}`);
+  const policyPath = `${fixture.origin}/namespaces/${namespace.id}/iam`;
+  const reason = "The request does not match the operation contract: body /name is too long.";
+  // The real API accepts these writes, so a 400 naming a field is simulated for one request.
+  const reject = async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { code: "INVALID_REQUEST", message: reason },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000999" },
+      }),
+    });
+  };
+  const panel = page.getByRole("region", { name: "Share Agent", exact: true });
+  await panel
+    .getByLabel("Existing person’s Principal ID")
+    .fill("prn_00000000-0000-4000-8000-000000000001");
+  await panel.getByRole("checkbox").check();
+
+  // The first write (the discovery Role) is rejected: its reason is shown.
+  await page.route(`${policyPath}/roles`, reject);
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText(reason, { exact: false }).waitFor();
+  assert.equal(await panel.getByText("Check the entered values", { exact: false }).count(), 0);
+  await page.unroute(`${policyPath}/roles`, reject);
+
+  // The Role is created, then its binding is rejected: the outcome is partial, so generic text.
+  await panel.getByRole("button", { name: "Refresh sharing" }).click();
+  await panel.getByText("Current policy loaded.", { exact: false }).waitFor();
+  await page.route(`${policyPath}/access-bindings`, reject);
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
+  await panel.getByText("Check the entered values and resource IDs", { exact: false }).waitFor();
+  assert.equal(await panel.getByText(reason, { exact: false }).count(), 0);
+  const roles = await fixture.request("GET", `/namespaces/${namespace.id}/iam/roles`);
+  assert.equal(roles.data.length, 1);
+});
+
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "occ-gateway-password-"));
   t.after(() => rm(root, { recursive: true, force: true }));
