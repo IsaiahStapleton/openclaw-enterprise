@@ -101,6 +101,42 @@ function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
 }
 
+const transientHttpStatus = /^(?:408|429|5\d\d)$/;
+
+// Same retry rule as scripts/ci/download-pinned.sh: network errors, timeouts
+// and HTTP 408/429/5xx are retried (five attempts, 120 s budget); any other
+// HTTP status fails at once. The caller verifies the checksum, never retried.
+export async function fetchPinnedBytes(
+  artifact,
+  { attempts = 5, firstDelayMs = 2_000, budgetMs = 120_000 } = {},
+) {
+  const started = Date.now();
+  let delayMs = firstDelayMs;
+  for (let attempt = 1; ; attempt += 1) {
+    let failure;
+    let transient = true;
+    try {
+      const response = await fetch(artifact.url, { signal: AbortSignal.timeout(60_000) });
+      if (response.ok) {
+        return Buffer.from(await response.arrayBuffer());
+      }
+      await response.body?.cancel();
+      failure = `HTTP ${response.status}`;
+      transient = transientHttpStatus.test(String(response.status));
+    } catch (error) {
+      failure = error.cause?.code ?? error.name ?? "network error";
+    }
+    if (!transient || attempt >= attempts || Date.now() - started + delayMs > budgetMs) {
+      throw new Error(`${artifact.name} download failed: ${failure} after ${attempt} attempt(s).`);
+    }
+    console.error(
+      `${artifact.name} download failed (${failure}); retrying in ${delayMs} ms (attempt ${attempt + 1}/${attempts}).`,
+    );
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    delayMs *= 2;
+  }
+}
+
 async function downloadPinnedArtifact({ artifact, directory }) {
   const destination = join(directory, artifact.path);
   assertInsideDirectory(directory, destination, `${artifact.name} manifest`);
@@ -115,11 +151,7 @@ async function downloadPinnedArtifact({ artifact, directory }) {
     }
   }
 
-  const response = await fetch(artifact.url, { signal: AbortSignal.timeout(60_000) });
-  if (!response.ok) {
-    throw new Error(`${artifact.name} download failed: HTTP ${response.status}.`);
-  }
-  const data = Buffer.from(await response.arrayBuffer());
+  const data = await fetchPinnedBytes(artifact);
   const actual = sha256(data);
   if (actual !== artifact.sha256) {
     throw new Error(
