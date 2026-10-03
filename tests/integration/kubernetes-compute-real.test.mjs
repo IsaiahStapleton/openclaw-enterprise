@@ -27,6 +27,7 @@ import { createGatewayNodeEnrollment } from "../../apps/controller/src/gateway/n
 import { authenticatedHeaders, signInToControllerApp } from "../helpers/auth-session.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import {
+  assertProbeDenied,
   createKubernetesFixtureHarnessAuth,
   retryKubectlRead,
   validateExplicitK3dLoopbackContext,
@@ -682,8 +683,8 @@ async function workloadPod(namespaceName, selector) {
   return pods.find((pod) => pod.status.phase === "Running" && pod.status.podIP !== undefined);
 }
 
-async function probe(namespaceName, podName, operation, target, port) {
-  return kubectl(
+function probeArguments(namespaceName, podName, operation, target, port) {
+  return [
     "exec",
     podName,
     "--namespace",
@@ -694,19 +695,28 @@ async function probe(namespaceName, podName, operation, target, port) {
     operation,
     target,
     ...(port === undefined ? [] : [String(port)]),
-  );
+  ];
 }
 
+// Every probe only reads, so a dropped exec stream is retried. A probe that
+// ran and failed (including a denial) is thrown to the caller.
+async function probe(namespaceName, podName, operation, target, port) {
+  return kubectlRead(...probeArguments(namespaceName, podName, operation, target, port));
+}
+
+// Passes only when the probe itself reports a refused, unreachable, or
+// unanswered connection (finding 334): a dropped exec stream, a missing probe
+// script, or a DNS failure is not proof that a NetworkPolicy denied traffic.
 async function assertDeniedTraffic(description, namespaceName, podName, operation, target, port) {
   try {
-    await probe(namespaceName, podName, operation, target, port);
-    assert.fail(`${description} unexpectedly succeeded`);
+    await assertProbeDenied(description, () =>
+      kubectl(...probeArguments(namespaceName, podName, operation, target, port)),
+    );
   } catch (error) {
     if (error.code === "ERR_ASSERTION") {
       error.openclawCiDiagnostic = { kind: "network-policy", stage: description };
-      throw error;
     }
-    assert.equal(error.code, 1, `${description} must be denied by enforced NetworkPolicies`);
+    throw error;
   }
 }
 
@@ -810,24 +820,29 @@ async function createDnsTrafficFixture(context, peer) {
     new URL("../fixtures/kubernetes/probe.mjs", import.meta.url),
     "utf8",
   );
+  const queryArguments = (source, target, protocol, port) => [
+    "exec",
+    source.metadata.name,
+    "-n",
+    source.metadata.namespace,
+    "--",
+    "node",
+    "--input-type=module",
+    "-e",
+    script,
+    "probe.mjs",
+    `dns-${protocol}`,
+    target.status.podIP,
+    String(port),
+    "openshift-dns.example.test",
+  ];
   const query = (source, target, protocol, port) =>
-    kubectl(
-      "exec",
-      source.metadata.name,
-      "-n",
-      source.metadata.namespace,
-      "--",
-      "node",
-      "--input-type=module",
-      "-e",
-      script,
-      "probe.mjs",
-      `dns-${protocol}`,
-      target.status.podIP,
-      String(port),
-      "openshift-dns.example.test",
+    kubectlRead(...queryArguments(source, target, protocol, port));
+  const assertQueryDenied = (description, source, target, protocol, port) =>
+    assertProbeDenied(description, () =>
+      kubectl(...queryArguments(source, target, protocol, port)),
     );
-  return { selected, unselected, control, query };
+  return { selected, unselected, control, query, assertQueryDenied };
 }
 
 async function assertExplicitNetworkProfile(context, namespaceName, sourcePod) {
@@ -3460,14 +3475,12 @@ test(
           [dns.selected, 5354],
           [dns.unselected, 5353],
         ]) {
-          await assert.rejects(
-            dns.query(source, target, protocol, port),
-            (error) => {
-              assert.equal(error.code, 1);
-              assert.match(error.stderr, /ETIMEOUT|ETIMEDOUT|timed out|ECONNREFUSED/);
-              return true;
-            },
-            `${source.metadata.name} must not reach ${target.metadata.name} over ${protocol} port ${port}`,
+          await dns.assertQueryDenied(
+            `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
+            source,
+            target,
+            protocol,
+            port,
           );
         }
         assert.equal(
