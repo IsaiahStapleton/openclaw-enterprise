@@ -3177,7 +3177,7 @@ test(
 );
 
 test(
-  "an exhausted credential withdrawal stays pending with its reason until a replay retries it",
+  "an exhausted credential withdrawal stays pending, reports no attempt in progress, and a replay retries it",
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context, { maxAttempts: 2 });
@@ -3221,14 +3221,19 @@ test(
           [active.id],
         )
       ).rows;
-    await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, request);
+    const requested = await fixture.controller.withdrawAgentCredentialSource(
+      fixture.actor.id,
+      request,
+    );
+    assert.equal(requested.withdrawalInProgress, true);
     const [first] = await withdrawalWork();
     await fixture.work(
       { id: active.id, idempotencyKey: first.idempotency_key },
       "failed_permanent",
     );
 
-    // Exhausting attempts leaves the withdrawal pending, and the row says why.
+    // Exhausting attempts leaves the withdrawal pending, and the row says why. Nothing retries
+    // it (this revision has no maintenance), so the read must not suggest an attempt is coming.
     const exhausted = await fixture.controller.readAgentCredentialWithdrawal(
       fixture.actor.id,
       request,
@@ -3236,6 +3241,7 @@ test(
     assert.equal(exhausted.state, "pending");
     assert.equal(exhausted.lastReason, "CREDENTIAL_WITHDRAWAL_PENDING");
     assert.ok(exhausted.lastAttemptAt);
+    assert.equal(exhausted.withdrawalInProgress, false);
     const audit = await fixture.observerPool.query(
       `SELECT outcome, details->>'reasonCode' AS reason_code FROM occ.audit_events
        WHERE namespace_id = $1 AND action = 'openclaw.agents.lifecycle.credentials_withdraw'`,
@@ -3257,6 +3263,7 @@ test(
     );
     assert.equal(revoked.state, "revoked");
     assert.equal(revoked.lastReason, "CREDENTIALS_WITHDRAWN");
+    assert.equal(revoked.withdrawalInProgress, false);
   },
 );
 

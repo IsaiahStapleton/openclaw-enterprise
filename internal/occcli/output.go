@@ -70,6 +70,7 @@ func (app *application) printCredentialWithdrawal(value any) error {
 		{title: "STATE", key: "state"},
 		{title: "REQUESTED BY", key: "requestedBy"},
 		{title: "REASON", key: "reason"},
+		{title: "IN PROGRESS", key: "withdrawalInProgress"},
 	})
 }
 
