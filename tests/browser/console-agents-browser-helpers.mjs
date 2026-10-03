@@ -203,15 +203,17 @@ export async function trackSettledFetches(page) {
   await page.addInitScript(() => {
     const settled = new Map();
     const record = (input) => {
-      const path = new URL(input instanceof Request ? input.url : String(input), location.href)
-        .pathname;
+      const path = new URL(
+        input instanceof Request ? input.url : String(input),
+        globalThis.location.href,
+      ).pathname;
       settled.set(path, (settled.get(path) ?? 0) + 1);
     };
-    const pageFetch = window.fetch;
-    window.fetch = async function (input, init) {
+    const pageFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
       let response;
       try {
-        response = await pageFetch.call(this, input, init);
+        response = await pageFetch(input, init);
       } catch (error) {
         record(input);
         throw error;
@@ -228,17 +230,17 @@ export async function trackSettledFetches(page) {
       }
       return response;
     };
-    window.settledFetchCount = (path) => settled.get(path) ?? 0;
+    globalThis.settledFetchCount = (path) => settled.get(path) ?? 0;
   });
 }
 
 export async function settledFetches(page, path) {
-  return page.evaluate((target) => window.settledFetchCount(target), path);
+  return page.evaluate((target) => globalThis.settledFetchCount(target), path);
 }
 
 export async function waitForSettledFetches(page, path, count) {
   await page.waitForFunction(
-    ([target, expected]) => window.settledFetchCount(target) >= expected,
+    ([target, expected]) => globalThis.settledFetchCount(target) >= expected,
     [path, count],
   );
 }
