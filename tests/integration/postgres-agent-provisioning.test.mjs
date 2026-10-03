@@ -1246,6 +1246,74 @@ test(
 );
 
 test(
+  "pending provisioning blocks deleting its Secrets; a failed plan's retry names the deleted one",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const configurationDriver = createProvisioningConfigurationDriver({
+      id: "configuration-provisioning-secret-delete",
+    });
+    let configurationOutage = true;
+    const createExact = configurationDriver.createExact;
+    configurationDriver.createExact = async (configuration) => {
+      if (configurationOutage) {
+        throw new Error("synthetic Configuration outage");
+      }
+      return createExact(configuration);
+    };
+    const fixture = await createFixture(context, { configurationDriver });
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets),
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const secretPath = (secret) => `/namespaces/${namespace.id}/secrets/${secret.id}`;
+
+    // Queued: no Configuration or Agent names these Secrets yet, only the accepted plan.
+    for (const secret of [secrets.slackBotToken, secrets.modelKey]) {
+      const refused = await fixture.request("DELETE", secretPath(secret));
+      assert.equal(refused.status, 409, JSON.stringify(refused.body));
+      assert.match(refused.body.error.message, /pending Agent provisioning request/);
+    }
+
+    await fixture.startWorker();
+    const failed = await waitFor(
+      "Agent provisioning to fail before its Configuration",
+      async () => {
+        const observed = await fixture.request("GET", admitted.data.provisioning.url);
+        assert.equal(observed.status, 200, JSON.stringify(observed.body));
+        return observed.data.status === "failed" ? observed.data : undefined;
+      },
+    );
+    await fixture.stopWorker();
+    assert.equal(failed.phase, "admitted");
+
+    // A failed plan has no owner that would ever remove it, so it does not block deletion.
+    const deleted = await fixture.request("DELETE", secretPath(secrets.slackBotToken));
+    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+
+    // The plan can never run again: reading or retrying it names the deleted Secret
+    // instead of answering 404 for a job that exists.
+    configurationOutage = false;
+    const gone = `Secret ${secrets.slackBotToken.id}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`;
+    for (const [method, path] of [
+      ["GET", admitted.data.provisioning.url],
+      ["POST", `${admitted.data.provisioning.url}/retry`],
+    ]) {
+      const refused = await fixture.request(method, path);
+      assert.equal(refused.status, 409, `${method} ${JSON.stringify(refused.body)}`);
+      assert.equal(refused.body.error.code, "RESOURCE_CONFLICT");
+      assert.equal(refused.body.error.message, gone);
+    }
+    const work = await fixture.pool.query(
+      "SELECT state FROM occ.controller_work WHERE idempotency_key = $1",
+      [admitted.data.provisioning.workId],
+    );
+    assert.deepEqual(work.rows, [{ state: "failed_permanent" }], "a refused retry queues nothing");
+  },
+);
+
+test(
   "a provisioned Agent's first Configuration is refused for deletion with 409 after a switch",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {

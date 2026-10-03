@@ -3408,7 +3408,7 @@ export class OpenClawController {
       }
       if (await state.secrets.hasReferences(namespace.id, secret.id)) {
         throw new ResourceStateConflictError(
-          "A Configuration, credential source, Agent draft, active revision, or pending deployment still references the Secret. Remove those references first.",
+          "A Configuration, credential source, Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the Secret. Remove those references, or let provisioning finish, first.",
         );
       }
       const removed = await accessBindingsTargeting(state, namespace.id, "secret", secret.id);
@@ -6517,6 +6517,10 @@ export class OpenClawController {
       executionMode: plan.executionMode,
       configuration: plan.configuration.values,
     });
+    if (record.status === "failed") {
+      // A failed plan does not keep its Secrets from deletion; say which one is gone.
+      await this.assertProvisioningSecretsExist(state, namespaceId, plan);
+    }
     await this.authorizeProvisioningSecretSources(
       state,
       principalId,
@@ -7062,6 +7066,27 @@ export class OpenClawController {
         progress: {},
       });
     });
+  }
+
+  private async assertProvisioningSecretsExist(
+    state: PlatformUnitOfWork,
+    namespaceId: string,
+    plan: ReturnType<OpenClawController["provisioningPlan"]>,
+  ): Promise<void> {
+    const ids = Object.values(plan.configuration.secretBindings ?? {}).map(
+      (binding) => binding.source.id,
+    );
+    const auth = plan.harnessAuth;
+    if (auth?.method === "api_key" || auth?.method === "codex_pat" || auth?.method === "oauth") {
+      ids.push(auth.source.id);
+    }
+    for (const id of ids) {
+      if ((await state.secrets.findSecret(namespaceId, id)) === undefined) {
+        throw new ResourceStateConflictError(
+          `Secret ${id}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
+        );
+      }
+    }
   }
 
   private provisioningPlan(record: Readonly<AgentProvisioningRecord>): {

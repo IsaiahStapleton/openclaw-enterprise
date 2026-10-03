@@ -2343,6 +2343,26 @@ export class PostgresPlatformState implements PlatformStateStore {
                  WHERE w.namespace_id = $1 AND w.state IN ('queued', 'claimed')
                    AND r.admitted_spec #>> '{harness_auth,method}' IN ('api_key', 'codex_pat', 'oauth')
                    AND r.admitted_spec #>> '{harness_auth,source,id}' = $2
+               ) OR EXISTS (
+                 -- A queued or running guided provisioning plan creates its Configuration and
+                 -- Agent from these references later. A failed plan does not block: nothing
+                 -- removes it, and reading or retrying it then names the deleted Secret.
+                 SELECT 1 FROM occ.agent_provisioning_work AS p
+                 WHERE p.namespace_id = $1 AND p.status IN ('queued', 'running')
+                   AND (
+                     EXISTS (
+                       SELECT 1
+                       FROM jsonb_each(
+                         COALESCE(p.plan #> '{configuration,secretBindings}', '{}'::jsonb)
+                       ) AS binding(env, value)
+                       WHERE binding.value #>> '{source,kind}' = 'secret'
+                         AND binding.value #>> '{source,namespaceId}' = $1
+                         AND binding.value #>> '{source,id}' = $2
+                     ) OR (
+                       p.plan #>> '{harnessAuth,method}' IN ('api_key', 'codex_pat', 'oauth')
+                       AND p.plan #>> '{harnessAuth,source,id}' = $2
+                     )
+                   )
                ) AS present`,
               [namespaceId, secretId],
             )
