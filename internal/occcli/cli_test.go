@@ -662,3 +662,53 @@ func TestAgentStopNamesTheDeployCommandThatStartsTheAgentAgain(t *testing.T) {
 		t.Fatalf("occ agent stop help = %q, %v", stop.Long, err)
 	}
 }
+
+func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
+	var followed bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		followed = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	for _, testCase := range []struct {
+		name     string
+		location string
+		want     string
+	}{
+		{
+			name:     "absolute",
+			location: target.URL + "/installation",
+			want:     "redirected to " + target.URL + "/installation; occ does not follow redirects, so set OCC_URL (or --url) to " + target.URL + " ",
+		},
+		{name: "relative", location: "/elsewhere/installation", want: "/elsewhere/installation; occ does not follow redirects"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var sawKey string
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sawKey = r.Header.Get("x-api-key")
+				w.Header().Set("location", testCase.location)
+				w.WriteHeader(http.StatusPermanentRedirect)
+			}))
+			defer origin.Close()
+			keyFile := filepath.Join(t.TempDir(), "service-key.json")
+			if err := os.WriteFile(keyFile, []byte(`{"data":{"key":"test-key"}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := New(io.Discard, io.Discard)
+			command.SetArgs([]string{"installation", "get", "--url", origin.URL, "--service-key-file", keyFile})
+			err := command.Execute()
+			if err == nil {
+				t.Fatal("expected the redirect to fail the command")
+			}
+			if !strings.Contains(err.Error(), "HTTP 308") || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error = %q, want it to contain HTTP 308 and %q", err, testCase.want)
+			}
+			if testCase.name == "relative" && !strings.Contains(err.Error(), origin.URL+"/elsewhere/installation") {
+				t.Fatalf("relative Location was not resolved against the request: %q", err)
+			}
+			if sawKey != "test-key" || followed {
+				t.Fatalf("origin key = %q, redirect followed = %v", sawKey, followed)
+			}
+		})
+	}
+}
