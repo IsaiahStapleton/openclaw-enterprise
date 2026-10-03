@@ -391,6 +391,8 @@ cannot strand provisioning.
 
 ## Changelog
 
+- 2026-10-03 16:00: Bound worker queries client-side and restart a worker whose run loop stops making progress. (fix-worker-liveness)
+
 - 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 
 - 2026-10-01 17:20: Point Agent lifecycle admission at its HTTP owner; deployment audit keeps the admitted authorization. (authoring-run/bef09bf6-deaa-4189-9568-5f13beb451e7 - 7a6cc931d)
