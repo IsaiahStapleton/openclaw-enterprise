@@ -1070,7 +1070,7 @@ test("SSH host lock excludes concurrent helpers and is released by the kernel wh
   t.after(() => held.kill());
   const pending = f.driver.ensureNamespace(tenant);
   // While another helper holds the lock, this one must keep waiting without mutating
-  // the host: thirty held attempts span at least the 1.5 s this test used to sleep.
+  // the host: thirty held attempts span about the 1.5 s this test used to sleep.
   await waitForLockWait(f, 30);
   await missing(f.nsDir);
   assert.equal(f.children[0].exitCode, null);
