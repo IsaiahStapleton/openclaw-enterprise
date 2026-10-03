@@ -115,6 +115,14 @@ export async function assertProbeDenied(description, run, options) {
   assert.fail(`${description} unexpectedly succeeded: ${String(stdout).trim()}`);
 }
 
+// The `node` command that runs probe.mjs from its source text, for a container
+// that does not mount the fixture (a Gateway container, the DNS fixture Pods).
+// "probe.mjs" fills process.argv[1], so the probe still reads its own arguments
+// from process.argv.slice(2).
+export function inlineProbeCommand(source, ...probeArguments) {
+  return ["node", "--input-type=module", "-e", source, "probe.mjs", ...probeArguments.map(String)];
+}
+
 export function createKubernetesClient({
   selection,
   kubectl = (...args) => kubectlFor(selection, ...args),

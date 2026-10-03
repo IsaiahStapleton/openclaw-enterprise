@@ -29,6 +29,7 @@ import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mj
 import {
   assertProbeDenied,
   createKubernetesFixtureHarnessAuth,
+  inlineProbeCommand,
   retryKubectlRead,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
@@ -58,6 +59,10 @@ const { kubernetesGatewayNamespaceName } =
 
 const driverPath = "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
 const configurationIds = new Map();
+const probeSource = await readFile(
+  new URL("../fixtures/kubernetes/probe.mjs", import.meta.url),
+  "utf8",
+);
 const harnessAuthentication = new Map();
 const sharedWorkspaceSize = "40Gi";
 
@@ -708,10 +713,16 @@ async function probe(namespaceName, podName, operation, target, port) {
 // unanswered connection (finding 334): a dropped exec stream, a missing probe
 // script, or a DNS failure is not proof that a NetworkPolicy denied traffic.
 async function assertDeniedTraffic(description, namespaceName, podName, operation, target, port) {
+  await assertExecDenied(
+    description,
+    probeArguments(namespaceName, podName, operation, target, port),
+  );
+}
+
+// Runs one `kubectl exec` of the probe that a NetworkPolicy must block.
+async function assertExecDenied(description, execArguments) {
   try {
-    await assertProbeDenied(description, () =>
-      kubectl(...probeArguments(namespaceName, podName, operation, target, port)),
-    );
+    await assertProbeDenied(description, () => kubectl(...execArguments));
   } catch (error) {
     if (error.code === "ERR_ASSERTION") {
       error.openclawCiDiagnostic = { kind: "network-policy", stage: description };
@@ -816,32 +827,24 @@ async function createDnsTrafficFixture(context, peer) {
       }),
     ),
   );
-  const script = await readFile(
-    new URL("../fixtures/kubernetes/probe.mjs", import.meta.url),
-    "utf8",
-  );
   const queryArguments = (source, target, protocol, port) => [
     "exec",
     source.metadata.name,
     "-n",
     source.metadata.namespace,
     "--",
-    "node",
-    "--input-type=module",
-    "-e",
-    script,
-    "probe.mjs",
-    `dns-${protocol}`,
-    target.status.podIP,
-    String(port),
-    "openshift-dns.example.test",
+    ...inlineProbeCommand(
+      probeSource,
+      `dns-${protocol}`,
+      target.status.podIP,
+      port,
+      "openshift-dns.example.test",
+    ),
   ];
   const query = (source, target, protocol, port) =>
     kubectlRead(...queryArguments(source, target, protocol, port));
   const assertQueryDenied = (description, source, target, protocol, port) =>
-    assertProbeDenied(description, () =>
-      kubectl(...queryArguments(source, target, protocol, port)),
-    );
+    assertExecDenied(description, queryArguments(source, target, protocol, port));
   return { selected, unselected, control, query, assertQueryDenied };
 }
 
@@ -3621,26 +3624,27 @@ test(
       const env = firstGateway.spec.template.spec.containers[0].env;
       const transportUrl = env.find(({ name }) => name === "APP_SERVER_URL").value;
       assert.equal(new URL(transportUrl).hostname, `${agentName(first.id)}.${dataTarget}.svc`);
-      async function connectFromGateway(target) {
-        return kubectl(
-          "exec",
-          `deployment/${gatewayName(first.id)}`,
-          "--namespace",
-          gatewayTarget,
-          "-c",
-          "gateway",
-          "--",
-          "node",
-          "-e",
-          `const net=require('node:net'); const s=net.connect({host:${JSON.stringify(target)},port:18790}); s.setTimeout(3000); s.on('connect',()=>{s.destroy();process.exit(0)}); s.on('timeout',()=>process.exit(1)); s.on('error',()=>process.exit(1));`,
-        );
-      }
-      await connectFromGateway(new URL(transportUrl).hostname);
+      const gatewayConnectArguments = (target) => [
+        "exec",
+        `deployment/${gatewayName(first.id)}`,
+        "--namespace",
+        gatewayTarget,
+        "-c",
+        "gateway",
+        "--",
+        ...inlineProbeCommand(probeSource, "tcp", target, 18790),
+      ];
+      await kubectlRead(...gatewayConnectArguments(new URL(transportUrl).hostname));
+      // Finding 335: only the probe's own refused or unanswered connection is a
+      // denial, never a DNS error or a dropped exec stream.
       for (const forbidden of [
         `${agentName(second.id)}.${dataTarget}.svc`,
         `${agentName(separateTenant.id)}.${placements.get(namespaceIds[1])}.svc`,
       ]) {
-        await assert.rejects(connectFromGateway(forbidden), (error) => error.code === 1);
+        await assertExecDenied(
+          `Gateway connection to ${forbidden}`,
+          gatewayConnectArguments(forbidden),
+        );
       }
     }
 
