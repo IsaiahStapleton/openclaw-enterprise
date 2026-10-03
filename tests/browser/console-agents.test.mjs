@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers/configuration/filesystem/index.ts";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import {
   WORKSPACE_DEFAULTS,
@@ -154,7 +157,9 @@ test("Agent creation stores its API key separately, grants exact access, and sav
     .waitFor();
   assert.equal(await createChannelDialog.getByRole("link").count(), 0);
   await selectSecret(createChannelDialog, "Slack app token", existingSlackAppSecret);
-  await createChannelDialog.getByText("Secret binding staged. Save changes to apply it.").waitFor();
+  await createChannelDialog
+    .getByText("Secret selected. Apply channel settings, then Create Agent binds it.")
+    .waitFor();
   // Separate applications must retain grants for every final selected Secret.
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await createChannelDialog.waitFor({ state: "hidden" });
@@ -229,7 +234,9 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   );
   secretRelease.resolve();
   const createdSlackBotSecret = (await (await botSecretResponse).json()).data;
-  await createChannelDialog.getByText("Secret binding staged. Save changes to apply it.").waitFor();
+  await createChannelDialog
+    .getByText("Secret selected. Apply channel settings, then Create Agent binds it.")
+    .waitFor();
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await createChannelDialog.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Edit Slack" }).click();
@@ -1149,6 +1156,9 @@ test("Agent repository recovery with empty current policy requires an explicit n
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText(/No approved repositories are available/).waitFor();
   await selectSecret(page, "API key Secret", modelSecret);
+  // The Create Agent form has no Save changes control; Create Agent applies the binding.
+  await page.getByText("Secret selected. Create Agent binds it.", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Save changes to apply it.").count(), 0);
   const model = page.getByLabel("Model ID", { exact: true });
   if (!(await model.isVisible())) {
     await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
@@ -2018,7 +2028,10 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
         status: 400,
         contentType: "application/json",
         body: JSON.stringify({
-          error: { code: "INVALID_REQUEST", message: "The Agent name is invalid." },
+          error: {
+            code: "INVALID_REQUEST",
+            message: "The request does not match the operation contract: /name is too long.",
+          },
           meta: { requestId: "req_00000000-0000-4000-8000-000000000400" },
         }),
       });
@@ -2159,7 +2172,9 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
   // A 400 to the resend shows the request was never admitted, so the form unlocks.
   await retry.click();
-  await page.getByText(/^Check the entered values/).waitFor();
+  await page
+    .getByText(/^The request does not match the operation contract: \/name is too long\./)
+    .waitFor();
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByLabel("Agent name").fill("Taken name");
@@ -2535,6 +2550,49 @@ test("Agent creation accepts a manual model outside the static list and saves th
   assert.equal(JSON.stringify(configuration.data).includes("manual-model-key"), false);
 });
 
+test("Agent creation names the Configuration field that holds an inline model credential without showing it", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "occ-create-inline-credential-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Create inline credential", { ready: true });
+  const { page } = await newPage(t, fixture);
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Inline credential Agent");
+  await enterManualModel(page, "inline-credential-model-key", "gpt-inline-credential");
+  await openAdvancedSettings(page);
+  // A pasted provider key is a value, not the Secret reference the field requires.
+  const sentinel = `synthetic-inline-key-${randomUUID()}`;
+  const configuration = page.getByLabel("Configuration JSON");
+  const edited = JSON.parse(await configuration.inputValue());
+  edited.models = {
+    ...edited.models,
+    providers: { ...edited.models?.providers, openai: { apiKey: sentinel } },
+  };
+  await configuration.fill(JSON.stringify(edited, null, 2));
+  const rejected = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}/namespaces/${namespace.id}/configurations` &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await rejected).status(), 400);
+  const feedback = page.getByRole("alert").filter({
+    hasText:
+      "Configuration field /models/providers/openai/apiKey holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.",
+  });
+  await feedback.waitFor();
+  // Only the editor holds the key; the explanation never repeats it.
+  assert.equal((await feedback.textContent()).includes(sentinel), false);
+  assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+  assert.equal(await configuration.isDisabled(), false);
+});
+
 test("Agent creation reports unavailable Secret storage before creating Configuration or Agent", async (t) => {
   const fixture = await createConsoleAppFixture(t, { secretDriver: null });
   await fixture.bootstrap();
@@ -2562,6 +2620,86 @@ test("Agent creation reports unavailable Secret storage before creating Configur
   assert.equal(await dialog.isVisible(), true);
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);
   assert.equal(agentPostRequests(requests, namespace.id).length, 0);
+});
+
+test("Agent creation shows the API's duplicate-name conflict, generic text for other conflicts, and keeps the form usable", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Duplicate Agent name", { ready: true });
+  await fixture.createAgent(namespace.id, "Taken Agent");
+  const { page } = await newPage(t, fixture);
+  // The regular create path, which skips the provisioning job.
+  await routeInstallationWithoutProvisioning(page, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Taken Agent");
+  await enterManualModel(page, "duplicate-name-model-key", "gpt-duplicate-name");
+  const agentsUrl = `${fixture.origin}/namespaces/${namespace.id}/agents`;
+  const agentPost = (response) =>
+    response.url() === agentsUrl && response.request().method() === "POST";
+
+  // Any other conflict keeps the generic text: plain conflicts reach the client as "The
+  // requested platform resource already exists.", which would mislead on this form.
+  const otherConflict = async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "RESOURCE_CONFLICT",
+          message: "The requested platform resource already exists.",
+        },
+        meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+      }),
+    });
+  };
+  await page.route(agentsUrl, otherConflict);
+  const conflicted = page.waitForResponse(agentPost);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await conflicted).status(), 409);
+  await page
+    .getByRole("alert")
+    .filter({
+      hasText:
+        "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again. Request ID: req_00000000-0000-4000-8000-000000000409",
+    })
+    .waitFor();
+  assert.equal(await page.getByText("The requested platform resource already exists.").count(), 0);
+  await page.unroute(agentsUrl, otherConflict);
+  await page.getByRole("button", { name: "Create Agent", disabled: false }).waitFor();
+
+  const rejected = page.waitForResponse(agentPost);
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await rejected).status(), 409);
+  const sentence =
+    "An Agent with this name already exists in this Namespace. Choose a different name.";
+  const feedback = page.getByRole("alert").filter({ hasText: sentence });
+  await feedback.waitFor();
+  assert.match(
+    await feedback.textContent(),
+    /^An Agent with this name already exists in this Namespace\. Choose a different name\.( Request ID: req_[0-9a-f-]+)?$/,
+  );
+  const name = page.getByLabel("Agent name");
+  const create = page.getByRole("button", { name: "Create Agent" });
+  await page.getByRole("button", { name: "Create Agent", disabled: false }).waitFor();
+  assert.equal(await name.isDisabled(), false);
+  assert.equal(await create.isDisabled(), false);
+
+  // A new name saves through the same Configuration.
+  await name.fill("Free Agent");
+  const saved = page.waitForResponse(agentPost);
+  await create.click();
+  const response = await saved;
+  assert.equal(response.status(), 201);
+  const agent = (await response.json()).data;
+  assert.equal(agent.name, "Free Agent");
+  assert.equal(configurationPostRequests(requests, namespace.id).length, 1);
+  await page.waitForURL((url) => url.pathname === `/console/agents/${agent.id}`);
 });
 
 test("Agent creation reuses its saved Secret and Configuration after an Agent creation conflict", async (t) => {
@@ -2670,7 +2808,9 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
   await page
     .getByText(`Configuration saved: ${savedConfiguration.data.id}.`, { exact: false })
     .waitFor();
-  await page.getByText(/conflicts with the saved state/i).waitFor();
+  await page
+    .getByText("An Agent with this name already exists in this Namespace. Choose a different name.")
+    .waitFor();
   assert.equal(
     await page
       .getByRole("heading", {

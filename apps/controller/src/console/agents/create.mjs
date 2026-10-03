@@ -9,7 +9,12 @@ import { createPresetFields } from "./presets.mjs";
 import { createPluginDiscovery } from "./plugin-discovery.mjs";
 import { createSlackApproverField } from "./slack-approvers.mjs";
 import { renderChannels } from "../channels.mjs";
-import { link, message, namespacePath } from "./list.mjs";
+import { link, message, namespacePath, rejectionMessage } from "./list.mjs";
+
+// The API's duplicate-name sentence. Other Agent conflicts reach the client as generic text,
+// so only this one is shown as sent.
+const AGENT_NAME_CONFLICT =
+  "An Agent with this name already exists in this Namespace. Choose a different name.";
 
 // TODO: This starter list is intentionally hardcoded for the initial Console release.
 // Revisit catalog refresh and credential-aware discovery after the basic creation flow ships.
@@ -502,6 +507,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     createDialogTitle: "Create model credential Secret",
     metadataLabel: "View model credential Secret metadata",
     noSecretLabel: "Choose a model credential Secret",
+    stagedHint: "Secret selected. Create Agent binds it.",
     required: !binding && !passwordAuth,
     disabled: Boolean(binding || passwordAuth),
   });
@@ -1569,7 +1575,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
                     ? error.message
                     : recovering && error.status === 409
                       ? "The provisioning job can no longer be retried; it may have finished. Select Create Agent to resend the same request ID and open its result."
-                      : message(error, mutationStarted);
+                      : rejectionMessage(error, mutationStarted);
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
       // A 400 to an unacknowledged request means the API never admitted it: a resend of
       // an admitted request returns that job before validation.
@@ -1784,8 +1790,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         : error.status === 409 && creatingSecret && error.code !== "NAMESPACE_NOT_READY"
           ? `A Secret named "${body.name}" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over, choose the Preset again, and set its Secret source to Use existing Secret.`
           : error.status === 409 && savedConfiguration
-            ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
-            : message(error, mutationStarted);
+            ? error.serverMessage === AGENT_NAME_CONFLICT
+              ? AGENT_NAME_CONFLICT
+              : "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
+            : rejectionMessage(error, mutationStarted);
       outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       const knownRejection = [400, 403, 404, 409, 429].includes(error.status);
       if (!savedAgent && savedConfiguration && knownRejection) {
