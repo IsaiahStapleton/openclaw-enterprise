@@ -82,8 +82,9 @@ function startChild(port, overrides = {}) {
 }
 
 // Each case points OCC_DATABASE_URL at a closed port, so a case whose own check stopped
-// firing would still exit nonzero once startup tried the database. The startup-error code
-// proves the intended check refused it first (STARTUP_FAILED is the code for bind checks).
+// firing would still exit nonzero once startup tried the database (PERSISTENCE_UNAVAILABLE).
+// The startup-error code proves startup refused it before that. STARTUP_FAILED is the
+// catch-all code, so the bind and production cases prove only that much.
 async function assertUnsafeStartupRejected() {
   const configuredDatabase = { OCC_DATABASE_URL: "postgresql://127.0.0.1:1/openclaw" };
   for (const [description, overrides, code] of [
