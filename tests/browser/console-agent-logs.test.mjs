@@ -114,6 +114,7 @@ test("a rejected cursor starts one new view and later restarts wait for it", asy
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
   computeDriver.state.lines = [line(1, "first view line")];
   const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
   const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
   await login(page, fixture, url.pathname + url.search);
   const pane = page.getByRole("log", { name: "Runtime log output" });
@@ -154,6 +155,9 @@ test("a rejected cursor starts one new view and later restarts wait for it", asy
   assert.deepEqual(arrivedWhileHeld, []);
   release.resolve();
   await pane.getByText("debug floor line").waitFor();
+  // The queued restart read the new debug view.
+  const after = logRequests(requests, revisionId).at(-1);
+  assert.equal(new URL(after.path, fixture.origin).searchParams.has("minLevel"), false);
   await page.getByRole("button", { name: "Following" }).click();
 });
 
