@@ -1871,6 +1871,13 @@ export class OpenClawController {
         "Agent provisioning requires dedicated Harness authentication.",
       );
     }
+    // Refuse before any lookup, authorization or write: the worker cannot hand off a
+    // credential-source plan, and admission does not authorize the source.
+    if (harnessAuth.method === "credential_source") {
+      throw new SecretBindingValidationError(
+        "Agent provisioning does not support credential-source Harness authentication. Create the Agent, then deploy it.",
+      );
+    }
     const acceptedInput = Object.freeze({
       requestId,
       namespaceId: input.namespaceId,
