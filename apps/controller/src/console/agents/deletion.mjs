@@ -193,14 +193,14 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     }
   }
 
-  // Agent deletion keeps the Configuration and model key Secret, even ones Create Agent made
+  // Agent deletion keeps the Configuration and model credential Secret, even ones Create Agent made
   // for this Agent, and the console cannot list or delete them, so name them and the commands.
   function keptResourcesText() {
     const source = agent.harnessAuth?.source;
     if (source?.kind !== "secret") {
-      return `Its Configuration ${agent.configurationId} is kept, even if it was created with this Agent. Delete it separately with occ configuration delete once nothing else uses it.`;
+      return `Its Configuration is kept, even if it was created with this Agent. Once nothing else uses it, delete it with occ configuration delete ${agent.configurationId}.`;
     }
-    return `Its Configuration ${agent.configurationId} and model key Secret ${source.id} are kept, even if they were created with this Agent. Delete them separately with occ configuration delete and occ secret delete once nothing else uses them.`;
+    return `Its Configuration and model credential Secret are kept, even if they were created with this Agent. Once nothing else uses them, delete them with occ configuration delete ${agent.configurationId} and occ secret delete ${source.id}.`;
   }
 
   function openConfirmation() {

@@ -2138,12 +2138,12 @@ test("Agent delete confirmation can be canceled without sending a write request"
   await page.getByRole("button", { name: "Delete Agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Cancel Candidate?" });
   await dialog.getByText(/Agent, its revision history, and its workspace data/i).waitFor();
-  // Deletion keeps the Agent's Configuration and model key Secret, which the console cannot
-  // list or delete, so the dialog names both and the commands that remove them.
+  // Deletion keeps the Agent's Configuration and model credential Secret, which the console
+  // cannot list or delete, so the dialog gives the commands that remove them by ID.
   assert.equal(agent.harnessAuth.method, "api_key");
   await dialog
     .getByText(
-      `Its Configuration ${agent.configurationId} and model key Secret ${agent.harnessAuth.source.id} are kept, even if they were created with this Agent. Delete them separately with occ configuration delete and occ secret delete once nothing else uses them.`,
+      `Its Configuration and model credential Secret are kept, even if they were created with this Agent. Once nothing else uses them, delete them with occ configuration delete ${agent.configurationId} and occ secret delete ${agent.harnessAuth.source.id}.`,
     )
     .waitFor();
   const cancel = dialog.getByRole("button", { name: "Cancel" });

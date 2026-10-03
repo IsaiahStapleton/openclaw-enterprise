@@ -304,8 +304,7 @@ Open **Delete Agent**, inspect or cancel the confirmation, and confirm permanent
 deletion. The UI enters cleanup state and removes editing/deployment controls.
 **Refresh deletion status** completes the fixture and returns to the Agent list.
 The console has no detailed cleanup-progress view. Namespace-owned Configurations
-and Secrets remain and require separate management; the confirmation names the
-Agent's Configuration and model key Secret. See
+and Secrets remain and require separate management. See
 [Agent deletion](../reference/agents.md#deletion).
 
 Serving health, completed routing cutover, real shutdown, channel delivery, and
