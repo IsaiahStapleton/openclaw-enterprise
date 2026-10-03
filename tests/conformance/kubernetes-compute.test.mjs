@@ -6413,14 +6413,56 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
     ["openai", "gpt-5", "OPENAI_API_KEY"],
     ["anthropic", "claude-sonnet-4-5", "ANTHROPIC_API_KEY"],
   ]) {
-    for (const [variant, probeStatus, failureCode] of [
+    // A failed model probe publishes a classified cause from a closed vocabulary.
+    for (const [variant, probeStatus, failureCode, cause] of [
       ["accepted", "ok", undefined],
-      ["wrong provider result", "ok", "MODEL_PROBE_FAILED"],
+      [
+        "wrong provider result",
+        "ok",
+        "MODEL_PROBE_FAILED",
+        { kind: "INVALID_OUTPUT", detail: "shape" },
+      ],
       // OpenClaw buckets provider 401/403 and invalid-key responses as "auth".
       ["credentials rejected", "auth", "AUTHENTICATION_FAILED"],
       // The provider's 401 to the upfront request ends the probe before OpenClaw starts.
       ["credentials rejected upfront", undefined, "AUTHENTICATION_FAILED"],
-      ["provider unavailable", "unknown", "MODEL_PROBE_FAILED"],
+      [
+        "provider unavailable",
+        "unknown",
+        "MODEL_PROBE_FAILED",
+        { kind: "PROBE_STATUS", detail: "unknown" },
+      ],
+      // An unknown model or invalid provider settings: OpenClaw's "format" bucket.
+      [
+        "provider rejected the request format",
+        "format",
+        "MODEL_PROBE_FAILED",
+        { kind: "PROBE_STATUS", detail: "format" },
+      ],
+      [
+        "unrecognized probe status",
+        "fixture-model-key",
+        "MODEL_PROBE_FAILED",
+        { kind: "PROBE_STATUS", detail: "other" },
+      ],
+      [
+        "probe exited nonzero",
+        undefined,
+        "MODEL_PROBE_FAILED",
+        { kind: "PROCESS_EXIT", detail: "exit-1" },
+      ],
+      [
+        "probe output exceeded its buffer",
+        undefined,
+        "MODEL_PROBE_FAILED",
+        { kind: "PROCESS_EXIT", detail: "error-ENOBUFS" },
+      ],
+      [
+        "probe output is not JSON",
+        undefined,
+        "MODEL_PROBE_FAILED",
+        { kind: "INVALID_OUTPUT", detail: "json" },
+      ],
       ["provider timeout", "timeout", "MODEL_PROBE_TIMEOUT"],
       // The wrapper's cap ends the probe. Only CPU waiting for most of it makes
       // the failure CPU starvation, which fails the deployment at once.
@@ -6435,6 +6477,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
     ]) {
       const accepted = failureCode === undefined;
       const upfront = variant === "credentials rejected upfront";
+      const providerText = "provider-detail: HTTP 404 for key fixture-model-key";
       await t.test(`${provider}: ${variant}`, async () => {
         const driver = createKubernetesComputeDriver(options());
         const candidate = {
@@ -6559,6 +6602,22 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                       error: { code: "ETIMEDOUT" },
                     };
                   }
+                  // Native output and provider text that echo the credential
+                  // must never reach the published cause or the probe log.
+                  if (variant === "probe exited nonzero") {
+                    return { status: 1, signal: null, stdout: "", stderr: providerText };
+                  }
+                  if (variant === "probe output exceeded its buffer") {
+                    return {
+                      status: null,
+                      signal: "SIGTERM",
+                      stdout: providerText,
+                      error: { code: "ENOBUFS", message: providerText },
+                    };
+                  }
+                  if (variant === "probe output is not JSON") {
+                    return { status: 0, stdout: providerText };
+                  }
                   return {
                     status: 0,
                     stdout: JSON.stringify({
@@ -6571,6 +6630,7 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
                               model: `${provider}/${model}`,
                               source: "env",
                               status: probeStatus,
+                              error: providerText,
                             },
                           ],
                         },
@@ -6726,6 +6786,9 @@ test("embedded startup probes its selected provider and allows graceful Gateway 
           { writeHead() {}, end: (chunk) => (body += chunk) },
         );
         assert.equal(JSON.parse(body).runtimeFailure?.code, failureCode);
+        assert.deepEqual(JSON.parse(body).runtimeFailure?.cause, cause);
+        assert.deepEqual(probeLog.cause, cause);
+        assert.doesNotMatch(body + probeLines[0], /fixture-model-key|provider-detail/);
         if (accepted) {
           signals.get("SIGTERM")();
           assert.deepEqual(childSignals, ["SIGTERM"]);

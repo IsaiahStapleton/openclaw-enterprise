@@ -132,9 +132,10 @@ method are unaffected.
 ### Startup failure evidence
 
 `ComputeReadiness.runtimeFailure` optionally reports a bounded startup failure
-for the exact observed revision. Compute owns collection and classification. Evidence contains safe
-`component`, `check`, `checkedAt`, and `code` fields, never credentials or raw
-provider errors. An unavailable or untrusted observation omits the evidence.
+for the exact observed revision. Compute owns collection and classification. Evidence has safe
+`component`, `check`, `checkedAt`, `code`, and optional
+[`cause`](../agents/deployment.md#model-check-failure-cause) fields, never
+credentials or provider errors. An unavailable or untrusted observation omits the evidence.
 
 Runtimes hold published evidence until restart, so the worker fails at once
 with `RUNTIME_` plus the code (`RUNTIME_CPU_STARVED` for

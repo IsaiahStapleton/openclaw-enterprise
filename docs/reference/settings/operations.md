@@ -59,7 +59,8 @@ An exit-0 `migration.checked` record reports one reviewed history shape:
 `preBrokerReceipts`, `preAgentDeletion`, `preDeploymentProgress`,
 `preHumanAuthentication`, `preAgentDeletionTakeover`,
 `preNamespaceDeletionTakeover`, `preRepositoryAccess`, `preRestrictionReadLogs`,
-`preOAuth`, `preCredentialWithdrawals`, `preBrokerReceiptFence`, or `completed`.
+`preOAuth`, `preCredentialWithdrawals`, `preBrokerReceiptFence`,
+`preModelProbeFailureCause`, or `completed`.
 `prePresetsMain` means
 the exact canonical history through `0023_runtime_failure_timestamp_validation`;
 `main` also includes `0024_agent_presets`. `repositoryCredentials` adds
@@ -81,8 +82,9 @@ has 38 through `0037_human_authentication`; `preNamespaceDeletionTakeover` has
 `0040_repository_access`; `preOAuth` has 42 through
 `0041_restriction_read_logs`; `preCredentialWithdrawals` has 43 through
 `0042_oauth_harness_auth`; `preBrokerReceiptFence` has 44 through
-`0043_credential_withdrawals`. `completed` is the current canonical history with
-all receipts, including `0045_repository_broker_receipt_fence`.
+`0043_credential_withdrawals`; `preModelProbeFailureCause` has 45 through
+`0045_repository_broker_receipt_fence`. `completed` is the current canonical
+history with all receipts, including `0046_model_probe_failure_cause`.
 The source manifest is
 [`migrations/meta/canonical-history.json`](../../../migrations/meta/canonical-history.json).
 Empty schemas may be absent or have only their owner's ordinary `CREATE` and
