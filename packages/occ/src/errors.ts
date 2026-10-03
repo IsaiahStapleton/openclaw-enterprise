@@ -173,6 +173,20 @@ export class ConfigurationHarnessError extends ScopeViolationError {
   }
 }
 
+/**
+ * An Agent provisioning request names an invalid Secret binding: a reserved or invalid
+ * environment destination, an unsupported binding shape, or a Secret reference to
+ * another Namespace. Messages are static, so HTTP reports them as an invalid request
+ * instead of hiding them as a scope miss; Secret existence is still checked later
+ * and stays a scope miss.
+ */
+export class AgentProvisioningValidationError extends ScopeViolationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentProvisioningValidationError";
+  }
+}
+
 const modelCredentialMessage = (path: string): string =>
   `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
 
@@ -232,9 +246,11 @@ export const SERVICE_ACCOUNT_NAME_CONFLICT =
   "A ServiceAccount with this name already exists in this Namespace. Choose a different name.";
 export const CREDENTIAL_SOURCE_NAME_CONFLICT =
   "A credential source with this name already exists in this Namespace. Choose a different name.";
-/** Deleted Namespaces keep their name, so a name can be taken by one no longer listed. */
 export const NAMESPACE_NAME_CONFLICT =
-  "A Namespace with this name already exists or was deleted. Choose a different name.";
+  "A Namespace with this name already exists. Choose a different name.";
+/** A deleted Namespace's tombstone keeps its name, so a name can be taken by one no longer listed. */
+export const DELETED_NAMESPACE_NAME_CONFLICT =
+  "This name belongs to a deleted Namespace and cannot be reused. Choose a different name.";
 
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {

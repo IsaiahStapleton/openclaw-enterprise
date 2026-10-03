@@ -13,8 +13,9 @@ mode, the container engine hosts k3d and builds or imports images without
 running OCE application services.
 
 K3s requires the `cpuset` cgroup controller, which systemd does not delegate to
-a rootless session. On Podman, run as root, delegate `cpuset` to your user
-session, or use a rootful Podman machine. On macOS:
+a rootless session. On Podman, run as root or use a rootful Podman machine;
+native rootless Podman cannot start this profile even with `cpuset` delegated.
+On macOS:
 
 ```bash
 podman machine stop
@@ -365,17 +366,18 @@ removing the cluster. For a persistent Helm-installed k3d environment, complete 
 
 ## Resolve node DNS failures
 
-If the k3d node cannot resolve image registries, identify a DNS server reachable
-from the container engine's node network. Set its IPv4 address for a fresh
-startup:
+On Linux Docker, the launcher gives its k3d node the host's first non-loopback
+IPv4 upstream resolver, because k3d's default refuses queries on iptables-nft
+hosts. If the node still cannot resolve image registries, set a DNS server
+reachable from the node network for a fresh startup:
 
 ```bash
 OCC_DEVELOPMENT_K3D_DNS_RESOLVER='<reachable-dns-ip>' ./scripts/dev-up
 ```
 
 The launcher uses this resolver inside its owned node and disables k3d's DNS
-rewriting for that node. It does not change the host resolver. Leave the setting
-unset when the default node resolver works.
+rewriting for that node; the host resolver is unchanged. The value `k3d` keeps
+k3d's default.
 
 ## Stop and clean up
 

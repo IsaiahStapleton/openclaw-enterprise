@@ -30,6 +30,7 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  settlePageRequests,
   waitForCondition,
   waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
@@ -2138,6 +2139,14 @@ test("Agent delete confirmation can be canceled without sending a write request"
   await page.getByRole("button", { name: "Delete Agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete Cancel Candidate?" });
   await dialog.getByText(/Agent, its revision history, and its workspace data/i).waitFor();
+  // Deletion keeps the Agent's Configuration and model credential Secret, which the console
+  // cannot list or delete, so the dialog gives the commands that remove them by ID.
+  assert.equal(agent.harnessAuth.method, "api_key");
+  await dialog
+    .getByText(
+      `Its Configuration and model credential Secret are kept, even if they were created with this Agent. Once nothing else uses them, delete them with occ configuration delete ${agent.configurationId} and occ secret delete ${agent.harnessAuth.source.id}.`,
+    )
+    .waitFor();
   const cancel = dialog.getByRole("button", { name: "Cancel" });
   assert.equal(await cancel.evaluate((node) => node.ownerDocument.activeElement === node), true);
   const unexpectedDelete = page.waitForResponse(
@@ -3589,7 +3598,8 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
     await page.reload();
     await unavailable.waitFor();
   }
-  await page.waitForTimeout(300);
+  // The native admin card asks for status as it renders, before the denial panel shows.
+  await settlePageRequests(page);
   assert.equal(reads(configurationPath), 1);
   assert.equal(reads(nativeAdminPath), 1);
   assert.equal(denials("openclaw.configurations.read"), 1);

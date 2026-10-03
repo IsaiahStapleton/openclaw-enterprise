@@ -7,7 +7,7 @@ import {
   type AgentRuntimeCredentialsBody,
 } from "@openclaw-enterprise/contracts";
 import {
-  accessBindingsTargeting,
+  accessBindingsRemovedWithAgent,
   NamespaceNotReadyError,
   RepositoryOptionsUnavailableError,
   type AgentProvisioningProgress,
@@ -299,9 +299,10 @@ export function createAgentHandlers(options: AgentHandlerOptions) {
       const agentId = params.agentId!;
       const agent = await controller.transact(async (unit) => {
         const deleting = await controller.deleteAgent(context.actorId, namespaceId, agentId);
-        // The deleting Agent is locked and refuses new bindings, so these are exactly the
-        // AccessBindings that completing the deletion removes (unless deleted explicitly).
-        const pending = await accessBindingsTargeting(unit, namespaceId, "agent", deleting.id);
+        // The deleting Agent refuses new bindings on itself, its AgentRevisions, and its
+        // ServicePrincipal, so these are exactly the AccessBindings that completing the
+        // deletion removes (unless deleted explicitly first).
+        const pending = await accessBindingsRemovedWithAgent(unit, deleting);
         await unit.audit.append(
           mutationEvent(
             { kind: "agent", id: deleting.id, namespaceId },

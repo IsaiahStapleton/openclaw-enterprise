@@ -9,6 +9,7 @@ import { loadInstallationConfiguration } from "../../apps/controller/src/composi
 import { OpenShellGateway } from "../../apps/controller/src/backends/openshell.ts";
 import { OpenShellCredentialGatewayDriver } from "../../apps/controller/src/drivers/credential-gateway/openshell.ts";
 import { OpenShellSandboxDriver } from "../../apps/controller/src/drivers/sandbox/openshell.ts";
+import { OpenShellSandboxAlreadyExistsError } from "../../apps/controller/src/drivers/sandbox/openshell-gateway-client.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { SandboxRevisionUnsupportedError } from "../../packages/occ/src/index.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
@@ -109,6 +110,12 @@ function workspaceGatewayClient(seed = [], events = []) {
       events.push(["gateway", "deleteWorkspace", name]);
       workspaces.delete(name);
     },
+    async getSandbox() {
+      return undefined;
+    },
+    async getServiceUrl() {
+      return undefined;
+    },
     async createSandbox() {
       throw new Error("Sandbox creation is outside this Namespace lifecycle scenario.");
     },
@@ -179,9 +186,12 @@ test("startup constructs the bundled OpenShell SandboxDriver before constructing
 });
 
 test("startup composes both OpenShell members from one Backend", async (t) => {
+  // An explicit hard_requirement composes like the omitted default above.
+  const configuration = sandboxInstallation();
+  configuration.drivers.sandbox.configuration.policy.landlockCompatibility = "hard_requirement";
   const createdDriver = await loadInstallationConfiguration({
     mode: "production",
-    environment: { OCC_CONFIG_PATH: await fixture(t, sandboxInstallation()) },
+    environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
   });
 
   assert.ok(createdDriver.credentialGatewayDriver instanceof OpenShellCredentialGatewayDriver);
@@ -368,6 +378,135 @@ test("OpenShell provisions native OpenClaw without exposing an inbound Harness s
   assert.deepEqual(requests[0].serviceExposures, []);
   assert.deepEqual(requests[0].spec.command, command);
   assert.deepEqual(requests[0].labels, labels);
+  // The real Gateway receives this mode with the Sandbox request; a weaker
+  // Landlock setting could let a ready Harness run without filesystem policy.
+  assert.equal(requests[0].spec.policy.landlock.compatibility, "hard_requirement");
+});
+
+test("OpenShell adopts its revision's existing Sandbox instead of re-sending CreateSandbox", async () => {
+  // The gateway's request_id replay refuses a changed spec and forgets a create after
+  // 24 h, so a reconcile pass must find the existing Sandbox rather than create again.
+  const gatewayClient = workspaceGatewayClient();
+  const sandboxes = new Map();
+  const services = new Map();
+  const calls = [];
+  let createError;
+  gatewayClient.getSandbox = async ({ name, workspace }) => {
+    calls.push(["getSandbox", name, workspace]);
+    return sandboxes.get(name);
+  };
+  gatewayClient.getServiceUrl = async ({ sandbox, workspace, service }) => {
+    calls.push(["getServiceUrl", sandbox, workspace, service]);
+    return services.get(sandbox);
+  };
+  gatewayClient.createSandbox = async (request) => {
+    calls.push(["createSandbox", request.name, request.requestId]);
+    const sandbox = {
+      name: request.name,
+      labels: request.labels,
+      annotations: { ...request.annotations, "openshell.io/runtime-identity": "opaque" },
+      serviceUrls: { "": `http://${request.workspace}--${request.name}.openshell.test/` },
+    };
+    sandboxes.set(request.name, sandbox);
+    services.set(request.name, sandbox.serviceUrls[""]);
+    if (createError !== undefined) {
+      throw createError;
+    }
+    return sandbox;
+  };
+  const driver = new OpenShellSandboxDriver(sandboxInstallation().drivers.sandbox.configuration, {
+    id: "openshell-sandbox",
+    implementation: "openshell",
+    backend: backendFor(gatewayClient),
+  });
+  const context = namespaceContext();
+  const revision = {
+    id: "rev_00000000-0000-4000-8000-000000000003",
+    namespaceId: context.namespace.id,
+    agentId: "agt_00000000-0000-4000-8000-000000000003",
+    harness: { id: "codex", version: "1.0.0", mode: "dedicated" },
+    sandboxDriverId: driver.id,
+  };
+  const requirements = (environment) => ({
+    loginMode: "api_key",
+    image: "codex-runtime@sha256:synthetic",
+    command: ["codex"],
+    serviceAccountName: "agent-codex",
+    serviceAccountToken: {
+      audience: "openclaw-enterprise",
+      expirationSeconds: 900,
+      mountPath: "/var/run/secrets/openclaw-enterprise",
+      path: "token",
+      readOnly: true,
+    },
+    workspaceMounts: [
+      {
+        claimName: "harness-workspace-codex",
+        subPath: "workspace",
+        mountPath: "/home/node/workspace",
+        readOnly: false,
+      },
+    ],
+    credentialAttachments: [],
+    environment: [{ name: "APP_SERVER_PORT", value: "8080" }, ...environment],
+    labels: { "openclaw.dev/revision": revision.id },
+  });
+  const provision = (environment = [], target = revision) =>
+    driver.provisionHarness({
+      ...context,
+      revision: target,
+      requirements: requirements(environment),
+    });
+
+  const first = await provision();
+  const name = first.resourceName;
+  assert.deepEqual(
+    calls.map(([call]) => call),
+    ["getSandbox", "createSandbox"],
+  );
+  // A later pass with a different spec reads the Sandbox and its service; it never creates.
+  calls.length = 0;
+  const second = await provision([{ name: "TMPDIR", value: "/tmp/changed" }]);
+  assert.deepEqual(second, first);
+  assert.deepEqual(calls, [
+    ["getSandbox", name, calls[0][2]],
+    ["getServiceUrl", name, calls[0][2], ""],
+  ]);
+
+  // ALREADY_EXISTS (a create that outlived its 24 h replay record) adopts this revision's Sandbox.
+  sandboxes.clear();
+  services.clear();
+  createError = new OpenShellSandboxAlreadyExistsError(name);
+  calls.length = 0;
+  assert.deepEqual(await provision(), first);
+  assert.deepEqual(
+    calls.map(([call]) => call),
+    ["getSandbox", "createSandbox", "getSandbox", "getServiceUrl"],
+  );
+  createError = undefined;
+
+  // Another revision's Sandbox, or one without its Harness service, is never adopted.
+  sandboxes.set(name, {
+    ...sandboxes.get(name),
+    annotations: { ...sandboxes.get(name).annotations, "openclaw.dev/revision-id": "rev_other" },
+  });
+  await assert.rejects(provision(), /belongs to another revision; remove the stale Sandbox/);
+  sandboxes.set(name, {
+    ...sandboxes.get(name),
+    annotations: { ...sandboxes.get(name).annotations, "openclaw.dev/revision-id": revision.id },
+  });
+  // A Sandbox on its way out is never adopted as this revision's Harness.
+  for (const [phase, message] of [
+    ["SANDBOX_PHASE_DELETING", /is being deleted; it is created again/],
+    ["SANDBOX_PHASE_STOPPED", /has stopped; remove the stale Sandbox/],
+    ["SANDBOX_PHASE_COMPLETED", /has stopped; remove the stale Sandbox/],
+  ]) {
+    sandboxes.set(name, { ...sandboxes.get(name), phase });
+    await assert.rejects(provision(), message);
+  }
+  sandboxes.set(name, { ...sandboxes.get(name), phase: "SANDBOX_PHASE_READY" });
+  services.delete(name);
+  await assert.rejects(provision(), /exists without its Harness service; remove the stale Sandbox/);
 });
 
 test("OpenShell rejects Secret-backed Harness environment as a permanent revision failure", async () => {
@@ -592,6 +731,21 @@ test("startup rejects OpenShell network values outside the v0.1 protocol enums",
     }),
     /OpenShell network policy model-egress TLS mode must be one of: skip, terminate/,
   );
+});
+
+test("startup refuses OpenShell filesystem modes that can weaken containment", async (t) => {
+  for (const mode of ["best_effort", "hard-requirement"]) {
+    const configuration = sandboxInstallation();
+    configuration.drivers.sandbox.configuration.policy.landlockCompatibility = mode;
+
+    await assert.rejects(
+      loadInstallationConfiguration({
+        mode: "production",
+        environment: { OCC_CONFIG_PATH: await fixture(t, configuration) },
+      }),
+      /OpenShell policy\.landlockCompatibility must be hard_requirement or omitted/,
+    );
+  }
 });
 
 test("startup rejects OpenShell network policies without binary identities", async (t) => {

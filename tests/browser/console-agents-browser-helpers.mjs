@@ -181,6 +181,70 @@ export async function waitForInputValue(locator, expected, timeoutMs = 10_000) {
   );
 }
 
+// Ordering sentinel for "this action sends no request" checks. After one macrotask turn, the
+// page fetches a static asset and this waits for the response. Chromium reports requests in
+// the order the page starts them, so any request started before the sentinel (synchronously,
+// from a microtask or from a zero-delay timer) is already in the apiRequests() log.
+export async function settlePageRequests(page) {
+  await page.evaluate(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const response = await fetch(`/console/favicon-16.png?request-sentinel=${Date.now()}`, {
+      cache: "no-store",
+    });
+    await response.arrayBuffer();
+  });
+}
+
+// Test-only page hook: counts, per URL path, the page's fetches that have settled, meaning the
+// fetch rejected or the page finished reading the response body. Install it before the page
+// loads. A count observed by waitForSettledFetches() is read in a later task, so the page's own
+// continuation of that fetch (for example dropping a stale response) has already run.
+export async function trackSettledFetches(page) {
+  await page.addInitScript(() => {
+    const settled = new Map();
+    const record = (input) => {
+      const path = new URL(
+        input instanceof Request ? input.url : String(input),
+        globalThis.location.href,
+      ).pathname;
+      settled.set(path, (settled.get(path) ?? 0) + 1);
+    };
+    const pageFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      let response;
+      try {
+        response = await pageFetch(input, init);
+      } catch (error) {
+        record(input);
+        throw error;
+      }
+      for (const method of ["arrayBuffer", "blob", "json", "text"]) {
+        const read = response[method].bind(response);
+        response[method] = async () => {
+          try {
+            return await read();
+          } finally {
+            record(input);
+          }
+        };
+      }
+      return response;
+    };
+    globalThis.settledFetchCount = (path) => settled.get(path) ?? 0;
+  });
+}
+
+export async function settledFetches(page, path) {
+  return page.evaluate((target) => globalThis.settledFetchCount(target), path);
+}
+
+export async function waitForSettledFetches(page, path, count) {
+  await page.waitForFunction(
+    ([target, expected]) => globalThis.settledFetchCount(target) >= expected,
+    [path, count],
+  );
+}
+
 export async function waitForCondition(predicate, message, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

@@ -31,9 +31,17 @@ export interface OpenShellSandboxCreateRequest {
   }[];
 }
 
+/** Selects one Sandbox by name in a Workspace (GetSandbox, DeleteSandbox). */
 export interface OpenShellSandboxDeleteRequest {
   readonly name: string;
   readonly workspace: string;
+}
+
+export interface OpenShellServiceRequest {
+  readonly sandbox: string;
+  readonly workspace: string;
+  /** Empty selects the unnamed endpoint. */
+  readonly service: string;
 }
 
 export interface OpenShellSandboxResponse {
@@ -41,6 +49,7 @@ export interface OpenShellSandboxResponse {
   readonly id?: string;
   readonly workspace?: string;
   readonly labels: Readonly<Record<string, string>>;
+  readonly annotations: Readonly<Record<string, string>>;
   readonly phase?: string | number;
   readonly serviceUrls: Readonly<Record<string, string>>;
 }
@@ -169,6 +178,13 @@ export interface OpenShellGatewayClient extends OpenShellSandboxLogReader {
     request: OpenShellSandboxCreateRequest,
     signal: AbortSignal,
   ): Promise<OpenShellSandboxResponse>;
+  /** Undefined when the Sandbox does not exist. Service URLs are always empty. */
+  getSandbox(
+    request: OpenShellSandboxDeleteRequest,
+    signal: AbortSignal,
+  ): Promise<OpenShellSandboxResponse | undefined>;
+  /** The exposed service's URL, or undefined when the endpoint does not exist. */
+  getServiceUrl(request: OpenShellServiceRequest, signal: AbortSignal): Promise<string | undefined>;
   deleteSandbox(request: OpenShellSandboxDeleteRequest, signal: AbortSignal): Promise<void>;
   getProviderProfile(
     workspace: string,
@@ -231,6 +247,8 @@ type OpenShellMethod =
   | "CreateWorkspace"
   | "DeleteWorkspace"
   | "CreateSandbox"
+  | "GetSandbox"
+  | "GetService"
   | "DeleteSandbox"
   | "GetSandboxLogs"
   | "GetSandboxProviderStatus"
@@ -301,6 +319,42 @@ function deadline(timeoutMs: number): Date {
 function statusCode(error: unknown): number | undefined {
   const candidate = asRecord(error)?.code;
   return typeof candidate === "number" ? candidate : undefined;
+}
+
+function sandboxResponse(
+  response: RecordValue,
+  operation: string,
+  endpoint: string,
+): OpenShellSandboxResponse {
+  const sandbox = asRecord(response.sandbox);
+  const metadata = asRecord(sandbox?.metadata);
+  const name = metadata?.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no stable name.`);
+  }
+  const phase = asRecord(sandbox?.status)?.phase;
+  return Object.freeze({
+    name,
+    ...(typeof metadata?.id === "string" && metadata.id.length > 0 ? { id: metadata.id } : {}),
+    ...(typeof metadata?.workspace === "string" && metadata.workspace.length > 0
+      ? { workspace: metadata.workspace }
+      : {}),
+    labels: Object.freeze({
+      ...(asRecord(metadata?.labels) as Record<string, string> | undefined),
+    }),
+    annotations: Object.freeze({
+      ...(asRecord(metadata?.annotations) as Record<string, string> | undefined),
+    }),
+    serviceUrls: Object.freeze(
+      Object.fromEntries(
+        Object.entries(asRecord(response.service_urls) ?? {}).map(([service, value]) => [
+          service,
+          normalizeServiceUrl(value, endpoint),
+        ]),
+      ),
+    ),
+    ...(phase === undefined ? {} : { phase: phase as string | number }),
+  });
 }
 
 function workspaceResponse(response: RecordValue, operation: string): OpenShellWorkspaceResponse {
@@ -717,37 +771,57 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       }
       throw error;
     }
-    const sandbox = asRecord(response.sandbox);
-    const metadata = asRecord(sandbox?.metadata);
-    const name = metadata?.name;
-    if (typeof name !== "string" || name.trim().length === 0) {
-      throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no stable name.");
-    }
     const serviceUrls = asRecord(response.service_urls);
     if (serviceUrls === undefined && request.serviceExposures.length !== 0) {
       throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no service URL map.");
     }
-    return Object.freeze({
-      name,
-      ...(typeof metadata?.id === "string" && metadata.id.length > 0 ? { id: metadata.id } : {}),
-      ...(typeof metadata?.workspace === "string" && metadata.workspace.length > 0
-        ? { workspace: metadata.workspace }
-        : {}),
-      labels: Object.freeze({
-        ...(asRecord(metadata?.labels) as Record<string, string> | undefined),
-      }),
-      serviceUrls: Object.freeze(
-        Object.fromEntries(
-          Object.entries(serviceUrls ?? {}).map(([service, value]) => [
-            service,
-            normalizeServiceUrl(value, this.options.endpoint),
-          ]),
+    return sandboxResponse(response, "CreateSandbox", this.options.endpoint);
+  }
+
+  async getSandbox(
+    request: OpenShellSandboxDeleteRequest,
+    signal: AbortSignal,
+  ): Promise<OpenShellSandboxResponse | undefined> {
+    try {
+      return sandboxResponse(
+        await this.unary(
+          "GetSandbox",
+          { name: request.name, workspace_scope: { workspace: request.workspace } },
+          signal,
         ),
-      ),
-      ...(asRecord(sandbox?.status)?.phase === undefined
-        ? {}
-        : { phase: asRecord(sandbox?.status)?.phase as string | number }),
-    });
+        "GetSandbox",
+        this.options.endpoint,
+      );
+    } catch (error) {
+      if (await this.isStatus(error, "NOT_FOUND")) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  async getServiceUrl(
+    request: OpenShellServiceRequest,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    let response: RecordValue;
+    try {
+      response = await this.unary(
+        "GetService",
+        {
+          sandbox: request.sandbox,
+          name: request.service,
+          workspace_scope: { workspace: request.workspace },
+        },
+        signal,
+      );
+    } catch (error) {
+      if (await this.isStatus(error, "NOT_FOUND")) {
+        return undefined;
+      }
+      throw error;
+    }
+    return normalizeServiceUrl(response.url, this.options.endpoint);
   }
 
   async deleteSandbox(request: OpenShellSandboxDeleteRequest, signal: AbortSignal): Promise<void> {

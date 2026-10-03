@@ -131,6 +131,11 @@ An empty queue waits within a bound. After work or idle, `health()` queries
 work, calls `onHealthy`, and emits `worker.health`. Both must succeed for readiness. Serialized failures emit `HEALTH_UNAVAILABLE` without
 consuming retries.
 
+Each pass start and claim renewal calls `onProgress`; the liveness probe
+restarts a worker whose marker goes stale. A client `query_timeout` usually
+frees a stuck pass first by discarding its connection. See
+[worker settings](../reference/settings/operations.md#controller-worker-environment).
+
 ### 4. Reload ownership and reauthorize before infrastructure effects
 
 `apps/controller/src/worker.ts:ControllerWorker.process`,
@@ -334,10 +339,9 @@ On `SIGTERM` or `SIGINT`, shutdown removes readiness, aborts in-flight work, wai
 `worker.stopped`. Each `PostgresWorkQueue.recoverStale()` statement atomically publishes exhausted
 work, failure of a still-provisioning Namespace targeted for `ready`, and audit
 evidence for expired claims and exhausted queued work, so final-attempt crashes
-cannot strand provisioning. A deployment whose claim expires on its last attempt
-after publishing its revision gets one more attempt (`ACTIVE_REVISION_RECOVERY`).
-If that attempt also fails, the deployment fails without retiring the active
-runtime.
+cannot strand provisioning. A deployment whose last claim expires after it
+published its revision gets one more attempt (`ACTIVE_REVISION_RECOVERY`); a
+failed retry keeps the active runtime.
 
 ## Debugging and Verification
 
@@ -385,7 +389,9 @@ runtime.
 
 ## Changelog
 
-- 2026-10-03 17:00: Finish a published deployment whose last attempt lost its lease. (fix-recover-active-revision)
+- 2026-10-03 17:00: Finish published deployments after a last-attempt crash. (fix-recover-active-revision)
+
+- 2026-10-03 16:00: Bound worker queries and restart a stuck run loop. (fix-worker-liveness)
 
 - 2026-10-02 06:30: Name Compute's pending reason in deployment progress and slow rechecks for long-pending revisions. (fix-deploy-pending-reasons)
 

@@ -81,6 +81,24 @@ import {
   RepositoryCredentialLifecycle,
 } from "./worker/repository-credentials.ts";
 
+/**
+ * Connection limits for the worker's main PostgreSQL pool. The worker is serial, so one query
+ * on a connection that went silent (a failover or partition with no RST) would otherwise stop
+ * every claim forever. `query_timeout` is client-side: it abandons the query, the transaction
+ * owner discards the connection, and the loop retries on a fresh one. It is not sent to the
+ * server, so poolers and migrations are unaffected. Size it well above any legitimate query.
+ * TCP keepalive only prunes dead idle connections eventually (kernel probe defaults apply).
+ */
+export function workerDatabasePoolOptions(timeoutMs: number) {
+  const timeout = positiveInteger(timeoutMs, "Worker database timeout");
+  return {
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    connectionTimeoutMillis: timeout,
+    query_timeout: timeout,
+  } as const;
+}
+
 export interface ControllerWorkerOptions {
   readonly metrics?: OccMetrics;
   readonly pool: PostgresPool & PostgresQueryClient;
@@ -95,6 +113,12 @@ export interface ControllerWorkerOptions {
   readonly convergenceTimeoutMs?: number;
   readonly emit?: (event: Readonly<Record<string, unknown>>) => void;
   readonly onHealthy?: () => Promise<void>;
+  /**
+   * Called, at most once per health interval, when the run loop starts a pass or a claim
+   * heartbeat renews. It goes quiet only while the loop is stuck, so a liveness probe can tell
+   * a wedged worker from one waiting out a database outage (each pass then fails fast).
+   */
+  readonly onProgress?: () => Promise<void>;
 }
 
 type Observation = NamespaceEnsureResult | NamespaceDeleteResult;
@@ -552,12 +576,15 @@ export class ControllerWorker {
   private readonly mode: "development" | "production";
   private readonly emit: (event: Readonly<Record<string, unknown>>) => void;
   private readonly onHealthy: (() => Promise<void>) | undefined;
+  private readonly onProgress: (() => Promise<void>) | undefined;
   private readonly abort = new AbortController();
   private installation: Readonly<Installation> | undefined;
   private loop: Promise<void> | undefined;
   private stopping = false;
   private lastHealthAt = 0;
   private pendingHealth: Promise<void> | undefined;
+  private lastProgressAt = 0;
+  private pendingProgress = false;
   /**
    * Predecessors this process stopped for an exclusive successor, by revision ID.
    * The dispatch guard supersedes a predecessor's own work once an exclusive
@@ -684,6 +711,7 @@ export class ControllerWorker {
         process.stdout.write(`${JSON.stringify(event)}\n`);
       });
     this.onHealthy = options.onHealthy;
+    this.onProgress = options.onProgress;
     this.repoDriver = drivers?.repoDriver;
     this.repositoryCleanupRetryMs = positiveInteger(
       this.repoDriver?.maintenanceIntervalMs ?? 30_000,
@@ -789,6 +817,8 @@ export class ControllerWorker {
 
   private async run(): Promise<void> {
     while (!this.stopping) {
+      // Every pass starts here, including back-to-back claims that skip the idle delay.
+      this.progress();
       try {
         await this.queue.recoverStale();
         const claim = await this.queue.claim();
@@ -839,6 +869,28 @@ export class ControllerWorker {
         }
       }
     }
+  }
+
+  /** Report loop progress without ever delaying the loop; see `onProgress`. */
+  private progress(): void {
+    const now = Date.now();
+    if (
+      this.onProgress === undefined ||
+      this.pendingProgress ||
+      now - this.lastProgressAt < Math.max(1_000, this.pollIntervalMs * 20)
+    ) {
+      return;
+    }
+    const onProgress = this.onProgress;
+    this.lastProgressAt = now;
+    this.pendingProgress = true;
+    void (async () => onProgress())()
+      .catch(() => {
+        this.emit({ event: "worker.error", code: "PROGRESS_UNAVAILABLE" });
+      })
+      .finally(() => {
+        this.pendingProgress = false;
+      });
   }
 
   private async health(force: boolean): Promise<void> {
@@ -3034,6 +3086,7 @@ export class ControllerWorker {
     if ((await this.queue.heartbeat(claim)) === undefined) {
       throw new WorkClaimLostError();
     }
+    this.progress();
     let lost = false;
     let pending = Promise.resolve();
     const operation = new AbortController();
@@ -3051,6 +3104,7 @@ export class ControllerWorker {
           if ((await this.queue.heartbeat(claim)) === undefined) {
             abandon();
           } else if (!lost) {
+            this.progress();
             void this.health(false);
           }
         });

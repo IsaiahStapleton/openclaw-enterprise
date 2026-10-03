@@ -129,6 +129,8 @@ async function fixture(mode = "embedded", nodeEnrollment, options = {}) {
     },
     { nodeEnrollment },
   );
+  // Fixture failures are final; skip the driver's API retry waits.
+  driver.waitBeforeRetry = async () => {};
   const revision = {
     id: "revision-repository-material",
     namespaceId: "namespace-repository-material",
