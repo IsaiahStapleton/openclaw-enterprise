@@ -776,7 +776,9 @@ for (const authMethod of ["api_key", "codex_pat"]) {
       const denied = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
         body: foreign,
       });
-      assert.equal(denied.status, 404, JSON.stringify(denied.body));
+      assert.equal(denied.status, 400, JSON.stringify(denied.body));
+      assert.equal(denied.body.error.code, "INVALID_REQUEST");
+      assert.equal(denied.body.error.message, "Secret references cannot cross Namespaces.");
       const jobs = await fixture.pool.query(
         "SELECT work_id FROM occ.agent_provisioning_work WHERE namespace_id = $1",
         [namespace.id],

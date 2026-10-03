@@ -137,6 +137,102 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
   }
 });
 
+test("OpenShell client reads an existing Sandbox and its service endpoint", async () => {
+  const proto = await loader.load(
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
+  );
+  const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
+  const requests = [];
+  const notFound = (callback) =>
+    callback(Object.assign(new Error("not found"), { code: grpc.status.NOT_FOUND }));
+  const server = new grpc.Server();
+  server.addService(OpenShell.service, {
+    GetSandbox(call, callback) {
+      requests.push(["GetSandbox", call.request]);
+      if (call.request.name !== "sandbox-wire") {
+        notFound(callback);
+        return;
+      }
+      callback(null, {
+        sandbox: {
+          metadata: {
+            id: "sandbox-id",
+            name: call.request.name,
+            workspace: call.request.workspace_scope.workspace,
+            labels: { owner: "openclaw" },
+            annotations: { "openclaw.dev/revision-id": "rev_wire" },
+          },
+        },
+      });
+    },
+    GetService(call, callback) {
+      requests.push(["GetService", call.request]);
+      if (call.request.sandbox !== "sandbox-wire") {
+        notFound(callback);
+        return;
+      }
+      callback(null, {
+        endpoint: { sandbox: call.request.sandbox, name: call.request.name, target_port: 18_790 },
+        url: "http://tenant-workspace--sandbox-wire.openshell.localhost:8080/",
+      });
+    },
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+  const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
+  const signal = AbortSignal.timeout(2_000);
+  try {
+    const sandbox = await client.getSandbox(
+      { name: "sandbox-wire", workspace: "tenant-workspace" },
+      signal,
+    );
+    assert.equal(sandbox.name, "sandbox-wire");
+    assert.equal(sandbox.workspace, "tenant-workspace");
+    assert.deepEqual(sandbox.annotations, { "openclaw.dev/revision-id": "rev_wire" });
+    assert.deepEqual(sandbox.serviceUrls, {});
+    assert.equal(
+      await client.getSandbox({ name: "missing", workspace: "tenant-workspace" }, signal),
+      undefined,
+    );
+    assert.equal(
+      await client.getServiceUrl(
+        { sandbox: "sandbox-wire", workspace: "tenant-workspace", service: "" },
+        signal,
+      ),
+      `http://tenant-workspace--sandbox-wire.openshell.localhost:${port}/`,
+    );
+    assert.equal(
+      await client.getServiceUrl(
+        { sandbox: "missing", workspace: "tenant-workspace", service: "" },
+        signal,
+      ),
+      undefined,
+    );
+    assert.deepEqual(requests[0], [
+      "GetSandbox",
+      {
+        name: "sandbox-wire",
+        workspace_scope: { workspace: "tenant-workspace", selection: "workspace" },
+      },
+    ]);
+    assert.deepEqual(requests[2], [
+      "GetService",
+      {
+        sandbox: "sandbox-wire",
+        name: "",
+        workspace_scope: { workspace: "tenant-workspace", selection: "workspace" },
+      },
+    ]);
+  } finally {
+    client.close();
+    await new Promise((resolve) => server.tryShutdown(resolve));
+  }
+});
+
 test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, and attachment status", async () => {
   const proto = await loader.load(
     join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),

@@ -88,8 +88,9 @@ to a running Agent requires upstream support:
 | `filesystem` | Approved PVC subpath mounts and OpenShell filesystem policy for read-only/read-write paths.   |
 | `process`    | OpenShell process policy, including the configured run-as user and group.                     |
 
-The Driver sends `hard_requirement` for Landlock filesystem enforcement.
-Other `policy.landlockCompatibility` values fail Installation startup.
+The Driver sends `hard_requirement` for Landlock filesystem enforcement. Omit
+`policy.landlockCompatibility` or set it to `hard_requirement`; any other value,
+including `best_effort`, fails Installation startup.
 
 There is no `exec` facet. Command-level authorization and per-tool dynamic
 sandbox creation are deferred; `exec` remains a tool invocation that runs inside
@@ -257,18 +258,19 @@ Compute requires every attachment to report `ready` before activation.
 
 For a dedicated Codex request that reaches OpenShell, the Driver reads the literal
 `APP_SERVER_PORT` prepared by Compute and includes one unnamed service exposure
-in `CreateSandbox`. It uses the Agent revision UUID as OpenShell's `request_id`,
-so retries receive the same service URL. The Driver accepts only an HTTP or HTTPS
-origin, rewrites its port to the configured gateway endpoint for local
-port-forwards, and requires a valid route before provisioning succeeds.
+in `CreateSandbox`, with the revision UUID as `request_id`. It creates only an
+absent Sandbox (`GetSandbox` first) and adopts an existing one only when its
+annotations name the revision and, for Codex, `GetService` finds the endpoint.
+It requires an HTTP or HTTPS route and rewrites its port to the gateway
+endpoint for port-forwards.
 
 OCE omits `authorization_mode`, so OpenShell strips `Authorization` before proxying.
 Upstream v0.1.3-pre.1 supports `BEARER_PASSTHROUGH`, which OCE leaves unselected.
 Codex accepts only bearer authorization. The integration expects the protected
 app server's `401` through this route and runs its real model turn on Pod
 loopback. It does not treat the test bridge as supported or replace Compute's
-Agent Service. A Sandbox without a replayable Create receipt must be removed;
-the Driver does not mutate it with a later `ExposeService` call.
+Agent Service. Remove a Sandbox it cannot adopt; the Driver never calls
+`ExposeService`.
 
 Native OpenClaw does not accept inbound Harness traffic. Its enrolled node host
 opens the connection to the Agent Gateway, so the Driver sends an empty service

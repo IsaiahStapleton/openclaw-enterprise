@@ -287,7 +287,8 @@ finish and their material is disposed.
 
 Bounded REST JSON responses omit the provider's `temp_clone_token` from the
 repository object, its `parent` and `source` repository relationships, and
-pull-request `head.repo` and `base.repo` objects. Human text and unrelated
+pull-request `head.repo` and `base.repo` objects. GraphQL selecting
+`tempCloneToken` gets 400. Human text and unrelated
 metadata remain unchanged. Qualified machine links still pass through the
 existing origin, repository, route, and profile checks before gateway rewriting;
 other informational links remain data.

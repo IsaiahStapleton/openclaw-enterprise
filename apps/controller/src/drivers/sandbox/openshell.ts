@@ -316,6 +316,16 @@ function harnessPort(requirements: HarnessWorkloadRequirements): number {
   return port(Number(entry.value), "OpenShell APP_SERVER_PORT");
 }
 
+// A Sandbox in one of these phases never serves the revision again.
+const STOPPED_SANDBOX_PHASES: ReadonlySet<string | number> = new Set([
+  "SANDBOX_PHASE_STOPPING",
+  "SANDBOX_PHASE_STOPPED",
+  "SANDBOX_PHASE_COMPLETED",
+  6,
+  7,
+  9,
+]);
+
 function requestId(revisionId: string): string {
   const match = /^rev_([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(revisionId);
   if (match === null) {
@@ -849,7 +859,7 @@ function sandboxSpec(
     policy: {
       version: 1,
       filesystem: filesystemPolicy(options, requirements, dataMount),
-      landlock: { compatibility: options.policy.landlockCompatibility ?? "hard_requirement" },
+      landlock: { compatibility: "hard_requirement" },
       process: {
         run_as_user: options.policy.process.runAsUser,
         run_as_group: options.policy.process.runAsGroup,
@@ -930,7 +940,7 @@ function validateOptions(options: OpenShellSandboxDriverOptions): void {
     options.policy.landlockCompatibility !== "hard_requirement"
   ) {
     throw new OpenShellSandboxConfigurationFailure(
-      "OpenShell Landlock compatibility must be hard_requirement.",
+      "OpenShell policy.landlockCompatibility must be hard_requirement or omitted; best_effort is not supported.",
     );
   }
   nonempty(options.policy.process.runAsUser, "OpenShell process runAsUser");
@@ -1157,43 +1167,83 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     const serviceExposures = codex
       ? [{ service: "", targetPort: harnessPort(context.requirements) }]
       : [];
-    let created;
-    try {
-      created = await this.gatewayClientForNamespace(sandbox.namespaceName).createSandbox(
-        {
-          name: sandbox.resourceName,
-          workspace: workspaceName(context.namespace),
-          requestId: requestId(context.revision.id),
-          labels: context.requirements.labels,
-          annotations: {
-            "openclaw.dev/namespace-id": context.revision.namespaceId,
-            "openclaw.dev/agent-id": context.revision.agentId,
-            "openclaw.dev/revision-id": context.revision.id,
-          },
-          spec: sandboxSpec(this.options, context.requirements),
-          serviceExposures,
-        },
-        context.signal,
-      );
-    } catch (error) {
-      if (error instanceof OpenShellSandboxAlreadyExistsError) {
+    const annotations = {
+      "openclaw.dev/namespace-id": context.revision.namespaceId,
+      "openclaw.dev/agent-id": context.revision.agentId,
+      "openclaw.dev/revision-id": context.revision.id,
+    };
+    const selector = { name: sandbox.resourceName, workspace: workspaceName(context.namespace) };
+    const create = {
+      ...selector,
+      requestId: requestId(context.revision.id),
+      labels: context.requirements.labels,
+      annotations,
+      spec: sandboxSpec(this.options, context.requirements),
+      serviceExposures,
+    };
+    const client = this.gatewayClientForNamespace(sandbox.namespaceName);
+    // Every reconcile pass reaches here. Re-sending CreateSandbox for a Sandbox that
+    // exists would hit the gateway's request_id replay, which refuses a changed spec
+    // (REQUEST_ID_PAYLOAD_MISMATCH) and forgets the create after 24 h (ALREADY_EXISTS).
+    let existing = await client.getSandbox(selector, context.signal);
+    if (existing === undefined) {
+      let created;
+      try {
+        created = await client.createSandbox(create, context.signal);
+      } catch (error) {
+        if (!(error instanceof OpenShellSandboxAlreadyExistsError)) {
+          throw error;
+        }
+      }
+      if (created !== undefined) {
+        if (created.name !== sandbox.resourceName) {
+          throw new OpenShellSandboxConfigurationFailure(
+            "OpenShell returned a different Sandbox name than requested.",
+          );
+        }
+        if (codex) {
+          validateHarnessServiceUrl(created.serviceUrls[""]);
+        } else if (Object.keys(created.serviceUrls).length !== 0) {
+          throw new OpenShellSandboxConfigurationFailure(
+            "OpenShell exposed an unexpected service for the native OpenClaw Harness.",
+          );
+        }
+        return Object.freeze(sandbox);
+      }
+      existing = await client.getSandbox(selector, context.signal);
+      if (existing === undefined) {
         throw new OpenShellSandboxConfigurationFailure(
-          "OpenShell Sandbox already exists without a replayable create-time service URL; remove the stale Sandbox before retrying.",
+          `OpenShell Sandbox ${sandbox.resourceName} disappeared during creation.`,
         );
       }
-      throw error;
     }
-    if (created.name !== sandbox.resourceName) {
+    // Adopt only this revision's own live Sandbox, with its Harness service in place.
+    if (Object.entries(annotations).some(([key, value]) => existing.annotations[key] !== value)) {
       throw new OpenShellSandboxConfigurationFailure(
-        "OpenShell returned a different Sandbox name than requested.",
+        `OpenShell Sandbox ${sandbox.resourceName} exists but belongs to another revision; remove the stale Sandbox before retrying.`,
+      );
+    }
+    if (existing.phase === "SANDBOX_PHASE_DELETING" || existing.phase === 4) {
+      throw new OpenShellSandboxConfigurationFailure(
+        `OpenShell Sandbox ${sandbox.resourceName} is being deleted; it is created again after deletion finishes.`,
+      );
+    }
+    if (STOPPED_SANDBOX_PHASES.has(existing.phase ?? "")) {
+      throw new OpenShellSandboxConfigurationFailure(
+        `OpenShell Sandbox ${sandbox.resourceName} has stopped; remove the stale Sandbox before retrying.`,
       );
     }
     if (codex) {
-      validateHarnessServiceUrl(created.serviceUrls[""]);
-    } else if (Object.keys(created.serviceUrls).length !== 0) {
-      throw new OpenShellSandboxConfigurationFailure(
-        "OpenShell exposed an unexpected service for the native OpenClaw Harness.",
+      const url = await client.getServiceUrl(
+        { sandbox: selector.name, workspace: selector.workspace, service: "" },
+        context.signal,
       );
+      if (url === undefined) {
+        throw new OpenShellSandboxConfigurationFailure(
+          `OpenShell Sandbox ${sandbox.resourceName} exists without its Harness service; remove the stale Sandbox before retrying.`,
+        );
+      }
+      validateHarnessServiceUrl(url);
     }
     return Object.freeze(sandbox);
   }

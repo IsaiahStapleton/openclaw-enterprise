@@ -183,11 +183,9 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 
 OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
-The Driver requires `hard_requirement` Landlock compatibility, including when
-the Installation omits that setting. It rejects weaker or unknown values at
-startup before a Sandbox request. A runtime that cannot apply the filesystem
-policy must fail startup; Pod readiness alone does not establish the exact
-enforcement evidence proposed for OCE-owned Sandbox policies.
+It always sends `hard_requirement` Landlock compatibility; Installation startup
+rejects any other `policy.landlockCompatibility` value. On a node that cannot
+enforce Landlock, the OpenShell supervisor refuses to launch the workload.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
 allowlists before they are converted to the exact `v0.1.3-pre.1` protobuf enums.
 It rejects inherited object names and the old `passthrough` TLS spelling,
@@ -221,8 +219,12 @@ enrollment CA.
 The client sends the Sandbox identity, spec, Namespace Workspace scope, and
 revision UUID as `request_id`. Codex requests one unnamed exposure for
 `APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
-outbound, so it requests no exposure and rejects any returned URL. A replay
-returns the same result; a Sandbox that predates replayable creation fails.
+outbound, so it requests no exposure and rejects any returned URL. The Driver
+calls `getSandbox` first and creates only an absent Sandbox; it adopts an
+existing or `ALREADY_EXISTS` Sandbox only when its annotations name this
+revision, it is not deleting or stopped, and, for Codex, `getServiceUrl` finds
+the unnamed endpoint. Workspace `sandbox:write` is the trust boundary here: a
+holder could already delete and replace the Sandbox.
 
 For each unary Gateway call, the client checks cancellation after client setup
 and credential-metadata preparation and before dispatch. An abort during setup
