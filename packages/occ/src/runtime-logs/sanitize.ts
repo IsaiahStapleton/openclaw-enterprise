@@ -352,9 +352,12 @@ function codexSpanLifecycle(
 
 // Codex messages shown as written. `codex_core` formats can interpolate chat text and
 // model-proposed values (`event_mapping` logs `Output text in user message: <text>`),
-// so only app-server records (whose formats interpolate error values) and reviewed
-// fixed `codex_core` messages keep their text; the Collector applies the same rule.
-const CODEX_MESSAGE_TARGET = /^codex_app_server(?:::|$)/;
+// so only reviewed crates that never handle conversation items (app-server and its
+// transport, login, TLS setup, plugin manifests) and reviewed fixed `codex_core`
+// messages keep their text. Every other target, `codex_otel` included, shows a fixed
+// message. The Collector keeps message text only from `codex_app_server`.
+const CODEX_MESSAGE_TARGET =
+  /^(?:codex_app_server|codex_app_server_transport|codex_login|codex_http_client|codex_core_plugins)(?:::|$)/;
 const CODEX_FIXED_MESSAGES: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
   "codex_core::responses_retry": new Set([
     "stream connection failed; waiting to retry",

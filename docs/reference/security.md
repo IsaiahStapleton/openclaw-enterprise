@@ -242,7 +242,8 @@ to the Collector, and responses carry `Cache-Control: no-store`.
   A download is the same sanitized page in a text serializer; it needs the
   same grants and is not stored on the server.
 - **Content.** An allowlist classifier keeps only operational wrapper, Gateway,
-  Codex tracing and short plain-text lines. Other structured output, including
+  Codex tracing and short plain-text lines. Codex message text is kept only from
+  reviewed targets that never handle conversation items. Other structured output, including
   Codex protocol traffic, payload keys such as `prompt` and `content`, and
   pretty-printed JSON spread over several lines, is withheld and counted. Retained text passes pattern redaction, which is
   best-effort. The `content` class has no producer.

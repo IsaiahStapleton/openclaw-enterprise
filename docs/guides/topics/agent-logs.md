@@ -48,8 +48,7 @@ file holds the same classified and redacted records as the page, one per line
 (`TIME LEVEL KIND [SUBSYSTEM] MESSAGE key=value`, plus `GAP` and `WITHHELD`
 rows), after a `#` header naming the Agent, revision, Pod and container.
 Only **Include debug** applies to the download. Each download is a separate audited read.
-The saved file stays on your device, and
-redaction is best-effort, so handle it as sensitive and delete it when done.
+Redaction is best-effort: handle the file as sensitive and delete it when done.
 
 The HTTP API has the same two reads:
 
@@ -124,9 +123,10 @@ returning it:
   errors and warnings, like `Gateway failed to start: ...`, are kept.
 - **codex**: Codex tracing records (level, target, message). Turns show as
   `turn started` and `turn completed` (info, with model, turn ID, tokens and
-  busy time); tool calls keep their name and duration. Other messages, except
-  `codex_app_server` and fixed retry text, read `Codex message withheld` (they can
-  carry chat text). Other span records are
+  busy time); tool calls keep their name and duration. Only app-server, login,
+  TLS, plugin-manifest and fixed retry messages keep their text; others, such as
+  `codex_core` (which can log chat text), read `Codex message withheld`. Other
+  span records are
   `debug`; below `logging.level: debug` the Harness drops them, readiness-probe
   connections and repeated remote-control retries (one per 10 minutes is kept).
 - **text**: plain lines up to 4 KiB, including lines that start with a bracketed
