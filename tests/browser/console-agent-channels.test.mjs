@@ -17,7 +17,6 @@ import {
   revealNativeConfiguration,
   routeRuntimeCredentials,
   secretOptionLabel,
-  secretPostRequests,
   selectSecret,
   waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
@@ -754,70 +753,6 @@ test("Channel drawer reports partial save when post-PATCH Secret grant is reject
   assert.equal(await appToken.evaluate((node) => node.tagName), "INPUT");
   await waitForInputValue(appToken, secretOptionLabel(slackAppSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
-});
-
-test("Agent credentials choose existing Slack Secrets without reading token values", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
-  await fixture.bootstrap();
-  const namespace = await fixture.createNamespace("Runtime Slack picker", { ready: true });
-  const slackAppSecretValue = "never-visible-runtime-app-token";
-  const slackBotSecretValue = "never-visible-runtime-bot-token";
-  const slackAppSecret = await fixture.createSecret(
-    namespace.id,
-    "Runtime Slack app token",
-    slackAppSecretValue,
-  );
-  const slackBotSecret = await fixture.createSecret(
-    namespace.id,
-    "Runtime Slack bot token",
-    slackBotSecretValue,
-  );
-  const slack = {
-    enabled: true,
-    mode: "socket",
-    appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
-    botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
-    channels: { CRUNTIME123: { requireMention: true } },
-  };
-  const agent = await fixture.createAgent(
-    namespace.id,
-    "Runtime Slack Picker Agent",
-    nativeValues("runtime-slack-picker", { harnessId: "codex", channels: { slack } }),
-    { executionMode: "dedicated" },
-  );
-  const { page } = await newPage(t, fixture);
-  const requests = apiRequests(page, fixture.origin);
-  await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, {
-    transportConfigured: true,
-  });
-  const url = detailUrl(fixture, namespace.id, agent.id, "draft", "credentials");
-
-  await login(page, fixture, url.pathname + url.search);
-  await page.getByRole("heading", { name: "Runtime Slack Picker Agent" }).waitFor();
-  requests.length = 0;
-  await selectSecret(page, "Slack app token", slackAppSecret);
-  await selectSecret(page, "Slack bot token", slackBotSecret);
-  await page.getByRole("button", { name: "Save channel Secrets" }).click();
-  await page
-    .getByText("Channel Secret bindings saved. Deploy the new version to deliver them.")
-    .waitFor();
-
-  const configuration = await fixture.request(
-    "GET",
-    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
-  );
-  assert.deepEqual(configuration.data.secretBindings, {
-    SLACK_APP_TOKEN: { source: slackAppSecret.ref, delivery: { type: "env" } },
-    SLACK_BOT_TOKEN: { source: slackBotSecret.ref, delivery: { type: "env" } },
-  });
-  assert.deepEqual(
-    accessBindingPostRequests(requests, namespace.id).map((request) => request.body.resourceId),
-    [slackAppSecret.id, slackBotSecret.id],
-  );
-  assert.deepEqual(secretPostRequests(requests, namespace.id), []);
-  const pageText = await page.locator("body").textContent();
-  assert.equal(pageText.includes(slackAppSecretValue), false);
-  assert.equal(pageText.includes(slackBotSecretValue), false);
 });
 
 test("Agent credentials retry outstanding Slack Secret grants after changing one token", async (t) => {
