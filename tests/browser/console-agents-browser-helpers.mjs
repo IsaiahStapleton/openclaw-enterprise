@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after } from "node:test";
 
 import { chromium } from "playwright";
 
@@ -51,46 +50,19 @@ async function launchBrowser(options = {}) {
   return browser;
 }
 
-// Tests without custom launch arguments share one Chromium per test file. Each test still
-// gets its own browser context, so cookies, storage, cache and routes stay isolated.
-let defaultBrowser;
-
-async function sharedBrowser() {
-  const browser = await defaultBrowser?.catch(() => undefined);
-  if (browser?.isConnected()) {
-    return browser;
-  }
-  defaultBrowser = launchBrowser();
-  return defaultBrowser;
-}
-
-after(async () => {
-  const browser = defaultBrowser;
-  defaultBrowser = undefined;
-  await (await browser?.catch(() => undefined))?.close();
-});
-
 export async function newPage(t, fixture, options = {}) {
   const artifacts = await artifactDirectory(t);
-  // Custom arguments (per-fixture host resolver and certificate rules) get a browser of
-  // their own that closes with the test.
-  const dedicated = options.args !== undefined;
-  const browser = dedicated ? await launchBrowser(options) : await sharedBrowser();
+  const browser = await launchBrowser(options);
   let context;
   let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
       await diagnostics?.capture();
-    } catch (error) {
-      cleanupError = error;
-    }
-    try {
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
-    }
-    if (dedicated) {
+    } finally {
       try {
         await browser.close();
       } catch (error) {
