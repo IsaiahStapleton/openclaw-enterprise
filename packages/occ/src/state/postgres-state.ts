@@ -57,6 +57,7 @@ import { immutableCopy } from "@openclaw-enterprise/utils";
 import {
   AGENT_NAME_CONFLICT,
   CREDENTIAL_SOURCE_NAME_CONFLICT,
+  DELETED_NAMESPACE_NAME_CONFLICT,
   DependencyUnavailableError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
@@ -1785,6 +1786,18 @@ export class PostgresPlatformState implements PlatformStateStore {
       },
       createNamespace: async (namespace) => {
         await this.requireInitialized(context);
+        // A tombstone keeps its name UNIQUE; say so instead of reporting a live Namespace.
+        const tombstoned = rows(
+          (
+            await client.query(
+              "SELECT EXISTS (SELECT 1 FROM occ.namespaces WHERE name = $1 AND deleted_at IS NOT NULL) AS present",
+              [namespace.name],
+            )
+          ).rows,
+        )[0];
+        if (tombstoned?.present === true) {
+          throw new ResourceStateConflictError(DELETED_NAMESPACE_NAME_CONFLICT);
+        }
         await client.query(
           `INSERT INTO occ.namespaces (id, name, existing_namespace, status, created_at)
            VALUES ($1, $2, $3, $4, $5)`,

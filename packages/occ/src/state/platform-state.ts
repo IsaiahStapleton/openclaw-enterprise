@@ -61,6 +61,7 @@ import { immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
   AGENT_NAME_CONFLICT,
   CREDENTIAL_SOURCE_NAME_CONFLICT,
+  DELETED_NAMESPACE_NAME_CONFLICT,
   DependencyUnavailableError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
@@ -1148,12 +1149,13 @@ function repositories(
       if (snapshot.namespaces.has(key)) {
         throw new ResourceConflictError("The server generated an existing Namespace identity.");
       }
-      if (
-        Array.from(snapshot.namespaces.values()).some(
-          (existing) => existing.name === namespace.name,
-        )
-      ) {
-        throw new ResourceStateConflictError(NAMESPACE_NAME_CONFLICT);
+      const named = Array.from(snapshot.namespaces.values()).find(
+        (existing) => existing.name === namespace.name,
+      );
+      if (named !== undefined) {
+        throw new ResourceStateConflictError(
+          named.deletedAt === undefined ? NAMESPACE_NAME_CONFLICT : DELETED_NAMESPACE_NAME_CONFLICT,
+        );
       }
       if (
         namespace.existingNamespace !== undefined &&
