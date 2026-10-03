@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { after } from "node:test";
 
 import { chromium } from "playwright";
 
@@ -50,24 +51,46 @@ async function launchBrowser(options = {}) {
   return browser;
 }
 
+// One Chromium per test file and launch-argument set. Each test still gets its own
+// browser context, so cookies, storage, cache and routes stay isolated per test.
+const browsers = new Map();
+
+async function sharedBrowser(options = {}) {
+  const key = JSON.stringify(options.args ?? []);
+  const launched = browsers.get(key);
+  if (launched !== undefined) {
+    const browser = await launched.catch(() => undefined);
+    if (browser?.isConnected()) {
+      return browser;
+    }
+  }
+  const launching = launchBrowser(options);
+  browsers.set(key, launching);
+  return launching;
+}
+
+after(async () => {
+  const launched = [...browsers.values()];
+  browsers.clear();
+  await Promise.allSettled(launched.map(async (browser) => (await browser).close()));
+});
+
 export async function newPage(t, fixture, options = {}) {
   const artifacts = await artifactDirectory(t);
-  const browser = await launchBrowser(options);
+  const browser = await sharedBrowser(options);
   let context;
   let diagnostics;
   fixture.registerCleanupBeforeAppClose(async () => {
     let cleanupError;
     try {
       await diagnostics?.capture();
+    } catch (error) {
+      cleanupError = error;
+    }
+    try {
       await context?.close();
     } catch (error) {
       cleanupError ??= error;
-    } finally {
-      try {
-        await browser.close();
-      } catch (error) {
-        cleanupError ??= error;
-      }
     }
     if (cleanupError) {
       throw cleanupError;
