@@ -276,13 +276,15 @@ const credentialServiceFailures = new Map([
 ]);
 
 // Names which credential service startup step failed, from the fixture's own fixed messages.
+// A startup failure whose cleanup also failed is an AggregateError: errors[0] is the
+// startup failure and cause is the cleanup failure, so errors[0] is checked first.
 function credentialServiceFailure(error) {
   for (let current = error, depth = 0; current && depth < 4; depth += 1) {
     const reason = credentialServiceFailures.get(current.message);
     if (reason) {
       return reason;
     }
-    current = current.cause ?? current.errors?.[0];
+    current = current.errors?.[0] ?? current.cause;
   }
   return "other";
 }

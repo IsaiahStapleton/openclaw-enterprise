@@ -63,10 +63,12 @@ process.on("message", (message) => {
     startup = initialize(message.input);
     void startup.catch((error) => {
       // The listener's closed error code is safe to report; the parent retries on a new port.
+      // It also covers the control socket bind, which a retry handles the same way.
       if (error?.message === "listener-startup-failed" && process.connected) {
-        process.send({ type: "listener-unavailable" });
+        process.send({ type: "listener-unavailable" }, () => void stop(1));
+      } else {
+        void stop(1);
       }
-      return stop(1);
     });
   } else if (
     message?.type === "advance" &&
