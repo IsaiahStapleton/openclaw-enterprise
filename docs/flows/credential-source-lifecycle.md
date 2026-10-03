@@ -217,9 +217,15 @@ attempt records its reason code in `last_reason` and `last_attempt_at`, in the
 transaction that completes, retries, or fails the claim. `revoked` or `absent`
 also marks the row `revoked` and appends
 `openclaw.agents.lifecycle.credentials_withdraw`. Any other state retries with
-backoff until attempts run out; the row then stays `pending`.
+backoff until attempts run out; the row then stays `pending`. The API derives
+`withdrawalInProgress` from outstanding withdrawal work
+(`packages/occ/src/index.ts:readAgentCredentialWithdrawal`), so an exhausted
+withdrawal reads `false` whether its last attempt failed or its claim expired.
+Only a replay of the withdraw request, or maintenance where it exists, queues
+another attempt.
 
-Maintenance of the active revision checks for a withdrawal before it resolves
+Maintenance of the active revision (scheduled only when the Compute Driver or
+the revision's repository credentials declare an interval) checks for a withdrawal before it resolves
 the revision's credentials
 (`apps/controller/src/worker.ts:completeWithdrawnRevisionMaintenance`). While
 the withdrawal is `pending`, the pass queues withdrawal work as the requester if
@@ -275,6 +281,7 @@ than re-attach the source.
 
 ## Changelog
 
+- 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)
 - 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)
 - 2026-09-30 21:14: Updated the independent OpenShell wire-contract verification pointer to v0.1.3-pre.1. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 

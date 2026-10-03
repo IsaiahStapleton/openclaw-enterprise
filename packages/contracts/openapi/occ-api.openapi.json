@@ -11377,6 +11377,10 @@
                             { "const": "revoked", "type": "string" }
                           ],
                           "description": "`revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve."
+                        },
+                        "withdrawalInProgress": {
+                          "description": "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it.",
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -11386,7 +11390,8 @@
                         "credentialSourceId",
                         "state",
                         "requestedBy",
-                        "requestedAt"
+                        "requestedAt",
+                        "withdrawalInProgress"
                       ],
                       "type": "object"
                     },
@@ -11538,6 +11543,10 @@
                             { "const": "revoked", "type": "string" }
                           ],
                           "description": "`revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve."
+                        },
+                        "withdrawalInProgress": {
+                          "description": "`true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it.",
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -11547,7 +11556,8 @@
                         "credentialSourceId",
                         "state",
                         "requestedBy",
-                        "requestedAt"
+                        "requestedAt",
+                        "withdrawalInProgress"
                       ],
                       "type": "object"
                     },

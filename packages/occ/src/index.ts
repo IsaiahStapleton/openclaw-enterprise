@@ -28,7 +28,7 @@ import type {
   CredentialSource,
   CredentialSourceMetadata,
   CredentialSourceStatus,
-  CredentialWithdrawal,
+  CredentialWithdrawalStatus,
   CredentialSourceType,
   AuditEvent,
   Driver,
@@ -5482,7 +5482,7 @@ export class OpenClawController {
   async withdrawAgentCredentialSource(
     principalId: string,
     input: AgentCredentialSourceInput,
-  ): Promise<Readonly<CredentialWithdrawal>> {
+  ): Promise<Readonly<CredentialWithdrawalStatus>> {
     return this.mutate(async (state) => {
       await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(input.namespaceId, input.agentId);
@@ -5525,14 +5525,21 @@ export class OpenClawController {
           operationId: crypto.randomUUID(),
         });
       }
-      return withdrawal;
+      // A pending withdrawal now has an attempt queued or running, either earlier or just now.
+      // Like the read, this reflects the queue at commit: a claim that expired on its last
+      // attempt counts until recoverStale fails it.
+      return Object.freeze({ ...withdrawal, withdrawalInProgress: withdrawal.state === "pending" });
     });
   }
 
+  /**
+   * A `pending` withdrawal whose attempts ran out has no outstanding work, whether the last
+   * attempt failed or its claim expired, so `withdrawalInProgress` is read from the queue.
+   */
   async readAgentCredentialWithdrawal(
     principalId: string,
     input: AgentCredentialSourceInput,
-  ): Promise<Readonly<CredentialWithdrawal>> {
+  ): Promise<Readonly<CredentialWithdrawalStatus>> {
     await this.authorize(principalId, "read", {
       kind: "agent",
       id: input.agentId,
@@ -5554,7 +5561,15 @@ export class OpenClawController {
           "The credential source was not withdrawn from the Agent's active revision.",
         );
       }
-      return withdrawal;
+      return Object.freeze({
+        ...withdrawal,
+        withdrawalInProgress:
+          withdrawal.state === "pending" &&
+          (await state.operations.hasOutstandingCredentialWithdrawalWork(
+            withdrawal.namespaceId,
+            withdrawal.revisionId,
+          )),
+      });
     });
   }
 

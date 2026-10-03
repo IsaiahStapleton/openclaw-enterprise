@@ -140,18 +140,27 @@ longer resolve, even in running processes. Requests already forwarded upstream
 are not undone. Read the state with
 `GET /namespaces/:namespaceId/agents/:agentId/credential-sources/:credentialSourceId/withdrawal`,
 which requires `agent:read`. It returns `requestedBy`, the principal whose
-`agent:operate` the worker rechecks, and `reason` with `lastAttemptAt` for the
-worker's latest attempt. A `pending` withdrawal with reason
+`agent:operate` the worker rechecks, `reason` with `lastAttemptAt` for the
+worker's latest attempt, and `withdrawalInProgress`, which is `true` while an
+attempt is queued or running. A `pending` withdrawal with reason
 `CREDENTIAL_WITHDRAWAL_PENDING` is waiting for the gateway; a Sandbox without a
 running process never confirms revocation. `AUTHORIZATION_DENIED` or
 `ACTOR_REVOKED` means the requester lost `agent:operate`.
 
+The worker retries an unconfirmed withdrawal a few times with backoff
+(`OCC_WORKER_MAX_ATTEMPTS`). When those attempts run out, the withdrawal stays
+`pending` with `withdrawalInProgress: false`, and nothing retries it on its own
+unless the revision has maintenance (see below). Send the withdraw request
+again to queue another attempt.
+
 A withdrawn source never re-attaches to that revision; if its Sandbox is
 recreated, provisioning fails with `CREDENTIAL_WITHDRAWN`. Maintenance of the
-revision stops preparing it. While the withdrawal is `pending`, each
-maintenance pass queues another attempt if none is outstanding. Once it is
-`revoked`, maintenance stops, so Compute no longer repairs the revision until a
-redeploy replaces it.
+revision stops preparing it. Only revisions with maintenance, those with
+repository credentials or on a Compute Driver that declares a maintenance
+interval, run it: while the withdrawal is `pending`, each maintenance pass
+queues another attempt if none is outstanding. Once it is `revoked`,
+maintenance stops, so Compute no longer repairs the revision until a redeploy
+replaces it.
 
 The revision still references the source, so the source cannot be deleted until
 a redeploy replaces the revision. Redeploy the Agent with a replacement source
