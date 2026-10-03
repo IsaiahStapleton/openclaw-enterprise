@@ -52,7 +52,7 @@
       "replay": "kubelet-container",
       "source": "agent",
       "provenance": "upstream-derived",
-      "origin": "codex-cli 0.158.0 (rust-v0.158.0) log formats: codex-api/src/endpoint/responses_websocket.rs connect_websocket and its event parser, core/src/client.rs force_http_fallback, core/src/responses_retry.rs, network-proxy/src/{socks5,proxy,http_proxy,mitm}.rs; connect errors in tungstenite 0.27 Display form; the last five lines are payload-carrying or altered formats that must stay withheld",
+      "origin": "codex-cli 0.158.0 (rust-v0.158.0) log formats: codex-api/src/endpoint/responses_websocket.rs connect_websocket and its event parser, core/src/client.rs force_http_fallback, core/src/responses_retry.rs, network-proxy/src/{socks5,proxy,http_proxy,mitm}.rs; connect errors in tungstenite 0.27 Display form; the last six lines are payload-carrying or altered formats that must stay withheld",
       "scrubbed": "nothing to scrub (synthetic values)"
     },
     {

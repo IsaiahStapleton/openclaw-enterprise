@@ -290,6 +290,7 @@ test("Codex model connection and network proxy diagnostics keep their text; payl
     ["warn", "codex_network_proxy::mitm", withheld],
     ["info", "codex_network_proxy::http_proxy", withheld],
     ["info", "codex_api::endpoint::responses_websocket", withheld],
+    ["error", "codex_api::endpoint::responses_websocket", withheld],
   ]);
   const body = JSON.stringify(failures.records);
   for (const leaked of ["replay chat sentence", "replay-chat-sentence", "output_text"]) {

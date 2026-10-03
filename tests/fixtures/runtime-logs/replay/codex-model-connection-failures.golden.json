@@ -1,5 +1,5 @@
 {
-  "input": 15,
+  "input": 16,
   "withheld": 0,
   "records": [
     {
@@ -245,6 +245,22 @@
       "contentClass": "operational",
       "kind": "codex",
       "level": "info",
+      "message": "Codex message withheld",
+      "subsystem": "codex_api::endpoint::responses_websocket"
+    },
+    {
+      "type": "line",
+      "time": "2026-10-03T05:00:03.500000000Z",
+      "stream": {
+        "source": "agent",
+        "pod": "fixture-pod",
+        "podUid": "00000000-0000-4000-8000-000000000001",
+        "container": "agent",
+        "restartCount": 0
+      },
+      "contentClass": "operational",
+      "kind": "codex",
+      "level": "error",
       "message": "Codex message withheld",
       "subsystem": "codex_api::endpoint::responses_websocket"
     }
