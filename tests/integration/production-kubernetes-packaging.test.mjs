@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
 
 import {
   renderProductionChart,
@@ -1998,7 +1999,13 @@ test("Slack directory proxy grants only API egress to its exact endpoint", tooli
   for (const url of [
     "http://slack.com:3128",
     "http://198.51.100.25:65536",
-    "http://user:pass@198.51.100.25:3128",
+    syntheticCredentialUrl({
+      protocol: "http",
+      username: "user",
+      password: "pass",
+      host: "198.51.100.25",
+      port: 3128,
+    }),
     "http://198.51.100.25:3128/path",
     "http://198.51.100.999:3128",
   ]) {
