@@ -1503,6 +1503,21 @@ test(
       );
     }
     assert.deepEqual(deleted, []);
+
+    // Once the other Agent leaves too, the first provisioned Configuration is free.
+    await selectConfiguration(fixture, namespace.id, second.agentId, second.configurationId);
+    const removed = await fixture.request(
+      "DELETE",
+      `/namespaces/${namespace.id}/configurations/${first.configurationId}`,
+    );
+    assert.equal(removed.status, 204, JSON.stringify(removed.body));
+    assert.deepEqual(deleted, [first.configurationId]);
+    await assertConfigurationDeletionRefused(
+      fixture,
+      namespace.id,
+      second.configurationId,
+      /An Agent still references the Configuration/,
+    );
   },
 );
 
