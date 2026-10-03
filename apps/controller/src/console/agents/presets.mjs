@@ -50,19 +50,24 @@ export function createPresetFields(context, apply) {
   const status = element("p", { className: "hint", role: "status" }, "Loading Presets…");
   const feedback = element("p", { className: "error", role: "alert" });
   const inputs = element("div");
+  let defaultId;
+  // How the next selection change started: "shortcut" applies the default Preset at once;
+  // "restore" reopens a retained shortcut chooser. Both discard the resulting form on exit.
+  let origin;
+  let discardOnExit = false;
+  const chooseHint = () =>
+    defaultId
+      ? "Choose a Preset or start with the default Preset."
+      : "Choose a Preset. default-codex is not available in this Namespace.";
   const startDefault = button(
     "Start with default Preset",
     () => {
       selector.value = defaultId;
-      quickStart = true;
+      origin = "shortcut";
       selector.dispatchEvent(new Event("change"));
     },
     { className: "primary", disabled: true },
   );
-  let defaultId;
-  let quickStart = false;
-  let restoringShortcut = false;
-  let discardOnExit = false;
   let selected;
   let fields = [];
   let loadVersion = 0;
@@ -247,10 +252,9 @@ export function createPresetFields(context, apply) {
   selector.addEventListener("change", async () => {
     const version = ++loadVersion;
     const selectedId = selector.value;
-    const applyDefault = quickStart;
-    quickStart = false;
-    discardOnExit = applyDefault || restoringShortcut;
-    restoringShortcut = false;
+    const applyDefault = origin === "shortcut";
+    discardOnExit = origin !== undefined;
+    origin = undefined;
     if (retained?.id !== selectedId) {
       retained = undefined;
     }
@@ -260,7 +264,7 @@ export function createPresetFields(context, apply) {
     feedback.textContent = "";
     applyButton.disabled = true;
     if (!selectedId) {
-      status.textContent = "Choose a Preset or start with the default Preset.";
+      status.textContent = chooseHint();
       return;
     }
     status.textContent = "Loading Preset…";
@@ -445,16 +449,14 @@ export function createPresetFields(context, apply) {
       startDefault.disabled = !defaultId;
       if (retained && presets.some((preset) => preset.id === retained.id)) {
         selector.value = retained.id;
-        restoringShortcut = Boolean(retained.discardOnExit);
+        origin = retained.discardOnExit ? "restore" : undefined;
         selector.dispatchEvent(new Event("change"));
       }
       if (presets.length === 0) {
         status.textContent =
           "No Presets in this Namespace. Ask an administrator to install default-codex or another Preset.";
       } else {
-        status.textContent = defaultId
-          ? "Choose a Preset or start with the default Preset."
-          : "Choose a Preset. default-codex is not available in this Namespace.";
+        status.textContent = chooseHint();
       }
     })
     .catch((error) => {

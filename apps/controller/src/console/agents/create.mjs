@@ -88,8 +88,9 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
     },
   };
 
+  const { plugins, ...base } = structuredClone(defaultCodexPreset.template.configuration.values);
   return {
-    ...structuredClone(defaultCodexPreset.template.configuration.values),
+    ...base,
     ...(providerModel
       ? {
           agents: {
@@ -101,10 +102,8 @@ function configurationTemplate(harnessId, nativeProvider, providerModel) {
           models: { providers: provider },
         }
       : {}),
-    plugins:
-      harnessId === "codex"
-        ? structuredClone(defaultCodexPreset.template.configuration.values.plugins)
-        : undefined,
+    // Codex model transport must use its authenticated app server, never direct HTTP.
+    ...(harnessId === "codex" ? { plugins } : {}),
   };
 }
 
