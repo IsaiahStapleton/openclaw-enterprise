@@ -14,7 +14,7 @@ import {
   redactRuntimeLogText,
   stripRuntimeLogControls,
 } from "./redact.ts";
-import { runtimeFailureCause } from "../state/controller-work.ts";
+import { runtimeFailureCause } from "../runtime-failure-cause.ts";
 
 declare const sanitizedRuntimeLogRecord: unique symbol;
 
@@ -233,7 +233,10 @@ function classifyStructured(value: Readonly<Record<string, unknown>>): Classifie
     }
     // A failed model probe names its cause from the closed vocabulary the deployment
     // error uses; anything outside it is dropped, as Compute drops it there.
-    const cause = event.endsWith("model_probe") ? runtimeFailureCause(value.cause) : undefined;
+    const cause =
+      event.endsWith("model_probe") && value.code === "MODEL_PROBE_FAILED"
+        ? runtimeFailureCause(value.cause)
+        : undefined;
     if (cause !== undefined) {
       fields = Object.freeze({
         ...fields,

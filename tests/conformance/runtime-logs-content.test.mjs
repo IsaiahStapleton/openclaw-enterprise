@@ -386,6 +386,30 @@ test("a failed model probe keeps its closed-vocabulary cause, never other cause 
         raw: probe("codex.model_probe", { kind: "PROBE_STATUS", detail: "format", text: "x" }),
       },
       { time: lineTime(7), raw: probe("codex.model_probe", "PROBE_STATUS") },
+      {
+        time: lineTime(8),
+        raw: probe("openclaw.model_probe", { kind: "PROBE_STATUS", detail: 42 }),
+      },
+      // Only a failed check carries a cause, and only probe records keep one.
+      {
+        time: lineTime(9),
+        raw: JSON.stringify({
+          event: "codex.model_probe",
+          elapsedMs: 2340,
+          code: "READY",
+          cause: { kind: "PROBE_STATUS", detail: "format" },
+        }),
+      },
+      {
+        time: lineTime(10),
+        raw: JSON.stringify({
+          event: "runtime.startup_phase",
+          phase: "model-probe",
+          outcome: "failed",
+          code: "MODEL_PROBE_FAILED",
+          cause: { kind: "PROBE_STATUS", detail: "format" },
+        }),
+      },
     ],
   });
   assert.equal(withheld, 0);
@@ -405,6 +429,19 @@ test("a failed model probe keeps its closed-vocabulary cause, never other cause 
       fields("openclaw.model_probe"),
       fields("codex.model_probe"),
       fields("codex.model_probe"),
+      fields("openclaw.model_probe"),
+      {
+        kind: "wrapper",
+        level: "info",
+        message: "codex.model_probe",
+        fields: { elapsedMs: 2340, code: "READY" },
+      },
+      {
+        kind: "wrapper",
+        level: "error",
+        message: "runtime.startup_phase",
+        fields: { phase: "model-probe", outcome: "failed", code: "MODEL_PROBE_FAILED" },
+      },
     ],
   );
 });
