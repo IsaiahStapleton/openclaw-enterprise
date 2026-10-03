@@ -74,6 +74,7 @@ import type {
   RevisionHarnessDescriptor,
   ResourceKind,
   ResourceRef,
+  Restriction,
   Role,
   SandboxDriver,
   SandboxFacet,
@@ -930,11 +931,7 @@ export async function accessBindingsRemovedWithAgent(
   state: Pick<PlatformReadView, "iamPolicy" | "revisions">,
   agent: Pick<Agent, "namespaceId" | "id" | "servicePrincipalId">,
 ): Promise<readonly RemovedAccessBinding[]> {
-  const revisionIds = new Set(
-    (await state.revisions.listRevisions(agent.namespaceId, agent.id)).map(
-      (revision) => revision.id,
-    ),
-  );
+  const revisionIds = new Set(await agentRevisionIds(state, agent));
   return Object.freeze(
     (await state.iamPolicy.listAccessBindings(agent.namespaceId))
       .filter(
@@ -946,6 +943,34 @@ export async function accessBindingsRemovedWithAgent(
             revisionIds.has(binding.resourceId)),
       )
       .map(removedAccessBinding),
+  );
+}
+
+/**
+ * Lists the IAM Restrictions that completing an Agent's deletion removes: those on the
+ * Agent or one of its AgentRevisions, in any scope (the same two groups the deletion
+ * finalizer deletes). OCC has no API that writes Restrictions; they come from the
+ * Installation's IAM seed, so the list stays final unless an operator edits them directly.
+ */
+export async function restrictionsRemovedWithAgent(
+  state: Pick<PlatformReadView, "iamPolicy" | "revisions">,
+  agent: Pick<Agent, "namespaceId" | "id">,
+): Promise<readonly Readonly<Restriction>[]> {
+  return Object.freeze([
+    ...(await state.iamPolicy.listRestrictionsTargeting("agent", [agent.id])),
+    ...(await state.iamPolicy.listRestrictionsTargeting(
+      "agent_revision",
+      await agentRevisionIds(state, agent),
+    )),
+  ]);
+}
+
+async function agentRevisionIds(
+  state: Pick<PlatformReadView, "revisions">,
+  agent: Pick<Agent, "namespaceId" | "id">,
+): Promise<readonly string[]> {
+  return (await state.revisions.listRevisions(agent.namespaceId, agent.id)).map(
+    (revision) => revision.id,
   );
 }
 

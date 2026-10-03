@@ -968,6 +968,28 @@ function validateProvisioningProgressStep(
   }
 }
 
+function restrictionFromRow(row: PostgresRow): Readonly<Restriction> {
+  const namespaceId = optionalText(row, "namespace_id");
+  const action = text(row, "action");
+  const resourceKind = text(row, "resource_kind");
+  const resourceId = optionalText(row, "resource_id");
+  if (
+    !PERMISSION_ACTIONS.has(action) ||
+    !RESOURCE_KINDS.has(resourceKind) ||
+    text(row, "effect") !== "deny"
+  ) {
+    throw new DependencyUnavailableError("Persisted IAM restriction is invalid.");
+  }
+  return immutableCopy({
+    id: text(row, "id"),
+    ...(namespaceId === undefined ? {} : { namespaceId }),
+    action: action as Restriction["action"],
+    resourceKind: resourceKind as Restriction["resourceKind"],
+    ...(resourceId === undefined ? {} : { resourceId }),
+    effect: "deny" as const,
+  });
+}
+
 function permissions(value: unknown): readonly Permission[] {
   const parsed = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
   if (!Array.isArray(parsed)) {
@@ -1186,27 +1208,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       });
     });
 
-    const restrictions = restrictionRows.map((row): Restriction => {
-      const namespaceId = optionalText(row, "namespace_id");
-      const action = text(row, "action");
-      const resourceKind = text(row, "resource_kind");
-      const resourceId = optionalText(row, "resource_id");
-      if (
-        !PERMISSION_ACTIONS.has(action) ||
-        !RESOURCE_KINDS.has(resourceKind) ||
-        text(row, "effect") !== "deny"
-      ) {
-        throw new DependencyUnavailableError("Persisted IAM restriction is invalid.");
-      }
-      return immutableCopy({
-        id: text(row, "id"),
-        ...(namespaceId === undefined ? {} : { namespaceId }),
-        action: action as Restriction["action"],
-        resourceKind: resourceKind as Restriction["resourceKind"],
-        ...(resourceId === undefined ? {} : { resourceId }),
-        effect: "deny",
-      });
-    });
+    const restrictions = restrictionRows.map(restrictionFromRow);
 
     const state = { identities, groups, memberships, roles, bindings, restrictions };
     this.validateIAMState(state, true);
@@ -3401,6 +3403,23 @@ export class PostgresPlatformState implements PlatformStateStore {
               )
             ).rows,
           ).map(accessBindingFromRow),
+        ),
+      // Not Namespace-scoped: the Agent deletion finalizer's DELETE is not either, and an
+      // Installation Restriction (no Namespace) may name a Namespace resource.
+      listRestrictionsTargeting: async (resourceKind, resourceIds) =>
+        Object.freeze(
+          resourceIds.length === 0
+            ? []
+            : rows(
+                (
+                  await client.query(
+                    `SELECT id, namespace_id, action, resource_kind, resource_id, effect
+                     FROM occ.iam_restrictions
+                     WHERE resource_kind = $1 AND resource_id = ANY($2::text[]) ORDER BY id`,
+                    [resourceKind, [...resourceIds]],
+                  )
+                ).rows,
+              ).map(restrictionFromRow),
         ),
       getAccessBinding: async (namespaceId, bindingId) => {
         const found = rows(

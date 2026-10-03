@@ -251,7 +251,9 @@ them (`removedAccessBindings`). Agent deletion completes asynchronously and also
 removes the bindings that target its AgentRevisions or name its ServicePrincipal as
 subject; its accepted delete event lists all of them in
 `accessBindingsRemovedOnCompletion`. A deleting Agent admits no new binding of
-those kinds.
+those kinds. Completion also removes the deny Restrictions on the Agent or its
+AgentRevisions, at Installation or Namespace scope; the same event lists them in
+`restrictionsRemovedOnCompletion`.
 Namespace teardown removes the Namespace's bindings and Roles with the tombstone
 and records them in the lifecycle event. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings
@@ -354,6 +356,8 @@ For a working authenticated request, see the
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 16:45: The Agent delete event lists the Restrictions its completion removes. (deletion-audit-restrictions)
 
 - 2026-09-19 20:53: Document Namespace Role and exact identity AccessBinding management. (codex/01a0bce5-9f29-7110-85fd-6b140674d362 - 06c23b9cf60915ba58baa38b23cf304562e674a1)
 
