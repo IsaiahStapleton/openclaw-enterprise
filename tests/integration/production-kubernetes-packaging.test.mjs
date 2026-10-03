@@ -2797,6 +2797,138 @@ test(
   },
 );
 
+// Kubernetes names, namespaces, Secret keys and label values are strings. Collect every
+// one that a numeric- or boolean-looking value could reach so a missing quote fails here.
+function nonStringIdentifiers(objects) {
+  const identifierKeys = new Set(["name", "namespace", "secretName", "key", "claimName"]);
+  const labelMaps = new Set(["labels", "matchLabels", "selector"]);
+  const found = [];
+  const visit = (value, path, parentKey) => {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${path}[${index}]`, parentKey));
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, nested] of Object.entries(value)) {
+        const nestedPath = `${path}.${key}`;
+        if (
+          (identifierKeys.has(key) || labelMaps.has(parentKey)) &&
+          (nested === null || typeof nested !== "object") &&
+          typeof nested !== "string"
+        ) {
+          found.push(`${nestedPath}=${JSON.stringify(nested)}`);
+        }
+        visit(nested, nestedPath, key);
+      }
+    }
+  };
+  for (const object of objects) {
+    visit(object, `${object.kind}/${object.metadata.name}`, undefined);
+  }
+  return found;
+}
+
+test(
+  "numeric- and boolean-looking names, keys and namespaces render as strings",
+  tooling,
+  async () => {
+    const features = {
+      ...productionCollectorValues,
+      ...slackProxyValues,
+      ...chatgptValues,
+      ...repositoryCredentialValues,
+      ...gatewayRoutingValues,
+      ...databaseCaValues,
+      "gatewayRouting.sandbox.enabled": "true",
+      "gatewayRouting.sandbox.domain": "previews.example.test",
+      "gatewayRouting.sandbox.ingressPeers[0].ipBlock.cidr": "0.0.0.0/0",
+      "agentNativeAdmin.enabled": "true",
+      "agentNativeAdmin.domain": "agents.example.invalid",
+      "agentNativeAdmin.sharedCookieDomain": "example.invalid",
+      "executionCluster.enabled": "true",
+      "executionCluster.apiCidrs[0]": "10.44.0.2/32",
+    };
+    // Every value is a valid Kubernetes name or Secret key that plain YAML reads as a
+    // number, boolean or null.
+    const strings = {
+      "installation.secretName": "407",
+      "installation.key": "true",
+      "auth.secretName": "1e3",
+      "auth.secretKey": "1",
+      "database.secretName": "null",
+      "database.appUrlKey": "2",
+      "database.migrationUrlKey": "3",
+      "database.caSecretName": "on",
+      "database.caKey": "4",
+      "backend.chatgpt.secretName": "1.5",
+      "backend.chatgpt.key": "off",
+      "bootstrap.password.claimName": "408",
+      "api.clients[0].namespace": "2024",
+      "dns.namespace": "true",
+      "gatewayRouting.gatewayName": "409",
+      "gatewayRouting.envoyNamespace": "1e4",
+      "gatewayRouting.apiKeySecretName": "false",
+      "gatewayRouting.tlsSecretName": "1e5",
+      "gatewayRouting.sandbox.tlsSecretName": "yes",
+      "repositoryCredentials.serviceName": "no",
+      "repositoryCredentials.serviceConfigSecretName": "11",
+      "repositoryCredentials.serviceConfigKey": "true",
+      "repositoryCredentials.appKeySecretName": "12",
+      "repositoryCredentials.appKeyKey": "5",
+      "repositoryCredentials.tlsSecretName": "13",
+      "repositoryCredentials.publicCaSecretName": "14",
+      "repositoryCredentials.publicCaKey": "6",
+      "repositoryCredentials.registryConfigMapName": "15",
+      "repositoryCredentials.registryKey": "7",
+      "slackProxy.serviceName": "y",
+      "executionCluster.apiKubeconfigSecretName": "21",
+      "executionCluster.workerKubeconfigSecretName": "22",
+      "executionCluster.kubeconfigKey": "true",
+      "logging.collector.configSecretName": "31",
+      "logging.collector.envSecretName": "32",
+    };
+    for (const [release, namespace] of [
+      ["407", "1e3"],
+      ["true", "null"],
+    ]) {
+      const objects = await resources(
+        (await render(features, { release, namespace, strings })).stdout,
+      );
+      assert.ok(objects.length > 40);
+      assert.deepEqual(nonStringIdentifiers(objects), [], `${release}/${namespace}`);
+    }
+
+    const execution = await resources(
+      (
+        await execute(
+          helm,
+          [
+            "template",
+            "407",
+            "deploy/helm/openclaw-execution",
+            "--namespace",
+            "1e3",
+            "--set",
+            "routing.hostname=agents.example.invalid",
+            "--set",
+            "routing.gatewayClassName=private-envoy-gateway",
+            "--set",
+            "routing.tlsSecretName=agents-tls",
+            "--set",
+            "routing.controlPlaneCidrs[0]=198.51.100.0/24",
+            "--set-string",
+            "routing.gatewayName=409",
+            "--set-string",
+            "routing.envoyNamespace=1e4",
+            "--set-string",
+            "dns.namespace=true",
+          ],
+          { cwd: repository, maxBuffer: 2_000_000 },
+        )
+      ).stdout,
+    );
+    assert.deepEqual(nonStringIdentifiers(execution), []);
+  },
+);
+
 test(
   "private Envoy Gateway routing renders automatic CA and deterministic default hostnames",
   tooling,

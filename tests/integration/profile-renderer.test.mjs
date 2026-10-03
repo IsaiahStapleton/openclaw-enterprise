@@ -292,7 +292,7 @@ test(
           .split(/\n---\n/)
           .find((document) => /\nkind: Gateway\n/.test(document));
         assert.ok(gateway, "Helm must render the Gateway referenced by Compute");
-        const gatewayName = gateway.match(/^ {2}name: (\S+)$/m)?.[1];
+        const gatewayName = gateway.match(/^ {2}name: "([^"]+)"$/m)?.[1];
         const routingName = output.installation.match(/^\s+gatewayName: (\S+)$/m)?.[1];
         assert.ok(gatewayName && gatewayName.length <= 63);
         assert.equal(routingName, gatewayName, `${profile}: release length ${length}`);
@@ -560,7 +560,7 @@ test("repository serviceName is left to the chart so its upgrade guard applies",
   const omitted = render("codex", codexInput({ repository: repositoryInput }));
   assert.doesNotMatch(omitted.values, /serviceName: git/);
   if (!helmSkip) {
-    assert.match(helmTemplate(omitted), /name: git\n/);
+    assert.match(helmTemplate(omitted), /name: "git"\n/);
     const error = renderError(() => helmTemplate(omitted, [], "oce", ["--is-upgrade"]));
     assert.match(
       `${error.stdout ?? ""}${error.stderr ?? ""}`,
@@ -574,7 +574,7 @@ test("repository serviceName is left to the chart so its upgrade guard applies",
   );
   assert.match(kept.values, /serviceName: oce-git/);
   if (!helmSkip) {
-    assert.match(helmTemplate(kept, [], "oce", ["--is-upgrade"]), /name: oce-git\n/);
+    assert.match(helmTemplate(kept, [], "oce", ["--is-upgrade"]), /name: "oce-git"\n/);
   }
 });
 
