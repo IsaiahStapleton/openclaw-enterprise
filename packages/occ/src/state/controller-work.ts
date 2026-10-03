@@ -1,9 +1,9 @@
 import { immutableCopy, isNonEmptyString, isPositiveSafeInteger } from "@openclaw-enterprise/utils";
-import type { RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
+import type { RuntimeFailureCause, RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
 
 import { ScopeViolationError } from "../errors.ts";
 
-export type { RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
+export type { RuntimeFailureCause, RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
 
 export type ControllerWorkState = "queued" | "claimed" | "succeeded" | "failed_permanent";
 
@@ -209,6 +209,18 @@ export interface PermanentFailure {
 }
 
 const RUNTIME_FAILURE_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
+// The closed vocabulary of a model-probe failure cause. Each kind admits only
+// these detail tokens (WRAPPER_ERROR none), so a cause can never carry native
+// output, a provider response or a credential across the runtime boundary.
+const RUNTIME_FAILURE_CAUSE_DETAILS: Readonly<
+  Record<RuntimeFailureCause["kind"], RegExp | undefined>
+> = Object.freeze({
+  PROCESS_EXIT: /^(?:exit-[1-9][0-9]{0,2}|signal-SIG[A-Z0-9]{1,10}|error-E[A-Z0-9]{1,15})$/u,
+  PROBE_STATUS:
+    /^(?:format|rate_limit|billing|unknown|no_model|other|turn-failed|error-event|tool-event|unexpected-event|no-reply)$/u,
+  INVALID_OUTPUT: /^(?:json|shape)$/u,
+  WRAPPER_ERROR: undefined,
+});
 const ISO_TIMESTAMP =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
 
@@ -265,14 +277,38 @@ function validIsoTimestamp(value: string): boolean {
   );
 }
 
+/** Returns the cause when it is in the closed vocabulary, otherwise undefined. */
+export function runtimeFailureCause(value: unknown): RuntimeFailureCause | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const { kind, detail, ...rest } = value as Record<string, unknown>;
+  if (
+    Object.keys(rest).length > 0 ||
+    typeof kind !== "string" ||
+    !Object.hasOwn(RUNTIME_FAILURE_CAUSE_DETAILS, kind)
+  ) {
+    return undefined;
+  }
+  const details = RUNTIME_FAILURE_CAUSE_DETAILS[kind as RuntimeFailureCause["kind"]];
+  if (detail === undefined) {
+    return Object.freeze({ kind: kind as RuntimeFailureCause["kind"] });
+  }
+  if (details === undefined || typeof detail !== "string" || !details.test(detail)) {
+    return undefined;
+  }
+  return Object.freeze({ kind: kind as RuntimeFailureCause["kind"], detail });
+}
+
 export function validateRuntimeFailureEvidence(value: unknown): RuntimeFailureEvidence {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ScopeViolationError("Runtime failure evidence must be an object.");
   }
   const evidence = value as Partial<RuntimeFailureEvidence>;
   const keys = Object.keys(evidence);
+  const hasCause = keys.includes("cause");
   if (
-    keys.length !== 4 ||
+    keys.length !== (hasCause ? 5 : 4) ||
     !keys.includes("component") ||
     !keys.includes("check") ||
     !keys.includes("checkedAt") ||
@@ -284,11 +320,17 @@ export function validateRuntimeFailureEvidence(value: unknown): RuntimeFailureEv
   if (typeof checkedAt !== "string" || !validIsoTimestamp(checkedAt)) {
     throw new ScopeViolationError("Runtime failure evidence requires an ISO timestamp.");
   }
+  const code = validateRuntimeFailureIdentifier(evidence.code, "Runtime failure code");
+  const cause = hasCause ? runtimeFailureCause(evidence.cause) : undefined;
+  if (hasCause && (cause === undefined || code !== "MODEL_PROBE_FAILED")) {
+    throw new ScopeViolationError("Runtime failure cause is invalid.");
+  }
   return Object.freeze({
     component: validateRuntimeFailureIdentifier(evidence.component, "Runtime failure component"),
     check: validateRuntimeFailureIdentifier(evidence.check, "Runtime failure check"),
     checkedAt,
-    code: validateRuntimeFailureIdentifier(evidence.code, "Runtime failure code"),
+    code,
+    ...(cause === undefined ? {} : { cause }),
   });
 }
 
@@ -319,12 +361,34 @@ export function validateFailureData(
       );
     }
     const runtimeFailure = (data as { readonly runtimeFailure?: unknown }).runtimeFailure;
+    const evidence =
+      runtimeFailure === undefined ? undefined : validateRuntimeFailureEvidence(runtimeFailure);
+    if (evidence?.cause !== undefined) {
+      throw new ScopeViolationError("Convergence deadline failure data cannot carry a cause.");
+    }
     return Object.freeze({
       timeoutMs,
-      ...(runtimeFailure === undefined
-        ? {}
-        : { runtimeFailure: validateRuntimeFailureEvidence(runtimeFailure) }),
+      ...(evidence === undefined ? {} : { runtimeFailure: evidence }),
     });
+  }
+  if (reasonCode === "RUNTIME_MODEL_PROBE_FAILED") {
+    // The held model-probe failure that ended the deployment, with its cause.
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      Array.isArray(data) ||
+      Object.keys(data).length !== 1 ||
+      !Object.hasOwn(data, "runtimeFailure")
+    ) {
+      throw new ScopeViolationError("Model probe failure data has unsupported fields.");
+    }
+    const evidence = validateRuntimeFailureEvidence(
+      (data as { readonly runtimeFailure: unknown }).runtimeFailure,
+    );
+    if (evidence.code !== "MODEL_PROBE_FAILED") {
+      throw new ScopeViolationError("Model probe failure data requires its runtime failure.");
+    }
+    return Object.freeze({ runtimeFailure: evidence });
   }
   throw new ScopeViolationError("Controller work failure data is not allowed for this code.");
 }

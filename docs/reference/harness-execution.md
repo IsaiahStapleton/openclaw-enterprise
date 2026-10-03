@@ -166,7 +166,9 @@ starts another model call.
 Codex emits a structured `codex.model_probe` log for each attempt with its number,
 elapsed milliseconds, exit code, recognized termination signal, and final code
 (`READY`, `MODEL_PROBE_TIMEOUT`, `MODEL_PROBE_FAILED`, `AUTHENTICATION_FAILED`, or
-`UNAVAILABLE`). Logs omit credentials and raw provider output. The existing runtime
+`UNAVAILABLE`). Both probe logs add a `MODEL_PROBE_FAILED`
+[cause](agents/deployment.md#model-check-failure-cause). Logs omit credentials and
+raw provider output. The existing runtime
 failure status is published only after retries end.
 
 `AUTHENTICATION_FAILED` means the provider rejected the credential: OpenClaw

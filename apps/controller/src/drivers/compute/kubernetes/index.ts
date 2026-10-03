@@ -88,6 +88,7 @@ import {
   DependencyUnavailableError,
   ResourceConflictError,
   RuntimeLogsForbiddenByClusterError,
+  runtimeFailureCause,
   TransientDependencyError,
 } from "@openclaw-enterprise/occ";
 import {
@@ -6737,11 +6738,16 @@ export class KubernetesComputeDriver implements ComputeDriver {
     ) {
       throw new DependencyUnavailableError("Runtime failure status returned invalid data.");
     }
+    // The runtime classifies a failed model probe from a closed vocabulary. A
+    // cause outside it is dropped rather than trusted; the failure code stays.
+    const cause =
+      failed.code === "MODEL_PROBE_FAILED" ? runtimeFailureCause(failed.cause) : undefined;
     return Object.freeze({
       component: failed.component,
       check: failed.check,
       checkedAt: failed.checkedAt,
       code: failed.code,
+      ...(cause === undefined ? {} : { cause }),
     });
   }
 

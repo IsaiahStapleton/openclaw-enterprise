@@ -390,11 +390,13 @@ export {
   CREDENTIAL_WITHDRAWAL_TARGET,
   credentialWithdrawalWorkKey,
   isCredentialWithdrawalWork,
+  runtimeFailureCause,
   validateRuntimeFailureEvidence,
   type DeploymentStatus,
   type DeploymentStatusError,
   type DeploymentStatusResult,
   type PluginDeploymentWarning,
+  type RuntimeFailureCause,
   type RuntimeFailureEvidence,
 } from "./state/controller-work.ts";
 export {

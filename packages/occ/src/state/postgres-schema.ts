@@ -1137,6 +1137,40 @@ export const controllerWork = occSchema.table(
             )
           )
           OR (
+            ${table.state} = 'failed_permanent'
+            AND ${table.reasonCode} = 'RUNTIME_MODEL_PROBE_FAILED'
+            AND ${table.resultData} ? 'runtimeFailure'
+            AND (${table.resultData} - 'runtimeFailure') = '{}'::jsonb
+            AND jsonb_typeof(${table.resultData}->'runtimeFailure') = 'object'
+            AND (${table.resultData}->'runtimeFailure') ?& ARRAY['component', 'check', 'checkedAt', 'code']
+            AND ((${table.resultData}->'runtimeFailure') - 'component' - 'check' - 'checkedAt' - 'code' - 'cause') = '{}'::jsonb
+            AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,component}') = 'string'
+            AND (${table.resultData} #>> '{runtimeFailure,component}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+            AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,check}') = 'string'
+            AND (${table.resultData} #>> '{runtimeFailure,check}') ~ '^[A-Za-z0-9._~:@-]{1,64}$'
+            AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,checkedAt}') = 'string'
+            AND occ.iso_timestamp_is_valid(${table.resultData} #>> '{runtimeFailure,checkedAt}')
+            AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,code}') = 'string'
+            AND (${table.resultData} #>> '{runtimeFailure,code}') = 'MODEL_PROBE_FAILED'
+            AND (
+              NOT ((${table.resultData}->'runtimeFailure') ? 'cause')
+              OR (
+                jsonb_typeof(${table.resultData} #> '{runtimeFailure,cause}') = 'object'
+                AND (${table.resultData} #> '{runtimeFailure,cause}') ? 'kind'
+                AND ((${table.resultData} #> '{runtimeFailure,cause}') - 'kind' - 'detail') = '{}'::jsonb
+                AND jsonb_typeof(${table.resultData} #> '{runtimeFailure,cause,kind}') = 'string'
+                AND (${table.resultData} #>> '{runtimeFailure,cause,kind}') IN ('PROCESS_EXIT', 'PROBE_STATUS', 'INVALID_OUTPUT', 'WRAPPER_ERROR')
+                AND (
+                  NOT ((${table.resultData} #> '{runtimeFailure,cause}') ? 'detail')
+                  OR (
+                    jsonb_typeof(${table.resultData} #> '{runtimeFailure,cause,detail}') = 'string'
+                    AND (${table.resultData} #>> '{runtimeFailure,cause,detail}') ~ '^[A-Za-z0-9_-]{1,32}$'
+                  )
+                )
+              )
+            )
+          )
+          OR (
             ${table.state} = 'succeeded'
             AND ${table.reasonCode} IN ('REVISION_ACTIVATED', 'REVISION_ALREADY_ACTIVE')
             AND ${table.resultData} ? 'warnings'

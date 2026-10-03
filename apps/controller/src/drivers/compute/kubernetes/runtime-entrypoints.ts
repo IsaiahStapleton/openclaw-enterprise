@@ -262,7 +262,7 @@ function publishPluginRuntimeStatus(report) {
   };
 }
 
-function publishRuntimeFailure(check, code) {
+function publishRuntimeFailure(check, code, cause) {
   if (runtimeStatusPort() === undefined) return;
   requireNonEmptyString(check, "Runtime failure check");
   if (!RUNTIME_DIAGNOSTIC_CODES.has(code)) {
@@ -273,6 +273,7 @@ function publishRuntimeFailure(check, code) {
     check,
     checkedAt: new Date().toISOString(),
     code,
+    ...(cause === undefined ? {} : { cause }),
   };
 }
 
@@ -1789,11 +1790,21 @@ function codexPluginStartupFailureCode(error) {
 `;
 
 // Holds unready until an explicit restart; readiness polls never submit model calls.
+// A failed probe's cause is a closed kind and a fixed token, never native output,
+// provider text or a credential; the controller drops a cause outside that vocabulary.
 const AUTH_PROBE_FAILURE_HELPER = String.raw`
-function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
-  publishRuntimeFailure(check, code);
+function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE", cause) {
+  publishRuntimeFailure(check, code, cause);
   console.error("Harness model authentication probe failed.");
   setInterval(() => {}, 3600000);
+}
+function probeFailure(kind, detail) {
+  return { code: "MODEL_PROBE_FAILED", cause: detail === undefined ? { kind } : { kind, detail } };
+}
+function probeExitFailure({ error, status, signal }) {
+  return probeFailure("PROCESS_EXIT", /^E[A-Z0-9]{1,15}$/.test(error?.code) ? "error-" + error.code
+    : Number.isInteger(status) && status > 0 && status < 1000 ? "exit-" + status
+    : /^SIG[A-Z0-9]{1,10}$/.test(signal) ? "signal-" + signal : undefined);
 }
 `;
 
@@ -1819,18 +1830,19 @@ function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
 // Generated code stays compact: the Gateway program is near the exec limit.
 const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
 ${AUTH_PROBE_FAILURE_HELPER}
-function probeOpenClawAuthenticationFailureCode() {
+function probeOpenClawAuthenticationFailure() {
   const fs = require("node:fs");
   const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
   const [quota, period] = cgroup("cpu.max").split(" ");
   const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
   const read = (name) => (name === "cpu.pressure" ? /^some .*total=(\d+)/m : /throttled_usec (\d+)/).exec(cgroup(name))?.[1] / 1000;
   const startedAt = Date.now(), pressure = read("cpu.pressure"), metric = Number.isFinite(pressure) ? "cpu.pressure" : "cpu.stat", before = metric === "cpu.pressure" ? pressure : read(metric);
-  let code = runOpenClawAuthenticationProbe(fs, capMs);
+  let code = runOpenClawAuthenticationProbe(fs, capMs), cause;
+  if (typeof code === "object") ({ code, cause } = code);
   const elapsedMs = Date.now() - startedAt, after = read(metric), cpuWaitMs = Math.round(Number.isFinite(after) && after >= before ? after - before : NaN);
   if (code === "CAP") code = cpuWaitMs > elapsedMs / 4 ? "MODEL_PROBE_CPU_STARVED" : "MODEL_PROBE_TIMEOUT";
-  console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY" }));
-  return code;
+  console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY", cause }));
+  return code === undefined ? undefined : { code, cause };
 }
 
 // The full probe needs 10-20 s of local work before its model request. A
@@ -1912,16 +1924,20 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
     });
     stage("returned");
     if (result.error?.code === "ETIMEDOUT") return "CAP";
-    if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
-    const results = JSON.parse(result.stdout).auth?.probes?.results;
+    if (result.status !== 0 || result.error) return probeExitFailure(result);
+    let output;
+    try { output = JSON.parse(result.stdout); } catch { return probeFailure("INVALID_OUTPUT", "json"); }
+    const results = output?.auth?.probes?.results;
     if (!Array.isArray(results) || results.length !== 1 ||
-      results[0].provider !== provider || results[0].model !== model ||
-      results[0].source !== "env") return "MODEL_PROBE_FAILED";
-    if (results[0].status === "ok") return undefined;
-    if (results[0].status === "auth") return "AUTHENTICATION_FAILED";
-    return results[0].status === "timeout" ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_FAILED";
+      results[0]?.provider !== provider || results[0].model !== model ||
+      results[0].source !== "env") return probeFailure("INVALID_OUTPUT", "shape");
+    const status = results[0].status;
+    if (status === "ok") return undefined;
+    if (status === "auth") return "AUTHENTICATION_FAILED";
+    if (status === "timeout") return "MODEL_PROBE_TIMEOUT";
+    return probeFailure("PROBE_STATUS", ["format", "rate_limit", "billing", "unknown", "no_model"].includes(status) ? status : "other");
   } catch {
-    return "MODEL_PROBE_FAILED";
+    return probeFailure("WRAPPER_ERROR");
   } finally {
     stage("cleanup");
     fs.rmSync(directory, { recursive: true, force: true });
@@ -2315,15 +2331,15 @@ function withWorkspaceNodeFailure(code, run) {
   }
 }
 
-const openClawAuthenticationFailureCode =
+const openClawAuthenticationFailure =
   process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
     ? undefined
-    : probeOpenClawAuthenticationFailureCode();
+    : probeOpenClawAuthenticationFailure();
 if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined) {
-  logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailureCode === undefined ? "ok" : "failed");
+  logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailure === undefined ? "ok" : "failed");
 }
-if (openClawAuthenticationFailureCode !== undefined) {
-  holdFailedAuthentication("model-probe", openClawAuthenticationFailureCode);
+if (openClawAuthenticationFailure !== undefined) {
+  holdFailedAuthentication("model-probe", openClawAuthenticationFailure.code, openClawAuthenticationFailure.cause);
 } else {
 mkdirSync("/home/node/.openclaw", { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
@@ -3037,8 +3053,8 @@ function isRecoveredNativeStreamError(event) {
 
 function probeCodexAuthentication(timeout) {
   let result;
-  const finish = (code) => ({
-    code,
+  const finish = (failure) => ({
+    ...(typeof failure === "string" ? { code: failure } : failure),
     exitCode: Number.isInteger(result?.status) ? result.status : null,
     signal: ["SIGKILL", "SIGTERM", "SIGINT"].includes(result?.signal) ? result.signal : null,
   });
@@ -3088,7 +3104,13 @@ function probeCodexAuthentication(timeout) {
       timeout, killSignal: "SIGKILL", maxBuffer: 262144,
     });
     const output = result.stdout?.trim() ?? "";
-    const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
+    let events;
+    try {
+      events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
+    } catch {
+      return finish(probeFailure("INVALID_OUTPUT", "json"));
+    }
+    if (events.some((event) => typeof event?.type !== "string")) return finish(probeFailure("INVALID_OUTPUT", "shape"));
     // A failed turn caused by provider 401/403 is a deterministic credential
     // rejection; timeouts, 5xx, and transport errors keep their existing codes.
     if (events.some((event) => event.type === "turn.failed" && codexAuthenticationRejected(event.error?.message))) {
@@ -3106,25 +3128,28 @@ function probeCodexAuthentication(timeout) {
       if (event.type === "turn.started") turnStarted = true;
       if (event.type === "error") {
         if (!turnStarted || turnCompleted || !isRecoveredNativeStreamError(event) ||
-          ++recoveredStreamErrors > MAX_RECOVERED_STREAM_RETRIES) return finish("MODEL_PROBE_FAILED");
+          ++recoveredStreamErrors > MAX_RECOVERED_STREAM_RETRIES) return finish(probeFailure("PROBE_STATUS", "error-event"));
         continue;
       }
       if (!allowed.has(event.type) ||
-        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) return finish("MODEL_PROBE_FAILED");
+        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) {
+        return finish(probeFailure("PROBE_STATUS", event.type === "turn.failed" ? "turn-failed"
+          : event.type.startsWith("item.") ? "tool-event" : "unexpected-event"));
+      }
       if (event.type === "turn.completed") turnCompleted = true;
     }
     // A timeout cannot make an observed tool call or protocol failure retryable.
     if (result.error?.code === "ETIMEDOUT") return finish("MODEL_PROBE_TIMEOUT");
-    if (result.status !== 0 || result.error) return finish("MODEL_PROBE_FAILED");
+    if (result.status !== 0 || result.error) return finish(probeExitFailure(result));
     return finish(events.filter((event) => event.type === "turn.completed").length === 1 &&
       events.filter((event) => event.type === "turn.started").length === 1 &&
       events.at(-1)?.type === "turn.completed" &&
       events.some((event) => event.type === "item.completed" && event.item?.type === "agent_message" &&
         typeof event.item.text === "string" && event.item.text.trim().length > 0)
         ? undefined
-        : "MODEL_PROBE_FAILED");
+        : probeFailure("PROBE_STATUS", "no-reply"));
   } catch {
-    return finish("MODEL_PROBE_FAILED");
+    return finish(probeFailure("WRAPPER_ERROR"));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -3149,6 +3174,7 @@ function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 610
     exitCode: result.exitCode,
     signal: result.signal,
     code: result.code ?? "READY",
+    cause: result.cause,
   }));
   if (result.code === "MODEL_PROBE_TIMEOUT" && attempt === 1 && performance.now() + 1000 < deadline) {
     setTimeout(() => startAuthenticatedCodex(2, deadline), 1000);
@@ -3156,7 +3182,7 @@ function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 610
   }
   if (result.code !== undefined) {
     logStartupPhase("model-probe", modelProbeStartedAt, "failed");
-    holdFailedAuthentication("model-probe", result.code);
+    holdFailedAuthentication("model-probe", result.code, result.cause);
     return;
   }
   logStartupPhase("model-probe", modelProbeStartedAt);
@@ -3464,9 +3490,9 @@ if (
 mkdirSync(temporary, { recursive: true, mode: 0o700 });
 chmodSync(temporary, 0o700);
 initializeRuntimeAssets();
-const authenticationFailureCode = probeOpenClawAuthenticationFailureCode();
-if (authenticationFailureCode !== undefined) {
-  holdFailedAuthentication("model-probe", authenticationFailureCode);
+const authenticationFailure = probeOpenClawAuthenticationFailure();
+if (authenticationFailure !== undefined) {
+  holdFailedAuthentication("model-probe", authenticationFailure.code, authenticationFailure.cause);
 } else {
 mkdirSync(state, { recursive: true });
 const workerConfigPath = join(state, "openclaw.json");

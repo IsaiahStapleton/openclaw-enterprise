@@ -211,6 +211,29 @@ func TestDeploymentStatusDefaultsToTheLatestRevision(t *testing.T) {
 	}
 }
 
+func TestDeploymentStatusShowsModelProbeFailureCause(t *testing.T) {
+	// Finding 323: a failed startup model check names its classified cause.
+	agentPath := "/namespaces/" + testNamespaceID + "/agents/" + testAgentID
+	responses := map[string]string{
+		"GET " + agentPath + "/deployments/" + testRevision2ID: `{"deploymentId":"` + testRevision2ID + `","agentId":"` + testAgentID +
+			`","namespaceId":"` + testNamespaceID + `","status":"failed","error":{"code":"RUNTIME_MODEL_PROBE_FAILED",` +
+			`"message":"Deployment runtime startup model check failed.","data":{"runtimeFailure":{"component":"gateway",` +
+			`"check":"model-probe","checkedAt":"2026-10-03T08:00:00.000Z","code":"MODEL_PROBE_FAILED",` +
+			`"cause":{"kind":"PROBE_STATUS","detail":"rate_limit"}}}}}`,
+	}
+	for _, output := range []string{"table", "json"} {
+		out, _, err := runOCC(t, responses, "--namespace", testNamespaceID, "--output", output, "agent", "deployment-status", testAgentID, testRevision2ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"RUNTIME_MODEL_PROBE_FAILED", "PROBE_STATUS", "rate_limit"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("%s output lacks %s:\n%s", output, want, out)
+			}
+		}
+	}
+}
+
 func TestDeploymentStatusTableShowsStartupWarnings(t *testing.T) {
 	// D331: a succeeded deployment that disabled a plugin must not look clean.
 	agentPath := "/namespaces/" + testNamespaceID + "/agents/" + testAgentID

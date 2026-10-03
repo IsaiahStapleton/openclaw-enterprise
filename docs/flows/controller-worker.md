@@ -300,7 +300,7 @@ aborts the pass.
 
 Terminal rows store `reason_code` and optional `result_data`: success
 `{ warnings: [...] }`; convergence-deadline failure `timeoutMs` and optional
-`runtimeFailure`. Compute reads cached startup results from its private status
+`runtimeFailure`; `RUNTIME_MODEL_PROBE_FAILED` the held `runtimeFailure`. Compute reads cached startup results from its private status
 path, including unready Harnesses without plugins, and verifies runtime incarnation
 without repeating the model probe. Missing or invalid evidence leaves cause unspecified.
 

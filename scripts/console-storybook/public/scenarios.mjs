@@ -2746,6 +2746,16 @@ export const scenarios = {
     description:
       "v7 failed before activation; v6 remains selected. The record includes bounded startup failure evidence.",
   },
+  deploymentModelProbeFailed: {
+    group: "Pages/Agent detail",
+    name: "New version failed its model check",
+    path: candidateVersion,
+    deployed: true,
+    candidateDeploymentStatus: "failed",
+    candidateModelProbeCause: { kind: "PROBE_STATUS", detail: "format" },
+    description:
+      "v7 failed its startup model check; the record names the runtime's classified cause (the provider rejected the model or request format) beside the Configuration guidance.",
+  },
   deploymentFailedAfterSelection: {
     group: "Pages/Agent detail",
     name: "Deployment failed after selection",
