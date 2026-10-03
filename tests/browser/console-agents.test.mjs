@@ -2021,7 +2021,10 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
         status: 400,
         contentType: "application/json",
         body: JSON.stringify({
-          error: { code: "INVALID_REQUEST", message: "The Agent name is invalid." },
+          error: {
+            code: "INVALID_REQUEST",
+            message: "The request does not match the operation contract: /name is too long.",
+          },
           meta: { requestId: "req_00000000-0000-4000-8000-000000000400" },
         }),
       });
@@ -2162,7 +2165,9 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
   // A 400 to the resend shows the request was never admitted, so the form unlocks.
   await retry.click();
-  await page.getByText(/^The Agent name is invalid\./).waitFor();
+  await page
+    .getByText(/^The request does not match the operation contract: \/name is too long\./)
+    .waitFor();
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByLabel("Agent name").fill("Taken name");
