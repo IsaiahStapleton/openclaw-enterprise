@@ -1,6 +1,7 @@
 import type { Denied, RequestHead, RequestPlan } from "../../credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 import type { GitHubTokenProfile } from "./types.ts";
+import { allowsGraphqlInput } from "./graphql-input.ts";
 import { createResponsePolicy } from "./response.ts";
 import { classifyRoute, nativeGraphqlAccept } from "./routes/classification.ts";
 import type { Route } from "./routes/classification.ts";
@@ -111,6 +112,9 @@ function planRequest(
       connectMs: options.limits.connectMs,
     }),
     responsePolicy: dependencies.responsePolicy(git, selected.target, selected.rawResponse),
+    ...(selected.kind === "api" && selected.target === "/graphql"
+      ? { inputPolicy: allowsGraphqlInput }
+      : {}),
   }) as RequestPlan;
 }
 

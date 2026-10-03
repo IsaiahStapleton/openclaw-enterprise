@@ -242,7 +242,7 @@ function classifyApiRoute(
   if (!policy || !policy.methods.includes(head.method)) {
     return;
   }
-  // GraphQL remains token-bounded without inspecting operations, fields or bodies.
+  // GraphQL is token-bounded; only the clone-credential body check applies (graphql-input.ts).
   if (head.method !== "GET" && path !== "/graphql") {
     const permissions = permissionsForProfile(profile);
     if (!policy.writePermissions?.some((permission) => permissions[permission] === "write")) {

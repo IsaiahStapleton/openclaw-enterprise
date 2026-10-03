@@ -161,8 +161,8 @@ test(
       201,
     );
 
-    // Even Reader GraphQL is dispatched once as a possible write; no query inspection
-    // or replay is introduced when the provider response disappears.
+    // Even Reader GraphQL is dispatched once as a possible write; no replay is
+    // introduced when the provider response disappears.
     fixture.github.disconnectAfterMutation("POST", "/graphql");
     const graphBefore = fixture.github.trace.length;
     const lost = await gatewayRequest(reader, "/graphql", {
@@ -176,6 +176,44 @@ test(
       fixture.github.issuesOfTokens.every(
         (token) => token.repositoryIds.length === 1 && token.repositoryIds[0] === 73,
       ),
+    );
+    assert.deepEqual(fixture.github.errors, []);
+  },
+);
+
+test(
+  "GraphQL refuses provider clone credential selections before token issuance or dispatch",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await startCredentialServiceFixture(t, {
+      profile: "git-read",
+      gateway: { listen: "127.0.0.1:0" },
+    });
+    const repository = 'repository(owner: "fixture", name: "repository")';
+    for (const query of [
+      `query { ${repository} { tempCloneToken } }`,
+      `query { ${repository} { clone: tempCloneToken } }`,
+      `query { ${repository} { ...Clone } } fragment Clone on Repository { tempCloneToken }`,
+    ]) {
+      const refused = await gatewayRequest(fixture, "/graphql", {
+        method: "POST",
+        body: { query },
+      });
+      assert.equal(refused.status, 400);
+      assert.doesNotMatch(refused.body, /synthetic-graphql-cloning-credential/);
+    }
+    assert.deepEqual(fixture.github.trace, []);
+    assert.deepEqual(fixture.github.issuesOfTokens, []);
+
+    const allowed = await gatewayRequest(fixture, "/graphql", {
+      method: "POST",
+      body: { query: `query { ${repository} { nameWithOwner } }` },
+    });
+    assert.equal(allowed.status, 200);
+    assert.equal(JSON.parse(allowed.body).data.repository.nameWithOwner, "fixture/repository");
+    assert.deepEqual(
+      fixture.github.trace.filter((entry) => entry.target === "/graphql").map((e) => e.query),
+      [`query { ${repository} { nameWithOwner } }`],
     );
     assert.deepEqual(fixture.github.errors, []);
   },
