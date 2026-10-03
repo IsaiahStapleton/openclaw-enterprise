@@ -176,7 +176,7 @@ const cases = [
     },
   ],
   [
-    "an invalid Agent provisioning Secret binding",
+    "an invalid requested Secret binding",
     new SecretBindingValidationError("Secret references cannot cross Namespaces."),
     {
       status: 400,

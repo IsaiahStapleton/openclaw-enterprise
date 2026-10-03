@@ -4262,10 +4262,33 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
     }
   }
 
+  // A resource the caller cannot find stays a not-found even when the request is invalid.
+  for (const [path, url, body] of [
+    [
+      "Configuration update",
+      `/namespaces/${namespaceId}/configurations/cfg_${randomUUID()}`,
+      { values, secretBindings: bindingsTo("OPENCLAW_TOKEN", own) },
+    ],
+    [
+      "Agent update",
+      `/namespaces/${namespaceId}/agents/agt_${randomUUID()}`,
+      {
+        configurationId: configuration.data.id,
+        harnessAuth: { method: "api_key", source: foreign },
+      },
+    ],
+  ]) {
+    const result = await injectedRequest(fixture.app, "PATCH", url, { body });
+    assert.equal(result.status, 404, `${path}: ${JSON.stringify(result.body)}`);
+    assert.equal(result.body.error.code, "NOT_FOUND", path);
+  }
+
   // The rejected writes changed nothing.
   const stored = await injectedRequest(fixture.app, "GET", configurationPath);
   assert.equal(stored.data.generation, 1);
   assert.deepEqual(stored.data.secretBindings, bindingsTo("TOOL_API_KEY", own));
+  const storedAgent = await injectedRequest(fixture.app, "GET", agentPath);
+  assert.deepEqual(storedAgent.data.harnessAuth, agent.data.harnessAuth);
 });
 
 test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
