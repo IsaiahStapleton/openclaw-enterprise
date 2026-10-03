@@ -1578,13 +1578,12 @@ test("standard Codex password Preset creates one scoped Secret and reuses it aft
 });
 
 test("Preset marks referenced variables without defaults as required before rendering", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
-  await fixture.bootstrap();
   const root = await mkdtemp(join(tmpdir(), "occ-required-preset-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const configurationDriver = new FilesystemConfigurationDriver(root);
-  fixture.controller.registerDriver(configurationDriver);
-  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Required Preset variables", { ready: true });
   const artifact = JSON.parse(
     await readFile(new URL("../../deploy/presets/standard-codex.json", import.meta.url), "utf8"),
@@ -1805,13 +1804,12 @@ test("codex_pat password Preset creates one Secret and reuses it after an Agent 
 });
 
 test("password Preset names the taken Secret when an earlier Agent left one with the same name", async (t) => {
-  const fixture = await createConsoleAppFixture(t);
-  await fixture.bootstrap();
   const root = await mkdtemp(join(tmpdir(), "occ-secret-name-conflict-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const configurationDriver = new FilesystemConfigurationDriver(root);
-  fixture.controller.registerDriver(configurationDriver);
-  fixture.controller.selectDriver("configuration", configurationDriver.id);
+  const fixture = await createConsoleAppFixture(t, {
+    configurationDriver: new FilesystemConfigurationDriver(root),
+  });
+  await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Secret name conflict", { ready: true });
   // Deleting an Agent keeps its model Secret, which is named after the Agent.
   await fixture.createSecret(namespace.id, "Recreated Agent", "earlier-model-key");
