@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
 async function dependencies(context, options = {}) {
   const [{ Pool }, queueModule] = await Promise.all([

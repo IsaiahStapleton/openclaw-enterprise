@@ -18,8 +18,7 @@ import { startRegistryCredentialServiceFixture } from "../fixtures/repository-cr
 import { startServiceProcessFixture } from "../fixtures/repository-credentials/service-process.mjs";
 import { run, temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
 import { appRoot, appExtension } from "../fixtures/repository-credentials/runtime.mjs";
-
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
 function useGateway(fixture, opened) {
   return new Promise((resolve, reject) => {
@@ -47,12 +46,7 @@ function useGateway(fixture, opened) {
 
 test(
   "confirmed broker disposal survives service restart in PostgreSQL",
-  {
-    skip: databaseUrl
-      ? false
-      : "Set OCC_TEST_DATABASE_URL to a disposable migrated PostgreSQL database.",
-    timeout: 60_000,
-  },
+  { ...requiresPostgres, timeout: 60_000 },
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
     t.after(() => pool.end());
@@ -399,12 +393,7 @@ test(
 
 test(
   "broker shutdown waits for receipts and loss of unconfirmed authority stays unknown",
-  {
-    skip: databaseUrl
-      ? false
-      : "Set OCC_TEST_DATABASE_URL to a disposable migrated PostgreSQL database.",
-    timeout: 45_000,
-  },
+  { ...requiresPostgres, timeout: 45_000 },
   async (t) => {
     for (const mode of ["delayed-commit", "unavailable", "abrupt-death"]) {
       await t.test(mode, async (context) => {
