@@ -222,7 +222,9 @@ credential. Rejected material retains its cleanup owner.
 Its bounded credential transport,
 `apps/controller/src/drivers/repo/github/credentials/provider-transport.ts:createProviderTransport`,
 uses `apps/controller/src/drivers/repo/github/credentials/provider-transport/request.ts:sendProviderRequest`
-to dispatch and join the actual request close event. Opaque scope freezes
+to dispatch and join the actual request close event. It latches dispatch, after
+rechecking admission, only when TCP connects, so DNS and connection-refused
+failures are definite and only later failures are uncertain. Opaque scope freezes
 installation, repository and profile. The adapter can issue that scope or revoke
 a token, never supply arbitrary targets, bodies or headers. After authentication
 preparation, a synchronous gate rechecks admission, registers cancellation and
