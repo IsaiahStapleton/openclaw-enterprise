@@ -1,6 +1,6 @@
 ---
 created: 2026-09-01
-updated: 2026-09-29
+updated: 2026-10-03
 last_updated_session: authoring-run/1ca6a40a-a247-465f-9a83-182dbcb6ff4e
 ---
 
@@ -156,7 +156,7 @@ unavailable; selection never becomes an API query selector.
 
 `shell.mjs:namespaceSelector` disables and hides choices through session and
 Namespace checks for loads, Refresh, and admission-starting navigation;
-retained-view validation can extend this.
+retained-view reads never extend this.
 Empty lists show access guidance. `navigation.mjs:navigate` returns Agent detail/creation
 to Agents; global pages remain open; recovered warnings disappear.
 
@@ -330,6 +330,7 @@ refresh and inspection.
 
 ## Changelog
 
+- 2026-10-03 18:00: Re-enable the header selector during retained-view reads once Namespace access is checked.
 - 2026-09-30 19:00: Remember denied Agent detail snapshot reads per tab so reloads do not add an audited denial per view.
 - 2026-09-29 20:00: Trace repository descriptions and inherited access. (public-pr/374)
 
