@@ -1282,6 +1282,16 @@ function integrationGatewayClient(
       observeServiceUrl(created.serviceUrls[""]);
       return created;
     },
+    getSandbox(request, signal) {
+      return gateway.getSandbox(request, signal);
+    },
+    async getServiceUrl(request, signal) {
+      const serviceUrl = await gateway.getServiceUrl(request, signal);
+      if (serviceUrl !== undefined) {
+        observeServiceUrl(serviceUrl);
+      }
+      return serviceUrl;
+    },
     deleteSandbox(request, signal) {
       return gateway.deleteSandbox(request, signal);
     },
