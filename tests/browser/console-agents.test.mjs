@@ -157,7 +157,9 @@ test("Agent creation stores its API key separately, grants exact access, and sav
     .waitFor();
   assert.equal(await createChannelDialog.getByRole("link").count(), 0);
   await selectSecret(createChannelDialog, "Slack app token", existingSlackAppSecret);
-  await createChannelDialog.getByText("Secret binding staged. Save changes to apply it.").waitFor();
+  await createChannelDialog
+    .getByText("Secret selected. Apply channel settings, then Create Agent binds it.")
+    .waitFor();
   // Separate applications must retain grants for every final selected Secret.
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await createChannelDialog.waitFor({ state: "hidden" });
@@ -232,7 +234,9 @@ test("Agent creation stores its API key separately, grants exact access, and sav
   );
   secretRelease.resolve();
   const createdSlackBotSecret = (await (await botSecretResponse).json()).data;
-  await createChannelDialog.getByText("Secret binding staged. Save changes to apply it.").waitFor();
+  await createChannelDialog
+    .getByText("Secret selected. Apply channel settings, then Create Agent binds it.")
+    .waitFor();
   await createChannelDialog.getByRole("button", { name: "Apply channel settings" }).click();
   await createChannelDialog.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Edit Slack" }).click();
@@ -1152,6 +1156,9 @@ test("Agent repository recovery with empty current policy requires an explicit n
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByText(/No approved repositories are available/).waitFor();
   await selectSecret(page, "API key Secret", modelSecret);
+  // The Create Agent form has no Save changes control; Create Agent applies the binding.
+  await page.getByText("Secret selected. Create Agent binds it.", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Save changes to apply it.").count(), 0);
   const model = page.getByLabel("Model ID", { exact: true });
   if (!(await model.isVisible())) {
     await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
