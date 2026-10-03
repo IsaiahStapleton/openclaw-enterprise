@@ -390,6 +390,7 @@ test("console ignores stale collection successes and errors while switching Name
   await waitForSettledFetches(page, slowAgentsPath, slowSuccessRead);
   await expectNoText(page, /Slow (new )?agent|unavailable|failed|interrupted/i);
   assert.equal(await page.getByText("Current agent").isVisible(), true);
+  assert.equal(new URL(page.url()).searchParams.get("namespace"), current.id);
 
   await page.unroute(slowAgents);
   const slowError = await holdRoute(t, page, slowAgents, (route) => route.abort("failed"));

@@ -156,7 +156,7 @@ unavailable; selection never becomes an API query selector.
 
 `shell.mjs:namespaceSelector` disables and hides choices through session and
 Namespace checks for loads, Refresh, and admission-starting navigation;
-retained-view reads never extend this.
+retained-view reads do not extend this.
 Empty lists show access guidance. `navigation.mjs:navigate` returns Agent detail/creation
 to Agents; global pages remain open; recovered warnings disappear.
 
