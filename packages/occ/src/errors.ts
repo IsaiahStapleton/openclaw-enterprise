@@ -187,6 +187,19 @@ export class AgentProvisioningValidationError extends ScopeViolationError {
   }
 }
 
+/**
+ * Builds a message that names a Configuration field. The error contract caps messages at
+ * 256 characters; a long provider name shortens the path. The cut counts code points, so it
+ * never leaves half of a surrogate pair.
+ */
+function configurationFieldMessage(path: string, message: (path: string) => string): string {
+  const budget = 256 - message("").length;
+  const characters = Array.from(path);
+  return message(
+    characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
+  );
+}
+
 const modelCredentialMessage = (path: string): string =>
   `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
 
@@ -198,16 +211,29 @@ export class ModelCredentialValueError extends Error {
   readonly path: string;
 
   constructor(path: string) {
-    // The error contract caps messages at 256 characters; a long provider name shortens the
-    // path. The cut counts code points, so it never leaves half of a surrogate pair.
-    const budget = 256 - modelCredentialMessage("").length;
-    const characters = Array.from(path);
-    super(
-      modelCredentialMessage(
-        characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
-      ),
-    );
+    super(configurationFieldMessage(path, modelCredentialMessage));
     this.name = "ModelCredentialValueError";
+    this.path = path;
+  }
+}
+
+const modelProviderSettingMessages = {
+  baseUrl: (path: string): string =>
+    `Configuration field ${path} must be an absolute http or https URL.`,
+  api: (path: string): string =>
+    `Configuration field ${path} must name a model API the runtime supports, such as openai-responses, openai-completions or anthropic-messages.`,
+} as const;
+
+/**
+ * A model provider `baseUrl` or `api` in Configuration values that the runtime cannot
+ * use. The message names the field's JSON pointer and the expected form, never the value.
+ */
+export class ModelProviderSettingError extends Error {
+  readonly path: string;
+
+  constructor(path: string, setting: keyof typeof modelProviderSettingMessages) {
+    super(configurationFieldMessage(path, modelProviderSettingMessages[setting]));
+    this.name = "ModelProviderSettingError";
     this.path = path;
   }
 }
