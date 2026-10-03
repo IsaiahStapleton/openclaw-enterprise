@@ -115,7 +115,6 @@ import {
 import {
   AGENT_NAME_CONFLICT,
   AgentDeletingError,
-  AgentProvisioningValidationError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
@@ -142,6 +141,7 @@ import {
   RuntimeLogsForbiddenByClusterError,
   RuntimeLogsSandboxNotFoundError,
   ScopeViolationError,
+  SecretBindingValidationError,
   SecretValueError,
 } from "./errors.ts";
 import { validateModelProviderSettings } from "./model-provider-settings.ts";
@@ -196,6 +196,7 @@ import {
   normalizeProvisioningConfiguration,
   normalizeProvisioningHarnessAuth,
   normalizeProvisioningWorkspace,
+  normalizeRequestSecretBindings,
   provisioningProgress,
   requireProvisioningRequestId,
   type ProvisionAgentInput,
@@ -217,7 +218,6 @@ import type {
 export {
   ActivationPendingError,
   AgentDeletingError,
-  AgentProvisioningValidationError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
@@ -248,6 +248,7 @@ export {
   RuntimeLogsSandboxNotFoundError,
   SandboxRevisionUnsupportedError,
   ScopeViolationError,
+  SecretBindingValidationError,
   SecretValueError,
   TransientDependencyError,
   type ActivationPendingCode,
@@ -882,21 +883,21 @@ function removedAccessBinding(binding: Readonly<AccessBinding>): RemovedAccessBi
 }
 
 /**
- * Rejects Agent provisioning Secret references (bindings and model authentication) that
- * name another Namespace. It compares only the request against its route Namespace, so
- * it reveals nothing about other Namespaces and can run before any Secret lookup.
+ * Rejects requested Secret references (bindings and Harness authentication) that name
+ * another Namespace. It compares only the request against its route Namespace, so it
+ * reveals nothing about other Namespaces and can run before any Secret lookup.
  */
-function rejectCrossNamespaceProvisioningSources(
+function rejectCrossNamespaceSecretSources(
   namespaceId: string,
-  configuration: AgentProvisioningConfigurationInput,
-  harnessAuth: HarnessAuthBinding | null,
+  secretBindings: SecretBindings | undefined,
+  harnessAuth: HarnessAuthBinding | null | undefined,
 ): void {
-  const sources = Object.values(configuration.secretBindings ?? {}).map(({ source }) => source);
-  if (harnessAuth !== null && "source" in harnessAuth) {
+  const sources = Object.values(secretBindings ?? {}).map(({ source }) => source);
+  if (harnessAuth !== undefined && harnessAuth !== null && "source" in harnessAuth) {
     sources.push(harnessAuth.source);
   }
   if (sources.some((source) => source.namespaceId !== namespaceId)) {
-    throw new AgentProvisioningValidationError("Secret references cannot cross Namespaces.");
+    throw new SecretBindingValidationError("Secret references cannot cross Namespaces.");
   }
 }
 
@@ -1879,7 +1880,11 @@ export class OpenClawController {
         namespaceId: input.namespaceId,
       });
       // Reject foreign references before channel validation can report them as a scope miss.
-      rejectCrossNamespaceProvisioningSources(input.namespaceId, configurationInput, harnessAuth);
+      rejectCrossNamespaceSecretSources(
+        input.namespaceId,
+        configurationInput.secretBindings,
+        harnessAuth,
+      );
       await this.validateChannelCredentials(principalId, input.namespaceId, configurationInput);
     }
     return this.mutate(async (state) => {
@@ -3770,7 +3775,8 @@ export class OpenClawController {
       if (namespace.existingNamespace !== undefined && namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
-      const secretBindings = this.bindings(input.secretBindings);
+      const secretBindings = normalizeRequestSecretBindings(input.secretBindings);
+      rejectCrossNamespaceSecretSources(namespace.id, secretBindings, undefined);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
       const driver = this.configurationDriver();
       const configuration: Configuration = Object.freeze({
@@ -4017,9 +4023,13 @@ export class OpenClawController {
         ),
         metadata,
       );
-      const secretBindings = this.bindings(
-        input.secretBindings === undefined ? metadata.secretBindings : input.secretBindings,
-      );
+      let secretBindings: SecretBindings;
+      if (input.secretBindings === undefined) {
+        secretBindings = this.bindings(metadata.secretBindings);
+      } else {
+        secretBindings = normalizeRequestSecretBindings(input.secretBindings);
+        rejectCrossNamespaceSecretSources(namespace.id, secretBindings, undefined);
+      }
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
       const advanced = await state.configurations.advanceConfigurationGeneration(
         namespace.id,
@@ -4974,6 +4984,7 @@ export class OpenClawController {
         );
       }
       await this.guardProvisioningConfiguration(state, namespace.id, input.configurationId);
+      rejectCrossNamespaceSecretSources(namespace.id, undefined, harnessAuth);
       await this.authorizeHarnessAuthSource(state, principalId, namespace.id, harnessAuth);
       this.validatePluginPolicies(plugins, pluginApprovers);
       const agentId = this.nextIdentifier("agent");
@@ -5066,6 +5077,7 @@ export class OpenClawController {
       const previousAuth = this.harnessAuthBinding(agent.harnessAuth);
       await this.authorizeHarnessAuthSource(state, principalId, namespace.id, previousAuth);
       if (requestedAuth !== undefined) {
+        rejectCrossNamespaceSecretSources(namespace.id, undefined, requestedAuth);
         await this.authorizeHarnessAuthSource(state, principalId, namespace.id, requestedAuth);
       }
       const secretBindings = this.bindings(configuration.secretBindings);
@@ -7020,7 +7032,7 @@ export class OpenClawController {
       configuration = normalizeProvisioningConfiguration(plan?.configuration);
     } catch (error) {
       // A stored plan that no longer validates is not the caller's invalid request.
-      if (error instanceof AgentProvisioningValidationError) {
+      if (error instanceof SecretBindingValidationError) {
         throw new ScopeViolationError("The accepted provisioning plan is no longer valid.");
       }
       throw error;
@@ -7175,7 +7187,7 @@ export class OpenClawController {
     source: SecretReference,
   ): Promise<void> {
     if (source.namespaceId !== namespaceId) {
-      throw new AgentProvisioningValidationError("Secret references cannot cross Namespaces.");
+      throw new SecretBindingValidationError("Secret references cannot cross Namespaces.");
     }
     await this.authorize(principalId, "operate", source);
     const secret = await state.secrets.lockSecret(namespaceId, source.id);

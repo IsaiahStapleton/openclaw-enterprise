@@ -3,7 +3,6 @@ import { PresetValidationError } from "@openclaw-enterprise/contracts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
-  AgentProvisioningValidationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   ChannelDirectoryError,
@@ -29,6 +28,7 @@ import {
   ResourceStateConflictError,
   RuntimeLogsError,
   ScopeViolationError,
+  SecretBindingValidationError,
   SecretValueError,
   type RuntimeLogsErrorCode,
 } from "@openclaw-enterprise/occ";
@@ -548,7 +548,7 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof ConfigurationHarnessError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
-  if (error instanceof AgentProvisioningValidationError) {
+  if (error instanceof SecretBindingValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof NativeWorkerSupportError) {

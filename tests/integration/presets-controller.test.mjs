@@ -679,7 +679,8 @@ test("standard Codex Preset installs and creates a dedicated Agent with restrict
       configurationId: otherConfiguration.data.id,
     },
   });
-  assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
+  assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error.message, "Secret references cannot cross Namespaces.");
   assert.equal(JSON.stringify(installed.body).includes("synthetic-model-key"), false);
 });
 
