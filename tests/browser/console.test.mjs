@@ -393,7 +393,8 @@ test("console ignores stale collection successes and errors while switching Name
   slowError.release();
   await slowError.waitForCompletion();
   await waitForSettledFetches(page, slowAgentsPath, slowErrorRead);
-  await expectNoText(page, /Slow agent|unavailable|failed/i);
+  // A failed read the console still treated as current would show "Request interrupted".
+  await expectNoText(page, /Slow agent|unavailable|failed|interrupted/i);
 });
 
 async function releaseHeldRoute(page, pattern, hold) {
