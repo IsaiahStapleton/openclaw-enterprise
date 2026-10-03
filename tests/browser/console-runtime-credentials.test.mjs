@@ -471,7 +471,7 @@ test("revision deployment blocks unavailable reads and does not replay a lost re
   const deploy = page.getByRole("button", { name: "Deploy new version" });
   await page
     .getByRole("alert")
-    .filter({ hasText: "Service unavailable. The read could not be completed. Please retry." })
+    .filter({ hasText: "Service unavailable. The read could not be completed. Try again." })
     .first()
     .waitFor();
   assert.equal(deploymentRequests, 0);
