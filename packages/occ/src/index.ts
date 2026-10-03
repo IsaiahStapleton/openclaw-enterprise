@@ -210,7 +210,6 @@ import {
 import type {
   AgentProvisioningCheckpoint,
   AgentProvisioningRecord,
-  AgentProvisioningWithWork,
 } from "./state/agent-provisioning.ts";
 
 export {
@@ -6449,7 +6448,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     workId: string,
-  ): Promise<Readonly<AgentProvisioningWithWork>> {
+  ) {
     if (!isNonEmptyString(workId)) {
       throw new ScopeViolationError("The exact provisioning work identity is missing.");
     }
