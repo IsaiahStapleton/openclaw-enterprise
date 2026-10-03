@@ -56,6 +56,7 @@ test("kubectl transport failures are transient", () => {
     "error: read tcp 127.0.0.1:50122->127.0.0.1:6443: read: connection reset by peer\n",
     "The connection to the server 0.0.0.0:6443 was refused - did you specify the right host or port?\nconnection refused\n",
     "Unable to connect to the server: net/http: TLS handshake timeout\n",
+    "Unable to connect to the server: dial tcp 127.0.0.1:6443: i/o timeout\n",
     "error: http2: client connection lost\n",
     "Error from server (ServiceUnavailable): the server is currently unable to handle the request\n",
     "Error from server: etcdserver: request timed out\n",
@@ -99,18 +100,22 @@ test("a kubectl read fails at once on a non-transient error", async () => {
   assert.deepEqual(sleeps, []);
 });
 
-test("a kubectl read gives up after four attempts with the last error", async () => {
-  const { sleeps, logs, options } = recordingOptions();
-  const failures = [];
-  await assert.rejects(
-    retryKubectlRead(async () => {
-      const failure = kubectlFailure(execStreamDropped);
-      failures.push(failure);
-      throw failure;
-    }, options),
-    (error) => error === failures.at(-1),
-  );
-  assert.equal(failures.length, 4);
-  assert.deepEqual(sleeps, [500, 1000, 2000]);
-  assert.equal(logs.length, 3);
-});
+test(
+  "a kubectl read gives up after four attempts with the last error",
+  { timeout: 5_000 },
+  async () => {
+    const { sleeps, logs, options } = recordingOptions();
+    const failures = [];
+    await assert.rejects(
+      retryKubectlRead(async () => {
+        const failure = kubectlFailure(execStreamDropped);
+        failures.push(failure);
+        throw failure;
+      }, options),
+      (error) => error === failures.at(-1),
+    );
+    assert.equal(failures.length, 4);
+    assert.deepEqual(sleeps, [500, 1000, 2000]);
+    assert.equal(logs.length, 3);
+  },
+);
