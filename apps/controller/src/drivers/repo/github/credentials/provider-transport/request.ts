@@ -101,8 +101,9 @@ export function sendProviderRequest({
       if (attempt.signal.aborted || remaining <= 0) {
         throw new Error("not-admitted");
       }
-      // No request byte can leave before TCP connects, so DNS and connect failures
-      // stay definite. Admission is checked again with the latch at that point.
+      // No request byte can leave before TCP connects (the request itself is written
+      // only after the TLS handshake), so DNS and connect failures stay definite.
+      // Admission is checked again with the latch at that point.
       const observeDispatch = () => {
         if (failed) {
           return;
