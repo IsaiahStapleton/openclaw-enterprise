@@ -223,10 +223,10 @@ errored server-side unresolved forever, so when the Gateway refuses one
 `REQUEST_REPLAY_UNAVAILABLE`) and `getSandbox` finds no Sandbox, the Driver tries
 the next of 16 IDs: the revision UUID, then 15 derived from it. Each failing pass
 spends at most one new ID. The Sandbox name is unique per Workspace, so these
-attempts never yield two Sandboxes. Unresolved IDs never expire, and OpenShell caps
-them at 1000 per caller: repeated server-side create failures can exhaust the
-controller identity's quota, after which OpenShell rejects every mutation that
-carries a `request_id` with `RESOURCE_EXHAUSTED`. Codex requests one unnamed exposure for
+attempts never yield two Sandboxes. Unresolved IDs never expire. Once the controller
+identity holds 1000 unresolved or unexpired admission records, OpenShell rejects
+every new `request_id` with `RESOURCE_EXHAUSTED`, so repeated server-side create
+failures count against that quota. Codex requests one unnamed exposure for
 `APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
 outbound, so it requests no exposure and rejects any returned URL. The Driver
 calls `getSandbox` first and creates only an absent Sandbox; it adopts an

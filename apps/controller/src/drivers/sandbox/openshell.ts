@@ -1212,8 +1212,8 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     let refusal: OpenShellRequestReplayRefusedError | undefined;
     for (let attempt = 0; existing === undefined; attempt++) {
       if (attempt === requestIds.length) {
-        // REQUEST_REPLAY_UNAVAILABLE on every ID also means unreadable gateway key material,
-        // which a new revision would not fix.
+        // A last refusal of REQUEST_REPLAY_UNAVAILABLE can also mean unreadable gateway key
+        // material, which a new revision would not fix.
         const remedy =
           refusal?.reason === "REQUEST_REPLAY_UNAVAILABLE"
             ? "check that the gateway's JWT or TLS key material is readable, or deploy a new revision"

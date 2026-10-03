@@ -706,7 +706,10 @@ test("OpenShell moves a revision's create to a fresh request_id after the gatewa
     release = resolve;
   });
   const held = provision();
-  while (holdHandler !== undefined) {
+  for (let turn = 0; holdHandler !== undefined; turn++) {
+    if (turn === 1000) {
+      assert.fail("the first pass never reached CreateSandbox");
+    }
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.deepEqual(await provision(), first);
