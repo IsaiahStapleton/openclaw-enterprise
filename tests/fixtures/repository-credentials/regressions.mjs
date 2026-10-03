@@ -26,12 +26,68 @@ async function runningProcessesMentioning(marker) {
       }
     } catch (error) {
       // procfs may lose the task during lookup (ENOENT) or the read (ESRCH).
-      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+      // With hidepid, other users' entries are unreadable (EACCES/EPERM); the
+      // owned command tree runs as this user, so its entries stay readable.
+      if (!["ENOENT", "ESRCH", "EACCES", "EPERM"].includes(error.code)) {
         throw error;
       }
     }
   }
   return running;
+}
+
+// The published PID once it is complete and its process is live, else undefined.
+function liveDescendantPid(pidFile) {
+  try {
+    const value = readFileSync(pidFile, "utf8");
+    if (!/^[1-9]\d*\n$/.test(value)) {
+      return undefined;
+    }
+    const pid = Number(value);
+    return /\) [ZX] /.test(readFileSync(`/proc/${pid}/stat`, "utf8")) ? undefined : pid;
+  } catch (error) {
+    // Not published yet (ENOENT), or the process vanished during the read (ESRCH).
+    if (error.code === "ENOENT" || error.code === "ESRCH") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+// An owned descendant lives this long unless the command stops it. Settling in
+// time is proven by its expiry marker being absent, not by a wall-clock bound.
+const descendantLifetimeMs = 30000;
+
+// Blocks this thread until the descendant is live. The command's timers cannot
+// fire meanwhile, so its timeout or cancellation always lands on a started
+// descendant however slowly the two Node processes start.
+function holdUntilDescendantRuns(pidFile) {
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = performance.now() + descendantLifetimeMs;
+  for (;;) {
+    const pid = liveDescendantPid(pidFile);
+    if (pid !== undefined) {
+      return pid;
+    }
+    if (performance.now() > deadline) {
+      throw new Error("descendant did not start");
+    }
+    Atomics.wait(pause, 0, 0, 10);
+  }
+}
+
+// A SIGKILLed process can still be listed until it is scheduled to exit, so poll
+// until the owned tree is gone. A leaked descendant stays until its expiry
+// writes the marker, which the caller rejects.
+async function ownedProcessesAfterExit(pidFile, naturalExitFile) {
+  const deadline = performance.now() + 2 * descendantLifetimeMs;
+  for (;;) {
+    const running = await runningProcessesMentioning(pidFile);
+    if (running.length === 0 || existsSync(naturalExitFile) || performance.now() > deadline) {
+      return running;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 export function registerCredentialFixtureRegressions() {
@@ -40,90 +96,66 @@ export function registerCredentialFixtureRegressions() {
       const directory = await temporaryDirectory(t);
       const pidFile = join(directory, "descendant.pid");
       const naturalExitFile = join(directory, "natural-exit");
-      const descendant = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid) + '\\n');
-      ${reason === "output overflow" ? "process.stdout.write('sensitive-fixture-value'.repeat(150000));" : ""}
-      setTimeout(() => {
-        ${reason === "cancelled" ? `require('node:fs').writeFileSync(${JSON.stringify(naturalExitFile)}, 'expired');` : ""}
-      }, 1500);`;
+      const descendant = `const fs = require('node:fs');
+      fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid) + '\\n');
+      setTimeout(() => fs.writeFileSync(${JSON.stringify(naturalExitFile)}, 'expired'), ${descendantLifetimeMs});
+      ${reason === "output overflow" ? "process.stdout.write('sensitive-fixture-value'.repeat(150000));" : ""}`;
       const launcher = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {stdio:'inherit'});`;
-      const controller = new AbortController();
-      let timer;
-      let cancelledAt;
-      let cancelledPid;
-      let readinessError;
-      if (reason === "cancelled") {
-        // A complete PID and live process separate cancellation from startup.
-        timer = setInterval(() => {
+      // Both carry the PID file path in their command lines. Never leave either
+      // running, even when an assertion fails.
+      t.after(async () => {
+        for (const pid of await runningProcessesMentioning(pidFile)) {
           try {
-            const value = readFileSync(pidFile, "utf8");
-            if (!/^[1-9]\d*\n$/.test(value)) {
-              return;
-            }
-            const pid = Number(value);
-            if (
-              !Number.isSafeInteger(pid) ||
-              /\) [ZX] /.test(readFileSync(`/proc/${pid}/stat`, "utf8"))
-            ) {
-              return;
-            }
-            cancelledPid = pid;
-            clearInterval(timer);
-            cancelledAt = performance.now();
-            controller.abort("sensitive-fixture-value");
-          } catch (error) {
-            if (error.code !== "ENOENT") {
-              readinessError = error;
-              clearInterval(timer);
-              controller.abort("sensitive-fixture-value");
-            }
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // It exited after the scan.
           }
-        }, 10);
+        }
+      });
+      const controller = new AbortController();
+      // Only the case under test may stop the command: its own timeout fires long
+      // after the descendant would expire, so a command that waits instead fails.
+      const settled = run(process.execPath, ["-e", launcher], {
+        timeout: reason === "timeout" ? 250 : 4 * descendantLifetimeMs,
+        signal: controller.signal,
+      });
+      let startedPid;
+      let readinessError;
+      if (reason !== "output overflow") {
+        // Overflow needs the event loop to read output; it follows the PID write.
+        try {
+          startedPid = holdUntilDescendantRuns(pidFile);
+        } catch (error) {
+          readinessError = error;
+        }
       }
-      const start = performance.now();
-      try {
-        await assert.rejects(
-          run(process.execPath, ["-e", launcher], {
-            timeout: reason === "timeout" ? 250 : 5000,
-            signal: controller.signal,
-          }),
-          (error) =>
-            error.message.includes(reason) && !error.message.includes("sensitive-fixture-value"),
-        );
-        const settledAt = performance.now();
-        if (readinessError) {
-          throw readinessError;
-        }
-        // A killed orphan may await the container init's reap; a zombie cannot
-        // execute or retain pipes. No running launcher or descendant may survive
-        // completion. Both carry the unique PID file path in their command lines,
-        // so this also covers a descendant killed before it published its PID: a
-        // slow start can outlast the 250 ms timeout (no PID file) or be killed
-        // between creating and writing the file (empty PID file).
-        assert.deepEqual(
-          await runningProcessesMentioning(pidFile),
-          [],
-          "owned descendant remains running",
-        );
-        if (reason !== "timeout") {
-          // Overflow output and cancellation readiness both follow the PID write.
-          const pid = Number(await readFile(pidFile, "utf8"));
-          assert.ok(Number.isSafeInteger(pid) && pid > 0, "descendant PID must be valid");
-        }
-        if (reason === "cancelled") {
-          assert.equal(
-            Number(await readFile(pidFile, "utf8")),
-            cancelledPid,
-            "cancellation must observe the owned descendant",
-          );
-          // Natural expiry cannot substitute for termination, even after delayed startup.
-          assert.equal(existsSync(naturalExitFile), false, "descendant exited naturally");
-        }
-        assert.ok(
-          settledAt - (reason === "cancelled" ? cancelledAt : start) < 1250,
-          "launcher descendants must not extend the command bound",
-        );
-      } finally {
-        clearInterval(timer);
+      if (reason === "cancelled") {
+        controller.abort("sensitive-fixture-value");
+      }
+      await assert.rejects(
+        settled,
+        (error) =>
+          error.message.includes(reason) && !error.message.includes("sensitive-fixture-value"),
+      );
+      if (readinessError) {
+        throw readinessError;
+      }
+      // A killed orphan may await the container init's reap; a zombie cannot
+      // execute or retain pipes. No running launcher or descendant may survive.
+      assert.deepEqual(
+        await ownedProcessesAfterExit(pidFile, naturalExitFile),
+        [],
+        "owned descendant remains running",
+      );
+      assert.equal(
+        existsSync(naturalExitFile),
+        false,
+        "owned descendant outlived the command (waited for or leaked)",
+      );
+      const pid = Number(await readFile(pidFile, "utf8"));
+      assert.ok(Number.isSafeInteger(pid) && pid > 0, "descendant PID must be valid");
+      if (reason !== "output overflow") {
+        assert.equal(pid, startedPid, `${reason} must observe the owned descendant`);
       }
     });
   }
