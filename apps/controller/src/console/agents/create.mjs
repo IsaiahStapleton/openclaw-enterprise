@@ -16,6 +16,8 @@ import { link, message, namespacePath, rejectionMessage } from "./list.mjs";
 // so only this one is shown as sent.
 const AGENT_NAME_CONFLICT =
   "An Agent with this name already exists in this Namespace. Choose a different name.";
+// The API's text for a conflict whose reason it does not name.
+const GENERIC_CONFLICT = "The requested platform resource already exists.";
 
 // TODO: This starter list is intentionally hardcoded for the initial Console release.
 // Revisit catalog refresh and credential-aware discovery after the basic creation flow ships.
@@ -1530,9 +1532,14 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
         mutationStarted &&
         !error.provisioningTerminal &&
         ![400, 403, 404, 409, 429].includes(error.status);
-      // The API refuses to retry a job whose Namespace or Agent lifecycle changed, or
-      // that was cancelled or handed off; that job can never finish.
+      // The API refuses to retry a job whose Namespace or Agent lifecycle changed, that was
+      // cancelled or handed off, or whose Secret was deleted; that job can never finish. A
+      // refusal that names its reason (the deleted Secret) is shown as sent.
       const retryRefused = retrying && error.status === 409;
+      const retryRefusal =
+        error.serverMessage !== undefined && error.serverMessage !== GENERIC_CONFLICT
+          ? error.serverMessage
+          : "The provisioning job can no longer be retried.";
       const detail =
         outcomeUnknown && attempt.acknowledged
           ? "Outcome unknown after provisioning admission. Retry resumes the accepted provisioning job, or retries it if it failed. If the API refuses because the job finished, select Create Agent to resend the same request ID."
@@ -1543,7 +1550,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
               : error.provisioningFailed
                 ? `${error.message} Select Create Agent to submit a new request.`
                 : retryRefused
-                  ? "The provisioning job can no longer be retried. Select Create Agent to submit a new request."
+                  ? `${retryRefusal} Select Create Agent to submit a new request.`
                   : error.status === undefined && error.message
                     ? error.message
                     : recovering && error.status === 409

@@ -151,8 +151,10 @@ give the request ID to your operator if the outcome remains unknown.
 If provisioning admission loses its response, **Retry provisioning request** resubmits
 the same request ID and saved Secret references. An acknowledged job is retried through
 its job URL; if that retry is refused after an unknown outcome, **Create Agent** resends
-the same request. Saved Secrets are reused, never deleted automatically. After a lost
-Secret save, check existing Namespace Secrets before starting again.
+the same request. A refused retry of a failed job shows the API's reason when it names
+one, such as a deleted Secret; **Create Agent** then submits a new request. Saved
+Secrets are reused, never deleted automatically. After a lost Secret save, check
+existing Namespace Secrets before starting again.
 See the [provisioning flow](../../flows/agent-provisioning.md) for the API sequence.
 
 Repository discovery is independent of model authentication. Small catalogs offer
