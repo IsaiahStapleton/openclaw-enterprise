@@ -409,9 +409,14 @@ export class RuntimeLogsError extends Error {
 }
 
 export class PluginPolicyValidationError extends Error {
-  constructor(field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers") {
+  constructor(
+    field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers" | "aliasedPlugin",
+  ) {
     let message = "The supplied plugin policies are invalid.";
-    if (field === "approvers") {
+    if (field === "aliasedPlugin") {
+      message =
+        'Two plugin selections name the same plugin (a native ID and its driver-prefixed ID, such as "diffs" and "occ-plugin:diffs"). Keep one selection per plugin.';
+    } else if (field === "approvers") {
       message =
         "This Plugin Driver does not support plugin or tool approvers. Omit approvers from plugin selections and set Agent-wide pluginApprovers instead.";
     } else if (field === "toolDefaults.reviewer") {

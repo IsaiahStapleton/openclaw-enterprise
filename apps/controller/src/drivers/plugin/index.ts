@@ -18,6 +18,7 @@ import {
   ScopeViolationError,
 } from "@openclaw-enterprise/occ";
 import {
+  hasAliasedSelections,
   openClawCatalogEntries,
   validatePolicies,
   type CodexPluginCatalogReader,
@@ -320,6 +321,11 @@ class BundledPluginDriverBase {
       throw new PluginPolicyValidationError(
         field === "toolDefaults.reviewer" || field === "tools[id].reviewer" ? field : undefined,
       );
+    }
+    // Admission-only, like the Codex approvers check: revisions admitted before this
+    // check keep rendering unchanged; the Agent is refused at its next update or deploy.
+    if (hasAliasedSelections(kind, selections)) {
+      throw new PluginPolicyValidationError("aliasedPlugin");
     }
   }
 

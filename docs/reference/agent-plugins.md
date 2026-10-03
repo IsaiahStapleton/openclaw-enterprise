@@ -119,7 +119,9 @@ Plugin IDs are 1–253 characters matching `^[A-Za-z0-9._~:@-]+$`. Tool IDs are
 opaque Driver identifiers, 1–1024 characters without spaces or control characters.
 Keep them unchanged; a tool's display name is not its policy ID. Callers cannot
 submit a native source, release version, or owning Driver identity. Request
-objects reject unknown fields. `plugins:null` is invalid.
+objects reject unknown fields. `plugins:null` is invalid. A bare native ID and
+its Driver-qualified form (`diffs` and `occ-plugin:diffs`) name the same
+plugin, so a map that contains both is rejected with `400`.
 
 On Agent create, an absent `plugins` field and `{}` mean no desired user plugins.
 On update, omitting `plugins` preserves the existing map, `{}` clears it, and a
