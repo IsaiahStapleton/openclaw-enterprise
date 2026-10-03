@@ -740,3 +740,75 @@ test("a status denial for one operator does not carry over to the next sign-in o
   assert.ok(statusReads() > before);
   assert.equal(await page.getByText(/Runtime status requires Agent operate/).count(), 0);
 });
+
+test("Back restores a followed Logs view without replaying its reads and keeps polling", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  computeDriver.state.lines = [line(1, "before leaving")];
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  // A recorded deployment result keeps the Agent view cacheable for Back.
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revisionId}`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            deploymentId: revisionId,
+            namespaceId: namespace.id,
+            agentId: agent.id,
+            status: "succeeded",
+            error: null,
+            warnings: [],
+            progress: null,
+          },
+          meta: { requestId: "req_logs_back" },
+        }),
+      }),
+  );
+  await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url.pathname + url.search);
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  await pane.getByText("before leaving").waitFor();
+  await page.getByRole("button", { name: "Follow" }).click();
+  for (const tick of ["first poll", "second poll"]) {
+    computeDriver.state.lines = [
+      ...computeDriver.state.lines,
+      line(computeDriver.state.lines.length + 1, tick),
+    ];
+    await page.clock.runFor(2_000);
+    await pane.getByText(tick).waitFor();
+  }
+  const panel = await pane.elementHandle();
+  const logPaths = () =>
+    requests.filter(({ path }) => path.includes("/runtime/logs")).map(({ path }) => path);
+  const statusReads = () => requests.filter(({ path }) => path.endsWith("/runtime")).length;
+  const readBeforeLeaving = new Set(logPaths());
+  const logReadsBeforeLeaving = logPaths().length;
+
+  // Both timers fire while the view is cached and stop.
+  await page.getByRole("link", { name: "Namespaces", exact: true }).click();
+  await page.getByRole("heading", { name: "Namespaces" }).waitFor();
+  await page.clock.runFor(25_000);
+  const statusBeforeBack = statusReads();
+  computeDriver.state.lines = [...computeDriver.state.lines, line(9, "after back")];
+  await page.goBack();
+  // The cached view stays inert, its controls disabled, until Back revalidates it.
+  await page
+    .locator(".agent-logs button[aria-pressed='true']:enabled", { hasText: "Following" })
+    .waitFor();
+  assert.equal(await panel.evaluate((node) => node.isConnected), true);
+
+  // The restored view resumes from its cursor; Back replays none of its earlier reads.
+  await page.clock.runFor(2_000);
+  await pane.getByText("after back").waitFor();
+  assert.ok(statusReads() > statusBeforeBack);
+  const readAfterBack = logPaths().slice(logReadsBeforeLeaving);
+  assert.ok(readAfterBack.length > 0);
+  assert.deepEqual(
+    readAfterBack.filter((path) => readBeforeLeaving.has(path) || path.includes("tailLines")),
+    [],
+  );
+});
