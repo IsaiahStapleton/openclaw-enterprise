@@ -116,7 +116,8 @@ export OCC_DEVELOPMENT_SANDBOX_DRIVER=openshell
 The checkout-local CLI creates one k3d cluster, then:
 
 1. installs the pinned Agent Sandbox controller and OpenShell
-   `v0.1.3-pre.2` assets;
+   `v0.1.3-pre.2` assets, then the pinned cert-manager and Envoy Gateway
+   controllers for private Agent Gateway routing;
 2. imports digest-resolved OpenShell, OCE controller, Agent runtime, and
    PostgreSQL images;
 3. creates `oce-system` and installs PostgreSQL, one central OpenShell Gateway
@@ -275,9 +276,9 @@ In Kubernetes-only mode, the API is reachable only through the loopback k3d
 publication, whose Service selects a dedicated in-cluster proxy admitted by
 exact Namespace and Pod labels in the OCE Helm NetworkPolicy. The OCE API itself
 remains a ClusterIP Service, and the worker authenticates to Kubernetes
-in-cluster. With OpenShell, the API (which registers credential sources) and the
-worker reach OpenShell Gateway through a narrow development NetworkPolicy in
-`oce-system`.
+in-cluster. With OpenShell, the API (which registers credential sources), the
+worker, and dedicated Agent Gateways reach OpenShell Gateway through a narrow
+development NetworkPolicy in `oce-system`.
 
 The launcher sets
 [`network.pluginStatusProxySourceCidrs`](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#networking)
