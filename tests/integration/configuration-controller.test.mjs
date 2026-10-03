@@ -762,7 +762,7 @@ test("Filesystem Configuration API rejects plaintext model writes without changi
   // replaced, and a shortened path never ends in half of a surrogate pair, as for other
   // contract messages that name submitted keys.
   for (const [providerName, field] of [
-    ["evil\u001b[2J‮name", "/models/providers/evil?[2J?name/apiKey"],
+    ["evil\u001b[2J\u202Ename", "/models/providers/evil?[2J?name/apiKey"],
     ["\u{1F600}".repeat(150), `/models/providers/${"\u{1F600}".repeat(72)}…`],
   ]) {
     const named = await request(context.app, "PATCH", `${collection}/${id}`, {
