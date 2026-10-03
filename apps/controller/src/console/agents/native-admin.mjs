@@ -39,6 +39,8 @@ export function renderNativeAdminAccess(context, path) {
 
   let current;
   let pending = false;
+  // A refresh that arrives during a read may predate the change it reports; read once more.
+  let rereadAfterPending = false;
 
   function updateControls() {
     reload.disabled = pending;
@@ -97,6 +99,10 @@ export function renderNativeAdminAccess(context, path) {
       if (context.isCurrent()) {
         pending = false;
         updateControls();
+        if (rereadAfterPending) {
+          rereadAfterPending = false;
+          void load();
+        }
       }
     }
   }
@@ -106,6 +112,10 @@ export function renderNativeAdminAccess(context, path) {
     section,
     // Rereads access once, for example after the active version or runtime state changes.
     refresh() {
+      if (pending) {
+        rereadAfterPending = true;
+        return;
+      }
       void load();
     },
   };

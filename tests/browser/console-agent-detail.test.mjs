@@ -2479,8 +2479,22 @@ test("Agent detail rereads native admin access once when a pending deployment ac
     .waitFor();
   assert.equal(pathRequests(requests, "GET", nativeAdminPath).length, 2);
 
-  // Access is reread only when the serving version changes, not on every later tick.
-  await page.clock.runFor(DEPLOYMENT_POLL_MS * 3);
+  // Access is reread only when the serving version changes: Refresh deployment rereads the
+  // unchanged Agent through the same path without asking for native admin access again.
+  const agentReads = pathRequests(
+    requests,
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  ).length;
+  await activity.getByRole("button", { name: "Refresh deployment" }).click();
+  await waitForCondition(
+    () =>
+      pathRequests(requests, "GET", `/namespaces/${namespace.id}/agents/${agent.id}`).length >
+      agentReads,
+    "Refresh deployment did not reread the Agent",
+  );
+  // The button returns from "Refreshing..." only after the reread Agent was applied.
+  await activity.getByRole("button", { name: "Refresh deployment", disabled: false }).waitFor();
   assert.equal(pathRequests(requests, "GET", nativeAdminPath).length, 2);
 });
 
