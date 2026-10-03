@@ -1813,6 +1813,8 @@ function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
 // without pressure accounting, cpu.stat throttled_usec (throttling only).
 // OpenClaw buckets provider 401/403 and invalid-key responses as "auth". Only
 // that deterministic rejection fails the deployment before its deadline.
+// The turn allows 256 output tokens. A reasoning model spends output tokens on
+// thinking before any text; at 16 it returned none and the probe failed.
 // The Gateway times its model-probe phase from wrapper start: it is the first step.
 // Generated code stays compact: the Gateway program is near the exec limit.
 const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
@@ -1891,7 +1893,7 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
     const result = spawnSync("node", [
       "/app/openclaw.mjs", "models", "status", "--json", "--probe",
       "--probe-provider", provider, "--probe-concurrency", "1",
-      "--probe-timeout", "15000", "--probe-max-tokens", "16",
+      "--probe-timeout", "15000", "--probe-max-tokens", "256",
     ], {
       cwd: directory,
       env: {

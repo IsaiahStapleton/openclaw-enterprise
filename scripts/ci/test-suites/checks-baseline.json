@@ -218,6 +218,9 @@
       ]
     },
     {
+      "path": "tests/integration/dev-codex-seccomp-failure.test.mjs"
+    },
+    {
       "path": "tests/integration/first-agent-startup.test.mjs",
       "expectedTests": [
         "first-Agent accepts current Compose-backed Kubernetes development state",

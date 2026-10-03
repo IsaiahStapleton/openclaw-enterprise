@@ -274,6 +274,15 @@ async function fixture(t, selection = {}) {
   };
 }
 
+// The fixture flock(1) logs each attempt (about 50 ms apart) that finds the host
+// lock held, so a test can act while a helper is waiting for the lock.
+function waitForLockWait(f, attempts = 1) {
+  return waitFor(`the helper to find the host lock held ${attempts} times`, async () => {
+    const log = await readFile(join(f.state, "flock-waiting"), "utf8").catch(() => "");
+    return log.split("\n").length - 1 >= attempts ? true : undefined;
+  });
+}
+
 // Hold the host lock exactly as a live helper would: a flock(2) on <root>/.compute-lock
 // owned by a child that exits when its stdin closes. Releasing always ends stdin first:
 // the sh child inherits the stdio pipes, so killing only its parent would orphan it and
@@ -1006,10 +1015,7 @@ test("SSH local executor cancellation terminates the real helper waiting for the
   t.after(() => held.kill());
   const controller = new AbortController();
   const pending = withComputeAbortSignal(controller.signal, () => f.driver.ensureNamespace(tenant));
-  while (f.children.length === 0) {
-    await delay(10);
-  }
-  await delay(100);
+  await waitForLockWait(f);
   controller.abort();
   assert.equal((await pending).failure, "retryable");
   assert.notEqual(f.children[0].signalCode ?? f.children[0].exitCode, null);
@@ -1045,11 +1051,8 @@ test("SSH helper stops mutating when its session pipe closes, without any signal
   const held = await holdLock(f);
   t.after(() => held.kill());
   const pending = f.driver.ensureNamespace(tenant);
-  while (f.children.length === 0) {
-    await delay(10);
-  }
+  await waitForLockWait(f);
   const child = f.children[0];
-  await delay(100);
   child.stdout.destroy();
   const started = Date.now();
   assert.equal((await pending).failure, "retryable");
@@ -1066,11 +1069,9 @@ test("SSH host lock excludes concurrent helpers and is released by the kernel wh
   const held = await holdLock(f);
   t.after(() => held.kill());
   const pending = f.driver.ensureNamespace(tenant);
-  while (f.children.length === 0) {
-    await delay(10);
-  }
-  // While another helper holds the lock, this one must wait without mutating the host.
-  await delay(1_500);
+  // While another helper holds the lock, this one must keep waiting without mutating
+  // the host: thirty held attempts span about the 1.5 s this test used to sleep.
+  await waitForLockWait(f, 30);
   await missing(f.nsDir);
   assert.equal(f.children[0].exitCode, null);
   // A holder killed without any cleanup (SIGKILL) releases the flock through the kernel;
