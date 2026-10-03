@@ -66,6 +66,55 @@ export async function retryKubectlRead(
   }
 }
 
+// tests/fixtures/kubernetes/probe.mjs exits with this code, and prints
+// {"denied":true,"code":...} on stdout, only when its connection attempt was
+// refused, unreachable, or unanswered. Any other probe failure exits 1.
+export const PROBE_DENIED_EXIT_CODE = 42;
+
+// Returns the probe's denial report when kubectl exec ran the probe and the
+// probe itself reported a denial, otherwise undefined. A dropped exec stream, a
+// missing or crashing probe script, and a DNS or argument error are not denials.
+export function probeDenial(error) {
+  const stderr = String(error?.stderr ?? "");
+  if (
+    error?.code !== PROBE_DENIED_EXIT_CODE ||
+    !stderr.includes(`command terminated with exit code ${PROBE_DENIED_EXIT_CODE}`)
+  ) {
+    return undefined;
+  }
+  try {
+    const report = JSON.parse(
+      String(error.stdout ?? "")
+        .trim()
+        .split("\n")
+        .at(-1),
+    );
+    return report?.denied === true && typeof report.code === "string" ? report : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Runs a probe exec that is expected to be blocked. Transport drops are
+// retried like any read; the check passes only on the probe's own denial.
+export async function assertProbeDenied(description, run, options) {
+  let stdout;
+  try {
+    stdout = await retryKubectlRead(run, options);
+  } catch (error) {
+    const denial = probeDenial(error);
+    if (denial !== undefined) {
+      return denial;
+    }
+    const detail = String(error?.stderr ?? "").trim() || error?.message;
+    throw new Error(
+      `${description}: the probe did not report a denial (exit ${error?.code}): ${detail}`,
+      { cause: error },
+    );
+  }
+  assert.fail(`${description} unexpectedly succeeded: ${String(stdout).trim()}`);
+}
+
 export function createKubernetesClient({
   selection,
   kubectl = (...args) => kubectlFor(selection, ...args),

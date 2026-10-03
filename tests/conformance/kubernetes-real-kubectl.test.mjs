@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { createServer } from "node:net";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { isTransientKubectlFailure, retryKubectlRead } from "../helpers/kubernetes-real.mjs";
+import { promisify } from "node:util";
+import {
+  assertProbeDenied,
+  isTransientKubectlFailure,
+  PROBE_DENIED_EXIT_CODE,
+  probeDenial,
+  retryKubectlRead,
+} from "../helpers/kubernetes-real.mjs";
+
+const execute = promisify(execFile);
+const probeScript = fileURLToPath(new URL("../fixtures/kubernetes/probe.mjs", import.meta.url));
 
 // execFile rejects a non-zero kubectl exit with a numeric code and the
 // captured stderr; a spawn failure has a string code and no stderr.
@@ -119,3 +133,112 @@ test(
     assert.equal(logs.length, 3);
   },
 );
+
+// Stands in for `kubectl exec <pod> -- node <script> ...`: kubectl reports a
+// remote command's non-zero exit on stderr and exits with the same code.
+async function fakeKubectlExec(script, ...args) {
+  try {
+    const { stdout } = await execute(process.execPath, [script, ...args], { timeout: 10_000 });
+    return stdout;
+  } catch (error) {
+    if (typeof error.code === "number") {
+      error.stderr = `${error.stderr}command terminated with exit code ${error.code}\n`;
+    }
+    throw error;
+  }
+}
+
+async function closedLoopbackPort() {
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+  server.close();
+  await once(server, "close");
+  return port;
+}
+
+const quiet = { sleep: async () => {}, log: () => {} };
+
+test("the probe's own refused connection passes a deny check", async () => {
+  const port = await closedLoopbackPort();
+  const denial = await assertProbeDenied(
+    "refused loopback traffic",
+    () => fakeKubectlExec(probeScript, "tcp", "127.0.0.1", String(port)),
+    quiet,
+  );
+  assert.deepEqual(denial, { denied: true, code: "ECONNREFUSED" });
+});
+
+test("a connected probe fails a deny check", async (context) => {
+  const server = createServer((socket) => socket.end());
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  context.after(() => server.close());
+  await assert.rejects(
+    assertProbeDenied(
+      "open loopback traffic",
+      () => fakeKubectlExec(probeScript, "tcp", "127.0.0.1", String(server.address().port)),
+      quiet,
+    ),
+    (error) => error.code === "ERR_ASSERTION" && /unexpectedly succeeded/.test(error.message),
+  );
+});
+
+test("a deny check fails when the probe never reports a denial", async () => {
+  const missingScript = fileURLToPath(new URL("./missing-probe.mjs", import.meta.url));
+  const execStreamDroppedEveryTime = async () => {
+    throw kubectlFailure(execStreamDropped);
+  };
+  for (const [reason, run] of [
+    ["exec stream dropped on every attempt", execStreamDroppedEveryTime],
+    ["missing probe script", () => fakeKubectlExec(missingScript, "tcp", "127.0.0.1", "1")],
+    // A name that cannot resolve fails before any connection attempt.
+    ["DNS failure", () => fakeKubectlExec(probeScript, "tcp", "probe.invalid", "80")],
+    ["unsupported operation", () => fakeKubectlExec(probeScript, "udp", "127.0.0.1", "1")],
+  ]) {
+    await assert.rejects(
+      assertProbeDenied(reason, run, quiet),
+      (error) => error.code !== "ERR_ASSERTION" && /did not report a denial/.test(error.message),
+      reason,
+    );
+  }
+});
+
+test("a deny check retries a dropped exec stream and accepts the probe's denial", async () => {
+  const port = await closedLoopbackPort();
+  let calls = 0;
+  const denial = await assertProbeDenied(
+    "refused loopback traffic after a dropped stream",
+    async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw kubectlFailure(execStreamDropped);
+      }
+      return fakeKubectlExec(probeScript, "tcp", "127.0.0.1", String(port));
+    },
+    quiet,
+  );
+  assert.equal(calls, 2);
+  assert.equal(denial.code, "ECONNREFUSED");
+});
+
+test("only the probe's denial exit code with its stdout report is a denial", () => {
+  const terminated = `command terminated with exit code ${PROBE_DENIED_EXIT_CODE}\n`;
+  const report = '{"denied":true,"code":"ETIMEDOUT"}\n';
+  assert.deepEqual(
+    probeDenial(
+      Object.assign(kubectlFailure(terminated, PROBE_DENIED_EXIT_CODE), { stdout: report }),
+    ),
+    { denied: true, code: "ETIMEDOUT" },
+  );
+  for (const error of [
+    // The denial exit code without the probe's report, or kubectl's own exit.
+    Object.assign(kubectlFailure(terminated, PROBE_DENIED_EXIT_CODE), { stdout: "" }),
+    Object.assign(kubectlFailure("error: EOF\n", PROBE_DENIED_EXIT_CODE), { stdout: report }),
+    // The report with a generic probe failure exit.
+    Object.assign(kubectlFailure("command terminated with exit code 1\n"), { stdout: report }),
+  ]) {
+    assert.equal(probeDenial(error), undefined, error.message);
+  }
+});

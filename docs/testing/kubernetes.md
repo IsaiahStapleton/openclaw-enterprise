@@ -87,6 +87,9 @@ between successful controls; an unrestricted Pod verifies listener availability.
 Readiness gates exclude fixtures from cluster DNS endpoints. This proves k3d
 enforcement, not OpenShift.
 
+A denial counts only when the probe exits 42 with `{"denied":true}`. A dropped
+exec stream is retried; any other probe error fails the check.
+
 Live Configuration ConfigMap CRUD and least-privilege RBAC cases require the
 selected disposable cluster and tenant credentials. Without those inputs, they
 skip explicitly. Schema, controller, and SDK fixtures do not exercise that live
