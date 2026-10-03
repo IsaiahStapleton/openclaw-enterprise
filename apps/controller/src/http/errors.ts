@@ -321,11 +321,11 @@ function namespaceNotEmptyMessage(error: NamespaceNotEmptyError): string {
     return `${prefix} It still contains: ${parts.join(", ")}.`;
   };
   // Add one ID per kind in turn, so a kind with many IDs cannot crowd out the ones after it
-  // (Configurations, the kind with no list route). Adding only lengthens the message, so a
-  // kind whose next ID does not fit is done.
+  // (Configurations, the kind with no list route). A kind whose next ID does not fit is done.
+  const kinds = new Set(error.contents);
   const done = new Set<string>();
-  while (done.size < error.contents.length) {
-    for (const kind of error.contents) {
+  while (done.size < kinds.size) {
+    for (const kind of kinds) {
       const count = shown.get(kind) ?? 0;
       if (done.has(kind)) {
         continue;
