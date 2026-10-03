@@ -308,6 +308,21 @@ export class IAMPolicyValidationError extends ScopeViolationError {
   }
 }
 
+/**
+ * A Secret value passed the request schema but not OCC's stricter rules: it holds an
+ * unpaired UTF-16 surrogate (not valid UTF-8) or exceeds 65536 UTF-8 bytes. HTTP reports
+ * it as an invalid `/value` instead of hiding it as a scope miss.
+ */
+export class SecretValueError extends ScopeViolationError {
+  readonly code: "INVALID_VALUE" | "TOO_LONG";
+
+  constructor(code: "INVALID_VALUE" | "TOO_LONG", message: string) {
+    super(message);
+    this.name = "SecretValueError";
+    this.code = code;
+  }
+}
+
 /** A Namespace Role cannot be deleted while AccessBindings still reference it. */
 export class IAMRoleInUseError extends ResourceConflictError {
   constructor() {
