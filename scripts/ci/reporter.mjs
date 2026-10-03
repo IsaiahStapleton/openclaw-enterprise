@@ -1,3 +1,5 @@
+import { stripVTControlCharacters } from "node:util";
+
 const safeOccErrorCodes = new Set([
   "INVALID_REQUEST",
   "UNAUTHENTICATED",
@@ -510,6 +512,92 @@ function upstreamDiagnostic(value) {
   return { kind: "chatgpt-admin-http", operation, status };
 }
 
+// Failure messages and the top stack frame make flakes attributable from the
+// results artifact, which anyone who can read the run may download. Keep them
+// short and strip every environment value (credentials, private image names,
+// database URLs) plus common token shapes before they leave the test process.
+const failureMessageLimit = 600;
+const failureFrameLimit = 240;
+const minimumRedactedEnvLength = 8;
+const secretShapes = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gu,
+  /\b(?:[Bb]earer|BEARER|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gu,
+  /\b(eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*)/gu,
+  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}/gu,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gu,
+  /\bxox[abposr]-[A-Za-z0-9-]{8,}/gu,
+  /\bA[KS]IA[A-Z0-9]{16}\b/gu,
+];
+const secretAssignment =
+  /\b([A-Za-z_-]{0,40}(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)s?["']?\s*[:=]\s*["']?)[^\s"',;}&]+/giu;
+
+let environmentSecrets;
+function environmentValues() {
+  if (environmentSecrets) {
+    return environmentSecrets;
+  }
+  const values = new Map();
+  for (const [name, value] of Object.entries(process.env)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    if (value.length >= minimumRedactedEnvLength) {
+      values.set(value, name);
+    }
+    // A database or proxy URL can surface its password on its own.
+    try {
+      const password = decodeURIComponent(new URL(value).password);
+      if (password.length >= 4) {
+        values.set(password, name);
+      }
+    } catch {
+      // Not a URL.
+    }
+  }
+  // Longest first, so a value containing another is replaced whole.
+  environmentSecrets = [...values].sort(([a], [b]) => b.length - a.length);
+  return environmentSecrets;
+}
+
+function redactFailureText(text, limit) {
+  if (typeof text !== "string" || text.length === 0) {
+    return undefined;
+  }
+  // Bound the work; only the first `limit` characters survive anyway.
+  let result = stripVTControlCharacters(text.slice(0, 16_384));
+  const root = process.cwd();
+  if (root.length > 1) {
+    result = result.replaceAll(`file://${root}/`, "").replaceAll(`${root}/`, "");
+  }
+  for (const [value, name] of environmentValues()) {
+    result = result.replaceAll(value, `[env:${name}]`);
+  }
+  for (const shape of secretShapes) {
+    result = result.replace(shape, "[redacted]");
+  }
+  result = result
+    .replace(secretAssignment, "$1[redacted]")
+    .replace(/:\/\/[^/\s:@]+:[^/\s@]+@/gu, "://[redacted]@")
+    .replace(/[^\P{Cc}\n\t]/gu, "");
+  return result.length > limit ? `${result.slice(0, limit)}... [truncated]` : result;
+}
+
+function failureText(cause) {
+  const message =
+    typeof cause === "string" ? cause : typeof cause?.message === "string" ? cause.message : "";
+  const frame =
+    typeof cause?.stack === "string"
+      ? cause.stack
+          .split("\n")
+          .find((line) => /^\s+at\s/u.test(line))
+          ?.trim()
+      : undefined;
+  return {
+    message: redactFailureText(message, failureMessageLimit),
+    frame: redactFailureText(frame, failureFrameLimit),
+  };
+}
+
 function location(data = {}) {
   const error = data.details?.error;
   const cause = error?.cause ?? error;
@@ -559,6 +647,7 @@ function location(data = {}) {
               : undefined,
           location: failureLocation,
           diagnostic: failureDiagnostic(cause),
+          ...failureText(cause),
         }
       : undefined,
     durationMs:

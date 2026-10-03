@@ -40,6 +40,8 @@ function run(root, args, env = {}) {
       ...process.env,
       GITHUB_SHA: currentSha(),
       CI_RUNNER_PARENT_SECRET: "secretauthvalue-parent",
+      // Fixture failures quote this value; the reporter must redact env values.
+      CI_RUNNER_FIXTURE_CREDENTIAL: "secretauthvalue",
       ...env,
     },
   });
@@ -280,7 +282,13 @@ test("run records a sanitized file failure after all reported cases pass", async
   assert.equal(summary.counts.passed, 2);
   assert.equal(summary.counts.failed, 0);
   assert.deepEqual(summary.files[0].fileFailure, {
-    error: { code: "ERR_TEST_FAILURE", name: "Error", failureType: "testCodeFailure", exitCode: 1 },
+    error: {
+      code: "ERR_TEST_FAILURE",
+      name: "Error",
+      failureType: "testCodeFailure",
+      exitCode: 1,
+      message: "test failed",
+    },
     diagnosticKind: "post-test-async-activity",
   });
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}\n${artifact}`, /secretauthvalue/);
@@ -1066,12 +1074,21 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
   );
   assert.equal(failure.location.line, 6);
   assert.ok(failure.location.column > 0);
+  // The bounded message and top frame name the failure; env values never survive.
+  assert.match(failure.message, /'\[env:CI_RUNNER_FIXTURE_CREDENTIAL\]-actual'/);
+  assert.match(failure.message, /'expected'/);
+  assert.match(failure.frame, /\(tests\/integration\/redacted\.test\.mjs:6:\d+\)$/);
+  assert.match(
+    result.stderr,
+    /run-tests: failed tests\/integration\/redacted\.test\.mjs:6 "redacted failure locator": Expected values/,
+  );
   const customFailure = summary.files[0].tests.find(
     (entry) => entry.name === "redacted custom error",
   );
   assert.equal(customFailure.status, "failed");
   assert.equal(customFailure.error.cause, undefined);
   assert.equal(customFailure.error.location.line, 11);
+  assert.equal(customFailure.error.message, "[env:CI_RUNNER_FIXTURE_CREDENTIAL]-message");
   const httpFailure = summary.files[0].tests.find(
     (entry) => entry.name === "allowlisted controller HTTP diagnostic",
   );
@@ -1192,6 +1209,49 @@ test("run redacts arbitrary stdout, stderr, assertion payloads, and stacks from 
     assert.equal(rejected.status, "failed");
     assert.equal(rejected.error.diagnostic, undefined);
   }
+});
+
+test("reporter bounds failure messages and redacts credential shapes", async () => {
+  const { default: reporter } = await import("../../scripts/ci/reporter.mjs");
+  const render = async (cause) => {
+    let text = "";
+    for await (const chunk of reporter([
+      { type: "test:fail", data: { name: "case", details: { error: { cause } } } },
+    ])) {
+      text += chunk;
+    }
+    return JSON.parse(text).data.error;
+  };
+  const credentials = [
+    "Authorization: Bearer abcdefghijklmnop0123",
+    "postgres://occ:hunter2pass@db.internal:5432/occ",
+    "token=ghp_0123456789abcdefghijABCDEFGHIJ",
+    'password: "correct-horse"',
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhIn0.c2lnbmF0dXJl",
+    "sk-proj-0123456789abcdef",
+    "xoxb-1234-5678-abcdefgh",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----",
+  ];
+  const error = await render(new Error(`request failed\n${credentials.join("\n")}`));
+  assert.match(error.message, /^request failed\n/);
+  for (const leaked of [
+    "abcdefghijklmnop0123",
+    "hunter2pass",
+    "ghp_0123",
+    "correct-horse",
+    "eyJhbGci",
+    "sk-proj",
+    "xoxb-",
+    "MIIEabc",
+  ]) {
+    assert.doesNotMatch(error.message, new RegExp(leaked));
+  }
+  assert.match(error.frame, /^at /);
+  const long = await render(new Error("x".repeat(100_000)));
+  assert.ok(long.message.length < 700);
+  assert.match(long.message, /\.\.\. \[truncated\]$/);
+  assert.equal((await render("thrown string")).message, "thrown string");
+  assert.equal((await render(undefined)).message, undefined);
 });
 
 test("run keeps bounded Agent namespace activity from a passing k3d file", async (t) => {

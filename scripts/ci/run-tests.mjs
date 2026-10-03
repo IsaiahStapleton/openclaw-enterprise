@@ -765,7 +765,27 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
   };
 
   await writeSummary(resultsPath, summary);
+  logFailures(files);
   return summary.exitCode;
+}
+
+// The job log keeps every attempt, so name each failure there as well. The
+// reporter has already bounded and redacted the message.
+function logFailures(files) {
+  const oneLine = (text) => (text ?? "").replace(/\s*\n\s*/gu, " | ");
+  for (const file of files) {
+    const failures = file.tests.filter((testCase) => testCase.status === "failed");
+    if (file.fileFailure) {
+      failures.push({ name: "(file)", line: undefined, error: file.fileFailure.error });
+    }
+    for (const { name, line, error } of failures) {
+      const at = error?.location?.line ?? line;
+      const message = oneLine(error?.message);
+      process.stderr.write(
+        `run-tests: failed ${file.path}${at ? `:${at}` : ""} ${JSON.stringify(name)}${message ? `: ${message}` : ""}${error?.frame ? ` (${oneLine(error.frame)})` : ""}\n`,
+      );
+    }
+  }
 }
 
 function laneNamesForTarget(manifest, target) {
