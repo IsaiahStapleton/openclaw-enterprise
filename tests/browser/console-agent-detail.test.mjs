@@ -30,6 +30,7 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  settlePageRequests,
   waitForCondition,
   waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
@@ -3589,7 +3590,8 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
     await page.reload();
     await unavailable.waitFor();
   }
-  await page.waitForTimeout(300);
+  // The native admin card asks for status as it renders, before the denial panel shows.
+  await settlePageRequests(page);
   assert.equal(reads(configurationPath), 1);
   assert.equal(reads(nativeAdminPath), 1);
   assert.equal(denials("openclaw.configurations.read"), 1);
