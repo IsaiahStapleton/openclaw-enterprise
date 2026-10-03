@@ -5658,7 +5658,7 @@ export class OpenClawController {
       // Installation defaults were seeded by Namespace creation, so deletion removes
       // them only while they still match the defaults; edited copies block above.
       for (const preset of seededPresets) {
-        await this.deletePresetInState(state, principalId, namespace.id, preset.id);
+        const removed = await this.deletePresetInState(state, principalId, namespace.id, preset.id);
         await state.audit.append({
           id: `aud_${crypto.randomUUID()}`,
           installationId: this.installation.id,
@@ -5670,7 +5670,11 @@ export class OpenClawController {
           action: "openclaw.presets.delete",
           resource: { kind: "preset", id: preset.id, namespaceId: namespace.id },
           outcome: "success",
-          details: { source: "namespace-deletion" },
+          // Like a direct Preset delete, name the AccessBindings removed with it.
+          details: {
+            source: "namespace-deletion",
+            ...(removed.length === 0 ? {} : { removedAccessBindings: removed }),
+          },
         });
       }
       const deleting = await state.namespaces.transitionNamespaceStatus(
