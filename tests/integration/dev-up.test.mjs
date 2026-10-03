@@ -1383,6 +1383,7 @@ for (const driver of ["docker"]) {
 for (const scenario of [
   "compose-up-failed",
   "cluster-create-failed",
+  "node-dns-refused",
   "api-mismatch",
   "api-unauthorized",
 ]) {
@@ -1410,6 +1411,16 @@ for (const scenario of [
     }
     if (scenario === "cluster-create-failed") {
       assert.match(result.stderr, /partial cluster creation/);
+    }
+    if (scenario === "node-dns-refused") {
+      // A node resolver nobody answers stops startup before the first image pull.
+      assert.match(result.stderr, /cannot resolve registry-1\.docker\.io/);
+      assert.match(result.stderr, /OCC_DEVELOPMENT_K3D_DNS_RESOLVER/);
+      const commands = await readJsonLines(fixture.env.SAFETY_LOG);
+      assert.equal(
+        commands.some(({ command, args }) => command === "k3d" && args[0] === "image"),
+        false,
+      );
     }
     if (scenario.startsWith("api-")) {
       await assert.rejects(stat(keyOutput), { code: "ENOENT" });
