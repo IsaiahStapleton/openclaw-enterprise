@@ -10493,7 +10493,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
                 name: "prepare-oauth-home",
                 image: this.options.images.agent,
                 imagePullPolicy: "IfNotPresent",
-                command: ["node", "-e"],
+                // OAuth requires the managed runtime image, which provides tini.
+                command: [...SETUP_WRAPPER_COMMAND],
                 args: [
                   [
                     'const { chmodSync, lstatSync, mkdirSync, rmSync } = require("node:fs");',
@@ -10520,7 +10521,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
                 name: "oauth-bootstrap",
                 image: this.options.images.agent,
                 imagePullPolicy: "IfNotPresent",
-                command: ["node", "-e"],
+                // Under tini the idle seed writer is not PID 1, so its Pod's delete ends it
+                // on SIGTERM instead of waiting out the grace period for SIGKILL.
+                command: [...SETUP_WRAPPER_COMMAND],
                 args: [CODEX_OAUTH_BOOTSTRAP_ENTRYPOINT + "\nsetInterval(() => {}, 60000);"],
                 env: [
                   { name: "CODEX_HOME", value: "/auth" },
