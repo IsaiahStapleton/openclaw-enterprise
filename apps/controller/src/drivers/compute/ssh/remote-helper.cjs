@@ -912,11 +912,18 @@ async function removeNamespace(input, nsDir) {
 // Agent directory with its port marker, the unit file, and the runtime account.
 async function removeAgent(input, nsDir) {
   const agentDir = join(nsDir, "agents", hash(input.revision.agentId).slice(0, 12));
+  if (inspect(nsDir) !== undefined) {
+    directory(join(nsDir, "agents"));
+  }
   if (inspect(agentDir) === undefined) {
     // A retry after the tree was removed only needs the remaining account.
     const markerPath = accountMarker(input);
     if (inspect(markerPath) !== undefined) {
-      await removeRuntimeIdentity(input, readJson(markerPath));
+      const marker = readJson(markerPath);
+      if (marker.runtimeUser !== accountName(input)) {
+        throw new OwnershipFailure("Runtime account marker is invalid.");
+      }
+      await removeRuntimeIdentity(input, marker);
     }
     return {};
   }
@@ -928,8 +935,8 @@ async function removeAgent(input, nsDir) {
     await systemctl("stop", unit);
     await systemctl("disable", unit);
     fs.unlinkSync(join(input.runtime.systemdUnitDirectory, unit));
-    await systemctl("daemon-reload");
   }
+  await systemctl("daemon-reload");
   fs.rmSync(agentDir, { recursive: true });
   await removeRuntimeIdentity(input, agent);
   return {};

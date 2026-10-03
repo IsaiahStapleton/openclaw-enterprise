@@ -741,8 +741,12 @@ test("SSH Agent deletion frees the Agent's host port, unit, account, and state",
   await missing(join(f.root, "accounts", `${runtimeUser}.json`));
   await missing(join(f.state, "accounts", "users", runtimeUser));
   await missing(join(f.state, "accounts", "groups", runtimeUser));
-  // Idempotent: a retried deletion with nothing left succeeds.
+  // Idempotent: a retried deletion with nothing left succeeds, as does an Agent never prepared.
   await f.driver.deleteAgentRuntimeCredentials(binding);
+  await f.driver.deleteAgentRuntimeCredentials({
+    ...binding,
+    agent: { ...binding.agent, id: "agent-ssh-never", servicePrincipalId: "agent-ssh-never-p" },
+  });
   assert.equal((await stat(join(f.units, f.unit(kept)))).isFile(), true);
   assert.equal((await json(join(f.agentDir(kept), "agent.json"))).port, start);
   // The full range is reusable: a new Agent receives the freed port.

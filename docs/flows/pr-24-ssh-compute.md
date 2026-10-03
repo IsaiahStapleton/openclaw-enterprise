@@ -14,7 +14,7 @@ The worker realizes an admitted embedded OpenClaw AgentRevision on a configured
 Linux host. The SSH Compute Driver sends a controller-owned helper to the host,
 which stages the revision and activates the Agent's systemd gateway after OCC
 commits its active revision. This trace covers preparation, activation,
-retirement, and Namespace deletion. It stops when
+retirement, and Agent and Namespace deletion. It stops when
 control returns to the worker; gateway request execution is outside this flow.
 The [SSH reference](../reference/drivers/ssh-compute.md) owns configuration and
 supported boundaries.
