@@ -31,6 +31,7 @@ import {
   openShellSandboxLogReader,
   type OpenShellGatewayClient,
   type OpenShellWorkspaceResponse,
+  OpenShellRequestReplayRefusedError,
   OpenShellSandboxAlreadyExistsError,
   OpenShellWorkspaceAlreadyExistsError,
   toProtobufStruct,
@@ -326,7 +327,13 @@ const STOPPED_SANDBOX_PHASES: ReadonlySet<string | number> = new Set([
   9,
 ]);
 
-function requestId(revisionId: string): string {
+// OpenShell keeps a request_id whose create errored server-side unresolved forever, so a
+// revision's create moves to its next request_id once the gateway refuses the current one
+// and no Sandbox exists. The gateway's own admission records are the attempt counter, and
+// the bound caps the records one revision can leave unresolved.
+const MAX_CREATE_REQUEST_IDS = 16;
+
+function revisionUuid(revisionId: string): string {
   const match = /^rev_([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/.exec(revisionId);
   if (match === null) {
     throw new OpenShellSandboxConfigurationFailure(
@@ -334,6 +341,19 @@ function requestId(revisionId: string): string {
     );
   }
   return match[1]!;
+}
+
+/** Attempt 0 is the revision UUID; later attempts are stable RFC 9562 version-8 UUIDs. */
+function createRequestIds(revisionId: string): readonly string[] {
+  const uuid = revisionUuid(revisionId);
+  return Array.from({ length: MAX_CREATE_REQUEST_IDS }, (_, attempt) => {
+    if (attempt === 0) {
+      return uuid;
+    }
+    const hex = sha256Hex(`openclaw.dev/openshell-create-sandbox/v1\0${uuid}\0${attempt}`, 32);
+    const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20)}`;
+  });
 }
 
 function validateHarnessServiceUrl(value: unknown): void {
@@ -1173,9 +1193,9 @@ export class OpenShellSandboxDriver implements SandboxDriver {
       "openclaw.dev/revision-id": context.revision.id,
     };
     const selector = { name: sandbox.resourceName, workspace: workspaceName(context.namespace) };
+    const requestIds = createRequestIds(context.revision.id);
     const create = {
       ...selector,
-      requestId: requestId(context.revision.id),
       labels: context.requirements.labels,
       annotations,
       spec: sandboxSpec(this.options, context.requirements),
@@ -1186,12 +1206,35 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     // exists would hit the gateway's request_id replay, which refuses a changed spec
     // (REQUEST_ID_PAYLOAD_MISMATCH) and forgets the create after 24 h (ALREADY_EXISTS).
     let existing = await client.getSandbox(selector, context.signal);
-    if (existing === undefined) {
+    // A refused request_id ran nothing, but its earlier call may still create the Sandbox,
+    // so the next ID is tried only after GetSandbox finds none. The Sandbox name is unique
+    // per Workspace, so concurrent attempts yield one Sandbox and ALREADY_EXISTS adopts it.
+    let refusal: OpenShellRequestReplayRefusedError | undefined;
+    for (let attempt = 0; existing === undefined; attempt++) {
+      if (attempt === requestIds.length) {
+        // A last refusal of REQUEST_REPLAY_UNAVAILABLE can also mean unreadable gateway key
+        // material, which a new revision would not fix.
+        const remedy =
+          refusal?.reason === "REQUEST_REPLAY_UNAVAILABLE"
+            ? "check that the gateway's JWT or TLS key material is readable, or deploy a new revision"
+            : "deploy a new revision";
+        throw new OpenShellSandboxConfigurationFailure(
+          `OpenShell refused all ${requestIds.length} create request IDs for Sandbox ${sandbox.resourceName} (last: ${refusal?.message}); ${remedy}.`,
+        );
+      }
       let created;
+      let alreadyExists = false;
       try {
-        created = await client.createSandbox(create, context.signal);
+        created = await client.createSandbox(
+          { ...create, requestId: requestIds[attempt]! },
+          context.signal,
+        );
       } catch (error) {
-        if (!(error instanceof OpenShellSandboxAlreadyExistsError)) {
+        if (error instanceof OpenShellRequestReplayRefusedError) {
+          refusal = error;
+        } else if (error instanceof OpenShellSandboxAlreadyExistsError) {
+          alreadyExists = true;
+        } else {
           throw error;
         }
       }
@@ -1211,7 +1254,7 @@ export class OpenShellSandboxDriver implements SandboxDriver {
         return Object.freeze(sandbox);
       }
       existing = await client.getSandbox(selector, context.signal);
-      if (existing === undefined) {
+      if (existing === undefined && alreadyExists) {
         throw new OpenShellSandboxConfigurationFailure(
           `OpenShell Sandbox ${sandbox.resourceName} disappeared during creation.`,
         );
@@ -1225,7 +1268,7 @@ export class OpenShellSandboxDriver implements SandboxDriver {
     }
     if (existing.phase === "SANDBOX_PHASE_DELETING" || existing.phase === 4) {
       throw new OpenShellSandboxConfigurationFailure(
-        `OpenShell Sandbox ${sandbox.resourceName} is being deleted; it is created again after deletion finishes.`,
+        `OpenShell Sandbox ${sandbox.resourceName} is being deleted; it can be created again once deletion finishes.`,
       );
     }
     if (STOPPED_SANDBOX_PHASES.has(existing.phase ?? "")) {
