@@ -174,16 +174,16 @@ export class ConfigurationHarnessError extends ScopeViolationError {
 }
 
 /**
- * An Agent provisioning request names an invalid Secret binding: a reserved or invalid
- * environment destination, an unsupported binding shape, or a Secret reference to
- * another Namespace. Messages are static, so HTTP reports them as an invalid request
- * instead of hiding them as a scope miss; Secret existence is still checked later
- * and stays a scope miss.
+ * A request (Agent provisioning, a Configuration write, or an Agent's Harness authentication)
+ * names an invalid Secret binding: a reserved or invalid environment destination, an
+ * unsupported binding shape, or a Secret reference to another Namespace. Messages are static,
+ * so HTTP reports them as an invalid request instead of hiding them as a scope miss; Secret
+ * existence is still checked later and stays a scope miss.
  */
-export class AgentProvisioningValidationError extends ScopeViolationError {
+export class SecretBindingValidationError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
-    this.name = "AgentProvisioningValidationError";
+    this.name = "SecretBindingValidationError";
   }
 }
 

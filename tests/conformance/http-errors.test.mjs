@@ -9,7 +9,6 @@ import { PresetValidationError } from "../../packages/contracts/src/index.ts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
-  AgentProvisioningValidationError,
   AuthorizationDeniedError,
   ChannelCredentialError,
   ChannelDirectoryError,
@@ -34,6 +33,7 @@ import {
   ResourceStateConflictError,
   RuntimeLogsError,
   ScopeViolationError,
+  SecretBindingValidationError,
   SecretValueError,
 } from "../../packages/occ/src/index.ts";
 
@@ -177,7 +177,7 @@ const cases = [
   ],
   [
     "an invalid Agent provisioning Secret binding",
-    new AgentProvisioningValidationError("Secret references cannot cross Namespaces."),
+    new SecretBindingValidationError("Secret references cannot cross Namespaces."),
     {
       status: 400,
       code: "INVALID_REQUEST",
