@@ -968,3 +968,19 @@ test(
     assert.equal(denied.statusCode, 403, denied.body);
   },
 );
+
+// THROWAWAY (ci-diag proof, reverted before landing): deliberate failures that
+// show the results artifact keeps the test name, a redacted message and a frame.
+function throwawayHelperFailure() {
+  throw new Error(
+    `throwaway helper failed for ${process.env.GITHUB_SHA} with Bearer abcdefghijklmnopqrstuv`,
+  );
+}
+
+test("THROWAWAY deliberate assertion failure for results proof", () => {
+  assert.equal("deliberate actual value", "deliberate expected value");
+});
+
+test("THROWAWAY deliberate helper failure for results proof", () => {
+  throwawayHelperFailure();
+});
