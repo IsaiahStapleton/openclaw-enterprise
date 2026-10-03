@@ -133,6 +133,8 @@ function expectedType(parameters: Record<string, unknown>): string | undefined {
 // field once with the accepted members instead of one contradictory problem per member.
 function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly ContractProblem[] {
   const collapsed = new Map<ValidationEntry, ContractProblem | null>();
+  // A member of a union that does not collapse names only one alternative, so it gets no hint.
+  const unionMembers = new Set<ValidationEntry>();
   for (const union of entries) {
     if (union.keyword !== "anyOf" || typeof union.schemaPath !== "string") {
       continue;
@@ -140,8 +142,12 @@ function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly Con
     const members = entries.filter(
       (entry) =>
         entry.schemaPath.startsWith(`${union.schemaPath}/`) &&
-        entry.instancePath.startsWith(union.instancePath),
+        (entry.instancePath === union.instancePath ||
+          entry.instancePath.startsWith(`${union.instancePath}/`)),
     );
+    for (const member of members) {
+      unionMembers.add(member);
+    }
     if (
       members.length === 0 ||
       !members.every(
@@ -196,8 +202,9 @@ function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly Con
     ) {
       path += `/${jsonPointer(parameters.additionalProperty)}`;
     }
-    const expected =
-      entry.keyword === "type"
+    const expected = unionMembers.has(entry)
+      ? undefined
+      : entry.keyword === "type"
         ? expectedType(parameters)
         : entry.keyword === "const"
           ? JSON.stringify(parameters.allowedValue)
@@ -250,9 +257,9 @@ function contractMessage(error: FastifyError, found: readonly ContractProblem[])
 }
 
 // The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
-// Control characters from submitted object keys are replaced, and the cut keeps whole characters.
+// Control and format characters from submitted object keys are replaced, and the cut keeps whole characters.
 function capped(message: string): string {
-  const characters = Array.from(message.replace(/\p{Cc}/gu, "?"));
+  const characters = Array.from(message.replace(/[\p{Cc}\p{Cf}]/gu, "?"));
   return characters.length <= 256 ? characters.join("") : `${characters.slice(0, 255).join("")}…`;
 }
 
