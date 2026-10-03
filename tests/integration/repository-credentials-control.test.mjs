@@ -991,6 +991,12 @@ test(
       return id;
     };
     const [first, retried, recovered] = ["repo-a", "repo-b", "repo-c"].map(inputFor);
+    // Without a worker attempt the journal refuses after the session opens; that
+    // session is closed and its only slot is free for the next admission.
+    assert.deepEqual(await send(first, freshId()), {
+      status: 503,
+      body: { error: "unavailable" },
+    });
     const opened = await send(first, await prepared(first));
     assert.equal(opened.status, 201);
     // Session capacity refuses these opens; neither may strand a durable reservation.
@@ -1011,7 +1017,8 @@ test(
     await eventually(
       () => fixture.service.status(opened.body.session.sessionId).state === "DISPOSED",
     );
-    // The fence stands; the session opened for this request is closed, not handed out.
+    // The fence stands. This plain retry opens a session, the journal answers
+    // missing, and that session is closed rather than handed out.
     assert.deepEqual(await send(recovered, recoveredId), {
       status: 404,
       body: { error: "admission-missing" },
