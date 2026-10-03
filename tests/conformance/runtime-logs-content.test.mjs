@@ -359,6 +359,56 @@ test("a failed startup phase keeps its fixed cause code", () => {
   );
 });
 
+test("a failed model probe keeps its closed-vocabulary cause, never other cause text", () => {
+  const probe = (event, cause) =>
+    JSON.stringify({ event, elapsedMs: 2340, code: "MODEL_PROBE_FAILED", cause });
+  const { records, withheld } = sanitizeRuntimeLogChunk({
+    stream: { source: "gateway", pod: "gateway-0", container: "gateway" },
+    truncated: false,
+    lines: [
+      {
+        time: lineTime(1),
+        raw: probe("openclaw.model_probe", { kind: "PROBE_STATUS", detail: "format" }),
+      },
+      {
+        time: lineTime(2),
+        raw: probe("codex.model_probe", { kind: "PROBE_STATUS", detail: "error-event" }),
+      },
+      { time: lineTime(3), raw: probe("openclaw.model_probe", { kind: "WRAPPER_ERROR" }) },
+      // Off-vocabulary details, unknown kinds and extra keys drop the cause, never the line.
+      {
+        time: lineTime(4),
+        raw: probe("openclaw.model_probe", { kind: "PROBE_STATUS", detail: "sk-live-abc" }),
+      },
+      { time: lineTime(5), raw: probe("openclaw.model_probe", { kind: "PROVIDER_TEXT" }) },
+      {
+        time: lineTime(6),
+        raw: probe("codex.model_probe", { kind: "PROBE_STATUS", detail: "format", text: "x" }),
+      },
+      { time: lineTime(7), raw: probe("codex.model_probe", "PROBE_STATUS") },
+    ],
+  });
+  assert.equal(withheld, 0);
+  const fields = (event, cause = {}) => ({
+    kind: "wrapper",
+    level: "error",
+    message: event,
+    fields: { elapsedMs: 2340, code: "MODEL_PROBE_FAILED", ...cause },
+  });
+  assert.deepEqual(
+    records.map(({ kind, level, message, fields }) => ({ kind, level, message, fields })),
+    [
+      fields("openclaw.model_probe", { causeKind: "PROBE_STATUS", causeDetail: "format" }),
+      fields("codex.model_probe", { causeKind: "PROBE_STATUS", causeDetail: "error-event" }),
+      fields("openclaw.model_probe", { causeKind: "WRAPPER_ERROR" }),
+      fields("openclaw.model_probe"),
+      fields("openclaw.model_probe"),
+      fields("codex.model_probe"),
+      fields("codex.model_probe"),
+    ],
+  );
+});
+
 test("a Gateway settings override keeps its setting names, never values (D322)", () => {
   const event = (settings) =>
     JSON.stringify({
