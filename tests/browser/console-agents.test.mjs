@@ -1984,7 +1984,8 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
     }),
   });
   // Each accepted request fails in the worker: first a taken name (permanent), then an
-  // unavailable dependency (transient).
+  // unavailable dependency (transient). Its retry is then rejected after the job created
+  // the Agent, which only the job's retry can finish.
   const failures = [
     {
       code: "PROVISIONING_REJECTED",
@@ -2009,6 +2010,31 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
             attemptCount: 0,
             updatedAt,
             url,
+          },
+        },
+        202,
+      ),
+    );
+  });
+  const agentId = "agt_00000000-0000-4000-8000-00000000c0de";
+  let retries = 0;
+  await page.route(`**/namespaces/${namespace.id}/agents/provision/work_2/retry`, async (route) => {
+    retries += 1;
+    await route.fulfill(
+      json(
+        {
+          provisioning: {
+            workId: "work_2",
+            status: "failed",
+            phase: "transport",
+            attemptCount: 2,
+            updatedAt,
+            agentId,
+            url: `/namespaces/${namespace.id}/agents/provision/work_2`,
+            error: {
+              code: "PROVISIONING_REJECTED",
+              message: "Agent provisioning could not complete.",
+            },
           },
         },
         202,
@@ -2040,7 +2066,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
     .getByText(
-      "An Agent with this name already exists in this Namespace. Choose a different name. Change the settings and select Create Agent to submit a new request.",
+      "An Agent with this name already exists in this Namespace. Choose a different name. Select Create Agent to submit a new request.",
     )
     .waitFor();
   const retry = page.getByRole("button", { name: "Retry provisioning request" });
@@ -2056,8 +2082,18 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1].name, "Free name");
-  // The failed job keeps its request ID, so the edited form submits a new one.
+  // The failed job keeps its request ID, so the edited form submits a new one with the
+  // same saved credential.
   assert.notEqual(bodies[1].requestId, bodies[0].requestId);
+  assert.deepEqual(bodies[1].harnessAuth, bodies[0].harnessAuth);
+
+  const retried = page.waitForResponse((response) => response.url().endsWith("/work_2/retry"));
+  await retry.click();
+  await retried;
+  await page.getByRole("button", { name: "Retry provisioning request", disabled: false }).waitFor();
+  assert.equal(retries, 1);
+  assert.equal(await retry.isVisible(), true);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
 });
 
 test("Agent creation rejects non-object native Configuration JSON before Configuration or Agent writes", async (t) => {
