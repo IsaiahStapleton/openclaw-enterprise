@@ -2284,7 +2284,8 @@ test("Dedicated Agent creation shows the API's named reason when a provisioning 
   const meta = { requestId: "req_00000000-0000-4000-8000-000000000001" };
   const jobUrl = (work) => `/namespaces/${namespace.id}/agents/provision/work_${work}`;
   // Each job fails transiently, then the API refuses its retry: first with the generic
-  // conflict text, which names no reason, then naming the Secret that was deleted.
+  // conflict text (a store race; controller refusals name a reason), then naming the
+  // Secret that was deleted.
   const refusals = [
     "The requested platform resource already exists.",
     "Secret sec_00000000-0000-4000-8000-00000000dead, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.",

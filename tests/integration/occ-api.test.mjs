@@ -1496,6 +1496,11 @@ test("a state conflict names what blocks the request, after authorization only",
       { name: "late-account" },
       "The Namespace does not accept new ServiceAccounts.",
     ],
+    [
+      "agents",
+      { name: "late-agent", configurationId: "cfg_00000000-0000-4000-8000-000000000000" },
+      "The Namespace does not accept new Agents.",
+    ],
   ]) {
     const refused = await controller.request("POST", `/namespaces/${namespace.id}/${path}`, {
       body,
@@ -1505,16 +1510,34 @@ test("a state conflict names what blocks the request, after authorization only",
     assert.equal(refused.body.error.message, message);
   }
 
+  const options = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/repository-options`,
+  );
+  assert.equal(options.status, 409, JSON.stringify(options.body));
+  assert.equal(options.body.error.message, "The Namespace does not accept new Agents.");
+
   // A caller without create permission learns nothing about the Namespace lifecycle.
   const memberApp = fixture.createApp(member.principal);
-  const denied = await injectedRequest(
-    memberApp,
-    "POST",
-    `/namespaces/${namespace.id}/configurations`,
-    { body: { kind: "agent", values: {} } },
-  );
-  assert.equal(denied.status, 403, JSON.stringify(denied.body));
-  assert.equal(denied.body.error.code, "FORBIDDEN");
+  for (const [method, path, body] of [
+    ["POST", "configurations", { kind: "agent", values: {} }],
+    ["POST", "service-accounts", { name: "late-account" }],
+    [
+      "POST",
+      "agents",
+      { name: "late-agent", configurationId: "cfg_00000000-0000-4000-8000-000000000000" },
+    ],
+    ["GET", "agents/repository-options"],
+  ]) {
+    const denied = await injectedRequest(
+      memberApp,
+      method,
+      `/namespaces/${namespace.id}/${path}`,
+      body === undefined ? {} : { body },
+    );
+    assert.equal(denied.status, 403, `${path}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+  }
 });
 
 test("Namespace IAM reports invalid policy input as 400 with the field and refuses inert Permissions", async () => {

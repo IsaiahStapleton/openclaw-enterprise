@@ -1934,6 +1934,7 @@ export class OpenClawController {
       const replay = await state.provisioning.findByRequest(namespace.id, principalId, requestId);
       if (replay !== undefined) {
         if (replay.requestFingerprint !== requestFingerprintHex) {
+          // The replay is keyed by this principal, so this names only the caller's own request.
           throw new ResourceStateConflictError(
             "The Agent provisioning request ID has a different plan.",
           );
