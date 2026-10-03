@@ -33,10 +33,11 @@ function contractOperations(document) {
 
 test("generated API reference stays on the approved single page", async () => {
   const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const outputs = generateApiReferenceOutputs(document);
   // Legal path-level keys are not operations and must not change the reference.
   const [firstPath] = Object.keys(document.paths);
   Object.assign(document.paths[firstPath], { summary: "Path-level summary", parameters: [] });
-  const outputs = generateApiReferenceOutputs(document);
+  assert.deepEqual(generateApiReferenceOutputs(document), outputs);
 
   assert.deepEqual(
     outputs.map((output) => output.path),
