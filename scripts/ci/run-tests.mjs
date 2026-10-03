@@ -779,7 +779,7 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
 // The job log keeps every attempt, so name each failure there as well. The
 // reporter has already bounded and redacted the message.
 function logFailures(files) {
-  const oneLine = (text) => (text ?? "").replace(/\s*\n\s*/gu, " | ");
+  const oneLine = (text) => (text ?? "").trim().replace(/\s*\n\s*/gu, " | ");
   for (const file of files) {
     const failures = file.tests.filter((testCase) => testCase.status === "failed");
     if (file.fileFailure) {
