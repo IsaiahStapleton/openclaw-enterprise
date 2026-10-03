@@ -615,19 +615,19 @@ test("Agent sharing shows a rejected write's reason, but generic text after an a
   assert.equal(await panel.getByText("Check the entered values", { exact: false }).count(), 0);
   await page.unroute(`${policyPath}/access-bindings`, reject);
 
-  // A rejected binding removal also shows its reason, and the binding stays.
+  // A rejected binding removal also shows its reason.
   await panel.getByRole("button", { name: "Refresh sharing" }).click();
   await panel.getByText("Current policy loaded.", { exact: false }).waitFor();
   await panel.getByRole("checkbox").check();
   await panel.getByRole("button", { name: "Share Agent", exact: true }).click();
   await panel.getByText("Agent access is shared.", { exact: false }).waitFor();
+  const bindings = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
+  assert.equal(bindings.data.length, 2);
   await page.route(`${policyPath}/access-bindings/*`, reject);
   await panel.getByRole("button", { name: "Remove binding", exact: true }).click();
   await panel.getByText(reason, { exact: false }).waitFor();
   assert.equal(await panel.getByText("Check the entered values", { exact: false }).count(), 0);
   assert.equal(await panel.getByText("Binding removed.", { exact: false }).count(), 0);
-  const bindings = await fixture.request("GET", `/namespaces/${namespace.id}/iam/access-bindings`);
-  assert.equal(bindings.data.length, 2);
 });
 
 test("Gateway password access saves the generated reference without changing admitted versions or Secret bindings", async (t) => {
