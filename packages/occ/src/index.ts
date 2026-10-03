@@ -5660,32 +5660,52 @@ export class OpenClawController {
         }
         return namespace;
       }
+      // The 409 names each remaining resource's ID: Configurations have no list view, so
+      // the error is the only place an operator can find what to delete.
       const contents: string[] = [];
+      const ids: Record<string, readonly string[]> = {};
+      const remaining = (kind: string, resources: readonly { readonly id: string }[]) => {
+        contents.push(kind);
+        ids[kind] = resources.map((resource) => resource.id);
+      };
       if (await state.namespaces.hasAgents(namespace.id)) {
-        contents.push("Agents");
+        remaining("Agents", await state.agents.listAgents(namespace.id));
       }
-      if (await state.namespaces.hasConfigurations(namespace.id)) {
-        contents.push("Configurations");
+      const configurationIds = await state.namespaces.listConfigurationIds(namespace.id);
+      if (configurationIds.length > 0) {
+        remaining(
+          "Configurations",
+          configurationIds.map((id) => ({ id })),
+        );
       }
       const presets = await state.presets.listPresets(namespace.id);
       const seededPresets = presets.filter((preset) => this.isUnmodifiedDefaultPreset(preset));
       if (seededPresets.length < presets.length) {
-        contents.push("Presets");
+        remaining(
+          "Presets",
+          presets.filter((preset) => !seededPresets.includes(preset)),
+        );
       }
       if (await state.namespaces.hasSecrets(namespace.id)) {
-        contents.push("Secrets");
+        remaining("Secrets", await state.secrets.listSecrets(namespace.id));
       }
       if (await state.namespaces.hasCredentialSources(namespace.id)) {
-        contents.push("credential sources");
+        remaining(
+          "credential sources",
+          await state.credentialSources.listCredentialSources(namespace.id),
+        );
       }
       if (await state.namespaces.hasServiceAccounts(namespace.id)) {
-        contents.push("service accounts");
+        remaining(
+          "service accounts",
+          await state.serviceAccounts.listServiceAccounts(namespace.id),
+        );
       }
       if (await state.provisioning.hasPendingNamespaceProvisioning(namespace.id)) {
         contents.push("pending Agent provisioning");
       }
       if (contents.length > 0) {
-        throw new NamespaceNotEmptyError(contents);
+        throw new NamespaceNotEmptyError(contents, ids);
       }
       // Installation defaults were seeded by Namespace creation, so deletion removes
       // them only while they still match the defaults; edited copies block above.

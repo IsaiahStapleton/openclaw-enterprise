@@ -115,6 +115,8 @@ export interface NamespaceRepository extends NamespaceReadRepository {
   ): Promise<Readonly<PersistedNamespace> | undefined>;
   hasAgents(namespaceId: string): Promise<boolean>;
   hasConfigurations(namespaceId: string): Promise<boolean>;
+  /** IDs of the Namespace's Configurations, oldest first; nothing else lists them. */
+  listConfigurationIds(namespaceId: string): Promise<readonly string[]>;
   hasPresets(namespaceId: string): Promise<boolean>;
   hasServiceAccounts(namespaceId: string): Promise<boolean>;
   hasSecrets(namespaceId: string): Promise<boolean>;
@@ -1186,6 +1188,16 @@ function repositories(
     hasConfigurations: async (namespaceId) =>
       Array.from(snapshot.configurations.values()).some(
         (configuration) => configuration.namespaceId === namespaceId,
+      ),
+    listConfigurationIds: async (namespaceId) =>
+      Object.freeze(
+        Array.from(snapshot.configurations.values())
+          .filter((configuration) => configuration.namespaceId === namespaceId)
+          .sort(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+          )
+          .map((configuration) => configuration.id),
       ),
     hasPresets: async (namespaceId) =>
       Array.from(snapshot.presets.values()).some((preset) => preset.namespaceId === namespaceId),

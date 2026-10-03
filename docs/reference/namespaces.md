@@ -114,7 +114,10 @@ Kubernetes namespaces are deleted normally.
 
 A Namespace containing any Agent, Configuration, Preset, service account, Secret,
 or [credential source](credential-sources.md) cannot be deleted and returns
-`409 NAMESPACE_NOT_EMPTY`; the error message lists the kinds that remain. Delete
+`409 NAMESPACE_NOT_EMPTY`. The error message lists the kinds that remain and
+the IDs of their resources, as far as the 256-character message
+allows; a kind with more says how many are left. Configurations have no list
+route, so this message is where their IDs appear. Delete
 unreferenced Agents, Configurations, [Presets](presets.md), service accounts,
 Secrets, and credential sources before deleting their Namespace. A credential
 source in `deleting` still counts; retry its deletion until it disappears.
@@ -152,7 +155,8 @@ workload is ready.
   operation.
 - `404`: The Namespace does not exist, belongs outside the requested scope, or
   has already been tombstoned.
-- `409 NAMESPACE_NOT_EMPTY`: The message names what remains. Remove the
+- `409 NAMESPACE_NOT_EMPTY`: The message names what remains, with resource
+  IDs. Delete the named resources and retry to see any others. Remove the
   Namespace's unreferenced Agents, Configurations, edited or custom Presets,
   service accounts, Secrets, and credential sources before deletion. An Agent
   whose teardown is still in progress, or a credential source in `deleting`,

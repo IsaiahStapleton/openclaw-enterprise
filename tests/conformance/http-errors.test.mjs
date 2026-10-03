@@ -111,6 +111,22 @@ const cases = [
     },
   ],
   [
+    "a non-empty Namespace names the remaining resource IDs that fit and counts the rest",
+    new NamespaceNotEmptyError(
+      ["Agents", "Configurations", "Secrets", "pending Agent provisioning"],
+      {
+        Agents: [],
+        Configurations: Array.from({ length: 12 }, (_, index) => `cfg_${String(index).repeat(36)}`),
+        Secrets: ["sec_1"],
+      },
+    ),
+    {
+      status: 409,
+      code: "NAMESPACE_NOT_EMPTY",
+      message: `The requested Namespace is not empty. It still contains: Agents, Configurations (${["0", "1"].map((digit) => `cfg_${digit.repeat(36)}`).join(", ")} and 10 more), Secrets (sec_1), pending Agent provisioning.`,
+    },
+  ],
+  [
     "a non-empty Namespace with unnamed contents",
     new NamespaceNotEmptyError(),
     { status: 409, code: "NAMESPACE_NOT_EMPTY", message: "The requested Namespace is not empty." },

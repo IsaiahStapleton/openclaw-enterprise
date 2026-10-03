@@ -1834,6 +1834,17 @@ export class PostgresPlatformState implements PlatformStateStore {
         )[0];
         return found?.present === true;
       },
+      listConfigurationIds: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                "SELECT id FROM occ.configurations WHERE namespace_id = $1 ORDER BY created_at, id",
+                [namespaceId],
+              )
+            ).rows,
+          ).map((row) => String(row.id)),
+        ),
       hasPresets: async (namespaceId) => {
         const found = rows(
           (
