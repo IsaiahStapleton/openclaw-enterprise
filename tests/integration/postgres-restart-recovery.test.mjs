@@ -2160,7 +2160,7 @@ test(
 );
 
 for (const invalid of [
-  "ordinary",
+  "another revision's deployment",
   "leading zero",
   "suffix",
   "cleanup",
@@ -2190,8 +2190,9 @@ for (const invalid of [
         [agents[0], owner.revisionId],
       );
       let sourceKey = `agent_revision:${owner.revisionId}:maintenance:1`;
-      if (invalid === "ordinary") {
-        sourceKey = `agent_revision:${owner.revisionId}:reconcile`;
+      // The active revision's own deployment may continue; see the worker tests.
+      if (invalid === "another revision's deployment") {
+        sourceKey = `agent_revision:rev_${randomUUID()}:reconcile`;
       }
       if (invalid === "leading zero") {
         sourceKey = `agent_revision:${owner.revisionId}:maintenance:01`;

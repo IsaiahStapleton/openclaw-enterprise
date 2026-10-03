@@ -3315,7 +3315,7 @@ export class ControllerWorker {
     if (
       resolved.outcome === "retry" &&
       claim.attemptCount >= this.maxAttempts &&
-      (await this.continueExhaustedMaintenance(claim, resolved.code))
+      (await this.continueExhaustedActiveRevision(claim, resolved.code))
     ) {
       return;
     }
@@ -3660,16 +3660,25 @@ export class ControllerWorker {
   // the maintenance chain, as finalizeActiveRevision does for failed
   // observations. The queue still refuses continuation past the credential
   // deadline, and the next pass re-checks authority before any new material.
-  private async continueExhaustedMaintenance(claim: ClaimedWork, code: string): Promise<boolean> {
+  // The same holds for a deployment that already published the active pointer
+  // (for example one recovered after its lease expired): its last retry fails
+  // the deployment without retiring the runtime it activated.
+  private async continueExhaustedActiveRevision(
+    claim: ClaimedWork,
+    code: string,
+  ): Promise<boolean> {
     const revisionId = claim.revisionId;
     if (
       claim.agentId === undefined ||
       revisionId === undefined ||
-      claim.namespaceTarget !== undefined ||
-      !new RegExp(`^agent_revision:${revisionId}:maintenance:(0|[1-9][0-9]*)$`).test(
-        claim.idempotencyKey,
-      )
+      claim.namespaceTarget !== undefined
     ) {
+      return false;
+    }
+    const maintenance = new RegExp(
+      `^agent_revision:${revisionId}:maintenance:(0|[1-9][0-9]*)$`,
+    ).test(claim.idempotencyKey);
+    if (!maintenance && claim.idempotencyKey !== `agent_revision:${revisionId}:reconcile`) {
       return false;
     }
     let continued = false;
@@ -3691,14 +3700,16 @@ export class ControllerWorker {
         namespace?.status !== "ready" ||
         revision === undefined ||
         revision.servicePrincipalId !== agent.servicePrincipalId ||
-        this.revisionMaintenanceInterval(revision) === undefined ||
+        (maintenance && this.revisionMaintenanceInterval(revision) === undefined) ||
         (revision.repositoryCredentials !== undefined &&
           Date.now() >= revision.repositoryCredentials.deadlineWallMs)
       ) {
         return;
       }
       await queue.fail(claim, { code }, { continuingRevision: true });
-      await this.enqueueMaintenance(queue, claim, revision);
+      if (maintenance) {
+        await this.enqueueMaintenance(queue, claim, revision);
+      }
       continued = true;
     }, this.queueOptions);
     if (!continued) {
