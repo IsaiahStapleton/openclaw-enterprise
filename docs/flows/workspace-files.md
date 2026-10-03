@@ -145,7 +145,7 @@ PostgreSQL development composition bind the selected Compute Driver to
 `createWorkspaceFilesAccess`. The worker uses the same mounted service key
 for native node enrollment.
 
-API and worker Pods load only public CA trust through `NODE_EXTRA_CA_CERTS` at
+API and worker Pods wait for the root Secret and load only public CA trust through `NODE_EXTRA_CA_CERTS` at
 startup, never the CA signing key; the
 [TLS lifecycle](../reference/gateway-routing.md#tls-and-certificate-lifecycle)
 covers the automatic CA and explicit issuers.
@@ -256,7 +256,7 @@ artifacts before cleanup. Embedded storage is unchanged.
 mutating them. The worker stops predecessors and suppresses their maintenance
 before dedicated preparation. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)
 owns RWO, downtime and recovery limits. These contracts require matching runtime
-images.
+images; local checks do not prove deployed acceptance.
 
 The API reads the mounted key per operation, so new connections pick up
 Secret rotation without a restart. Missing routing, missing or invalid

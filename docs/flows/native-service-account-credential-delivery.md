@@ -202,7 +202,7 @@ the second call.
 Embedded OpenClaw consumes the selected provider's native API key and runs one bounded native
 primary-model probe during actual gateway startup, with tools and fallback
 disabled; its 256-token output cap lets reasoning models answer within the
-15-second timeout. Replacement deployments use the same path; their `Recreate`
+15-second timeout. Initial and replacement deployments use the same path; their `Recreate`
 activation can stop the serving gateway before the new
 process validates credentials, so a failure leaves the Agent unavailable until
 repair and restart or a new deployment, with no automatic rollback.

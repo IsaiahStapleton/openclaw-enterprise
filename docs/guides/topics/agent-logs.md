@@ -12,8 +12,8 @@ SSH Compute, and Drivers that own their runtime logging (`runtimeLogging:
 
 ## Open the Logs tab
 
-1. Open the Agent and select a deployed version. The editable draft has no
-   runtime; a version without a running Pod shows no Pod.
+1. Open the Agent and select a deployed version. The editable draft is not a
+   version and has no runtime; a version without a running Pod shows no Pod.
    When the latest deployment failed, **Deployment activity** links straight to
    that version's Logs tab.
 2. Select **Logs**. The runtime strip refreshes every 10 seconds. Each Pod card
@@ -180,7 +180,8 @@ replica allows each principal 2 requests per second per Agent with a burst of
 and operator switch run before
 [authorization](../../reference/security.md#console-and-api-runtime-log-reads).
 
-Kubernetes keeps only each container's current and previous instance; for
+Kubernetes keeps only each container's current and previous instance, nothing
+from deleted Pods; for
 older output, use your [observability backend](../observability.md). While a
 container crash-loops, the previous instance can briefly read as empty.
 

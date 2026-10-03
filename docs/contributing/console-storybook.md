@@ -134,7 +134,7 @@ Agent from the SWE Agent Preset and opening the deployed `oceclaw` Agent's
 simulated Admin UI, which connects to no gateway, Slack, credential, or model.
 
 **Choose provider, harness, and authentication** covers the supported
-combinations. **Enter another model ID**
+combinations; models appear before credentials. **Enter another model ID**
 allows manual entry but does not prove access. Execution mode follows the
 harness; saved tokens require Codex. **Experimental Dedicated OpenClaw** shows
 the runtime-build warning; Embedded OpenClaw does not.
@@ -223,7 +223,8 @@ keep selections.
 closed; open it to reuse the background request. **Plugin search loading** holds
 the response: loading starts while typing, keeps focus, and replaces empty-result
 feedback. **Plugin tools loading** holds Calendar's details: check its loading
-status and disabled **Add Calendar**.
+status and disabled **Add Calendar**. Reset to replay pending states before
+timeout.
 
 In **Discover plugins with a selected PAT Secret**, choose Calendar, then change
 the Secret to clear discovery. **Selected PAT Secret discovery denied** previews

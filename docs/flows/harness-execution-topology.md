@@ -254,7 +254,7 @@ retires every revision before calling
 `apps/controller/src/drivers/compute/kubernetes/index.ts:KubernetesComputeDriver.deleteAgentRuntimeCredentials`
 to delete exact-owned private and shared claims by UID. Final deletion checks
 both physical targets, independently of the Agent draft's current execution mode. Cleanup failures retry
-before the worker removes the Agent's database identity. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md#harness-storage)
+before the worker removes the Agent's database identity. The [storage contract](../reference/drivers/kubernetes-compute/storage-and-credentials.md)
 owns claim sizes, mount paths, StorageClass requirements, and final teardown.
 
 ## Debugging and Verification
