@@ -875,6 +875,15 @@ for (const [model, method, executionMode] of [
       blocked.body.error.message,
       "A Configuration, credential source, Agent draft, active revision, or pending deployment still references the Secret. Remove those references first.",
     );
+    // Authorization precedes the reference check: a caller without delete learns nothing about references.
+    const { app: outsiderApp } = await fixture.createPrincipal("secret-outsider");
+    const forbidden = await request(
+      outsiderApp,
+      "DELETE",
+      `/namespaces/${namespace.id}/secrets/${key.data.id}`,
+    );
+    assert.equal(forbidden.status, 403);
+    assert.equal(forbidden.body.error.code, "FORBIDDEN");
     // Administrative rights on the actor do not give the Agent permission to receive a key.
     const denied = await request(fixture.app, "POST", `${path}/deploy`);
     assert.equal(denied.status, 403);
