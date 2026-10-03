@@ -73,7 +73,7 @@ export async function newPage(t, fixture, options = {}) {
       throw cleanupError;
     }
   });
-  context = await browser.newContext();
+  context = await browser.newContext(options.context);
   diagnostics = await watchBrowserContext(t, context);
   await keepRequestInterceptionEnabled(context);
   const page = await context.newPage();
