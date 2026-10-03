@@ -123,9 +123,9 @@ const REVISION_READINESS_CODES: ReadonlySet<string> = new Set([
 ]);
 
 // A repository cleanup that another pass cannot settle (an invalidated attempt or a cleanup
-// error) still rechecks so its obligation stays visible, but the delay grows with the work's
-// age, as for long readiness rechecks: the configured interval for the first 20 minutes at
-// 30 s, then age / 40, up to 10 minutes.
+// error, with no session still closing) still rechecks so its obligation stays visible, but
+// the delay grows with the work row's age, as for long readiness rechecks: age / 40, at least
+// the configured interval and at most 10 minutes.
 const REPOSITORY_CLEANUP_RECHECK_MAX_MS = 600_000;
 const REPOSITORY_CLEANUP_RECHECK_AGE_DIVISOR = 40;
 
@@ -1329,14 +1329,16 @@ export class ControllerWorker {
       if (complete) {
         await queue.complete(claim);
       } else {
-        // A session awaiting disposal keeps the configured cadence. A stuck cleanup keeps its
-        // obligation visible but slows down with age, like long readiness rechecks.
+        // A session still closing keeps the configured cadence whatever else is stuck: its
+        // disposal must not wait on an unrelated invalidated attempt. Otherwise a stuck
+        // cleanup keeps its obligation visible but slows down with age, like long readiness
+        // rechecks. The row's age spans every obligation it has carried for the revision.
         await queue.defer(
           claim,
           { code: "REPOSITORY_CLEANUP_PENDING" },
           {
             delayMs:
-              cause === undefined
+              cause === undefined || attempts.some(({ phase }) => phase === "closing")
                 ? this.repositoryCleanupRetryMs
                 : repositoryCleanupRecheckMs(
                     this.repositoryCleanupRetryMs,

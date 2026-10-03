@@ -3926,7 +3926,7 @@ test(
   "a repository cleanup stuck on an invalidated attempt logs its cause once and backs off",
   requiresPostgres,
   async (context) => {
-    const repository = repositoryBoundary();
+    const repository = repositoryBoundary({ count: 2 });
     // The production default; the fixture's hour-long interval would hide the backoff.
     repository.driver.maintenanceIntervalMs = 30_000;
     const fixture = await setup(context, { repoDriver: repository.driver });
@@ -3935,7 +3935,7 @@ test(
     const events = [];
     await fixture.start(fixture.compute, (event) => events.push(event));
     await fixture.work(candidate, "succeeded");
-    const [attempt] = await repositoryAttempts(fixture, candidate);
+    const [attempt, sibling] = await repositoryAttempts(fixture, candidate);
     // An invalidated attempt has no outgoing transition, so no pass can settle this cleanup.
     await fixture.observerPool.query(
       `UPDATE occ.repository_session_attempts
@@ -3986,6 +3986,22 @@ test(
         .map(({ code, cause }) => ({ code, cause })),
       [{ code: "REPOSITORY_CLEANUP_STALLED", cause: "REPOSITORY_ATTEMPT_INVALIDATED" }],
     );
+    // A session still closing keeps the configured cadence, even next to an invalidated one.
+    repository.driver.close = async () => {
+      throw new Error("REPOSITORY_BROKER_UNAVAILABLE");
+    };
+    await fixture.observerPool.query(
+      `UPDATE occ.repository_session_attempts
+       SET phase = 'closing', updated_at = clock_timestamp()
+       WHERE admission_id = $1`,
+      [sibling.admissionId],
+    );
+    await fixture.observerPool.query(
+      "UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1",
+      [cleanupKey],
+    );
+    const closing = await deferred(3);
+    assert.ok(Number(closing.delay_ms) < 60_000, `delay ${closing.delay_ms} ms`);
     // Retain the unsettled obligation while keeping it out of later scheduling.
     await fixture.observerPool.query(
       "UPDATE occ.controller_work SET available_at = 'infinity' WHERE idempotency_key = $1",

@@ -170,10 +170,12 @@ finds or fences unfinished admissions and closes recovered sessions.
 Fresh material requires confirmed disposal or a missing opening without a recorded
 session ID; invalidated known sessions block automatic same-revision replacement.
 Closing sessions raise `REPOSITORY_CLEANUP_PENDING` until disposal, subject to Work
-bounds and the revision deadline. Cleanup that another pass cannot settle, an
-`invalidated` attempt or a cleanup error, keeps its obligation and its code but
-rechecks with age (`age / 40`, from the configured interval up to 10 minutes)
-and logs `worker.repository-cleanup-warning` with the `cause` once
+bounds and the revision deadline. While any session is still closing, cleanup
+keeps the configured interval. Otherwise cleanup that another pass cannot
+settle, an `invalidated` attempt or a cleanup error, keeps its obligation and
+its code but rechecks with the work row's age (`age / 40`, from the configured
+interval up to 10 minutes). Either way it logs
+`worker.repository-cleanup-warning` with the `cause` once per worker
 (`apps/controller/src/worker.ts:processRepositoryCleanup`). Validated `DISPOSED` observations survive service pruning.
 `apps/controller/src/drivers/repo/credentials/control.ts:createControlAdmission`
 reserves before releasing material. The worker's
