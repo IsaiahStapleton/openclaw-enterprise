@@ -514,7 +514,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
           "p",
           { className: "hint" },
           hasBoundModelCredential
-            ? "This Preset's saved credential and provider are fixed. Start with default-codex to use a different provider."
+            ? "This Preset's saved credential and provider are fixed. Start without a Preset to use a different provider."
             : "This Preset's saved authentication source is preserved.",
         )
       : null,
@@ -1308,7 +1308,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     codexOption.disabled = nativeProvider.value === "anthropic";
     harnessHint.textContent =
       harness.disabled && usesPat
-        ? "This saved service account token requires Codex. Start with default-codex to use OpenClaw with an API key."
+        ? "This saved service account token requires Codex. Create a new draft without a Preset to use OpenClaw with an API key."
         : nativeRefused
           ? "OpenClaw is available for both providers. This installation runs OpenClaw with Embedded execution only; choose Codex for Dedicated execution."
           : "OpenClaw is available for both providers. With OpenAI it supports Dedicated or Embedded execution; Anthropic uses Embedded OpenClaw.";

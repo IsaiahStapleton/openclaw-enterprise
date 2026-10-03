@@ -2219,7 +2219,7 @@ export const scenarios = {
       click("Use Preset"),
     ],
     description:
-      "A Preset with a saved service account token keeps its OpenAI provider and Codex harness fixed because the credential requires Codex. Start with default-codex to choose OpenClaw with an API key.",
+      "A Preset with a saved service account token keeps its OpenAI provider and Codex harness fixed because the credential requires Codex. Start without a Preset to choose OpenClaw with an API key.",
   },
   createModels: {
     group: "Pages/Create Agent",
