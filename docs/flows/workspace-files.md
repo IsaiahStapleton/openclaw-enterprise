@@ -354,8 +354,6 @@ replays it. The native client closes in the operation's cleanup path.
 
 ## Changelog
 
-- 2026-10-03 16:19: Align the documented workspace version with the OpenClaw `2026.9.7` pin. (authoring-run/264cfb8c-8627-40cb-8ac4-0b67ef3134dc - 8193ad3cadec560e3f97401fb999e672b1517aec)
-
 - 2026-10-01 15:11: Query Gateway workspace binding state through bounded SDK calls. (authoring-run/24df37c6-7eef-483a-a31c-d2c14a51ca6c - 521549df)
 
 - 2026-10-01 11:27: Authorize dedicated Skill source trees and lifecycle metadata in the default node policy. (authoring-run/944b9f5c-dd07-45f4-8179-ed96b2ba3e79 - 836a88e048dc79dfb42066fd0cf868e7405a2f98)
