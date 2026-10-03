@@ -5648,6 +5648,29 @@ test("Kubernetes runtime diagnostics reject missing timestamps and raced Pod rea
     ),
     undefined,
   );
+
+  // A status port that is not serving yet (503) is an answer, read once and not retried.
+  podLists = 0;
+  let proxied = 0;
+  const waits = [];
+  driver.waitBeforeRetry = async (ms) => {
+    waits.push(ms);
+  };
+  (await driver.apiClients).core.connectGetNamespacedPodProxyWithPath = async () => {
+    proxied += 1;
+    throw Object.assign(new Error("status port not serving"), { code: 503, headers: {} });
+  };
+  assert.equal(
+    await driver.privateStatusReadback(
+      revision,
+      { name: namespaceName, plane: "execution" },
+      "agent",
+      "/openclaw/runtime/status",
+    ),
+    undefined,
+  );
+  assert.equal(proxied, 1);
+  assert.deepEqual(waits, []);
 });
 
 test("runtime diagnostics proxy ingress remains available without enabled plugins", () => {
@@ -7909,6 +7932,7 @@ test("provider Harness preparation preserves readiness and cleanup contracts", a
 
 test("provider Harness readiness preserves API errors and owner cancellation", async () => {
   const fixture = providerReadinessFixture();
+  fixture.driver.waitBeforeRetry = async () => {};
   const denied = Object.assign(new Error("Pod observation denied"), { statusCode: 403 });
   fixture.setObservation(() => {
     throw denied;
@@ -7920,7 +7944,7 @@ test("provider Harness readiness preserves API errors and owner cancellation", a
     throw unavailable;
   });
   await assert.rejects(fixture.ready(), (error) => error === unavailable);
-  assert.equal(fixture.requests.length, 4);
+  assert.equal(fixture.requests.length, 7);
 
   const cancellation = new Error("revision observation cancelled");
   const alreadyAborted = new AbortController();
@@ -7929,7 +7953,7 @@ test("provider Harness readiness preserves API errors and owner cancellation", a
     withComputeAbortSignal(alreadyAborted.signal, () => fixture.ready()),
     (error) => error === cancellation,
   );
-  assert.equal(fixture.requests.length, 4);
+  assert.equal(fixture.requests.length, 7);
   for (const lateSuccess of [false, true]) {
     const owner = new AbortController();
     let release;
@@ -7958,7 +7982,101 @@ test("provider Harness readiness preserves API errors and owner cancellation", a
     }
     await rejected;
   }
-  assert.equal(fixture.requests.length, 6);
+  assert.equal(fixture.requests.length, 9);
+});
+
+test("Kubernetes reads ride out a short API outage and honor Retry-After", async () => {
+  const fixture = providerReadinessFixture();
+  const waits = [];
+  fixture.driver.waitBeforeRetry = async (ms) => {
+    waits.push(ms);
+  };
+  const failing = (count, error) => {
+    let failures = 0;
+    fixture.setObservation(() => {
+      if (failures < count) {
+        failures += 1;
+        throw error();
+      }
+      return { items: [fixture.pod("ready")] };
+    });
+  };
+
+  // Four 503s in a row (a few hundred milliseconds of API server restart) still
+  // end in a successful read, with exponential, jittered waits.
+  failing(4, () => Object.assign(new Error("unavailable"), { code: 503, headers: {} }));
+  assert.equal(await fixture.ready(), true);
+  assert.equal(fixture.requests.length, 5);
+  assert.equal(waits.length, 4);
+  waits.forEach((ms, index) => {
+    assert.ok(ms >= 25 * 2 ** index && ms <= 50 * 2 ** index, `wait ${index}: ${ms}`);
+  });
+
+  // Retry-After in seconds and as an HTTP date is honored, capped at 2 s per wait.
+  waits.length = 0;
+  const throttled = (value) =>
+    Object.assign(new Error("throttled"), { code: 429, headers: { "retry-after": value } });
+  let retryAfter = ["1", new Date(Date.now() + 60_000).toUTCString()];
+  fixture.setObservation(() => {
+    const value = retryAfter.shift();
+    if (value !== undefined) {
+      throw throttled(value);
+    }
+    return { items: [fixture.pod("ready")] };
+  });
+  assert.equal(await fixture.ready(), true);
+  // The date is a minute away, but the wait stops at the 2 s total.
+  assert.deepEqual(waits, [1_000, 1_000]);
+
+  // The total wait is bounded: a persistent outage fails within the budget.
+  waits.length = 0;
+  const before = fixture.requests.length;
+  retryAfter = [];
+  fixture.setObservation(() => {
+    throw throttled("30");
+  });
+  await assert.rejects(fixture.ready(), /throttled/);
+  assert.deepEqual(waits, [2_000]);
+  assert.equal(fixture.requests.length - before, 2);
+
+  // Mutating calls never retry, and a 404 is not retryable.
+  waits.length = 0;
+  let calls = 0;
+  const flaky = () => {
+    calls += 1;
+    throw Object.assign(new Error("unavailable"), { code: 503, headers: {} });
+  };
+  await assert.rejects(fixture.driver.request(flaky, { mutating: true }), /unavailable/);
+  await assert.rejects(
+    fixture.driver.request(() => {
+      calls += 1;
+      throw Object.assign(new Error("missing"), { code: 404 });
+    }),
+    /missing/,
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, []);
+});
+
+test("an owner cancellation ends a Kubernetes retry wait at once", async () => {
+  const driver = createKubernetesComputeDriver(options());
+  const owner = new AbortController();
+  const reason = new Error("revision observation cancelled");
+  let calls = 0;
+  const started = Date.now();
+  const request = withComputeAbortSignal(owner.signal, () =>
+    driver.request(() => {
+      calls += 1;
+      throw Object.assign(new Error("throttled"), {
+        code: 429,
+        headers: { "Retry-After": "2" },
+      });
+    }),
+  );
+  setTimeout(() => owner.abort(reason), 50);
+  await assert.rejects(request, (error) => error === reason);
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 1_500);
 });
 
 test("revision lifecycle rejects another driver or missing identity before cluster access", async () => {
