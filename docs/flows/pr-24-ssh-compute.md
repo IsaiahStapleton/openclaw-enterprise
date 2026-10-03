@@ -1,6 +1,6 @@
 ---
 created: 2026-09-07
-updated: 2026-09-22
+updated: 2026-10-03
 last_updated_session: authoring-run/d7126920-6a2a-4126-ad7d-fafd57593855
 ---
 
@@ -168,6 +168,10 @@ and unit in the deletion set before stopping gateways. The helper stops and
 disables owned units, removes their unit files, reloads systemd, and removes the
 Namespace tree, including persistent state, and its owned runtime accounts. The driver clears its in-memory
 bindings only after the host operation succeeds.
+
+Agent deletion (`ssh/index.ts:deleteAgentRuntimeCredentials`,
+`remote-helper.cjs:removeAgent`) does the same for one Agent after its revisions
+retire, which frees its gateway port.
 
 ## Debugging and Verification
 
