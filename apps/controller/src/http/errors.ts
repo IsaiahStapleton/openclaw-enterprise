@@ -130,6 +130,36 @@ function expectedType(parameters: Record<string, unknown>): string | undefined {
   return typeof type === "string" && type.length > 0 ? type : undefined;
 }
 
+const LIMITS: Readonly<Record<string, readonly [bound: string, unit?: string]>> = Object.freeze({
+  minLength: ["at least", "character"],
+  maxLength: ["at most", "character"],
+  minItems: ["at least", "item"],
+  maxItems: ["at most", "item"],
+  minProperties: ["at least", "field"],
+  maxProperties: ["at most", "field"],
+  minimum: ["at least"],
+  maximum: ["at most"],
+  exclusiveMinimum: ["more than"],
+  exclusiveMaximum: ["less than"],
+});
+
+// Names the schema's bound or accepted values for keywords that reject a value by its size or
+// range, such as an empty required string.
+function expectedBound(keyword: string, parameters: Record<string, unknown>): string | undefined {
+  if (keyword === "enum" && Array.isArray(parameters.allowedValues)) {
+    return `one of ${parameters.allowedValues.map((value) => JSON.stringify(value)).join(", ")}`;
+  }
+  const bound = LIMITS[keyword];
+  const limit = parameters.limit;
+  if (bound === undefined || typeof limit !== "number") {
+    return undefined;
+  }
+  const [relation, unit] = bound;
+  return unit === undefined
+    ? `${relation} ${limit}`
+    : `${relation} ${limit} ${unit}${limit === 1 ? "" : "s"}`;
+}
+
 // A union of literals or scalar types fails once per member, at the same field. Report that
 // field once with the accepted members instead of one contradictory problem per member.
 function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly ContractProblem[] {
@@ -209,7 +239,7 @@ function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly Con
         ? expectedType(parameters)
         : entry.keyword === "const"
           ? JSON.stringify(parameters.allowedValue)
-          : undefined;
+          : expectedBound(entry.keyword, parameters);
     const detail = { path, code: validationCode(entry.keyword) };
     return [expected === undefined ? { detail } : { detail, expected }];
   });

@@ -646,6 +646,20 @@ test("Secret API stores values through the selected driver and returns metadata 
     assert.equal(rejected.status, 400);
     assert.equal(rejected.body.error.code, "INVALID_REQUEST");
   }
+  // An empty value or name also names the schema's minimum length, so the caller can fix it.
+  for (const [method, path, body, field] of [
+    ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Empty", value: "" }, "value"],
+    ["POST", `/namespaces/${namespace.id}/secrets`, { name: "", value: "nonempty" }, "name"],
+    ["PATCH", `/namespaces/${namespace.id}/secrets/${created.data.id}`, { value: "" }, "value"],
+  ]) {
+    const empty = await request(fixture.app, method, path, { body });
+    assert.equal(empty.status, 400);
+    assert.equal(
+      empty.body.error.message,
+      `The request does not match the operation contract: body /${field} has an unsupported value (expected at least 1 character).`,
+    );
+    assert.deepEqual(empty.body.error.details, [{ path: `/${field}`, code: "INVALID_VALUE" }]);
+  }
   const deleted = await request(
     fixture.app,
     "DELETE",
