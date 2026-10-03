@@ -592,6 +592,8 @@ function location(data = {}) {
   };
 }
 
+// Only for scripts/ci/run-tests.mjs: failure text here is unredacted, so never
+// point a step whose stdout reaches a log or artifact at this reporter directly.
 export default async function* jsonLinesReporter(source) {
   for await (const event of source) {
     if (event.type === "test:diagnostic") {
