@@ -482,7 +482,8 @@ test("device login names the Driver that cannot hold a login session", async (t)
   const fixture = await createFixture(t);
   const login = await fixture.start();
   const before = fixture.requests.length;
-  // compareAndSwap is optional in the Secret Driver contract. Without it OCC cannot
+  // compareAndSwap is optional in the Secret Driver contract (the bundled Kubernetes
+  // Driver implements it; another Driver may not). Without it OCC cannot
   // fence a login session, so both start and poll refuse permanently and name which
   // Driver is missing the capability.
   delete fixture.secretDriver.compareAndSwap;
@@ -492,6 +493,8 @@ test("device login names the Driver that cannot hold a login session", async (t)
     start.body.error.message,
     "Device authorization is unavailable for the selected Drivers.",
   );
+  // Past the provider interval, a poll would otherwise call upstream.
+  await fixture.clock.advance(5000);
   const poll = await fixture.poll(login);
   assert.equal(poll.status, 501, JSON.stringify(poll.body));
   assert.equal(
