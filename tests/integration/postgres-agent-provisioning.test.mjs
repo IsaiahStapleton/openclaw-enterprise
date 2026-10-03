@@ -1325,8 +1325,8 @@ test(
     });
     assert.equal(created.status, 201, JSON.stringify(created.body));
     const account = created.data;
-    // Admitting a ChatGPT service account plan needs a Backend-issued credential this fixture
-    // lacks. Store the accepted plan as admission would, with no worker running yet.
+    // Admission would reject this account, which has no Backend-issued credential, so store
+    // the plan directly; the worker fails it for the same reason before any effect.
     const iam = await fixture.state.loadNativeIAMState();
     const principal = iam.identities.find(
       (identity) => identity.kind === "principal" && identity.issuer.endsWith(":better-auth"),

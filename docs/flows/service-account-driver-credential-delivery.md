@@ -86,8 +86,8 @@ exact binding to match the current configured Backend and member Driver.
 
 Before deletion, OCC locks the Namespace and account, then checks Agent drafts,
 active revisions, queued or claimed revision work, and queued or running Agent
-provisioning plans through `serviceAccounts.hasReferences`. A conflict returns before any Driver call can
-revoke the credential or remove its Secret. Namespace locking serializes this
+provisioning plans through `serviceAccounts.hasReferences`. A conflict returns
+before any Driver call can revoke the credential or remove its Secret. Namespace locking serializes this
 check with draft changes and deployment admission; the PostgreSQL reference
 query observes active pointers and pending work together during worker cutover.
 
