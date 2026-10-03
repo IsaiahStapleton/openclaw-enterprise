@@ -896,7 +896,9 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
     (error) =>
       error instanceof NativeWorkerSupportError &&
       /cloudWorkers\.requiredProfile/.test(error.message) &&
-      /docs\/reference\/harness-execution\.md#native-worker-support/.test(error.message),
+      /docs-enterprise\.openclaw\.org\/reference\/harness-execution\/#native-worker-support/.test(
+        error.message,
+      ),
   );
   assert.equal((await controller.getInstallation(administrator)).capabilities, undefined);
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), [

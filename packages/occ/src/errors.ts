@@ -265,7 +265,7 @@ export class NamespaceNotReadyError extends ResourceConflictError {
 export class NativeWorkerSupportError extends Error {
   constructor() {
     super(
-      "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See docs/reference/harness-execution.md#native-worker-support.",
+      "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See https://docs-enterprise.openclaw.org/reference/harness-execution/#native-worker-support",
     );
     this.name = "NativeWorkerSupportError";
   }
@@ -398,7 +398,7 @@ export class IAMRoleInUseError extends ResourceConflictError {
 export class CredentialGatewayNotConfiguredError extends Error {
   constructor() {
     super(
-      "This Installation has no Credential Gateway, so credential sources are unavailable. An administrator must select the OpenShell Credential Gateway Driver; see docs/reference/credential-sources.md.",
+      "This Installation has no Credential Gateway, so credential sources are unavailable. An administrator must select the OpenShell Credential Gateway Driver; see https://docs-enterprise.openclaw.org/reference/credential-sources/",
     );
     this.name = "CredentialGatewayNotConfiguredError";
   }

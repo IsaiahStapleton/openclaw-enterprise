@@ -2409,12 +2409,12 @@ export const scenarios = {
   },
   gatewayPasswordAccess: {
     group: "Pages/Agent detail",
-    name: "Enable Gateway password access",
+    name: "Enable gateway password access",
     path: draft,
     deployed: true,
-    description: "Configure the generated Gateway password without typing native JSON.",
+    description: "Configure the generated gateway password without typing native JSON.",
     steps: [
-      "Select Enable Gateway password access. The draft receives a password reference; no password value is displayed.",
+      "Select Enable gateway password access. The draft receives a password reference; no password value is displayed.",
       "Cancel to discard the edit, or Save Configuration to persist it.",
       "Confirm the saved-access message, then Deploy new version to apply the reference.",
     ],
@@ -2432,7 +2432,7 @@ export const scenarios = {
     group: "Pages/Agent detail",
     name: "Gateway password save denied",
     path: draft,
-    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    actions: [click("Enable gateway password access"), click("Save Configuration")],
     rules: [
       {
         method: "PATCH",
@@ -2446,7 +2446,7 @@ export const scenarios = {
     group: "Pages/Agent detail",
     name: "Gateway password save in progress",
     path: draft,
-    actions: [click("Enable Gateway password access"), click("Save Configuration")],
+    actions: [click("Enable gateway password access"), click("Save Configuration")],
     rules: [
       {
         method: "PATCH",
