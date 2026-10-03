@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,6 +165,22 @@ export function accessBindingPostRequests(requests, namespaceId) {
   return pathRequests(requests, "POST", `/namespaces/${namespaceId}/iam/access-bindings`);
 }
 
+// A bound Secret picker reads "Bound Secret" until its Namespace Secret list loads, and every
+// render (page load, save, reload) starts that load again. Read such a picker only through this.
+export async function waitForInputValue(locator, expected, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let value = await locator.inputValue();
+  while (value !== expected && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    value = await locator.inputValue();
+  }
+  assert.equal(
+    value,
+    expected,
+    `input value was ${JSON.stringify(value)}, not ${JSON.stringify(expected)}, after ${timeoutMs} ms`,
+  );
+}
+
 export async function waitForCondition(predicate, message, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -228,15 +243,4 @@ export function repositoryCheckbox(page, name) {
     .locator("#repository-results .repository-result-row")
     .filter({ has: page.getByText(name, { exact: true }) })
     .getByRole("checkbox");
-}
-
-export async function unusedPort() {
-  const server = createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
 }

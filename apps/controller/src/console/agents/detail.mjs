@@ -8,7 +8,7 @@ import { renderAgentAccess } from "./access.mjs";
 import { renderNativeAdminAccess } from "./native-admin.mjs";
 import { createAgentDeletion } from "./deletion.mjs";
 import { createAgentStop } from "./stop.mjs";
-import { renderAgentPlugins } from "./plugins.mjs";
+import { pluginWarningText, renderAgentPlugins } from "./plugins.mjs";
 import { repositoryProfile, repositoryWriteAccessHelp } from "./repository-profiles.mjs";
 import { createRepositoryFields } from "./repositories.mjs";
 import { renderChannels } from "../channels.mjs";
@@ -20,6 +20,7 @@ import {
   namespacePath,
   link,
   message,
+  rejectionMessage,
   assertReadableConfiguration,
 } from "./list.mjs";
 import {
@@ -206,6 +207,13 @@ function createDeploymentStatusPanel(
   const state = { loading: false, status: null, error: null, overviewError: false };
   let pollTimer = null;
 
+  // A poll that fired while the view was retained stopped; restoring the view re-arms it.
+  context.onResume?.(() => {
+    if (section.isConnected) {
+      schedulePoll();
+    }
+  });
+
   // Queued and running records are reread until they record a result or a read fails.
   function schedulePoll() {
     clearTimeout(pollTimer);
@@ -349,7 +357,7 @@ function createDeploymentStatusPanel(
               "ul",
               {},
               ...state.status.warnings.map((warning) =>
-                element("li", {}, `${warning.pluginId}: ${warning.code}`),
+                element("li", {}, pluginWarningText(warning)),
               ),
             ),
           )
@@ -477,9 +485,16 @@ function createVersionDeploymentRecord(context, path, revisionId, onChange = () 
               deploymentFailure(status.error),
               status.warnings?.length
                 ? element(
-                    "p",
+                    "div",
                     { className: "hint" },
-                    `Startup warnings: ${status.warnings.map((warning) => `${warning.pluginId} (${warning.code})`).join(", ")}`,
+                    element("p", {}, "Startup warnings:"),
+                    element(
+                      "ul",
+                      {},
+                      ...status.warnings.map((warning) =>
+                        element("li", {}, pluginWarningText(warning)),
+                      ),
+                    ),
                   )
                 : null,
             )
@@ -657,6 +672,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
   context.setTitle(agent.name);
   let deleting = agent.status === "deleting";
   let currentRevisionId = agent.activeRevisionId;
+  let currentRuntimeState = agent.desiredRuntimeState;
   let visibleRevisions = [];
   // True once the readable version list loaded; until then nothing counts as hidden.
   let visibleRevisionsLoaded = false;
@@ -845,13 +861,14 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     tabs.append(control);
   }
   detailPane.append(detailHeading, versionEvidence, tabs, content);
+  const nativeAdmin = renderNativeAdminAccess(context, path);
   view.replaceChildren(
     header,
     identity,
     currentSummary,
     statusLine,
     deploymentStatus,
-    renderNativeAdminAccess(context, path),
+    nativeAdmin.section,
     // Sharing policy reads need Installation administration and a denial is audited, so
     // skip the panel when the session probe already showed that access is missing.
     ...(context.installationAdmin === false ? [] : [renderAgentAccess(context, agent)]),
@@ -1060,8 +1077,16 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       showDeleting();
       return;
     }
+    const servingChanged =
+      freshAgent.activeRevisionId !== currentRevisionId ||
+      freshAgent.desiredRuntimeState !== currentRuntimeState;
     currentRevisionId = freshAgent.activeRevisionId;
+    currentRuntimeState = freshAgent.desiredRuntimeState;
     stopPanel.updateAgent(freshAgent);
+    if (servingChanged) {
+      // Native admin access depends on the serving version, so a finished deployment rereads it.
+      nativeAdmin.refresh();
+    }
     renderOverview({ status: "fulfilled", value: revisions }, snapshot);
     renderDetailHeading();
     const notice = content.querySelector(".version-selection-notice");
@@ -1121,6 +1146,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
       current !== undefined &&
       current.revision < latest.revision &&
       latest.harness?.mode === "dedicated";
+    // Embedded activation selects the new version before its gateway is ready, and that
+    // gateway replaces the previous one, so a failed selected version is the only one left.
+    const selectedFailed =
+      latestDeploymentStatus === "failed" && current !== undefined && current.id === latest.id;
     if (newerHidden) {
       latestDeploymentValue.textContent = "Newer version hidden";
       latestDeploymentNote.textContent = `You cannot read the current version. v${latest.revision} (${latestDeploymentStatus}) is older.`;
@@ -1128,6 +1157,9 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
     if (replacementFailed) {
       liveServingValue.textContent = "Probably down";
       liveServingNote.textContent = `v${latest.revision} failed; ${currentLabel} was probably stopped for it.`;
+    } else if (selectedFailed) {
+      liveServingValue.textContent = "Probably down";
+      liveServingNote.textContent = `${currentLabel} is selected and its deployment failed.`;
     } else {
       liveServingValue.textContent = "Not verified";
       liveServingNote.textContent = "Serving version and model access are unknown.";
@@ -1147,6 +1179,8 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         .join(" ");
     } else if (replacementFailed) {
       statusLine.textContent = `v${latest.revision} deployment failed. ${currentLabel} is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
+    } else if (selectedFailed) {
+      statusLine.textContent = `${currentLabel} deployment failed. ${currentLabel} is still selected because its runtime already replaced the previous version, so this Agent is probably not serving: chat and the native admin UI fail until a new version deploys. Fix the failure, then deploy a new version.`;
     } else if (latestDeploymentStatus) {
       const selection = currentRevisionId
         ? `${currentLabel} is selected.`
@@ -1997,6 +2031,14 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
         if (!form.reportValidity() || save.disabled) {
           return;
         }
+        let harnessAuth;
+        try {
+          harnessAuth = savedAuthentication?.harnessAuth ?? (await auth.readBinding());
+        } catch (error) {
+          // Incomplete fields (no Secret, unfinished ChatGPT sign-in) say what to do next.
+          feedback.textContent = error.message;
+          return;
+        }
         save.disabled = true;
         pending = true;
         reload.disabled = true;
@@ -2008,7 +2050,6 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           : "Saving authentication…";
         let mutationStarted = false;
         try {
-          const harnessAuth = savedAuthentication?.harnessAuth ?? (await auth.readBinding());
           const current = await request(path);
           if (!context.isCurrent()) {
             return;
@@ -2466,7 +2507,7 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           context.onExpired();
           return;
         }
-        feedback.textContent = message(error, mutationStarted);
+        feedback.textContent = rejectionMessage(error, mutationStarted);
         feedbackLocked = true;
         outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       } finally {

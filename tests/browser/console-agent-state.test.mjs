@@ -114,6 +114,55 @@ test("Deployment activity follows pending work until it records a result", async
   assert.equal(statusReads, readsAtResult);
 });
 
+test("Deployment activity keeps following after Back restores the cached Agent view", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Activity restore", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Restore Agent", nativeValues("v1"));
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  let status = "running";
+  let statusReads = 0;
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`,
+    (route) => {
+      statusReads += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: deploymentBody(namespace.id, agent.id, revision.id, status),
+      });
+    },
+  );
+  await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const activity = page.locator(".deployment-status");
+  await activity.getByText("Recorded status: running").waitFor();
+  const panel = await activity.elementHandle();
+
+  // While the Agent view is cached, its poll timer fires without a current view.
+  await page.getByRole("link", { name: "Namespaces", exact: true }).click();
+  await page.getByRole("heading", { name: "Namespaces" }).waitFor();
+  await page.clock.runFor(DEPLOYMENT_POLL_MS * 2);
+  await page.goBack();
+  await page.locator('.content [aria-live="polite"]:not([inert])').waitFor();
+  assert.equal(
+    await panel.evaluate((node) => node.isConnected),
+    true,
+    "Back reuses the cached Agent view",
+  );
+  await activity.getByText("Recorded status: running").waitFor();
+
+  // The restored view resumes following without a manual Refresh deployment.
+  status = "succeeded";
+  const readsBeforeResult = statusReads;
+  await page.clock.runFor(DEPLOYMENT_POLL_MS);
+  await activity.getByText("Recorded status: succeeded").waitFor();
+  assert.ok(statusReads > readsBeforeResult);
+});
+
 test("Diagnostics explain UNAVAILABLE checks and point at the recorded failure", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -387,6 +436,36 @@ test("Agent detail reports a failed dedicated replacement as probably not servin
       /^v2 deployment failed\. v1 is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving/,
     )
     .waitFor();
+});
+
+// Embedded activation selects the new version before its gateway is ready, so a failed
+// embedded redeploy leaves the failed version selected and nothing else serving (D225).
+test("Agent detail reports a failed selected version as probably not serving", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Failed selection", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Embedded Agent", nativeValues("v1"));
+  const first = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const selected = await fixture.seedActiveAgentRevision(namespace.id, agent.id, first.revision.id);
+  const { page } = await newPage(t, fixture);
+  await routeDeploymentStatus(page, fixture, namespace, agent, selected.revision, "failed", {
+    code: "RUNTIME_MODEL_PROBE_TIMEOUT",
+    message: "Deployment runtime startup model check timed out.",
+  });
+
+  const url = detailUrl(fixture, namespace.id, agent.id, selected.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v2" }).waitFor();
+  const summary = page.locator(".agent-current-summary");
+  await summary.getByText("Probably down", { exact: true }).waitFor();
+  await summary.getByText("v2 is selected and its deployment failed.").waitFor();
+  await page
+    .locator(".agent-status-line")
+    .getByText(
+      /^v2 deployment failed\. v2 is still selected because its runtime already replaced the previous version, so this Agent is probably not serving/,
+    )
+    .waitFor();
+  assert.equal(await page.getByText("Live serving is unverified").count(), 0);
 });
 
 test("Agent detail keeps an embedded Agent's failed redeploy separate from serving", async (t) => {

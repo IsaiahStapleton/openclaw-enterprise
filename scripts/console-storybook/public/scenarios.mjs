@@ -433,6 +433,9 @@ export const scenarios = {
     githubEnabled: true,
     description:
       "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    steps: [
+      "Check the GitHub icon and label, then select the button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
   },
   githubUnavailable: {
@@ -520,6 +523,9 @@ export const scenarios = {
     googleEnabled: true,
     description:
       "Provider discovery adds Continue with Google beside the password form and any other configured provider. Clicking it demonstrates an unavailable provider; this fixture never navigates to Google.",
+    steps: [
+      "Check the Google and GitHub icons and labels, then select either button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the Google subject identifier to an existing account through the API. Email addresses never match an account. OAuth navigation and session issuance require backend verification.",
   },
   googleUnavailable: {
@@ -797,7 +803,7 @@ export const scenarios = {
     path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
     description: "Recover from a stale Namespace URL using the selector inside the message.",
     steps: [
-      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Choose Engineering under Choose a valid Namespace; the URL changes and the warning disappears without leaving Namespaces.",
       "Use browser Back to return to the unavailable selection and recover again.",
     ],
   },
@@ -2787,6 +2793,16 @@ export const scenarios = {
     candidateDeploymentStatus: "succeeded",
     description:
       "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsStartupWarnings: {
+    group: "Pages/Agent detail",
+    name: "Runtime status after a healthy first deploy",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    runtimePod: "startupWarnings",
+    description:
+      "The Gateway Pod is Ready with no restarts; its startup readiness-probe Event is listed in muted text as an earlier warning instead of in the warning color.",
   },
   runtimeLogsFilteredDownload: {
     group: "Pages/Agent detail",

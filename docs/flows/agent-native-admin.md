@@ -1,7 +1,7 @@
 ---
 created: "2026-09-19"
-updated: "2026-09-29"
-last_updated_session: "89a4ccd7-3974-43c6-b08a-be02269a8d01"
+updated: "2026-10-01"
+last_updated_session: "authoring-run/bef09bf6-deaa-4189-9568-5f13beb451e7"
 ---
 
 # Agent Native Admin UI Flow
@@ -19,8 +19,8 @@ WebSocket traffic through the API process. Live runtime proof remains separate.
 
 - Trigger: Console renders an Agent detail tab, calls the native admin availability API, and opens the returned Agent URL.
 - Source: `apps/controller/src/console/agents/native-admin.mjs:renderNativeAdminAccess`
-- Source: `apps/controller/src/index.ts:resolveNativeAdminAvailability`
-- Source: `apps/controller/src/index.ts:handleNativeAdminUpgrade`
+- Source: `apps/controller/src/http/native-admin.ts:resolveNativeAdminAvailability`
+- Source: `apps/controller/src/http/native-admin.ts:handleNativeAdminUpgrade`
 - Assumptions: The API has a valid controller session, `agentNativeAdmin.enabled` is true, `agentNativeAdmin.domain` and `agentNativeAdmin.sharedCookieDomain` are configured, Better Auth emits the shared session cookie at that parent domain, and private Agent gateway routing can return a `ComputeDriver.getGatewayEndpoint` value.
 
 ## Flow
@@ -63,20 +63,22 @@ graph TD
 
 `apps/controller/src/console/agents/native-admin.mjs:renderNativeAdminAccess`
 
-The Agent detail page inserts the native admin panel on its tabs, including Configuration and Workspace files. The panel starts hidden while it requests `${path}/native-admin`. The UI hides disabled and denied states, reports stopped, unavailable, or unsupported states, and shows the **Open native admin UI** link only when the API returns `status: "available"` with an Agent URL. The link opens that URL in a new tab with `noopener noreferrer`; opening it makes no additional availability or launch request. A `403` is an audited denial, so the console remembers the denied status path in tab `sessionStorage` for the same session owner and hides the panel on later views of that Agent without asking again. Logout, another sign-in, or a new tab asks afresh.
+The Agent detail page inserts the native admin panel on its tabs, including Configuration and Workspace files. The panel starts hidden while it requests `${path}/native-admin`. The UI hides disabled and denied states, reports stopped, unavailable, or unsupported states, and shows the **Open native admin UI** link only when the API returns `status: "available"` with an Agent URL. The link opens that URL in a new tab with `noopener noreferrer`; opening it makes no additional availability or launch request. A `403` is an audited denial, so the console remembers the denied status path in tab `sessionStorage` for the same session owner and hides the panel on later views of that Agent without asking again. Logout, another sign-in, or a new tab asks afresh. When deployment polling or **Refresh deployment** sees a new `activeRevisionId` or `desiredRuntimeState`, `updateCurrentAgent` calls the panel's `refresh()` once under the same guards; a refresh during a read rereads once after it.
 
 The warning text tells operators that native admin access can change gateway state outside OCE and that durable configuration should remain in OCE.
 
 ### 2. OCC protects the availability route
 
-`apps/controller/src/index.ts:nativeAdminStatusOperation`
+`apps/controller/src/http/native-admin.ts:nativeAdminStatusOperation`
+
+`createNativeAdminAccess` owns the host interceptor, upgrade listener and socket shutdown hook. It reads the current controller through a getter so an app created before bootstrap uses the initialized controller on later requests. Shared route admission remains in `apps/controller/src/index.ts`.
 
 The route is `GET /namespaces/:namespaceId/agents/:agentId/native-admin`. Its operation metadata requires Agent `administer`, targets the exact Agent, and runs through the same `admit` and `resolveIdentity` middleware as other protected OCC routes. A caller with only `read` or `operate` does not reach the handler as an administrator. The disabled feature state is still behind OCC exact-Agent `administer` authorization and existence checks; `disabled` is not an unauthenticated discovery result and does not add a separate Agent `read` permission path.
 
 ### 3. Shared availability resolver checks feature and active revision state
 
-`apps/controller/src/index.ts:getNativeAdminStatus`
-`apps/controller/src/index.ts:resolveNativeAdminAvailability`
+`apps/controller/src/http/native-admin.ts:getNativeAdminStatus`
+`apps/controller/src/http/native-admin.ts:resolveNativeAdminAvailability`
 `packages/occ/src/index.ts:getAdministerableActiveAgentRevision`
 
 The status handler validates the human session, preserves the OCC exact-Agent `administer` authorization and existence boundary, then delegates to `resolveNativeAdminAvailability`. The resolver returns `disabled` only after that protected boundary succeeds. When enabled, it requires a configured public origin and native admin domain, then calls `controller.getAdministerableActiveAgentRevision`. That controller method authorizes exact Agent `administer` and loads the Agent before inspecting its state. If the Agent is stopped and has no `activeRevisionId`, it raises `ResourceConflictError`; the resolver returns only `status: "stopped"`. This covers new Agents and completed stops. If active-revision selection instead raises `DependencyUnavailableError`, as for a desired-running Agent awaiting activation, the resolver returns `unavailable` in a successful status envelope. The console asks the operator to check the Agent's deployment and refresh access; private gateway routing has not been evaluated. The panel always reports the Agent's active revision, independently of the viewed snapshot. Authorization denial remains a protected-route `403` and preserves the human IAM denial audit.
@@ -111,7 +113,7 @@ A domain-scoped session cookie cannot use a host-only `__Host-` prefix. The cont
 
 ### 6. OCC intercepts native-host HTTP requests
 
-`apps/controller/src/index.ts:interceptNativeAdminHttp`
+`apps/controller/src/http/native-admin.ts:interceptNativeAdminHttp`
 
 The `onRequest` hook calls `interceptNativeAdminHttp` before normal OCC route
 handling. For hosts beneath the configured native admin domain, that early
@@ -134,7 +136,7 @@ The HTTP proxy canonicalizes a bounded path suffix, rejects missing or nonmatchi
 
 ### 7. OCC proxies native WebSocket upgrades
 
-`apps/controller/src/index.ts:handleNativeAdminUpgrade`
+`apps/controller/src/http/native-admin.ts:handleNativeAdminUpgrade`
 
 The API process intercepts `upgrade` before Fastify routing. It accepts only derived Agent hosts, reuses the shared-session admission path, captures the current active revision at connection admission, and builds the same private proxy transport context. Active sockets are tracked so `preClose` destroys them during API shutdown.
 
@@ -194,6 +196,10 @@ The init container cannot write through the gateway's later mount path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 12:00: Reread availability once when deployment polling observes a new active revision or runtime state.
+
+- 2026-10-01 17:20: Move native-admin admission, availability, sockets and shutdown ownership into the HTTP module. (authoring-run/bef09bf6-deaa-4189-9568-5f13beb451e7 - 7a6cc931d)
 
 - 2026-10-01 21:00: Reported `unavailable` while a newer exclusive revision replaces the active workload, including after that replacement fails.
 - 2026-10-01 18:20: Answered unreachable user-photo fallbacks with `404` instead of `502`.

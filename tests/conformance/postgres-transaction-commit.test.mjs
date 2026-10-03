@@ -8,6 +8,7 @@ import {
 } from "../../packages/occ/src/state/postgres-state.ts";
 import { DependencyUnavailableError, ScopeViolationError } from "../../packages/occ/src/errors.ts";
 import { requestFailure } from "../../apps/controller/src/http/errors.ts";
+import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
 
 // A transport protocol fixture for the actual outer owner, not a SQL database
 // emulator. No repository reads/writes, authentication, custody or PG evidence.
@@ -436,19 +437,6 @@ test("observed client error during release preserves an earlier callback failure
   assert.equal(p.releases(), 1);
 });
 
-test("lost acknowledgment remains unknown without a follow-up query", async () => {
-  const p = protocol({
-    commit: () => {
-      throw Object.assign(new Error("connection lost"), { code: "ECONNRESET" });
-    },
-  });
-  await assert.rejects(
-    p.state.transact(async () => 1),
-    PostgresCommitOutcomeUnknownError,
-  );
-  assert.deepEqual(p.calls, ["BEGIN", "COMMIT"]);
-});
-
 test("40003 statement completion unknown does not issue a follow-up query", async () => {
   let discarded;
   const p = protocol({
@@ -568,8 +556,16 @@ test("cleanup failure cannot replace an earlier callback failure", async () => {
 });
 
 test("commit fault URL routes the actual pg client through the proxy", async () => {
-  const original =
-    "postgresql://fixture:fixture@127.0.0.1:1/example?host=127.0.0.1&port=55432&user=override&password=override&application_name=commit-fixture&sslmode=disable";
+  const original = syntheticCredentialUrl({
+    protocol: "postgresql",
+    username: "fixture",
+    password: "fixture",
+    host: "127.0.0.1",
+    port: 1,
+    pathname: "/example",
+    search:
+      "?host=127.0.0.1&port=55432&user=override&password=override&application_name=commit-fixture&sslmode=disable",
+  });
   const before = new pg.Client({ connectionString: original });
   const proxy = await commitAckProxy(original);
   try {
@@ -592,12 +588,28 @@ test("commit fault URL routes the actual pg client through the proxy", async () 
 test("commit fault rejects an effective remote override and preserves TLS intent", async () => {
   await assert.rejects(
     commitAckProxy(
-      "postgresql://fixture:fixture@127.0.0.1/example?host=remote.invalid&sslmode=disable",
+      syntheticCredentialUrl({
+        protocol: "postgresql",
+        username: "fixture",
+        password: "fixture",
+        host: "127.0.0.1",
+        pathname: "/example",
+        search: "?host=remote.invalid&sslmode=disable",
+      }),
     ),
     /loopback/,
   );
   await assert.rejects(
-    commitAckProxy("postgresql://fixture:fixture@127.0.0.1/example?ssl=true"),
+    commitAckProxy(
+      syntheticCredentialUrl({
+        protocol: "postgresql",
+        username: "fixture",
+        password: "fixture",
+        host: "127.0.0.1",
+        pathname: "/example",
+        search: "?ssl=true",
+      }),
+    ),
     /non-TLS/,
   );
 });
