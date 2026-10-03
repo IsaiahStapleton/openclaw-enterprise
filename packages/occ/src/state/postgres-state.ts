@@ -105,6 +105,7 @@ import {
   validHarnessAuthSnapshot,
 } from "./platform-state.ts";
 import {
+  asWork,
   WorkClaimLostError,
   PostgresWorkQueue,
   type PostgresQueryClient,
@@ -3491,6 +3492,30 @@ export class PostgresPlatformState implements PlatformStateStore {
             ).rows,
           );
           return found[0] === undefined ? undefined : provisioningRecordFromRow(found[0]);
+        },
+        findWithWork: async (workId) => {
+          // One statement, one snapshot: separate reads under READ COMMITTED can pair a
+          // job with a queue row from a later commit (a failed queue row, a running job).
+          const found = rows(
+            (
+              await client.query(
+                `SELECT provisioning.*, to_jsonb(work) AS controller_work
+                 FROM occ.agent_provisioning_work AS provisioning
+                 LEFT JOIN occ.controller_work AS work
+                   ON work.idempotency_key = provisioning.work_id
+                 WHERE provisioning.work_id = $1`,
+                [workId],
+              )
+            ).rows,
+          );
+          if (found[0] === undefined) {
+            return undefined;
+          }
+          const work = found[0].controller_work;
+          return Object.freeze({
+            record: provisioningRecordFromRow(found[0]),
+            ...(work === null || work === undefined ? {} : { work: asWork(work) }),
+          });
         },
         hasPendingNamespaceProvisioning: async (namespaceId) => {
           // An external write is unresolved until a receipt matches its pending effect

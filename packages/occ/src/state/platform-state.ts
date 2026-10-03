@@ -2519,6 +2519,7 @@ function repositories(
     repositorySessions,
     provisioning: {
       findByWorkId: provisioningAbsent,
+      findWithWork: provisioningAbsent,
       hasPendingNamespaceProvisioning: provisioningPendingAbsent,
       findByAgent: provisioningAbsent,
       findByConfiguration: provisioningAbsent,
