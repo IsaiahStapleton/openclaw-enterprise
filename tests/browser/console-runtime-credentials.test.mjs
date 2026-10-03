@@ -8,8 +8,10 @@ import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs
 import {
   accessBindingPostRequests,
   apiRequests,
+  detailUrl,
   expectNoText,
   login,
+  nativeValues,
   newPage,
   nonAuthWriteRequests,
   secretOptionLabel,
@@ -18,49 +20,16 @@ import {
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 
-function detailUrl(fixture, namespaceId, agentId, tab = "credentials") {
-  const url = new URL(`/console/agents/${agentId}`, fixture.origin);
-  url.searchParams.set("namespace", namespaceId);
-  url.searchParams.set("revision", "draft");
-  url.searchParams.set("tab", tab);
-  return `${url.pathname}${url.search}`;
-}
-
-function nativeValues(marker, { slack = false } = {}) {
-  const values = createHarnessConfiguration("codex", "gpt-5.1");
-  return {
-    ...values,
-    plugins: {
-      ...values.plugins,
-      entries: {
-        ...values.plugins.entries,
-        knowledge: { enabled: true, config: { marker } },
-      },
-    },
-    ...(slack
-      ? {
-          channels: {
-            slack: {
-              enabled: true,
-              mode: "socket",
-              appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
-              botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
-              dmPolicy: "allowlist",
-              groupPolicy: "allowlist",
-              allowFrom: ["U123"],
-              channels: { C123: { requireMention: true } },
-            },
-          },
-        }
-      : {}),
-  };
-}
-
-function nativeValuesWithImplicitSlack(marker) {
-  const values = nativeValues(marker, { slack: true });
-  const { enabled, ...slack } = values.channels.slack;
-  return { ...values, channels: { slack } };
-}
+const slack = {
+  enabled: true,
+  mode: "socket",
+  appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+  botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+  dmPolicy: "allowlist",
+  groupPolicy: "allowlist",
+  allowFrom: ["U123"],
+  channels: { C123: { requireMention: true } },
+};
 
 function secretWrites(requests, namespaceId) {
   return requests.filter(
@@ -89,20 +58,6 @@ async function savedSecretBindings(fixture, namespaceId, configurationId) {
   return saved.data.secretBindings;
 }
 
-function nativeValuesWithImplicitTeams(marker) {
-  return {
-    ...nativeValues(marker),
-    channels: {
-      msteams: {
-        appId: "00000000-0000-4000-8000-000000000000",
-        tenantId: "11111111-1111-4111-8111-111111111111",
-        appPassword: { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" },
-        requireMention: true,
-      },
-    },
-  };
-}
-
 test("draft Agent offers deployment without a generated-credential step", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -110,11 +65,11 @@ test("draft Agent offers deployment without a generated-credential step", async 
   const agent = await fixture.createAgent(
     namespace.id,
     "Credential-gated Agent",
-    nativeValues("gate"),
+    nativeValues("gate", { harnessId: "codex" }),
     { executionMode: "dedicated" },
   );
   const { page, artifacts } = await newPage(t, fixture);
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "configuration"));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "configuration"));
   await page.getByText("Ready to deploy.", { exact: true }).waitFor();
   await page.getByText(/Connection credentials are generated automatically/).waitFor();
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
@@ -167,7 +122,7 @@ test("active Agent can deploy the current saved draft as a new version", async (
   const agent = await fixture.createAgent(
     namespace.id,
     "Redeployable Agent",
-    nativeValues("first"),
+    nativeValues("first", { harnessId: "codex" }),
     {
       executionMode: "dedicated",
     },
@@ -176,7 +131,7 @@ test("active Agent can deploy the current saved draft as a new version", async (
   await fixture.updateConfiguration(
     namespace.id,
     agent.configurationId,
-    nativeValues("current-draft", { slack: true }),
+    nativeValues("current-draft", { harnessId: "codex", channels: { slack } }),
   );
   const { page, artifacts } = await newPage(t, fixture);
   const deploymentRequests = [];
@@ -222,7 +177,7 @@ test("active Agent can deploy the current saved draft as a new version", async (
   const currentDraft = await fixture.updateConfiguration(
     namespace.id,
     agent.configurationId,
-    nativeValues("current-draft", { slack: true }),
+    nativeValues("current-draft", { harnessId: "codex", channels: { slack } }),
     { secretBindings },
   );
   await page.reload();
@@ -265,9 +220,14 @@ test("unsaved Configuration blocks deployment from an admitted revision", async 
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Revision draft guard", { ready: true });
-  const agent = await fixture.createAgent(namespace.id, "Guarded Agent", nativeValues("saved"), {
-    executionMode: "dedicated",
-  });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Guarded Agent",
+    nativeValues("saved", { harnessId: "codex" }),
+    {
+      executionMode: "dedicated",
+    },
+  );
   await fixture.seedActiveAgentRevision(namespace.id, agent.id);
   const { page } = await newPage(t, fixture);
   let deploymentRequests = 0;
@@ -276,7 +236,7 @@ test("unsaved Configuration blocks deployment from an admitted revision", async 
       deploymentRequests += 1;
     }
   });
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "configuration"));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "configuration"));
   await page.getByRole("button", { name: "Edit Configuration" }).click();
   const advanced = page.locator(".launch-advanced:not([open]) > summary");
   if (await advanced.count()) {
@@ -284,7 +244,7 @@ test("unsaved Configuration blocks deployment from an admitted revision", async 
   }
   await page
     .getByLabel("Configuration JSON")
-    .fill(JSON.stringify(nativeValues("unsaved"), null, 2));
+    .fill(JSON.stringify(nativeValues("unsaved", { harnessId: "codex" }), null, 2));
   await page.getByText("Save or cancel Configuration edits before deploying.").waitFor();
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), true);
   assert.equal(deploymentRequests, 0);
@@ -297,7 +257,7 @@ test("revision deployment blocks unavailable reads and does not replay a lost re
   const agent = await fixture.createAgent(
     namespace.id,
     "Recovery Agent",
-    nativeValues("recovery"),
+    nativeValues("recovery", { harnessId: "codex" }),
     { executionMode: "dedicated" },
   );
   await fixture.seedActiveAgentRevision(namespace.id, agent.id);
@@ -362,14 +322,15 @@ test("Slack credential gate treats omitted enabled as enabled", async (t) => {
   const namespace = await fixture.createNamespace("Implicit Slack credential gate", {
     ready: true,
   });
+  const { enabled, ...implicitSlack } = slack;
   const agent = await fixture.createAgent(
     namespace.id,
     "Implicit Slack Credential Agent",
-    nativeValuesWithImplicitSlack("implicit-slack"),
+    nativeValues("implicit-slack", { harnessId: "codex", channels: { slack: implicitSlack } }),
     { executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
   await page.getByLabel("Slack app token").waitFor();
   await page.getByLabel("Slack bot token").waitFor();
@@ -389,11 +350,21 @@ test("Teams-enabled drafts keep console deploy blocked", async (t) => {
   const agent = await fixture.createAgent(
     namespace.id,
     "Teams Credential Agent",
-    nativeValuesWithImplicitTeams("implicit-teams"),
+    nativeValues("implicit-teams", {
+      harnessId: "codex",
+      channels: {
+        msteams: {
+          appId: "00000000-0000-4000-8000-000000000000",
+          tenantId: "11111111-1111-4111-8111-111111111111",
+          appPassword: { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" },
+          requireMention: true,
+        },
+      },
+    }),
     { executionMode: "dedicated" },
   );
   const { page } = await newPage(t, fixture);
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByRole("button", { name: "Save authentication source" }).waitFor();
   await page
     .getByText(
@@ -409,7 +380,7 @@ test("bound Slack credential fields show Secret references without reading value
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Bound Slack credential gate", { ready: true });
-  const values = nativeValues("slack-bound", { slack: true });
+  const values = nativeValues("slack-bound", { harnessId: "codex", channels: { slack } });
   const appSecret = await fixture.createSecret(
     namespace.id,
     "Existing Slack app token",
@@ -437,7 +408,7 @@ test("bound Slack credential fields show Secret references without reading value
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
 
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
   const appToken = page.getByLabel("Slack app token");
   const botToken = page.getByLabel("Slack bot token");
@@ -457,7 +428,7 @@ test("Slack credential replacement switches only selected Secret references", as
   const namespace = await fixture.createNamespace("Replacement Slack credential gate", {
     ready: true,
   });
-  const values = nativeValues("slack-replacement", { slack: true });
+  const values = nativeValues("slack-replacement", { harnessId: "codex", channels: { slack } });
   const appSecret = await fixture.createSecret(
     namespace.id,
     "Existing Slack app token",
@@ -490,7 +461,7 @@ test("Slack credential replacement switches only selected Secret references", as
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
 
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
   await selectSecret(page, "Slack app token", replacementAppSecret);
   await expectNoText(page, /xapp-replacement/);
@@ -531,7 +502,7 @@ test("partially bound Slack credentials save only the missing token", async (t) 
   const namespace = await fixture.createNamespace("Partial Slack credential gate", {
     ready: true,
   });
-  const values = nativeValues("slack-partial", { slack: true });
+  const values = nativeValues("slack-partial", { harnessId: "codex", channels: { slack } });
   const appSecret = await fixture.createSecret(
     namespace.id,
     "Existing Slack app token",
@@ -551,7 +522,7 @@ test("partially bound Slack credentials save only the missing token", async (t) 
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
 
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
   await waitForInputValue(page.getByLabel("Slack app token"), secretOptionLabel(appSecret));
   assert.equal(await page.getByLabel("Slack bot token").evaluate((node) => node.value), "");
@@ -575,7 +546,7 @@ test("missing Slack credential fields require both Secret references before savi
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Slack credential gate", { ready: true });
-  const values = nativeValues("slack", { slack: true });
+  const values = nativeValues("slack", { harnessId: "codex", channels: { slack } });
   const appSecret = await fixture.createSecret(
     namespace.id,
     "Slack Credential Agent Slack app token",
@@ -592,7 +563,7 @@ test("missing Slack credential fields require both Secret references before savi
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
 
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByRole("heading", { name: "Channel Secrets" }).waitFor();
   await page
     .getByText(/Complete these in Credentials before deploying: Slack Secret bindings/)
@@ -633,7 +604,7 @@ test("operator-managed console binding saves and deploys without a managed crede
     { harnessAuth: null },
   );
   const { page } = await newPage(t, fixture);
-  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id));
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "credentials"));
   await page.getByLabel("Authentication source").selectOption("runtime");
   await page
     .getByText("Configured on the runtime host; not validated by OCC.", { exact: true })
