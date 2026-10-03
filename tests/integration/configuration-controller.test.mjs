@@ -363,6 +363,11 @@ test("Configuration HTTP names a model provider baseUrl or api the runtime canno
       }),
       baseUrlMessage("/models/providers/openai/models/1/baseUrl"),
     ],
+    // Only a provider's blank baseUrl means "use the built-in default"; a model's must be set.
+    [
+      provider({ models: [{ id: "a", name: "a", baseUrl: "" }] }),
+      baseUrlMessage("/models/providers/openai/models/0/baseUrl"),
+    ],
   ]) {
     const rejected = await request(context.app, "POST", collection, {
       body: { kind: "agent", values },
@@ -389,7 +394,9 @@ test("Configuration HTTP names a model provider baseUrl or api the runtime canno
   );
   const unchanged = await request(context.app, "GET", item);
   assert.deepEqual(unchanged.body.data, created.body.data);
-  // Any API id the pinned runtime accepts, on a provider or a model, still saves.
+  // Any API id the pinned runtime accepts, on a provider or a model, still saves, as do a
+  // blank provider baseUrl (the runtime's built-in default) and `${VAR}` references the
+  // runtime resolves before it validates.
   const local = {
     models: {
       providers: {
@@ -398,6 +405,8 @@ test("Configuration HTTP names a model provider baseUrl or api the runtime canno
           api: "ollama",
           models: [{ id: "m", name: "m", api: "openai-completions", baseUrl: "http://[::1]:9/v1" }],
         },
+        openai: { baseUrl: "" },
+        gateway: { baseUrl: "${PRIVATE_GATEWAY_URL}", api: "${GATEWAY_MODEL_API}" },
       },
     },
   };

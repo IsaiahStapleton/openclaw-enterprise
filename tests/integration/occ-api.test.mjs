@@ -4273,6 +4273,29 @@ test("Agent provisioning API validates inline configuration with existing Secret
     assert.equal(result.body.error.code, "INVALID_REQUEST", description);
   }
 
+  // A model provider baseUrl the runtime cannot use is refused at admission with the field
+  // named, instead of surfacing later as an unexplained startup model check failure.
+  const badBaseUrl = provisioningRequestBody(namespace.data.id, secrets);
+  badBaseUrl.configuration.values = {
+    ...badBaseUrl.configuration.values,
+    models: { providers: { codex: { baseUrl: "not a url", api: "openai-responses" } } },
+  };
+  const refusedBaseUrl = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: badBaseUrl },
+  );
+  assert.equal(refusedBaseUrl.status, 400, JSON.stringify(refusedBaseUrl.body));
+  assert.equal(
+    refusedBaseUrl.body.error.message,
+    "Configuration field /models/providers/codex/baseUrl must be an absolute http or https URL.",
+  );
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.data.id)),
+    [],
+  );
+
   const pluginDriver = new CodexPluginDriver();
   fixture.controller.registerDriver(pluginDriver);
   fixture.controller.selectDriver("plugin", pluginDriver.id);

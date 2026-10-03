@@ -8,7 +8,7 @@ import { ModelProviderSettingError } from "./errors.ts";
  * openclaw/openclaw `packages/llm-core/src/model-data.ts` at the `OPENCLAW_COMMIT` in
  * `deploy/runtime/Dockerfile`. Update this list when that pin changes.
  */
-export const RUNTIME_MODEL_APIS: readonly string[] = Object.freeze([
+const RUNTIME_MODEL_APIS: readonly string[] = Object.freeze([
   "openai-completions",
   "openai-responses",
   "openai-chatgpt-responses",
@@ -28,16 +28,33 @@ const pointer = (...segments: readonly (string | number)[]): string =>
     .map((segment) => `/${String(segment).replaceAll("~", "~0").replaceAll("/", "~1")}`)
     .join("");
 
-function validateSettings(settings: Record<string, unknown>, path: readonly (string | number)[]) {
-  if (Object.hasOwn(settings, "baseUrl")) {
-    const { baseUrl } = settings;
+// The runtime resolves `${VAR}` environment references (uppercase names) before it validates
+// its configuration, so a value that holds one is left to the runtime.
+const environmentReference = /\$\{[A-Z_][A-Z0-9_]*\}/;
+
+function validateSettings(
+  settings: Record<string, unknown>,
+  path: readonly (string | number)[],
+  provider: boolean,
+) {
+  const { baseUrl, api } = settings;
+  // On a provider, the runtime treats a blank baseUrl as unset and uses a built-in
+  // provider's default endpoint; a model's baseUrl must be a nonempty URL.
+  const unsetBaseUrl = provider && typeof baseUrl === "string" && baseUrl.trim() === "";
+  if (
+    Object.hasOwn(settings, "baseUrl") &&
+    !unsetBaseUrl &&
+    !(typeof baseUrl === "string" && environmentReference.test(baseUrl))
+  ) {
     const url = typeof baseUrl === "string" && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined;
     if (url?.protocol !== "http:" && url?.protocol !== "https:") {
       throw new ModelProviderSettingError(pointer(...path, "baseUrl"), "baseUrl");
     }
   }
-  if (Object.hasOwn(settings, "api")) {
-    const { api } = settings;
+  if (
+    Object.hasOwn(settings, "api") &&
+    !(typeof api === "string" && environmentReference.test(api))
+  ) {
     if (typeof api !== "string" || !RUNTIME_MODEL_APIS.includes(api)) {
       throw new ModelProviderSettingError(pointer(...path, "api"), "api");
     }
@@ -58,7 +75,7 @@ export function validateModelProviderSettings(values: OpenClawConfigurationDocum
       continue;
     }
     const path = ["models", "providers", providerName] as const;
-    validateSettings(settings, path);
+    validateSettings(settings, path, true);
     const models = settings.models;
     if (!Array.isArray(models)) {
       continue;
@@ -66,7 +83,7 @@ export function validateModelProviderSettings(values: OpenClawConfigurationDocum
     for (const [index, model] of models.entries()) {
       const modelSettings = asRecord(model);
       if (modelSettings !== undefined) {
-        validateSettings(modelSettings, [...path, "models", index]);
+        validateSettings(modelSettings, [...path, "models", index], false);
       }
     }
   }

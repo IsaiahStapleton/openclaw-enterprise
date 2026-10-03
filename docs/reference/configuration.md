@@ -125,15 +125,14 @@ Additional consumer kinds are reserved for future approved resources and are
 not accepted. `values` must be a JSON object. It can contain the nested objects,
 arrays, strings, finite numbers, booleans, and nulls used by native OpenClaw
 configuration. OCC preserves the native document without interpreting its
-fields or resolving SecretRefs, except that each model provider's `baseUrl` and
-`api`, and those of its `models` entries, are checked on create and update:
-`baseUrl` must be an absolute `http` or `https` URL, and `api` must be a model
-API the pinned OpenClaw runtime supports (`openai-responses`,
-`openai-completions`, `openai-chatgpt-responses`, `anthropic-messages`,
-`google-generative-ai`, `google-interactions`, `google-vertex`,
-`github-copilot`, `bedrock-converse-stream`, `ollama`, `pi-messages`, or
-`azure-openai-responses`). The `400` names the field as a JSON pointer within
-`values`. Agent deployment separately validates supported
+fields or resolving SecretRefs, except that Configuration create and update and
+Agent provisioning check each model provider's `baseUrl` and `api`, and those of
+its `models` entries: `baseUrl` must be an absolute `http` or `https` URL, and
+`api` must be a model API the pinned OpenClaw runtime supports, such as
+`openai-responses`, `openai-completions`, `anthropic-messages`, or `ollama`.
+A blank provider `baseUrl` and values with `${VAR}` references are left to the
+runtime. The `400` names the field as a JSON pointer within `values`. Agent
+deployment separately validates supported
 runtime selection, topology, and Secret binding ownership before admission.
 Creation requires `create` permission for Configurations in the
 exact parent Namespace. Reads, updates, and deletes require the corresponding
