@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requestFailure } from "../../apps/controller/src/http/errors.ts";
+import { RequestFailure, requestFailure } from "../../apps/controller/src/http/errors.ts";
 import {
   ConfigurationOwnershipError,
   ConfigurationValidationError,
@@ -21,6 +21,7 @@ import {
   IAMPolicyValidationError,
   IAMRoleInUseError,
   ModelCredentialValueError,
+  ModelDiscoveryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
@@ -48,6 +49,10 @@ function apiError(statusCode) {
 
 function fastifyError(code) {
   return Object.assign(new Error(INTERNAL), { code });
+}
+
+function namedError(name) {
+  return Object.assign(new Error(INTERNAL), { name });
 }
 
 function admissionFailure(fields) {
@@ -213,6 +218,16 @@ const cases = [
     },
   ],
   [
+    "a channel credential the provider rejects",
+    new ChannelCredentialError("credentials_rejected", "/channels/slack/botToken"),
+    {
+      status: 400,
+      code: "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED",
+      message: "The channel provider rejected this credential. Check the selected Secret.",
+      details: [{ path: "/channels/slack/botToken", code: "INVALID_VALUE" }],
+    },
+  ],
+  [
     "a channel credential that is not environment-backed",
     new ChannelCredentialError("binding_required", "/channels/slack/appToken"),
     {
@@ -230,6 +245,15 @@ const cases = [
       code: "CHANNEL_CREDENTIAL_UNAVAILABLE",
       message: "Channel credential validation is temporarily unavailable. Retry before deploying.",
       details: [{ path: "/channels/slack/botToken", code: "INVALID_VALUE" }],
+    },
+  ],
+  [
+    "a channel directory credential the provider rejects",
+    new ChannelDirectoryError("credentials_rejected"),
+    {
+      status: 400,
+      code: "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED",
+      message: "The channel provider rejected the selected credential. Check the Secret and retry.",
     },
   ],
   [
@@ -252,6 +276,63 @@ const cases = [
     },
   ],
   [
+    "a channel directory with an invalid response",
+    new ChannelDirectoryError("invalid_response"),
+    {
+      status: 503,
+      code: "CHANNEL_DIRECTORY_INVALID_RESPONSE",
+      message:
+        "The channel provider returned an invalid directory response. Retry or enter an exact ID.",
+    },
+  ],
+  [
+    "an unavailable channel directory",
+    new ChannelDirectoryError("unavailable"),
+    {
+      status: 503,
+      code: "CHANNEL_DIRECTORY_UNAVAILABLE",
+      message: "Channel directory lookup is unavailable. Retry or enter an exact ID.",
+    },
+  ],
+  [
+    "a model provider that rejects discovery",
+    new ModelDiscoveryError("credentials_rejected"),
+    {
+      status: 400,
+      code: "MODEL_DISCOVERY_CREDENTIALS_REJECTED",
+      message:
+        "The provider rejected model discovery. Check the selected credential and its permission to list models, then retry or enter a model ID manually.",
+    },
+  ],
+  [
+    "a rate-limited model discovery",
+    new ModelDiscoveryError("rate_limited"),
+    {
+      status: 429,
+      code: "MODEL_DISCOVERY_RATE_LIMITED",
+      message:
+        "The provider rate-limited model discovery. Wait and retry, or enter a model ID manually.",
+    },
+  ],
+  [
+    "a model list that is invalid",
+    new ModelDiscoveryError("invalid_response"),
+    {
+      status: 503,
+      code: "MODEL_DISCOVERY_INVALID_RESPONSE",
+      message: "The provider returned an invalid model list. Retry or enter a model ID manually.",
+    },
+  ],
+  [
+    "an unavailable model service",
+    new ModelDiscoveryError("unavailable"),
+    {
+      status: 503,
+      code: "MODEL_DISCOVERY_UNAVAILABLE",
+      message: "The provider model service is unavailable. Retry or enter a model ID manually.",
+    },
+  ],
+  [
     "a plugin service that rejects the credential",
     new PluginDiscoveryError("credentials_rejected"),
     {
@@ -259,6 +340,33 @@ const cases = [
       code: "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED",
       message:
         "The plugin service rejected this credential. Check its permission to list plugins, then retry.",
+    },
+  ],
+  [
+    "a rate-limited plugin service",
+    new PluginDiscoveryError("rate_limited"),
+    {
+      status: 429,
+      code: "PLUGIN_DISCOVERY_RATE_LIMITED",
+      message: "The plugin service rate-limited discovery. Wait and retry.",
+    },
+  ],
+  [
+    "a plugin service with an invalid response",
+    new PluginDiscoveryError("invalid_response"),
+    {
+      status: 503,
+      code: "PLUGIN_DISCOVERY_INVALID_RESPONSE",
+      message: "The plugin service returned an invalid response. Retry discovery.",
+    },
+  ],
+  [
+    "an unavailable plugin service",
+    new PluginDiscoveryError("unavailable"),
+    {
+      status: 503,
+      code: "PLUGIN_DISCOVERY_UNAVAILABLE",
+      message: "The plugin service is unavailable. Retry discovery.",
     },
   ],
   [
@@ -297,6 +405,39 @@ const cases = [
       message: "Requests must use application/json.",
     },
   ],
+  ...[
+    [
+      "RUNTIME_LOGS_POD_INVALID",
+      400,
+      "The requested Pod is not a current Pod of this Agent version and source.",
+    ],
+    ["RUNTIME_LOGS_SOURCE_UNAVAILABLE", 400, "This Agent version has no such runtime log source."],
+    [
+      "RUNTIME_LOGS_RATE_LIMITED",
+      429,
+      "Too many runtime log requests. Wait for Retry-After and try again.",
+    ],
+    [
+      "RUNTIME_LOGS_CLUSTER_RBAC",
+      503,
+      "The cluster denied the runtime log read. Ask a platform operator to enable agentRuntimeLogs and the documented roles.",
+    ],
+    [
+      "RUNTIME_LOGS_SANDBOX_NOT_FOUND",
+      503,
+      "OpenShell reports no such sandbox for OpenClaw Enterprise: it is not provisioned yet or was removed, or the gateway identity is not a member of its Workspace.",
+    ],
+    ["RUNTIME_LOGS_UNAVAILABLE", 503, "Runtime status or logs are unavailable. Retry later."],
+    [
+      "RUNTIME_LOGS_AUDIT_UNAVAILABLE",
+      503,
+      "The runtime log view could not be audited, so no output was read.",
+    ],
+  ].map(([code, status, message]) => [
+    `a runtime log failure ${code}`,
+    new RuntimeLogsError(code),
+    { status, code, message },
+  ]),
   [
     "a runtime log cursor from another view",
     new RuntimeLogsError("RUNTIME_LOGS_CURSOR_INVALID"),
@@ -358,6 +499,15 @@ const cases = [
       code: "FORBIDDEN",
       message:
         "The Agent service principal prn_agent is not authorized to operate secret sec_1. Grant that principal operate on the secret, then deploy again.",
+    },
+  ],
+  [
+    "a denial from another module copy, matched by name",
+    namedError("AuthorizationDeniedError"),
+    {
+      status: 403,
+      code: "FORBIDDEN",
+      message: "The exact platform operation was not authorized.",
     },
   ],
   [
@@ -446,6 +596,25 @@ const cases = [
     },
   ],
   [
+    "an unavailable dependency from another module copy, matched by name",
+    namedError("DependencyUnavailableError"),
+    {
+      status: 503,
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "A required platform dependency is unavailable.",
+    },
+  ],
+  [
+    "a device login when the API Pods cannot reach the sign-in service",
+    new DeviceAuthorizationStartError("unreachable", "ECONNREFUSED"),
+    {
+      status: 503,
+      code: "DEPENDENCY_UNAVAILABLE",
+      message:
+        "OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs or the cluster's egress policy), then try again.",
+    },
+  ],
+  [
     "a device login the sign-in service could not start",
     new DeviceAuthorizationStartError("unavailable", "HTTP_503"),
     {
@@ -461,6 +630,18 @@ const cases = [
       status: 503,
       code: "DEPENDENCY_UNAVAILABLE",
       message: "A required platform dependency is unavailable.",
+    },
+  ],
+  [
+    "a RequestFailure passes through unchanged",
+    new RequestFailure(422, "UNPROCESSABLE", "The route's own sentence.", [
+      { path: "/name", code: "TOO_LONG" },
+    ]),
+    {
+      status: 422,
+      code: "UNPROCESSABLE",
+      message: "The route's own sentence.",
+      details: [{ path: "/name", code: "TOO_LONG" }],
     },
   ],
   [
