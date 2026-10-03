@@ -1053,7 +1053,9 @@ export interface IAMPolicyReadRepository {
   ): Promise<Readonly<AccessBinding> | undefined>;
   /**
    * Lists the deny Restrictions on these exact resources in every scope (Installation and
-   * Namespace), as deleting the resources removes them.
+   * Namespace), as deleting the resources removes them. A store that keeps no Restrictions
+   * (the in-memory one; its IAM driver seed holds them and no deletion removes them)
+   * returns none.
    */
   listRestrictionsTargeting(
     resourceKind: ResourceKind,

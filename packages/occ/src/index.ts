@@ -956,13 +956,16 @@ export async function restrictionsRemovedWithAgent(
   state: Pick<PlatformReadView, "iamPolicy" | "revisions">,
   agent: Pick<Agent, "namespaceId" | "id">,
 ): Promise<readonly Readonly<Restriction>[]> {
-  return Object.freeze([
+  const restrictions = [
     ...(await state.iamPolicy.listRestrictionsTargeting("agent", [agent.id])),
     ...(await state.iamPolicy.listRestrictionsTargeting(
       "agent_revision",
       await agentRevisionIds(state, agent),
     )),
-  ]);
+  ];
+  return Object.freeze(
+    restrictions.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
+  );
 }
 
 async function agentRevisionIds(

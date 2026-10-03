@@ -215,7 +215,8 @@ test(
 
     // OCC has no API that writes Restrictions (they come from the IAM seed), so insert them
     // directly: one on the Agent and one on its revision in the Namespace, one on the Agent
-    // at Installation scope, and a kind-wide one the finalizer keeps.
+    // at Installation scope, and a kind-wide one the finalizer keeps. The application role
+    // cannot delete Restrictions, so they stay; each names only this test's Namespace or Agent.
     const restrict = async (namespaceId, resourceKind, resourceId) => {
       const id = `restriction_${randomUUID()}`;
       await pool.query(
@@ -252,7 +253,7 @@ test(
           ...(row.namespace_id === null ? {} : { namespaceId: row.namespace_id }),
           action: row.action,
           resourceKind: row.resource_kind,
-          resourceId: row.resource_id,
+          ...(row.resource_id === null ? {} : { resourceId: row.resource_id }),
           effect: row.effect,
         }))
         .sort(byId);
