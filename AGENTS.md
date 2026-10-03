@@ -13,9 +13,6 @@ authorize every exact resource operation through the selected IAM Driver, and
 emit attributable audit evidence for bootstrap, successful mutations, and
 authorization denials.
 
-Preserve Git history, registered worktrees, ignored local `.env` files, and
-existing root or nested `node_modules/` directories.
-
 The authoritative architecture is the repository's
 [platform design](docs/design.md).
 Read its [implementation status](docs/design.md#implementation-status) before
@@ -330,6 +327,8 @@ Tests must verify real, supported application behavior. A test that merely
 confirms behavior invented by its own mock, monkeypatch, fixture, or hand-written
 adapter is invalid and must be rewritten or deleted.
 
+Use `tests/fixtures/synthetic-credential-url.mjs` to construct synthetic credential-bearing URLs at runtime; do not commit complete credential-bearing URL literals, which TruffleHog treats as secrets.
+
 - Use actual API routes, request methods, server-owned resource scope, response
   envelopes, authorization rules, and lifecycle transitions. Never invent
   endpoints, caller-selected singleton Installation IDs, nonexistent response
@@ -402,6 +401,10 @@ and PostgreSQL, tenant-local RoleBindings, model turns before and after revision
 cutover, and allowed/denied NetworkPolicy checks. Configure API egress for its
 actual translated `/32` endpoint and port. The fixture suite's scoped RBAC does
 not verify shared-cluster admission guardrails.
+
+## Browser automation
+
+On a devbox without an X server, run Playwright with `headless: true`.
 
 ## Console Storybook
 

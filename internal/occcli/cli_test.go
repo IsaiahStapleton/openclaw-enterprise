@@ -121,6 +121,10 @@ type runtimeLogStub struct {
 	// revisions is the JSON revision list; empty means the Agent has none.
 	revisions string
 	paths     []string
+	// podless lists revisions whose runtime description has no Pods.
+	podless []string
+	// forbidden lists revisions whose runtime description is refused with 403.
+	forbidden []string
 }
 
 func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Request) {
@@ -147,6 +151,14 @@ func (stub *runtimeLogStub) serve(response http.ResponseWriter, request *http.Re
 		next := stub.pages[0]
 		stub.pages = stub.pages[1:]
 		next(response, query)
+	case strings.HasSuffix(request.URL.Path, "/runtime") && slices.ContainsFunc(stub.forbidden, func(id string) bool {
+		return strings.HasSuffix(request.URL.Path, "/deployments/"+id+"/runtime")
+	}):
+		logError(http.StatusForbidden, "FORBIDDEN", nil)(response, nil)
+	case strings.HasSuffix(request.URL.Path, "/runtime") && slices.ContainsFunc(stub.podless, func(id string) bool {
+		return strings.HasSuffix(request.URL.Path, "/deployments/"+id+"/runtime")
+	}):
+		fmt.Fprint(response, `{"data":{"revisionId":"rev_x","observedAt":"2026-09-30T12:00:00.000Z","pods":[],"sources":[]},"meta":{}}`)
 	case strings.HasSuffix(request.URL.Path, "/runtime"):
 		fmt.Fprint(response, `{"data":{"revisionId":"rev_1","observedAt":"2026-09-30T12:00:00.000Z","pods":[{"role":"gateway","cluster":"control","name":"gw-0","uid":"u","phase":"Running","ready":true,"createdAt":null,"containers":[{"name":"gateway","state":"running","reason":null,"ready":true,"restartCount":2,"startedAt":null,"lastTermination":{"reason":"OOMKilled","exitCode":137,"finishedAt":null}}],"events":[{"type":"Warning","container":"gateway","reason":"Unhealthy","message":"Readiness probe failed","count":146,"lastObservedAt":"2026-09-30T11:59:00.000Z"},{"type":"Normal","container":"prepare-private-state","reason":"Started","message":"Container started","count":1,"lastObservedAt":"2026-09-30T11:00:00.000Z"},{"type":"Normal","container":null,"reason":"Scheduled","message":"Successfully assigned","count":1,"lastObservedAt":null}]}],"sources":[{"id":"gateway","kind":"container","pods":[],"available":true,"retention":"current and previous instance"}]},"meta":{}}`)
 	default:
@@ -311,13 +323,15 @@ func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 		{"agent", "logs", "agt_1", "--source", "gateway", "--level", "unknown"},
 		{"agent", "logs", "agt_1", "--source", "gateway", "-o", "yaml"},
 		{"agent", "runtime", "agt_1", "-o", "text"},
+		{"agent", "logs", "agt_1", "--source", "gateway", "--revision", "3"},
+		{"agent", "runtime", "agt_1", "--revision", "my-deploy"},
 	} {
 		stub := &runtimeLogStub{t: t, activeID: "rev_1"}
 		if _, _, err := runLogsCommand(t, context.Background(), stub, args...); err == nil {
 			t.Errorf("%v: expected an error", args)
 		}
-		if len(stub.queries) != 0 {
-			t.Errorf("%v: sent %d log requests", args, len(stub.queries))
+		if len(stub.paths) != 0 {
+			t.Errorf("%v: sent requests %v", args, stub.paths)
 		}
 	}
 	stub := &runtimeLogStub{t: t}
@@ -356,6 +370,80 @@ func TestAgentRuntimeAndLogsDefaultToLatestRevisionWithoutActiveRevision(t *test
 	}
 	if !strings.Contains(runtimeErr, "using latest revision rev_2") {
 		t.Fatalf("runtime notice = %q", runtimeErr)
+	}
+}
+
+// A failed or still-deploying dedicated replacement leaves the active revision
+// stopped while the newer revision's Pods hold the failure: read the newer one
+// while it has Pods, and always say which revision was read.
+func TestAgentLogsDefaultToANewerRevisionWithPodsAndNameTheRevision(t *testing.T) {
+	revisions := `[{"id":"rev_1","revision":1},{"id":"rev_2","revision":2}]`
+	for _, test := range []struct {
+		name      string
+		podless   []string
+		forbidden []string
+		revision  string
+		notice    string
+	}{
+		{"newer revision has Pods", nil, nil, "rev_2", "notice: reading revision rev_2, newer than the active revision rev_1 and not yet active; pass --revision rev_1 for the active revision"},
+		{"newer revision has no Pods", []string{"rev_2"}, nil, "rev_1", "notice: reading the active revision rev_1\n"},
+		// A log reader without Agent operate cannot read the runtime description;
+		// the notice still names the newer revision it may read with --revision.
+		{"newer revision runtime is refused", nil, []string{"rev_2"}, "rev_1", "notice: reading the active revision rev_1; a newer revision rev_2 exists but its runtime could not be read (OCC operation failed (HTTP 403): FORBIDDEN: fixed message); pass --revision rev_2 to read it"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &runtimeLogStub{t: t, activeID: "rev_1", revisions: revisions, podless: test.podless, forbidden: test.forbidden, pages: []func(http.ResponseWriter, url.Values){
+				logPage("", logLine(1, "error", "plugin install failed")),
+			}}
+			out, errOut, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "agent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "plugin install failed") {
+				t.Fatalf("logs output = %q", out)
+			}
+			if want := "/namespaces/ns_1/agents/agt_1/deployments/" + test.revision + "/runtime/logs"; !slices.Contains(stub.paths, want) {
+				t.Fatalf("requests = %v, want %s", stub.paths, want)
+			}
+			if !strings.Contains(errOut, test.notice) {
+				t.Fatalf("notice = %q, want %q", errOut, test.notice)
+			}
+		})
+	}
+	// `occ agent runtime` reuses the probed description of the newer revision.
+	runtimeStub := &runtimeLogStub{t: t, activeID: "rev_1", revisions: revisions}
+	if _, _, err := runLogsCommand(t, context.Background(), runtimeStub, "agent", "runtime", "agt_1"); err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := "/namespaces/ns_1/agents/agt_1/deployments/rev_2/runtime"
+	if got := slices.Index(runtimeStub.paths, runtimePath); got < 0 || slices.Contains(runtimeStub.paths[got+1:], runtimePath) {
+		t.Fatalf("runtime requests = %v, want %s exactly once", runtimeStub.paths, runtimePath)
+	}
+	// The active revision is the latest: no runtime probe, and the notice names it.
+	stub := &runtimeLogStub{t: t, activeID: "rev_2", revisions: revisions, pages: []func(http.ResponseWriter, url.Values){
+		logPage("", logLine(1, "info", "ready")),
+	}}
+	_, errOut, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "notice: reading the active revision rev_2") {
+		t.Fatalf("notice = %q", errOut)
+	}
+	for _, path := range stub.paths {
+		if strings.HasSuffix(path, "/runtime") {
+			t.Fatalf("probed runtime %s although the active revision is the latest", path)
+		}
+	}
+	// An explicit --revision skips every lookup.
+	stub = &runtimeLogStub{t: t, activeID: "rev_1", revisions: revisions, pages: []func(http.ResponseWriter, url.Values){
+		logPage("", logLine(1, "info", "ready")),
+	}}
+	if _, _, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "gateway", "--revision", "rev_1"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/namespaces/ns_1/agents/agt_1/deployments/rev_1/runtime/logs"}; !slices.Equal(stub.paths, want) {
+		t.Fatalf("requests = %v, want %v", stub.paths, want)
 	}
 }
 
@@ -526,5 +614,106 @@ func TestAgentRuntimePrintsPodsAndSources(t *testing.T) {
 		if strings.Join(got, " ") != strings.Join(want, " ") {
 			t.Errorf("Event row %d = %q, want %q:\n%s", index, got, want, out)
 		}
+	}
+}
+
+func TestAgentStopNamesTheDeployCommandThatStartsTheAgentAgain(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"id":"agt_1","name":"stopped-agent","namespaceId":"ns_1","desiredRuntimeState":"stopped"},"meta":{"requestId":"req_1"}}`)
+	}))
+	t.Cleanup(server.Close)
+	keyFile := filepath.Join(t.TempDir(), "service-key.json")
+	if err := os.WriteFile(keyFile, []byte(`{"data":{"key":"test-key"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	command := New(&out, &errOut)
+	command.SetArgs([]string{"agent", "stop", "agt_1", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"POST /namespaces/ns_1/agents/agt_1/stop"}; !slices.Equal(requests, want) {
+		t.Fatalf("requests = %v, want %v", requests, want)
+	}
+	if !strings.Contains(out.String(), "stopped-agent") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+	if want := "notice: stop requested; run \"occ agent deploy agt_1\" to start the Agent again\n"; errOut.String() != want {
+		t.Fatalf("stderr = %q, want %q", errOut.String(), want)
+	}
+	// Structured output stays machine-readable: the notice goes to stderr only.
+	out.Reset()
+	errOut.Reset()
+	command = New(&out, &errOut)
+	command.SetArgs([]string{"agent", "stop", "agt_1", "-o", "json", "--url", server.URL, "--service-key-file", keyFile, "--namespace", "ns_1"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out.String()), &decoded); err != nil || decoded["id"] != "agt_1" {
+		t.Fatalf("json stdout = %q, %v", out.String(), err)
+	}
+	if want := "notice: stop requested; run \"occ agent deploy agt_1\" to start the Agent again\n"; errOut.String() != want {
+		t.Fatalf("json stderr = %q, want %q", errOut.String(), want)
+	}
+	stop, _, err := New(io.Discard, io.Discard).Find([]string{"agent", "stop"})
+	if err != nil || !strings.Contains(stop.Long, `run "occ agent deploy ID" to start the Agent again`) {
+		t.Fatalf("occ agent stop help = %q, %v", stop.Long, err)
+	}
+}
+
+func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
+	var followed bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		followed = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	for _, testCase := range []struct {
+		name     string
+		location string
+		want     string
+	}{
+		{
+			name:     "other origin",
+			location: "https://user:pass@" + strings.TrimPrefix(target.URL, "http://") + "/installation?code=secret#frag",
+			want:     "redirected to https://" + strings.TrimPrefix(target.URL, "http://") + "/installation; occ does not follow redirects, so set OCC_URL (or --url) to https://" + strings.TrimPrefix(target.URL, "http://") + " ",
+		},
+		{name: "same origin", location: "/elsewhere/installation", want: "/elsewhere/installation; occ does not follow redirects, and OCC_URL must be the origin that serves the OCC API directly"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var sawKey string
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sawKey = r.Header.Get("x-api-key")
+				w.Header().Set("location", testCase.location)
+				w.WriteHeader(http.StatusPermanentRedirect)
+			}))
+			defer origin.Close()
+			keyFile := filepath.Join(t.TempDir(), "service-key.json")
+			if err := os.WriteFile(keyFile, []byte(`{"data":{"key":"test-key"}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := New(io.Discard, io.Discard)
+			command.SetArgs([]string{"installation", "get", "--url", origin.URL, "--service-key-file", keyFile})
+			err := command.Execute()
+			if err == nil {
+				t.Fatal("expected the redirect to fail the command")
+			}
+			if !strings.Contains(err.Error(), "HTTP 308") || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error = %q, want it to contain HTTP 308 and %q", err, testCase.want)
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "pass") {
+				t.Fatalf("error echoed redirect credentials: %q", err)
+			}
+			if testCase.name == "same origin" && !strings.Contains(err.Error(), origin.URL+"/elsewhere/installation") {
+				t.Fatalf("relative Location was not resolved against the request: %q", err)
+			}
+			if sawKey != "test-key" || followed {
+				t.Fatalf("origin key = %q, redirect followed = %v", sawKey, followed)
+			}
+		})
 	}
 }

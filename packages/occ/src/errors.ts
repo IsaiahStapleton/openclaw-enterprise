@@ -62,6 +62,29 @@ export class AgentPrincipalAuthorizationError extends AuthorizationDeniedError {
 }
 
 /**
+ * A permanently failed deletion belongs to the actor that started it. Another caller that
+ * also holds delete may take it over only after the initiating actor loses delete, so the
+ * refusal names that condition and, for audit only, the initiating actor.
+ */
+export class DeletionRetryOwnedError extends AuthorizationDeniedError {
+  readonly initiatingActorId: string;
+  declare readonly authorization: {
+    readonly action: AuthorizationRequest["action"];
+    readonly resource: ResourceRef;
+  };
+
+  constructor(initiatingActorId: string, resource: ResourceRef) {
+    super(
+      "Only the actor that started this deletion can retry it while that actor still holds delete. Retry as that actor, or remove its delete permission first.",
+      undefined,
+      { action: "delete", resource },
+    );
+    this.name = "DeletionRetryOwnedError";
+    this.initiatingActorId = initiatingActorId;
+  }
+}
+
+/**
  * Authority and audit outages fail closed as authorization failures while
  * remaining distinguishable from explicit denials for HTTP and audit handling.
  */
@@ -87,6 +110,24 @@ export class ModelDiscoveryError extends Error {
     super("Model discovery failed.");
     this.name = "ModelDiscoveryError";
     this.reason = reason;
+  }
+}
+
+/**
+ * Device login could not start. `reason` is `unreachable` when the API could not open a
+ * connection to the sign-in service (DNS, refused, reset, timeout), else `unavailable`.
+ * `failure` is a bounded class for the server log only (an error code such as
+ * `ECONNREFUSED`, `TimeoutError` or `HTTP_503`); no provider body or message is kept.
+ */
+export class DeviceAuthorizationStartError extends Error {
+  readonly reason: "unreachable" | "unavailable";
+  readonly failure: string;
+
+  constructor(reason: DeviceAuthorizationStartError["reason"], failure = "unclassified") {
+    super("Device login could not start.");
+    this.name = "DeviceAuthorizationStartError";
+    this.reason = reason;
+    this.failure = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(failure) ? failure : "unclassified";
   }
 }
 
@@ -132,12 +173,68 @@ export class ConfigurationHarnessError extends ScopeViolationError {
   }
 }
 
+const modelCredentialMessage = (path: string): string =>
+  `Configuration field ${path} holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.`;
+
+/**
+ * A literal credential in a known model credential field of Configuration values. The
+ * message names the field's JSON pointer and never the value, so HTTP returns it.
+ */
+export class ModelCredentialValueError extends Error {
+  readonly path: string;
+
+  constructor(path: string) {
+    // The error contract caps messages at 256 characters; a long provider name shortens the
+    // path. The cut counts code points, so it never leaves half of a surrogate pair.
+    const budget = 256 - modelCredentialMessage("").length;
+    const characters = Array.from(path);
+    super(
+      modelCredentialMessage(
+        characters.length <= budget ? path : `${characters.slice(0, budget - 1).join("")}…`,
+      ),
+    );
+    this.name = "ModelCredentialValueError";
+    this.path = path;
+  }
+}
+
 export class ResourceConflictError extends ScopeViolationError {
   constructor(message: string) {
     super(message);
     this.name = "ResourceConflictError";
   }
 }
+
+/**
+ * A conflict raised only after the caller was authorized on the resource, whose message
+ * names what blocks the operation. HTTP returns that message instead of the generic text.
+ */
+export class ResourceStateConflictError extends ResourceConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResourceStateConflictError";
+  }
+}
+
+/*
+ * Duplicate caller-chosen names, shared by the memory and PostgreSQL stores so both report
+ * them alike. Each is raised only after the caller was authorized to create (or rename) that
+ * resource kind in that scope, and the 409 already revealed that the name is taken, so naming
+ * the kind discloses nothing new.
+ */
+export const AGENT_NAME_CONFLICT =
+  "An Agent with this name already exists in this Namespace. Choose a different name.";
+export const SECRET_NAME_CONFLICT =
+  "A Secret with this name already exists in this Namespace. Choose a different name.";
+export const PRESET_NAME_CONFLICT =
+  "A Preset with this name already exists in this Namespace. Choose a different name.";
+export const SERVICE_ACCOUNT_NAME_CONFLICT =
+  "A ServiceAccount with this name already exists in this Namespace. Choose a different name.";
+export const CREDENTIAL_SOURCE_NAME_CONFLICT =
+  "A credential source with this name already exists in this Namespace. Choose a different name.";
+/** Deleted Namespaces keep their name, so a name can be taken by one no longer listed. */
+export const NAMESPACE_NAME_CONFLICT =
+  "A Namespace with this name already exists or was deleted. Choose a different name.";
 
 export class AgentDeletingError extends ResourceConflictError {
   constructor(message = "The Agent is being deleted.") {
@@ -174,6 +271,63 @@ export class NativeWorkerSupportError extends Error {
   }
 }
 
+/** A platform dependency a Compute Driver reaches while it reconciles a revision. */
+export type TransientDependency = "agent_gateway" | "kubernetes_api";
+
+/** Why the dependency failed, from a closed set that carries no provider text. */
+export type TransientDependencyReason = "unreachable" | "timeout" | "unavailable";
+
+const TRANSIENT_DEPENDENCY_CODES: Readonly<Record<TransientDependency, string>> = Object.freeze({
+  agent_gateway: "AGENT_GATEWAY_UNAVAILABLE",
+  kubernetes_api: "KUBERNETES_API_UNAVAILABLE",
+});
+
+/**
+ * A Compute dependency failed in a way that clears without a change to the
+ * revision: the Kubernetes API timed out or answered 429/5xx, or the Agent
+ * Gateway's route refused or dropped a connection while it converged. The
+ * worker retries it within the deployment's convergence deadline instead of
+ * spending the attempt budget, and records `code`, which names the dependency.
+ * The message stays in the controller; status shows a fixed text.
+ */
+export class TransientDependencyError extends Error {
+  readonly dependency: TransientDependency;
+  readonly reason: TransientDependencyReason;
+  readonly code: string;
+
+  constructor(
+    dependency: TransientDependency,
+    reason: TransientDependencyReason,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "TransientDependencyError";
+    this.dependency = dependency;
+    this.reason = reason;
+    this.code = TRANSIENT_DEPENDENCY_CODES[dependency];
+  }
+}
+
+/** A step of dedicated activation that completes by itself once a workload catches up. */
+export type ActivationPendingCode = "WORKSPACE_NODE_PENDING" | "WORKSPACE_NODE_BINDING_PENDING";
+
+/**
+ * Activation found its workloads ready but is still waiting for one of them:
+ * the Gateway has not applied the workspace node it was handed, or the Harness
+ * node has not connected to the Gateway. The worker records `code` so status
+ * names the wait. The message stays in the controller.
+ */
+export class ActivationPendingError extends Error {
+  readonly code: ActivationPendingCode;
+
+  constructor(code: ActivationPendingCode, message: string) {
+    super(message);
+    this.name = "ActivationPendingError";
+    this.code = code;
+  }
+}
+
 /**
  * A Sandbox Driver cannot run this exact AgentRevision with the installed
  * driver. Retrying cannot change the outcome, so the worker fails the deployment
@@ -186,6 +340,67 @@ export class SandboxRevisionUnsupportedError extends Error {
     super(message);
     this.name = "SandboxRevisionUnsupportedError";
     this.code = code;
+  }
+}
+
+/**
+ * An AccessBinding Role carries Permissions that can never take effect through the
+ * binding: `create` is checked against the Namespace, not an existing resource, and a
+ * binding to an exact resource applies only Permissions of that resource's kind.
+ */
+export class IAMAccessBindingRoleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IAMAccessBindingRoleError";
+  }
+}
+
+/**
+ * A Namespace IAM policy write names an invalid or unavailable input: an unsupported
+ * Permission, or a subject, Role or target that is not usable in the exact Namespace.
+ * The caller already administers the Namespace's IAM policy, so HTTP reports the static
+ * message and the offending request field as an invalid request.
+ */
+export class IAMPolicyValidationError extends ScopeViolationError {
+  readonly path: string;
+
+  constructor(path: string, message: string) {
+    super(message);
+    this.name = "IAMPolicyValidationError";
+    this.path = path;
+  }
+}
+
+/**
+ * A Secret value passed the request schema but not OCC's stricter rules: it holds an
+ * unpaired UTF-16 surrogate (not valid UTF-8) or exceeds 65536 UTF-8 bytes. HTTP reports
+ * it as an invalid `/value` instead of hiding it as a scope miss.
+ */
+export class SecretValueError extends ScopeViolationError {
+  readonly code: "INVALID_VALUE" | "TOO_LONG";
+
+  constructor(code: "INVALID_VALUE" | "TOO_LONG", message: string) {
+    super(message);
+    this.name = "SecretValueError";
+    this.code = code;
+  }
+}
+
+/** A Namespace Role cannot be deleted while AccessBindings still reference it. */
+export class IAMRoleInUseError extends ResourceConflictError {
+  constructor() {
+    super("The IAM Role is referenced by AccessBindings. Delete those AccessBindings first.");
+    this.name = "IAMRoleInUseError";
+  }
+}
+
+/** The Installation selects no Credential Gateway, so credential sources are unavailable. */
+export class CredentialGatewayNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "This Installation has no Credential Gateway, so credential sources are unavailable. An administrator must select the OpenShell Credential Gateway Driver; see docs/reference/credential-sources.md.",
+    );
+    this.name = "CredentialGatewayNotConfiguredError";
   }
 }
 
@@ -253,9 +468,14 @@ export class RuntimeLogsError extends Error {
 }
 
 export class PluginPolicyValidationError extends Error {
-  constructor(field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers") {
+  constructor(
+    field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers" | "aliasedPlugin",
+  ) {
     let message = "The supplied plugin policies are invalid.";
-    if (field === "approvers") {
+    if (field === "aliasedPlugin") {
+      message =
+        'Two plugin selections name the same plugin (a native ID and its driver-prefixed ID, such as "diffs" and "occ-plugin:diffs"). Keep one selection per plugin.';
+    } else if (field === "approvers") {
       message =
         "This Plugin Driver does not support plugin or tool approvers. Omit approvers from plugin selections and set Agent-wide pluginApprovers instead.";
     } else if (field === "toolDefaults.reviewer") {

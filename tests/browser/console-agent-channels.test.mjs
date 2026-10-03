@@ -5,6 +5,7 @@ import test from "node:test";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
 import {
   accessBindingPostRequests,
+  apiRequests,
   detailUrl,
   expectNoText,
   login,
@@ -18,24 +19,8 @@ import {
   secretOptionLabel,
   secretPostRequests,
   selectSecret,
+  waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
-
-function apiRequests(page, origin) {
-  const requests = [];
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (url.origin === origin) {
-      let body;
-      try {
-        body = request.postDataJSON();
-      } catch {
-        // Some request bodies are not JSON.
-      }
-      requests.push({ method: request.method(), path: `${url.pathname}${url.search}`, body });
-    }
-  });
-  return requests;
-}
 
 test("Channel drawer saves channel edits without exposing Secret values or dropping unrelated draft state", async (t) => {
   const secretValue = "super-secret-channel-value";
@@ -767,7 +752,7 @@ test("Channel drawer reports partial save when post-PATCH Secret grant is reject
   const appToken = page.getByLabel("Slack app token");
   await appToken.waitFor();
   assert.equal(await appToken.evaluate((node) => node.tagName), "INPUT");
-  assert.equal(await appToken.evaluate((node) => node.value), secretOptionLabel(slackAppSecret));
+  await waitForInputValue(appToken, secretOptionLabel(slackAppSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
 });
 

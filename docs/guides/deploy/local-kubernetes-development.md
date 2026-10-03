@@ -13,8 +13,9 @@ mode, the container engine hosts k3d and builds or imports images without
 running OCE application services.
 
 K3s requires the `cpuset` cgroup controller, which systemd does not delegate to
-a rootless session. On Podman, run as root, delegate `cpuset` to your user
-session, or use a rootful Podman machine. On macOS:
+a rootless session. On Podman, run as root or use a rootful Podman machine;
+native rootless Podman cannot start this profile even with `cpuset` delegated.
+On macOS:
 
 ```bash
 podman machine stop
@@ -70,8 +71,9 @@ actual policy, installs it only on the owned k3d node, and verifies workspace
 and outside-write boundaries and missing-profile failure. Only dedicated Codex
 containers select the profile. The private state directory records its hashes and
 node provenance in `codex-seccomp-provenance.json`. If the policy, runtime, or
-verification is unsupported, startup fails and rolls back the owned cluster;
-check the reported failure and host user-namespace restrictions before retrying.
+verification is unsupported, startup fails and rolls back the owned cluster.
+On Ubuntu 24.04, follow
+[local Codex sandbox troubleshooting](../operate/troubleshooting.md#local-codex-sandbox-check-fails).
 The sandbox check applies to that node and image at startup; repeat it after a
 runtime, kernel, or image change by recreating the local installation.
 
@@ -164,8 +166,9 @@ helper does not modify the default kubeconfig or current kubectl context.
 
 For separate stacks, select distinct state directories, cluster names, bridge
 subnets and published ports. Compose also needs a distinct `OCC_POSTGRES_PORT`;
-changing the API port alone leaves PostgreSQL on port 55432. Generated runtime workloads have a 2 GiB memory limit
-each; size the local engine VM for OCC plus the Agents you run. Keep each
+changing the API port alone leaves PostgreSQL on port 55432. Generated Harness workloads have a 2 GiB memory limit
+each, and each Agent Gateway requests 1280 MiB with a 3 GiB limit; size the local engine VM for OCC
+plus the Agents you run. Keep each
 stack's resources under the helper's lifecycle until cleanup.
 
 ## Require both proxies before enabling Slack

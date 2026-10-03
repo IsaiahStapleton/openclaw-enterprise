@@ -9,19 +9,19 @@ do not confirm that an Agent or its Slack connection is currently healthy.
 
 ## Navigation and Agent identity
 
-| Component                     | What it does                                                                                |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| **Control Plane**             | Identifies the OpenClaw Control Plane (OCC) console.                                        |
-| **Agents** / **← Agents**     | Opens the Agents list in the selected Namespace.                                            |
-| **Namespaces**                | Lists the Namespaces you can read.                                                          |
-| Agent name                    | Human-readable name of this Agent.                                                          |
-| **Namespace · name**          | Namespace containing the Agent.                                                             |
-| **Refresh**                   | Reloads the Agent page. It does not retry or restart deployment.                            |
-| **Current version**           | Version in the Agent's `activeRevisionId`. It may differ from the latest or viewed version. |
-| **Latest visible deployment** | Newest readable version and its recorded deployment status.                                 |
-| **Live serving**              | Remains unverified by this page and its limited diagnostics.                                |
-| **Deployment activity**       | Most recent visible version and its persisted deployment status.                            |
-| `agt_…`                       | Stable Agent identifier for API calls and support.                                          |
+| Component                     | What it does                                                                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Control Plane**             | Identifies the OpenClaw Control Plane (OCC) console.                                                                                                                                                                                                               |
+| **Agents** / **← Agents**     | Opens the Agents list in the selected Namespace.                                                                                                                                                                                                                   |
+| **Namespaces**                | Lists the Namespaces you can read.                                                                                                                                                                                                                                 |
+| Agent name                    | Human-readable name of this Agent.                                                                                                                                                                                                                                 |
+| **Namespace · name**          | Namespace containing the Agent.                                                                                                                                                                                                                                    |
+| **Refresh**                   | Reloads the Agent page. It does not retry or restart deployment.                                                                                                                                                                                                   |
+| **Current version**           | Version in the Agent's `activeRevisionId`. It may differ from the latest or viewed version.                                                                                                                                                                        |
+| **Latest visible deployment** | Newest readable version and its recorded deployment status. **Newer version hidden** means the current version is one you cannot read; ask for read access to new versions.                                                                                        |
+| **Live serving**              | Unverified by this page. **Probably down** means a newer dedicated deployment failed, and the current version was probably stopped for it, or the selected version's own deployment failed (an embedded redeploy selects its version before its gateway is ready). |
+| **Deployment activity**       | Most recent visible version and its persisted deployment status.                                                                                                                                                                                                   |
+| `agt_…`                       | Stable Agent identifier for API calls and support.                                                                                                                                                                                                                 |
 
 The bottom **OpenClaw Enterprise** menu contains **Namespace**, **Settings**,
 and **Logout**. Namespace selection changes your scope; from Agent detail it
@@ -41,6 +41,12 @@ another version or the draft. Its milestones use the persisted record:
 
 A `failed` result shows the stored error and an **Open vN Logs** link to that
 version's [Logs tab](../topics/agent-logs.md), which the draft does not have.
+For `RUNTIME_AUTHENTICATION_FAILED`, `RUNTIME_MODEL_PROBE_FAILED`, and
+`RUNTIME_MODEL_PROBE_TIMEOUT` it also states the next step and links
+**Credentials** or the draft **Configuration**. A provider the runtime cannot
+reach (refused connection, unknown host) usually reports
+`RUNTIME_MODEL_PROBE_TIMEOUT` with OpenClaw and `RUNTIME_MODEL_PROBE_FAILED`
+with Codex.
 Startup evidence may identify the runtime component, failed check, code, and
 check time. Plugin warnings describe that attempt. An unavailable record has
 unknown status. While the record is `queued` or `running`, the panel rereads it
@@ -48,8 +54,9 @@ every few seconds and stops at `succeeded`, `failed`, or a read error.
 **Refresh deployment** rereads it, the selected version, and that version's
 deployment record without retrying work.
 
-Pending work shows its **Last recorded result** and **Last checked** time,
-including deferred readiness checks and a running worker's previous result.
+Pending work shows its **Last recorded result** and **Since**, when OCC first
+recorded that result; repeated identical readiness checks are not recorded again.
+A running worker shows its previous result.
 Next eligibility does not promise a start time; missing evidence does not mean
 work never started.
 
@@ -88,7 +95,9 @@ read access to that version.
 and redacted container output. It can follow new lines, filter the loaded
 lines by level or text, and download the last 1000 lines. Status needs the same
 grants as diagnostics; log text needs Agent `administer` instead of `operate`.
-See [Agent logs](../topics/agent-logs.md).
+When a Pod is Ready and its containers have not restarted, its warning Events
+appear in muted text as earlier warnings, such as readiness probes that failed
+while it started. See [Agent logs](../topics/agent-logs.md).
 
 There is no rollback or redeploy-old-revision button. See
 [Agent Revisions](../topics/agent-revisions.md) for the lifecycle.
@@ -233,8 +242,10 @@ administrators can [share an Agent](agent-sharing.md) with existing people.
 
 **Stop Agent** opens a confirmation explaining that shutdown interrupts running
 work but preserves revision history, credentials, gateway state, and workspace
-files. **Cancel** closes it without a write. Confirming requires `operate`
-permission on this Agent, regardless of the viewed revision or tab.
+files. A chat that was mid-reply can keep showing the reply as in progress;
+reload it after the Agent is deployed again. **Cancel** closes it without a
+write. Confirming requires `operate` permission on this Agent, regardless of the
+viewed revision or tab.
 
 An accepted stop requests shutdown; it does not prove the runtime
 finished. **Refresh stop status** reads the desired state and selected revision.

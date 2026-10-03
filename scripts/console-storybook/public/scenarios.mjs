@@ -10,7 +10,7 @@ const create = "/console/agents/new?namespace=ns_00000000-0000-4000-8000-0000000
 const click = (text) => ({ click: text });
 const form = [click("Start without Preset")];
 const oauthForm = [...form, { selector: "#agent-auth-method", value: "oauth" }];
-const startOAuthLogin = [...oauthForm, click("Sign in with ChatGPT")];
+const startOAuthLogin = [...oauthForm, click("Sign in with OAuth")];
 const createModelSecret = (value) => [
   { selector: "#provider-credential-secret", value: "__openclaw_create_secret__" },
   { selector: "#create-provider-credential-secret-value", value },
@@ -433,6 +433,9 @@ export const scenarios = {
     githubEnabled: true,
     description:
       "Provider discovery adds Continue with GitHub beside the password form. Clicking it demonstrates an unavailable provider; this fixture never navigates to GitHub.",
+    steps: [
+      "Check the GitHub icon and label, then select the button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the numeric GitHub identity to an existing account through the API. Enrollment, account creation, and recovery administration have no console controls. OAuth navigation and session issuance require backend verification.",
   },
   githubUnavailable: {
@@ -520,6 +523,9 @@ export const scenarios = {
     googleEnabled: true,
     description:
       "Provider discovery adds Continue with Google beside the password form and any other configured provider. Clicking it demonstrates an unavailable provider; this fixture never navigates to Google.",
+    steps: [
+      "Check the Google and GitHub icons and labels, then select either button to see the unavailable message.",
+    ],
     gap: "An administrator must attach the Google subject identifier to an existing account through the API. Email addresses never match an account. OAuth navigation and session issuance require backend verification.",
   },
   googleUnavailable: {
@@ -797,7 +803,7 @@ export const scenarios = {
     path: "/console/namespaces?namespace=ns_00000000-0000-4000-8000-000000000099",
     description: "Recover from a stale Namespace URL using the selector inside the message.",
     steps: [
-      "Choose Engineering under Choose a valid namespace; the URL changes and the warning disappears without leaving Namespaces.",
+      "Choose Engineering under Choose a valid Namespace; the URL changes and the warning disappears without leaving Namespaces.",
       "Use browser Back to return to the unavailable selection and recover again.",
     ],
   },
@@ -1977,6 +1983,16 @@ export const scenarios = {
     ],
     gap: "All credentials and API responses in this preview are simulated.",
   },
+  createPasswordPresetMissingModel: {
+    group: "Pages/Create Agent",
+    name: "Standard Codex missing model",
+    path: create,
+    standardCodexPreset: true,
+    actions: passwordPresetForm.filter((action) => action.selector !== "#preset-variable-model"),
+    description:
+      "Use Preset with an empty Model stops at the required Model field. Variables with defaults stay optional.",
+    gap: "All credentials and API responses in this preview are simulated.",
+  },
   createPasswordPresetDraft: {
     group: "Pages/Create Agent",
     name: "Standard Codex password draft",
@@ -2148,7 +2164,7 @@ export const scenarios = {
     agentPlugins: JSON.parse(pluginSelections),
     pluginCapabilities,
     pluginDiscovery,
-    actions: [click("Sign in with ChatGPT")],
+    actions: [click("Sign in with OAuth")],
     description:
       "A separate configuration login enables plugin browsing while the deployed Agent retains its own credential. Saving plugin selections never replaces authentication.",
   },
@@ -2158,7 +2174,7 @@ export const scenarios = {
     path: `${draft}&tab=credentials`,
     deployed: true,
     auth: "oauth",
-    actions: [click("Sign in with ChatGPT")],
+    actions: [click("Sign in with OAuth")],
     description:
       "The current Agent login is preserved by default. A completed new login only replaces the saved source when Save authentication source is chosen; deployment remains separate.",
   },
@@ -2666,7 +2682,7 @@ export const scenarios = {
     description:
       "v7 has already been checked and is waiting for another reconciliation. Its last result and timestamp remain distinct from current runtime health.",
     steps: [
-      "Read the pending reason and Last checked time in Deployment activity.",
+      "Read the pending reason and Since time in Deployment activity.",
       "Click Refresh deployment; the simulated pending result remains visible.",
       "View v6 and confirm the latest deployment still describes v7.",
     ],
@@ -2787,6 +2803,16 @@ export const scenarios = {
     candidateDeploymentStatus: "succeeded",
     description:
       "The Logs tab shows the Gateway Pod, its OOMKilled restart and BackOff Event, then redacted operational output with a withheld-structured-output row. Previous instance is available after the restart.",
+  },
+  runtimeLogsStartupWarnings: {
+    group: "Pages/Agent detail",
+    name: "Runtime status after a healthy first deploy",
+    path: `${candidateVersion}&tab=logs`,
+    deployed: true,
+    candidateDeploymentStatus: "succeeded",
+    runtimePod: "startupWarnings",
+    description:
+      "The Gateway Pod is Ready with no restarts; its startup readiness-probe Event is listed in muted text as an earlier warning instead of in the warning color.",
   },
   runtimeLogsFilteredDownload: {
     group: "Pages/Agent detail",

@@ -59,8 +59,17 @@ import {
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
 import {
+  AGENT_NAME_CONFLICT,
+  CREDENTIAL_SOURCE_NAME_CONFLICT,
   DependencyUnavailableError,
+  IAMPolicyValidationError,
+  IAMRoleInUseError,
+  NAMESPACE_NAME_CONFLICT,
+  PRESET_NAME_CONFLICT,
   ResourceConflictError,
+  ResourceStateConflictError,
+  SECRET_NAME_CONFLICT,
+  SERVICE_ACCOUNT_NAME_CONFLICT,
   ScopeViolationError,
 } from "../errors.ts";
 import {
@@ -1144,9 +1153,7 @@ function repositories(
           (existing) => existing.name === namespace.name,
         )
       ) {
-        throw new ResourceConflictError(
-          "A Namespace with this name already exists in the Installation.",
-        );
+        throw new ResourceStateConflictError(NAMESPACE_NAME_CONFLICT);
       }
       if (
         namespace.existingNamespace !== undefined &&
@@ -1293,14 +1300,16 @@ function repositories(
       if (namespace === undefined || !["provisioning", "ready"].includes(namespace.status)) {
         throw new ScopeViolationError("The Preset belongs to an unavailable Namespace.");
       }
+      if (Array.from(snapshot.presets.values()).some((existing) => existing.id === preset.id)) {
+        throw new ResourceConflictError("The server generated an existing Preset identity.");
+      }
       if (
         Array.from(snapshot.presets.values()).some(
           (existing) =>
-            existing.id === preset.id ||
-            (existing.namespaceId === preset.namespaceId && existing.name === preset.name),
+            existing.namespaceId === preset.namespaceId && existing.name === preset.name,
         )
       ) {
-        throw new ResourceConflictError("The Preset identity or Namespace name already exists.");
+        throw new ResourceStateConflictError(PRESET_NAME_CONFLICT);
       }
       const saved = immutableCopy(preset);
       snapshot.presets.set(agentKey(preset.namespaceId, preset.id), saved);
@@ -1321,7 +1330,7 @@ function repositories(
             existing.name === saved.name,
         )
       ) {
-        throw new ResourceConflictError("The Preset name already exists in this Namespace.");
+        throw new ResourceStateConflictError(PRESET_NAME_CONFLICT);
       }
       snapshot.presets.set(agentKey(namespaceId, presetId), saved);
       return immutableCopy(saved);
@@ -1488,7 +1497,7 @@ function repositories(
             existing.namespaceId === secret.namespaceId && existing.name === secret.name,
         )
       ) {
-        throw new ResourceConflictError("A Secret with this name already exists in the Namespace.");
+        throw new ResourceStateConflictError(SECRET_NAME_CONFLICT);
       }
       const saved = immutableCopy(secret);
       snapshot.secrets.set(key, saved);
@@ -1715,9 +1724,7 @@ function repositories(
             existing.namespaceId === source.namespaceId && existing.name === source.name,
         )
       ) {
-        throw new ResourceConflictError(
-          "A credential source with this name already exists in the Namespace.",
-        );
+        throw new ResourceStateConflictError(CREDENTIAL_SOURCE_NAME_CONFLICT);
       }
       const saved = immutableCopy(source);
       snapshot.credentialSources.set(key, saved);
@@ -1849,15 +1856,19 @@ function repositories(
       const key = agentKey(account.namespaceId, account.id);
       if (
         snapshot.serviceAccounts.has(key) ||
-        Array.from(snapshot.serviceAccounts.values()).some(
-          (existing) =>
-            existing.id === account.id ||
-            (existing.namespaceId === account.namespaceId && existing.name === account.name),
-        )
+        Array.from(snapshot.serviceAccounts.values()).some((existing) => existing.id === account.id)
       ) {
         throw new ResourceConflictError(
-          "A ServiceAccount with this identity or name already exists.",
+          "The server generated an existing ServiceAccount identity.",
         );
+      }
+      if (
+        Array.from(snapshot.serviceAccounts.values()).some(
+          (existing) =>
+            existing.namespaceId === account.namespaceId && existing.name === account.name,
+        )
+      ) {
+        throw new ResourceStateConflictError(SERVICE_ACCOUNT_NAME_CONFLICT);
       }
       const saved = immutableCopy(account);
       snapshot.serviceAccounts.set(key, saved);
@@ -2042,7 +2053,7 @@ function repositories(
           (existing) => existing.namespaceId === agent.namespaceId && existing.name === agent.name,
         )
       ) {
-        throw new ResourceConflictError("An Agent with this name already exists in the Namespace.");
+        throw new ResourceStateConflictError(AGENT_NAME_CONFLICT);
       }
       if (
         Array.from(snapshot.agents.values()).some(
@@ -2400,7 +2411,7 @@ function repositories(
           (binding) => binding.namespaceId === namespaceId && binding.roleId === roleId,
         )
       ) {
-        throw new ResourceConflictError("The IAM Role is referenced by an AccessBinding.");
+        throw new IAMRoleInUseError();
       }
       snapshot.roles.delete(key);
       return true;
@@ -2427,17 +2438,24 @@ function repositories(
       }
       const role = await iamPolicy.getRole(namespace.id, binding.roleId);
       if (role === undefined) {
-        throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+        throw new IAMPolicyValidationError(
+          "/roleId",
+          "The IAM AccessBinding Role does not exist in this Namespace.",
+        );
       }
       if (binding.resourceKind === "namespace" && namespaceRoleGrantsBeyondRead(role)) {
-        throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
+        throw new IAMPolicyValidationError(
+          "/roleId",
+          "Namespace IAM Roles support only Namespace read.",
+        );
       }
       if (
         binding.subjectKind !== "identity" ||
         !policySubjectExists(namespace.id, binding.subjectId)
       ) {
-        throw new ScopeViolationError(
-          "The IAM AccessBinding subject does not belong to the exact Namespace.",
+        throw new IAMPolicyValidationError(
+          "/subjectId",
+          "The IAM AccessBinding subject must be a human Principal, a non-Agent ServicePrincipal of this Namespace, or the ServicePrincipal of a live Agent here.",
         );
       }
       if (
@@ -2445,8 +2463,9 @@ function repositories(
         binding.resourceId === undefined ||
         !(await managedPolicyResourceExists(namespace.id, binding.resourceKind, binding.resourceId))
       ) {
-        throw new ScopeViolationError(
-          "The IAM AccessBinding target does not belong to the exact Namespace.",
+        throw new IAMPolicyValidationError(
+          "/resourceId",
+          "The IAM AccessBinding target does not exist in this Namespace or is being deleted.",
         );
       }
       const key = iamPolicyKey(namespace.id, binding.id);
@@ -2507,6 +2526,7 @@ function repositories(
     repositorySessions,
     provisioning: {
       findByWorkId: provisioningAbsent,
+      findWithWork: provisioningAbsent,
       hasPendingNamespaceProvisioning: provisioningPendingAbsent,
       findByAgent: provisioningAbsent,
       findByConfiguration: provisioningAbsent,

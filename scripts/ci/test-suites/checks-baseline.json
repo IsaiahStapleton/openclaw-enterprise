@@ -22,7 +22,22 @@
       "path": "tests/conformance/contracts.test.mjs"
     },
     {
+      "path": "tests/docs/docs-length.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-server.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-site.test.mjs"
+    },
+    {
+      "path": "tests/docs/generated-api-reference.test.mjs"
+    },
+    {
       "path": "tests/conformance/harness-device-auth.test.mjs"
+    },
+    {
+      "path": "tests/conformance/http-errors.test.mjs"
     },
     {
       "path": "tests/conformance/credential-source-occ.test.mjs"
@@ -203,10 +218,14 @@
       ]
     },
     {
+      "path": "tests/integration/dev-codex-seccomp-failure.test.mjs"
+    },
+    {
       "path": "tests/integration/first-agent-startup.test.mjs",
       "expectedTests": [
         "first-Agent accepts current Compose-backed Kubernetes development state",
-        "first-Agent rejects OpenShell development state before external calls"
+        "first-Agent rejects OpenShell development state before external calls",
+        "first-Agent runs psql through the k3d PostgreSQL StatefulSet"
       ]
     },
     {

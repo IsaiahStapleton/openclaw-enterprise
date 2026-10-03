@@ -754,6 +754,7 @@ export const ERROR_CODES = Object.freeze([
   "NOT_IMPLEMENTED",
   "INTERNAL_ERROR",
   "DEPENDENCY_UNAVAILABLE",
+  "CREDENTIAL_GATEWAY_NOT_CONFIGURED",
   "REPOSITORY_OPTIONS_UNAVAILABLE",
   "MODEL_DISCOVERY_CREDENTIALS_REJECTED",
   "MODEL_DISCOVERY_RATE_LIMITED",
@@ -823,6 +824,10 @@ export const ErrorResponse = Type.Object(
           Type.Literal("NOT_IMPLEMENTED"),
           Type.Literal("INTERNAL_ERROR"),
           Type.Literal("DEPENDENCY_UNAVAILABLE"),
+          Type.Literal("CREDENTIAL_GATEWAY_NOT_CONFIGURED", {
+            description:
+              "The Installation selects no Credential Gateway, so credential sources cannot be registered.",
+          }),
           Type.Literal("REPOSITORY_OPTIONS_UNAVAILABLE", {
             description:
               "Only repository-option discovery is unavailable after Agent create authorization. An Agent without repository bindings may be submitted and is authorized again. Other dependency failures do not carry this meaning.",
@@ -921,24 +926,26 @@ export type ErrorResponse = Type.Static<typeof ErrorResponse>;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 export type ErrorDetailCode = (typeof ERROR_DETAIL_CODES)[number];
 
-export const PresetVariableSchema = Type.Union([
-  Type.Object(
-    { type: Type.Literal("password"), description: Type.Optional(Type.String()) },
-    { additionalProperties: false },
-  ),
-  ...(["string", "number", "boolean"] as const).map((type) =>
-    Type.Object(
-      {
-        type: Type.Literal(type),
-        description: Type.Optional(Type.String()),
-        default: Type.Optional(
-          type === "string" ? Type.String() : type === "number" ? Type.Number() : Type.Boolean(),
-        ),
-      },
-      { additionalProperties: false },
+// One object shape, so a bad field gets one error at its own path rather than one per
+// variable kind. Preset admission checks that a default matches `type` and that password
+// variables have none, and names the variable when they do not.
+export const PresetVariableSchema = Type.Object(
+  {
+    type: Type.Union([
+      Type.Literal("string"),
+      Type.Literal("number"),
+      Type.Literal("boolean"),
+      Type.Literal("password"),
+    ]),
+    description: Type.Optional(Type.String()),
+    default: Type.Optional(
+      Type.Union([Type.String(), Type.Number(), Type.Boolean()], {
+        description: "A value of the declared type. Password variables take no default.",
+      }),
     ),
-  ),
-]);
+  },
+  { additionalProperties: false },
+);
 
 export const PresetTemplateSchema = Type.Object(
   {

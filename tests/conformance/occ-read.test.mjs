@@ -5,14 +5,13 @@ import { resolveApprovedHarness as resolveApprovedDevelopmentHarness } from "../
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
 import {
   AuthorizationDeniedError,
-  NamespaceNotReadyError,
   OpenClawController,
   ResourceConflictError,
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
-import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
+import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 
 const installation = Object.freeze({
   id: "installation-read-test",
@@ -123,25 +122,9 @@ async function createFixture() {
   controller.registerDriver(configurationDriver);
   controller.selectDriver("configuration", configurationDriver.id);
   const compute = {
+    ...createDevelopmentComputeDriver(),
     id: "compute-read-test",
-    capability: "compute",
     implementation: "deterministic-read-test",
-    validateHarnessAuth() {},
-    async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
-    },
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
-    async retireRevision() {},
   };
   controller.registerDriver(compute);
   controller.selectDriver("compute", compute.id);
@@ -257,23 +240,10 @@ async function createFixture() {
   };
 }
 
-test("selecting an existing namespace requires installation administration and completed provisioning", async () => {
+// The HTTP fixture in occ-api-security.test.mjs records no operations, so the
+// controller-level proof that a refused adoption queues nothing stays here.
+test("a refused existing-namespace adoption leaves Namespaces and pending operations unchanged", async () => {
   const { controller, roles } = await createFixture();
-
-  // A principal allowed to create managed Namespaces cannot claim operator-owned infrastructure.
-  await assert.rejects(
-    controller.createNamespace("principal-admin", {
-      name: "Unauthorized existing tenant",
-      existingNamespace: "operator-owned",
-    }),
-    (error) =>
-      error instanceof AuthorizationDeniedError &&
-      error.authorization.action === "administer" &&
-      error.authorization.resource.kind === "installation" &&
-      error.authorization.resource.id === installation.id,
-  );
-
-  // Native IAM reads current roles, but an administrator still cannot adopt through another Driver.
   roles[0].permissions.push({ action: "administer", resourceKind: "installation" });
   const existingNamespaces = await controller.listNamespaces("principal-admin");
   const pendingOperations = controller.pendingOperations().length;
@@ -286,43 +256,6 @@ test("selecting an existing namespace requires installation administration and c
   );
   assert.deepEqual(await controller.listNamespaces("principal-admin"), existingNamespaces);
   assert.equal(controller.pendingOperations().length, pendingOperations);
-
-  const kubernetes = createTestKubernetesComputeDriver("compute-existing-namespace");
-  controller.registerDriver(kubernetes);
-  controller.selectDriver("compute", kubernetes.id);
-  const selected = await controller.createNamespace("principal-admin", {
-    name: "Selected existing tenant",
-    existingNamespace: "operator-owned",
-  });
-  assert.equal(selected.existingNamespace, "operator-owned");
-
-  await assert.rejects(
-    controller.createConfiguration("principal-exact-a", {
-      namespaceId: selected.id,
-      kind: "agent",
-      values: {},
-    }),
-    AuthorizationDeniedError,
-  );
-
-  await assert.rejects(
-    controller.createConfiguration("principal-admin", {
-      namespaceId: selected.id,
-      kind: "agent",
-      values: {},
-    }),
-    NamespaceNotReadyError,
-  );
-
-  await controller.transact((state) =>
-    state.namespaces.transitionNamespaceStatus(selected.id, "provisioning", "ready"),
-  );
-  const configuration = await controller.createConfiguration("principal-admin", {
-    namespaceId: selected.id,
-    kind: "agent",
-    values: {},
-  });
-  assert.equal(configuration.namespaceId, selected.id);
 });
 
 test("installation and exact resource reads require their own explicit authorization", async () => {

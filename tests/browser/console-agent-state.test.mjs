@@ -114,6 +114,55 @@ test("Deployment activity follows pending work until it records a result", async
   assert.equal(statusReads, readsAtResult);
 });
 
+test("Deployment activity keeps following after Back restores the cached Agent view", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Activity restore", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Restore Agent", nativeValues("v1"));
+  const revision = await fixture.deployAgent(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  let status = "running";
+  let statusReads = 0;
+  await page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`,
+    (route) => {
+      statusReads += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: deploymentBody(namespace.id, agent.id, revision.id, status),
+      });
+    },
+  );
+  await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
+  const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const activity = page.locator(".deployment-status");
+  await activity.getByText("Recorded status: running").waitFor();
+  const panel = await activity.elementHandle();
+
+  // While the Agent view is cached, its poll timer fires without a current view.
+  await page.getByRole("link", { name: "Namespaces", exact: true }).click();
+  await page.getByRole("heading", { name: "Namespaces" }).waitFor();
+  await page.clock.runFor(DEPLOYMENT_POLL_MS * 2);
+  await page.goBack();
+  await page.locator('.content [aria-live="polite"]:not([inert])').waitFor();
+  assert.equal(
+    await panel.evaluate((node) => node.isConnected),
+    true,
+    "Back reuses the cached Agent view",
+  );
+  await activity.getByText("Recorded status: running").waitFor();
+
+  // The restored view resumes following without a manual Refresh deployment.
+  status = "succeeded";
+  const readsBeforeResult = statusReads;
+  await page.clock.runFor(DEPLOYMENT_POLL_MS);
+  await activity.getByText("Recorded status: succeeded").waitFor();
+  assert.ok(statusReads > readsBeforeResult);
+});
+
 test("Diagnostics explain UNAVAILABLE checks and point at the recorded failure", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
@@ -286,4 +335,215 @@ test("Agent detail hides sharing instead of showing an error to non-administrato
     await page.getByText(/Sharing policy requires Installation administration/).count(),
     0,
   );
+});
+
+function routeDeploymentStatus(page, fixture, namespace, agent, revision, status, error = null) {
+  return page.route(
+    `${fixture.origin}/namespaces/${namespace.id}/agents/${agent.id}/deployments/${revision.id}`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: deploymentBody(namespace.id, agent.id, revision.id, status, error),
+      }),
+  );
+}
+
+function denyRevisionRead(fixture, namespace, revision) {
+  fixture.policy.restrictions.push({
+    id: `deny-read-${revision.id}`,
+    namespaceId: namespace.id,
+    resourceKind: "agent_revision",
+    resourceId: revision.id,
+    action: "read",
+    effect: "deny",
+  });
+}
+
+test("Agent detail says when the current or requested version cannot be read", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Hidden versions", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Hidden Agent", nativeValues("v1"));
+  const first = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  // Revision read is granted per version: v2 is current, but this reader cannot read it.
+  const second = await fixture.seedActiveAgentRevision(namespace.id, agent.id, first.revision.id);
+  denyRevisionRead(fixture, namespace, second.revision);
+  const { page } = await newPage(t, fixture);
+  await routeDeploymentStatus(page, fixture, namespace, agent, first.revision, "succeeded");
+
+  const url = detailUrl(fixture, namespace.id, agent.id, second.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Hidden Agent" }).waitFor();
+  const summary = page.locator(".agent-current-summary");
+  await summary.getByText("Newer version hidden", { exact: true }).waitFor();
+  await summary.getByText("Selected for service · you cannot read this version").waitFor();
+  assert.equal(await summary.getByText("v1 · Succeeded").count(), 0);
+  await page
+    .locator(".agent-status-line")
+    .getByText(/The current version, rev_.*, is one you cannot read; v1 is an older version\./)
+    .waitFor();
+  await page.getByRole("heading", { name: "You cannot read this version" }).waitFor();
+  assert.equal(await page.getByText("Configuration unavailable").count(), 0);
+
+  // After a deploy the console opens the requested version; its outcome stays hidden too.
+  const requested = await fixture.deployAgent(namespace.id, agent.id);
+  denyRevisionRead(fixture, namespace, requested);
+  const requestedUrl = detailUrl(fixture, namespace.id, agent.id, requested.id, "configuration");
+  await page.goto(`${fixture.origin}${requestedUrl.pathname}${requestedUrl.search}`);
+  await page.getByRole("heading", { name: "Hidden Agent" }).waitFor();
+  await page
+    .locator(".agent-status-line")
+    .getByText(
+      /Version rev_.* was requested, but you cannot read it, so its progress and outcome are not shown here\./,
+    )
+    .waitFor();
+  await page.getByRole("heading", { name: "You cannot read this version" }).waitFor();
+});
+
+test("Agent detail reports a failed dedicated replacement as probably not serving", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Failed replacement", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "Dedicated Agent",
+    nativeValues("v1", { harnessId: "codex" }),
+    { executionMode: "dedicated" },
+  );
+  const active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const replacement = await fixture.deployAgent(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  await routeDeploymentStatus(
+    page,
+    fixture,
+    namespace,
+    agent,
+    replacement,
+    "failed",
+    authenticationFailure,
+  );
+
+  const url = detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v1" }).waitFor();
+  const summary = page.locator(".agent-current-summary");
+  await summary.getByText("Probably down", { exact: true }).waitFor();
+  await summary.getByText("v2 failed; v1 was probably stopped for it.").waitFor();
+  await page
+    .locator(".agent-status-line")
+    .getByText(
+      /^v2 deployment failed\. v1 is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving/,
+    )
+    .waitFor();
+});
+
+// Embedded activation selects the new version before its gateway is ready, so a failed
+// embedded redeploy leaves the failed version selected and nothing else serving (D225).
+test("Agent detail reports a failed selected version as probably not serving", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Failed selection", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Embedded Agent", nativeValues("v1"));
+  const first = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const selected = await fixture.seedActiveAgentRevision(namespace.id, agent.id, first.revision.id);
+  const { page } = await newPage(t, fixture);
+  await routeDeploymentStatus(page, fixture, namespace, agent, selected.revision, "failed", {
+    code: "RUNTIME_MODEL_PROBE_TIMEOUT",
+    message: "Deployment runtime startup model check timed out.",
+  });
+
+  const url = detailUrl(fixture, namespace.id, agent.id, selected.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page.getByRole("heading", { name: "Version v2" }).waitFor();
+  const summary = page.locator(".agent-current-summary");
+  await summary.getByText("Probably down", { exact: true }).waitFor();
+  await summary.getByText("v2 is selected and its deployment failed.").waitFor();
+  await page
+    .locator(".agent-status-line")
+    .getByText(
+      /^v2 deployment failed\. v2 is still selected because its runtime already replaced the previous version, so this Agent is probably not serving/,
+    )
+    .waitFor();
+  assert.equal(await page.getByText("Live serving is unverified").count(), 0);
+});
+
+// A startup model check that failed or timed out is not a rejected credential, so its
+// next step points at the Configuration and the failed version's Logs, not at Credentials.
+// OpenClaw reports an unreachable provider (refused connection, DNS failure) as a timeout and
+// Codex as a failure, so each text names the harness it applies to.
+test("Deployment activity guides a failed or timed-out startup model check", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Model check", { ready: true });
+  const { page } = await newPage(t, fixture);
+  const cases = [
+    {
+      error: {
+        code: "RUNTIME_MODEL_PROBE_FAILED",
+        message: "Deployment runtime startup model check failed.",
+      },
+      guidance:
+        /^The startup model check failed for a reason other than a rejected credential, .*, or, with Codex, a provider the runtime cannot reach\. .*and that the runtime can reach the provider, then deploy a new version\./,
+    },
+    {
+      error: {
+        code: "RUNTIME_MODEL_PROBE_TIMEOUT",
+        message: "Deployment runtime startup model check timed out.",
+      },
+      guidance:
+        /^The startup model check did not get a reply from the model provider in time\. With OpenClaw this includes a provider the runtime cannot reach \(refused connection or unknown host\)\./,
+    },
+  ];
+  for (const [index, { error, guidance }] of cases.entries()) {
+    const agent = await fixture.createAgent(namespace.id, `Agent ${index}`, nativeValues("v1"));
+    const { revision } = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+    await routeDeploymentStatus(page, fixture, namespace, agent, revision, "failed", error);
+
+    const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
+    if (index === 0) {
+      await login(page, fixture, url.pathname + url.search);
+    } else {
+      await page.goto(url.href);
+    }
+    const activity = page.locator(".deployment-status");
+    await activity.getByText(`${error.code}: ${error.message}`).waitFor();
+    await activity.locator(".deployment-failure-guidance").getByText(guidance).waitFor();
+    assert.match(
+      await activity.getByRole("link", { name: "Open Configuration" }).getAttribute("href"),
+      new RegExp(`agents/${agent.id}\\?revision=draft&tab=configuration`),
+    );
+    assert.match(
+      await activity.getByRole("link", { name: "Open v1 Logs" }).getAttribute("href"),
+      new RegExp(`revision=${revision.id}&tab=logs`),
+    );
+    assert.equal(await activity.getByRole("link", { name: "Open Credentials" }).count(), 0);
+  }
+});
+
+test("Agent detail keeps an embedded Agent's failed redeploy separate from serving", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Embedded redeploy", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Embedded Agent", nativeValues("v1"));
+  const active = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  const replacement = await fixture.deployAgent(namespace.id, agent.id);
+  const { page } = await newPage(t, fixture);
+  await routeDeploymentStatus(
+    page,
+    fixture,
+    namespace,
+    agent,
+    replacement,
+    "failed",
+    authenticationFailure,
+  );
+
+  const url = detailUrl(fixture, namespace.id, agent.id, active.revision.id, "configuration");
+  await login(page, fixture, url.pathname + url.search);
+  await page
+    .locator(".agent-status-line")
+    .getByText("v2 deployment is recorded as failed. v1 is selected. Live serving is unverified.")
+    .waitFor();
+  assert.equal(await page.getByText("Probably down", { exact: true }).count(), 0);
 });

@@ -20,6 +20,7 @@ import {
 } from "../../packages/occ/src/index.ts";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 
 const administrator = "principal-configuration-administrator";
 const deployOnly = "principal-configuration-deploy-only";
@@ -86,25 +87,9 @@ async function fixture(options = {}) {
     { id: "configuration-occ-iam" },
   );
   const compute = {
+    ...createDevelopmentComputeDriver(),
     id: "configuration-occ-compute",
-    capability: "compute",
     implementation: "configuration-conformance-compute",
-    validateHarnessAuth() {},
-    async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
-    },
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
-    async retireRevision() {},
   };
   const configurationDriver = createTestConfigurationDriver();
   const state = new InMemoryPlatformState();
@@ -394,6 +379,28 @@ test("native selected-model policy explicitly chooses Codex or OpenClaw", () => 
       },
     }),
     "codex",
+  );
+  // A model ID may itself contain slashes. The provider ends at the first slash, so the
+  // catalog entry `vendor/model` must match `openai/vendor/model` and keep its authored name.
+  assert.equal(
+    resolveConfiguredHarnessId({
+      agents: {
+        defaults: {
+          model: "openai/vendor/model",
+          models: { "openai/vendor/model": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://gateway.example.test/v1",
+            api: "openai-responses",
+            models: [{ id: "vendor/model", name: "Team Fast", agentRuntime: { id: "openclaw" } }],
+          },
+        },
+      },
+    }),
+    "openclaw",
   );
 });
 
@@ -768,6 +775,24 @@ test("OCC rejects alternate selectable runtimes and unsupported Codex providers 
         models: {
           providers: {
             openai: { models: [{ id: "gpt-4.1", agentRuntime: { id: "codex" } }] },
+          },
+        },
+      },
+    },
+    {
+      // The nested catalog entry must still be found, or its conflicting runtime would go unseen.
+      name: "selected model policy cannot mask a conflicting nested-slash provider-model runtime",
+      executionMode: "embedded",
+      values: {
+        agents: {
+          defaults: {
+            model: "openai/vendor/model",
+            models: { "openai/vendor/model": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: { models: [{ id: "vendor/model", agentRuntime: { id: "codex" } }] },
           },
         },
       },

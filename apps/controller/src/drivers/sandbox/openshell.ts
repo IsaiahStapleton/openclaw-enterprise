@@ -94,7 +94,7 @@ export interface OpenShellSandboxDriverOptions {
       readonly readOnly?: readonly string[];
       readonly readWrite?: readonly string[];
     };
-    readonly landlockCompatibility?: string;
+    readonly landlockCompatibility?: "hard_requirement";
     readonly process: {
       readonly runAsUser: string;
       readonly runAsGroup: string;
@@ -849,7 +849,7 @@ function sandboxSpec(
     policy: {
       version: 1,
       filesystem: filesystemPolicy(options, requirements, dataMount),
-      landlock: { compatibility: options.policy.landlockCompatibility ?? "best_effort" },
+      landlock: { compatibility: options.policy.landlockCompatibility ?? "hard_requirement" },
       process: {
         run_as_user: options.policy.process.runAsUser,
         run_as_group: options.policy.process.runAsGroup,
@@ -925,6 +925,14 @@ function validateOptions(options: OpenShellSandboxDriverOptions): void {
   }
   configurationObject(options.kubernetes.sandboxDataMount, "OpenShell sandbox data mount");
   validateSandboxDataMount(options.kubernetes.sandboxDataMount);
+  if (
+    options.policy.landlockCompatibility !== undefined &&
+    options.policy.landlockCompatibility !== "hard_requirement"
+  ) {
+    throw new OpenShellSandboxConfigurationFailure(
+      "OpenShell Landlock compatibility must be hard_requirement.",
+    );
+  }
   nonempty(options.policy.process.runAsUser, "OpenShell process runAsUser");
   nonempty(options.policy.process.runAsGroup, "OpenShell process runAsGroup");
   if (
@@ -1325,11 +1333,4 @@ export class OpenShellSandboxDriver implements SandboxDriver {
       revisionId: context.revision.id,
     });
   }
-}
-
-export function createOpenShellSandboxDriver(
-  options: OpenShellSandboxDriverOptions,
-  selection: OpenShellSandboxDriverSelection,
-): OpenShellSandboxDriver {
-  return new OpenShellSandboxDriver(options, selection);
 }

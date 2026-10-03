@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createServer as createNetServer } from "node:net";
 import { request } from "node:https";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
@@ -19,21 +18,7 @@ import { startRegistryCredentialServiceFixture } from "../fixtures/repository-cr
 import { startServiceProcessFixture } from "../fixtures/repository-credentials/service-process.mjs";
 import { run, temporaryDirectory } from "../fixtures/repository-credentials/process.mjs";
 import { appRoot, appExtension } from "../fixtures/repository-credentials/runtime.mjs";
-
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-
-async function unusedPort() {
-  const server = createNetServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = server.address().port;
-  await new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
-  return port;
-}
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
 function useGateway(fixture, opened) {
   return new Promise((resolve, reject) => {
@@ -61,12 +46,7 @@ function useGateway(fixture, opened) {
 
 test(
   "confirmed broker disposal survives service restart in PostgreSQL",
-  {
-    skip: databaseUrl
-      ? false
-      : "Set OCC_TEST_DATABASE_URL to a disposable migrated PostgreSQL database.",
-    timeout: 60_000,
-  },
+  { ...requiresPostgres, timeout: 60_000 },
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
     t.after(() => pool.end());
@@ -75,7 +55,7 @@ test(
     const fixture = await startRegistryCredentialServiceFixture(t, {
       namespaceId,
       autoOpen: false,
-      gateway: { listen: `127.0.0.1:${await unusedPort()}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const client = new UnixRepositoryCredentialControlClient({
       controlSocket: fixture.config.gateway.controlSocket,
@@ -413,12 +393,7 @@ test(
 
 test(
   "broker shutdown waits for receipts and loss of unconfirmed authority stays unknown",
-  {
-    skip: databaseUrl
-      ? false
-      : "Set OCC_TEST_DATABASE_URL to a disposable migrated PostgreSQL database.",
-    timeout: 45_000,
-  },
+  { ...requiresPostgres, timeout: 45_000 },
   async (t) => {
     for (const mode of ["delayed-commit", "unavailable", "abrupt-death"]) {
       await t.test(mode, async (context) => {

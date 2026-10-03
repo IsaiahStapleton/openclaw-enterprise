@@ -30,7 +30,7 @@ Each operation lists its supported status codes.
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `error` | `object` | Yes | — |
-| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE" or "CHANNEL_CREDENTIAL_ROLE_MISMATCH" or "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED" or "CHANNEL_CREDENTIAL_UNAVAILABLE" or "CHANNEL_CREDENTIAL_BINDING_REQUIRED" or "RUNTIME_LOGS_CURSOR_INVALID" or "RUNTIME_LOGS_POD_INVALID" or "RUNTIME_LOGS_SOURCE_UNAVAILABLE" or "RUNTIME_LOGS_RATE_LIMITED" or "RUNTIME_LOGS_CLUSTER_RBAC" or "RUNTIME_LOGS_SANDBOX_NOT_FOUND" or "RUNTIME_LOGS_UNAVAILABLE" or "RUNTIME_LOGS_AUDIT_UNAVAILABLE" or "RUNTIME_LOGS_TIMEOUT"` | Yes | — |
+| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "CREDENTIAL_GATEWAY_NOT_CONFIGURED" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE" or "CHANNEL_CREDENTIAL_ROLE_MISMATCH" or "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED" or "CHANNEL_CREDENTIAL_UNAVAILABLE" or "CHANNEL_CREDENTIAL_BINDING_REQUIRED" or "RUNTIME_LOGS_CURSOR_INVALID" or "RUNTIME_LOGS_POD_INVALID" or "RUNTIME_LOGS_SOURCE_UNAVAILABLE" or "RUNTIME_LOGS_RATE_LIMITED" or "RUNTIME_LOGS_CLUSTER_RBAC" or "RUNTIME_LOGS_SANDBOX_NOT_FOUND" or "RUNTIME_LOGS_UNAVAILABLE" or "RUNTIME_LOGS_AUDIT_UNAVAILABLE" or "RUNTIME_LOGS_TIMEOUT"` | Yes | — |
 | `error.details` | `array<object>` | No | max items: 32 |
 | `error.details[].code` | `"REQUIRED" or "UNKNOWN_FIELD" or "INVALID_TYPE" or "INVALID_FORMAT" or "INVALID_VALUE" or "TOO_LONG" or "TOO_DEEP"` | Yes | — |
 | `error.details[].path` | `string` | Yes | max length: 512; pattern: `^(?:/(?:[^~/]\|~0\|~1)*)*$` |
@@ -1017,7 +1017,7 @@ Revoke a service API key
 
 **Operation ID:** `revokeServiceKey`
 
-**Permissions:** Requires a session or Installation-scoped service key with administer on the Installation. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.
+**Permissions:** Requires a session or Installation-scoped service key with administer on the Installation, plus every IAM grant of the key's ServicePrincipal, as for issuance. Deletes the stored Better Auth key; subsequent requests cannot authenticate with it.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -4593,7 +4593,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 
 **Operation ID:** `createIAMAccessBinding`
 
-**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body CredentialSource when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Preset when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -4602,7 +4602,9 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 | `read` | `agent` | `request_body` |
 | `read` | `agent_revision` | `request_body` |
 | `read` | `configuration` | `request_body` |
+| `read` | `credential_source` | `request_body` |
 | `read` | `namespace` | `request_body` |
+| `read` | `preset` | `request_body` |
 | `read` | `secret` | `request_body` |
 | `read` | `service_account` | `request_body` |
 
@@ -4990,7 +4992,7 @@ List readable Presets in one Namespace
 | `data[].template.configuration` | `object` | No | — |
 | `data[].template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data[].template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data[].template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data[].template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5041,7 +5043,7 @@ Create a reusable Namespace-owned Agent Preset
 | `template.configuration` | `object` | No | — |
 | `template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `template.variables` | `object<string, object or object or object or object>` | No | — |
+| `template.variables` | `object<string, object>` | No | — |
 
 ##### Responses
 
@@ -5085,7 +5087,7 @@ Create a reusable Namespace-owned Agent Preset
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data.template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data.template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5183,7 +5185,7 @@ Read one exact Namespace-owned Preset
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data.template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data.template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5235,7 +5237,7 @@ Update a Preset without changing existing Agents
 | `template.configuration` | `object` | No | — |
 | `template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `template.variables` | `object<string, object or object or object or object>` | No | — |
+| `template.variables` | `object<string, object>` | No | — |
 
 ##### Responses
 
@@ -5279,7 +5281,7 @@ Update a Preset without changing existing Agents
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data.template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data.template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

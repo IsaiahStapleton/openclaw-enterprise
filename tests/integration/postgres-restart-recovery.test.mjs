@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
-const requiresPostgres = {
-  skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL to run real PostgreSQL integration tests.",
-};
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
 async function dependencies(context, options = {}) {
   const [{ Pool }, queueModule] = await Promise.all([
@@ -478,6 +474,64 @@ test(
     assert.deepEqual(evidence.rows, [{ count: 7 }]);
 
     assert.equal(await queue.pending(), initialTotal);
+  },
+);
+
+// A serial worker's in-pass waits end early when other Work could be claimed
+// (D221). Only Work some worker could take now counts: not the caller's own
+// Agent's queued Work, which its claim holds back, and not delayed Work.
+test(
+  "claimable work waiting matches what a worker could claim now",
+  requiresPostgres,
+  async (context) => {
+    const { pool, queue } = await dependencies(context, { maxAttempts: 5 });
+    const { namespaceId, agents } = await createResources(pool, 2);
+    const [first, second] = agents;
+    const prefix = `queue-claimable:${randomUUID()}`;
+    for (let index = 0; index < 200; index += 1) {
+      const leftover = await queue.claim();
+      if (leftover === undefined) {
+        break;
+      }
+      await queue.complete(leftover);
+    }
+    assert.equal(await queue.claimableWorkWaiting(), false);
+
+    const firstRevision = await createQueueRevision(pool, namespaceId, first);
+    await queue.enqueue(revisionWork(namespaceId, `${prefix}:first`, first, firstRevision));
+    assert.equal(await queue.claimableWorkWaiting(), true);
+    const firstClaim = await claimExpected(queue, `${prefix}:first`);
+    assert.equal(await queue.claimableWorkWaiting(), false);
+
+    // Same Agent: held back by the claim, so nothing is waiting for the worker.
+    const firstSuccessor = await createQueueRevision(pool, namespaceId, first, 2);
+    await queue.enqueue(
+      revisionWork(namespaceId, `${prefix}:first-successor`, first, firstSuccessor),
+    );
+    assert.equal(await queue.claimableWorkWaiting(), false);
+
+    // Another Agent's Work counts once it is due.
+    const secondRevision = await createQueueRevision(pool, namespaceId, second);
+    await queue.enqueue(
+      revisionWork(
+        namespaceId,
+        `${prefix}:second`,
+        second,
+        secondRevision,
+        new Date(Date.now() + 3_600_000),
+      ),
+    );
+    assert.equal(await queue.claimableWorkWaiting(), false);
+    await pool.query(
+      `UPDATE occ.controller_work SET available_at = clock_timestamp() WHERE idempotency_key = $1`,
+      [`${prefix}:second`],
+    );
+    assert.equal(await queue.claimableWorkWaiting(), true);
+
+    await queue.complete(firstClaim);
+    await queue.complete(await claimExpected(queue, `${prefix}:first-successor`));
+    await queue.complete(await claimExpected(queue, `${prefix}:second`));
+    assert.equal(await queue.claimableWorkWaiting(), false);
   },
 );
 

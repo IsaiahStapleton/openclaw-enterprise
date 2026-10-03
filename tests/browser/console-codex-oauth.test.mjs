@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
-import { apiRequests, login, newPage } from "./console-agents-browser-helpers.mjs";
+import {
+  apiRequests,
+  expectNoText,
+  login,
+  nativeValues,
+  newPage,
+} from "./console-agents-browser-helpers.mjs";
 
 test("Codex OAuth console creates an Agent and keeps plugin editing separate from credential replacement", async (t) => {
   const fixture = await createConsoleAppFixture(t);
@@ -88,7 +94,7 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
   await page.getByRole("button", { name: "Start without Preset" }).click();
   await page.getByLabel("Authentication method").selectOption("oauth");
   assert.equal(await page.getByLabel("API key Secret", { exact: true }).isVisible(), false);
-  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
   await page.getByText("CODE-1234", { exact: true }).waitFor();
   assert.equal(
     await page.getByRole("link", { name: "Open Codex sign-in" }).getAttribute("href"),
@@ -101,11 +107,11 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
   );
   await page.getByRole("button", { name: "Cancel login", exact: true }).click();
   assert.equal((await cancelled).status(), 204);
-  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).waitFor();
 
   // A fresh login becomes the Agent credential; the browser receives only its Secret reference.
   approved = true;
-  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
   await page
     .getByText("ChatGPT login ready. Credentials are stored on the server.", { exact: true })
     .waitFor();
@@ -145,7 +151,7 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
   approved = false;
   await page.clock.install();
   await page.clock.pauseAt(new Date(Date.now() + 1_000));
-  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
   await page.getByText("CODE-1234", { exact: true }).waitFor();
   // The start mutation rebuilds the tab once; a second visit reuses its DOM and pending timer.
   for (let visit = 0; visit < 2; visit += 1) {
@@ -200,7 +206,7 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
   // Reconnection is a separate, explicit authentication save with a newly completed login.
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
   assert.equal(await page.getByLabel("Authentication source").inputValue(), "oauth");
-  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
   await page
     .getByText("ChatGPT login ready. Credentials are stored on the server.", { exact: true })
     .waitFor();
@@ -217,7 +223,7 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
 
   // Discard withdraws a staged login before the server confirms it, so a save racing the
   // request keeps the saved credential instead of binding a source about to be cancelled.
-  await page.getByRole("button", { name: "Sign in with ChatGPT", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
   await page
     .getByText("ChatGPT login ready. Credentials are stored on the server.", { exact: true })
     .waitFor();
@@ -253,5 +259,69 @@ test("Codex OAuth console creates an Agent and keeps plugin editing separate fro
   assert.equal(
     providerRequests.some((url) => url.includes("revoke") || url.includes("whoami")),
     false,
+  );
+});
+
+test("saving ChatGPT OAuth before sign-in names the missing step and sends nothing", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("OAuth save guard", { ready: true });
+  const agent = await fixture.createAgent(
+    namespace.id,
+    "OAuth save guard",
+    nativeValues("oauth-save-guard", { harnessId: "codex" }),
+  );
+  const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(
+    page,
+    fixture,
+    `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft&tab=credentials`,
+  );
+  const save = page.getByRole("button", { name: "Save authentication source", exact: true });
+  await save.waitFor();
+  await page.getByLabel("Authentication source").selectOption("oauth");
+  await save.click();
+  await page.getByText("Complete ChatGPT sign-in before saving.", { exact: true }).waitFor();
+  await expectNoText(page, /Service unavailable/);
+  assert.equal(await save.isEnabled(), true);
+  assert.equal(
+    requests.some((request) => request.method === "PATCH" && request.path === agentPath),
+    false,
+  );
+  assert.equal((await fixture.request("GET", agentPath)).data.harnessAuth.method, "api_key");
+});
+
+test("sign-in that cannot reach the sign-in service shows the API's cause once", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("OAuth egress", { ready: true });
+  const originalFetch = globalThis.fetch;
+  // The chart's default network policy: the API Pod cannot connect to auth.openai.com.
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (!url.startsWith("https://auth.openai.com/")) {
+      return originalFetch(input, init);
+    }
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Authentication method").selectOption("oauth");
+  await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).click();
+  await page
+    .getByText(
+      "Codex sign-in failed. OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs or the cluster's egress policy), then try again.",
+      { exact: true },
+    )
+    .waitFor();
+  await expectNoText(page, /Service unavailable|The read could not be completed/);
+  assert.equal(
+    await page.getByRole("button", { name: "Sign in with OAuth", exact: true }).isEnabled(),
+    true,
   );
 });

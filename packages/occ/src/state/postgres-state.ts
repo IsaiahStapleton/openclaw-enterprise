@@ -55,8 +55,17 @@ import {
 } from "@openclaw-enterprise/contracts";
 import { immutableCopy } from "@openclaw-enterprise/utils";
 import {
+  AGENT_NAME_CONFLICT,
+  CREDENTIAL_SOURCE_NAME_CONFLICT,
   DependencyUnavailableError,
+  IAMPolicyValidationError,
+  IAMRoleInUseError,
+  NAMESPACE_NAME_CONFLICT,
+  PRESET_NAME_CONFLICT,
   ResourceConflictError,
+  ResourceStateConflictError,
+  SECRET_NAME_CONFLICT,
+  SERVICE_ACCOUNT_NAME_CONFLICT,
   ScopeViolationError,
 } from "../errors.ts";
 import type {
@@ -101,6 +110,7 @@ import {
   validHarnessAuthSnapshot,
 } from "./platform-state.ts";
 import {
+  asWork,
   WorkClaimLostError,
   PostgresWorkQueue,
   type PostgresQueryClient,
@@ -675,6 +685,22 @@ function referencedSecretIds(
   );
 }
 
+/**
+ * Unique constraints on caller-chosen names, mapped to the duplicate-name text the memory
+ * store also raises. Identity (id) collisions stay generic. The caller was already authorized
+ * to create (or rename) that resource kind in that scope, and the 409 alone reveals that the
+ * name is taken, so naming the kind discloses nothing new.
+ */
+const NAME_CONFLICTS: Readonly<Record<string, string>> = Object.freeze({
+  agents_namespace_id_name_unique: AGENT_NAME_CONFLICT,
+  secrets_namespace_id_name_unique: SECRET_NAME_CONFLICT,
+  presets_namespace_id_name_unique: PRESET_NAME_CONFLICT,
+  service_accounts_namespace_id_name_unique: SERVICE_ACCOUNT_NAME_CONFLICT,
+  credential_sources_namespace_id_name_unique: CREDENTIAL_SOURCE_NAME_CONFLICT,
+  // The inline `name ... UNIQUE` on occ.namespaces (0000_occ_initial.sql) gets this default name.
+  namespaces_name_key: NAMESPACE_NAME_CONFLICT,
+});
+
 function databaseError(error: unknown): Error {
   if (
     error instanceof ScopeViolationError ||
@@ -688,6 +714,15 @@ function databaseError(error: unknown): Error {
 
   const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
   if (code === "23505") {
+    const constraint =
+      "constraint" in error && typeof error.constraint === "string" ? error.constraint : undefined;
+    const nameConflict =
+      constraint !== undefined && Object.hasOwn(NAME_CONFLICTS, constraint)
+        ? NAME_CONFLICTS[constraint]
+        : undefined;
+    if (nameConflict !== undefined) {
+      return new ResourceStateConflictError(nameConflict);
+    }
     return new ResourceConflictError(
       "A platform resource with this identity or name already exists.",
     );
@@ -1463,6 +1498,7 @@ export class PostgresPlatformState implements PlatformStateStore {
       "claim",
       "heartbeat",
       "pending",
+      "claimableWorkWaiting",
       "complete",
       "completeAgentDeletion",
       "defer",
@@ -3340,7 +3376,7 @@ export class PostgresPlatformState implements PlatformStateStore {
           [namespaceId, roleId],
         );
         if (references.rowCount !== 0) {
-          throw new ResourceConflictError("The IAM Role is referenced by an AccessBinding.");
+          throw new IAMRoleInUseError();
         }
         const deleted = await client.query(
           "DELETE FROM occ.iam_roles WHERE namespace_id = $1 AND id = $2",
@@ -3409,20 +3445,28 @@ export class PostgresPlatformState implements PlatformStateStore {
           [namespace.id, binding.subjectId],
         );
         if (identity.rowCount !== 1) {
-          throw new ScopeViolationError(
-            "The IAM AccessBinding subject does not belong to the exact Namespace.",
+          throw new IAMPolicyValidationError(
+            "/subjectId",
+            "The IAM AccessBinding subject must be a human Principal, a non-Agent ServicePrincipal of this Namespace, or the ServicePrincipal of a live Agent here.",
           );
         }
         const role = await iamPolicy.getRole(namespace.id, binding.roleId);
         if (role === undefined) {
-          throw new ScopeViolationError("The IAM AccessBinding references an unavailable Role.");
+          throw new IAMPolicyValidationError(
+            "/roleId",
+            "The IAM AccessBinding Role does not exist in this Namespace.",
+          );
         }
         if (binding.resourceKind === "namespace" && namespaceRoleGrantsBeyondRead(role)) {
-          throw new ScopeViolationError("Namespace IAM Roles support only Namespace read.");
+          throw new IAMPolicyValidationError(
+            "/roleId",
+            "Namespace IAM Roles support only Namespace read.",
+          );
         }
         if (!(await lockTarget(namespace.id, binding.resourceKind, binding.resourceId))) {
-          throw new ScopeViolationError(
-            "The IAM AccessBinding target does not belong to the exact Namespace.",
+          throw new IAMPolicyValidationError(
+            "/resourceId",
+            "The IAM AccessBinding target does not exist in this Namespace or is being deleted.",
           );
         }
         await client.query(
@@ -3474,7 +3518,35 @@ export class PostgresPlatformState implements PlatformStateStore {
           );
           return found[0] === undefined ? undefined : provisioningRecordFromRow(found[0]);
         },
+        findWithWork: async (workId) => {
+          // One statement, one snapshot: separate reads under READ COMMITTED can pair a
+          // job with a queue row from a later commit (a failed queue row, a running job).
+          const found = rows(
+            (
+              await client.query(
+                `SELECT provisioning.*, to_jsonb(work) AS controller_work
+                 FROM occ.agent_provisioning_work AS provisioning
+                 LEFT JOIN occ.controller_work AS work
+                   ON work.idempotency_key = provisioning.work_id
+                 WHERE provisioning.work_id = $1`,
+                [workId],
+              )
+            ).rows,
+          );
+          if (found[0] === undefined) {
+            return undefined;
+          }
+          const work = found[0].controller_work;
+          return Object.freeze({
+            record: provisioningRecordFromRow(found[0]),
+            ...(work === null || work === undefined ? {} : { work: asWork(work) }),
+          });
+        },
         hasPendingNamespaceProvisioning: async (namespaceId) => {
+          // An external write is unresolved until a receipt matches its pending effect
+          // exactly, the rule occ.finalize_agent_deletion applies. A settled effect on
+          // terminal work is history, not work in flight. Missing or malformed
+          // evidence still blocks deletion.
           const found = await client.query(
             `SELECT 1
              FROM occ.agent_provisioning_work AS provisioning
@@ -3482,8 +3554,21 @@ export class PostgresPlatformState implements PlatformStateStore {
                ON work.idempotency_key = provisioning.work_id
              WHERE provisioning.namespace_id = $1
                AND (
-                 provisioning.progress ? 'pendingEffect'
-                 OR provisioning.progress ? 'effectReceipt'
+                 (
+                   (
+                     provisioning.progress ? 'pendingEffect'
+                     OR provisioning.progress ? 'effectReceipt'
+                   )
+                   AND NOT COALESCE(
+                     provisioning.progress->'effectReceipt'->>'kind' =
+                       provisioning.progress->'pendingEffect'->>'kind'
+                     AND provisioning.progress->'effectReceipt'->>'owner' =
+                       provisioning.progress->'pendingEffect'->>'owner'
+                     AND provisioning.progress->'effectReceipt'->>'targetId' =
+                       provisioning.progress->'pendingEffect'->>'targetId',
+                     false
+                   )
+                 )
                  OR provisioning.status IN ('queued', 'running')
                  OR work.state IN ('queued', 'claimed')
                )
