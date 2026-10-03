@@ -3522,11 +3522,12 @@ export class OpenClawController {
     namespace: Readonly<Namespace>,
     references: Readonly<Record<string, SecretReference>>,
   ): Promise<Record<string, string>> {
+    // Reject a foreign reference before any authorization or Secret lookup, as Secret bindings do.
+    if (Object.values(references).some((reference) => reference.namespaceId !== namespace.id)) {
+      throw new SecretBindingValidationError("Credential source Secrets cannot cross Namespaces.");
+    }
     const values: Record<string, string> = {};
     for (const [field, reference] of Object.entries(references)) {
-      if (reference.namespaceId !== namespace.id) {
-        throw new ScopeViolationError("Credential source Secrets cannot cross Namespaces.");
-      }
       await this.authorize(principalId, "operate", reference);
       const secret = await state.secrets.lockSecret(namespace.id, reference.id);
       if (secret === undefined) {
@@ -4685,8 +4686,11 @@ export class OpenClawController {
   ): Promise<T> {
     const source = credential.secretRef ?? credential.oauthLogin;
     if (source !== undefined) {
-      if (source.kind !== "secret" || source.namespaceId !== namespaceId) {
+      if (source.kind !== "secret") {
         throw new ScopeViolationError("Secret references cannot cross Namespaces.");
+      }
+      if (source.namespaceId !== namespaceId) {
+        throw new SecretBindingValidationError("Secret references cannot cross Namespaces.");
       }
       await this.authorize(principalId, "operate", source);
     }

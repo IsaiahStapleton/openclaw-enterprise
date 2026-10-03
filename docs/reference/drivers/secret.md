@@ -48,7 +48,9 @@ deploying actor and the consuming Agent's ServicePrincipal to have `operate` on
 each Secret; the worker rechecks them before preparing delivery. Registering a
 credential source requires the caller's `operate` on each referenced Secret. Namespace
 membership, possession of a reference, and backend permissions grant no OCC
-authority. Cross-Namespace bindings are rejected. Plugin discovery using a Secret also
+authority. A Secret binding, Harness authentication source, credential source
+Secret, or plugin discovery Secret that names another Namespace is rejected with
+`400 INVALID_REQUEST`; a Secret the Namespace does not hold is `404`. Plugin discovery using a Secret also
 requires caller `operate` on that exact Secret. Create Agent discovery also
 requires Namespace Agent `create`; it does not require an Agent ServicePrincipal.
 Saved-Agent discovery requires exact Agent `read` and `update`, plus `operate`
