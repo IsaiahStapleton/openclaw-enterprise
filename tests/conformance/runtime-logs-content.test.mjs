@@ -9,6 +9,7 @@ import {
 } from "../../packages/occ/src/runtime-logs/redact.ts";
 import { sanitizeRuntimeLogChunk } from "../../packages/occ/src/runtime-logs/sanitize.ts";
 import { readRuntimeLogPage } from "../../packages/occ/src/runtime-logs/read.ts";
+import { cpuTimeMs } from "../helpers/cpu-time.mjs";
 import {
   createRuntimeLogCursorCodec,
   RUNTIME_LOG_CURSOR_TTL_MS,
@@ -595,16 +596,19 @@ test("a PEM block printed over several lines is masked on every line", () => {
   for (const unit of [" ", "a", "A:", "A: ", "-----BEGIN A-----", "-----END A-----"]) {
     const hostile = unit.repeat(Math.ceil((32 * 1024) / unit.length)).slice(0, 32 * 1024 - 1);
     for (const suffix of ["!", " x"]) {
-      const started = performance.now();
-      sanitizeRuntimeLogChunk({
-        stream,
-        truncated: false,
-        lines: ["-----BEGIN X-----", hostile + suffix, hostile + suffix, "-----END X-----"].map(
-          (raw, index) => ({ time: lineTime(index), raw }),
-        ),
-      });
-      const elapsed = performance.now() - started;
-      assert.ok(elapsed < 400, `${JSON.stringify(unit)} took ${elapsed.toFixed(0)} ms`);
+      const budgetMs = 400;
+      const elapsed = cpuTimeMs(
+        () =>
+          sanitizeRuntimeLogChunk({
+            stream,
+            truncated: false,
+            lines: ["-----BEGIN X-----", hostile + suffix, hostile + suffix, "-----END X-----"].map(
+              (raw, index) => ({ time: lineTime(index), raw }),
+            ),
+          }),
+        { budgetMs },
+      );
+      assert.ok(elapsed < budgetMs, `${JSON.stringify(unit)} took ${elapsed.toFixed(0)} ms of CPU`);
     }
   }
 });
@@ -673,28 +677,33 @@ test("redaction stays linear on hostile 32 KiB lines", () => {
   for (const unit of units) {
     for (const suffix of ["", "?", "token", "=x"]) {
       const input = line(unit, suffix);
-      const started = performance.now();
-      redactRuntimeLogText(input);
-      maskRuntimeEventText(input);
-      const elapsed = performance.now() - started;
+      const elapsed = cpuTimeMs(
+        () => {
+          redactRuntimeLogText(input);
+          maskRuntimeEventText(input);
+        },
+        { budgetMs },
+      );
       assert.ok(
         elapsed < budgetMs,
-        `${JSON.stringify(unit)} + ${JSON.stringify(suffix)} took ${elapsed.toFixed(0)} ms`,
+        `${JSON.stringify(unit)} + ${JSON.stringify(suffix)} took ${elapsed.toFixed(0)} ms of CPU`,
       );
     }
   }
   // A whole page of such messages stays well inside one request's budget.
-  const started = performance.now();
-  sanitizeRuntimeLogChunk({
-    stream: { source: "gateway", pod: "gateway-0", container: "gateway" },
-    truncated: false,
-    lines: Array.from({ length: 50 }, (_, index) => ({
-      time: lineTime(index),
-      raw: JSON.stringify({ level: "info", message: "a-".repeat(15 * 1024) }),
-    })),
-  });
-  const elapsed = performance.now() - started;
-  assert.ok(elapsed < 50 * budgetMs, `50 hostile lines took ${elapsed.toFixed(0)} ms`);
+  const elapsed = cpuTimeMs(
+    () =>
+      sanitizeRuntimeLogChunk({
+        stream: { source: "gateway", pod: "gateway-0", container: "gateway" },
+        truncated: false,
+        lines: Array.from({ length: 50 }, (_, index) => ({
+          time: lineTime(index),
+          raw: JSON.stringify({ level: "info", message: "a-".repeat(15 * 1024) }),
+        })),
+      }),
+    { budgetMs: 50 * budgetMs },
+  );
+  assert.ok(elapsed < 50 * budgetMs, `50 hostile lines took ${elapsed.toFixed(0)} ms of CPU`);
 });
 
 test("redaction stays linear on a generated sweep of short repeated units", () => {
@@ -746,10 +755,13 @@ test("redaction stays linear on a generated sweep of short repeated units", () =
   const started = performance.now();
   for (const unit of units) {
     const input = unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
-    const unitStarted = performance.now();
-    redactRuntimeLogText(input);
-    maskRuntimeEventText(input);
-    const elapsed = performance.now() - unitStarted;
+    const elapsed = cpuTimeMs(
+      () => {
+        redactRuntimeLogText(input);
+        maskRuntimeEventText(input);
+      },
+      { budgetMs },
+    );
     if (elapsed > worst.elapsed) {
       worst = { unit, elapsed };
     }
@@ -757,7 +769,7 @@ test("redaction stays linear on a generated sweep of short repeated units", () =
   const total = performance.now() - started;
   assert.ok(
     worst.elapsed < budgetMs,
-    `${JSON.stringify(worst.unit)} took ${worst.elapsed.toFixed(0)} ms (sweep total ${total.toFixed(0)} ms)`,
+    `${JSON.stringify(worst.unit)} took ${worst.elapsed.toFixed(0)} ms of CPU (sweep total ${total.toFixed(0)} ms)`,
   );
 });
 
