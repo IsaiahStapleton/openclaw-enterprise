@@ -274,12 +274,13 @@ async function fixture(t, selection = {}) {
   };
 }
 
-// The fixture flock(1) marks the state directory when a helper first finds the
-// host lock held, so a test can act while that helper is waiting for the lock.
-function waitForLockWait(f) {
-  return waitFor("the helper to wait for the host lock", () =>
-    stat(join(f.state, "flock-waiting")).catch(() => undefined),
-  );
+// The fixture flock(1) logs each attempt (about 50 ms apart) that finds the host
+// lock held, so a test can act while a helper is waiting for the lock.
+function waitForLockWait(f, attempts = 1) {
+  return waitFor(`the helper to find the host lock held ${attempts} times`, async () => {
+    const log = await readFile(join(f.state, "flock-waiting"), "utf8").catch(() => "");
+    return log.split("\n").length - 1 >= attempts ? true : undefined;
+  });
 }
 
 // Hold the host lock exactly as a live helper would: a flock(2) on <root>/.compute-lock
@@ -1068,8 +1069,9 @@ test("SSH host lock excludes concurrent helpers and is released by the kernel wh
   const held = await holdLock(f);
   t.after(() => held.kill());
   const pending = f.driver.ensureNamespace(tenant);
-  // While another helper holds the lock, this one must wait without mutating the host.
-  await waitForLockWait(f);
+  // While another helper holds the lock, this one must keep waiting without mutating
+  // the host: thirty held attempts span at least the 1.5 s this test used to sleep.
+  await waitForLockWait(f, 30);
   await missing(f.nsDir);
   assert.equal(f.children[0].exitCode, null);
   // A holder killed without any cleanup (SIGKILL) releases the flock through the kernel;
