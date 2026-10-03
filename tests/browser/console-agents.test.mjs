@@ -2007,7 +2007,26 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
     },
   ];
   const bodies = [];
+  let provisionPosts = 0;
   await page.route(`**/namespaces/${namespace.id}/agents/provision`, async (route, request) => {
+    provisionPosts += 1;
+    // The first request is lost in transit and its resend is rejected at admission, so
+    // the API never admitted that request ID.
+    if (provisionPosts === 1) {
+      await route.abort("failed");
+      return;
+    }
+    if (provisionPosts === 2) {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "INVALID_REQUEST", message: "The Agent name is invalid." },
+          meta: { requestId: "req_00000000-0000-4000-8000-000000000400" },
+        }),
+      });
+      return;
+    }
     const body = request.postDataJSON();
     // Like the API, a known request ID returns its existing job.
     const work =
@@ -2076,7 +2095,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
       body: JSON.stringify({
         error: {
           code: "RESOURCE_CONFLICT",
-          message: "The requested platform resource already exists.",
+          message: "Provisioning cannot retry after cancellation or deployment handoff.",
         },
         meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
       }),
@@ -2133,13 +2152,23 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await page.getByLabel("Authentication method").selectOption("codex_pat");
   await createModelCredentialSecret(page, "model-secret-value");
   await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
+  const retry = page.getByRole("button", { name: "Retry provisioning request" });
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  await page
+    .getByText(/^Outcome unknown\. Retry resubmits the same request ID and saved references\./)
+    .waitFor();
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+  // A 400 to the resend shows the request was never admitted, so the form unlocks.
+  await retry.click();
+  await page.getByText(/^Check the entered values/).waitFor();
+  assert.equal(await retry.isVisible(), false);
+  assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
     .getByText(
       "An Agent with this name already exists in this Namespace. Choose a different name. Select Create Agent to submit a new request.",
     )
     .waitFor();
-  const retry = page.getByRole("button", { name: "Retry provisioning request" });
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
 
@@ -2209,6 +2238,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   // form would get 409 "different plan" from the API on every Create Agent.
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
+  assert.equal(await page.getByLabel("Service account token Secret").isDisabled(), true);
   assert.equal(await page.getByRole("button", { name: "Create Agent" }).isDisabled(), false);
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page.waitForURL(new RegExp(`/agents/${agentIds[2]}\\?`));

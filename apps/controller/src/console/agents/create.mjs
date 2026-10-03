@@ -1281,9 +1281,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   const shouldProvision = () =>
     mode.value === "dedicated" && provisionableExecutionModes.has(mode.value);
   const updateControls = () => {
-    const saved = Boolean(
-      savedConfiguration || savedAgent || provisioningAttempt || requestAdmitted,
-    );
+    const saved = Boolean(savedConfiguration || savedAgent || provisioningAttempt);
     const planLocked =
       pending ||
       Boolean(savedAgent) ||
@@ -1314,7 +1312,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     }
     updatePluginDiscovery();
     pluginFields.setDisabled(planLocked);
-    channelEditor.toggleAttribute("inert", pending || saved || outcomeUnknown);
+    channelEditor.toggleAttribute("inert", planLocked || saved);
     channelEditor.setAttribute("aria-busy", pending ? "true" : "false");
     const usesPat = (binding?.method ?? authMethod.value) === "codex_pat";
     const usesOAuth = (binding?.method ?? authMethod.value) === "oauth";
@@ -1323,7 +1321,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       modelCredentialSecret = oauthLogin.source;
     }
     oauthLogin.setActive(usesOAuth && !binding);
-    oauthLogin.setDisabled(pending || saved || outcomeUnknown);
+    oauthLogin.setDisabled(planLocked || saved);
     mode.disabled ||=
       harness.value === "codex" ||
       nativeProvider.value === "anthropic" ||
@@ -1394,16 +1392,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       : "API key Secret";
     modelCredentialPicker.setRequired(!binding && !passwordAuth && !usesOAuth);
     modelCredentialPicker.setDisabled(
-      pending ||
-        Boolean(
-          binding ||
-          passwordAuth ||
-          usesOAuth ||
-          savedConfiguration ||
-          savedAgent ||
-          provisioningAttempt,
-        ) ||
-        outcomeUnknown,
+      planLocked || Boolean(binding || passwordAuth || usesOAuth || savedConfiguration),
     );
     if (usesPat) {
       apiKey.placeholder = "at-…";
@@ -1582,7 +1571,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
                       ? "The provisioning job can no longer be retried; it may have finished. Select Create Agent to resend the same request ID and open its result."
                       : message(error, mutationStarted);
       feedback.textContent = detail + (error.requestId ? ` Request ID: ${error.requestId}` : "");
-      requestAdmitted ||= attempt.acknowledged || outcomeUnknown;
+      // A 400 to an unacknowledged request means the API never admitted it: a resend of
+      // an admitted request returns that job before validation.
+      requestAdmitted =
+        attempt.acknowledged || outcomeUnknown || (requestAdmitted && error.status !== 400);
       if (error.provisioningTerminal && error.canRetryProvisioning) {
         provisioningAttempt = {
           ...attempt,
