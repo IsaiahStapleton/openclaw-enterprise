@@ -1817,7 +1817,7 @@ test("password Preset names the taken Secret when an earlier Agent left one with
   assert.equal((await conflict).status(), 409);
   await page
     .getByText(
-      'A Secret named "Recreated Agent" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over and choose Use existing Secret as the Preset\'s Secret source.',
+      'A Secret named "Recreated Agent" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over, choose the Preset again, and set its Secret source to Use existing Secret.',
     )
     .waitFor();
   assert.equal(configurationPostRequests(requests, namespace.id).length, 0);

@@ -1781,8 +1781,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       }
       const detail = savedAgent
         ? `The Agent was created, but credential access is not confirmed. ${message(error)} Retry credential access, or open the saved Agent and ask an administrator to check access to its saved model and channel Secrets.`
-        : error.status === 409 && creatingSecret
-          ? `A Secret named "${body.name}" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over and choose Use existing Secret as the Preset's Secret source.`
+        : error.status === 409 && creatingSecret && error.code !== "NAMESPACE_NOT_READY"
+          ? `A Secret named "${body.name}" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over, choose the Preset again, and set its Secret source to Use existing Secret.`
           : error.status === 409 && savedConfiguration
             ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
             : message(error, mutationStarted);
