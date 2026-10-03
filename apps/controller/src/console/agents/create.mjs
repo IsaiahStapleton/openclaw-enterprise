@@ -1693,13 +1693,16 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     updateControls();
     feedback.textContent = "";
     let mutationStarted = false;
+    let creatingSecret = false;
     try {
       if (passwordAuth && !usesOAuth && !savedSecret) {
         mutationStarted = true;
+        creatingSecret = true;
         savedSecret = await request(`${namespacePath(namespaceId)}/secrets`, {
           method: "POST",
           body: { name: body.name, value: apiKey.value },
         });
+        creatingSecret = false;
         apiKey.value = "";
         apiKey.required = false;
         if (!context.isCurrent()) {
@@ -1778,9 +1781,11 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       }
       const detail = savedAgent
         ? `The Agent was created, but credential access is not confirmed. ${message(error)} Retry credential access, or open the saved Agent and ask an administrator to check access to its saved model and channel Secrets.`
-        : error.status === 409 && savedConfiguration
-          ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
-          : message(error, mutationStarted);
+        : error.status === 409 && creatingSecret && error.code !== "NAMESPACE_NOT_READY"
+          ? `A Secret named "${body.name}" already exists in this Namespace, possibly from an earlier Agent with this name. Choose another Agent name, delete that Secret, or select Start over, choose the Preset again, and set its Secret source to Use existing Secret.`
+          : error.status === 409 && savedConfiguration
+            ? "Agent creation conflicts with the saved state. Check the Agent name and selections, then try again."
+            : message(error, mutationStarted);
       outcomeUnknown = mutationStarted && ![400, 403, 404, 409, 429].includes(error.status);
       const knownRejection = [400, 403, 404, 409, 429].includes(error.status);
       if (!savedAgent && savedConfiguration && knownRejection) {
