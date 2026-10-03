@@ -258,7 +258,8 @@ Compute requires every attachment to report `ready` before activation.
 
 For a dedicated Codex request that reaches OpenShell, the Driver reads the literal
 `APP_SERVER_PORT` prepared by Compute and includes one unnamed service exposure
-in `CreateSandbox`, with the revision UUID as `request_id`. It creates only an
+in `CreateSandbox`, with the revision UUID as `request_id` (or, after the Gateway
+refuses that ID and no Sandbox exists, the next of 16 IDs derived from it). It creates only an
 absent Sandbox (`GetSandbox` first) and adopts an existing one only when its
 annotations name the revision and, for Codex, `GetService` finds the endpoint.
 It requires an HTTP or HTTPS route and rewrites its port to the gateway

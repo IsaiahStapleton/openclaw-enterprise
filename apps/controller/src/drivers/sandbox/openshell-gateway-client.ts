@@ -283,6 +283,102 @@ export class OpenShellSandboxAlreadyExistsError extends Error {
   }
 }
 
+/**
+ * The gateway refused a request_id it had already admitted: an earlier call with this ID
+ * errored server-side (REQUEST_OUTCOME_UNCERTAIN, permanent), carried another payload
+ * (REQUEST_ID_PAYLOAD_MISMATCH), or succeeded but can no longer be replayed
+ * (REQUEST_REPLAY_UNAVAILABLE). Nothing ran for this call.
+ */
+export class OpenShellRequestReplayRefusedError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string, message: string) {
+    super(`OpenShell refused the request_id (${reason}): ${message}`);
+    this.reason = reason;
+  }
+}
+
+const REPLAY_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "REQUEST_OUTCOME_UNCERTAIN",
+  "REQUEST_ID_PAYLOAD_MISMATCH",
+  "REQUEST_REPLAY_UNAVAILABLE",
+]);
+const OPENSHELL_ERROR_DOMAIN = "openshell.nvidia.com";
+const ERROR_INFO_TYPE_URL = "type.googleapis.com/google.rpc.ErrorInfo";
+
+/** The length-delimited fields of one protobuf message, or undefined if it is malformed. */
+function lengthDelimitedFields(bytes: Uint8Array): Map<number, Uint8Array[]> | undefined {
+  const fields = new Map<number, Uint8Array[]>();
+  let offset = 0;
+  const varint = (): number | undefined => {
+    let value = 0;
+    for (let shift = 0; shift < 70 && offset < bytes.length; shift += 7) {
+      const byte = bytes[offset++]!;
+      value += (byte & 0x7f) * 2 ** shift;
+      if (byte < 0x80) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+  while (offset < bytes.length) {
+    const key = varint();
+    if (key === undefined) {
+      return undefined;
+    }
+    const wireType = key % 8;
+    if (wireType === 0) {
+      if (varint() === undefined) {
+        return undefined;
+      }
+    } else if (wireType === 1 || wireType === 5) {
+      offset += wireType === 1 ? 8 : 4;
+    } else if (wireType === 2) {
+      const length = varint();
+      if (length === undefined || length > bytes.length - offset) {
+        return undefined;
+      }
+      const field = Math.floor(key / 8);
+      fields.set(field, [...(fields.get(field) ?? []), bytes.subarray(offset, offset + length)]);
+      offset += length;
+    } else {
+      return undefined;
+    }
+  }
+  return offset === bytes.length ? fields : undefined;
+}
+
+function utf8(bytes: Uint8Array | undefined): string | undefined {
+  return bytes === undefined ? undefined : Buffer.from(bytes).toString("utf8");
+}
+
+/** OpenShell's google.rpc.ErrorInfo reason from the gRPC status details trailer. */
+function openShellErrorReason(error: unknown): string | undefined {
+  const metadata = asRecord(error)?.metadata as { get?: unknown } | undefined;
+  const values =
+    typeof metadata?.get === "function"
+      ? (metadata.get as (key: string) => unknown)("grpc-status-details-bin")
+      : undefined;
+  const details = Array.isArray(values) ? values[0] : undefined;
+  if (!(details instanceof Uint8Array)) {
+    return undefined;
+  }
+  // google.rpc.Status: 3 = repeated Any details; Any: 1 = type_url, 2 = value;
+  // ErrorInfo: 1 = reason, 2 = domain.
+  for (const any of lengthDelimitedFields(details)?.get(3) ?? []) {
+    const fields = lengthDelimitedFields(any);
+    const value = fields?.get(2)?.[0];
+    if (utf8(fields?.get(1)?.[0]) !== ERROR_INFO_TYPE_URL || value === undefined) {
+      continue;
+    }
+    const info = lengthDelimitedFields(value);
+    if (utf8(info?.get(2)?.[0]) === OPENSHELL_ERROR_DOMAIN) {
+      return utf8(info?.get(1)?.[0]);
+    }
+  }
+  return undefined;
+}
+
 export class OpenShellProviderAlreadyExistsError extends Error {
   readonly providerName: string;
 
@@ -768,6 +864,18 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       const { grpc } = await this.ensureClient();
       if (statusCode(error) === grpc.status.ALREADY_EXISTS) {
         throw new OpenShellSandboxAlreadyExistsError(request.name);
+      }
+      const reason = openShellErrorReason(error);
+      if (
+        statusCode(error) === grpc.status.FAILED_PRECONDITION &&
+        reason !== undefined &&
+        REPLAY_REFUSAL_REASONS.has(reason)
+      ) {
+        const details = asRecord(error)?.details;
+        throw new OpenShellRequestReplayRefusedError(
+          reason,
+          typeof details === "string" ? details : "request_id refused",
+        );
       }
       throw error;
     }
