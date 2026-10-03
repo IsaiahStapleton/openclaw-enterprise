@@ -15,7 +15,6 @@ import {
   newPage,
   nonAuthWriteRequests,
   revealNativeConfiguration,
-  routeRuntimeCredentials,
   secretOptionLabel,
   selectSecret,
   waitForInputValue,
@@ -794,9 +793,6 @@ test("Agent credentials retry outstanding Slack Secret grants after changing one
   );
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
-  await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, {
-    transportConfigured: true,
-  });
   let denyGrant = true;
   let rejectNextConfigurationPatch = false;
   await page.route(
@@ -917,9 +913,6 @@ for (const grantStatus of [403, 429]) {
     );
     const { page } = await newPage(t, fixture);
     const requests = apiRequests(page, fixture.origin);
-    await routeRuntimeCredentials(page, fixture, namespace.id, agent.id, {
-      transportConfigured: true,
-    });
     await page.route(
       `**/namespaces/${namespace.id}/iam/access-bindings`,
       async (route, request) => {

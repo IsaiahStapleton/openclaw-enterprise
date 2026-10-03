@@ -68,11 +68,15 @@ function secretWrites(requests, namespaceId) {
   );
 }
 
-// Secret IDs granted to the Agent's ServicePrincipal, in request order.
-function secretGrants(requests, namespaceId, agent) {
+// Secret IDs granted to the Agent's ServicePrincipal with an operate-only Role, in request order.
+async function secretGrants(fixture, requests, namespaceId, agent) {
+  const roles = await fixture.request("GET", `/namespaces/${namespaceId}/iam/roles`);
   return accessBindingPostRequests(requests, namespaceId).map(({ body }) => {
+    assert.equal(body.subjectKind, "identity");
     assert.equal(body.subjectId, agent.servicePrincipalId);
     assert.equal(body.resourceKind, "secret");
+    const role = roles.data.find(({ id }) => id === body.roleId);
+    assert.deepEqual(role?.permissions, [{ action: "operate", resourceKind: "secret" }]);
     return body.resourceId;
   });
 }
@@ -509,7 +513,9 @@ test("Slack credential replacement switches only selected Secret references", as
     SLACK_BOT_TOKEN: secretBindings.SLACK_BOT_TOKEN,
   });
   assert.deepEqual(secretWrites(requests, namespace.id), []);
-  assert.deepEqual(secretGrants(requests, namespace.id, agent), [replacementAppSecret.id]);
+  assert.deepEqual(await secretGrants(fixture, requests, namespace.id, agent), [
+    replacementAppSecret.id,
+  ]);
   // Saving re-renders both pickers, which reload Secret metadata before showing names.
   await waitForInputValue(
     page.getByLabel("Slack app token"),
@@ -557,12 +563,11 @@ test("partially bound Slack credentials save only the missing token", async (t) 
     .waitFor();
   assert.deepEqual(secretWrites(requests, namespace.id), []);
   const saved = await savedSecretBindings(fixture, namespace.id, agent.configurationId);
-  assert.deepEqual(saved.SLACK_APP_TOKEN, secretBindings.SLACK_APP_TOKEN);
-  assert.deepEqual(saved.SLACK_BOT_TOKEN, {
-    source: botSecret.ref,
-    delivery: { type: "env" },
+  assert.deepEqual(saved, {
+    SLACK_APP_TOKEN: secretBindings.SLACK_APP_TOKEN,
+    SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
   });
-  assert.deepEqual(secretGrants(requests, namespace.id, agent), [botSecret.id]);
+  assert.deepEqual(await secretGrants(fixture, requests, namespace.id, agent), [botSecret.id]);
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });
 
@@ -604,10 +609,10 @@ test("missing Slack credential fields require both Secret references before savi
     .waitFor();
 
   assert.deepEqual(secretWrites(requests, namespace.id), []);
-  assert.deepEqual(
-    secretGrants(requests, namespace.id, agent).sort(),
-    [appSecret.id, botSecret.id].sort(),
-  );
+  assert.deepEqual(await secretGrants(fixture, requests, namespace.id, agent), [
+    appSecret.id,
+    botSecret.id,
+  ]);
   const pageText = await page.locator("body").textContent();
   assert.equal(pageText.includes("xapp-console-secret"), false);
   assert.equal(pageText.includes("xoxb-console-secret"), false);

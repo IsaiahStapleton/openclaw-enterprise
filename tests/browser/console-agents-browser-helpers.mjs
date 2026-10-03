@@ -94,19 +94,6 @@ export async function login(
   await page.waitForURL(/\/console\/(agents|backends|namespaces|settings)/);
 }
 
-export async function routeRuntimeCredentials(page, fixture, namespaceId, agentId, data) {
-  await page.route(
-    `${fixture.origin}/namespaces/${namespaceId}/agents/${agentId}/runtime-credentials`,
-    async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data, meta: { requestId: "req_test_runtime_credentials" } }),
-      });
-    },
-  );
-}
-
 // Browser storage the console wrote, except the tab-scoped Installation-access probe answer
 // (session owner key, admin flag and observability URL), which never holds drafts or
 // credentials.
