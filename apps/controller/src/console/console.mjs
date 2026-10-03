@@ -954,6 +954,10 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
         mountedViewState = retainedState;
         retainedState.active = active;
         retainedState.resumeDrafts?.();
+        // Timers that fired while the view was detached stopped; let them re-arm.
+        for (const resume of retainedState.resumeHandlers) {
+          resume();
+        }
         navigateAgentTab = retainedState.tabNavigation;
         mountedAgent = retainedState.agent;
         for (const control of shell.blockedControls) {
@@ -975,6 +979,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       reusable: true,
       mutations: 0,
       reads: new Map(),
+      resumeHandlers: new Set(),
       user: session.user,
     };
     mountedViewState = viewState;
@@ -1053,6 +1058,7 @@ async function loadPage({ fromNavigation = false, reuseView = fromNavigation } =
       navigate,
       pageUrl,
       isCurrent: () => lifetime.isCurrent(viewState.active),
+      onResume: (handler) => viewState.resumeHandlers.add(handler),
       onExpired: () => {
         if (lifetime.isCurrent(viewState.active)) {
           showLogin("Your session has expired.", pageUrl(current.target, current.namespace));

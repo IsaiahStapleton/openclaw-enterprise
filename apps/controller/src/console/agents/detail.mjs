@@ -206,6 +206,13 @@ function createDeploymentStatusPanel(
   const state = { loading: false, status: null, error: null, overviewError: false };
   let pollTimer = null;
 
+  // A poll that fired while the view was retained stopped; restoring the view re-arms it.
+  context.onResume?.(() => {
+    if (section.isConnected) {
+      schedulePoll();
+    }
+  });
+
   // Queued and running records are reread until they record a result or a read fails.
   function schedulePoll() {
     clearTimeout(pollTimer);
