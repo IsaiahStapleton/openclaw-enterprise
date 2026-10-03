@@ -1561,18 +1561,23 @@ test("prepareLane preserves an explicit logging Collector Node image over its de
     await readFile(join(repositoryRoot, "compose.logging.yaml"), "utf8"),
   ).services.collector.image;
   // Images are absent until pulled; the first pull of each hits a rate limit.
+  // Both images are prepared concurrently, so the fake counts each image's
+  // pulls in its own file: reading the shared call log while the other
+  // image's process appends to it can return a torn line.
   const dockerPath = join(root, "docker");
   await writeFile(
     dockerPath,
     `#!${process.execPath}
 const { appendFileSync, existsSync, readFileSync } = require("node:fs");
+const { createHash } = require("node:crypto");
 const log = ${JSON.stringify(join(root, "docker.jsonl"))};
 const args = process.argv.slice(2);
-const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\\n").map(JSON.parse) : [];
 appendFileSync(log, JSON.stringify(args) + "\\n");
 const image = args.at(-1);
-const pulls = calls.filter((call) => call[0] === "pull" && call[1] === image).length;
+const pullLog = log + "." + createHash("sha256").update(image).digest("hex") + ".pulls";
+const pulls = existsSync(pullLog) ? readFileSync(pullLog, "utf8").length : 0;
 if (args[0] === "pull") {
+  appendFileSync(pullLog, "p");
   if (pulls === 0) {
     process.stderr.write("Error response from daemon: toomanyrequests: rate limit\\n");
     process.exit(1);
