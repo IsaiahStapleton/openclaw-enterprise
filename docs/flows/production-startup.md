@@ -224,10 +224,9 @@ minimum versions in its message and continues. An invalid version response,
 unreachable API, or failed Namespace access still fails preflight.
 
 The worker independently validates production settings, opens the same
-application-role database, loads the selected Driver bundle, validates IAM, runs
-Compute preflight, emits the same advisory warning for an older Kubernetes
-server, emits `worker.started`, and polls durable Namespace and AgentRevision
-work. Worker readiness depends on fresh queue-health observations. Neither
+application-role database, loads the selected Drivers, validates IAM, runs
+Compute preflight (with the same advisory warning), emits `worker.started`, and
+polls durable Namespace and AgentRevision work. Worker readiness depends on fresh queue-health observations. Neither
 process mounts the bootstrap PVC.
 
 `apps/controller/src/composition/repository-credentials/platform.ts:composeRepoDriver`
@@ -281,15 +280,14 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 - `kubectl -n openclaw-system wait --for=condition=complete job/oce-initialization`
   should succeed before API and worker rollout checks.
 - `pnpm db:migrate:production --check` reports the accepted database history
-  without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` requires inspection of
-  the selected database; initialization does not repair or rewrite its ledger.
+  without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` needs the database
+  inspected; initialization never repairs its ledger.
 - The API should emit `listening`; the worker should emit `worker.started`
-  followed by `worker.health`. A stopping API emits `shutdown.started` and then
-  `shutdown.completed`.
-- `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`
-  identifies a server below the supported Kubernetes 1.35 baseline; startup
-  continues, but operators should upgrade before treating the deployment as
-  supported.
+  followed by `worker.health`. `listening` carries `startupMs` since process
+  start and `phasesMs` per startup phase, so a slow boot names its slow phase.
+  A stopping API emits `shutdown.started` and then `shutdown.completed`.
+- `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`:
+  startup continues, but upgrade to Kubernetes 1.35 or later for support.
 - `startup-error` or `worker.startup-error` with code
   `KUBERNETES_API_UNAVAILABLE` means the Compute preflight got no answer from
   the Kubernetes API server named by `host` and `port`. Check that
@@ -301,10 +299,9 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   from the retrieved key file.
 - Changing an external startup Secret alone does not restart the API or worker;
   run an explicit rollout and repeat readiness plus authenticated proof.
-- Packaging checks such as
-  `node --test tests/integration/production-kubernetes-packaging.test.mjs`
-  render chart behavior but do not prove a live Helm install, protected storage
-  retrieval, tenant runtime, or model turn.
+- `tests/integration/production-kubernetes-packaging.test.mjs` renders the
+  chart; it does not prove a live install, key retrieval, tenant runtime, or
+  model turn.
 
 ## Related docs
 
@@ -324,6 +321,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Time API startup phases in `listening`.
 - 2026-10-04: Add the API startup probe.
 - 2026-10-04: Log the API's shutdown start and completion.
 - 2026-10-04: Describe API shutdown timing against the Pod termination grace.
