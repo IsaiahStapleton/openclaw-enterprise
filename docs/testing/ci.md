@@ -60,10 +60,10 @@ targeted protected runs report only their selected lanes.
 The `postgres` lane owns migration compatibility; `postgres-application` owns the
 revision-worker, native IAM barrier and metrics tests; `postgres-auth` owns sign-in,
 session and account authentication; `postgres-platform` owns the connection,
-bootstrap, wire-up, platform-state and restart tests, the password sign-in limit
-test (77 s, moved for balance) and the remaining PostgreSQL files. Each has a disposable PostgreSQL server. The split follows measured file
-durations: the migration and revision-worker files each take most of a lane, so
-add a new file to `postgres-platform` or `postgres-auth`, keeping the job times close.
+bootstrap, wire-up, platform-state, restart and password sign-in limit tests and the
+remaining PostgreSQL files. Each has a disposable PostgreSQL server. The split
+follows measured file durations, so add a new file to `postgres-platform` or
+`postgres-auth`, keeping the job times close.
 Kubernetes fixture files run in `k3d-fixture-configuration`,
 `k3d-fixture-state`, and `k3d-fixture-plugins`, each with independent cluster,
 database, image, and cleanup state. Files run sequentially within each lane. The audit requires one owner per file; Full Integration aggregates its selected `full` group or targeted lane.
