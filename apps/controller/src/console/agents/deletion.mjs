@@ -17,6 +17,8 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     deleting: agent.status === "deleting",
     pending: false,
     needsRefresh: false,
+    // A deleter whose only grant targeted this Agent loses it when the delete is accepted.
+    accessEnded: false,
     notice: "",
     error: null,
   };
@@ -34,9 +36,11 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
   );
 
   function render() {
-    const status = state.deleting
-      ? "Deletion in progress. Cleanup runs in the background; this Agent cannot be edited or deployed."
-      : state.notice;
+    const status = state.accessEnded
+      ? "Deletion was accepted. Your access to this Agent ended with it, so this page cannot follow the cleanup."
+      : state.deleting
+        ? "Deletion in progress. Cleanup runs in the background; this Agent cannot be edited or deployed."
+        : state.notice;
     feedback.replaceChildren(
       ...(status ? [element("p", { className: "notice", role: "status" }, status)] : []),
       ...(state.error
@@ -55,7 +59,9 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     remove.disabled = state.pending || state.needsRefresh;
     refresh.disabled = state.pending;
     refresh.textContent = state.pending ? "Checking…" : "Refresh deletion status";
-    if (state.deleting) {
+    if (state.accessEnded) {
+      actions.replaceChildren();
+    } else if (state.deleting) {
       actions.replaceChildren(refresh);
     } else if (state.needsRefresh) {
       actions.replaceChildren(remove, refresh);
@@ -75,7 +81,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
   function schedulePoll() {
     clearTimeout(pollTimer);
     pollTimer = setTimeout(() => {
-      if (context.isCurrent() && state.deleting) {
+      if (context.isCurrent() && state.deleting && !state.accessEnded) {
         void refreshStatus({ poll: true });
       }
     }, DELETION_POLL_MS);
@@ -116,6 +122,11 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
         context.onExpired();
       } else if (error.status === 404) {
         context.navigate("agents");
+      } else if (error.status === 403 && state.deleting) {
+        // Accepting the delete removed the bindings that target this Agent, so a reader with
+        // only those grants can no longer follow it. Stop polling instead of showing a denial.
+        state.accessEnded = true;
+        clearTimeout(pollTimer);
       } else {
         state.error = {
           text: `Could not refresh deletion status. ${message(error)}`,
@@ -127,7 +138,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
       if (context.isCurrent()) {
         state.pending = false;
         render();
-        if (!poll) {
+        if (!poll && !state.accessEnded) {
           (state.deleting || state.needsRefresh ? refresh : remove).focus();
         }
       }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
+import { DELETION_POLL_MS } from "../../apps/controller/src/console/agents/deletion.mjs";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { WORKSPACE_DEFAULTS } from "../../packages/contracts/src/workspace-defaults.mjs";
@@ -2201,6 +2202,62 @@ test("Agent delete confirmation sends the real delete API and leaves visible que
     .filter({ hasText: "Success Candidate" })
     .getByText("Deleting", { exact: true })
     .waitFor();
+});
+
+test("Agent deletion says access ended when the deleter can no longer read the Agent", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Delete scoped", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Scoped Candidate", nativeValues("scoped"));
+  const { page } = await newPage(t, fixture);
+  const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  // A deleter with only an exact Agent grant loses it when the delete is accepted: the same
+  // transaction removes the bindings that target the Agent, so the next read answers 403.
+  let deleted = false;
+  const reads = [];
+  await page.route(`**${agentPath}`, async (route, request) => {
+    if (request.method() === "DELETE") {
+      const response = await route.fetch();
+      deleted = response.status() === 202;
+      await route.fulfill({ response });
+      return;
+    }
+    if (request.method() === "GET" && deleted) {
+      reads.push(request.url());
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "FORBIDDEN", message: "The exact platform operation was not authorized." },
+          meta: { requestId: "req_00000000-0000-4000-8000-000000000403" },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "configuration"));
+  await page.getByRole("heading", { name: "Scoped Candidate" }).waitFor();
+  await page.getByRole("button", { name: "Delete Agent" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Scoped Candidate?" });
+  await dialog.getByRole("button", { name: "Permanently delete Agent" }).click();
+  await page.getByRole("status").getByText("Deletion in progress").waitFor();
+  await page.getByRole("button", { name: "Refresh deletion status" }).click();
+
+  await page
+    .getByRole("status")
+    .getByText(
+      "Deletion was accepted. Your access to this Agent ended with it, so this page cannot follow the cleanup.",
+    )
+    .waitFor();
+  assert.equal(await page.getByRole("alert").filter({ hasText: "Access denied" }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Refresh deletion status" }).count(), 0);
+  const settled = reads.length;
+  await page.waitForTimeout(DELETION_POLL_MS + 500);
+  assert.equal(reads.length, settled);
+  const current = await fixture.request("GET", agentPath);
+  assert.equal(current.data.status, "deleting");
 });
 
 test("Agent delete uncertainty requires refresh before another destructive request", async (t) => {
