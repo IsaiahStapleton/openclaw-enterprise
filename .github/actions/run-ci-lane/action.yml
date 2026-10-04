@@ -64,29 +64,29 @@ runs:
       shell: bash
       run: bash scripts/ci/setup-tools.sh browser
     - name: Set up Go toolchain
-      if: inputs.lane == 'checks-baseline' || inputs.lane == 'docker-model' || inputs.lane == 'production-tui' || inputs.lane == 'openshell'
+      if: startsWith(inputs.lane, 'checks-baseline-') || inputs.lane == 'docker-model' || inputs.lane == 'production-tui' || inputs.lane == 'openshell'
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: go.mod
         cache: true
     - name: Run workspace boundary check
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm check:workspace
     - name: Run lint check
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm lint
     - name: Run format check
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm format:check
     - name: Run OpenAPI check
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm openapi:check
     - name: Run docs check
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm docs:install && pnpm docs:check && pnpm docs:build
     - name: Install documentation browser dependencies
@@ -94,13 +94,18 @@ runs:
       shell: bash
       run: pnpm docs:install
     - name: Run typecheck
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm typecheck
     - name: Check Go CLI
-      if: inputs.lane == 'checks-baseline'
+      if: inputs.lane == 'checks-baseline-1'
       shell: bash
       run: pnpm cli:check && pnpm cli:test
+    - name: Build workspace output
+      # Part 1 builds it in its typecheck step; some tests read apps/controller/dist.
+      if: inputs.lane == 'checks-baseline-2'
+      shell: bash
+      run: pnpm build
     - name: Build Go CLI for OpenShell development proof
       if: inputs.lane == 'openshell'
       shell: bash
@@ -135,7 +140,7 @@ runs:
     - name: Run lane
       shell: bash
       env:
-        CI_RUNNER_TEST_TIMEOUT_MS: ${{ (inputs.lane == 'checks-baseline' || inputs.lane == 'checks-browser') && '300000' || inputs.lane == 'k3d-model' && '5400000' || '' }}
+        CI_RUNNER_TEST_TIMEOUT_MS: ${{ (startsWith(inputs.lane, 'checks-baseline-') || inputs.lane == 'checks-browser') && '300000' || inputs.lane == 'k3d-model' && '5400000' || '' }}
         # Browser tests write screenshots and failure.json (console, network
         # and navigation log) here only when a test fails. Limited to the
         # fixture-only browser lane.
