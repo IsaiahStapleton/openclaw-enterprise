@@ -42,6 +42,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-github-org-allowlist.test.mjs",
+      "expectedTests": [
+        "a GitHub org and team allowlist refuses non-members before the account lookup and fails closed when GitHub cannot answer"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-github-tab-binding.test.mjs",
       "expectedTests": [
         "a GitHub tab keeps its own session: another tab's password sign-in signs it out"
