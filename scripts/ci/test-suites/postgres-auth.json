@@ -42,6 +42,12 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-github-org-allowlist.test.mjs",
+      "expectedTests": [
+        "a GitHub org and team allowlist refuses non-members before the account lookup and fails closed when GitHub cannot answer"
+      ]
+    },
+    {
       "path": "tests/integration/postgres-sign-in-unmatched-callbacks.test.mjs",
       "expectedTests": ["unmatched external sign-in callbacks are counted, not audited"]
     },

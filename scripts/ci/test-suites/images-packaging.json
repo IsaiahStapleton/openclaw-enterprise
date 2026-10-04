@@ -91,6 +91,7 @@
       "path": "tests/integration/sign-in-chart-parity.test.mjs",
       "expectedTests": [
         "the API accepts exactly the sign-in settings the chart renders for every proxy preset, with and without GitHub",
+        "the API accepts exactly the GitHub allowlist the chart renders",
         "the API accepts exactly the Google sign-in settings the chart renders, alone and with GitHub",
         "the API accepts exactly the OIDC sign-in settings the chart renders, alone and with GitHub and Google",
         "values the chart refuses are settings the API also refuses",

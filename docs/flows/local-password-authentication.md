@@ -204,7 +204,11 @@ it. A malformed, unbound, replayed, or expired callback is refused by
 [`occ_sign_in_unmatched_callbacks_total`](../reference/metrics.md#application-families).
 Denials after `consumeAttempt` matches are audited as
 [`PROVIDER_UNAVAILABLE`](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
-or `EXTERNAL_IDENTITY_REJECTED`;
+or `EXTERNAL_IDENTITY_REJECTED`; with GitHub's
+[allowlist](../reference/authentication/external-sign-in.md#organization-and-team-allowlist),
+`apps/controller/src/auth/github.ts:githubMembership` runs between `GET /user` and the account
+lookup and adds `MEMBERSHIP_REQUIRED` and `MEMBERSHIP_UNAVAILABLE`, whose response code the
+callback route turns into the Console's `authReason`;
 State dependency failure or uncertain session completion is not a denial. Neither path retries.
 
 Google (and generic OIDC) reuses `apps/controller/src/auth/github.ts:externalProviderEndpoints` for

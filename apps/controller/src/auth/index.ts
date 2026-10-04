@@ -37,6 +37,7 @@ import {
   githubProviderId,
   googleProviderId,
   type GitHubLoginConfiguration,
+  MEMBERSHIP_DENIALS,
   PASSWORD_DENIAL_AUDIT_UNAVAILABLE,
 } from "./github.ts";
 import type { ExternalProviderName } from "./github.ts";
@@ -535,6 +536,32 @@ class DenialAuditUnavailable extends Error {
   constructor(cause: unknown) {
     super("The sign-in denial could not be audited.", { cause });
     this.name = "DenialAuditUnavailable";
+  }
+}
+
+// The Console reason for each GitHub allowlist refusal (RFC-0061). No other value reaches
+// the redirect.
+const membershipReasons: Readonly<Record<(typeof MEMBERSHIP_DENIALS)[number], string>> = {
+  MEMBERSHIP_REQUIRED: "membership",
+  MEMBERSHIP_UNAVAILABLE: "membership-unavailable",
+};
+
+/** An audited allowlist refusal whose Console reason the callback redirect carries. */
+class MembershipRefusal extends AdmissionFailure {
+  readonly consoleReason: string;
+  constructor(consoleReason: string) {
+    super(401, "UNAUTHENTICATED", "Authentication was not accepted.");
+    this.consoleReason = consoleReason;
+  }
+}
+
+async function membershipRefusal(response: Response): Promise<MembershipRefusal | undefined> {
+  try {
+    const body = (await response.json()) as { readonly code?: unknown } | null;
+    const code = MEMBERSHIP_DENIALS.find((denial) => denial === body?.code);
+    return code === undefined ? undefined : new MembershipRefusal(membershipReasons[code]);
+  } catch {
+    return undefined;
   }
 }
 
@@ -1256,7 +1283,10 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
         }
         throw failure;
       }
-      throw new AdmissionFailure(401, "UNAUTHENTICATED", "Authentication was not accepted.");
+      const refusal = path.endsWith("/callback") ? await membershipRefusal(response) : undefined;
+      throw (
+        refusal ?? new AdmissionFailure(401, "UNAUTHENTICATED", "Authentication was not accepted.")
+      );
     }
     return { response: await response.json(), headers: response.headers, status: response.status };
   }
@@ -1298,8 +1328,12 @@ export function createControllerAuth(options: ControllerAuthOptions): Controller
           const result = await runPrivateEndpoint(request, `/oce/providers/${name}/callback`);
           setAuthHeaders(reply, result.headers);
           reply.redirect("/console/");
-        } catch {
-          reply.redirect(`/console/?authError=${name}`);
+        } catch (error) {
+          reply.redirect(
+            error instanceof MembershipRefusal
+              ? `/console/?authError=${name}&authReason=${error.consoleReason}`
+              : `/console/?authError=${name}`,
+          );
         }
       },
       async result(request: FastifyRequest, reply: FastifyReply): Promise<void> {
