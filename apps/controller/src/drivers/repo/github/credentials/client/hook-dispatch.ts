@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allowsPushRef, decodePushedBranchRef } from "../../../credentials/client-contracts.ts";
+import { allowsPushRef, readPushedBranchRef } from "../../../credentials/client-contracts.ts";
 import { readClientConfiguration } from "./config.ts";
 import {
   inheritedRepositoryBinding,
@@ -40,7 +40,8 @@ function setting(name: string): string | undefined {
   return output.slice(0, -1) || undefined;
 }
 
-async function checkPush(destination: string, input: Buffer): Promise<boolean> {
+/** True when the push may proceed, or the refusal message the hook prints. */
+async function checkPush(destination: string, input: Buffer): Promise<true | string> {
   if (!destination.startsWith("https://")) {
     return true;
   }
@@ -97,9 +98,14 @@ async function checkPush(destination: string, input: Buffer): Promise<boolean> {
     if (!fields) {
       throw new Error("invalid-pre-push-input");
     }
-    const ref = decodePushedBranchRef(Buffer.from(fields[3]!, "latin1"));
-    if (ref === undefined || !allowsPushRef(binding.client.pushRefAllowlist, ref)) {
-      return false;
+    const read = readPushedBranchRef(Buffer.from(fields[3]!, "latin1"));
+    if (!("ref" in read)) {
+      // The reason names a code point, never the raw name, so the terminal shows no
+      // invisible or direction-changing character.
+      return `repository-push-ref-not-allowed: ${read.refused}`;
+    }
+    if (!allowsPushRef(binding.client.pushRefAllowlist, read.ref)) {
+      return "repository-push-ref-not-allowed";
     }
   }
   return true;
@@ -179,8 +185,9 @@ async function run(): Promise<number> {
       throw new Error("invalid-pre-push-input");
     }
     input = await readPushInput();
-    if (!(await checkPush(args[1]!, input))) {
-      process.stderr.write("repository-push-ref-not-allowed\n");
+    const verdict = await checkPush(args[1]!, input);
+    if (verdict !== true) {
+      process.stderr.write(verdict + "\n");
       return 1;
     }
   }
