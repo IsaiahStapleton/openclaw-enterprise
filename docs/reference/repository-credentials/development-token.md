@@ -15,8 +15,9 @@ runs the service and client containers with a host token.
 
 ## Enable it
 
-Two explicit opt-ins are required; either one missing fails startup and
-`check-config` with `invalid-configuration`:
+Two explicit opt-ins are required. If either is missing, `check-config` prints
+`invalid-configuration` and the service exits with `repository credential
+service failed`:
 
 1. The protected configuration selects `backend.kind: "github-token"` with the
    literal `developmentOnly: true`.

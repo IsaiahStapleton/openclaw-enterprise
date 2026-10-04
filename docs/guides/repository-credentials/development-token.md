@@ -69,8 +69,8 @@ pnpm credentials:operator open --socket "$CREDENTIAL_SERVICE_CONTROL/control.soc
   --output "$CREDENTIAL_CLIENT_SESSION" --ca "$INPUTS/tls.crt"
 ```
 
-Starting with only `compose.yaml` fails with `invalid-configuration`, because the
-process flag is missing.
+Starting with only `compose.yaml` exits with `repository credential service
+failed`, because the process flag is missing.
 
 ## Clone, push and call the API
 
