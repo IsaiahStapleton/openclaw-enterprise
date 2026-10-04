@@ -67,11 +67,20 @@ export async function openAdvancedSettings(page) {
 }
 
 // Create Agent stays disabled while the form reads Installation capabilities and repository
-// choices. Call this once the form is shown, before checking whether a draft can be created.
-// It covers the form's first load: a capability retry keeps the failure text until it ends.
+// choices. Waits until the live form has both; a retained preview of an earlier form is inert
+// and shows that form's settled reads. A capability retry keeps the failure text until it ends.
 export async function waitForCreateFormReads(page) {
-  await page.getByText("Checking installation capabilities…").waitFor({ state: "detached" });
-  await page.locator('.repository-options[aria-busy="false"]').waitFor({ state: "attached" });
+  await page.waitForFunction(() => {
+    const form = globalThis.document.querySelector("#create-agent-form");
+    return (
+      form !== null &&
+      form.closest("[inert]") === null &&
+      form.querySelector('.repository-options[aria-busy="false"]') !== null &&
+      ![...form.querySelectorAll('[role="status"]')].some(
+        (node) => node.textContent === "Checking installation capabilities…",
+      )
+    );
+  });
 }
 
 export async function expectNativeAdminHidden(page) {
