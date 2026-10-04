@@ -17,15 +17,17 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
     deleting: agent.status === "deleting",
     pending: false,
     needsRefresh: false,
-    // A deleter whose only grant targeted this Agent loses it when the delete is accepted.
+    // Finishing the deletion removes the bindings that target this Agent, so a deleter whose
+    // only grants came from them can no longer read it.
     accessEnded: false,
     notice: "",
     error: null,
   };
   let pollTimer;
+  const heading = element("h2", { id: "agent-deletion-title", tabindex: "-1" }, "Delete Agent");
 
   section.append(
-    element("h2", { id: "agent-deletion-title" }, "Delete Agent"),
+    heading,
     element(
       "p",
       { className: "muted" },
@@ -94,6 +96,9 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
       }
       return;
     }
+    // Disabling Refresh while it checks drops its focus, so remember where focus was first.
+    const focusedHere =
+      section.contains(document.activeElement) || document.activeElement === document.body;
     state.pending = true;
     state.error = null;
     render();
@@ -123,7 +128,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
       } else if (error.status === 404) {
         context.navigate("agents");
       } else if (error.status === 403 && state.deleting) {
-        // Accepting the delete removed the bindings that target this Agent, so a reader with
+        // The finished deletion removed the bindings that target this Agent, so a reader with
         // only those grants can no longer follow it. Stop polling instead of showing a denial.
         state.accessEnded = true;
         clearTimeout(pollTimer);
@@ -138,7 +143,12 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
       if (context.isCurrent()) {
         state.pending = false;
         render();
-        if (!poll && !state.accessEnded) {
+        if (state.accessEnded) {
+          // Refresh is gone, so keep focus in this section on its heading.
+          if (focusedHere) {
+            heading.focus();
+          }
+        } else if (!poll) {
           (state.deleting || state.needsRefresh ? refresh : remove).focus();
         }
       }
