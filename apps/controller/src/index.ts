@@ -918,9 +918,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
 
   // Shutdown (app.close) drains admitted requests, but Node and Fastify close only the
   // keep-alive sockets that are idle when it starts. A socket whose response finishes during
-  // the drain would stay open until the client's keep-alive timeout (about 72 s), past the API
-  // Pod's 30 s termination grace. Mark those responses `Connection: close`, or close the
-  // socket after a response whose headers were already sent.
+  // the drain would stay open until the server's 72 s keep-alive timeout, past the API Pod's
+  // 30 s termination grace. Mark those responses `Connection: close`, or close the socket
+  // after a response whose headers were already sent, as Node does for `Connection: close`.
   const openResponses = new Set<ServerResponse>();
   app.server.on("request", (_request: IncomingMessage, response: ServerResponse) => {
     openResponses.add(response);
@@ -932,7 +932,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         response.setHeader("connection", "close");
       } else if (!response.writableFinished) {
         const { socket } = response;
-        response.once("finish", () => socket?.end());
+        response.once("finish", () => socket?.destroySoon());
       }
     }
   });

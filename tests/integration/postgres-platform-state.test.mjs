@@ -2158,10 +2158,13 @@ test(
       },
     });
     const responded = once(signIn, "response");
-    await once(signIn, "continue");
+    const admitted = await Promise.race([
+      once(signIn, "continue").then(() => true),
+      responded.then(() => false),
+    ]);
+    assert.ok(admitted, "the API must admit the request before its body arrives");
 
     const exited = once(api.child, "exit");
-    const stopping = performance.now();
     api.child.kill("SIGTERM");
     // Finish the request only after the listener has closed, so it completes during the drain.
     const deadline = Date.now() + 5_000;
@@ -2183,14 +2186,16 @@ test(
 
     // The drained response's socket must not hold shutdown open until the keep-alive
     // timeout (about 72 s), past the API Pod's 30 s default termination grace.
-    const bound = new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error("the API did not exit within 10 s of SIGTERM")),
-        10_000,
-      ).unref(),
-    );
-    const [code, signal] = await Promise.race([exited, bound]);
+    let timer;
+    const [code, signal] = await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("the API did not exit within 10 s of the drained response")),
+          10_000,
+        );
+      }),
+    ]).finally(() => clearTimeout(timer));
     assert.deepEqual({ code, signal }, { code: 0, signal: null });
-    assert.ok(performance.now() - stopping < 10_000);
   },
 );

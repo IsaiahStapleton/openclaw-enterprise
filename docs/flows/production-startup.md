@@ -170,8 +170,9 @@ operator-managed endpoint.
 `apps/controller/src/index.ts:createFastifyApp`
 
 On `SIGTERM` the API stops accepting connections and finishes admitted requests.
-Their responses carry `Connection: close`, so the process exits once they finish
-instead of holding each socket for the 72-second keep-alive. The API Pod keeps the
+Their responses carry `Connection: close`, or close their connection when they end
+if already streaming, so the process exits once they finish instead of holding each
+socket for the 72-second keep-alive. The API Pod keeps the
 default 30-second termination grace and no `preStop` hook: its single `Recreate`
 replica has no peer to take traffic, so a delay would only lengthen the outage. A
 request still running after 30 seconds is cut off.
