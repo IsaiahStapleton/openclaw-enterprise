@@ -165,8 +165,9 @@ Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Backend
 membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
-operator-managed endpoint. A startup probe on `/healthz` (5-second period, 24
-failures) gives the API 2 minutes to listen before liveness checks begin.
+operator-managed endpoint. A startup probe on `/healthz` (1-second period, 120
+failures) holds liveness off for 2 minutes; readiness waits for its first
+success, so the API takes traffic within a second of listening.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
@@ -321,6 +322,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Poll the startup probe every second.
 - 2026-10-04: Time API startup phases in `listening`.
 - 2026-10-04: Add the API startup probe.
 - 2026-10-04: Log the API's shutdown start and completion.
