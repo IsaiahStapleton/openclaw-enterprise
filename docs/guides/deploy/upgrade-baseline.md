@@ -69,7 +69,11 @@ for kind in rolebindings networkpolicies services; do
     jq -S '[.items[] | {namespace: .metadata.namespace, name: .metadata.name, roleRef, subjects, spec}]' \
       >"$BASELINE/$kind.json"
 done
-"${kube[@]}" get storageclasses -o wide >"$BASELINE/storageclasses.txt"
+"${kube[@]}" get storageclasses -o json |
+  jq -S '[.items[] | {name: .metadata.name, provisioner, reclaimPolicy, volumeBindingMode,
+    allowVolumeExpansion, parameters,
+    default: .metadata.annotations["storageclass.kubernetes.io/is-default-class"]}]' \
+    >"$BASELINE/storageclasses.json"
 "${kube[@]}" get pvc -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,UID:.metadata.uid,VOLUME:.spec.volumeName' \
   >"$BASELINE/pvcs.txt"
 # Only with private Agent routing (Gateway API resources):
@@ -140,9 +144,15 @@ eligible node, as the [Codex sandbox procedure](codex-sandbox.md) shows.
 Rerun the same commands into a new directory and compare. Expect new image
 digests and Pod names, new Helm revisions, the new controller image and
 Installation checksum in the live values, receipts appended by the release's
-migrations and, after a runtime release, new active revision IDs. Investigate
+migrations and, after a runtime release, new active revision IDs. Several of an
+Agent's NetworkPolicies and, for a dedicated Agent, its Harness Service select
+the active revision, so a runtime release changes the revision in those
+selectors. A dedicated Agent's gateway Deployment and Service can also be
+recreated, and the recreated Service has a new cluster IP. Agents add and delete
+their own workspace files, so the file count can change slightly. Investigate
 any other change, in particular a changed PVC UID, a missing or altered earlier
-receipt, a changed NetworkPolicy or RoleBinding, or a different workspace hash.
+receipt, any other NetworkPolicy, Service or RoleBinding change, a different
+workspace hash, or a workspace that is empty or nearly so.
 
 The checklist's Configuration, Preset, Backend, service account, audit,
 session and gateway state items, and its authentication, credential, repository
