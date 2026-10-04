@@ -86,8 +86,8 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
   --clusterrole=oce-openclaw-tenant-configuration --serviceaccount=openclaw-system:openclaw-enterprise-api
 ```
 
-The Secret RoleBinding grants Secret access, Deployment list access for preflight,
-and Pod read/proxy access for Gateway diagnostics. The data-plane observer grants
+Each `openclaw-enterprise-api-secrets` RoleBinding grants Secret access,
+Deployment list access for preflight, and Pod read/proxy access for diagnostics. The data-plane observer grants
 Deployment list and Pod read/proxy access for Agent diagnostics. With
 `agentRuntimeLogs.enabled` (default), both roles also grant `pods/log get` and
 `events get,list` for [Agent logs](../topics/agent-logs.md); roles you write by
