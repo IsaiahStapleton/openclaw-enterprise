@@ -52,6 +52,7 @@ import {
   DependencyUnavailableError,
   DeviceAuthorizationStartError,
   ResourceConflictError,
+  RuntimeCredentialsForbiddenByClusterError,
   RuntimeLogsError,
   UserAlreadyExistsError,
   type DeployAgentAuthorization,
@@ -1073,12 +1074,35 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     kind: AuditEventKind,
     context?: RequestContext,
     evidence?: AuthorizationEvidence,
-    result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
+    result?: {
+      readonly outcome: "success" | "denied" | "failure";
+      readonly reasonCode?: string;
+      // A route's own denial explanation. It passes through the factory with the rest of the
+      // event, so its reason is redacted and capped and its details are redacted.
+      readonly decisionReason?: string;
+      readonly details?: Readonly<Record<string, unknown>>;
+    },
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
     validatedAuthorization?: Readonly<DeployAgentAuthorization>,
   ): AuditEvent {
     const authorizationEvidence = validatedAuthorization?.decision.evidence ?? evidence;
     const outcome = result?.outcome ?? (kind === "authorization_denial" ? "denied" : "success");
+    const evidenceDetails =
+      context === undefined || authorizationEvidence === undefined
+        ? undefined
+        : {
+            iamEvidence: {
+              ...(authorizationEvidence.identityId === undefined
+                ? {}
+                : { identityId: authorizationEvidence.identityId }),
+              groupIds: authorizationEvidence.groupIds,
+              bindingIds: authorizationEvidence.bindingIds,
+              roleIds: authorizationEvidence.roleIds,
+              restrictionIds: authorizationEvidence.restrictionIds,
+            },
+          };
+    const details =
+      result?.details === undefined ? evidenceDetails : { ...evidenceDetails, ...result.details };
     return factory.create({
       installationId,
       ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
@@ -1116,19 +1140,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   ...(outcome === "denied" && authorizationEvidence.restrictionIds.length > 0
                     ? { decisionReason: "A matching Restriction denied the operation." }
                     : {}),
-                  details: {
-                    iamEvidence: {
-                      ...(authorizationEvidence.identityId === undefined
-                        ? {}
-                        : { identityId: authorizationEvidence.identityId }),
-                      groupIds: authorizationEvidence.groupIds,
-                      bindingIds: authorizationEvidence.bindingIds,
-                      roleIds: authorizationEvidence.roleIds,
-                      restrictionIds: authorizationEvidence.restrictionIds,
-                    },
-                  },
                 }),
           }),
+      ...(result?.decisionReason === undefined ? {} : { decisionReason: result.decisionReason }),
+      ...(details === undefined ? {} : { details }),
       action: auditAction(operation, request),
       resource,
       outcome,
@@ -1332,26 +1347,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     },
   ): Promise<void> {
     try {
-      const base = event(
-        operation,
-        request,
-        operationTarget(operation, installationId, request.params as Record<string, unknown>),
-        kind,
-        context,
-        evidence,
-        explanation?.reasonCode === undefined
-          ? undefined
-          : { outcome: "denied", reasonCode: explanation.reasonCode },
-        authorization,
-      );
       await options.auditSink.append(
-        explanation === undefined
-          ? base
-          : {
-              ...base,
-              decisionReason: explanation.decisionReason,
-              details: { ...base.details, ...explanation.details },
-            },
+        event(
+          operation,
+          request,
+          operationTarget(operation, installationId, request.params as Record<string, unknown>),
+          kind,
+          context,
+          evidence,
+          explanation === undefined ? undefined : { outcome: "denied", ...explanation },
+          authorization,
+        ),
       );
     } catch {
       throw failure(
@@ -2231,7 +2237,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           "Agent runtime status and logs are disabled for this Installation.",
         );
       }
-      runtimeLogLimiter.admit(context.actorId, agentId);
+      // Authorization comes first, inside the controller: a denied caller is refused (and
+      // audited) without taking a token, and only authorized Driver reads are limited.
+      const admitRead = <T>(read: () => Promise<T>): Promise<T> => {
+        runtimeLogLimiter.admit(context.actorId, agentId);
+        return runtimeLogLimiter.run(read);
+      };
       // A client that disconnects cancels its Driver reads.
       const disconnected = new AbortController();
       const onClose = () => {
@@ -2242,14 +2253,13 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       reply.raw.once("close", onClose);
       try {
         if (operation.operationId === "getAgentDeploymentRuntime") {
-          const description = await runtimeLogLimiter.run(() =>
-            controller!.describeAgentRuntime(
-              context.actorId,
-              namespaceId,
-              agentId,
-              params.deploymentId as string,
-              disconnected.signal,
-            ),
+          const description = await controller!.describeAgentRuntime(
+            context.actorId,
+            namespaceId,
+            agentId,
+            params.deploymentId as string,
+            disconnected.signal,
+            admitRead,
           );
           reply.send({ data: description, meta: { requestId: request.id } });
           return;
@@ -2265,36 +2275,35 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             "The request does not match the operation contract.",
           );
         }
-        const page = await runtimeLogLimiter.run(() =>
-          controller!.readAgentRuntimeLogs(
-            context.actorId,
-            namespaceId,
-            agentId,
-            params.deploymentId as string,
-            runtimeLogQuery(query),
-            {
-              codec: runtimeLogCursor,
-              signal: disconnected.signal,
-              // Once per view or download, before the first Driver read; failure means
-              // no content.
-              admitView: async (admission, grant) => {
-                const base = event(
-                  operation,
-                  request,
-                  target,
-                  "access",
-                  context,
-                  undefined,
-                  undefined,
-                  { action: grant.action, resource: target },
-                );
-                await options.auditSink.append({
-                  ...base,
-                  details: { ...base.details, runtimeLogs: { ...admission } },
-                });
-              },
+        const page = await controller!.readAgentRuntimeLogs(
+          context.actorId,
+          namespaceId,
+          agentId,
+          params.deploymentId as string,
+          runtimeLogQuery(query),
+          {
+            codec: runtimeLogCursor,
+            signal: disconnected.signal,
+            admitRead,
+            // Once per view or download, before the first Driver read; failure means
+            // no content.
+            admitView: async (admission, grant) => {
+              const base = event(
+                operation,
+                request,
+                target,
+                "access",
+                context,
+                undefined,
+                undefined,
+                { action: grant.action, resource: target },
+              );
+              await options.auditSink.append({
+                ...base,
+                details: { ...base.details, runtimeLogs: { ...admission } },
+              });
             },
-          ),
+          },
         );
         if (download) {
           reply
@@ -2492,28 +2501,29 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             if (covered) {
               return;
             }
-            const base = event(
-              operation,
-              request,
-              target,
-              "authorization_denial",
-              context,
-              decision.evidence,
-              { outcome: "denied", reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED" },
-            );
             try {
-              await options.auditSink.append({
-                ...base,
-                decisionReason:
-                  "The caller does not hold every grant of the target ServicePrincipal.",
-                details: {
-                  ...base.details,
-                  servicePrincipalId,
-                  ...(creating
-                    ? {}
-                    : { serviceKeyId: (request.params as { keyId: string }).keyId }),
-                },
-              });
+              await options.auditSink.append(
+                event(
+                  operation,
+                  request,
+                  target,
+                  "authorization_denial",
+                  context,
+                  decision.evidence,
+                  {
+                    outcome: "denied",
+                    reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED",
+                    decisionReason:
+                      "The caller does not hold every grant of the target ServicePrincipal.",
+                    details: {
+                      servicePrincipalId,
+                      ...(creating
+                        ? {}
+                        : { serviceKeyId: (request.params as { keyId: string }).keyId }),
+                    },
+                  },
+                ),
+              );
             } catch {
               throw dependencyUnavailable();
             }
@@ -3672,6 +3682,19 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           mapped = requestFailure(auditError);
         }
       }
+    }
+    if (error instanceof RuntimeCredentialsForbiddenByClusterError) {
+      // The response names the RoleBinding; the log names the exact denied call.
+      app.log.warn({
+        event: "agent_runtime_credentials.cluster_denied",
+        requestId: request.id,
+        route: request.routeOptions.url ?? "unmatched",
+        verb: error.verb,
+        resource: error.resource,
+        kubernetesNamespace: error.kubernetesNamespace,
+        plane: error.plane,
+        kubernetesStatus: error.status,
+      });
     }
     if (error instanceof DeviceAuthorizationStartError) {
       app.log.warn({

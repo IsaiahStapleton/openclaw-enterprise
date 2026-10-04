@@ -11,6 +11,7 @@
         "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent logout",
         "PostgreSQL native admin WebSocket lease closes within thirty seconds after parent session expiry",
         "PostgreSQL native admin WebSocket lease closes within thirty seconds after IAM administer restriction",
+        "PostgreSQL native admin WebSocket lease closes as a dependency failure during an IAM outage",
         "PostgreSQL native admin WebSocket lease closes within thirty seconds after Agent stop",
         "PostgreSQL native admin WebSocket lease closes within thirty seconds after active revision replacement",
         "PostgreSQL native admin WebSocket closes on API shutdown and disabled redeploy denies reuse"

@@ -451,6 +451,10 @@
                     "label": "Upgrade Checklist"
                   },
                   {
+                    "page": "guides/deploy/upgrade-baseline",
+                    "label": "Upgrade Baseline"
+                  },
+                  {
                     "page": "guides/deploy/production-upgrade",
                     "label": "Image Upgrades"
                   },
@@ -515,6 +519,10 @@
                   {
                     "page": "guides/operate/model-verification",
                     "label": "Model Response Verification"
+                  },
+                  {
+                    "page": "guides/operate/network-isolation",
+                    "label": "Network Isolation Check"
                   },
                   {
                     "page": "guides/deploy/native-admin",

@@ -927,7 +927,10 @@ for (const [model, method, executionMode] of [
       (event) => event.kind === "authorization_denial",
     );
     assert.equal(agentDenial.reasonCode, "AGENT_PRINCIPAL_NOT_AUTHORIZED");
-    assert.equal(agentDenial.decisionReason, denied.body.error.message);
+    // The route's reason passes through the audit factory like any other: redacted and capped
+    // at 120 characters. The details below still name the principal, action and resource.
+    assert.ok(denied.body.error.message.length > 120);
+    assert.equal(agentDenial.decisionReason, denied.body.error.message.slice(0, 120));
     assert.deepEqual(agentDenial.authorization, {
       principalId: fixture.principal.id,
       action: "deploy",
