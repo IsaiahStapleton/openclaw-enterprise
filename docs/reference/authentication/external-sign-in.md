@@ -163,7 +163,8 @@ seeds first activation; a differing value warns, and each start re-checks the ho
 Account reads and mutations require a human session, exact `Origin`, and
 Installation `administer`; service keys are refused. Account mutations also
 require every IAM grant of the target account's Principal (else `403`, audited as
-`ACCOUNT_PRINCIPAL_GRANTS_NOT_COVERED` with the target `userId` and `principalId`); Agent `administer`
+`ACCOUNT_PRINCIPAL_GRANTS_NOT_COVERED` with the target `userId` and `principalId`, the current
+holder's for a recovery move); Agent `administer`
 counts for a delegated Agent `read_logs` grant, as for [service keys](service-api-keys.md#issuance). State locks actor and target
 accounts (retryable `503` after five-second lock waits) and rechecks the actor
 session. A stale
