@@ -169,7 +169,7 @@ if (command === "docker" || command === "podman") {
     state.tag = args[args.indexOf("-t") + 1];
     finish();
   }
-  if (args[0] === "build" && args.includes("-f")) {
+  if ((args[0] === "build" || equals(args.slice(0, 2), ["buildx", "build"])) && args.includes("-f")) {
     assert.ok(args[args.indexOf("-f") + 1].endsWith("/deploy/runtime/Dockerfile"));
     state.runtime = args[args.indexOf("-t") + 1];
     finish();
@@ -773,6 +773,83 @@ test("ordinary k3d preparation forwards an immutable K3s override and retains th
     }
     const cleanup = commands.cleanup();
     assert.equal(cleanup.status, 0, cleanup.stderr);
+  }
+});
+
+// The docker shim records argv only: this proves the cache credential stays out of
+// build arguments and every output preparation hands on, not out of docker's environment.
+test("repository platform preparation restores the runtime image cache without exporting it", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform", {
+    GITHUB_ACTIONS: "true",
+    OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+    ACTIONS_RESULTS_URL: "https://cache.example.test/",
+  });
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const calls = (await commands.commands()).filter(({ command }) => command === "docker");
+  const runtime = calls.filter(({ args }) => args[0] === "buildx");
+  assert.equal(runtime.length, 1);
+  const { args } = runtime[0];
+  assert.deepEqual(args.slice(0, 3), ["buildx", "build", "--load"]);
+  assert.equal(
+    args[args.indexOf("--cache-from") + 1],
+    `type=gha,version=2,scope=oce-ci-runtime-${process.platform}-${process.arch}-v1,timeout=60s`,
+  );
+  assert.equal(args.includes("--cache-to"), false);
+  // The fixture derives from the loaded runtime image through the engine's own builder.
+  const fixtureBuilds = calls.filter(({ args }) => args[0] === "build");
+  assert.equal(fixtureBuilds.length, 1);
+  assert.equal(fixtureBuilds[0].args[fixtureBuilds[0].args.indexOf("--builder") + 1], "default");
+  assert.ok(fixtureBuilds[0].args.includes(`RUNTIME_IMAGE=${args[args.indexOf("-t") + 1]}`));
+  const state = await readFile(commands.statePath, "utf8");
+  const githubEnv = await readFile(commands.githubEnv, "utf8");
+  assert.match(githubEnv, /^OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE=/m);
+  assert.doesNotMatch(
+    JSON.stringify(calls) + state + githubEnv + prepared.stdout + prepared.stderr,
+    /synthetic-cache-credential/,
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("image cache preparation refuses missing credentials and unmapped lanes before building", async (t) => {
+  const credentials = {
+    GITHUB_ACTIONS: "true",
+    OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+    ACTIONS_RESULTS_URL: "https://cache.example.test/",
+  };
+  const nodeBaseImage = JSON.parse(
+    await readFile(join(repositoryRoot, "scripts/ci/test-suites/images-packaging.json"), "utf8"),
+  ).prepare.defaultEnv.NODE_BASE_IMAGE;
+  for (const [lane, env] of [
+    // A cache lane without its runtime token.
+    ["repository-credentials-platform", { ...credentials, ACTIONS_RUNTIME_TOKEN: "" }],
+    // A lane outside the cache map, even with credentials.
+    [
+      "docker-model",
+      {
+        ...credentials,
+        OPENAI_API_KEY: "synthetic-model-key",
+        OCC_TEST_OPENAI_MODEL: "gpt-synthetic",
+        NODE_BASE_IMAGE: nodeBaseImage,
+      },
+    ],
+  ]) {
+    const commands = await fixtureImageCommands(t, "success", lane, env);
+    const prepared = commands.prepare();
+    assert.notEqual(prepared.status, 0, lane);
+    assert.match(prepared.stderr, /Image caching requires the hosted image lane/, lane);
+    const calls = await commands.commands();
+    assert.equal(
+      calls.some(({ args }) => args[0] === "buildx" || args[0] === "build"),
+      false,
+      lane,
+    );
+    assert.doesNotMatch(prepared.stdout + prepared.stderr, /synthetic-cache-credential/, lane);
+    // Cleanup is not run: the refused build's planned tag stays owned, and this
+    // shim cannot remove images. The fixture directory is removed with the test.
   }
 });
 
