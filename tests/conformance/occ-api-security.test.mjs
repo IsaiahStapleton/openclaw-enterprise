@@ -1717,18 +1717,27 @@ test("runtime log reads are rate limited per principal and Agent with Retry-Afte
   assert.equal(limited.body.error.code, "RUNTIME_LOGS_RATE_LIMITED");
   assert.match(limited.headers.get("retry-after") ?? "", /^[1-9][0-9]*$/);
 
-  // The limiter runs before authorization (documented): an unauthorized principal can
-  // only spend its own bucket, never another principal's, and never reaches the Driver.
+  // Authorization runs before the limiter: an unauthorized principal past the burst is
+  // still refused with 403 and audited every time, takes no token and never reaches the
+  // Driver. (A limiter answering first would hide denials behind unaudited 429s.)
   const outsider = await fixture.createPrincipal("runtime-outsider", target, []);
   fixture.computeDriver.calls.length = 0;
+  const deniedBefore = fixture.auditSink.events.filter(
+    (event) => event.kind === "authorization_denial" && event.actorId === outsider.principal.id,
+  ).length;
   const statuses = [];
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    statuses.push(
-      (await fixture.request("GET", target.runtimePath, { session: outsider.session })).status,
-    );
+    for (const path of [target.runtimePath, target.logsPath()]) {
+      statuses.push((await fixture.request("GET", path, { session: outsider.session })).status);
+    }
   }
-  assert.ok(statuses.includes(403));
-  assert.equal(statuses.at(-1), 429);
+  assert.deepEqual(new Set(statuses), new Set([403]));
+  assert.equal(
+    fixture.auditSink.events.filter(
+      (event) => event.kind === "authorization_denial" && event.actorId === outsider.principal.id,
+    ).length - deniedBefore,
+    statuses.length,
+  );
   assert.equal(fixture.computeDriver.calls.length, 0);
   const operator = await fixture.createPrincipal("runtime-limit-operator", target, operateGrants);
   const unaffected = await fixture.request("GET", target.runtimePath, {

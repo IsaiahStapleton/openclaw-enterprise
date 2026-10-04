@@ -447,6 +447,12 @@ export interface RuntimeLogReadGrant {
   readonly action: "read_logs" | "administer";
 }
 
+/**
+ * Runs an authorized caller's runtime Driver reads; the API applies its per-caller rate
+ * limit and replica concurrency limit here, after authorization.
+ */
+export type RuntimeLogReadAdmission = <T>(read: () => Promise<T>) => Promise<T>;
+
 export interface ControllerOptions {
   readonly authorize?: (
     request: AuthorizationRequest,
@@ -2218,13 +2224,18 @@ export class OpenClawController {
     return deploymentDiagnostics(diagnostics, revision.id);
   }
 
-  /** Tier 1: Pod status, restarts, Events and log sources (Agent operate + read). */
+  /**
+   * Tier 1: Pod status, restarts, Events and log sources (Agent operate + read).
+   * `admitRead` wraps the Driver reads and runs only after authorization, so a caller's
+   * rate or concurrency limit never answers before a denial (which is audited).
+   */
   async describeAgentRuntime(
     principalId: string,
     namespaceId: string,
     agentId: string,
     deploymentId: string,
     signal?: AbortSignal,
+    admitRead: RuntimeLogReadAdmission = (read) => read(),
   ): Promise<Readonly<AgentRuntimeDescription>> {
     const { binding, driver } = await this.runtimeLogTarget(
       principalId,
@@ -2233,11 +2244,13 @@ export class OpenClawController {
       deploymentId,
       "operate",
     );
-    return this.runtimeLogOperation(signal, async (deadline) =>
-      this.withSandboxLogSource(
-        await this.describedAgentRuntime(driver, binding, deadline),
-        driver,
-        binding.revision,
+    return admitRead(() =>
+      this.runtimeLogOperation(signal, async (deadline) =>
+        this.withSandboxLogSource(
+          await this.describedAgentRuntime(driver, binding, deadline),
+          driver,
+          binding.revision,
+        ),
       ),
     );
   }
@@ -2260,6 +2273,8 @@ export class OpenClawController {
         grant: RuntimeLogReadGrant,
       ) => Promise<void>;
       readonly signal?: AbortSignal;
+      /** Wraps the Driver reads once the caller is authorized; see describeAgentRuntime. */
+      readonly admitRead?: RuntimeLogReadAdmission;
     },
   ): Promise<Readonly<RuntimeLogPage>> {
     const { binding, driver, grant } = await this.runtimeLogTarget(
@@ -2269,68 +2284,76 @@ export class OpenClawController {
       deploymentId,
       "logs",
     );
-    const options = {
-      codec: requested.codec,
-      ...(requested.signal === undefined ? {} : { signal: requested.signal }),
-      admitView: (admission: RuntimeLogViewAdmission) => requested.admitView(admission, grant!),
-    };
-    const source = query.source;
-    if (source === "sandbox") {
-      return runtimeLogPageAtLevel(
-        await this.readSandboxLogs(principalId, agentId, driver, binding, query, options),
-        query.minLevel,
-      );
-    }
-    if (typeof driver.readAgentRuntimeLogs !== "function") {
-      throw new NotImplementedError(
-        "readAgentRuntimeLogs",
-        "The selected Compute Driver does not expose runtime logs.",
-      );
-    }
-    return this.runtimeLogOperation(options.signal, async (deadline) => {
-      // Every follow poll describes the runtime again for the ownership re-check; it
-      // needs only the requested source's Pods, not their Events.
-      const description = await this.describedAgentRuntime(driver, binding, deadline, {
-        source,
-        events: false,
-      });
-      try {
-        const page = await readRuntimeLogPage({
-          description,
-          query,
-          codec: options.codec,
-          binding: { principalId, agentId, revisionId: binding.revision.id, source: query.source },
-          signal: deadline,
-          admitView: async (admission) => {
-            try {
-              await options.admitView(admission);
-            } catch {
-              throw new RuntimeLogsError("RUNTIME_LOGS_AUDIT_UNAVAILABLE");
-            }
-          },
-          readLogs: async (request) => {
-            try {
-              return await driver.readAgentRuntimeLogs!(binding, request);
-            } catch (error) {
-              throw this.runtimeLogDriverFailure(error, deadline);
-            }
-          },
-        });
-        return runtimeLogPageAtLevel(page, query.minLevel);
-      } catch (error) {
-        if (error instanceof RuntimeLogReadError) {
-          throw new RuntimeLogsError(
-            error.reason === "cursor_invalid"
-              ? "RUNTIME_LOGS_CURSOR_INVALID"
-              : error.reason === "pod_invalid"
-                ? "RUNTIME_LOGS_POD_INVALID"
-                : error.reason === "source_unavailable"
-                  ? "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
-                  : "RUNTIME_LOGS_UNAVAILABLE",
-          );
-        }
-        throw error;
+    const admitRead = requested.admitRead ?? ((read) => read());
+    return admitRead(async () => {
+      const options = {
+        codec: requested.codec,
+        ...(requested.signal === undefined ? {} : { signal: requested.signal }),
+        admitView: (admission: RuntimeLogViewAdmission) => requested.admitView(admission, grant!),
+      };
+      const source = query.source;
+      if (source === "sandbox") {
+        return runtimeLogPageAtLevel(
+          await this.readSandboxLogs(principalId, agentId, driver, binding, query, options),
+          query.minLevel,
+        );
       }
+      if (typeof driver.readAgentRuntimeLogs !== "function") {
+        throw new NotImplementedError(
+          "readAgentRuntimeLogs",
+          "The selected Compute Driver does not expose runtime logs.",
+        );
+      }
+      return this.runtimeLogOperation(options.signal, async (deadline) => {
+        // Every follow poll describes the runtime again for the ownership re-check; it
+        // needs only the requested source's Pods, not their Events.
+        const description = await this.describedAgentRuntime(driver, binding, deadline, {
+          source,
+          events: false,
+        });
+        try {
+          const page = await readRuntimeLogPage({
+            description,
+            query,
+            codec: options.codec,
+            binding: {
+              principalId,
+              agentId,
+              revisionId: binding.revision.id,
+              source: query.source,
+            },
+            signal: deadline,
+            admitView: async (admission) => {
+              try {
+                await options.admitView(admission);
+              } catch {
+                throw new RuntimeLogsError("RUNTIME_LOGS_AUDIT_UNAVAILABLE");
+              }
+            },
+            readLogs: async (request) => {
+              try {
+                return await driver.readAgentRuntimeLogs!(binding, request);
+              } catch (error) {
+                throw this.runtimeLogDriverFailure(error, deadline);
+              }
+            },
+          });
+          return runtimeLogPageAtLevel(page, query.minLevel);
+        } catch (error) {
+          if (error instanceof RuntimeLogReadError) {
+            throw new RuntimeLogsError(
+              error.reason === "cursor_invalid"
+                ? "RUNTIME_LOGS_CURSOR_INVALID"
+                : error.reason === "pod_invalid"
+                  ? "RUNTIME_LOGS_POD_INVALID"
+                  : error.reason === "source_unavailable"
+                    ? "RUNTIME_LOGS_SOURCE_UNAVAILABLE"
+                    : "RUNTIME_LOGS_UNAVAILABLE",
+            );
+          }
+          throw error;
+        }
+      });
     });
   }
 
