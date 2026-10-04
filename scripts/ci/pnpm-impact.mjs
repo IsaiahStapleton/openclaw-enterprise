@@ -124,17 +124,21 @@ function inspect() {
     return unavailable("not_pull_request");
   }
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-  const base = event?.pull_request?.base?.sha;
+  const eventBase = event?.pull_request?.base?.sha;
   const head = event?.pull_request?.head?.sha;
   const tested = process.env.GITHUB_SHA;
-  if (![base, head, tested].every((value) => typeof value === "string" && oid.test(value))) {
+  if (![eventBase, head, tested].every((value) => typeof value === "string" && oid.test(value))) {
     return unavailable("invalid_identity");
   }
   const actual = git("rev-parse", "--verify", "HEAD^{commit}").toString("ascii").trim();
   const parents = git("show", "-s", "--format=%P", tested).toString("ascii").trim().split(" ");
-  if (actual !== tested || parents.length !== 2 || parents[0] !== base || parents[1] !== head) {
+  if (actual !== tested || parents.length !== 2 || !oid.test(parents[0]) || parents[1] !== head) {
     return unavailable("checkout_mismatch");
   }
+  // When the base branch moves, GitHub builds the merge ref on a newer base
+  // than the event's base.sha. The tested merge's first parent is the base of
+  // the checked-out tree, so compare against it.
+  const base = parents[0];
 
   const paths = changedPaths(base, tested);
   if (!cleanCheckout()) {

@@ -129,11 +129,19 @@ test("pnpm impact reports a changed workspace package and its dependents", (t) =
     ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
     workspaceFiles(),
   );
-  assert.deepEqual(affectedPackages(f), {
+  const expected = {
     status: "affected",
     reason: "workspace_typescript",
     packages: ["@fixture/app", "@fixture/consumer", "@fixture/shared"],
-  });
+  };
+  assert.deepEqual(affectedPackages(f), expected);
+  // GitHub merges onto the current base, which can be newer than base.sha.
+  const stale = join(f.dir, "stale-event.json");
+  writeFileSync(
+    stale,
+    JSON.stringify({ pull_request: { base: { sha: "1".repeat(40) }, head: { sha: f.head } } }),
+  );
+  assert.deepEqual(affectedPackages(f, { GITHUB_EVENT_PATH: stale }), expected);
 });
 
 test("pnpm impact reports affected packages from a depth-two merge checkout", (t) => {
