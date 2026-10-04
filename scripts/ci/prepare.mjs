@@ -1936,9 +1936,6 @@ async function prepareLane({ lane, statePath }) {
         effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
         "NODE_BASE_IMAGE",
       );
-      if (lanePrepare(name).codexSeccomp) {
-        await prepareRuntimeSmokeCodexSeccompProfile(resolvedStatePath, state, env);
-      }
       break;
     case "repository-credentials-container":
       Object.assign(
