@@ -70,6 +70,7 @@ import Fastify, {
   type InjectOptions,
 } from "fastify";
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AdmittedCaller } from "./admission/admission-verifier.ts";
 import {
   OCC_SERVICE_KEY_HEADER,
@@ -914,6 +915,27 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       plugins: [formatsPlugin],
     },
   }).withTypeProvider<TypeBoxTypeProvider>();
+
+  // Shutdown (app.close) drains admitted requests, but Node and Fastify close only the
+  // keep-alive sockets that are idle when it starts. A socket whose response finishes during
+  // the drain would stay open until the client's keep-alive timeout (about 72 s), past the API
+  // Pod's 30 s termination grace. Mark those responses `Connection: close`, or close the
+  // socket after a response whose headers were already sent.
+  const openResponses = new Set<ServerResponse>();
+  app.server.on("request", (_request: IncomingMessage, response: ServerResponse) => {
+    openResponses.add(response);
+    response.once("close", () => openResponses.delete(response));
+  });
+  app.addHook("preClose", async () => {
+    for (const response of openResponses) {
+      if (!response.headersSent) {
+        response.setHeader("connection", "close");
+      } else if (!response.writableFinished) {
+        const { socket } = response;
+        response.once("finish", () => socket?.end());
+      }
+    }
+  });
 
   app.removeContentTypeParser("text/plain");
   app.addSchema(JsonValue);

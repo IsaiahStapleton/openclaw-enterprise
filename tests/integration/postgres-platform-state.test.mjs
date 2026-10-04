@@ -2165,10 +2165,12 @@ test(
     api.child.kill("SIGTERM");
     // Finish the request only after the listener has closed, so it completes during the drain.
     const deadline = Date.now() + 5_000;
-    while (await fetch(api.origin).then(
-      () => true,
-      () => false,
-    )) {
+    while (
+      await fetch(api.origin).then(
+        () => true,
+        () => false,
+      )
+    ) {
       assert.ok(Date.now() < deadline, "the API never stopped accepting connections");
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -2179,10 +2181,13 @@ test(
     response.resume();
     assert.equal(response.statusCode, 200);
 
-    // The socket the drained response used must not hold shutdown open until the client's
-    // keep-alive timeout (about 70 s), past the 30 s default Pod termination grace.
+    // The drained response's socket must not hold shutdown open until the keep-alive
+    // timeout (about 72 s), past the API Pod's 30 s default termination grace.
     const bound = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("the API did not exit within 10 s of SIGTERM")), 10_000).unref(),
+      setTimeout(
+        () => reject(new Error("the API did not exit within 10 s of SIGTERM")),
+        10_000,
+      ).unref(),
     );
     const [code, signal] = await Promise.race([exited, bound]);
     assert.deepEqual({ code, signal }, { code: 0, signal: null });
