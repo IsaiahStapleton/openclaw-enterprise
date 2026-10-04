@@ -167,6 +167,16 @@ membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
 operator-managed endpoint.
 
+`apps/controller/src/index.ts:createFastifyApp`
+
+On `SIGTERM` the API stops accepting connections and finishes admitted requests.
+Their responses carry `Connection: close`, or close their connection when they end
+if already streaming, so the process exits once they finish instead of holding each
+socket for the 72-second keep-alive. The API Pod keeps the
+default 30-second termination grace and no `preStop` hook: its single `Recreate`
+replica has no peer to take traffic, so a delay would only lengthen the outage. A
+request still running after 30 seconds is cut off.
+
 When `controlPlane.nodeSelector` is non-empty, the chart places the API and
 worker Pods with that selector. The same selector applies to the initialization
 Job that runs the migration init container and bootstrap container, so production
@@ -310,6 +320,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
 - 2026-09-29: Merge current main into release-scoped shared egress documentation. (PR-187)
 

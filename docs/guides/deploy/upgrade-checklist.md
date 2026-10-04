@@ -140,7 +140,9 @@ Agent. Existing RWO-backed Agents need no recreation.
 2. Run the canonical migration preflight. Stop if the history is unsupported or
    a required quiescence step is unresolved.
 3. Upgrade the controller, worker, and Console. Wait for database migration,
-   bootstrap, authenticated API recovery, and worker readiness.
+   bootstrap, authenticated API recovery, and worker readiness. The old API Pod
+   stops first and finishes admitted requests within its 30-second grace
+   ([shutdown timing](../../flows/production-startup.md#4-start-private-api-and-worker-deployments)).
 4. Reconcile persisted resources that startup intentionally preserves, including
    same-name Presets. Compare complete objects, not only counts or names.
 5. Update runtime image selection only when required. Reload API and worker, then

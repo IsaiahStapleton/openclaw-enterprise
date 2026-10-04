@@ -577,6 +577,7 @@ async function createDurableController(pool) {
 
 export {
   adminEmail,
+  adminPassword,
   admitted,
   cleanupKubernetesNamespaces,
   createConfiguration,
