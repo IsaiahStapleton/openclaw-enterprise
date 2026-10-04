@@ -354,3 +354,30 @@ test("prepare-bootstrap-volume preserves YAML-scalar namespace names as strings"
     });
   }
 });
+
+test("prepare-bootstrap-volume preserves YAML-scalar node selector keys", async (t) => {
+  const keys = ["null", "yes", "on", "1e3", "0x10", "010"];
+  const { directory, kubeconfig, manifestPath } = await fixture(t);
+  await execute(
+    helper,
+    [
+      "--kubeconfig",
+      kubeconfig,
+      "--context",
+      "production",
+      "--namespace",
+      "openclaw-system",
+      "--claim",
+      "claim",
+      "--image",
+      image,
+      ...keys.flatMap((key) => ["--node-selector", `${key}=control`]),
+    ],
+    { cwd: repository, env: { PATH: `${directory}:${process.env.PATH}` } },
+  );
+  const manifest = loadYaml(await readFile(manifestPath, "utf8"));
+  assert.deepEqual(
+    manifest.spec.nodeSelector,
+    Object.fromEntries(keys.map((key) => [key, "control"])),
+  );
+});

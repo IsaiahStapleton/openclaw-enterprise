@@ -102,7 +102,7 @@ images from Helm values or rewrite Driver configuration.
 Before the first install, the operator creates the `bootstrap.password.claimName`
 PVC and runs the helper with explicit kubeconfig, context, namespace, claim,
 approved Node-capable image, and optional `--node-selector KEY=VALUE` labels.
-The bounded preparation Pod preserves the namespace as a string and applies
+The bounded preparation Pod preserves namespace and selector keys as strings and applies
 selectors before WaitForFirstConsumer storage binds. The helper requires a fresh
 root except for filesystem-owned `lost+found`, sets UID/GID `1000` with mode
 `0700`, and refuses other entries.
@@ -321,7 +321,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
-- 2026-10-05 06:59: Preserve bootstrap Pod namespace strings. (01a0f9e4-a0bf-76f1-acdb-e6b55ada490a - b1ae47bb81864e3f5b98242a88d4b5ef02f1bd0a)
+- 2026-10-05 06:59: Preserve bootstrap Pod namespace strings. (01a0f9e4-a0bf-76f1-acdb-e6b55ada490a - 66a4a07028fd0a08c29ea80e8f95cadc48a74932)
 
 - 2026-10-04: Time API startup phases in `listening`.
 - 2026-10-04: Add the API startup probe.
