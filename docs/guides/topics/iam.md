@@ -51,24 +51,28 @@ A new account starts with no access. As a human Installation administrator:
    console origin. Under `recovery-only` password sign-in, only the recovery
    account signs in this way.
 2. Create the account from a private file with a generated password, and keep
-   the returned `principalId`:
+   the returned `id` and `principalId`. For a person who will sign in with
+   GitHub, add `"github":{"subject":"<numeric user ID>"}` to the body to attach
+   that identity in the same transaction:
 
    ```bash
    umask 077
    printf '{"email":"%s","password":"%s"}' 'person@example.com' \
      "$(openssl rand -base64 24)" > account.json
-   PRINCIPAL_ID="$(curl --fail-with-body --silent --show-error \
+   curl --fail-with-body --silent --show-error \
      --cookie "$OCC_SESSION_COOKIE_JAR" -H "Origin: $OCC_ORIGIN" \
      -H 'Content-Type: application/json' --data-binary @account.json \
-     "$OCC_URL/api/auth/accounts" | jq -r .data.principalId)"
+     "$OCC_URL/api/auth/accounts" > created.json
+   USER_ID="$(jq -r .data.id created.json)"
+   PRINCIPAL_ID="$(jq -r .data.principalId created.json)"
    ```
 
-3. If the person signs in only through GitHub, Google or OIDC, attach their
-   identity now: see [Google](../deploy/google-sign-in.md#attach-and-detach) or
-   [OIDC](../deploy/oidc-sign-in.md#attach-and-detach). For GitHub, add
-   `"github":{"subject":"<numeric user ID>"}` to the body in step 2 instead,
-   which attaches it in the same transaction. Then delete `account.json`; never
-   hand the password over.
+3. If the person signs in only through GitHub, Google or OIDC (always, under
+   `recovery-only`), attach their identity to `USER_ID` now unless step 2
+   did: see [GitHub](../../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts),
+   [Google](../deploy/google-sign-in.md#attach-and-detach) or
+   [OIDC](../deploy/oidc-sign-in.md#attach-and-detach). Then delete
+   `account.json`; never hand the password over.
 4. Grant access in each Namespace the person needs. With `OCC_NAMESPACE` set,
    create a Role, then bind it to the Namespace for discovery and to each
    exact resource, such as an Agent:
@@ -98,12 +102,13 @@ nobody uses. It is still a credential:
   to `all` or [deactivation](../deploy/auth-maintenance.md#deactivate-external-sign-in)
   restores password-only sign-in.
 - No API resets or removes it, and detach refuses password methods with `409`.
-  Only disabling the account stops it, and that also stops the person's SSO
-  sign-in.
-- Accounts cannot be deleted. If the attach fails, for example with `409`
+  Of the account controls, only disabling stops it, and that also stops the
+  person's SSO sign-in.
+- Accounts cannot be deleted. If an attach fails, for example with `409`
   because another account already holds the subject, correct the subject and
-  attach again. An account you abandon keeps its email, which creation will not
-  reuse, so disable it.
+  attach again. (A refused `github.subject` in step 2 creates nothing; retry
+  the creation.) An account you abandon keeps its email, which creation will
+  not reuse, so disable it.
 
 Add actions such as `update` or `deploy` to the Role for more access; see
 [Authorization](../../reference/authorization.md) for actions and scope. A
