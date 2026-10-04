@@ -2287,7 +2287,11 @@ try {
       "-e",
       deniedReadProbe,
     ]);
-    await assert.rejects(runRepositoryMaterialInitProbe(deniedMaterialVolumeName, descriptor));
+    // The init runs, cannot read the root-only source, and reports its one redacted failure.
+    await assert.rejects(
+      runRepositoryMaterialInitProbe(deniedMaterialVolumeName, descriptor),
+      /Repository credential material initialization failed\./,
+    );
     await runRepositoryMaterialInitProbe(materialVolumeName, descriptor);
 
     await runDocker(["network", "create", "--driver", "bridge", networkName]);
@@ -2716,8 +2720,9 @@ const timeout = setTimeout(() => {
     );
     assert.equal(unadmitted.git.trace.length, 0, "unadmitted requests must not reach the upstream");
     assert.equal(await guarded.git.ref(`refs/heads/${workspaceBranch}`), proof.commit);
-    await assert.rejects(guarded.git.ref("refs/heads/disallowed"));
-    await assert.rejects(readOnly.git.ref("refs/heads/denied"));
+    // `git rev-parse` exits 128 in the upstream bare repository: the refused pushes created no ref.
+    await assert.rejects(guarded.git.ref("refs/heads/disallowed"), /command failed \(exit 128\)/);
+    await assert.rejects(readOnly.git.ref("refs/heads/denied"), /command failed \(exit 128\)/);
     assert.equal(
       readOnly.git.trace.some(({ path }) => path.endsWith("/git-receive-pack")),
       false,
