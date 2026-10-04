@@ -24,7 +24,9 @@ const tenantAReaderPermissions = [
  *
  * `createApp(principal, overrides, factory)` builds another app over the same controller
  * with `principal`'s session as `app.defaultSession`; `appOptions(overrides)` maps a test's
- * overrides to extra app options. The returned `app` was built with `options` as overrides.
+ * overrides to extra app options. The returned `app` was built with `options` as overrides;
+ * the fixture itself also reads `options.identities` (the provisioned identities, default
+ * both people; bindings of anyone left out are dropped) and `options.restrictions`.
  */
 export async function createTenantReaderFixture({
   installationId,
