@@ -282,6 +282,17 @@ test("only RS256 from a 2,048-bit JWKS key named by kid verifies", () => {
     verified(token(payload), { jwks: { keys: [{ ...current.jwk, use: "enc" }] } }),
     undefined,
   );
+  assert.equal(
+    verified(token(payload), { jwks: { keys: [{ ...current.jwk, kty: "EC" }] } }),
+    undefined,
+  );
+  // A header without kid never selects a JWKS key, even one that has no kid either.
+  assert.equal(
+    verified(token(payload, { header: { alg: "RS256" } }), {
+      jwks: { keys: [{ ...current.jwk, kid: undefined }] },
+    }),
+    undefined,
+  );
   for (const unusable of [{ keys: [] }, {}, null, "not a jwks"]) {
     assert.equal(verified(token(payload), { jwks: unusable }), undefined);
   }
