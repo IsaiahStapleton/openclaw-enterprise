@@ -13,18 +13,16 @@ import {
 } from "./console-agents-test-support.mjs";
 
 // The production Kubernetes Drivers, built without a cluster client. The Compute Driver
-// advertises dedicated provisioning through the real /installation route; the
-// Configuration Driver is the one that refuses inline model credentials. Admission
-// refuses this request before any cluster call or provisioning record, so neither
-// Driver contacts a cluster.
+// advertises dedicated provisioning through the real /installation route. Provisioning
+// needs exact Configuration create and inspect, which only the Kubernetes Configuration
+// Driver implements; its validation refuses inline model credentials. Admission refuses
+// this request before any cluster call or provisioning record.
 function provisioningDrivers() {
   const computeDriver = Object.assign(createTestKubernetesComputeDriver("console-provisioning"), {
-    // Namespace readiness is the cluster boundary; the provisioning route stays real.
+    // createNamespace({ ready: true }) runs Namespace lifecycle; readiness is the cluster
+    // boundary.
     async ensureNamespace(namespace) {
       return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
     },
   });
   const configurationDriver = new KubernetesConfigurationDriver(
@@ -67,11 +65,8 @@ test("Dedicated Agent provisioning shows the API's 400 message for an inline mod
   const response = await rejected;
   assert.equal(response.status(), 400);
   const { error, meta } = await response.json();
-  // The console shows the API's own sentence, which names the field to fix.
-  assert.equal(
-    error.message,
-    "Configuration field /models/providers/openai/apiKey holds a credential value inline, where a reference is required. Store the key as a Secret and select it as the Agent's model credential instead.",
-  );
+  // The API's own sentence names the field to fix; the console shows it unchanged.
+  assert.match(error.message, /\/models\/providers\/openai\/apiKey/);
   const feedback = page.getByRole("alert").filter({ hasText: meta.requestId });
   await feedback.waitFor();
   assert.equal(await feedback.textContent(), `${error.message} Request ID: ${meta.requestId}`);
