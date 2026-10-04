@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { Agent, request as httpRequest } from "node:http";
 import test from "node:test";
 import {
   adminEmail,
+  adminPassword,
   createConfiguredAgent,
   createDurableController,
   databaseUrl,
@@ -2133,5 +2135,57 @@ test(
       [namespace.data.id, principalId],
     );
     assert.ok(denial.rowCount > 0, "revocation must produce attributable durable failure evidence");
+  },
+);
+
+test(
+  "API SIGTERM finishes an in-flight keep-alive request and exits within the Pod grace",
+  requiresPostgres,
+  async (context) => {
+    const api = await startController(context);
+    const agent = new Agent({ keepAlive: true });
+    context.after(() => agent.destroy());
+    const body = JSON.stringify({ email: adminEmail, password: adminPassword });
+    // `expect: 100-continue` makes the server answer as it admits the request, before the
+    // body. The request is then in flight on a keep-alive socket when shutdown begins.
+    const signIn = httpRequest(`${api.origin}/api/auth/sign-in/email`, {
+      method: "POST",
+      agent,
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        expect: "100-continue",
+      },
+    });
+    const responded = once(signIn, "response");
+    await once(signIn, "continue");
+
+    const exited = once(api.child, "exit");
+    const stopping = performance.now();
+    api.child.kill("SIGTERM");
+    // Finish the request only after the listener has closed, so it completes during the drain.
+    const deadline = Date.now() + 5_000;
+    while (await fetch(api.origin).then(
+      () => true,
+      () => false,
+    )) {
+      assert.ok(Date.now() < deadline, "the API never stopped accepting connections");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    signIn.end(body);
+
+    // Admitted work still completes during the drain.
+    const [response] = await responded;
+    response.resume();
+    assert.equal(response.statusCode, 200);
+
+    // The socket the drained response used must not hold shutdown open until the client's
+    // keep-alive timeout (about 70 s), past the 30 s default Pod termination grace.
+    const bound = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("the API did not exit within 10 s of SIGTERM")), 10_000).unref(),
+    );
+    const [code, signal] = await Promise.race([exited, bound]);
+    assert.deepEqual({ code, signal }, { code: 0, signal: null });
+    assert.ok(performance.now() - stopping < 10_000);
   },
 );
