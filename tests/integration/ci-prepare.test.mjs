@@ -776,6 +776,8 @@ test("ordinary k3d preparation forwards an immutable K3s override and retains th
   }
 });
 
+// The docker shim records argv only: this proves the cache credential stays out of
+// build arguments and every output preparation hands on, not out of docker's environment.
 test("repository platform preparation restores the runtime image cache without exporting it", async (t) => {
   const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform", {
     GITHUB_ACTIONS: "true",
@@ -801,12 +803,32 @@ test("repository platform preparation restores the runtime image cache without e
   assert.equal(fixtureBuilds[0].args[fixtureBuilds[0].args.indexOf("--builder") + 1], "default");
   assert.ok(fixtureBuilds[0].args.includes(`RUNTIME_IMAGE=${args[args.indexOf("-t") + 1]}`));
   const state = await readFile(commands.statePath, "utf8");
+  const githubEnv = await readFile(commands.githubEnv, "utf8");
+  assert.match(githubEnv, /^OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE=/m);
   assert.doesNotMatch(
-    JSON.stringify(calls) + state + prepared.stdout + prepared.stderr,
+    JSON.stringify(calls) + state + githubEnv + prepared.stdout + prepared.stderr,
     /synthetic-cache-credential/,
   );
   const cleaned = commands.cleanup();
   assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("repository platform preparation refuses the image cache without its credentials", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform", {
+    GITHUB_ACTIONS: "true",
+    OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RESULTS_URL: "https://cache.example.test/",
+  });
+  const prepared = commands.prepare();
+  assert.notEqual(prepared.status, 0);
+  assert.match(prepared.stderr, /Image caching requires the hosted image lane/);
+  const calls = await commands.commands();
+  assert.equal(
+    calls.some(({ args }) => args[0] === "buildx" || args[0] === "build"),
+    false,
+  );
+  // The refused build's planned tag is still owned; this shim cannot remove images.
+  commands.cleanup();
 });
 
 test("ordinary k3d preparation rejects mutable K3s overrides before creating state", async (t) => {
