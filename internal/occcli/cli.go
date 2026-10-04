@@ -291,11 +291,7 @@ func (app *application) iamRoleCommand() *cobra.Command {
 		Short: "List Namespace IAM Roles",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -312,11 +308,7 @@ func (app *application) iamRoleCommand() *cobra.Command {
 		Short: "Show a Namespace IAM Role",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -333,11 +325,7 @@ func (app *application) iamRoleCommand() *cobra.Command {
 		Short: "Delete an unreferenced Namespace IAM Role",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -389,11 +377,7 @@ func (app *application) iamAccessBindingCommand() *cobra.Command {
 		Short: "List Namespace IAM AccessBindings",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -410,11 +394,7 @@ func (app *application) iamAccessBindingCommand() *cobra.Command {
 		Short: "Show a Namespace IAM AccessBinding",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -431,11 +411,7 @@ func (app *application) iamAccessBindingCommand() *cobra.Command {
 		Short: "Delete a Namespace IAM AccessBinding",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -487,11 +463,7 @@ func (app *application) configurationCommand() *cobra.Command {
 		Short: "Show a Configuration",
 		Args:  idArgs(configurationIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -536,11 +508,7 @@ func (app *application) configurationCommand() *cobra.Command {
 		Short: "Delete an unreferenced Configuration",
 		Args:  idArgs(configurationIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -592,11 +560,7 @@ func (app *application) secretCommand() *cobra.Command {
 		Short: "Show Secret metadata",
 		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -641,11 +605,7 @@ func (app *application) secretCommand() *cobra.Command {
 		Short: "Delete an unbound Secret",
 		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -661,11 +621,7 @@ func (app *application) secretCommand() *cobra.Command {
 		Short: "List Secret metadata",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -721,11 +677,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 		Short: "List credential sources without live gateway status",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -742,11 +694,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 		Short: "Show a credential source and its live gateway status",
 		Args:  idArgs(credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -763,11 +711,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 		Short: "Delete an unreferenced credential source and its gateway copy",
 		Args:  idArgs(credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -854,11 +798,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Short: "List Agents",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -875,11 +815,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Short: "Show an Agent",
 		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -949,11 +885,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Short: "List an Agent's immutable revisions (deployment IDs)",
 		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -973,11 +905,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Short: "Show durable status for one Agent deployment, by default the latest revision",
 		Args:  idArgs(agentIDArg, optionalID(revisionIDArg)),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1008,11 +936,7 @@ func (app *application) agentCommand() *cobra.Command {
 			"There is no start command; run \"occ agent deploy ID\" to start the Agent again with a new revision.",
 		Args: idArgs(agentIDArg),
 		RunE: func(command *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1032,11 +956,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Short: "Begin asynchronous Agent deletion",
 		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1120,11 +1040,7 @@ func (app *application) agentCredentialWithdrawalCommand() *cobra.Command {
 		Short: "Request revocation; the worker revokes it from the running revision",
 		Args:  idArgs(agentIDArg, credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1141,11 +1057,7 @@ func (app *application) agentCredentialWithdrawalCommand() *cobra.Command {
 		Short: "Show whether the source is revoked and why a revocation is still pending",
 		Args:  idArgs(agentIDArg, credentialSourceIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1261,11 +1173,7 @@ func (app *application) agentRuntimeCommand() *cobra.Command {
 		Short: "Show Pod status, restarts, last termination and log sources for an Agent revision",
 		Args:  idArgs(agentIDArg),
 		RunE: func(command *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1376,11 +1284,7 @@ func (app *application) runAgentLogs(command *cobra.Command, agentID string, opt
 	if err != nil {
 		return err
 	}
-	namespace, err := app.requiredNamespace()
-	if err != nil {
-		return err
-	}
-	client, err := app.client()
+	namespace, client, err := app.namespaceClient()
 	if err != nil {
 		return err
 	}
@@ -1461,11 +1365,7 @@ func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
 		Short: "Show runtime credential metadata",
 		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1482,11 +1382,7 @@ func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
 		Short: "Provision initial runtime credentials with an empty request body",
 		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, client, err := app.namespaceClient()
 			if err != nil {
 				return err
 			}
@@ -1534,6 +1430,16 @@ func (app *application) validateOptions(command *cobra.Command) error {
 	}
 	app.parsedTimeout = time.Duration(seconds) * time.Second
 	return nil
+}
+
+// Invalid namespace input must win over client configuration and key-file errors.
+func (app *application) namespaceClient() (string, *occclient.Client, error) {
+	namespace, err := app.requiredNamespace()
+	if err != nil {
+		return "", nil, err
+	}
+	client, err := app.client()
+	return namespace, client, err
 }
 
 func (app *application) client() (*occclient.Client, error) {
