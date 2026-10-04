@@ -124,7 +124,9 @@ authorization codes, tokens, response bodies, or user data. A rejected identity 
 logins, and `OCC_AUTH_GITHUB_ALLOWED_TEAMS` (`auth.github.allowedTeams`) lists `org/team-slug`
 entries, whose active members may use GitHub sign-in. Both are empty by default,
 which admits any attached identity as above. Entries are lowercased, at most 10 in total;
-other values, or either list without the GitHub client, fail startup and Helm rendering.
+other values, or either list without the GitHub client, fail startup. Helm refuses invalid
+entries and renders the lists only with `auth.github.enabled`; the installation profile wants
+them lowercase.
 
 With a list, the callback reads membership with the user token after `GET /user` and before
 the account lookup, so a refusal reveals nothing about OCE accounts. It reads
@@ -151,8 +153,14 @@ numeric GitHub `subject`. The callback returns to
 `MEMBERSHIP_UNAVAILABLE` covers a transport failure, the deadline, a redirect, an oversized or
 malformed answer, and any status other than `200` or `404`. It fails closed and logs
 `authentication.provider-unavailable-warning` with `step: membership`. A `403` there usually
-means configuration: the App is not installed on the organization, its owner has not accepted
-Members: read, the organization blocked the App, or SAML SSO wants a session the user lacks.
+means configuration: the organization blocked the App, its owner has not accepted Members:
+read, or SAML SSO wants a session the user lacks.
+
+GitHub may answer `404`, not `403`, for an organization where the App is not installed, a
+misspelled organization or team slug, or (unverified) an unauthorized SAML session. That
+refuses every member as `MEMBERSHIP_REQUIRED` with no warning log. If known members are
+refused, check the slugs, that the App is installed on each listed organization, and that its
+owner accepted Members: read.
 
 Membership is checked only at sign-in. Turning the list on applies from the next sign-in
 after the API restarts; existing sessions run until they expire (at most 8 hours), so revoke

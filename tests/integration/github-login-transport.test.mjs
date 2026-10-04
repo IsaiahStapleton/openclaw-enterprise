@@ -659,15 +659,17 @@ test(
       ),
       providerOrigin,
     );
-    function allowlisted(state = {}) {
+    function allowlisted(
+      state = {},
+      allowlist = { allowedOrgs: ["acme"], allowedTeams: ["other/platform"] },
+    ) {
       return createLoginFixture({
         provider: "github",
         providers: {
           github: {
             clientId: "fixture-client",
             clientSecret: "fixture-client-secret",
-            allowedOrgs: ["acme"],
-            allowedTeams: ["other/platform"],
+            ...allowlist,
           },
         },
         state,
@@ -680,18 +682,19 @@ test(
     };
     const notFound = (response) => response.writeHead(404).end('{"message":"Not Found"}');
     // answers: path -> (response) => void; unlisted membership paths fail the test.
-    function provider(answers) {
+    function provider(answers, login = "Octo-Cat") {
+      const routes = new Map(Object.entries(answers));
       return (request, response) => {
         if (request.url === "/login/oauth/access_token") {
           return token(response);
         }
         if (request.url === "/user") {
           assert.equal(request.headers.authorization, "Bearer ghu_fixture_provider_token");
-          return response.end(JSON.stringify({ id: 12345678, login: "Octo-Cat" }));
+          return response.end(JSON.stringify({ id: 12345678, login }));
         }
         assert.equal(request.headers.authorization, "Bearer ghu_fixture_provider_token");
         assert.equal(request.headers.accept, "application/vnd.github+json");
-        const answer = answers[request.url];
+        const answer = routes.get(request.url);
         assert.ok(answer, `unexpected membership request ${request.url}`);
         return answer(response);
       };
@@ -777,7 +780,12 @@ test(
         { cause: "http_status", status: 429 },
       ],
       [
-        "a 403 (App not installed or Members permission missing)",
+        "a 401",
+        (response) => response.writeHead(401).end("{}"),
+        { cause: "http_status", status: 401 },
+      ],
+      [
+        "a 403 (App blocked or Members permission not accepted)",
         (response) =>
           response.writeHead(403).end('{"message":"Resource not accessible by integration"}'),
         { cause: "http_status", status: 403 },
@@ -823,6 +831,34 @@ test(
           JSON.stringify(login.operationalLogs()),
           /acme|Octo-Cat|ghu_|fixture-sensitive/,
         );
+      });
+    }
+
+    await t.test("a team check with a malformed profile login fails closed", async () => {
+      const login = allowlisted();
+      serve = provider({ [acme]: notFound, [other]: membership("active") }, "not a login");
+      const before = requests.length;
+      await expectRefused(await login.callback(), "MEMBERSHIP_UNAVAILABLE");
+      assert.deepEqual(requests.slice(before).slice(2), [acme, other], "no team request");
+      assert.equal(login.operationalLogs()[0].cause, "malformed_response");
+    });
+
+    // A team's organization lookup is shared with a listed organization, failure included.
+    for (const [label, answer, code] of [
+      ["a non-member", notFound, "MEMBERSHIP_REQUIRED"],
+      [
+        "a failed lookup",
+        (response) => response.writeHead(503).end("{}"),
+        "MEMBERSHIP_UNAVAILABLE",
+      ],
+    ]) {
+      await t.test(`one organization lookup serves its team entries for ${label}`, async () => {
+        const login = allowlisted({}, { allowedOrgs: ["acme"], allowedTeams: ["acme/platform"] });
+        serve = provider({ [acme]: answer });
+        const before = requests.length;
+        await expectRefused(await login.callback(), code);
+        assert.deepEqual(requests.slice(before).slice(2), [acme]);
+        assert.equal(login.operationalLogs().length, code === "MEMBERSHIP_REQUIRED" ? 0 : 1);
       });
     }
 

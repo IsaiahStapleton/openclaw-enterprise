@@ -47,7 +47,8 @@ test(
     });
     const github = await startFakeGitHub(t);
     let memberships = {};
-    github.membership = (path, subject) => memberships[path]?.(subject) ?? 404;
+    github.membership = (path, subject) =>
+      new Map(Object.entries(memberships)).get(path)?.(subject) ?? 404;
 
     const adminPassword = await bootstrapProductionInstallation(t, {
       databaseUrl,

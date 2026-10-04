@@ -251,7 +251,17 @@ async function githubMembership(
     }
     return known;
   }
+  // Past the shared deadline every lookup would fail at once; record the timeout and stop.
+  function expired(): boolean {
+    if (signal.aborted) {
+      failure ??= { step: "membership", cause: "timeout" };
+    }
+    return signal.aborted;
+  }
   for (const organization of allowlist.allowedOrgs ?? []) {
+    if (expired()) {
+      break;
+    }
     try {
       if (await activeIn(organization)) {
         return { admitted: true };
@@ -261,6 +271,9 @@ async function githubMembership(
     }
   }
   for (const entry of allowlist.allowedTeams ?? []) {
+    if (expired()) {
+      break;
+    }
     const [organization, team] = entry.split("/") as [string, string];
     try {
       if (!(await activeIn(organization))) {

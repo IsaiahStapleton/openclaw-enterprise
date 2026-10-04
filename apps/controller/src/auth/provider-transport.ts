@@ -197,9 +197,10 @@ export async function providerJSON(
 
 /**
  * Reads one GitHub membership: `true` for `state: active`, `false` for a 404 (not affiliated)
- * or `state: pending`. Anything else, including 401 and 403 (the App is not installed on the
- * organization, lacks Members: read, or is blocked by it), is unavailability: the allowlist
- * fails closed and the operator log says why.
+ * or `state: pending`. Anything else, including 401 and 403 (for example an organization that
+ * blocked the App, or a Members: read permission its owner has not accepted), is
+ * unavailability: the allowlist fails closed and the operator log says why. GitHub may also
+ * answer 404 for an organization without the App installed, which reads as "not a member".
  */
 export async function providerMembership(
   endpoint: MembershipEndpoint,
