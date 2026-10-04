@@ -343,9 +343,7 @@ refresh and inspection.
 
 ## Changelog
 
-- 2026-10-03 22:38: Preserve listed models across entry-mode switches while retaining one submitted model in the accompanying console update. (01a10328-9de5-7081-ada2-d88ff80161e4 - 7ac9f02abc912e93078bb6e0900a988f26e339d3)
-- 2026-10-03 15:22: Trace switching between listed and manual model entry in the accompanying console fix. (01a10328-9de5-7081-ada2-d88ff80161e4 - be09a25a8c13088f4bc700b99e71e7a5072851a3)
-
+- 2026-10-03 22:38: Trace switching between listed and manual model entry, preserving listed models and one submitted model. (01a10328-9de5-7081-ada2-d88ff80161e4 - 340feea42)
 - 2026-10-03 20:00: Rebuild a view retained without a Namespace selection once one is readable, so the header selector shows the default.
 - 2026-10-03 18:00: Re-enable the header selector during retained-view reads once Namespace access is checked.
 - 2026-09-30 19:00: Remember denied Agent detail snapshot reads per tab so reloads do not add an audited denial per view.
