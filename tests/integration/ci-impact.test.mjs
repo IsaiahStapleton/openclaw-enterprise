@@ -27,7 +27,10 @@ function command(cwd, program, args, options = {}) {
   return result.stdout.trim();
 }
 
-function fixture(t, change, initial = {}, initialModes = {}) {
+// `moveMain`, when given, commits to the base branch after the pull request
+// branched, then merges onto that newer base. The event keeps the older
+// base.sha, as GitHub's pull_request payload does when main moves after a push.
+function fixture(t, change, initial = {}, initialModes = {}, { moveMain } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ci-impact-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, "repo");
@@ -56,6 +59,12 @@ function fixture(t, change, initial = {}, initialModes = {}) {
   git("commit", "-qm", "change", "--allow-empty");
   const head = git("rev-parse", "HEAD");
   git("checkout", "-q", "--detach", base);
+  if (moveMain) {
+    moveMain({ repo, put, git });
+    git("add", "-A");
+    git("commit", "-qm", "main moved");
+  }
+  const mergeBase = git("rev-parse", "HEAD");
   git("merge", "--no-ff", "-qm", "merge", head);
   const tested = git("rev-parse", "HEAD");
   const eventPath = join(dir, "event.json");
@@ -88,7 +97,7 @@ function fixture(t, change, initial = {}, initialModes = {}) {
     assert.equal(run(["--verify-mode", mode], overrides).status, 0);
     assert.notEqual(run(["--verify-mode", mode === "docs" ? "full" : "docs"], overrides).status, 0);
   };
-  return { dir, repo, git, event, eventPath, base, head, tested, run, expect };
+  return { dir, repo, git, put, event, eventPath, base, mergeBase, head, tested, run, expect };
 }
 
 function workspaceFiles() {
@@ -568,12 +577,19 @@ test("missing, mismatched or incomplete merge evidence selects full", (t) => {
   for (const event of [
     {},
     { pull_request: { base: { sha: f.head }, head: { sha: f.base } } },
-    { pull_request: { base: { sha: "0".repeat(40) }, head: { sha: f.head } } },
+    { pull_request: { base: { sha: f.head }, head: { sha: f.head } } },
     { pull_request: { base: { sha: f.base }, head: {} } },
   ]) {
     writeFileSync(f.eventPath, JSON.stringify(event));
     f.expect("full");
   }
+  // An event base absent from the checkout is the stale base.sha of a base
+  // that moved after the push; the tested merge's first parent decides.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: "0".repeat(40) }, head: { sha: f.head } } }),
+  );
+  f.expect("docs");
   writeFileSync(f.eventPath, "{");
   f.expect("full");
   const empty = fixture(t, () => {});
@@ -715,6 +731,153 @@ test("workflow executes only the base policy on a shallow merge checkout", (t) =
 
   const code = fixture(t, ({ put }) => put("src/app.ts"), initial);
   shallowBootstrap(t, code).expect("full");
+});
+
+// Finding 413: GitHub builds the merge ref on the base branch tip at merge
+// time, so when main moves after a push the event's base.sha is older than the
+// tested merge's first parent, and a shallow checkout does not contain it.
+function selectorOutput(f, overrides = {}) {
+  const output = join(f.dir, "moved-output");
+  writeFileSync(output, "");
+  const result = f.run(["--github-output", output], overrides);
+  assert.equal(result.status, 0, result.stderr);
+  return readFileSync(output, "utf8");
+}
+
+test("a documentation-only pull request stays documentation-only after main moves", (t) => {
+  const policy = readFileSync(selector, "utf8");
+  const f = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    { "scripts/ci/impact.mjs": policy },
+    {},
+    {
+      // Main's own code change is in the merge but not in the pull request.
+      moveMain: ({ put }) => {
+        put("src/main.ts", "export const value = 1;\n");
+        put("docs/main.md");
+      },
+    },
+  );
+  assert.notEqual(f.base, f.mergeBase);
+  assert.equal(f.git("rev-parse", `${f.tested}^1`), f.mergeBase);
+  f.expect("docs");
+  assert.equal(selectorOutput(f), "mode=docs\nreason=docs_only\n");
+
+  const shallow = shallowBootstrap(t, f);
+  // As on a hosted runner, the stale event base is not in the depth-two checkout.
+  assert.notEqual(
+    spawnSync("git", ["cat-file", "-e", `${f.base}^{commit}`], { cwd: shallow.checkout }).status,
+    0,
+  );
+  shallow.expect("docs");
+  assert.equal(shallow.run("select").output, "mode=docs\nreason=docs_only\n");
+});
+
+test("a non-documentation change still selects full after main moves", (t) => {
+  const policy = readFileSync(selector, "utf8");
+  const initial = { "scripts/ci/impact.mjs": policy };
+  const moveMain = ({ put }) => put("docs/main.md");
+  for (const change of [
+    ({ put }) => put("src/app.ts"),
+    ({ put }) => {
+      put("docs/change.md");
+      put("src/app.ts");
+    },
+    ({ put }) => put(".github/workflows/ci.yml", "name: changed\n"),
+  ]) {
+    const f = fixture(t, change, initial, {}, { moveMain });
+    assert.notEqual(f.base, f.mergeBase);
+    f.expect("full");
+    assert.equal(selectorOutput(f), "mode=full\nreason=ineligible_change\n");
+    const shallow = shallowBootstrap(t, f);
+    shallow.expect("full");
+    assert.equal(shallow.run("select").output, "mode=full\nreason=ineligible_change\n");
+  }
+
+  // The pull request's own selector still never runs, even on a moved base.
+  const marker = join(tmpdir(), `ci-impact-untrusted-${process.pid}-${Date.now()}`);
+  t.after(() => rmSync(marker, { force: true }));
+  const malicious = fixture(
+    t,
+    ({ put }) => {
+      put(
+        "scripts/ci/impact.mjs",
+        `import { writeFileSync, appendFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nappendFileSync(process.argv[3], 'mode=docs\\n');\n`,
+      );
+      put("docs/change.md");
+    },
+    initial,
+    {},
+    { moveMain },
+  );
+  shallowBootstrap(t, malicious).expect("full");
+  assert.equal(existsSync(marker), false);
+});
+
+test("the tested merge's first parent supplies the trusted policy", (t) => {
+  // The stale event base has no policy; the moved base adds the real one.
+  const added = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    {},
+    {},
+    {
+      moveMain: ({ put }) => put("scripts/ci/impact.mjs", readFileSync(selector, "utf8")),
+    },
+  );
+  shallowBootstrap(t, added).expect("docs");
+
+  // The stale event base has the policy; the moved base removed it.
+  const removed = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    { "scripts/ci/impact.mjs": readFileSync(selector, "utf8") },
+    {},
+    { moveMain: ({ git }) => git("rm", "-q", "scripts/ci/impact.mjs") },
+  );
+  const shallow = shallowBootstrap(t, removed);
+  shallow.expect("full");
+  assert.equal(shallow.run("select").output, "mode=full\nreason=bootstrap_policy_unavailable\n");
+});
+
+test("an event base that is present but not behind the tested base selects full", (t) => {
+  const policy = readFileSync(selector, "utf8");
+  const f = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    { "scripts/ci/impact.mjs": policy },
+    {},
+    {
+      moveMain: ({ put }) => put("docs/main.md"),
+    },
+  );
+  // A commit the tested base does not contain, such as a rewritten main.
+  f.git("checkout", "-q", "--detach", f.base);
+  f.put("docs/side.md");
+  f.git("add", "-A");
+  f.git("commit", "-qm", "side");
+  const side = f.git("rev-parse", "HEAD");
+  f.git("checkout", "-q", "--detach", f.tested);
+  const shallow = shallowBootstrap(t, f);
+  for (const base of [side, f.head]) {
+    writeFileSync(
+      f.eventPath,
+      JSON.stringify({ pull_request: { base: { sha: base }, head: { sha: f.head } } }),
+    );
+    f.expect("full");
+    assert.equal(selectorOutput(f), "mode=full\nreason=checkout_mismatch\n");
+  }
+  // The pull request head is in the shallow checkout and is not an ancestor.
+  shallow.expect("full");
+  assert.equal(shallow.run("select").output, "mode=full\nreason=bootstrap_checkout_mismatch\n");
+  // A head that is not the tested merge's second parent still selects full.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: f.base }, head: { sha: f.mergeBase } } }),
+  );
+  f.expect("full");
+  shallow.expect("full");
 });
 
 test("workflow falls back to full without trustworthy event, parents or base policy", (t) => {

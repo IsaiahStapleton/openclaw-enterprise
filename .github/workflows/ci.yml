@@ -57,10 +57,17 @@ jobs:
             reason=bootstrap_git_inspection_failed
             parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
             reason=bootstrap_checkout_mismatch
-            [ "$parents" = "$base $head" ] || return 1
+            [[ $parents =~ ^([0-9a-f]{40}|[0-9a-f]{64})\ ([0-9a-f]{40}|[0-9a-f]{64})$ ]] || return 1
+            [ "${BASH_REMATCH[2]}" = "$head" ] || return 1
+            # GitHub merges onto the base tip at merge time; base.sha lags it
+            # when the base moved after the push and is then not fetched.
+            merge_base=${BASH_REMATCH[1]}
+            if [ "$base" != "$merge_base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git merge-base --is-ancestor "$base" "$merge_base" || return 1
+            fi
             reason=bootstrap_git_inspection_failed
-            git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
-            entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            git cat-file -e "$merge_base^{commit}" && git cat-file -e "$head^{commit}" || return 1
+            entry=$(git ls-tree "$merge_base" -- scripts/ci/impact.mjs) || return 1
             reason=bootstrap_policy_unavailable
             [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
             reason=bootstrap_git_inspection_failed
@@ -416,10 +423,17 @@ jobs:
             reason=bootstrap_git_inspection_failed
             parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
             reason=bootstrap_checkout_mismatch
-            [ "$parents" = "$base $head" ] || return 1
+            [[ $parents =~ ^([0-9a-f]{40}|[0-9a-f]{64})\ ([0-9a-f]{40}|[0-9a-f]{64})$ ]] || return 1
+            [ "${BASH_REMATCH[2]}" = "$head" ] || return 1
+            # GitHub merges onto the base tip at merge time; base.sha lags it
+            # when the base moved after the push and is then not fetched.
+            merge_base=${BASH_REMATCH[1]}
+            if [ "$base" != "$merge_base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git merge-base --is-ancestor "$base" "$merge_base" || return 1
+            fi
             reason=bootstrap_git_inspection_failed
-            git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
-            entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            git cat-file -e "$merge_base^{commit}" && git cat-file -e "$head^{commit}" || return 1
+            entry=$(git ls-tree "$merge_base" -- scripts/ci/impact.mjs) || return 1
             reason=bootstrap_policy_unavailable
             [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
             reason=bootstrap_git_inspection_failed

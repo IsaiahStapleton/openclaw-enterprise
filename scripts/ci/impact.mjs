@@ -15,6 +15,11 @@ class InspectionError extends Error {
   }
 }
 
+function gitStatus(...args) {
+  const result = spawnSync("git", args, { encoding: null, stdio: "ignore" });
+  return result.error ? null : result.status;
+}
+
 function git(...args) {
   const result = spawnSync("git", args, { encoding: null, maxBuffer: 64 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
@@ -65,13 +70,30 @@ function classify() {
       throw new InspectionError("checkout does not match tested commit", "checkout_mismatch");
     }
     const parents = git("show", "-s", "--format=%P", tested).toString("ascii").trim().split(" ");
-    if (parents.length !== 2 || parents[0] !== base || parents[1] !== head) {
+    if (parents.length !== 2 || !oid.test(parents[0]) || parents[1] !== head) {
       throw new InspectionError(
         "event commits do not match the tested merge parents",
         "checkout_mismatch",
       );
     }
-    git("cat-file", "-e", `${base}^{commit}`);
+    // GitHub merges onto the base branch tip at merge time, which is newer than
+    // the event's base.sha when the base moved after the push. The tested
+    // merge's first parent is the base of the tested tree. A depth-two
+    // checkout lacks an older base.sha; when it is present it must be behind.
+    const mergeBase = parents[0];
+    if (base !== mergeBase && gitStatus("cat-file", "-e", `${base}^{commit}`) === 0) {
+      const status = gitStatus("merge-base", "--is-ancestor", base, mergeBase);
+      if (status === 1) {
+        throw new InspectionError(
+          "event base is not an ancestor of the tested merge base",
+          "checkout_mismatch",
+        );
+      }
+      if (status !== 0) {
+        throw new InspectionError("Git inspection failed", "git_inspection_failed");
+      }
+    }
+    git("cat-file", "-e", `${mergeBase}^{commit}`);
     git("cat-file", "-e", `${head}^{commit}`);
     const diff = git(
       "diff",
@@ -81,7 +103,7 @@ function classify() {
       "--no-ext-diff",
       "--no-textconv",
       "--ignore-submodules=none",
-      base,
+      mergeBase,
       tested,
       "--",
     );
