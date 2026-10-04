@@ -8,7 +8,11 @@ import {
   kubernetesNamespaceName,
   kubernetesGatewayNamespaceName,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
-import { DependencyUnavailableError, ResourceConflictError } from "../../packages/occ/src/index.ts";
+import {
+  DependencyUnavailableError,
+  ResourceConflictError,
+  RuntimeCredentialsForbiddenByClusterError,
+} from "../../packages/occ/src/index.ts";
 
 const kubeconfigPath = "/tmp/openclaw-enterprise-conformance/kubeconfig";
 const contextName = "openclaw-enterprise-local";
@@ -90,6 +94,8 @@ function credentialFixture({
   configMaps = {},
   runtime = true,
   namespaceReadStatus = 200,
+  secretReadStatus = undefined,
+  secretCreateStatus = undefined,
 } = {}) {
   const driver = createKubernetesComputeDriver(options(runtime ? {} : { runtime: undefined }));
   const namespaceName = kubernetesNamespaceName(namespace.id);
@@ -158,6 +164,9 @@ function credentialFixture({
     },
     async readNamespacedSecret(request) {
       calls.push({ kind: "readSecret", name: request.name });
+      if (secretReadStatus !== undefined) {
+        throw httpError(secretReadStatus);
+      }
       const secret = locate(secrets, request)?.[1];
       if (secret === undefined) {
         throw httpError(404);
@@ -166,6 +175,9 @@ function credentialFixture({
     },
     async createNamespacedSecret(request) {
       calls.push({ kind: "createSecret", name: request.body.metadata.name });
+      if (secretCreateStatus !== undefined) {
+        throw httpError(secretCreateStatus);
+      }
       assert.equal(request.namespace, kubernetesGatewayNamespaceName(namespace.id));
       created.push(structuredClone(request.body));
       const observed = {
@@ -380,6 +392,55 @@ test("draft Agent cleanup tolerates absent compute Namespace without bypassing s
     credential.driver.getAgentRuntimeCredentialStatus(binding()),
     /namespace is unavailable/,
   );
+});
+
+test("a cluster denial of runtime credential Secrets names the Kubernetes operation and namespace", async () => {
+  // The data-plane tenant-api RoleBinding is missing: the API may not read the embedded
+  // Agent's transport Secret, so operators need the operation, not a generic outage.
+  for (const [executionMode, kubernetesNamespace, plane] of [
+    ["embedded", kubernetesNamespaceName(namespace.id), "execution"],
+    ["dedicated", kubernetesGatewayNamespaceName(namespace.id), "control"],
+  ]) {
+    const { driver } = credentialFixture({ secretReadStatus: 403 });
+    const denied = await driver
+      .getAgentRuntimeCredentialStatus({ namespace, agent: { ...agent, executionMode } })
+      .then(
+        () => assert.fail("a denied Secret read must fail"),
+        (error) => error,
+      );
+    assert.ok(denied instanceof RuntimeCredentialsForbiddenByClusterError, executionMode);
+    // Callers that fail closed on dependency outages keep doing so.
+    assert.ok(denied instanceof DependencyUnavailableError);
+    assert.deepEqual(
+      {
+        verb: denied.verb,
+        resource: denied.resource,
+        kubernetesNamespace: denied.kubernetesNamespace,
+        plane: denied.plane,
+        status: denied.status,
+      },
+      { verb: "get", resource: "secrets", kubernetesNamespace, plane, status: 403 },
+    );
+  }
+
+  const { driver, created } = credentialFixture({ secretCreateStatus: 403 });
+  const denied = await driver.provisionAgentRuntimeCredentials(binding(), {}).then(
+    () => assert.fail("a denied Secret create must fail"),
+    (error) => error,
+  );
+  assert.ok(denied instanceof RuntimeCredentialsForbiddenByClusterError);
+  assert.equal(denied.verb, "create");
+  assert.equal(denied.resource, "secrets");
+  assert.equal(denied.kubernetesNamespace, kubernetesGatewayNamespaceName(namespace.id));
+  assert.equal(created.length, 0);
+
+  // Other failures keep the generic, sanitized outage.
+  const unavailable = credentialFixture({ secretReadStatus: 400 });
+  await assert.rejects(unavailable.driver.getAgentRuntimeCredentialStatus(binding()), (error) => {
+    assert.ok(error instanceof DependencyUnavailableError);
+    assert.equal(error instanceof RuntimeCredentialsForbiddenByClusterError, false);
+    return true;
+  });
 });
 
 test("mocked Kubernetes client preflights the transport Secret before initial create", async () => {
