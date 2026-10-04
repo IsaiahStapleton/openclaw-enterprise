@@ -15,6 +15,12 @@ function unavailable(reason) {
   return { status: "unavailable", reason, packages: [] };
 }
 
+function forwarded(...names) {
+  return Object.fromEntries(
+    names.filter((name) => process.env[name]).map((name) => [name, process.env[name]]),
+  );
+}
+
 function run(program, args) {
   const result = spawnSync(program, args, {
     encoding: null,
@@ -22,6 +28,10 @@ function run(program, args) {
     timeout: 15_000,
     env: {
       PATH: process.env.PATH ?? "",
+      // Keep the pnpm that setup activated; never download one here.
+      ...forwarded("COREPACK_HOME", "PNPM_HOME"),
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+      COREPACK_ENABLE_NETWORK: "0",
       LC_ALL: "C",
       CI: "1",
       GIT_CONFIG_NOSYSTEM: "1",

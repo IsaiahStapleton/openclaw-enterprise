@@ -237,6 +237,39 @@ test("pnpm impact reports unavailable without exposing a failed tool's output", 
   });
 });
 
+test("pnpm impact summary prints only validated package names", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const summary = (overrides = {}) => {
+    const result = spawnSync(process.execPath, [pnpmImpact, "--summary"], {
+      cwd: f.repo,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: f.eventPath,
+        GITHUB_SHA: f.tested,
+        ...overrides,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  assert.match(summary(), /^- `@fixture\/shared`$/m);
+  const bin = join(f.dir, "bin");
+  mkdirSync(bin);
+  const project = JSON.stringify([
+    { name: "x`<img src=x>", path: join(f.repo, "packages/shared") },
+  ]);
+  writeFileSync(join(bin, "pnpm"), `#!/bin/sh\nprintf '%s\\n' '${project}'\n`, { mode: 0o755 });
+  const unsafe = summary({ PATH: `${bin}:${process.env.PATH}` });
+  assert.match(unsafe, /^Unavailable: inspection_failed\.$/m);
+  assert.doesNotMatch(unsafe, /<img|`x/);
+});
+
 test("pnpm impact rejects dirty tracked and untracked checkout inputs before running pnpm", (t) => {
   for (const kind of ["unstaged", "staged", "cancelled", "untracked", "ignored"]) {
     const f = fixture(

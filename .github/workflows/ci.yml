@@ -182,7 +182,7 @@ jobs:
     name: Affected Packages (advisory)
     needs: impact
     if: ${{ github.event_name == 'pull_request' && needs.impact.outputs.mode == 'full' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-22.04
     timeout-minutes: 3
     continue-on-error: true
     steps:
@@ -200,9 +200,11 @@ jobs:
       - name: Report affected workspace packages
         if: ${{ always() }}
         run: |
-          if [[ -z "${GITHUB_STEP_SUMMARY:-}" ]]; then exit 0; fi
-          if ! node scripts/ci/pnpm-impact.mjs --summary >> "$GITHUB_STEP_SUMMARY"; then
-            printf 'Affected workspace packages: unavailable.\n' >> "$GITHUB_STEP_SUMMARY" || true
+          # Print to the log too: step summaries are not readable through the API.
+          report=$(node scripts/ci/pnpm-impact.mjs --summary) || report='Affected workspace packages: unavailable.'
+          printf '%s\n' "$report"
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY" || true
           fi
 
   pr-safe:
