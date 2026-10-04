@@ -86,7 +86,9 @@ from that revision; missing evidence leaves the cause unspecified. Held runtime
 failures end deployment early: `RUNTIME_AUTHENTICATION_FAILED` (rejected
 credential), `RUNTIME_CPU_STARVED`, `RUNTIME_MODEL_PROBE_TIMEOUT`,
 `RUNTIME_MODEL_PROBE_FAILED`, `RUNTIME_LOGIN_FAILED`, or
-`RUNTIME_STARTUP_FAILED`; fix and redeploy. `RUNTIME_MODEL_PROBE_FAILED` adds
+`RUNTIME_STARTUP_FAILED`; fix and redeploy. A dedicated gateway that refuses its
+own CLI fails with
+[`AGENT_GATEWAY_UNAUTHORIZED`](agents/deployment.md#pending-deployment-progress). `RUNTIME_MODEL_PROBE_FAILED` adds
 [`runtimeFailure`](agents/deployment.md#model-check-failure-cause). Success can include [plugin warnings](agent-plugins.md#lifecycle)
 with a closed code and admitted `pluginId`.
 

@@ -506,6 +506,8 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment ended because the Agent was stopped.";
     case "AGENT_GATEWAY_UNAVAILABLE":
       return "The Agent Gateway was still not reachable through its route at the deployment deadline.";
+    case "AGENT_GATEWAY_UNAUTHORIZED":
+      return "The Agent Gateway refused its own CLI as unauthorized. Enable gateway password access (gateway.auth.password) in the Agent's Configuration, then deploy again.";
     case "KUBERNETES_API_UNAVAILABLE":
       return "The Kubernetes API was still unavailable at the deployment deadline.";
     case "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED":

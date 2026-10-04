@@ -900,6 +900,92 @@ test("a Gateway reports why OpenClaw has not applied its workspace node and clea
   ]);
 });
 
+// The error OpenClaw's CLI call rejects with when the Gateway refuses its connect
+// handshake: a GatewayClientRequestError carrying the server's connect-error details.
+function gatewayConnectRefusal(detailCode, retryable = false) {
+  const error = new Error("unauthorized");
+  error.name = "GatewayClientRequestError";
+  error.gatewayCode = "INVALID_REQUEST";
+  error.retryable = retryable;
+  error.details = { code: detailCode, authReason: "trusted_proxy_untrusted_source" };
+  return error;
+}
+
+test("a Gateway that refuses its own CLI as unauthorized reports it at once; other refusals keep waiting", async () => {
+  const intervals = [];
+  let now = 1_000_000;
+  const clock = class extends Date {
+    static now() {
+      return now;
+    }
+  };
+  let refusal;
+  let openClaw;
+  const { files, sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
+    baseConfig: codexGatewayConfig(),
+    env: { APP_SERVER_URL: "ws://harness.example.test:18790" },
+    workspaceNodeBindingPath: true,
+    intervals,
+    Date: clock,
+    gatewayCall: () => {
+      if (refusal !== undefined) {
+        throw refusal;
+      }
+      return openClaw;
+    },
+    setTimeout: () => ({ unref() {} }),
+    console: { error() {} },
+  });
+  const configPath = "/home/node/.openclaw/openclaw.json";
+  const tick = () => intervals.find(({ ms }) => ms === 1000).callback();
+  files.set(WORKSPACE_NODE_BINDING_PATH, workspaceNodeBinding("enrolled-node"));
+
+  // A rate-limited or pairing refusal clears by itself: it waits like an
+  // unreachable Gateway and is reported only as unavailable after the budget.
+  refusal = gatewayConnectRefusal("AUTH_RATE_LIMITED", true);
+  await tick();
+  refusal = gatewayConnectRefusal("PAIRING_REQUIRED");
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: undefined, failure: undefined });
+  now += 31_000;
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "GATEWAY_UNAVAILABLE",
+  });
+
+  // D381: without gateway.auth.password the in-Pod CLI connects with no
+  // credential and the Gateway refuses it on every call. That is fixed by the
+  // admitted configuration, so it is reported on the first refusal.
+  refusal = gatewayConnectRefusal("AUTH_UNAUTHORIZED");
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "GATEWAY_UNAUTHORIZED",
+  });
+  assert.equal(JSON.parse(files.get(configPath)).plugins.entries["file-transfer"], undefined);
+
+  // A refusal after the node was written is reported the same way.
+  refusal = undefined;
+  openClaw = pluginList("disabled", 1);
+  await tick();
+  assert.equal(
+    JSON.parse(files.get(configPath)).plugins.entries["file-transfer"].config.workspaces.main
+      .nodeId,
+    "enrolled-node",
+  );
+  refusal = gatewayConnectRefusal("AUTH_PASSWORD_MISSING");
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), {
+    nodeId: undefined,
+    failure: "GATEWAY_UNAUTHORIZED",
+  });
+  refusal = undefined;
+  openClaw = pluginList("active", 2);
+  await tick();
+  assert.deepEqual(workspaceNodeState(sandbox), { nodeId: "enrolled-node", failure: undefined });
+});
+
 test("a Gateway that starts after its node paired applies the binding before OpenClaw starts", async () => {
   const intervals = [];
   const kills = [];

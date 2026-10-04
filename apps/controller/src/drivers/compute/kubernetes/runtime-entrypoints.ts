@@ -341,6 +341,30 @@ function armTimer(callback, timeoutMs) {
   return timer;
 }
 
+// Connect-error codes with which the Gateway refuses this CLI's own credentials.
+// They follow from the admitted configuration (D381: no gateway.auth.password,
+// so the in-Pod CLI connects with none), so every later call is refused too.
+// Refusals that can clear by themselves are excluded: rate limiting, pairing,
+// device identity, and a token mismatch, which OpenClaw retries with a device token.
+const GATEWAY_AUTH_REFUSAL_CODES = new Set([
+  "AUTH_UNAUTHORIZED",
+  "AUTH_TOKEN_MISSING",
+  "AUTH_TOKEN_NOT_CONFIGURED",
+  "AUTH_PASSWORD_MISSING",
+  "AUTH_PASSWORD_MISMATCH",
+  "AUTH_PASSWORD_NOT_CONFIGURED",
+]);
+
+function gatewayRefusedAuthentication(gatewayRuntime, error) {
+  return (
+    typeof gatewayRuntime?.isGatewayClientRequestError === "function" &&
+    gatewayRuntime.isGatewayClientRequestError(error) === true &&
+    error.retryable !== true &&
+    isPlainObject(error.details) &&
+    GATEWAY_AUTH_REFUSAL_CODES.has(error.details.code)
+  );
+}
+
 // Query the running Gateway through OpenClaw's public SDK. Starting a CLI here
 // also starts its launcher/respawn lifecycle; killing that launcher cannot bound
 // a probe whose descendant still owns stdout.
@@ -380,10 +404,17 @@ function callNativeGateway(method, params, timeoutMs, abortSignal, maxBytes = 65
         return;
       }
       finish({ ok: true, value });
-    }).catch((error) => finish({
-      ok: false,
-      code: gatewayRuntime?.isGatewayTransportError(error) ? "UNAVAILABLE" : "PROBE_FAILED",
-    }));
+    }).catch((error) => {
+      if (gatewayRuntime?.isGatewayTransportError(error)) {
+        finish({ ok: false, code: "UNAVAILABLE" });
+        return;
+      }
+      finish({
+        ok: false,
+        code: "PROBE_FAILED",
+        ...(gatewayRefusedAuthentication(gatewayRuntime, error) ? { authenticationRefused: true } : {}),
+      });
+    });
   });
 }
 
@@ -2309,7 +2340,8 @@ function replaceOpenClawConfig(config) {
 
 // The running Gateway's own view of file-transfer: its runtime state in the
 // live plugin registry ("active", "service-failed", "disabled", "unloaded")
-// and that registry's generation, which every plugin reload replaces.
+// and that registry's generation, which every plugin reload replaces. A Gateway
+// that refused this CLI's credentials answers { refused: true }.
 async function openClawFileTransferState() {
   const result = await callNativeGateway(
     "plugins.list",
@@ -2318,6 +2350,9 @@ async function openClawFileTransferState() {
     undefined,
     4 * 1024 * 1024,
   );
+  if (result.authenticationRefused === true) {
+    return { refused: true };
+  }
   if (!result.ok || !isPlainObject(result.value) || !Array.isArray(result.value.plugins)) {
     return undefined;
   }
@@ -2543,6 +2578,10 @@ if (workspaceNodeBindingPath !== undefined) {
     if (written === undefined) {
       const before = await openClawFileTransferState();
       if (superseded()) return;
+      if (before?.refused) {
+        reportFailure("GATEWAY_UNAUTHORIZED");
+        return;
+      }
       if (before === undefined) {
         if (Date.now() - firstSeenAt > WORKSPACE_NODE_APPLY_TIMEOUT_MS) reportFailure("GATEWAY_UNAVAILABLE");
         return;
@@ -2562,6 +2601,11 @@ if (workspaceNodeBindingPath !== undefined) {
     }
     const after = await openClawFileTransferState();
     if (superseded()) return;
+    if (after?.refused) {
+      // The Gateway refuses its own CLI: it cannot confirm this node, now or later.
+      reportFailure("GATEWAY_UNAUTHORIZED");
+      return;
+    }
     if (
       after?.state === "active" &&
       (!written.activeBefore || after.generation !== written.generationBefore)

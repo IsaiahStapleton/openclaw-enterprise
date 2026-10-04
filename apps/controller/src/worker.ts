@@ -42,6 +42,7 @@ import {
   PostgresPlatformState,
   PostgresWorkQueue,
   OpenClawController,
+  ActivationFailedError,
   ActivationPendingError,
   SandboxRevisionUnsupportedError,
   TransientDependencyError,
@@ -2711,6 +2712,14 @@ export class ControllerWorker {
           ) {
             throw error;
           }
+          if (error instanceof ActivationFailedError) {
+            await this.finalizeRevision(
+              claim,
+              { outcome: "permanent", code: error.code },
+              revisionFailureLogFields(error),
+            );
+            return;
+          }
           const pending = activationPendingResult(error);
           await this.finalizeActiveRevision(claim, revision, pending.code, undefined, {
             ...(pending.dependencyFailure === undefined
@@ -2752,7 +2761,8 @@ export class ControllerWorker {
       }
       if (
         error instanceof RepositoryCredentialAuthorityError ||
-        error instanceof SandboxRevisionUnsupportedError
+        error instanceof SandboxRevisionUnsupportedError ||
+        error instanceof ActivationFailedError
       ) {
         result = { outcome: "permanent", code: error.code };
       } else if (error instanceof TransientDependencyError) {
@@ -3453,7 +3463,9 @@ export class ControllerWorker {
         }
         await this.finalizeRevision(
           claim,
-          activationPendingResult(error),
+          error instanceof ActivationFailedError
+            ? { outcome: "permanent", code: error.code }
+            : activationPendingResult(error),
           revisionFailureLogFields(error),
         );
         return;
