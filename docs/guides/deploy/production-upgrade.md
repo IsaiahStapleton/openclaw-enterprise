@@ -31,6 +31,15 @@ Prepare:
 
 - each selected image as an immutable `@sha256:` digest with passing checks and
   a reviewed source commit;
+- a clean checkout of the release you are installing, at that commit. Run the
+  helper from its root: it renders that checkout's Helm chart and compares the
+  Collector configuration with that checkout's files;
+- the OCC CLI from the same release, for `--occ`: its
+  [release binary](../cli.md#connect-to-your-installation), or `./bin/occ` from
+  `pnpm cli:build` in that checkout. The helper reads the deployment inventory
+  and deploys Agents through it, and an older CLI can lack those commands;
+- a [pre-upgrade baseline](upgrade-baseline.md) of Helm, Kubernetes, OCC and
+  database state;
 - the production kubeconfig, Helm values, Installation YAML, OCC service key,
   and optional CA bundle in protected files;
 - a PostgreSQL backup before a controller release whose migrations may require
@@ -85,9 +94,13 @@ export OCC_SERVICE_KEY_FILE='/secure/occ/operator-service-key.json'
 export OCC_CA_BUNDLE='/secure/occ/occ-ca.pem'
 export RELEASE_SOURCE_SHA='<full-40-character-git-sha>'
 export UPGRADE_EVIDENCE="/secure/occ/upgrades/$(date -u +%Y%m%dT%H%M%SZ)"
+cd /secure/src/openclaw-enterprise # the release checkout
+git checkout --detach "$RELEASE_SOURCE_SHA"
+test -z "$(git status --porcelain)"
 ```
 
 The evidence directory must not exist. The command creates it with mode `0700`.
+Run `scripts/upgrade-production-images` from this checkout.
 
 ### Include reviewed settings
 

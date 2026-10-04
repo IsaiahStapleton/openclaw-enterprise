@@ -447,6 +447,10 @@
                     "label": "Upgrade Checklist"
                   },
                   {
+                    "page": "guides/deploy/upgrade-baseline",
+                    "label": "Upgrade Baseline"
+                  },
+                  {
                     "page": "guides/deploy/production-upgrade",
                     "label": "Image Upgrades"
                   },
