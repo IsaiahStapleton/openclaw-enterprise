@@ -9,6 +9,7 @@ const matrixLanes = [
   "postgres-auth",
   "images-packaging",
   "images-model-probes",
+  "images-runtime-startup",
   "k3d-fixture-configuration",
   "k3d-fixture-state",
   "k3d-fixture-plugins",
