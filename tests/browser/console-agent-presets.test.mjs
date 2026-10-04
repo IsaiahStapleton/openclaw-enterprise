@@ -2478,7 +2478,7 @@ test("an empty Namespace can create an Agent without a Preset", async (t) => {
   await routeInstallationWithoutProvisioning(page, fixture);
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
-  await page.getByText(/No Presets in this Namespace/).waitFor();
+  await page.getByText(/^No Presets available to you in this Namespace\./).waitFor();
   assert.equal(
     await page.getByRole("button", { name: "Start with default Preset" }).isDisabled(),
     true,
@@ -2661,7 +2661,7 @@ test("denied Preset reads do not automatically start an Agent form", async (t) =
   // A later list filters the now-unreadable Preset; the independent action remains available.
   await page.getByRole("link", { name: "← Agents" }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
-  await page.getByText(/No Presets in this Namespace/).waitFor();
+  await page.getByText(/^No Presets available to you in this Namespace\./).waitFor();
   await page.getByRole("button", { name: "Start without Preset" }).click();
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "");
 });
@@ -2680,7 +2680,7 @@ test("The console requires a readable installed default for quick-start and stil
   const { page } = await newPage(t, fixture);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page
-    .getByText("Choose a Preset. default-codex is not available in this Namespace.", {
+    .getByText("Choose a Preset. default-codex is not available to you in this Namespace.", {
       exact: true,
     })
     .waitFor();
