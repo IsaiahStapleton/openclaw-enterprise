@@ -107,7 +107,9 @@ A refresh the policy refuses keeps the copy and logs one
 `presets.default-refresh-skipped` warning naming it and the reason. Startup
 first skips only refusals from a deny Restriction, which binds every
 administrator; only when no single administrator can then complete
-initialization does it skip every refused refresh.
+initialization does it skip every refused refresh. Removing the Restriction, or
+granting `preset:update` to an Installation administrator, lets the next startup
+refresh the copy.
 Other existing copies are untouched. Any other failure rolls back
 the transaction and prevents API startup. Namespace creation uses the same
 helper before queuing provisioning, so denied or invalid defaults also roll back

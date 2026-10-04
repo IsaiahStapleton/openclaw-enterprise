@@ -46,30 +46,21 @@ current template, keeping its ID and AccessBindings, and audits
 `openclaw.presets.update` with `source: installation-defaults-refresh`. Copies
 matching no shipped version are operator edits and stay; so do `presets.files`
 copies and retired names such as `standard-codex`. To keep an earlier version,
-rename the copy or change any field. Existing Agents and Configurations keep
-their settings.
+rename the copy or change any field. A refused refresh (say, a deny Restriction
+on `preset:update`) keeps the copy and logs a `presets.default-refresh-skipped`
+warning.
 
 Namespace deletion removes copies that equal, by name and template, a configured
 default or any shipped bundled version, even with `includeDefaults` disabled.
 Other Presets block it with `409 NAMESPACE_NOT_EMPTY`.
 
 Startup selects a persisted Principal authorized to administer the Installation
-and requires `preset:create` wherever defaults are missing. Namespace
+and requires `preset:create` wherever defaults are missing and `preset:update`
+on each copy it refreshes. Namespace
 creators likewise need `preset:create` when this option is enabled. Authorization
 or template validation failure rolls back initialization and prevents startup
 or Namespace creation. The selected Configuration Driver validates native
 values; seeding does not create workloads or credentials.
-
-Refreshing a copy also needs `preset:update` on it. A refresh the policy
-refuses never prevents startup; the copy keeps its earlier version. A Namespace
-deny Restriction on `preset:update` that freezes its Presets binds every
-administrator. Startup first looks for one administrator who can refresh every
-unrestricted copy; if none can, it uses the first who can create the missing
-defaults and keeps every copy that administrator is refused.
-The API logs one `presets.default-refresh-skipped` warning per kept copy,
-naming its Namespace, Preset ID and name, the refusal reason, and any
-Restriction IDs. To refresh it, remove the Restriction, or grant `preset:update`
-to an Installation administrator, and restart the API.
 
 ## Configuration inventory
 
@@ -98,8 +89,7 @@ through `includeDefaults`, `presets.files`, or Preset POST to enable it.
 console's shared configuration base and ordinary creation permissions.
 
 The shipped default file also supplies the console's shared configuration base
-for empty templates, **Reset template**, and provider/Harness switches. It replaces
-the former inline starter. The installed copy supplies initial draft settings;
+for empty templates, **Reset template**, and provider/Harness switches. The installed copy supplies initial draft settings;
 normal field edits preserve unrelated settings, while **Reset template** explicitly
 returns to the shipped base with the selected model. No installed credential or
 private template is exposed by the public shared-default asset.
