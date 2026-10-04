@@ -37,12 +37,15 @@ export function isWellFormedBranchRef(ref: string): boolean {
 }
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const c1Control = /[\u0080-\u009f]/u;
 
 /**
  * A pushed destination ref exactly as Git sent its bytes, or undefined. It must be strict
- * UTF-8 without control bytes and a branch name Git's refname rules accept. Nothing is
- * normalized (no Unicode composition, no case folding), so comparing the result with the
- * allowlist stays an exact byte match and a lookalike spelling never matches an entry.
+ * UTF-8 without control characters (C0, DEL or C1) and a branch name Git's refname rules
+ * accept. Nothing is normalized (no Unicode composition, no case folding), so comparing the
+ * result with the allowlist stays an exact byte match and a lookalike spelling never
+ * matches an entry. Other characters Git accepts, including format characters such as
+ * U+202E, are admitted as the exact bytes sent.
  */
 export function decodePushedBranchRef(bytes: Uint8Array): string | undefined {
   let ref: string;
@@ -51,7 +54,12 @@ export function decodePushedBranchRef(bytes: Uint8Array): string | undefined {
   } catch {
     return undefined;
   }
-  return isWellFormedBranchRef(ref) ? ref : undefined;
+  return isWellFormedBranchRef(ref) && !c1Control.test(ref) ? ref : undefined;
+}
+
+/** True when `value` has no lone UTF-16 surrogate, so it has one exact UTF-8 spelling. */
+function isWellFormedUnicode(value: string): boolean {
+  return strictUtf8.decode(new TextEncoder().encode(value)) === value;
 }
 
 /** Canonical nonsecret native-push policy. Git refs remain case-sensitive. */
@@ -64,7 +72,8 @@ export function normalizePushRefAllowlist(value: unknown): readonly string[] {
       throw new Error("invalid-push-ref-allowlist");
     }
     const ref = entry.endsWith("/*") ? entry.slice(0, -1) + "branch" : entry;
-    if (!isWellFormedBranchRef(ref)) {
+    // An entry with a lone surrogate could never match a pushed ref; refuse it.
+    if (!isWellFormedBranchRef(ref) || !isWellFormedUnicode(ref)) {
       throw new Error("invalid-push-ref-allowlist");
     }
     return entry;

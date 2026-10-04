@@ -4,6 +4,7 @@ import {
   allowsReceivePackInput,
   maximumPushRefs,
 } from "../../apps/controller/src/drivers/repo/github/credentials/routes/receive-pack.ts";
+import { normalizePushRefAllowlist } from "../../apps/controller/src/drivers/repo/credentials/client-contracts.ts";
 
 // The development token authority enforces its push allowlist at the gateway by
 // reading receive-pack commands before any byte goes upstream. These vectors use
@@ -92,6 +93,11 @@ test("receive-pack inspector admits UTF-8 branch names Git accepts and refuses l
     ["composed name under a prefix", section(utf8("refs/heads/agent/caf\u00e9"))],
     ["composed exact entry", section(utf8("refs/heads/caf\u00e9"))],
     ["astral character", section(utf8("refs/heads/agent/\u{1F680}"))],
+    ["highest code point", section(utf8("refs/heads/agent/\u{10FFFF}"))],
+    // Git accepts format characters; they are admitted as the exact bytes sent.
+    ["BOM inside the name", section(utf8("refs/heads/agent/a\ufeffb"))],
+    ["right-to-left override", section(utf8("refs/heads/agent/a\u202eb"))],
+    ["line separator", section(utf8("refs/heads/agent/a\u2028b"))],
     [
       "UTF-8 on a later command",
       section(utf8("refs/heads/agent/x"), utf8("refs/heads/caf\u00e9", "")),
@@ -108,11 +114,28 @@ test("receive-pack inspector admits UTF-8 branch names Git accepts and refuses l
     ["invalid byte", section(raw("refs/heads/agent/", [0xff], caps))],
     ["overlong slash", section(raw("refs/heads/agent/a", [0xc0, 0xaf], "main", caps))],
     ["encoded surrogate", section(raw("refs/heads/agent/", [0xed, 0xa0, 0x80], caps))],
+    ["above U+10FFFF", section(raw("refs/heads/agent/", [0xf4, 0x90, 0x80, 0x80], caps))],
     ["C0 control byte", section(raw("refs/heads/agent/caf", [0x01], caps))],
     ["DEL", section(raw("refs/heads/agent/caf", [0x7f], caps))],
+    ["C1 control", section(utf8("refs/heads/agent/a\u0085b"))],
+    ["second NUL on the first command", section(utf8("refs/heads/agent/x", `${caps}\0x`))],
+    [
+      "non-ASCII shallow line",
+      section(pkt(Buffer.from(`shallow ${a}\u00e9`)), utf8("refs/heads/agent/x")),
+    ],
     ["UTF-8 name Git refuses", section(utf8("refs/heads/agent/caf\u00e9.lock"))],
   ]) {
     assert.equal(exact(input), false, name);
+  }
+});
+
+test("push allowlist entries must have one exact UTF-8 spelling", () => {
+  assert.deepEqual(normalizePushRefAllowlist(["refs/heads/caf\u00e9", "refs/heads/agent/*"]), [
+    "refs/heads/agent/*",
+    "refs/heads/caf\u00e9",
+  ]);
+  for (const entry of ["refs/heads/\ud800/*", "refs/heads/a\udc00", "refs/heads/a\u0001"]) {
+    assert.throws(() => normalizePushRefAllowlist([entry]), /invalid-push-ref-allowlist/);
   }
 });
 

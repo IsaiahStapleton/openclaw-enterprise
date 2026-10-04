@@ -24,8 +24,8 @@ it does not add token permissions or change GraphQL access.
   `agent/café`. Matching compares bytes exactly, with no Unicode normalization
   or case folding: an entry spelled with a composed `é` (U+00E9) does not match
   a push to the decomposed `e` + U+0301, though both render alike. Write entries
-  in the spelling your clients push. A
-  ref that is not valid UTF-8 or contains a control character is refused.
+  in the spelling your clients push. A ref that is not valid UTF-8 or contains
+  a control character (C0, DEL or C1) is refused.
 - Omission preserves existing push behavior. An empty array denies all ref
   updates through the managed hook.
 - Creation, deletion and force updates use the same destination-ref check.
@@ -51,13 +51,15 @@ Standalone sessions with this policy require the emitted client from
 With the [development token authority](development-token.md), the same allowlist
 is also enforced by the gateway. It reads the receive-pack commands before any
 byte goes upstream and refuses the whole push with HTTP 400 when one ref fails,
-so `--no-verify` or a replaced `core.hooksPath` changes nothing. One push may
-update at most 256 refs; a larger push is refused with HTTP 413
-`push-ref-limit-exceeded`, even when every ref is allowed. Push the refs in
-batches of 256 or fewer. The client hook
+so `--no-verify` or a replaced `core.hooksPath` changes nothing. The client hook
 still gives the first, friendlier refusal. No admitted REST route writes refs,
 and GraphQL mutations are refused for this authority, so the allowlist bounds
 every ref write. GitHub App grants keep the hook-only behavior described below.
+
+The gateway also limits one push to 256 refs and refuses a larger push with
+HTTP 413 `push-ref-limit-exceeded`, even when every ref is allowed. The client
+hook does not count refs, so this refusal comes from the gateway. Push the refs
+in batches of 256 or fewer.
 
 ## Limits
 
