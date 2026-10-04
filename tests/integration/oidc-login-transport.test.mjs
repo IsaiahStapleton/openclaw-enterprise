@@ -210,6 +210,20 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     assert.deepEqual(fixture.operationalLogs(), []);
   });
 
+  await t.test("a refused client secret logs one warning instead of a rejection", async () => {
+    const fixture = loginFixture();
+    serve = (_request, response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "invalid_client", error_description: "fixture-code" }));
+    };
+    await expectDenied(await fixture.callback());
+    assert.deepEqual(fixture.denials, [["PROVIDER_UNAVAILABLE", "oidc"]]);
+    assert.deepEqual(fixture.operationalLogs(), [
+      unavailableLog({ step: "token", cause: "client_rejected" }),
+    ]);
+    assertNoSecrets(fixture.operationalLogs());
+  });
+
   await t.test("GitHub, Google and OIDC share the start budget", async () => {
     const fixture = loginFixture({
       oidc,
