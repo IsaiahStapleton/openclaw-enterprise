@@ -23,10 +23,11 @@ function event(installation, namespace, agent, action) {
   };
 }
 
-// Both stores raise the same error class for these refusals. The memory store names the refusing
-// check; PostgreSQL enforces it with a constraint or trigger whose violation databaseError maps
-// to one generic message without a cause. Neither store raises the other's message, so this
-// accepts exactly the two refusals.
+// Both stores raise the same error class for these refusals but word them differently. The
+// memory store names the refusing check. PostgreSQL either enforces it with a constraint or
+// trigger whose violation databaseError maps to one generic message without a cause, or refuses
+// it in a broader application check (controller work shape, revision harness authentication).
+// Neither store raises the other's message, so this accepts exactly the two refusals.
 function storeRefusal(name, memoryMessage, postgresMessage) {
   return (error) =>
     error.name === name && (error.message === memoryMessage || error.message === postgresMessage);
