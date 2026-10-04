@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allowsReceivePackInput } from "../../apps/controller/src/drivers/repo/github/credentials/routes/receive-pack.ts";
+import {
+  allowsReceivePackInput,
+  maximumPushRefs,
+} from "../../apps/controller/src/drivers/repo/github/credentials/routes/receive-pack.ts";
 
 // The development token authority enforces its push allowlist at the gateway by
 // reading receive-pack commands before any byte goes upstream. These vectors use
 // Git's wire format: 4-hex-digit pkt-line lengths, a flush-pkt, then the pack.
 const pkt = (line) => {
-  const payload = Buffer.from(line, "latin1");
+  const payload = Buffer.isBuffer(line) ? line : Buffer.from(line, "latin1");
   return Buffer.concat([Buffer.from((payload.length + 4).toString(16).padStart(4, "0")), payload]);
 };
 const flush = Buffer.from("0000");
@@ -41,7 +44,6 @@ test("receive-pack inspector admits create, update and delete on allowed refs on
 });
 
 test("receive-pack inspector refuses every disallowed or malformed command section", () => {
-  const many = Array.from({ length: 257 }, (_, index) => `${a} ${b} refs/heads/agent/${index}`);
   for (const [name, input] of [
     ["default branch", body(`${a} ${b} refs/heads/main${caps}\n`)],
     [
@@ -72,10 +74,66 @@ test("receive-pack inspector refuses every disallowed or malformed command secti
     ["bad length hex", Buffer.concat([Buffer.from("00zz"), flush])],
     ["delimiter packet", Buffer.concat([Buffer.from("0001"), flush])],
     ["empty body", Buffer.alloc(0)],
-    ["257 commands", body(`${many[0]}${caps}`, ...many.slice(1))],
+    ["non-ASCII capability", body(`${a} ${b} refs/heads/agent/x${caps} agent=caf\xe9`)],
   ]) {
     assert.equal(allows(input), false, name);
   }
+});
+
+// Git's refnames are bytes; it accepts UTF-8 names such as agent/café. The gateway
+// decodes them as strict UTF-8 and compares with the allowlist byte for byte.
+test("receive-pack inspector admits UTF-8 branch names Git accepts and refuses lookalikes", () => {
+  const utf8 = (ref, extra = caps) => pkt(Buffer.from(`${a} ${b} ${ref}${extra}\n`, "utf8"));
+  const raw = (...parts) =>
+    pkt(Buffer.concat([Buffer.from(`${a} ${b} `), ...parts.map((part) => Buffer.from(part))]));
+  const section = (...lines) => Buffer.concat([...lines, flush, pack]);
+  const exact = allowsReceivePackInput(["refs/heads/agent/*", "refs/heads/caf\u00e9"]);
+  for (const [name, input] of [
+    ["composed name under a prefix", section(utf8("refs/heads/agent/caf\u00e9"))],
+    ["composed exact entry", section(utf8("refs/heads/caf\u00e9"))],
+    ["astral character", section(utf8("refs/heads/agent/\u{1F680}"))],
+    [
+      "UTF-8 on a later command",
+      section(utf8("refs/heads/agent/x"), utf8("refs/heads/caf\u00e9", "")),
+    ],
+  ]) {
+    assert.equal(exact(input), true, name);
+  }
+  for (const [name, input] of [
+    // NFD spelling of the exact entry: renders the same, differs in bytes.
+    ["decomposed lookalike", section(utf8("refs/heads/cafe\u0301"))],
+    ["case variant", section(utf8("refs/heads/CAF\u00c9"))],
+    ["lone continuation byte", section(raw("refs/heads/agent/caf", [0x80], caps))],
+    ["truncated sequence", section(raw("refs/heads/agent/caf", [0xc3], caps))],
+    ["invalid byte", section(raw("refs/heads/agent/", [0xff], caps))],
+    ["overlong slash", section(raw("refs/heads/agent/a", [0xc0, 0xaf], "main", caps))],
+    ["encoded surrogate", section(raw("refs/heads/agent/", [0xed, 0xa0, 0x80], caps))],
+    ["C0 control byte", section(raw("refs/heads/agent/caf", [0x01], caps))],
+    ["DEL", section(raw("refs/heads/agent/caf", [0x7f], caps))],
+    ["UTF-8 name Git refuses", section(utf8("refs/heads/agent/caf\u00e9.lock"))],
+  ]) {
+    assert.equal(exact(input), false, name);
+  }
+});
+
+test("receive-pack inspector refuses more than 256 ref updates with its own code", () => {
+  const commands = (count) =>
+    Array.from({ length: count }, (_, index) => `${a} ${b} refs/heads/agent/${index}`);
+  const push = (count) => {
+    const lines = commands(count);
+    return body(`${lines[0]}${caps}`, ...lines.slice(1));
+  };
+  assert.equal(maximumPushRefs, 256);
+  assert.equal(allows(push(256)), true);
+  assert.deepEqual(allows(push(257)), {
+    status: 413,
+    code: "push-ref-limit-exceeded",
+    message: "A push may update at most 256 refs. Push the refs in smaller batches.",
+  });
+  // A disallowed ref is still refused as such, whatever the count.
+  const mixed = commands(300);
+  mixed[10] = `${a} ${b} refs/heads/main`;
+  assert.equal(allows(body(`${mixed[0]}${caps}`, ...mixed.slice(1))), false);
 });
 
 test("an empty allowlist refuses every push command while allowing an empty flush", () => {

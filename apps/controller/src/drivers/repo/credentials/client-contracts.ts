@@ -36,6 +36,24 @@ export function isWellFormedBranchRef(ref: string): boolean {
   );
 }
 
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * A pushed destination ref exactly as Git sent its bytes, or undefined. It must be strict
+ * UTF-8 without control bytes and a branch name Git's refname rules accept. Nothing is
+ * normalized (no Unicode composition, no case folding), so comparing the result with the
+ * allowlist stays an exact byte match and a lookalike spelling never matches an entry.
+ */
+export function decodePushedBranchRef(bytes: Uint8Array): string | undefined {
+  let ref: string;
+  try {
+    ref = strictUtf8.decode(bytes);
+  } catch {
+    return undefined;
+  }
+  return isWellFormedBranchRef(ref) ? ref : undefined;
+}
+
 /** Canonical nonsecret native-push policy. Git refs remain case-sensitive. */
 export function normalizePushRefAllowlist(value: unknown): readonly string[] {
   if (!Array.isArray(value)) {
