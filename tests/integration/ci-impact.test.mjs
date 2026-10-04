@@ -857,9 +857,9 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
       continue;
     }
 
-    // Two synthetic lanes cover cross-lane aggregation and failures.
+    // Three synthetic lanes cover cross-lane aggregation and failures.
     // The inventory checks above still require every production CI lane.
-    const fixtureLanes = ["checks-baseline-1", "postgres"];
+    const fixtureLanes = ["checks-baseline-1", "checks-baseline-2", "postgres"];
     const selectedNeeds = JSON.parse(readFileSync(expanded, "utf8"));
     assert.deepEqual(Object.keys(selectedNeeds).sort(), ["impact", "audit", ...lanes].sort());
     for (const lane of lanes) {
@@ -916,7 +916,23 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     command(root, "git", ["checkout", "-q", "--detach", f.tested]);
 
     {
-      const lane = "postgres";
+      const lane = "checks-baseline-2";
+      const artifact = join(root, `results/${lane}.json`);
+      const original = readFileSync(artifact);
+      const wrongSource = JSON.parse(original);
+      wrongSource.sourceSha = f.head;
+      writeFileSync(artifact, JSON.stringify(wrongSource));
+      const result = aggregate();
+      assert.notEqual(result.status, 0);
+      assert.ok(
+        JSON.parse(result.stdout).issues.some(
+          (issue) => issue.code === "source-sha-mismatch" && issue.lane === lane,
+        ),
+      );
+      writeFileSync(artifact, original);
+    }
+
+    for (const lane of ["checks-baseline-2", "postgres"]) {
       const artifact = join(root, `results/${lane}.json`);
       const original = readFileSync(artifact);
       rmSync(artifact);
@@ -941,6 +957,8 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
         ),
       );
       writeFileSync(artifact, original);
+    }
+    {
       needs["pr-safe"].result = "failure";
       assert.notEqual(runGate().status, 0);
       const failedJob = aggregate();

@@ -259,7 +259,7 @@ async function createApi(t, label, upstreamPort, options = {}) {
       await pool.end();
     }
   });
-  return { app, auth, controller, state, pool };
+  return { app, auth, controller, iamDriver, state, pool };
 }
 
 async function inject(app, method, url, { session, headers = {}, body } = {}) {
@@ -849,6 +849,33 @@ test(
       scenario.principal.id,
       { excludeId: leaseDenial.id },
     );
+  },
+);
+
+test(
+  "PostgreSQL native admin WebSocket lease closes as a dependency failure during an IAM outage",
+  { ...requiresPostgres, timeout: 45_000 },
+  async (t) => {
+    const scenario = await openNativeAdminSocketScenario(t, "iam-outage");
+    // The replica holding the socket loses its IAM Driver at the next lease renewal. An outage
+    // is not a revocation: the close names a dependency failure and writes no denial audit.
+    const authorize = scenario.apiB.iamDriver.authorize;
+    t.after(() => {
+      scenario.apiB.iamDriver.authorize = authorize;
+    });
+    const closedAfterMs = await assertSocketClosesAfterMutation(scenario.socket, async () => {
+      scenario.apiB.iamDriver.authorize = async () => {
+        throw new Error("IAM outage");
+      };
+    });
+    t.diagnostic(`IAM outage closed native admin WebSocket in ${closedAfterMs}ms`);
+    await assertSocketAuditCloseReason(scenario, "dependency_failure");
+    const denials = await scenario.apiA.pool.query(
+      `SELECT count(*)::int AS count FROM occ.audit_events
+        WHERE namespace_id = $1 AND resource_id = $2 AND kind = 'authorization_denial'`,
+      [scenario.namespace.id, scenario.agent.id],
+    );
+    assert.equal(denials.rows[0].count, 0);
   },
 );
 
