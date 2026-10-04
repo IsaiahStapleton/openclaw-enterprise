@@ -60,6 +60,7 @@ import {
   type OpenClawController,
 } from "@openclaw-enterprise/occ";
 import { isNonEmptyString } from "@openclaw-enterprise/utils";
+import SerializerSelector from "@fastify/fast-json-stringify-compiler";
 import ajvFormats from "ajv-formats";
 import Fastify, {
   LogController,
@@ -229,6 +230,44 @@ const RESOURCE_ID = Object.fromEntries(
 
 function formatsPlugin(ajv: Parameters<typeof ajvFormats.default>[0]) {
   return ajvFormats.default(ajv);
+}
+
+// Fastify compiles one response serializer per route and status code, and rebuilds its
+// serializer factory for every route in a plugin that added shared schemas; each
+// fast-json-stringify build then re-validates every shared schema. That was about 1,100
+// builds (830 of them the same ErrorResponse reference) and most of the API's boot at the
+// chart's 500m CPU limit. A serializer depends only on its schema, the shared schemas and
+// the serializer options, so build each distinct combination once.
+function cachedResponseSerializers(): SerializerSelector.SerializerFactory {
+  const buildSerializerCompiler = SerializerSelector();
+  const sharedSchemaIds = new WeakMap<object, number>();
+  const serializers = new Map<string, SerializerSelector.Serializer>();
+  let nextSharedSchemaId = 0;
+  const sharedSchemaId = (schema: object) => {
+    let id = sharedSchemaIds.get(schema);
+    if (id === undefined) {
+      id = nextSharedSchemaId++;
+      sharedSchemaIds.set(schema, id);
+    }
+    return id;
+  };
+  return (externalSchemas, options) => {
+    const compile = buildSerializerCompiler(externalSchemas, options);
+    // Fastify passes the same stored schema objects each time; identity names the set.
+    const shared = Object.entries((externalSchemas ?? {}) as Record<string, object>)
+      .map(([id, schema]) => `${id}=${sharedSchemaId(schema)}`)
+      .join(",");
+    const prefix = `${JSON.stringify(options ?? {})}|${shared}|`;
+    return (route) => {
+      const key = prefix + JSON.stringify(route.schema);
+      let serializer = serializers.get(key);
+      if (serializer === undefined) {
+        serializer = compile(route);
+        serializers.set(key, serializer);
+      }
+      return serializer;
+    };
+  };
 }
 
 function ipv4(value: string): number | undefined {
@@ -948,6 +987,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false },
       plugins: [formatsPlugin],
     },
+    schemaController: { compilersFactory: { buildSerializer: cachedResponseSerializers() } },
   }).withTypeProvider<TypeBoxTypeProvider>();
 
   // Shutdown (app.close) drains admitted requests, but Node and Fastify close only the
