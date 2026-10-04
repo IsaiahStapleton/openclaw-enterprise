@@ -186,7 +186,9 @@ Compose service with Docker-compatible engine access.
 `internal/occdev/repository_k3d.go:enableDevelopmentRepository`.
 
 Both k3d profiles use legacy iptables and honor an explicit IPv4 node resolver
-without changing host DNS;
+without changing host DNS.
+Linux Docker's automatic host resolver selection ignores trailing nameserver
+fields, matching glibc parsing.
 `internal/occdev/node_dns_k3d.go:checkDevelopmentNodeDNS` fails startup on
 refused node DNS. Kubernetes-only startup imports matching OCE images into the
 cluster.
