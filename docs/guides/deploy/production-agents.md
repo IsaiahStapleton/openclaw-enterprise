@@ -59,7 +59,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
 
 If the Namespace will run embedded Agents, also let the API store their combined
 transport bundle in the data plane. Without this grant, an embedded Agent's
-`runtime-credentials` request answers `503 DEPENDENCY_UNAVAILABLE`:
+`runtime-credentials` request and first deployment answer
+`503 RUNTIME_CREDENTIALS_CLUSTER_RBAC`, and the API logs
+`agent_runtime_credentials.cluster_denied` with the denied call and namespace:
 
 ```bash
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \

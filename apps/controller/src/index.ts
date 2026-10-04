@@ -52,6 +52,7 @@ import {
   DependencyUnavailableError,
   DeviceAuthorizationStartError,
   ResourceConflictError,
+  RuntimeCredentialsForbiddenByClusterError,
   RuntimeLogsError,
   UserAlreadyExistsError,
   type DeployAgentAuthorization,
@@ -3672,6 +3673,19 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           mapped = requestFailure(auditError);
         }
       }
+    }
+    if (error instanceof RuntimeCredentialsForbiddenByClusterError) {
+      // The response names the RoleBinding; the log names the exact denied call.
+      app.log.warn({
+        event: "agent_runtime_credentials.cluster_denied",
+        requestId: request.id,
+        route: request.routeOptions.url ?? "unmatched",
+        verb: error.verb,
+        resource: error.resource,
+        kubernetesNamespace: error.kubernetesNamespace,
+        plane: error.plane,
+        kubernetesStatus: error.status,
+      });
     }
     if (error instanceof DeviceAuthorizationStartError) {
       app.log.warn({

@@ -511,6 +511,36 @@ export class RuntimeLogsForbiddenByClusterError extends Error {
 }
 
 /**
+ * The cluster refused the API access to an Agent's runtime credential Secrets or their
+ * Deployment preflight: an operator must grant the documented tenant RoleBinding. It stays a
+ * dependency outage for callers that fail closed, and carries only fixed operation names and
+ * the Kubernetes namespace, for the server log.
+ */
+export class RuntimeCredentialsForbiddenByClusterError extends DependencyUnavailableError {
+  readonly verb: "get" | "list" | "create";
+  readonly resource: "secrets" | "deployments";
+  readonly kubernetesNamespace: string;
+  readonly plane: "control" | "execution";
+  readonly status: 403;
+
+  constructor(denial: {
+    readonly verb: RuntimeCredentialsForbiddenByClusterError["verb"];
+    readonly resource: RuntimeCredentialsForbiddenByClusterError["resource"];
+    readonly kubernetesNamespace: string;
+    readonly plane: RuntimeCredentialsForbiddenByClusterError["plane"];
+    readonly status: RuntimeCredentialsForbiddenByClusterError["status"];
+  }) {
+    super("The cluster denied access to Agent runtime credentials.");
+    this.name = "RuntimeCredentialsForbiddenByClusterError";
+    this.verb = denial.verb;
+    this.resource = denial.resource;
+    this.kubernetesNamespace = denial.kubernetesNamespace;
+    this.plane = denial.plane;
+    this.status = denial.status;
+  }
+}
+
+/**
  * OpenShell answered NOT_FOUND for the revision's Sandbox. It gives the same answer when
  * the Sandbox is not provisioned (yet) and when OCC's identity is not a member of its
  * Workspace, so the two cannot be told apart and neither is reported as "no lines".
