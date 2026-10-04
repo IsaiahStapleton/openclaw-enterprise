@@ -8,10 +8,11 @@ import {
 import { encodeRepositoryCredentialSessionFiles } from "../../../apps/controller/src/drivers/repo/github/credentials/client/config.ts";
 
 /**
- * Projects `count` new repository credential sessions into `sourceRoot` the way the
- * kubelet publishes the production Secret volume, and returns the production repository
- * init descriptor that reads them. Each session's files come from the real encoder; the
- * descriptor comes from the init container that repositoryMaterialDeployment renders.
+ * Projects `count` new repository credential sessions into the existing `sourceRoot` the
+ * way the kubelet publishes the production Secret volume. Each session's files come from
+ * the real encoder. The returned descriptor is the one repositoryMaterialDeployment renders
+ * for the init container, so it still names the in-Pod /run/oce roots: callers replace
+ * sourceRoot and targetRoot with the paths where their run sees the projection and output.
  */
 export async function projectRepositorySessions(
   sourceRoot,
