@@ -5,6 +5,7 @@ import type {
 } from "../../credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 import type { GitHubDriverState } from "./driver/state.ts";
+import type { GitHubGraphqlMode } from "./routes/classification.ts";
 import type { GitHubAuthority, GitHubConfiguration, GitHubTokenProfile } from "./types.ts";
 import { createAppTokenSource } from "./token-source/app.ts";
 import { createStaticTokenSource } from "./token-source/static.ts";
@@ -29,7 +30,7 @@ export interface GitHubTokenSource {
   readonly cleanup: RepositoryBackend["cleanup"];
   /** Folded into the grant identity. */
   capabilityPolicy(profile: GitHubTokenProfile): string;
-  graphql(profile: GitHubTokenProfile): "token-bounded" | "deny";
+  graphql(profile: GitHubTokenProfile): GitHubGraphqlMode;
   /** Enforced at the gateway on receive-pack commands when defined. */
   readonly pushRefAllowlist: readonly string[] | undefined;
   bind(session: TokenSourceSession): TokenSourceBinding;

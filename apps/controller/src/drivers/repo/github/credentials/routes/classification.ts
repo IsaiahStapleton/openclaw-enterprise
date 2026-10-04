@@ -117,16 +117,23 @@ interface ApiRoutePolicy {
   readonly rawMedia?: readonly string[];
 }
 
+/**
+ * "token-bounded": the upstream token's permissions bound GraphQL (App).
+ * "read-only": mutations are refused at the gateway (static token with allowGraphql).
+ * "deny": no /graphql route.
+ */
+export type GitHubGraphqlMode = "token-bounded" | "read-only" | "deny";
+
 function matchApiRoute(
   path: string,
   repository: string,
-  graphql: "token-bounded" | "deny",
+  graphql: GitHubGraphqlMode,
 ): ApiRoutePolicy | undefined {
   const prefix = `/repos/${repository}`;
   if (path === prefix || path === "/meta") {
     return { methods: ["GET"], queryParameters: [] };
   }
-  if (path === "/graphql" && graphql === "token-bounded") {
+  if (path === "/graphql" && graphql !== "deny") {
     return { methods: ["POST"], queryParameters: [] };
   }
   if (!path.startsWith(`${prefix}/`)) {
@@ -243,14 +250,14 @@ function classifyApiRoute(
   target: ParsedTarget,
   repository: string,
   profile: GitHubTokenProfile,
-  graphql: "token-bounded" | "deny",
+  graphql: GitHubGraphqlMode,
 ): Route | undefined {
   const { raw, path, query } = target;
   const policy = matchApiRoute(path, repository, graphql);
   if (!policy || !policy.methods.includes(head.method)) {
     return;
   }
-  // GraphQL is token-bounded; only the clone-credential body check applies (graphql-input.ts).
+  // GraphQL is bounded by the token or, for "read-only", by the body checks in graphql-input.ts.
   if (head.method !== "GET" && path !== "/graphql") {
     const permissions = permissionsForProfile(profile);
     if (!policy.writePermissions?.some((permission) => permissions[permission] === "write")) {
@@ -298,7 +305,7 @@ export function classifyRoute(
     repository: string;
     profile: GitHubTokenProfile;
     targetBytes: number;
-    graphql: "token-bounded" | "deny";
+    graphql: GitHubGraphqlMode;
   }>,
 ): Route | undefined {
   const target = parseTarget(head.rawTarget, policy.targetBytes);

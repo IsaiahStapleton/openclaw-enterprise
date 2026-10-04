@@ -181,6 +181,7 @@ test(
           defaultProfile: "git-write",
           allowedProfiles: ["git-read", "git-write"],
         },
+        limits: { gitPushInputBytes: 67108864 },
         backend: {
           kind: "github-token",
           providerInstanceId: "fixture",

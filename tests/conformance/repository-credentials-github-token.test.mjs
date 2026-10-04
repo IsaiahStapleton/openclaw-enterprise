@@ -226,6 +226,19 @@ test("token factory refuses mismatched authorities, metadata scope, broad GraphQ
       { token: sentinel("ghp_"), configuration: { allowGraphql: true } },
     ],
     // A lease must cover one exchange deadline plus two safety margins.
+    // The gateway enforces the configured allowlist; a binding cannot replace it.
+    [
+      "binding push allowlist",
+      {
+        options: {
+          binding: {
+            profile: "git-write",
+            identity: { providerInstanceId: "github-test", repositoryId: "73", grantId: "x" },
+            pushRefAllowlist: ["refs/heads/*"],
+          },
+        },
+      },
+    ],
     [
       "lease below the exchange bound",
       { configuration: { leaseSeconds: 900 }, limits: { exchangeMs: 900000 } },
@@ -280,11 +293,34 @@ test("token routes deny GraphQL by default and for git-read, and inspect every p
     assert.deepEqual(bind(defaults, profile).plan(graphql), denied, profile);
   }
   assert.deepEqual(bind(opted, "git-read").plan(graphql), denied);
+  // Opted-in GraphQL is read-only: a mutation could write refs outside the push allowlist.
+  const query = (text) => Buffer.from(JSON.stringify({ query: text }));
   for (const profile of ["git-write", "git-full"]) {
     const plan = bind(opted, profile).plan(graphql);
     assert.equal(plan.target, "/graphql", profile);
-    assert.equal(typeof plan.inputPolicy, "function");
+    assert.equal(plan.inputPolicy(query("{ viewer { login } }")), true, profile);
+    assert.equal(plan.inputPolicy(query("query { mutationTesting: viewer { login } }")), true);
+    for (const refused of [
+      query('mutation { updateRef(input: {refId: "x", oid: "y"}) { clientMutationId } }'),
+      query("mutation{createRef(input:{}){ref{name}}}"),
+      Buffer.from('{"query":"\\u006dutation { deleteRef(input: {}) { clientMutationId } }"}'),
+      Buffer.from(
+        '[{"query":"{ viewer { login } }"},{"query":"mutation { mergeBranch(input: {}) { clientMutationId } }"}]',
+      ),
+      query('{ repository(owner: "o", name: "r") { tempCloneToken } }'),
+      Buffer.from("not json"),
+    ]) {
+      assert.equal(plan.inputPolicy(refused), false, refused.toString());
+    }
   }
+  // The App path keeps token-bounded GraphQL, where mutations are bounded by the App token.
+  const appGraphql = appFactory();
+  const appPlan = bind(appGraphql, "git-write").plan(graphql);
+  assert.equal(
+    appPlan.inputPolicy(query("mutation { addStar(input: {}) { clientMutationId } }")),
+    true,
+  );
+  appGraphql.key.close();
   // git-read never reaches receive-pack, before any acquisition.
   assert.deepEqual(bind(defaults, "git-read").plan(receivePack), denied);
   assert.deepEqual(bind(defaults, "git-read").plan(discovery), denied);

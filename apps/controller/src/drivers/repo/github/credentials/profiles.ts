@@ -34,7 +34,7 @@ export const githubCapabilityPolicy = "permission-aligned-rest-token-bounded-gra
 // A static token cannot be narrowed per session: the route allowlist is its scope.
 export const staticTokenCapabilityPolicy = Object.freeze({
   deny: "static-token-route-bounded-rest-only-v1",
-  "token-bounded": "static-token-route-bounded-graphql-v1",
+  "read-only": "static-token-route-bounded-read-only-graphql-v1",
 });
 
 export function permissionsForProfile(

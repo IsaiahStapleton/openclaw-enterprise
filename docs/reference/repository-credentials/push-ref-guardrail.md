@@ -46,8 +46,9 @@ With the [development token authority](development-token.md), the same allowlist
 is also enforced by the gateway. It reads the receive-pack commands before any
 byte goes upstream and refuses the whole push with HTTP 400 when one ref fails,
 so `--no-verify` or a replaced `core.hooksPath` changes nothing. The client hook
-still gives the first, friendlier refusal. GitHub App grants keep the hook-only
-behavior described below.
+still gives the first, friendlier refusal. No admitted REST route writes refs,
+and GraphQL mutations are refused for this authority, so the allowlist bounds
+every ref write. GitHub App grants keep the hook-only behavior described below.
 
 ## Limits
 

@@ -28,7 +28,7 @@ export function createStaticTokenSource(
     throw new Error("invalid-configuration");
   }
   const graphql = (profile: GitHubTokenProfile) =>
-    profile !== "git-read" && config.allowGraphql ? ("token-bounded" as const) : ("deny" as const);
+    profile !== "git-read" && config.allowGraphql ? ("read-only" as const) : ("deny" as const);
   return Object.freeze<GitHubTokenSource>({
     kind: "github-token",
     cleanup: "expiry-only",

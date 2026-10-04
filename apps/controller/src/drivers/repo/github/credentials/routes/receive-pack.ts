@@ -1,4 +1,4 @@
-import { allowsPushRef } from "../../../credentials/client-contracts.ts";
+import { allowsPushRef, isWellFormedBranchRef } from "../../../credentials/client-contracts.ts";
 
 // Smart-HTTP receive-pack (protocol v0/v1; v2 has no receive-pack form) sends
 // plaintext pkt-line commands, a flush-pkt, then optional push options and the
@@ -77,7 +77,13 @@ export function allowsReceivePackInput(
       }
       // push-cert (signed pushes) and any other line form are refused.
       const match = command.exec(line);
-      if (!match || match[1]!.length !== match[2]!.length || !allowsPushRef(refs, match[3]!)) {
+      // Malformed refnames are refused here rather than left to upstream.
+      if (
+        !match ||
+        match[1]!.length !== match[2]!.length ||
+        !isWellFormedBranchRef(match[3]!) ||
+        !allowsPushRef(refs, match[3]!)
+      ) {
         return false;
       }
       commands++;

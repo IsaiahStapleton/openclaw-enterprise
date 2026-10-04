@@ -25,9 +25,11 @@ service failed`:
    `docker inspect`. `pnpm credentials:check-config FILE --development-authority`
    checks the configuration the same way.
 
-`sessionPolicy.maximumDurationSeconds` must be at most 28800 (eight hours). The
+`sessionPolicy.maximumDurationSeconds` must be at most 28800 (eight hours), and
+`limits.gitPushInputBytes` at most 67108864 (64 MiB), because the gateway buffers
+each push in memory to inspect it. The
 [development example](../../../deploy/examples/repository-credentials/service-config.development-token.json)
-uses four hours and lowers `gitPushInputBytes` to 64 MiB.
+uses four hours and 64 MiB.
 
 | Backend field                                                       | Rule                                                                                   |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
@@ -45,9 +47,10 @@ rejected.
 
 The token file follows the App key rules: a private regular file owned by root
 or the service user, in trusted directories, with no symlink or replacement
-during the read. One trailing newline is removed, so
-`gh auth token > file` works. The rest must be 1 to `accessTokenBytes` printable
-ASCII bytes. Create it fresh so the umask applies, and never print it:
+during the read. One trailing newline (LF or CRLF) is removed, so
+`gh auth token > file` works. The rest must be 1 to `accessTokenBytes`
+non-space printable ASCII bytes. Create it fresh so the umask applies, and never
+print it:
 
 ```sh
 rm -f "$INPUTS/token"
@@ -73,7 +76,9 @@ A static token cannot be narrowed per session, so the gateway enforces scope:
   routes as the App. The profile's permission map is a route allowlist here, not
   provider-checked token permissions.
 - **GraphQL** is refused for `git-read` always, and for other profiles unless
-  `allowGraphql: true` is set with a fine-grained token.
+  `allowGraphql: true` is set with a fine-grained token. Even then it is
+  read-only: the gateway refuses any body containing a `mutation`, because
+  mutations such as `updateRef` would write refs outside the push allowlist.
 - **Pushes** are checked at the gateway. Before any byte goes upstream, the
   gateway reads the receive-pack commands and refuses the whole push with 400 if
   any ref fails the allowlist. Bypassing or replacing the client hook does not

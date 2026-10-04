@@ -228,6 +228,7 @@ test("development token authority loads only with both opt-ins and never reaches
       defaultProfile: "git-write",
       allowedProfiles: ["git-read", "git-write"],
     },
+    limits: { gitPushInputBytes: 67108864 },
     backend: {
       kind: "github-token",
       providerInstanceId: "github-local-dev",
@@ -264,6 +265,9 @@ test("development token authority loads only with both opt-ins and never reaches
   ]);
   for (const invalid of [
     { ...input, sessionPolicy: { ...input.sessionPolicy, maximumDurationSeconds: 28801 } },
+    // Token pushes are buffered for inspection, so the 256 MiB service default is refused.
+    { ...input, limits: undefined },
+    { ...input, limits: { gitPushInputBytes: 67108865 } },
     { ...input, backend: { ...input.backend, developmentOnly: false } },
     { ...input, backend: { ...input.backend, privateKeyFile: tokenFile } },
   ]) {
@@ -283,14 +287,16 @@ test("development token authority loads only with both opt-ins and never reaches
   await assert.rejects(checkConfiguration(file, development), { message: "invalid-configuration" });
   await rm(link);
   await save();
-  for (const contents of ["\n", "", `${token}\n\n`, `${token} \n`]) {
+  for (const contents of ["\n", "\r\n", "", `${token}\n\n`, `${token} \n`, `${token}\r\r\n`]) {
     await writeFile(tokenFile, contents);
     await assert.rejects(checkConfiguration(file, development), {
       message: "invalid-configuration",
     });
   }
-  await writeFile(tokenFile, token);
-  assert.equal((await checkConfiguration(file, development)).tokenClass, "oauth");
+  for (const contents of [token, `${token}\r\n`]) {
+    await writeFile(tokenFile, contents);
+    assert.equal((await checkConfiguration(file, development)).tokenClass, "oauth");
+  }
   // The flag does not change App configurations, which still reject token fields.
   const app = {
     ...input,

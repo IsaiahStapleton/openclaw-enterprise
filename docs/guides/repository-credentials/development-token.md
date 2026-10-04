@@ -16,7 +16,7 @@ session directory.
 
 Use a scratch repository. A fine-grained token limited to that repository
 (Contents read and write, Metadata read) bounds the damage if a session bearer
-leaks, and is the only class that may enable GraphQL. The host `gh` token
+leaks, and is the only class that may enable read-only GraphQL. The host `gh` token
 (`gho_`) works for clone, push and REST; GraphQL stays refused. Find the
 repository ID:
 

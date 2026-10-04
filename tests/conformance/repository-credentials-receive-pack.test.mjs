@@ -52,6 +52,11 @@ test("receive-pack inspector refuses every disallowed or malformed command secti
     ["tag", body(`${zero} ${b} refs/tags/agent/v1${caps}`)],
     ["prefix without slash", body(`${a} ${b} refs/heads/agentx${caps}`)],
     ["exact entry is not a prefix", body(`${a} ${b} refs/heads/release/x${caps}`)],
+    // Git would refuse these names too; the gateway refuses them before upstream.
+    ["dot-dot inside an allowed prefix", body(`${a} ${b} refs/heads/agent/../main${caps}`)],
+    ["empty name under an allowed prefix", body(`${a} ${b} refs/heads/agent/${caps}`)],
+    ["lock suffix", body(`${a} ${b} refs/heads/agent/x.lock${caps}`)],
+    ["reflog syntax", body(`${a} ${b} refs/heads/agent/x@{1}${caps}`)],
     ["mixed oid lengths", body(`${a} ${"d".repeat(64)} refs/heads/agent/x${caps}`)],
     ["uppercase oid", body(`${"A".repeat(40)} ${b} refs/heads/agent/x${caps}`)],
     ["signed push", body(`push-cert${caps}`, "certificate version 0.1")],

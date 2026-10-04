@@ -1,11 +1,11 @@
 import type { Denied, RequestHead, RequestPlan } from "../../credentials/backend-contracts.ts";
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 import type { GitHubTokenProfile } from "./types.ts";
-import { allowsGraphqlInput } from "./graphql-input.ts";
+import { allowsGraphqlInput, allowsReadOnlyGraphqlInput } from "./graphql-input.ts";
 import { allowsReceivePackInput } from "./routes/receive-pack.ts";
 import { createResponsePolicy } from "./response.ts";
 import { classifyRoute, nativeGraphqlAccept } from "./routes/classification.ts";
-import type { Route } from "./routes/classification.ts";
+import type { GitHubGraphqlMode, Route } from "./routes/classification.ts";
 
 const deny = (): Denied =>
   Object.freeze({ kind: "denied", status: 400, code: "unsupported-request" });
@@ -24,7 +24,7 @@ interface RoutePolicyOptions {
   readonly apiOrigin: string;
   readonly limits: ServiceLimits;
   /** "deny" removes the /graphql route; the default keeps token-bounded GraphQL. */
-  readonly graphql?: "token-bounded" | "deny";
+  readonly graphql?: GitHubGraphqlMode;
   /** When set, git-push plans inspect receive-pack commands before credential use. */
   readonly pushRefAllowlist?: readonly string[];
 }
@@ -32,6 +32,7 @@ interface RoutePolicyOptions {
 interface PlanDependencies {
   readonly route: RoutePolicy["route"];
   readonly responsePolicy: ReturnType<typeof createResponsePolicy>;
+  readonly graphqlInput: (body: Uint8Array) => boolean;
   readonly receivePackInput: ((body: Uint8Array) => boolean) | undefined;
 }
 
@@ -118,7 +119,7 @@ function planRequest(
       connectMs: options.limits.connectMs,
     }),
     responsePolicy: dependencies.responsePolicy(git, selected.target, selected.rawResponse),
-    ...(selected.graphql === true ? { inputPolicy: allowsGraphqlInput } : {}),
+    ...(selected.graphql === true ? { inputPolicy: dependencies.graphqlInput } : {}),
     ...(selected.kind === "git-push" && dependencies.receivePackInput
       ? { inputPolicy: dependencies.receivePackInput }
       : {}),
@@ -137,6 +138,7 @@ export function createRoutePolicy(options: RoutePolicyOptions): RoutePolicy {
   const dependencies: PlanDependencies = {
     route,
     responsePolicy,
+    graphqlInput: options.graphql === "read-only" ? allowsReadOnlyGraphqlInput : allowsGraphqlInput,
     receivePackInput:
       options.pushRefAllowlist === undefined
         ? undefined

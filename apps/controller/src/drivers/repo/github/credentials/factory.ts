@@ -20,9 +20,11 @@ function endpoint(value: string): string {
 export function createGitHubDriverFactory(options: GitHubFactoryOptions): GitHubDriverFactory {
   const config = validateGitHubConfiguration(options.configuration);
   // A static token has no metadata-only capability: the registry description path is App-only.
+  // Its push allowlist comes only from configuration, where the gateway enforces it.
   if (
     options.authority?.kind !== config.kind ||
-    (config.kind === "github-token" && options.metadataOnly)
+    (config.kind === "github-token" &&
+      (options.metadataOnly || options.binding?.pushRefAllowlist !== undefined))
   ) {
     throw new Error("invalid-configuration");
   }

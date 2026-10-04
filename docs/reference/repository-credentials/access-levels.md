@@ -15,7 +15,8 @@ OCE requests one numeric repository ID and rejects a different returned grant.
 App permissions must be approved on the installation before use.
 With the [development token authority](development-token.md), these maps decide
 only which REST write routes the gateway forwards; the token keeps its own
-GitHub permissions, and GraphQL is refused unless explicitly enabled.
+GitHub permissions, and GraphQL is refused unless explicitly enabled, and then
+read-only.
 
 The Console starts with Contributor as the Agent default. Added repositories
 inherit it until customized by expanding their card. Turning off issue management

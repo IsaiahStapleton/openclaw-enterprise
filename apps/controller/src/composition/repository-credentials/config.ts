@@ -44,6 +44,8 @@ type SelectedBackend =
 
 /** Development-only static token sessions are capped at eight hours. */
 const developmentTokenMaximumSeconds = 28800;
+// 64 MiB: the development example value; the service default (256 MiB) would be buffered per push.
+const developmentTokenPushInputBytes = 67108864;
 
 async function readProtected(path: string, maximum: number, privateFile = true): Promise<Buffer> {
   const result = await readProtectedFile(path, maximum, privateFile);
@@ -106,7 +108,9 @@ export async function loadConfiguration(
         // Second explicit opt-in: the process flag, visible in argv and `docker inspect`.
         if (
           options.developmentAuthority !== true ||
-          config.sessionPolicy.maximumDurationSeconds > developmentTokenMaximumSeconds
+          config.sessionPolicy.maximumDurationSeconds > developmentTokenMaximumSeconds ||
+          // Token pushes are buffered in memory for the receive-pack inspector.
+          config.limits.gitPushInputBytes > developmentTokenPushInputBytes
         ) {
           throw new Error("invalid-configuration");
         }
@@ -130,12 +134,13 @@ export async function loadConfiguration(
     }
     let keyOwner: ReturnType<typeof createGitHubKeyOwner> | undefined;
     if (selected.kind === "github-token") {
-      // One trailing newline (as `gh auth token > file` writes) is not part of the token.
+      // One trailing LF or CRLF (as `gh auth token > file` writes) is not part of the token.
       token = await readProtected(
         selected.configuration.tokenFile,
-        config.limits.accessTokenBytes + 1,
+        config.limits.accessTokenBytes + 2,
       );
-      const length = token.at(-1) === 0x0a ? token.length - 1 : token.length;
+      const newline = token.at(-1) !== 0x0a ? 0 : token.at(-2) === 0x0d ? 2 : 1;
+      const length = token.length - newline;
       if (length < 1 || length > config.limits.accessTokenBytes) {
         throw new Error("invalid-configuration");
       }
