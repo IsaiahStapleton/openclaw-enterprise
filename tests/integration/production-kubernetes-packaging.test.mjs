@@ -1852,7 +1852,7 @@ test(
         assert.deepEqual(container.readinessProbe.httpGet, { path: "/readyz", port: "http" });
         // A slow boot must not trip liveness: the startup probe holds liveness off for 2 min.
         // Readiness waits for the first startup success, so a 1 s period lets the API take
-        // traffic about when it listens instead of at the next 5 s tick.
+        // traffic about when it listens instead of at a later probe tick.
         assert.deepEqual(container.startupProbe, {
           httpGet: { path: "/healthz", port: "http" },
           periodSeconds: 1,

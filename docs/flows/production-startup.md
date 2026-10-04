@@ -167,7 +167,7 @@ membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
 operator-managed endpoint. A startup probe on `/healthz` (1-second period, 120
 failures) holds liveness off for 2 minutes; readiness waits for its first
-success, so the API takes traffic within a second of listening.
+success, so the API takes traffic about a second after listening.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
