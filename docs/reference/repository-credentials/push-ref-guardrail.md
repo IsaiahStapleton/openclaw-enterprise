@@ -26,6 +26,10 @@ it does not add token permissions or change GraphQL access.
   a push to the decomposed `e` + U+0301, though both render alike. Write entries
   in the spelling your clients push. A ref that is not valid UTF-8 or contains
   a control character (C0, DEL or C1) is refused.
+- Invisible and direction-changing characters are refused in refs and entries,
+  even under an allowed prefix: bidi controls (U+061C, U+200E-U+200F,
+  U+202A-U+202E, U+2066-U+2069), zero-width characters (U+200B-U+200D, U+2060,
+  U+FEFF), and U+2028 and U+2029. The hook names the refused character.
 - Omission preserves existing push behavior. An empty array denies all ref
   updates through the managed hook.
 - Creation, deletion and force updates use the same destination-ref check.
