@@ -229,16 +229,20 @@ test("renderer supports exactly the openclaw and codex profiles", () => {
 
 // Tenant runtimes may burst to four cores; 100m requests keep the scheduling
 // reservation unchanged. The production example carries the same values.
-const tenantRuntimeResources = {
+const containerDefaultResources = {
   requests: { cpu: "100m", memory: "128Mi" },
   limits: { cpu: "4", memory: "2Gi" },
 };
-// An OpenClaw Gateway settles near 1.2 GiB once it has served a few turns, so
-// its memory request reserves that much. A dedicated Codex Gateway with native
-// admin chat peaked at 1.9 GiB and was OOM-killed at 2Gi, so its limit is 3Gi.
+// Memory requests cover measured use between turns and limits cover measured
+// peaks (see the renderer): Gateways hold 1.2-1.6 GiB and peak at 2.2 GiB; a
+// Codex Harness holds about 0.6 GiB and needs more than 2 GiB to build and test.
 const gatewayResources = {
-  requests: { cpu: "100m", memory: "1280Mi" },
+  requests: { cpu: "100m", memory: "1792Mi" },
   limits: { cpu: "4", memory: "3Gi" },
+};
+const harnessResources = {
+  requests: { cpu: "100m", memory: "768Mi" },
+  limits: { cpu: "4", memory: "4Gi" },
 };
 
 test("profiles give tenant runtimes four-core CPU limits over unchanged 100m requests", () => {
@@ -255,10 +259,10 @@ test("profiles give tenant runtimes four-core CPU limits over unchanged 100m req
   ]) {
     const { resources } = installation.drivers.compute.configuration;
     assert.deepEqual(resources.gateway, gatewayResources, `${name} Gateway`);
-    assert.deepEqual(resources.agent, tenantRuntimeResources, `${name} Harness`);
+    assert.deepEqual(resources.agent, harnessResources, `${name} Harness`);
     assert.deepEqual(
       resources.namespace.containerDefaults,
-      tenantRuntimeResources,
+      containerDefaultResources,
       `${name} namespace container default`,
     );
     assert.deepEqual(resources.namespace.quota, { pods: "10" }, `${name} quota`);
