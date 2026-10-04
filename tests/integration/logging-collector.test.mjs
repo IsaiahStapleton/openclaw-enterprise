@@ -422,6 +422,7 @@ test(
       "occ-api",
       "occ-api",
       "occ-api",
+      "occ-api",
       "occ-worker",
       "openclaw-gateway",
     ]);
