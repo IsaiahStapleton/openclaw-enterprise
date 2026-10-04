@@ -23,7 +23,10 @@ interface RoutePolicyOptions {
   readonly gitOrigin: string;
   readonly apiOrigin: string;
   readonly limits: ServiceLimits;
-  /** "deny" removes the /graphql route; the default keeps token-bounded GraphQL. */
+  /**
+   * "deny" removes the /graphql route; "read-only" also refuses mutations; the
+   * default keeps token-bounded GraphQL.
+   */
   readonly graphql?: GitHubGraphqlMode;
   /** When set, git-push plans inspect receive-pack commands before credential use. */
   readonly pushRefAllowlist?: readonly string[];

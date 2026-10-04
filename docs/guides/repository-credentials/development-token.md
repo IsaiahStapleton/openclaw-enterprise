@@ -82,7 +82,9 @@ $compose run --rm client /session gh api repos/OWNER/scratch-repo
 
 A push outside `pushRefAllowlist` fails twice over: the client hook refuses it
 first, and with `--no-verify` the gateway answers 400 before anything reaches
-GitHub. `gh api graphql` fails unless GraphQL is enabled for a fine-grained token.
+GitHub. `gh api graphql` fails unless GraphQL is enabled for a fine-grained token,
+and even then mutations fail, including those behind `gh pr create`, `gh pr comment`
+and `gh pr edit`.
 
 ## Close and clean up
 

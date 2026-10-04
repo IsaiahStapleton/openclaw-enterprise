@@ -78,7 +78,9 @@ A static token cannot be narrowed per session, so the gateway enforces scope:
 - **GraphQL** is refused for `git-read` always, and for other profiles unless
   `allowGraphql: true` is set with a fine-grained token. Even then it is
   read-only: the gateway refuses any body containing a `mutation`, because
-  mutations such as `updateRef` would write refs outside the push allowlist.
+  mutations such as `updateRef` would write refs outside the push allowlist. `gh`
+  commands built on mutations, such as `gh pr create` or `gh pr comment`, fail.
+  Only one plain query document is accepted, without batches or extensions.
 - **Pushes** are checked at the gateway. Before any byte goes upstream, the
   gateway reads the receive-pack commands and refuses the whole push with 400 if
   any ref fails the allowlist. Bypassing or replacing the client hook does not

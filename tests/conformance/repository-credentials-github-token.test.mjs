@@ -300,6 +300,11 @@ test("token routes deny GraphQL by default and for git-read, and inspect every p
     assert.equal(plan.target, "/graphql", profile);
     assert.equal(plan.inputPolicy(query("{ viewer { login } }")), true, profile);
     assert.equal(plan.inputPolicy(query("query { mutationTesting: viewer { login } }")), true);
+    const named = { query: "query Q($n: Int) { viewer { login } }", variables: { n: 1 } };
+    assert.equal(
+      plan.inputPolicy(Buffer.from(JSON.stringify({ ...named, operationName: "Q" }))),
+      true,
+    );
     for (const refused of [
       query('mutation { updateRef(input: {refId: "x", oid: "y"}) { clientMutationId } }'),
       query("mutation{createRef(input:{}){ref{name}}}"),
@@ -309,6 +314,11 @@ test("token routes deny GraphQL by default and for git-read, and inspect every p
       ),
       query('{ repository(owner: "o", name: "r") { tempCloneToken } }'),
       Buffer.from("not json"),
+      // Only one plain query document: no persisted queries, IDs or extensions.
+      Buffer.from('{"id":"stored-document"}'),
+      Buffer.from('{"extensions":{"persistedQuery":{"version":1,"sha256Hash":"x"}}}'),
+      Buffer.from('{"query":"{ viewer { login } }","extensions":{}}'),
+      Buffer.from('{"query":{"text":"{ viewer { login } }"}}'),
     ]) {
       assert.equal(plan.inputPolicy(refused), false, refused.toString());
     }
