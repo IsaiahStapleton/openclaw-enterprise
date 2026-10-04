@@ -295,9 +295,10 @@ globalThis.setTimeout = (resolve) => queueMicrotask(resolve);
   assert.deepEqual(JSON.parse(await readFile(statePath, "utf8")), initialState);
   interruptRuntime = false;
   // Each refusal names the guard that must refuse it: the child prints only the
-  // error message, and every case plants a value that only one guard reports
-  // (in a message of that guard's form). The CI runs above do not inherit the
-  // producer run, so only the producer's own guards see its fields.
+  // error message, and each case plants a value that only one guard reports (in
+  // a message of that guard's form), except the controller ciRunId case below,
+  // which verifyCi's identical run id check also refuses. The CI runs above do
+  // not inherit the producer run, so only the producer's own guards see its fields.
   const refusedBy = (pattern) => (error) => pattern.test(String(error.stderr));
   const mismatch = (value) => new RegExp(`^Expected values to be strictly equal:[\\s\\S]*${value}`);
   const unmatched = (value) =>
