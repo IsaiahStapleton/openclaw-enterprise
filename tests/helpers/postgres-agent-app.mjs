@@ -44,12 +44,21 @@ async function ensureBootstrap(t, { label, authSecret }) {
 /**
  * The real Fastify controller over PostgreSQL State and Native IAM, with the bootstrap
  * administrator signed in by password. Compute is the runtime-log test Driver; Configuration
- * and Secret are the test Drivers. `createAuditSink(persisted)` may wrap the PostgreSQL audit
- * sink; `appOptions` adds Fastify app options.
+ * and Secret are the test Drivers.
  *
- * `inject(method, url, body)` sends an administrator request; `deployAgent(name)` creates a
- * ready Namespace, an Agent Configuration and API-key Secret, and an Agent whose
- * ServicePrincipal may operate that Secret, then deploys it.
+ * @param t the test context; pools and the app close after it.
+ * @param options.label names the Drivers (`<label>-pg-iam`, …) and, when this run bootstraps
+ *   the database, its Installation.
+ * @param options.authSecret the session signing secret (at least 32 characters).
+ * @param options.createAuditSink receives the PostgreSQL audit sink and returns the sink the
+ *   app writes to (default: that sink).
+ * @param options.appOptions extra Fastify app options, such as `agentRuntimeLogs`. They are
+ *   spread last, so they may also replace a default above.
+ * @returns `{ pool, state, controller, computeDriver, app, principal, inject, deployAgent }`.
+ *   `inject(method, url, body)` sends an administrator request. `deployAgent(name)` creates a
+ *   ready Namespace, an Agent Configuration and API-key Secret, and an Agent whose
+ *   ServicePrincipal may operate that Secret, deploys it, and returns
+ *   `{ namespace, secretRef, agent, revision }`.
  */
 export async function createPostgresAgentApp(
   t,
