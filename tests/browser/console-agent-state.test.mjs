@@ -468,8 +468,8 @@ test("Agent detail reports a failed selected version as probably not serving", a
   assert.equal(await page.getByText("Live serving is unverified").count(), 0);
 });
 
-// A startup model check that failed or timed out, or a Gateway that refused its own CLI,
-// is not a rejected credential, so its next step points at the Configuration and the failed version's Logs, not at Credentials.
+// A startup model check that failed or timed out, or a Gateway that refused its own
+// CLI, is not a rejected credential, so its next step points at the Configuration and the failed version's Logs, not at Credentials.
 // OpenClaw reports an unreachable provider (refused connection, DNS failure) as a timeout and
 // Codex as a failure, so each text names the harness it applies to.
 test("Deployment activity guides a failed model check or an unauthorized gateway cli", async (t) => {
@@ -513,7 +513,7 @@ test("Deployment activity guides a failed model check or an unauthorized gateway
           "The Agent Gateway refused its own CLI as unauthorized. Check that the Agent's Configuration sets gateway.auth.password to OPENCLAW_GATEWAY_PASSWORD (Enable gateway password access), then deploy again.",
       },
       guidance:
-        /^The Agent Gateway refused its own in-Pod CLI, so the version never finished starting\. In the Configuration, select Enable gateway password access, save, then deploy a new version\./,
+        /^The Agent Gateway refused its own in-Pod CLI, so the version never finished starting\. In the Configuration, select Enable gateway password access if it is not already enabled, save, then deploy a new version\./,
     },
   ];
   for (const [index, { error, guidance, cause }] of cases.entries()) {

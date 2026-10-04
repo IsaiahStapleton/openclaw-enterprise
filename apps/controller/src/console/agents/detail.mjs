@@ -115,7 +115,7 @@ const DEPLOYMENT_FAILURE_GUIDANCE = {
   // Kubernetes Compute fails activation at once when the Gateway refuses its own in-Pod
   // CLI (#1128); the Configuration's gateway password reference is what lets it in.
   AGENT_GATEWAY_UNAUTHORIZED: {
-    text: "The Agent Gateway refused its own in-Pod CLI, so the version never finished starting. In the Configuration, select Enable gateway password access, save, then deploy a new version.",
+    text: "The Agent Gateway refused its own in-Pod CLI, so the version never finished starting. In the Configuration, select Enable gateway password access if it is not already enabled, save, then deploy a new version.",
     link: "configuration",
   },
 };
