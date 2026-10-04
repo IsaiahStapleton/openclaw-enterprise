@@ -161,8 +161,10 @@ import type {
   AdmittedSession,
 } from "../admission/admission-verifier.ts";
 import { AdmissionFailure } from "../admission/admission-verifier.ts";
+import { betterAuthIssuer } from "./issuer.ts";
 
-export const OCC_BETTER_AUTH_ISSUER_PREFIX = "occ:installation:";
+export { betterAuthIssuer, OCC_BETTER_AUTH_ISSUER_PREFIX } from "./issuer.ts";
+
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
 const LOCAL_PASSWORD_MIN_LENGTH = 12;
 const LOCAL_PASSWORD_MAX_LENGTH = 128;
@@ -397,13 +399,6 @@ function validHttpBaseURL(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-export function betterAuthIssuer(installationId: string): string {
-  if (!isNonEmptyString(installationId)) {
-    throw new Error("Better Auth issuer requires an Installation.");
-  }
-  return `${OCC_BETTER_AUTH_ISSUER_PREFIX}${installationId}:better-auth`;
 }
 
 export function normalizeSharedCookieDomain(domain: string | undefined): string | undefined {
