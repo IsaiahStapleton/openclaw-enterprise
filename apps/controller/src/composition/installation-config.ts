@@ -26,6 +26,7 @@ import {
   AuthorizationDeniedError,
   DependencyUnavailableError,
   validateBackendDefinitions,
+  type BundledPresetVersion,
   type NativeWorkerSupport,
   type OpenClawController,
   type PostgresPlatformState,
@@ -102,6 +103,8 @@ export type ServiceAccountDriverFactory = (
 
 export interface InstallationRuntimeDrivers {
   readonly defaultPresets?: readonly Pick<Preset, "name" | "template">[];
+  /** Shipped versions of the bundled defaults, loaded even when they are not seeded. */
+  readonly bundledPresetVersions?: readonly BundledPresetVersion[];
   readonly installation: InstallationStartupConfiguration;
   readonly computeDriver: ComputeDriver;
   readonly configurationDriver: ConfigurationDriver;
@@ -431,6 +434,43 @@ async function loadPresetDefinition(
   return presetDefinition(parsed, `Preset file ${path}`);
 }
 
+const bundledPresetDirectory = new URL("../../../../deploy/presets/", import.meta.url);
+
+/**
+ * Load every shipped version of the bundled defaults. `archive/versions.json` lists each
+ * bundled file's versions oldest first; the last is the file itself and the others are
+ * archived as `archive/<file stem>/<version>.json`. A conformance test keeps it complete.
+ */
+async function loadBundledPresetVersions(): Promise<readonly BundledPresetVersion[]> {
+  const indexPath = new URL("archive/versions.json", bundledPresetDirectory);
+  let index: unknown;
+  try {
+    index = JSON.parse(await readFile(indexPath, "utf8"));
+  } catch {
+    throw new Error(`Bundled Preset version index ${fileURLToPath(indexPath)} is unavailable.`);
+  }
+  const versions: BundledPresetVersion[] = [];
+  for (const [file, history] of Object.entries(object(index, "Bundled Preset versions"))) {
+    if (
+      !/^[a-z0-9-]+\.json$/.test(file) ||
+      !Array.isArray(history) ||
+      history.length === 0 ||
+      history.some((version) => typeof version !== "string" || !/^[0-9a-f]{16}$/.test(version))
+    ) {
+      throw new Error(`Bundled Preset versions for ${file} are invalid.`);
+    }
+    const stem = file.slice(0, -".json".length);
+    for (const [position, version] of (history as string[]).entries()) {
+      const current = position === history.length - 1;
+      const preset = await loadPresetDefinition(
+        new URL(current ? file : `archive/${stem}/${version}.json`, bundledPresetDirectory),
+      );
+      versions.push(Object.freeze({ ...preset, file, version, current }));
+    }
+  }
+  return Object.freeze(versions);
+}
+
 function appendDefaultPreset(
   presets: Pick<Preset, "name" | "template">[],
   names: Set<string>,
@@ -574,17 +614,15 @@ export async function loadInstallationConfiguration(options: {
   const includeDefaults = presets.includeDefaults === true;
   const defaultPresets: Pick<Preset, "name" | "template">[] = [];
   const defaultPresetNames = new Set<string>();
+  const bundledPresetVersions = await loadBundledPresetVersions();
   if (includeDefaults) {
-    for (const preset of [
-      "../../../../deploy/presets/default-codex.json",
-      "../../../../deploy/presets/standard-codex.json",
-      "../../../../deploy/presets/standard-openclaw.json",
-    ]) {
-      appendDefaultPreset(
-        defaultPresets,
-        defaultPresetNames,
-        await loadPresetDefinition(new URL(preset, import.meta.url)),
-      );
+    for (const version of bundledPresetVersions) {
+      if (version.current) {
+        appendDefaultPreset(defaultPresets, defaultPresetNames, {
+          name: version.name,
+          template: version.template,
+        });
+      }
     }
   }
   const presetFiles = (presets.files ?? []) as readonly string[];
@@ -973,6 +1011,7 @@ export async function loadInstallationConfiguration(options: {
   }
   return Object.freeze({
     defaultPresets: Object.freeze(defaultPresets),
+    bundledPresetVersions,
     installation,
     computeDriver,
     configurationDriver,
