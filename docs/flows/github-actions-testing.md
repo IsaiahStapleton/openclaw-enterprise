@@ -130,12 +130,12 @@ file as `attempt-<run attempt>-<artifact-prefix>-<lane>`, which no aggregate
 pattern matches, so a failed attempt's cases survive a `--failed` rerun.
 
 The `k3d-fixture-configuration` lane also runs `scripts/ci/memory-sampler.sh`
-beside its tests, because its GitHub-hosted runner has been lost mid-lane. Every
-15 seconds it records available memory, memory pressure, the largest processes by
-executable name (never arguments or environment) and container memory, and every
-minute it prints one summary line to the job log, which is all that survives a lost
-runner. A failed or cancelled lane prints its last samples, and every attempt
-uploads the file (at most 1 MiB) as
+beside its tests, because its GitHub-hosted runner has been lost mid-lane. About
+every 15 seconds it records available memory, memory pressure, root disk space, the
+largest processes by executable name (never arguments or environment) and container
+memory, and about once a minute it prints one summary line to the job log, which is
+all that survives a lost runner. A failed or cancelled lane prints its last samples,
+and every attempt uploads the file (about 1 MiB at most) as
 `memory-<artifact-prefix>-<lane>-attempt-<run attempt>`. Sampler or upload errors
 never fail the lane.
 

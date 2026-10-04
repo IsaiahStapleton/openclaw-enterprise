@@ -2,9 +2,9 @@
 # Records runner memory while a CI lane runs, to diagnose hosted-runner loss.
 # Usage: memory-sampler.sh <output-file> [interval-seconds]
 #
-# Every interval it appends one sample (meminfo, memory pressure, load, the
-# largest processes by RSS, and container memory) to <output-file>. Every
-# fourth sample it also prints one summary line, so the job log keeps a
+# About every interval it appends one sample (meminfo, memory pressure, load,
+# root disk space, the largest processes by RSS, and container memory) to
+# <output-file>. Every fourth sample it also prints one summary line, so the job log keeps a
 # memory curve even when the runner is lost before any later step can run.
 # Processes are listed by executable name only (never arguments or
 # environment), and nothing here may fail the lane.
@@ -41,10 +41,11 @@ while true; do
   swap_total=$(meminfo_mib SwapTotal)
   swap_free=$(meminfo_mib SwapFree)
   swap_used='?'
-  if [[ $swap_total != '?' && $swap_free != '?' ]]; then
+  if [[ $swap_total =~ ^[0-9]+$ && $swap_free =~ ^[0-9]+$ ]]; then
     swap_used=$((swap_total - swap_free))
   fi
   psi=$(pressure)
+  disk=$(df -BM --output=avail / 2>/dev/null | tail -n 1 | tr -d ' ')
   size=$(stat -c %s "$output" 2>/dev/null || echo 0)
   if ((size < max_bytes)); then
     {
@@ -52,6 +53,7 @@ while true; do
       echo "mem_mib total=$(meminfo_mib MemTotal) available=$available free=$(meminfo_mib MemFree) cached=$(meminfo_mib Cached) swap_used=$swap_used"
       echo "psi_memory ${psi:-unavailable}"
       echo "loadavg $(cut -d ' ' -f 1-3 /proc/loadavg 2>/dev/null)"
+      echo "disk_root_available ${disk:-?}"
       echo "top_rss_kib comm"
       top_rss 10
       echo "containers name mem_usage mem_percent"
@@ -60,7 +62,7 @@ while true; do
   fi
   if ((sample % 4 == 1)); then
     top=$(top_rss 3 | awk '{ printf "%s%s:%dMiB", sep, $2, $1 / 1024; sep = "," }')
-    echo "memory-sampler $now available=${available}MiB swap_used=${swap_used}MiB ${psi}top=${top}"
+    echo "memory-sampler $now available=${available}MiB swap_used=${swap_used}MiB disk_available=${disk:-?} ${psi}top=${top}"
   fi
   sleep "$interval" &
   wait $!
