@@ -122,8 +122,8 @@ source. Apply the changes you adopt before or after the upgrade as in
 with this page's `INSTALLATION`, `VALUES`, kubeconfig, context, release and
 namespace, including for an installation created by `dev-up`. Do not apply with
 the launcher state's `helm-values.json` after this page has upgraded the
-installation: it still names the bring-up images and lacks values added since,
-so Helm would roll the controller back. Gateway and Harness resources apply when
+installation: it still names the bring-up images and lacks the upgraded values,
+such as the selected images and checksum, so Helm would roll the controller back. Gateway and Harness resources apply when
 an Agent is next deployed.
 
 It also never adds fields that `scripts/dev-up` writes only at bring-up. An installation created by `dev-up`

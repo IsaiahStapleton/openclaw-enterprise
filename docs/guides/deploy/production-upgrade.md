@@ -160,7 +160,7 @@ keep the image references in `values.yaml` unchanged:
 set -euo pipefail
 cp /secure/occ/installation.yaml /secure/occ/installation.yaml.before
 # Edit /secure/occ/installation.yaml and review the diff, then:
-export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName' /secure/occ/values.yaml)"
+export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
 export OCC_INSTALLATION_KEY="$(yq -er '.installation.key // "installation.yaml"' /secure/occ/values.yaml)"
 jq -n --arg key "$OCC_INSTALLATION_KEY" --rawfile document /secure/occ/installation.yaml \
   '{data: {($key): ($document | @base64)}}' |
@@ -194,7 +194,7 @@ bootstrap key and annotate the Secret:
 
 ```bash
 export OCC_INSTALLATION_ID="$(jq -er '.meta.installationId' "$OCC_BOOTSTRAP_KEY_FILE")"
-export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName' /secure/occ/values.yaml)"
+export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
 kubectl --kubeconfig /secure/occ/kubeconfig \
   --context '<reviewed-context>' --namespace openclaw-system \
   annotate secret "$OCC_INSTALLATION_SECRET" \
