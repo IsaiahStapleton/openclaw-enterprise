@@ -698,6 +698,7 @@ test("console retained views clear after session expiry and exact Agent denial",
   const namespace = await fixture.createNamespace("Retained invalidation", { ready: true });
   const agent = await fixture.createAgent(namespace.id, "Denied retained Agent");
   const { page } = await newPage(t, fixture);
+  await trackSettledFetches(page);
 
   await login(page, fixture, "/console/agents?namespace=" + namespace.id);
   await page.getByText("Denied retained Agent", { exact: true }).waitFor();
@@ -721,6 +722,8 @@ test("console retained views clear after session expiry and exact Agent denial",
   fixture.memoryDatabase.session.length = 0;
   await login(page, fixture, "/console/agents/" + agent.id + "?namespace=" + namespace.id);
   await page.getByRole("heading", { name: "Denied retained Agent", exact: true }).waitFor();
+  // The heading shows before the detail finishes loading; leaving earlier keeps no preview.
+  await waitForSettledView(page);
   await page.getByRole("link", { name: "← Agents", exact: true }).click();
   await page.getByText("Denied retained Agent", { exact: true }).waitFor();
   fixture.policy.restrictions.push({

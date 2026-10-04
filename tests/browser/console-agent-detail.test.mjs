@@ -3032,6 +3032,9 @@ test("Agent detail refocus checks access once without reloading an unfinished re
   );
   releaseSession();
   await checkedConfiguration;
+  // The view stays inert until every access read settles (revisions may answer after the
+  // Configuration); only then does the editor get its focus and caret back.
+  await page.locator('.content [aria-live="polite"][inert]').waitFor({ state: "detached" });
   assert.equal(pathRequests(requests, "GET", "/namespaces").length, 1);
   assert.equal(
     pathRequests(requests, "GET", `/namespaces/${namespace.id}/agents/${agent.id}`).length,

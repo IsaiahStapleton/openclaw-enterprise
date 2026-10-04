@@ -41,6 +41,7 @@ import {
   routeInstallationWithoutProvisioning,
   agentPostRequests,
   optionValues,
+  waitForCreateFormReads,
 } from "./console-agents-test-support.mjs";
 
 const defaultCodexPreset = JSON.parse(
@@ -1281,6 +1282,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     ),
     false,
   );
+  await waitForCreateFormReads(page);
   assert.equal(await save.isEnabled(), true);
   assert.equal(
     await page.getByLabel("AGENTS.md", { exact: true }).inputValue(),
@@ -1343,6 +1345,8 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
+  // Returning to the draft restores or remounts it; wait for the live form's reads.
+  await waitForCreateFormReads(page);
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
   // Plugin catalog discovery is a read sent as POST. A mounted draft with the rendered codex_pat
   // Secret prefetches it after a 300 ms debounce, so it may or may not have been sent yet.
