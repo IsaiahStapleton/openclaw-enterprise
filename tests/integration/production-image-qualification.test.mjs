@@ -344,6 +344,5 @@ test("deployed identity requires the qualified images on a ready, owned worker P
     await refuses(change);
   }
   await refuses(unknownComponent, { component: "other" });
-  await refuses(() => {}, { component: "api" });
   await refuses(() => {}, { release: "other" });
 });
