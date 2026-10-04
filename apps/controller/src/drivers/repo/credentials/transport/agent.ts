@@ -65,10 +65,11 @@ export function createAgentHandler(
       return;
     }
     // A refusal before the body is read must still reach the client (see refuseUnreadInput).
+    const hasBody = parsed.head.framing.kind === "chunked" || (parsed.head.framing.bytes ?? 0) > 0;
     const refuse = (status: number, code: string) =>
-      parsed.head.framing.kind === "none"
-        ? sendError(response, status, code)
-        : refuseUnreadInput(request, response, status, code, clock, limits.stallMs);
+      hasBody
+        ? refuseUnreadInput(request, response, status, code, clock, limits.stallMs)
+        : sendError(response, status, code);
     const abort = new AbortController();
     const cancel = () => abort.abort();
     const onResponseClose = () => {
@@ -83,7 +84,12 @@ export function createAgentHandler(
     try {
       const reserved = service.reserve(bearer, parsed.head, abort.signal);
       if ("kind" in reserved) {
-        refuse(reserved.status, reserved.code);
+        // Without an open session the socket is not worth holding; close at once.
+        if (reserved.status === 401) {
+          sendError(response, reserved.status, reserved.code);
+        } else {
+          refuse(reserved.status, reserved.code);
+        }
         return;
       }
       exchange = reserved;

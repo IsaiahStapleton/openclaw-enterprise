@@ -490,7 +490,7 @@ test(
         incoming.resume();
         incoming.once("end", () => outgoing.writeHead(200, replyHeaders).end("0000"));
       },
-      { gitPushInputBytes: inputLimit, stallMs: 300 },
+      { gitPushInputBytes: inputLimit, stallMs: 1000 },
     );
     // The declared size is refused before any body byte is read. This raw client keeps
     // sending regardless, so only the gateway's linger bound can end the connection.
@@ -518,6 +518,15 @@ test(
     const chunk = Buffer.alloc(16384, 42);
     const pump = setInterval(() => client.closed || client.socket.write(chunk), 2);
     t.after(() => clearInterval(pump));
+    await eventually(() => answeredAt !== undefined, { message: "refusal was not answered" });
+    // The sole exchange slot is free while the refused upload still lingers.
+    assert.deepEqual(await readDiscovery(fixture), {
+      kind: "completed",
+      status: 200,
+      bytes: 4,
+      complete: true,
+    });
+    assert.equal(client.closed, false);
     await eventually(() => client.closed, {
       timeoutMs: 5000,
       message: "refused upload kept lingering",
@@ -527,16 +536,12 @@ test(
     assert.match(answer, /"limit-exceeded"/);
     // The answer arrived at once; the connection stayed only for the linger bound.
     const lingered = Date.now() - answeredAt;
-    assert.ok(lingered >= 200 && lingered < 3000, `lingered ${lingered} ms`);
-    assert.deepEqual(fixture.received, []);
-    assert.equal(fixture.github.issuesOfTokens.length, 0);
-    // The sole exchange slot was released before lingering began.
-    assert.deepEqual(await readDiscovery(fixture), {
-      kind: "completed",
-      status: 200,
-      bytes: 4,
-      complete: true,
-    });
+    assert.ok(lingered >= 500 && lingered < 4000, `lingered ${lingered} ms`);
+    // Only the discovery request reached upstream; the refused upload never did.
+    assert.deepEqual(
+      fixture.received.map((entry) => entry.method),
+      ["GET"],
+    );
   },
 );
 

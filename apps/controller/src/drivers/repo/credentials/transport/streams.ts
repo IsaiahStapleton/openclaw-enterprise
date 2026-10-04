@@ -92,7 +92,8 @@ export function readBoundedInput(
       parts.push(chunk);
     };
     const end = () => finish();
-    // "close" before "end" means the peer went away mid-body.
+    // "close" before "end" means the peer went away mid-body. Deferring only breaks the
+    // tie when both are queued; an abort usually arrives first through `signal`.
     const closed = () => setImmediate(failed);
     const stall = watchdog(clock, limits.stallMs, failed);
     const total = clock.schedule(limits.inputMs, failed);

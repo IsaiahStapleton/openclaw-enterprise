@@ -77,7 +77,6 @@ export function refuseUnreadInput(
     response.destroy();
     return;
   }
-  response.write(writeErrorHead(response, status, code, {}));
   let closed = false;
   const close = (completed: boolean) => {
     if (closed) {
@@ -97,6 +96,7 @@ export function refuseUnreadInput(
   const ended = () => close(true);
   const aborted = () => close(request.readableEnded);
   const stop = clock.schedule(lingerMs, () => close(false));
+  response.write(writeErrorHead(response, status, code, {}));
   request.once("end", ended);
   request.once("close", aborted);
   request.on("error", () => {});

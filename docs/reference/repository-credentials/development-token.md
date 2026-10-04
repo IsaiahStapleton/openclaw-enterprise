@@ -32,8 +32,9 @@ each push in memory to inspect it. The
 uses four hours and 64 MiB.
 
 A push larger than `limits.gitPushInputBytes` is refused before the token is used
-and before anything reaches GitHub: the gateway answers `413` `limit-exceeded`, and
-Git prints `error: RPC failed; HTTP 413`. This holds whether Git declares the size
+for it: the gateway answers `413` `limit-exceeded`, the oversized body never reaches
+GitHub, and Git prints `error: RPC failed; HTTP 413`. (Before a chunked upload Git
+sends a 4-byte authentication probe, which does go to GitHub with the token.) This holds whether Git declares the size
 (`Content-Length`, below `http.postBuffer`) or streams it chunked; the gateway stops
 buffering at the limit and discards the rest of the upload for at most
 `limits.stallMs` so the client reads the answer. Budget about twice the push size of
