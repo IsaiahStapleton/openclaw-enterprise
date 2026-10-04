@@ -101,6 +101,10 @@ jobs:
             title: Image Runtime Startup
             profile: full
             timeout: 30
+          - lane: images-runtime-startup-2
+            title: Image Runtime Startup 2
+            profile: full
+            timeout: 30
           - lane: k3d-fixture-configuration
             title: k3d Fixture and Configuration
             profile: k3d
@@ -468,7 +472,7 @@ jobs:
           const out = { preflight: needs.preflight };
           if (lane === "all") {
             out["runtime-image-fixture"] = needs["runtime-image-fixture"] ?? { result: "missing" };
-            for (const name of ["checks-baseline-1", "checks-baseline-2", "checks-browser", "postgres", "postgres-application", "postgres-auth", "images-packaging", "images-model-probes", "images-runtime-startup", "k3d-fixture-configuration", "k3d-fixture-state", "k3d-fixture-plugins", "k3d-observability", "k3d-observability-demo", "logging-collector", "repository-credentials-container", "repository-credentials-platform"]) {
+            for (const name of ["checks-baseline-1", "checks-baseline-2", "checks-browser", "postgres", "postgres-application", "postgres-auth", "images-packaging", "images-model-probes", "images-runtime-startup", "images-runtime-startup-2", "k3d-fixture-configuration", "k3d-fixture-state", "k3d-fixture-plugins", "k3d-observability", "k3d-observability-demo", "logging-collector", "repository-credentials-container", "repository-credentials-platform"]) {
               out[name] = { result: needs["pr-safe-same-sha"]?.result ?? "missing" };
             }
           } else if (lane === "logging-collector") {
