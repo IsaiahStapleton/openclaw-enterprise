@@ -201,6 +201,12 @@ export async function startProviderServer(t, handle) {
     requests.push(request.url);
     handle(request, response);
   });
+  // Pooled connections outlive each subtest. A subtest that never yields to the event loop
+  // (the 4096-callback admission sweep) stalls every timer. If it runs past the server's
+  // idle timeout (about 6 s), the next fetch is written to a pooled socket before the
+  // overdue server timer destroys it, and fails as a provider outage. Only the client
+  // closes idle connections here.
+  server.keepAliveTimeout = 0;
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
     server.closeAllConnections();
