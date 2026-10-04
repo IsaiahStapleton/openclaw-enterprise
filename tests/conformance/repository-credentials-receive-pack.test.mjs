@@ -4,7 +4,10 @@ import {
   allowsReceivePackInput,
   maximumPushRefs,
 } from "../../apps/controller/src/drivers/repo/github/credentials/routes/receive-pack.ts";
-import { normalizePushRefAllowlist } from "../../apps/controller/src/drivers/repo/credentials/client-contracts.ts";
+import {
+  normalizePushRefAllowlist,
+  readPushedBranchRef,
+} from "../../apps/controller/src/drivers/repo/credentials/client-contracts.ts";
 
 // The development token authority enforces its push allowlist at the gateway by
 // reading receive-pack commands before any byte goes upstream. These vectors use
@@ -22,6 +25,11 @@ const caps =
   "\0report-status-v2 side-band-64k quiet object-format=sha1 agent=git/2.39.5.(Apple.Git-154)";
 const body = (...lines) => Buffer.concat([...lines.map(pkt), flush, pack]);
 const allows = allowsReceivePackInput(["refs/heads/agent/*", "refs/heads/release"]);
+// Bidi controls, zero-width and invisible characters, and line and paragraph separators.
+const invisibleCharacters = [
+  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d,
+  0x202e, 0x2060, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
+];
 
 test("receive-pack inspector admits create, update and delete on allowed refs only", () => {
   for (const [name, input] of [
@@ -94,10 +102,6 @@ test("receive-pack inspector admits UTF-8 branch names Git accepts and refuses l
     ["composed exact entry", section(utf8("refs/heads/caf\u00e9"))],
     ["astral character", section(utf8("refs/heads/agent/\u{1F680}"))],
     ["highest code point", section(utf8("refs/heads/agent/\u{10FFFF}"))],
-    // Git accepts format characters; they are admitted as the exact bytes sent.
-    ["BOM inside the name", section(utf8("refs/heads/agent/a\ufeffb"))],
-    ["right-to-left override", section(utf8("refs/heads/agent/a\u202eb"))],
-    ["line separator", section(utf8("refs/heads/agent/a\u2028b"))],
     [
       "UTF-8 on a later command",
       section(utf8("refs/heads/agent/x"), utf8("refs/heads/caf\u00e9", "")),
@@ -124,17 +128,64 @@ test("receive-pack inspector admits UTF-8 branch names Git accepts and refuses l
       section(pkt(Buffer.from(`shallow ${a}\u00e9`)), utf8("refs/heads/agent/x")),
     ],
     ["UTF-8 name Git refuses", section(utf8("refs/heads/agent/caf\u00e9.lock"))],
+    // Git accepts these, but they hide or reorder how the name displays (Trojan Source).
+    ...invisibleCharacters.map((code) => [
+      `U+${code.toString(16).toUpperCase().padStart(4, "0")} inside the name`,
+      section(utf8(`refs/heads/agent/a${String.fromCodePoint(code)}b`)),
+    ]),
+    ["BOM ending the name", section(utf8("refs/heads/agent/a\ufeff"))],
+    [
+      "invisible character on a later command",
+      section(utf8("refs/heads/agent/x"), utf8("refs/heads/agent/\u200bx", "")),
+    ],
   ]) {
     assert.equal(exact(input), false, name);
   }
 });
 
-test("push allowlist entries must have one exact UTF-8 spelling", () => {
+test("a pushed ref is refused with a readable reason that names the character", () => {
+  const read = (ref) => readPushedBranchRef(Buffer.isBuffer(ref) ? ref : Buffer.from(ref, "utf8"));
+  assert.deepEqual(read("refs/heads/agent/caf\u00e9"), { ref: "refs/heads/agent/caf\u00e9" });
+  assert.deepEqual(read("refs/heads/agent/a\u202eb"), {
+    refused: "the ref name contains U+202E, an invisible or direction-changing character",
+  });
+  assert.deepEqual(read("refs/heads/agent/a\u061cb"), {
+    refused: "the ref name contains U+061C, an invisible or direction-changing character",
+  });
+  assert.deepEqual(read(Buffer.from([...Buffer.from("refs/heads/agent/"), 0xff])), {
+    refused: "the ref name is not valid UTF-8",
+  });
+  assert.deepEqual(read("refs/heads/agent/a\u0085b"), {
+    refused: "the ref name contains a control character",
+  });
+  assert.deepEqual(read("refs/heads/agent/x.lock"), {
+    refused: "the ref name is not a branch name Git accepts",
+  });
+  assert.deepEqual(read("refs/tags/v1"), {
+    refused: "only branches under refs/heads/ can be pushed",
+  });
+  // Neighbors of the refused ranges stay ordinary text.
+  for (const code of [
+    0x061b, 0x061d, 0x200a, 0x2010, 0x2027, 0x202f, 0x205f, 0x2061, 0x2065, 0x206a, 0xfefe, 0xff01,
+  ]) {
+    const ref = `refs/heads/agent/a${String.fromCodePoint(code)}b`;
+    assert.deepEqual(read(ref), { ref }, code.toString(16));
+  }
+});
+
+test("push allowlist entries must have one exact, visible UTF-8 spelling", () => {
   assert.deepEqual(normalizePushRefAllowlist(["refs/heads/caf\u00e9", "refs/heads/agent/*"]), [
     "refs/heads/agent/*",
     "refs/heads/caf\u00e9",
   ]);
-  for (const entry of ["refs/heads/\ud800/*", "refs/heads/a\udc00", "refs/heads/a\u0001"]) {
+  for (const entry of [
+    "refs/heads/\ud800/*",
+    "refs/heads/a\udc00",
+    "refs/heads/a\u0001",
+    "refs/heads/agent\u202e/*",
+    "refs/heads/a\u200bb",
+    "refs/heads/a\ufeff",
+  ]) {
     assert.throws(() => normalizePushRefAllowlist([entry]), /invalid-push-ref-allowlist/);
   }
 });

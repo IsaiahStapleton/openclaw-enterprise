@@ -96,7 +96,8 @@ A static token cannot be narrowed per session, so the gateway enforces scope:
   any ref fails the allowlist. Bypassing or replacing the client hook does not
   change the result. Signed pushes (`push-cert`) are refused. UTF-8 branch names
   Git accepts are matched byte for byte, as described in the
-  [guardrail](push-ref-guardrail.md#matching-and-delivery).
+  [guardrail](push-ref-guardrail.md#matching-and-delivery). Names with invisible
+  or direction-changing characters are refused.
 - **At most 256 refs per push.** A push that updates, creates or deletes more
   refs is refused before the token is used, even when every ref is allowed. The
   gateway answers `413` with the error code `push-ref-limit-exceeded` and the

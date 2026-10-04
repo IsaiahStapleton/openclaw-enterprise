@@ -113,8 +113,8 @@ bootstrap needs its own URL:
 
 Omitting the general URL skips most persistence and
 queue cases. For a lane's complete file selection, prepare and run it as above,
-substituting `postgres` (platform state, wire-up) or `postgres-auth` for
-`postgres-application`. Broad `test:postgres`, `test:integration`, and `test` commands
+substituting `postgres-platform` (platform state, wire-up), `postgres` (migration
+compatibility) or `postgres-auth` for `postgres-application`. Broad `test:postgres`, `test:integration`, and `test` commands
 include the revision-worker suite and its
 [prepared-ownership requirement](#revision-worker-tests).
 

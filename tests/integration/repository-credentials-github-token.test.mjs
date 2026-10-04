@@ -356,14 +356,42 @@ test("development token pushes admit UTF-8 branch names and match the allowlist 
   assert.notEqual(invalidBypassed.code, 0);
   assert.match(invalidBypassed.stderr, /\b400\b/);
 
+  // Git accepts invisible and direction-changing characters in a name; under an allowed
+  // prefix both layers refuse them (Trojan Source). The hook names the code point.
+  for (const [code, character] of [
+    ["U+202E", "\u202e"],
+    ["U+200B", "\u200b"],
+    ["U+FEFF", "\ufeff"],
+    ["U+2028", "\u2028"],
+  ]) {
+    const ref = `refs/heads/agent/a${character}b`;
+    const refusedByHook = await gitCommand(["push", "origin", `HEAD:${ref}`], {
+      cwd: checkout,
+      allowFailure: true,
+    });
+    assert.notEqual(refusedByHook.code, 0, code);
+    assert.ok(
+      refusedByHook.stderr.includes(
+        `repository-push-ref-not-allowed: the ref name contains ${code}, an invisible or direction-changing character`,
+      ),
+      refusedByHook.stderr,
+    );
+    const refusedByGateway = await gitCommand(["push", "--no-verify", "origin", `HEAD:${ref}`], {
+      cwd: checkout,
+      allowFailure: true,
+    });
+    assert.notEqual(refusedByGateway.code, 0, code);
+    assert.match(refusedByGateway.stderr, /\b400\b/, code);
+    await assert.rejects(fixture.git.ref(ref), code);
+  }
+
   // Git refuses a control byte itself, before any request.
   const control = await gitCommand(
     ["push", "--no-verify", "origin", "HEAD:refs/heads/agent/caf\u0001"],
     { cwd: checkout, allowFailure: true },
   );
   assert.notEqual(control.code, 0);
-  // Only the two refused --no-verify pushes reached the gateway's receive-pack route;
-  // nothing refused went upstream.
+  // The refused --no-verify pushes reached only the gateway; nothing refused went upstream.
   assert.equal(receivePacks(fixture), before);
   assert.deepEqual(fixture.github.errors, []);
 });
