@@ -587,9 +587,15 @@ test("guarded adapter never lists, counts or mutates raw session rows", async ()
   assert.deepEqual(await context.adapter.findMany({ model: "session" }), []);
   assert.equal(await context.adapter.count({ model: "session" }), 0);
   const where = [{ field: "id", value: "stale-session" }];
-  await assert.rejects(context.adapter.consumeOne({ model: "session", where }));
+  const refused = {
+    name: "APIError",
+    status: "UNAUTHORIZED",
+    message: "Authentication was not accepted.",
+  };
+  await assert.rejects(context.adapter.consumeOne({ model: "session", where }), refused);
   await assert.rejects(
     context.adapter.incrementOne({ model: "session", where, increment: { version: 1 } }),
+    refused,
   );
   assert.equal(login.db.session.length, 1, "the raw row is untouched");
   // Other models still pass through to the underlying adapter.
