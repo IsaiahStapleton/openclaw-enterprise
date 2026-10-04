@@ -761,6 +761,10 @@ func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 }
 
 func TestUnknownTopLevelCommandFailsInsteadOfPrintingHelp(t *testing.T) {
+	// Bare occ validates the global options, so keep the caller's OCC_* values out.
+	for _, name := range []string{"OCC_URL", "OCC_SERVICE_KEY_FILE", "OCC_CA_BUNDLE", "OCC_TIMEOUT_SECONDS", "OCC_NAMESPACE"} {
+		t.Setenv(name, "")
+	}
 	for _, args := range [][]string{{"preset", "list"}, {"agnet", "list"}} {
 		var out, errOut strings.Builder
 		command := New(&out, &errOut)
