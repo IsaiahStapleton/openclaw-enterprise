@@ -361,8 +361,8 @@ async function start() {
       return;
     }
     closing = true;
-    // The drain and its onClose hooks are otherwise silent: without these events only the
-    // Pod's exit code tells a completed drain from one the termination grace cut off.
+    // Otherwise nothing marks the start or end of the drain: only the Pod's exit code would
+    // tell a completed drain from one the termination grace cut off.
     const startedAt = performance.now();
     emitOccLogEvent(logger, { event: "shutdown.started", signal });
     try {

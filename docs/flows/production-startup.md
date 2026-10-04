@@ -177,7 +177,7 @@ default 30-second termination grace and no `preStop` hook: its single `Recreate`
 replica has no peer to take traffic, so a delay would only lengthen the outage. A
 request still running after 30 seconds is cut off. The API logs `shutdown.started`
 with the `signal` when the drain begins and `shutdown.completed` with its
-`durationMs` once every close hook has finished; a failed hook logs
+`durationMs` once every close hook has finished; a failed close logs
 `shutdown.failed` and exits `1`. A log that ends after `shutdown.started` means
 the drain never finished, for example because the grace period ran out.
 

@@ -2164,7 +2164,8 @@ test(
     ]);
     assert.ok(admitted, "the API must admit the request before its body arrives");
 
-    const exited = once(api.child, "exit");
+    // "close" also waits for stdio to end, so the last log lines are read before parsing.
+    const exited = once(api.child, "close");
     api.child.kill("SIGTERM");
     // Finish the request only after the listener has closed, so it completes during the drain.
     const deadline = Date.now() + 5_000;
@@ -2203,8 +2204,14 @@ test(
     const events = api
       .output()
       .split("\n")
-      .filter((line) => line.startsWith("{"))
-      .map((line) => JSON.parse(line));
+      .flatMap((line) => {
+        // stdout and stderr share one buffer, so skip anything that is not a whole JSON line.
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      });
     const started = events.findIndex(({ event }) => event === "shutdown.started");
     const completed = events.findIndex(({ event }) => event === "shutdown.completed");
     // startController's readiness sign-in logs first; the drained request is the last one.
