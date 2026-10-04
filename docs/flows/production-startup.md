@@ -165,7 +165,9 @@ Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Backend
 membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
-operator-managed endpoint.
+operator-managed endpoint. A startup probe on `/healthz` (every 5 seconds, 24
+failures) gives the API 2 minutes to start listening; the kubelet runs the
+liveness probe only after it passes, so a slow boot is not restarted.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
@@ -325,6 +327,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Hold off the API liveness probe with a 2-minute startup probe.
 - 2026-10-04: Log the API's shutdown start and completion.
 - 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
