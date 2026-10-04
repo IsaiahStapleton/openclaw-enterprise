@@ -41,6 +41,7 @@ import {
   routeInstallationWithoutProvisioning,
   agentPostRequests,
   optionValues,
+  waitForCreateFormReads,
 } from "./console-agents-test-support.mjs";
 
 const defaultCodexPreset = JSON.parse(
@@ -1281,6 +1282,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
     ),
     false,
   );
+  await waitForCreateFormReads(page);
   assert.equal(await save.isEnabled(), true);
   assert.equal(
     await page.getByLabel("AGENTS.md", { exact: true }).inputValue(),
@@ -1355,6 +1357,8 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   // Canceling Start over keeps the ordinary draft and its ability to save.
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "Start over" }).click();
+  // The draft was mounted again from Agents, so the form repeats its reads.
+  await waitForCreateFormReads(page);
   assert.equal(await save.isEnabled(), true);
   assert.deepEqual(
     JSON.parse(await page.getByLabel("Configuration JSON", { exact: true }).inputValue()),
