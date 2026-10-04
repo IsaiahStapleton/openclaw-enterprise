@@ -144,13 +144,14 @@ eligible node, as the [Codex sandbox procedure](codex-sandbox.md) shows.
 Rerun the same commands into a new directory and compare. Expect new image
 digests and Pod names, new Helm revisions, the new controller image and
 Installation checksum in the live values, receipts appended by the release's
-migrations and, after a runtime release, new active revision IDs. Each Agent's
-NetworkPolicies and Services select its active revision, so a runtime release
-changes the revision in their selectors, and a Service can get a new cluster
-IP. Agents add and delete their own workspace files, so the file count can
-change. Investigate any other change, in particular a changed PVC UID, a missing
-or altered earlier receipt, another NetworkPolicy or RoleBinding change, or a
-different workspace hash.
+migrations and, after a runtime release, new active revision IDs. Several of an
+Agent's NetworkPolicies and its Harness Service select the active revision, so a
+runtime release changes the revision in those selectors. It also replaces the
+Agent's gateway, whose Service then has a new cluster IP. Agents add and delete
+their own workspace files, so the file count can change slightly. Investigate
+any other change, in particular a changed PVC UID, a missing or altered earlier
+receipt, any other NetworkPolicy, Service or RoleBinding change, a different
+workspace hash, or a workspace that is empty or nearly so.
 
 The checklist's Configuration, Preset, Backend, service account, audit,
 session and gateway state items, and its authentication, credential, repository
