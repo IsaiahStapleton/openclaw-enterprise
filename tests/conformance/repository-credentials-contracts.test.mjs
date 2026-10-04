@@ -386,8 +386,9 @@ test("response policy rewrites admitted machine links without changing human con
     message: "upstream-redirect",
   });
   // Each link breaks one guard: foreign origin, unadmitted route, then total length.
+  const foreign = link.replace("https://api.github.com/", "https://other.example/");
   assert.throws(
-    () => plan.responsePolicy.headers(200, { link: '<https://other.example/steal>; rel="next"' }),
+    () => plan.responsePolicy.headers(200, { link: `<${foreign}>; rel="next"` }),
     unsafe,
   );
   assert.throws(

@@ -59,7 +59,7 @@ test("cancelled queue entries release capacity while dispatched owner retains it
 });
 
 // `failure` makes the Driver fail after dispatch instead: "acquire" throws, "settle"
-// throws while settling an acquired outcome, "outcome" returns no outcome at all.
+// throws while settling a well-formed rejection, "outcome" returns no outcome at all.
 function uncertainLifecycle({ kind = "uncertain", failure } = {}) {
   const clock = createControlledClock(1700000000000);
   const authority = Object.freeze({
@@ -97,10 +97,11 @@ function uncertainLifecycle({ kind = "uncertain", failure } = {}) {
       if (failure === "outcome") {
         return undefined;
       }
-      const result = Object.freeze({
-        kind: failure === "settle" ? "acquired" : kind,
-        attemptId: attempt.id,
-      });
+      const result = Object.freeze(
+        failure === "settle"
+          ? { kind: "rejected", code: "scope-mismatch", attemptId: attempt.id }
+          : { kind, attemptId: attempt.id },
+      );
       originals.add(result);
       return result;
     },
@@ -139,7 +140,7 @@ function uncertainLifecycle({ kind = "uncertain", failure } = {}) {
   };
 }
 
-test("settled unknown issue without captured material occupies its reservation and blocks remint", async () => {
+test("unknown or unsettled issue without captured material occupies its reservation and blocks remint", async () => {
   // A Driver that fails after dispatch leaves the same unknown issue; the failures that
   // never settle keep their provider action open.
   for (const { failure, activeActions } of [
