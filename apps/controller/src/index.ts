@@ -1272,6 +1272,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
     explanation?: {
       readonly decisionReason: string;
+      readonly reasonCode?: string;
       readonly details: Readonly<Record<string, unknown>>;
     },
   ): Promise<void> {
@@ -1283,7 +1284,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         kind,
         context,
         evidence,
-        undefined,
+        explanation?.reasonCode === undefined
+          ? undefined
+          : { outcome: "denied", reasonCode: explanation.reasonCode },
         authorization,
       );
       await options.auditSink.append(
@@ -2727,29 +2730,42 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       // A change to an account acts for its Principal (an attached identity signs in as it), so
       // the actor must already hold every grant of that Principal, as for service keys.
       if (targetUserId !== undefined) {
+        let principalId;
         let covered;
         try {
           const principal = await selected.lookupIdentity({
             issuer: options.auth.issuer,
             subject: targetUserId,
           });
+          principalId = principal?.kind === "principal" ? principal.id : undefined;
           // Without a Principal the account is not enrolled, and State refuses the change.
           covered =
-            principal?.kind !== "principal" ||
+            principalId === undefined ||
             (await selected.coversIdentityAccess({
               principalId: context.actorId,
-              targetIdentityId: principal.id,
+              targetIdentityId: principalId,
             })) === true;
         } catch {
           throw dependencyUnavailable();
         }
         if (!covered) {
-          await denial(operation, request, "authorization_denial", context, decision.evidence);
-          throw failure(
-            403,
-            "FORBIDDEN",
-            "The caller does not hold every grant of the target account's Principal.",
+          const decisionReason =
+            "The caller does not hold every grant of the target account's Principal.";
+          // The event's resource is the Installation, so name the account it targeted.
+          await denial(
+            operation,
+            request,
+            "authorization_denial",
+            context,
+            decision.evidence,
+            undefined,
+            {
+              decisionReason,
+              reasonCode: "ACCOUNT_PRINCIPAL_GRANTS_NOT_COVERED",
+              details: { userId: targetUserId, principalId },
+            },
           );
+          throw failure(403, "FORBIDDEN", decisionReason);
         }
       }
       return {
