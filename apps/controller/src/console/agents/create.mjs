@@ -426,13 +426,17 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     element("option", { value: "" }, "Choose a model"),
     ...MODEL_CHOICES[nativeProvider.value].map((id) => element("option", { value: id }, id)),
   );
-  const enterModel = button("Enter model ID manually", () => {
-    manualModel = true;
-    model.value = "";
-    modelChoice.value = "";
-    updateModelConfiguration();
-    updateControls();
-    model.focus();
+  const toggleModel = button("Enter model ID manually", () => {
+    if (manualModel) {
+      resetModelChoices();
+    } else {
+      manualModel = true;
+      model.value = "";
+      modelChoice.value = "";
+      updateModelConfiguration();
+      updateControls();
+    }
+    (manualModel ? model : modelChoice).focus();
   });
   const modelField = field("Model ID", model, "Enter a model ID available to this credential.");
   const choiceField = field(
@@ -443,7 +447,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   const modelSection = element(
     "section",
     { className: "model-selection" },
-    ...(useModelChoices ? [choiceField, enterModel] : []),
+    ...(useModelChoices ? [choiceField, toggleModel] : []),
     modelField,
   );
   function resetModelChoices(resetTransport = false) {
@@ -1413,7 +1417,10 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       modelField.hidden = !manualModel;
       model.required = manualModel;
       modelChoice.required = !manualModel;
-      enterModel.disabled ||= Boolean(savedConfiguration);
+      toggleModel.textContent = manualModel
+        ? "Choose a model from the list"
+        : "Enter model ID manually";
+      toggleModel.disabled ||= Boolean(savedConfiguration);
     }
     reloadRepositories.disabled = pending || outcomeUnknown;
     startNewDraft.disabled = pending || outcomeUnknown;
