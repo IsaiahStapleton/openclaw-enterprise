@@ -15,14 +15,17 @@ import {
 } from "../helpers/human-login-transport.mjs";
 
 const providerId = `github:${createHash("sha256").update("fixture-client").digest("hex")}`;
+// The production deadline is 10 s; the stalled-provider cases shorten it to keep the wait short.
+const providerDeadlineMs = 2_000;
 
-function loginFixture(state = {}, { trustedClientAddress = true } = {}) {
+function loginFixture(state = {}, { trustedClientAddress = true, ...options } = {}) {
   return createLoginFixture({
     provider: "github",
     providers: { github: { clientId: "fixture-client", clientSecret: "fixture-client-secret" } },
     state,
     trustedClientAddress,
     recoveryEmail: "Recovery@example.test",
+    ...options,
   });
 }
 
@@ -129,7 +132,7 @@ test(
     }
 
     await t.test("shared deadline aborts a stalled token response before headers", async () => {
-      const login = loginFixture();
+      const login = loginFixture({}, { providerDeadlineMs });
       let closed = false;
       serve = (_request, response) => {
         response.on("close", () => {
@@ -139,18 +142,21 @@ test(
       const started = performance.now();
       await expectDenied(await login.callback());
       const elapsed = performance.now() - started;
-      assert.ok(elapsed >= 9_000 && elapsed < 12_000, `Elapsed: ${elapsed}`);
+      assert.ok(
+        elapsed >= providerDeadlineMs * 0.9 && elapsed < providerDeadlineMs + 2_000,
+        `Elapsed: ${elapsed}`,
+      );
       await until(() => closed);
       assert.deepEqual(login.subjects, []);
       assert.deepEqual(login.denials, [["PROVIDER_UNAVAILABLE", "github"]]);
     });
 
     await t.test("profile body reads use the remaining overall deadline", async () => {
-      const login = loginFixture();
+      const login = loginFixture({}, { providerDeadlineMs });
       let closed = false;
       serve = async (request, response) => {
         if (request.url === "/login/oauth/access_token") {
-          await delay(3_000);
+          await delay(1_500);
           return token(response);
         }
         response.on("close", () => {
@@ -161,8 +167,11 @@ test(
       const started = performance.now();
       await expectDenied(await login.callback());
       const elapsed = performance.now() - started;
-      // Separate per-request timers would take about 13 seconds here.
-      assert.ok(elapsed >= 9_000 && elapsed < 12_000, `Elapsed: ${elapsed}`);
+      // Separate per-request timers would take about 3.5 seconds here.
+      assert.ok(
+        elapsed >= providerDeadlineMs * 0.9 && elapsed < providerDeadlineMs + 1_000,
+        `Elapsed: ${elapsed}`,
+      );
       await until(() => closed);
       assert.deepEqual(login.subjects, []);
       assert.deepEqual(login.denials, [["PROVIDER_UNAVAILABLE", "github"]]);
