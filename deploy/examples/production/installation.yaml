@@ -82,7 +82,7 @@ drivers:
             memory: 768Mi
           limits:
             cpu: "4"
-            memory: 4Gi
+            memory: 6Gi
         # Each tenant namespace receives a Pod quota and default container bounds.
         # See [Namespace isolation](../../../docs/reference/drivers/kubernetes-compute/networking-and-isolation.md#namespaces-and-isolation).
         namespace:

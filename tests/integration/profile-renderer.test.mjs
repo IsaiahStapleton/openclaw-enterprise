@@ -235,14 +235,14 @@ const containerDefaultResources = {
 };
 // Memory requests cover measured use between turns and limits cover measured
 // peaks (see the renderer): Gateways hold 1.2-1.6 GiB and peak at 2.2 GiB; a
-// Codex Harness holds about 0.5 GiB and needs more than 2 GiB to build and test.
+// Codex Harness holds about 0.5 GiB and reached a 4 GiB limit building and testing.
 const gatewayResources = {
   requests: { cpu: "100m", memory: "1792Mi" },
   limits: { cpu: "4", memory: "3Gi" },
 };
 const harnessResources = {
   requests: { cpu: "100m", memory: "768Mi" },
-  limits: { cpu: "4", memory: "4Gi" },
+  limits: { cpu: "4", memory: "6Gi" },
 };
 
 test("profiles give tenant runtimes four-core CPU limits over unchanged 100m requests", () => {
