@@ -31,6 +31,8 @@ CI Impact and Suite Audit start independently. Full mode runs the eighteen-lane 
 
 For a verified documentation-only PR merge tree, `docs-checks` verifies checkout identity and runs formatting, `docs:install`, `docs:check`, and `docs:build`. The check covers word limits, site links and navigation, but not outgoing links in root or `specs/` Markdown. Docs mode runs no conformance, integration, browser, Go, or other product tests. `CI Required` verifies the mode and requires successful impact, audit and documentation jobs, with full test jobs skipped. Missing, failed, cancelled or unexpectedly skipped selected jobs fail. Docs mode does not run the test-result aggregator or require test artifacts.
 
+Test-only PRs run only their files' `ci` lanes plus `checks-baseline-1` ([rules](../flows/github-actions-testing.md)).
+
 An independent full-mode PR advisory job reports pnpm's affected TypeScript workspace packages for verified, clean PR merge checkouts. It uses declared package dependencies; Go, files outside a workspace package, non-TypeScript changes and missing evidence are reported as unavailable. It does not select or skip tests and cannot change the required CI result.
 
 API reference outputs and Markdown under `docs/reference/api/` select full for `openapi:check`. The selector loads policy from, and compares against, the tested merge's first parent: the current base, which is newer than the event base when the base moved after a push. An event base present in the checkout must be its ancestor. Code, configuration, workflow, mixed or unknown changes and non-PR events select full; unavailable or unverifiable evidence selects full or fails closed. A base without the selector also selects full. Hosted validation is not yet established.
