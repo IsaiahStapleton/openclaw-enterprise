@@ -124,7 +124,7 @@ drivers:
           limits: { cpu: "4", memory: 3Gi }
         agent:
           requests: { cpu: 100m, memory: 768Mi }
-          limits: { cpu: "4", memory: 4Gi }
+          limits: { cpu: "4", memory: 6Gi }
         namespace:
           quota: { pods: "10" }
           containerDefaults:

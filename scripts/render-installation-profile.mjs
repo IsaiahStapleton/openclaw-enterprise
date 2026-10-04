@@ -1042,10 +1042,12 @@ function buildRendered(profile, parsed, diagnostics) {
             },
             // A Codex Harness held 0.45-0.57 GiB between turns and peaked at
             // 1 GiB running a test suite and 1.9 GiB running tsc; lint, tsc and
-            // tests together need about 2.2 GiB and were OOM-killed at 2Gi.
+            // tests together were OOM-killed at 2Gi, and the same turn reached a
+            // 4Gi limit (memory.peak 4096 MiB, about 3.2 GiB anonymous) and
+            // survived only by page-cache reclaim. Limits reserve no node memory.
             agent: {
               requests: { cpu: "100m", memory: "768Mi" },
-              limits: { cpu: "4", memory: "4Gi" },
+              limits: { cpu: "4", memory: "6Gi" },
             },
             namespace: {
               quota: { pods: "10" },
