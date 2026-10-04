@@ -109,9 +109,14 @@ function parseLogEvents(stderr) {
     .map((line) => JSON.parse(line));
 }
 
-async function productionDrivers({ includeDefaults = false, configurationRoot } = {}) {
+async function productionDrivers({
+  includeDefaults = false,
+  files,
+  configurationRoot,
+  restrict,
+} = {}) {
   const configuration = createInstallationDriverConfiguration();
-  configuration.presets = { includeDefaults };
+  configuration.presets = { includeDefaults, ...(files === undefined ? {} : { files }) };
   configuration.drivers.compute.id = "compute-production-wireup";
   configuration.drivers.iam.id = "native-iam";
   const runtime = await loadInstallationConfiguration({
@@ -136,10 +141,26 @@ async function productionDrivers({ includeDefaults = false, configurationRoot } 
       id: installation.drivers.secret.id,
     }),
     createIAMDriver(state) {
-      return new NativeIAMDriver(state, {
+      const driver = new NativeIAMDriver(state, {
         id: installation.drivers.iam.id,
         implementation: installation.drivers.iam.implementation,
       });
+      if (restrict !== undefined) {
+        // Answers as an applicable Restriction would; the API's role cannot write one.
+        const authorize = driver.authorize.bind(driver);
+        driver.authorize = async (request) => {
+          const decision = await authorize(request);
+          return restrict.matches(request)
+            ? {
+                ...decision,
+                allowed: false,
+                reason: "An applicable Restriction denies the exact action and resource.",
+                evidence: { ...decision.evidence, restrictionIds: [restrict.id] },
+              }
+            : decision;
+        };
+      }
+      return driver;
     },
   };
 }
@@ -558,19 +579,72 @@ test(
       });
       assert.equal(rolledBack.status, 200);
       assert.notDeepEqual(rolledBack.data.template, copiedOpenClaw.template);
-      await app.close();
-      app = await composeProduction({
-        mode: "production",
-        host: "127.0.0.1",
-        databaseUrl,
-        authSecret,
-        authBaseURL,
-        drivers: await productionDrivers({
-          includeDefaults: true,
-          configurationRoot: join(passwordDirectory, "configurations"),
-        }),
+      const restart = async (drivers, logger) => {
+        await app.close();
+        app = await composeProduction({
+          mode: "production",
+          host: "127.0.0.1",
+          databaseUrl,
+          authSecret,
+          authBaseURL,
+          drivers: await productionDrivers({
+            ...drivers,
+            configurationRoot: join(passwordDirectory, "configurations"),
+          }),
+          ...(logger === undefined ? {} : { logger }),
+        });
+        endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
+      };
+      const readOpenClaw = async () =>
+        (await request("GET", `${presetPath}/${copiedOpenClaw.id}`)).data;
+      // The same file seeded through presets.files, with includeDefaults off, is never refreshed.
+      await restart({
+        includeDefaults: false,
+        files: [
+          fileURLToPath(new URL("../../deploy/presets/standard-openclaw.json", import.meta.url)),
+        ],
       });
-      endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
+      assert.deepEqual(await readOpenClaw(), rolledBack.data);
+      // A Restriction freezing the Namespace's Presets keeps the copy, and startup only warns.
+      const freezeId = "freeze-presets";
+      const frozenLog = memoryLog();
+      await restart(
+        {
+          includeDefaults: true,
+          restrict: {
+            id: freezeId,
+            matches: ({ action, resource }) =>
+              action === "update" &&
+              resource.kind === "preset" &&
+              resource.namespaceId === defaultNamespace[0].id,
+          },
+        },
+        frozenLog.logger,
+      );
+      assert.deepEqual(await readOpenClaw(), rolledBack.data);
+      assert.deepEqual(
+        frozenLog.lines
+          .filter(({ event }) => event === "presets.default-refresh-skipped")
+          .map(({ severity, namespaceId, presetId, presetName, reason, restrictionIds }) => ({
+            severity,
+            namespaceId,
+            presetId,
+            presetName,
+            reason,
+            restrictionIds,
+          })),
+        [
+          {
+            severity: "WARN",
+            namespaceId: defaultNamespace[0].id,
+            presetId: copiedOpenClaw.id,
+            presetName: "Standard OpenClaw",
+            reason: "An applicable Restriction denies the exact action and resource.",
+            restrictionIds: [freezeId],
+          },
+        ],
+      );
+      await restart({ includeDefaults: true });
       const afterRestart = await request("GET", presetPath);
       assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
         "Standard Codex",

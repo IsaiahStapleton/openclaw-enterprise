@@ -54,11 +54,17 @@ default or any shipped bundled version, even with `includeDefaults` disabled.
 Other Presets block it with `409 NAMESPACE_NOT_EMPTY`.
 
 Startup selects a persisted Principal authorized to administer the Installation
-and requires `preset:create` wherever defaults are missing and `preset:update`
-on each copy it refreshes. Namespace
+and requires `preset:create` wherever defaults are missing. Namespace
 creators likewise need `preset:create` when this option is enabled. Authorization
 or template validation failure rolls back initialization and prevents startup
-or Namespace creation. The selected Configuration Driver validates native
+or Namespace creation.
+
+Refreshing a copy also needs `preset:update` on it, preferring an administrator
+who holds it. A refresh the policy refuses never prevents startup: for example,
+a Namespace deny Restriction on `preset:update` that freezes its Presets keeps
+the earlier version. The API logs one `presets.default-refresh-skipped` warning
+per kept copy, naming its Namespace, Preset ID and name, the refusal reason, and
+any Restriction IDs. Remove the Restriction and restart the API to refresh it. The selected Configuration Driver validates native
 values; seeding does not create workloads or credentials.
 
 ## Configuration inventory
