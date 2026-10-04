@@ -99,8 +99,9 @@ its previous version archived there.
 Initialization authorizes Installation administration, locks Namespaces in ID
 order in one transaction, and skips failed/deleting Namespaces. Missing names
 require Preset create permission and ordinary template/Driver validation before
-storage and mutation audit. An existing copy of a bundled default that still
-equals a superseded shipped version requires Preset update permission; its
+storage and mutation audit. While `includeDefaults` is enabled, an existing copy
+of a bundled default that still equals a superseded shipped version requires
+Preset update permission; its
 template is replaced in place and audited with `source: installation-defaults-refresh`.
 Other existing copies are untouched. Any failure rolls back
 the transaction and prevents API startup. Namespace creation uses the same
@@ -284,6 +285,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-04 22:00: Refresh superseded copies only when `includeDefaults` seeded them; a `presets.files` copy of a bundled file stays.
 - 2026-10-04 14:00: Refresh untouched copies of superseded bundled defaults at startup, and let any shipped version pass the Namespace deletion check.
 - 2026-10-03 20:30: Seed default Presets with the next Installation administrator when one cannot create them, so an upgrade that adds a default no longer stops API startup.
 - 2026-09-28 10:36: Restore explicit creation without a Preset. (authoring-run/c140c47a-799b-48c8-929a-5d1a37eb31d1 - 9f7ae3cfb749a58394f8446f3a429db6ffa6f129)
