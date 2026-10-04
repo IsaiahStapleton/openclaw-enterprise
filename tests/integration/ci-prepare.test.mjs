@@ -60,7 +60,14 @@ async function fixtureImageCommands(
   const commandSource = `#!${process.execPath}\n${String.raw`
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 
 const root = process.env.CI_FIXTURE_ROOT;
@@ -76,14 +83,45 @@ const manifestDigest = "sha256:" + "c".repeat(64);
 appendFileSync(join(root, "commands.jsonl"), JSON.stringify({
   command, args, envPublished: existsSync(join(root, "github.env")),
 }) + "\n");
-function finish(stdout = "") {
-  // Parallel diagnostic reads must not truncate the shared fixture state.
+// Preparation runs independent commands concurrently. Merge this command's
+// changes into the latest shared state under a lock so none is lost.
+function commitState() {
   const serializedState = JSON.stringify(state);
-  if (serializedState !== initialState) {
-    writeFileSync(statePath, serializedState);
+  // Parallel diagnostic reads must not truncate the shared fixture state.
+  if (serializedState === initialState) return;
+  const lock = statePath + ".lock";
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST" || Date.now() > deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
   }
+  try {
+    const before = JSON.parse(initialState);
+    const latest = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {};
+    for (const [key, value] of Object.entries(state)) {
+      if (JSON.stringify(value) === JSON.stringify(before[key])) continue;
+      const nested = (entry) => entry && typeof entry === "object" && !Array.isArray(entry);
+      latest[key] = nested(value) && nested(latest[key]) ? { ...latest[key], ...value } : value;
+    }
+    writeFileSync(statePath, JSON.stringify(latest));
+  } finally {
+    rmdirSync(lock);
+  }
+}
+function finish(stdout = "") {
+  commitState();
   process.stdout.write(stdout);
   process.exit(0);
+}
+async function readInput() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString();
 }
 
 if (command === "docker" || command === "podman") {
@@ -175,7 +213,8 @@ if (command === "docker" || command === "podman") {
     finish();
   }
   if (equals(args.slice(0, 3), ["build", "--pull=false", "-t"]) && args.length === 5) {
-    assert.equal(args[3], "localhost/" + state.cluster + "/fixture:local");
+    // The fixture build overlaps cluster creation, so its tag cannot name the cluster.
+    assert.match(args[3], /^localhost\/openclaw-ci-image-[a-z0-9-]+\/fixture:local$/);
     state.tag = args[3];
     finish();
   }
@@ -185,23 +224,37 @@ if (command === "docker" || command === "podman") {
   }
   if (equals(args, ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", state.tag])) finish("linux/amd64\n");
   const expectedSave = command === "podman"
-    ? ["image", "save", "--output"]
-    : ["image", "save", "--platform", "linux/amd64", "--output"];
-  if (equals(args.slice(0, expectedSave.length), expectedSave) &&
-      args.length === expectedSave.length + 2 && args.at(-1) === state.tag) {
-    state.archive = args.at(-2);
-    writeFileSync(state.archive, "synthetic image archive\n");
-    finish();
+    ? ["image", "save", state.tag]
+    : ["image", "save", "--platform", "linux/amd64", state.tag];
+  if (equals(args, expectedSave)) {
+    if (scenario === "save-failed") {
+      // A truncated export must fail preparation even if a node accepts it.
+      process.stdout.write("synthetic image");
+      process.stderr.write("synthetic export failure\n");
+      process.exit(23);
+    }
+    finish("synthetic image archive " + state.tag + "\n");
   }
   if (equals(args, ["image", "rm", "-f", state.tag])) finish();
   if (state.runtime && equals(args, ["image", "rm", "-f", state.runtime])) finish();
-  if (args[0] === "cp" && args[1] === state.archive) {
-    assert.ok(existsSync(state.archive));
-    const [node, path] = args[2].split(":");
-    assert.ok(["server-0", "agent-0"].some((suffix) => node === "k3d-" + state.cluster + "-" + suffix));
-    assert.match(path, /^\/tmp\/openclaw-ci-image-import-[a-f0-9]+\.tar$/);
-    state.copiedArchives ??= {};
-    state.copiedArchives[node] = path;
+  if (equals(args.slice(0, 2), ["exec", "-i"]) && ["server-0", "agent-0"].some((suffix) =>
+      args[2] === "k3d-" + state.cluster + "-" + suffix)) {
+    const node = args[2];
+    assert.deepEqual(args.slice(3), ["ctr", "-n", "k8s.io", "images", "import", "--all-platforms", "-"]);
+    if (scenario === "nonzero-import" ||
+        (scenario === "nonzero-worker-import" && node.endsWith("-agent-0"))) {
+      process.stderr.write("synthetic import command failure\n");
+      process.exit(17);
+    }
+    const archive = await readInput();
+    if (archive !== "synthetic image archive " + state.tag + "\n") {
+      process.stderr.write("ctr: unexpected EOF\n");
+      process.exit(1);
+    }
+    if (scenario !== "missing-tag") {
+      state.importedNodes ??= {};
+      state.importedNodes[node] = true;
+    }
     finish();
   }
   if (args[0] === "exec" && ["server-0", "agent-0"].some((suffix) =>
@@ -221,18 +274,6 @@ if (command === "docker" || command === "podman") {
         : "10.42.7.0 via 10.42.7.0 dev flannel.1 src 10.42.3.0\n");
     }
     const ctr = ["ctr", "-n", "k8s.io", "images"];
-    if (equals(args.slice(2, 8), [...ctr, "import", "--all-platforms"]) && args.length === 9) {
-      assert.equal(args[8], state.copiedArchives?.[node]);
-      if (scenario === "nonzero-import") {
-        process.stderr.write("synthetic import command failure\n");
-        process.exit(17);
-      }
-      if (scenario !== "missing-tag") {
-        state.importedNodes ??= {};
-        state.importedNodes[node] = true;
-      }
-      finish();
-    }
     if (equals(args.slice(2), [...ctr, "list"])) {
       const references = [state.importedNodes?.[node] && state.tag, alias].filter(Boolean);
       finish("REF TYPE DIGEST SIZE PLATFORMS LABELS\n" + references.map((ref) =>
@@ -248,10 +289,6 @@ if (command === "docker" || command === "podman") {
     }
     if (equals(args.slice(2, 7), [...ctr, "rm"]) && args.length === 8 &&
         [state.tag, alias].includes(args[7])) finish();
-    if (equals(args.slice(2, 4), ["rm", "-f"]) && args.length === 5) {
-      assert.equal(args[4], state.copiedArchives?.[node]);
-      finish();
-    }
     if (equals(args.slice(2), ["crictl", "inspecti", alias]) && alias) {
       if (scenario === "missing-cri" ||
           (scenario === "missing-worker-cri" && node.endsWith("-agent-0"))) {
@@ -298,7 +335,7 @@ if (command === "k3d") {
     state.cluster = args[2];
     if (scenario === "cluster-create-failed") {
       state.containersAvailable = args.includes("--no-rollback");
-      writeFileSync(statePath, JSON.stringify(state));
+      commitState();
       process.stderr.write("synthetic cluster creation failure\n");
       process.exit(1);
     }
@@ -473,6 +510,8 @@ for (const { scenario, error } of [
   { scenario: "missing-cri", error: /synthetic CRI image not found/ },
   { scenario: "missing-worker-cri", error: /synthetic CRI image not found/ },
   { scenario: "nonzero-import", error: /synthetic import command failure/ },
+  { scenario: "nonzero-worker-import", error: /synthetic import command failure/ },
+  { scenario: "save-failed", error: /synthetic export failure/ },
 ]) {
   test(`fixture image CLI verifies runtime registration and cleanup: ${scenario}`, async (t) => {
     const commands = await fixtureImageCommands(t, scenario);
@@ -519,16 +558,29 @@ for (const { scenario, error } of [
       ({ command, args }) =>
         ["docker", "podman"].includes(command) && args[0] === "image" && args[1] === "save",
     );
-    assert.ok(save, "registration must export a task-owned archive");
-    const archive = save.args[save.args.indexOf("--output") + 1];
-    await assert.rejects(() => stat(archive), { code: "ENOENT" });
+    assert.ok(save, "registration must export the task-owned image");
+    // The export streams into each node; no archive is written or copied.
+    assert.equal(save.args.includes("--output"), false);
+    assert.equal(save.args.at(-1), localImage.name);
     assert.equal(save.args.includes("--platform"), scenario !== "podman-success");
+    assert.equal(
+      preparation.some(({ args }) => args[0] === "cp"),
+      false,
+    );
+    const imports = preparation.filter(
+      ({ args }) => args[0] === "exec" && args[1] === "-i" && args.includes("import"),
+    );
+    assert.deepEqual(
+      imports.map(({ args }) => args[2]).sort(),
+      [`k3d-${cluster.name}-agent-0`, `k3d-${cluster.name}-server-0`],
+      "every owned node must import the stream directly",
+    );
     assert.equal(
       preparation.every(({ envPublished }) => !envPublished),
       true,
     );
     if (!error) {
-      const expected = `localhost/${cluster.name}/fixture@sha256:${"c".repeat(64)}`;
+      const expected = `${localImage.name.replace(/:local$/, "")}@sha256:${"c".repeat(64)}`;
       assert.equal(importedImage.reference, expected);
       assert.equal(state.env.OCC_TEST_KUBERNETES_IMAGE, expected);
       assert.equal(state.env.OCC_TEST_KUBERNETES_PLUGIN_STATUS_PROXY_CIDRS, "10.42.3.0/32");
@@ -570,11 +622,20 @@ for (const { scenario, error } of [
       ({ command, args }) =>
         ["docker", "podman"].includes(command) && args[0] === "image" && args[1] === "rm",
     );
+    const importedRemoval = cleanupCalls.findIndex(
+      ({ args }) => args[0] === "exec" && args.includes("ctr") && args.includes("rm"),
+    );
     const clusterRemoval = cleanupCalls.findIndex(
       ({ command, args }) => command === "k3d" && args[0] === "cluster" && args[1] === "delete",
     );
-    assert.ok(localRemoval > 0, "imported image cleanup must precede local tag cleanup");
-    assert.ok(clusterRemoval > localRemoval, "the cluster must outlive image cleanup");
+    assert.ok(importedRemoval >= 0, "cleanup must remove the imported image from the nodes");
+    assert.ok(
+      localRemoval > importedRemoval,
+      "imported image cleanup must precede local tag cleanup",
+    );
+    // The local tag may be created before the cluster now that the fixture build
+    // overlaps cluster creation; only the node-side image needs the cluster.
+    assert.ok(clusterRemoval > importedRemoval, "the cluster must outlive imported image cleanup");
   });
 }
 
@@ -766,10 +827,16 @@ test("ordinary k3d preparation forwards an immutable K3s override and retains th
       assert.equal(cluster.kubernetesVersion, "v1.35.8+k3s1");
     } else {
       assert.match(result.stderr, /must resolve to Kubernetes 1\.35\.x/);
+      // The fixture build overlaps cluster creation; nothing reaches the cluster.
       assert.equal(
-        (await commands.commands()).some(({ args }) => args[0] === "build"),
+        (await commands.commands()).some(({ args }) => args[0] === "exec" && args[1] === "-i"),
         false,
       );
+      assert.equal(
+        state.resources.some(({ kind }) => kind === "k3d-image"),
+        false,
+      );
+      assert.equal(state.env, undefined);
     }
     const cleanup = commands.cleanup();
     assert.equal(cleanup.status, 0, cleanup.stderr);
@@ -874,8 +941,8 @@ test("repository platform preparation binds runtime clients, an owned gateway an
     "k3d-create",
     "runtime-image-build",
     "platform-fixture-build",
-    "image-archive-save",
-    "image-archive-import",
+    "postgres-cluster-image-build",
+    "image-stream-import",
     "platform-image-import",
   ]) {
     assert.match(
@@ -889,10 +956,15 @@ test("repository platform preparation binds runtime clients, an owned gateway an
   const cluster = state.resources.find(({ kind }) => kind === "k3d-cluster");
   assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM, "1");
   assert.equal(state.env.OCC_TEST_REPOSITORY_CREDENTIALS_HOST_ADDRESS, "172.19.0.1");
-  assert.equal(
+  assert.match(
     state.env.OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE,
-    `localhost/${cluster.name}/repository-platform@sha256:${"c".repeat(64)}`,
+    new RegExp(
+      `^localhost/openclaw-ci-image-[a-z0-9-]+/repository-platform@sha256:${"c".repeat(64)}$`,
+    ),
   );
+  const imported = state.resources.find(({ kind }) => kind === "k3d-image");
+  assert.equal(imported.cluster, cluster.name);
+  assert.equal(imported.status, "ready");
   assert.equal(state.env.OPENAI_API_KEY, undefined);
 
   const file = commands.prepareFile("tests/integration/repository-credentials-platform.test.mjs");
@@ -1086,7 +1158,7 @@ assert.equal(finalState.resources.length, 1);
   assert.equal((await readFile(logPath, "utf8")).trim().split("\n").length, 8);
 });
 
-test("repository platform preparation refuses a public relay gateway before building images", async (t) => {
+test("repository platform preparation refuses a public relay gateway before importing images", async (t) => {
   const commands = await fixtureImageCommands(
     t,
     "public-gateway",
@@ -1095,10 +1167,18 @@ test("repository platform preparation refuses a public relay gateway before buil
   const prepared = commands.prepare();
   assert.equal(prepared.status, 1);
   assert.match(prepared.stderr, /private IPv4 Docker host gateway/);
+  // The image builds overlap cluster creation; nothing reaches the refused cluster.
   assert.equal(
-    (await commands.commands()).some(({ args }) => args[0] === "build"),
+    (await commands.commands()).some(({ args }) => args[0] === "exec" && args[1] === "-i"),
     false,
   );
+  const state = JSON.parse(await readFile(commands.statePath, "utf8"));
+  assert.equal(
+    state.resources.some(({ kind }) => kind === "k3d-image"),
+    false,
+  );
+  assert.equal(state.env, undefined);
+  await assert.rejects(() => stat(commands.githubEnv), { code: "ENOENT" });
   const cleaned = commands.cleanup();
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
