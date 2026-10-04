@@ -1345,7 +1345,7 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
-  // The draft is mounted again, so the form repeats its reads.
+  // Returning to the draft restores or remounts it; wait for the live form's reads.
   await waitForCreateFormReads(page);
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
   // Plugin catalog discovery is a read sent as POST. A mounted draft with the rendered codex_pat
