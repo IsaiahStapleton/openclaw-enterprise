@@ -1428,6 +1428,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
         const localhostProfile =
           manifest?.spec?.containers?.[0]?.securityContext?.seccompProfile?.localhostProfile;
         if (localhostProfile?.includes("missing-")) {
+          const missingProfilePath = `/var/lib/kubelet/seccomp/${localhostProfile}`;
           return {
             stdout: JSON.stringify({
               metadata: { name },
@@ -1438,7 +1439,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
                     state: {
                       waiting: {
                         reason: "CreateContainerError",
-                        message: "seccomp profile is not found",
+                        message: `failed to create containerd container: cannot load seccomp profile ${JSON.stringify(missingProfilePath)}: open ${missingProfilePath}: no such file or directory`,
                       },
                     },
                   },
