@@ -31,11 +31,12 @@ Prepare:
 
 - each selected image as an immutable `@sha256:` digest with passing checks and
   a reviewed source commit;
-- a clean checkout of the release you are installing, at that commit. Run the
-  helper from its root: it renders that checkout's Helm chart and compares the
-  Collector configuration with that checkout's files;
-- the OCC CLI from the same release, for `--occ`: its
-  [release binary](../cli.md#connect-to-your-installation), or `./bin/occ` from
+- a clean checkout of the release you are installing, at `RELEASE_SOURCE_SHA`.
+  Run the helper from its root: it renders that checkout's Helm chart and
+  compares the Collector configuration with that checkout's files;
+- the OCC CLI from the same release, installed at the path you pass as `--occ`
+  (`/secure/occ/bin/occ` below): its
+  [release binary](../cli.md#connect-to-your-installation), or `bin/occ` from
   `pnpm cli:build` in that checkout. The helper reads the deployment inventory
   and deploys Agents through it, and an older CLI can lack those commands;
 - a [pre-upgrade baseline](upgrade-baseline.md) of Helm, Kubernetes, OCC and
@@ -95,12 +96,15 @@ export OCC_CA_BUNDLE='/secure/occ/occ-ca.pem'
 export RELEASE_SOURCE_SHA='<full-40-character-git-sha>'
 export UPGRADE_EVIDENCE="/secure/occ/upgrades/$(date -u +%Y%m%dT%H%M%SZ)"
 cd /secure/src/openclaw-enterprise # the release checkout
+git fetch origin
 git checkout --detach "$RELEASE_SOURCE_SHA"
-test -z "$(git status --porcelain)"
+test -z "$(git status --porcelain)" || echo 'The release checkout is not clean.' >&2
 ```
 
 The evidence directory must not exist. The command creates it with mode `0700`.
-Run `scripts/upgrade-production-images` from this checkout.
+Run `scripts/upgrade-production-images` from this checkout. Only
+[other Installation changes](#apply-other-installation-changes) use the
+installed release's checkout instead.
 
 ### Include reviewed settings
 
@@ -166,11 +170,13 @@ than the Plugin Driver selection stops the helper with `candidate Installation
 changes a protected setting`. Diff `deploy/examples/production/installation.yaml`
 and `scripts/render-installation-profile.mjs` between the deployed and candidate
 source, decide which changes to adopt, and apply them as a separate change, not
-during an image upgrade. Use the chart source of the installed controller and
-keep the image references in `values.yaml` unchanged:
+during an image upgrade. Run these commands from a checkout of the installed
+controller's source revision, not the release checkout, and keep the image
+references in `values.yaml` unchanged:
 
 ```bash
 set -euo pipefail
+cd /secure/src/openclaw-enterprise-installed # checkout of the deployed source revision
 cp /secure/occ/installation.yaml /secure/occ/installation.yaml.before
 # Edit /secure/occ/installation.yaml and review the diff, then:
 export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
