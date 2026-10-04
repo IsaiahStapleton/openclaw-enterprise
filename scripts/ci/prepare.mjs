@@ -757,6 +757,7 @@ const imageCacheLanes = new Map([
   ["images-packaging", { localStore: false }],
   ["images-model-probes", { localStore: false }],
   ["images-runtime-startup", { localStore: false }],
+  ["images-runtime-startup-2", { localStore: false }],
   ["repository-credentials-platform", { localStore: true }],
 ]);
 
@@ -1911,7 +1912,9 @@ async function prepareLane({ lane, statePath }) {
       );
       break;
     case "images-runtime-startup":
-      // Runtime image smoke tests run apart from packaging to shorten CI wall time.
+    case "images-runtime-startup-2":
+      // Runtime image smoke tests run apart from packaging, in two lanes, to
+      // shorten CI wall time.
       Object.assign(
         env,
         (
