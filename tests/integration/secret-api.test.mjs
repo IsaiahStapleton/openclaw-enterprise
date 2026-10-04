@@ -910,16 +910,34 @@ for (const [model, method, executionMode] of [
     assert.equal(forbidden.status, 403);
     assert.equal(forbidden.body.error.code, "FORBIDDEN");
     // Administrative rights on the actor do not give the Agent permission to receive a key.
-    const denied = await request(fixture.app, "POST", `${path}/deploy`);
-    assert.equal(denied.status, 403);
     const { servicePrincipalId } = await fixture
       .controller()
       .getAgent(fixture.principal.id, namespace.id, agent.id);
+    // The Agent's service principal exists but holds no grant on the key.
     fixture.state.identities.push({
       kind: "service_principal",
       id: servicePrincipalId,
       namespaceId: namespace.id,
     });
+    const denied = await request(fixture.app, "POST", `${path}/deploy`);
+    assert.equal(denied.status, 403);
+    // The caller's own grants passed, so the denial audit records the caller's deploy request
+    // and names the Agent service principal and the grant it lacks, never the caller as denied.
+    const agentDenial = fixture.auditSink.events.findLast(
+      (event) => event.kind === "authorization_denial",
+    );
+    assert.equal(agentDenial.reasonCode, "AGENT_PRINCIPAL_NOT_AUTHORIZED");
+    assert.equal(agentDenial.decisionReason, denied.body.error.message);
+    assert.deepEqual(agentDenial.authorization, {
+      principalId: fixture.principal.id,
+      action: "deploy",
+      resource: { kind: "agent", id: agent.id, namespaceId: namespace.id },
+    });
+    assert.equal(agentDenial.details.servicePrincipalId, servicePrincipalId);
+    assert.equal(agentDenial.details.action, "operate");
+    assert.deepEqual(agentDenial.details.resource, key.data.ref);
+    assert.equal(agentDenial.details.iamEvidence, undefined);
+    assert.equal(agentDenial.details.servicePrincipalEvidence.identityId, servicePrincipalId);
     fixture.state.roles.push({
       id: "harness-key-delivery",
       namespaceId: namespace.id,
