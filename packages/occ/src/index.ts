@@ -474,6 +474,12 @@ export interface ControllerOptions {
    * unmodified release content.
    */
   readonly bundledPresetVersions?: readonly BundledPresetVersion[];
+  /**
+   * Installation startup `presets.includeDefaults`. Only then are `defaultPresets` the bundled
+   * defaults whose superseded copies startup refreshes; a `presets.files` entry never is, even
+   * one that repeats a bundled file. Default: false.
+   */
+  readonly refreshBundledDefaultPresets?: boolean;
   readonly loggingLevel?: LoggingLevel;
   readonly configuredServiceAccountDriverId?: string;
   /** Installation startup `runtime.nativeWorkerSupport`; never set from the API. */
@@ -944,6 +950,7 @@ export class OpenClawController {
   private readonly backends: readonly BackendDefinition[];
   private readonly defaultPresets: readonly Pick<Preset, "name" | "template">[];
   private readonly bundledPresetVersions: readonly BundledPresetVersion[];
+  private readonly refreshBundledDefaultPresets: boolean;
   private readonly loggingLevel: LoggingLevel;
   private readonly backendMap: ReadonlyMap<string, BackendDefinition>;
   private readonly configuredServiceAccountDriverId: string | undefined;
@@ -978,6 +985,7 @@ export class OpenClawController {
       presetNames.add(preset.name);
     }
     this.bundledPresetVersions = immutableCopy(options.bundledPresetVersions ?? []);
+    this.refreshBundledDefaultPresets = options.refreshBundledDefaultPresets === true;
     this.loggingLevel = normalizeLoggingLevel(options.loggingLevel);
     if (
       options.nativeWorkerSupport !== undefined &&
@@ -3068,7 +3076,11 @@ export class OpenClawController {
     seeded: Pick<Preset, "name" | "template">,
     copy: Readonly<Preset>,
   ): Promise<void> {
-    // Only bundled defaults have a history; `presets.files` entries are never refreshed.
+    // Only bundled defaults have a history; `presets.files` entries are never refreshed,
+    // including a file that repeats a bundled default while `includeDefaults` is off.
+    if (!this.refreshBundledDefaultPresets) {
+      return;
+    }
     const current = this.bundledPresetVersions.find(
       (version) =>
         version.current &&

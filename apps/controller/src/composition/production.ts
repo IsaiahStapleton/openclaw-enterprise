@@ -254,6 +254,7 @@ export async function composeProduction(config: ProductionConfig) {
       backends: installation.backend,
       defaultPresets: config.drivers.defaultPresets ?? [],
       bundledPresetVersions: config.drivers.bundledPresetVersions ?? [],
+      refreshBundledDefaultPresets: config.drivers.installation.presets?.includeDefaults === true,
       loggingLevel: config.drivers.installation.logging.level,
       ...(installation.runtime === undefined
         ? {}
