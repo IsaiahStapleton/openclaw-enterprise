@@ -1071,6 +1071,7 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     "checks-baseline-1",
     "checks-baseline-2",
     "checks-browser",
+    "checks-browser-2",
     "postgres",
     "postgres-application",
     "postgres-auth",
