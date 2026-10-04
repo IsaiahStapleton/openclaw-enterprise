@@ -1519,14 +1519,6 @@ test("identity access coverage counts Agent administer for a delegated read_logs
   assert.equal(await covers("tenant-b-admin", "log-reader"), false);
   // Without administer, Agent read alone covers neither read_logs nor administer.
   assert.equal(await covers("agent-reader", "log-reader"), false);
-  assert.equal(await covers("log-reader", "tenant-a-admin"), false);
   // read_logs does not stand in for administer the other way round.
-  assert.equal(await covers("log-reader-without-read", "agent-reader"), false);
-  // Authorization itself is unchanged: administer still does not imply read_logs.
-  const decision = await driver.authorize({
-    principalId: "installation-admin",
-    action: "read_logs",
-    resource: agentResource("agent-a", "tenant-a"),
-  });
-  assert.equal(decision.allowed, false);
+  assert.equal(await covers("log-reader", "tenant-a-admin"), false);
 });

@@ -907,7 +907,8 @@ function effectiveGrants(
 /**
  * Agent `read_logs` admits only runtime log text, which Agent `administer` also admits (the
  * log route accepts either), so for coverage an `administer` grant stands in for it. This
- * changes coverage only: authorization still treats the two actions as unrelated.
+ * changes coverage only: authorization still treats the two actions as unrelated. No other
+ * action pair is related this way.
  */
 function coveringActions(permission: Permission): readonly string[] {
   return permission.resourceKind === "agent" && permission.action === "read_logs"
