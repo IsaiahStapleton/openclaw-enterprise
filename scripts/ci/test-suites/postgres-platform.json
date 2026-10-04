@@ -175,6 +175,12 @@
     {
       "path": "tests/integration/postgres-repository-broker-receipts.test.mjs",
       "expectedTests": ["confirmed broker disposal survives service restart in PostgreSQL"]
+    },
+    {
+      "path": "tests/integration/postgres-password-sign-in-limit.test.mjs",
+      "expectedTests": [
+        "password-only sign-in limits failures per client and email with a reserved administrator lane"
+      ]
     }
   ]
 }
