@@ -141,6 +141,17 @@ test("service API keys authenticate scoped automation without replacing sessions
   });
   const body = { servicePrincipalId: principal.id, namespaceId, name: "tenant-automation" };
   const issue = () => request("POST", "/api/auth/service-keys", { body });
+  async function assertServiceKeyManagementDenied(headers, keyResponse, status) {
+    assert.equal(
+      (await request("POST", "/api/auth/service-keys", { headers, body })).status,
+      status,
+    );
+    assert.equal(
+      (await request("DELETE", `/api/auth/service-keys/${keyResponse.data.id}`, { headers }))
+        .status,
+      status,
+    );
+  }
   const issued = await issue();
   assert.equal(issued.status, 201);
   assert.equal(issued.data.servicePrincipalId, principal.id);
@@ -551,19 +562,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       for (const key of ["", "forged-key", `${issued.data.key}tampered`]) {
         const invalidHeaders = { "x-api-key": key, cookie: session.cookie };
         assert.equal((await request("GET", path, { headers: invalidHeaders })).status, 401);
-        assert.equal(
-          (await request("POST", "/api/auth/service-keys", { headers: invalidHeaders, body }))
-            .status,
-          401,
-        );
-        assert.equal(
-          (
-            await request("DELETE", `/api/auth/service-keys/${issued.data.id}`, {
-              headers: invalidHeaders,
-            })
-          ).status,
-          401,
-        );
+        await assertServiceKeyManagementDenied(invalidHeaders, issued, 401);
       }
       assert.equal((await request("GET", path, { headers: {} })).status, 401);
       assert.equal(
@@ -601,11 +600,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       subjectId: principal.id,
       roleId: seed.bindings[0].roleId,
     });
-    assert.equal((await request("POST", "/api/auth/service-keys", { headers, body })).status, 403);
-    assert.equal(
-      (await request("DELETE", `/api/auth/service-keys/${issued.data.id}`, { headers })).status,
-      403,
-    );
+    await assertServiceKeyManagementDenied(headers, issued, 403);
     policy.bindings.pop();
   });
 
@@ -643,19 +638,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       assert.equal((await request("GET", path, { headers: keyHeaders })).status, 403);
       // A reader key cannot borrow the human cookie's Installation authority.
       const managementHeaders = { ...keyHeaders, cookie: session.cookie };
-      assert.equal(
-        (await request("POST", "/api/auth/service-keys", { headers: managementHeaders, body }))
-          .status,
-        403,
-      );
-      assert.equal(
-        (
-          await request("DELETE", `/api/auth/service-keys/${created.data.id}`, {
-            headers: managementHeaders,
-          })
-        ).status,
-        403,
-      );
+      await assertServiceKeyManagementDenied(managementHeaders, created, 403);
       // Installation administer alone cannot issue a key that reaches the
       // Namespace grants the issuer itself lacks.
       const exactAdminBinding = {
@@ -701,19 +684,7 @@ test("service API keys authenticate scoped automation without replacing sessions
         ).status,
         200,
       );
-      assert.equal(
-        (await request("POST", "/api/auth/service-keys", { headers: managementHeaders, body }))
-          .status,
-        401,
-      );
-      assert.equal(
-        (
-          await request("DELETE", `/api/auth/service-keys/${child.data.id}`, {
-            headers: managementHeaders,
-          })
-        ).status,
-        401,
-      );
+      await assertServiceKeyManagementDenied(managementHeaders, child, 401);
 
       // Management rechecks IAM: neither a removed grant nor a deny Restriction
       // can be bypassed by retaining a valid administrator credential.
@@ -729,19 +700,7 @@ test("service API keys authenticate scoped automation without replacing sessions
             effect: "deny",
           });
         }
-        assert.equal(
-          (await request("POST", "/api/auth/service-keys", { headers: replacementHeaders, body }))
-            .status,
-          403,
-        );
-        assert.equal(
-          (
-            await request("DELETE", `/api/auth/service-keys/${child.data.id}`, {
-              headers: replacementHeaders,
-            })
-          ).status,
-          403,
-        );
+        await assertServiceKeyManagementDenied(replacementHeaders, child, 403);
       }
       policy.restrictions.pop();
       for (const key of [child.data, replacement.data]) {

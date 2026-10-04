@@ -87,13 +87,16 @@ cookie is current. It never issues or extends a session.
 
 When a provider cannot answer a consumed attempt (transport failure, deadline,
 redirect, 429 or 5xx, an oversized or malformed body, or its own `server_error`
-or `temporarily_unavailable`), the denial is audited as `PROVIDER_UNAVAILABLE` and the
-API logs one `authentication.provider-unavailable-warning` at WARN. It carries
-`provider` (`github`, `google`, or `oidc`), the provider instance `providerId`, `step`
+or `temporarily_unavailable`), or its token endpoint refuses the configured client
+(`invalid_client`, `unauthorized_client`, `unsupported_grant_type`, or GitHub's
+`incorrect_client_credentials` or `redirect_uri_mismatch`: check the client ID, secret
+and registered callback), the denial is audited as `PROVIDER_UNAVAILABLE` and the API
+logs one `authentication.provider-unavailable-warning` at WARN. It carries `provider`
+(`github`, `google`, or `oidc`), the provider instance `providerId`, `step`
 (`authorization`, `token`, `jwks`, or `profile`), a bounded `cause` (`connect_refused`,
 `dns`, `timeout`, `tls`, `connection_reset`, `network`, `redirect`, `http_status`,
-`oversized_response`, `malformed_response`, or `provider_error`), and, when present, the
-HTTP `status` or transport `code` such as `ECONNREFUSED`. It never carries URLs,
+`oversized_response`, `malformed_response`, `provider_error`, or `client_rejected`), and,
+when present, the HTTP `status` or transport `code` such as `ECONNREFUSED`. It never carries URLs,
 authorization codes, tokens, response bodies, or user data. A rejected identity logs nothing.
 
 ## Recovery-only password sign-in
