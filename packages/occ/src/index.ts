@@ -498,6 +498,21 @@ export interface BundledPresetVersion {
   readonly current: boolean;
 }
 
+/**
+ * Which refusals of a default Preset refresh startup skips instead of failing on.
+ * `restricted`: a deny Restriction, which binds every principal alike. `denied`: any refusal.
+ */
+export type DefaultPresetRefreshSkip = "none" | "restricted" | "denied";
+
+/** A superseded default Preset copy left in place because the policy refused its refresh. */
+export interface SkippedDefaultPresetRefresh {
+  readonly namespaceId: string;
+  readonly presetId: string;
+  readonly presetName: string;
+  readonly reason: string;
+  readonly restrictionIds: readonly string[];
+}
+
 export interface CreateNamespaceInput {
   readonly name: string;
   readonly existingNamespace?: string;
@@ -2998,10 +3013,15 @@ export class OpenClawController {
    * Apply trusted Installation defaults: create missing names and refresh copies still equal
    * to a superseded bundled version. Edited copies are never replaced.
    */
-  async initializeDefaultPresets(principalId: string): Promise<void> {
+  async initializeDefaultPresets(
+    principalId: string,
+    options: { readonly skipRefusedRefresh?: DefaultPresetRefreshSkip } = {},
+  ): Promise<readonly SkippedDefaultPresetRefresh[]> {
+    const skipped: SkippedDefaultPresetRefresh[] = [];
     if (this.defaultPresets.length === 0) {
-      return;
+      return skipped;
     }
+    const skip = options.skipRefusedRefresh ?? "none";
     await this.mutate(async (state) => {
       await this.authorize(principalId, "administer", {
         kind: "installation",
@@ -3013,16 +3033,24 @@ export class OpenClawController {
       for (const namespace of namespaces) {
         const current = await state.namespaces.lockNamespace(namespace.id);
         if (current && ["provisioning", "ready"].includes(current.status)) {
-          await this.ensureNamespaceDefaultPresets(state, principalId, current);
+          await this.ensureNamespaceDefaultPresets(state, principalId, current, {
+            skip,
+            skipped,
+          });
         }
       }
     });
+    return Object.freeze(skipped);
   }
 
   private async ensureNamespaceDefaultPresets(
     state: PlatformUnitOfWork,
     principalId: string,
     namespace: Readonly<Namespace>,
+    refresh: {
+      readonly skip: DefaultPresetRefreshSkip;
+      readonly skipped: SkippedDefaultPresetRefresh[];
+    } = { skip: "none", skipped: [] },
   ): Promise<void> {
     if (this.defaultPresets.length === 0) {
       return;
@@ -3033,7 +3061,14 @@ export class OpenClawController {
     for (const preset of this.defaultPresets) {
       const copy = existing.get(preset.name);
       if (copy !== undefined) {
-        await this.refreshSupersededDefaultPreset(state, principalId, namespace, preset, copy);
+        await this.refreshSupersededDefaultPreset(
+          state,
+          principalId,
+          namespace,
+          preset,
+          copy,
+          refresh,
+        );
         continue;
       }
       await this.authorize(principalId, "create", {
@@ -3075,6 +3110,10 @@ export class OpenClawController {
     namespace: Readonly<Namespace>,
     seeded: Pick<Preset, "name" | "template">,
     copy: Readonly<Preset>,
+    refresh: {
+      readonly skip: DefaultPresetRefreshSkip;
+      readonly skipped: SkippedDefaultPresetRefresh[];
+    },
   ): Promise<void> {
     // Only bundled defaults have a history; `presets.files` entries are never refreshed,
     // including a file that repeats a bundled default while `includeDefaults` is off.
@@ -3101,11 +3140,39 @@ export class OpenClawController {
     if (superseded === undefined) {
       return;
     }
-    await this.authorize(principalId, "update", {
-      kind: "preset",
-      id: copy.id,
-      namespaceId: namespace.id,
-    });
+    try {
+      await this.authorize(principalId, "update", {
+        kind: "preset",
+        id: copy.id,
+        namespaceId: namespace.id,
+      });
+    } catch (error) {
+      // A refusal is the policy's answer, for example a Restriction an administrator set to
+      // freeze Presets, so startup keeps the copy instead of failing. Outages still fail.
+      if (
+        !(error instanceof AuthorizationDeniedError) ||
+        error instanceof DependencyUnavailableError
+      ) {
+        throw error;
+      }
+      const restrictionIds = error.evidence?.restrictionIds ?? [];
+      if (
+        refresh.skip === "none" ||
+        (refresh.skip === "restricted" && restrictionIds.length === 0)
+      ) {
+        throw error;
+      }
+      refresh.skipped.push(
+        Object.freeze({
+          namespaceId: namespace.id,
+          presetId: copy.id,
+          presetName: copy.name,
+          reason: error.message,
+          restrictionIds: Object.freeze([...restrictionIds]),
+        }),
+      );
+      return;
+    }
     const template = await this.admitPresetTemplate(seeded.template, namespace.id);
     const updated = await state.presets.updatePreset(namespace.id, copy.id, { template });
     if (!updated) {
