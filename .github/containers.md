@@ -252,8 +252,8 @@ repositories, use [Docker Hub promotion](container-promotion.md).
 
 ## Proof boundaries
 
-The existing CI Images and Packaging lane gates the selected source. Preparation
-reuses its controller/runtime startup tests against the newly prepared bytes:
+The existing CI Images and Packaging and Image Runtime Startup lanes gate the selected source.
+Preparation reuses their controller/runtime startup tests against the newly prepared bytes:
 source CI alone cannot prove a subsequent build with newly resolved npm
 transitives. Loading does not rebuild; each loaded config ID, its index entry, and the
 unchanged archive hash bind both platform smokes to the prepared image. Skopeo preserves manifest

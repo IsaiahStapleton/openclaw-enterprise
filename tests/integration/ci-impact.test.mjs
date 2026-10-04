@@ -539,6 +539,7 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     "postgres-auth",
     "images-packaging",
     "images-model-probes",
+    "images-runtime-startup",
     "runtime-image-fixture",
     "k3d-fixture-configuration",
     "k3d-fixture-state",
