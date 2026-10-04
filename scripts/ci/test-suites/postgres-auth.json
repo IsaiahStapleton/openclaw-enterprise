@@ -42,6 +42,10 @@
       ]
     },
     {
+      "path": "tests/integration/postgres-sign-in-unmatched-callbacks.test.mjs",
+      "expectedTests": ["unmatched external sign-in callbacks are counted, not audited"]
+    },
+    {
       "path": "tests/integration/postgres-github-tab-binding.test.mjs",
       "expectedTests": [
         "a GitHub tab keeps its own session: another tab's password sign-in signs it out"
