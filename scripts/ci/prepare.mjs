@@ -750,14 +750,24 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   }
 }
 
+// Lanes that may restore the hosted BuildKit cache. Only images-packaging
+// exports it. The repository platform lane loads its runtime image into the
+// Docker engine so a default-builder fixture build can derive from it.
+const imageCacheLanes = new Map([
+  ["images-packaging", { localStore: false }],
+  ["images-model-probes", { localStore: false }],
+  ["images-runtime-startup", { localStore: false }],
+  ["images-runtime-startup-2", { localStore: false }],
+  ["repository-credentials-platform", { localStore: true }],
+]);
+
 function imageBuildArgs(state, role, localStore) {
   if (process.env.OCC_CI_IMAGE_CACHE === "1") {
     if (
       process.env.GITHUB_ACTIONS !== "true" ||
-      !["images-packaging", "images-model-probes", "images-runtime-startup"].includes(state.lane) ||
+      imageCacheLanes.get(state.lane)?.localStore !== localStore ||
       !process.env.ACTIONS_RUNTIME_TOKEN ||
-      !process.env.ACTIONS_RESULTS_URL ||
-      localStore
+      !process.env.ACTIONS_RESULTS_URL
     ) {
       throw new Error("Image caching requires the hosted image lane and its cache credentials.");
     }
@@ -1902,7 +1912,9 @@ async function prepareLane({ lane, statePath }) {
       );
       break;
     case "images-runtime-startup":
-      // Runtime image smoke tests run apart from packaging to shorten CI wall time.
+    case "images-runtime-startup-2":
+      // Runtime image smoke tests run apart from packaging, in two lanes, to
+      // shorten CI wall time.
       Object.assign(
         env,
         (

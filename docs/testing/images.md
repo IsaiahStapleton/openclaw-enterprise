@@ -84,6 +84,7 @@ OCC_TEST_PRODUCTION_IMAGE="$OCC_IMAGE_CHECK_CONTROLLER" \
 OCC_TEST_RUNTIME_IMAGE="$OCC_IMAGE_CHECK_RUNTIME" \
   node --test tests/integration/production-image-startup.test.mjs \
     tests/integration/runtime-image-startup.test.mjs \
+    tests/integration/runtime-image-startup-probe.test.mjs \
     tests/integration/repository-runtime-volume.test.mjs
 ```
 
@@ -103,6 +104,7 @@ docker build -f deploy/runtime/Dockerfile \
   --tag openclaw-enterprise-runtime:test .
 OCC_TEST_RUNTIME_IMAGE=openclaw-enterprise-runtime:test \
   node --test tests/integration/runtime-image-startup.test.mjs \
+    tests/integration/runtime-image-startup-probe.test.mjs \
     tests/integration/repository-runtime-volume.test.mjs
 ```
 
@@ -223,11 +225,12 @@ reconciliation, runtime image execution, or a model turn.
 ## Runtime image startup test environment
 
 [`runtime-image-startup.test.mjs`](../../tests/integration/runtime-image-startup.test.mjs)
-verifies a locally available OpenClaw runtime image before Docker Compose or
-Kubernetes execution. It starts task-owned containers with the Docker Compute
+and [`runtime-image-startup-probe.test.mjs`](../../tests/integration/runtime-image-startup-probe.test.mjs)
+verify a locally available OpenClaw runtime image before Docker Compose or
+Kubernetes execution. They start task-owned containers with the Docker Compute
 Driver gateway entrypoint, UID `1000:1000`, a read-only root filesystem, and
 tmpfs-backed `/home/node` and `/tmp`. Host Node.js 24+ is required to run the
-test.
+tests.
 
 | Variable                         | Requirement or default                                                                                                                 |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |

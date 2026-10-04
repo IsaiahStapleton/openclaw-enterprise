@@ -16,6 +16,7 @@ const allLanes = [
   "images-packaging",
   "images-model-probes",
   "images-runtime-startup",
+  "images-runtime-startup-2",
   "runtime-image-fixture",
   "k3d-fixture-configuration",
   "k3d-fixture-state",
