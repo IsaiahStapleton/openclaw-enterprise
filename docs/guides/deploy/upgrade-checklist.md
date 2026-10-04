@@ -38,7 +38,8 @@ own topology.
 
 ## Record the starting state
 
-Create a private evidence directory and record these values before mutation:
+Create a private evidence directory and record these values before mutation.
+[Record the pre-upgrade baseline](upgrade-baseline.md) gives commands for many of them:
 
 - [ ] OCC Installation ID, cluster/context, Helm release or Compose project,
       source revision, chart revision, and all running image digests.
