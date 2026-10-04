@@ -3950,9 +3950,9 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
   );
 });
 
-// Back restores a copy of the old view with its controls disabled, and Agent navigation keeps
-// the old view inert, until revalidation re-enables it or replaces it with a rebuilt view. Only
-// a live control shows the current view, including any draft it restored.
+// Back, in-app navigation and reloads can first restore an inert copy of the old view with its
+// controls disabled, until revalidation re-enables it or replaces it with a rebuilt view. Only a
+// live control shows the current view, including any draft it restored.
 async function waitForLiveControls(page, ids) {
   await page.waitForFunction(
     (controlIds) =>
@@ -3964,7 +3964,7 @@ async function waitForLiveControls(page, ids) {
   );
 }
 
-// Each workspace file loads on its own, so wait for every editor the assertions read.
+// Each workspace editor also stays disabled until its own file read lands.
 async function waitForWorkspaceEditors(page, names) {
   await waitForLiveControls(
     page,
@@ -4101,7 +4101,7 @@ test("authentication drafts retain Secret references and their original save bas
     .waitFor();
   assert.deepEqual(nonAuthWriteRequests(requests), []);
   await page.getByRole("button", { name: "Reload authentication source" }).click();
-  await page.getByLabel("Authentication source").waitFor();
+  await waitForLiveControls(page, ["harness-auth-method"]);
   assert.equal(await page.getByLabel("Authentication source").inputValue(), "");
   await page.getByLabel("Authentication source").selectOption("api_key");
   assert.equal(
