@@ -45,6 +45,9 @@ async function pushFeatureBranch(client) {
 export async function qualifyIsolation(t, { serviceImage, clientImage, authority = "github-app" }) {
   // "github-token" runs the development authority: one static token in the service's
   // input mount, never issued, so every Agent surface must stay free of it.
+  if (authority !== "github-app" && authority !== "github-token") {
+    throw new Error("unknown isolation authority");
+  }
   const staticToken = authority === "github-token";
   const work = forwardWork(t.signal);
   const run = work.command;
@@ -397,7 +400,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage, authority
     );
 
     const probeSource = await readFile(new URL("./probe.mjs", import.meta.url), "utf8");
-    async function scan() {
+    async function scan({ duringClone = false } = {}) {
       const result = await docker(
         ["exec", "--interactive", names.agent, "node", "--input-type=module"],
         { input: probeSource },
@@ -436,6 +439,13 @@ export async function qualifyIsolation(t, { serviceImage, clientImage, authority
           JSON.stringify(containers),
         secrets,
       );
+      if (duringClone) {
+        // The hold caught the clone itself, not some earlier credential use.
+        assert.ok(
+          snapshot.surfaces.some((surface) => surface.includes("/session\0git\0clone\0")),
+          "held probe observes the running clone launcher",
+        );
+      }
       return snapshot.bytes;
     }
     await scan();
@@ -466,7 +476,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage, authority
     cloning.catch(() => {});
     try {
       await waitForPath(join(state, "held"));
-      await scan();
+      await scan({ duringClone: true });
     } finally {
       await writeFile(join(state, "release-hold"), "release", { mode: 0o600 });
       await cloning;
@@ -565,6 +575,15 @@ export async function qualifyIsolation(t, { serviceImage, clientImage, authority
       );
     });
     assert.deepEqual(finalReport.errors, []);
+    if (staticToken) {
+      assert.equal(
+        finalReport.apiTrace.some(
+          (entry) => entry.method === "DELETE" && entry.target === "/installation/token",
+        ),
+        false,
+        "the owner's static token is never revoked",
+      );
+    }
     assert.equal(
       finalReport.apiTrace.filter((entry) => entry.target === `/repos/${repository}`).length,
       beforeClose.apiTrace.filter((entry) => entry.target === `/repos/${repository}`).length,
@@ -575,7 +594,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage, authority
       JSON.stringify({
         scannedBytes,
         gitHead: head,
-        providerTokensRevoked: finalReport.tokens.length,
+        providerTokensRevoked: finalReport.tokens.filter((token) => token.revoked).length,
         shutdown: summary,
       }),
     );

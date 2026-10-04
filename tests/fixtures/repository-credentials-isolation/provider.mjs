@@ -29,7 +29,9 @@ async function holdOnce() {
   }
   held = true;
   await writeFile("/state/held", "ready", { mode: 0o600 });
-  const deadline = Date.now() + 10000;
+  // The host releases explicitly; this backstop stays under the gateway's 30 s
+  // first-header deadline so a slow probe does not fail the held request.
+  const deadline = Date.now() + 25000;
   while (Date.now() < deadline) {
     try {
       await lstat("/state/release-hold");
@@ -93,9 +95,11 @@ const relay = createServer(tls, (incoming, outgoing) => {
   }
   // Nothing is issued for a static token: hold its first authenticated Git request.
   if (authority === "github-token" && authorization && host === "github.com" && !held) {
+    let gone = false;
+    incoming.once("close", () => (gone = !incoming.complete));
     incoming.pause();
     holdOnce().then(
-      () => forward(incoming, outgoing, origin),
+      () => (gone ? outgoing.destroy() : forward(incoming, outgoing, origin)),
       () => {
         relayErrors.push("hold-failed");
         outgoing.destroy();
