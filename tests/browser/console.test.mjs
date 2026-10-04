@@ -617,6 +617,51 @@ test("console keeps loaded route families visible while return reads refresh", a
   assert.equal(await page.getByLabel("Agent name", { exact: true }).count(), 0);
 });
 
+test("an Agent tab chosen while the detail is still loading is the one Back restores", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Early tab", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Early tab Agent");
+  const { page } = await newPage(t, fixture);
+  await trackSettledFetches(page);
+  await login(page, fixture, "/console/agents?namespace=" + namespace.id);
+  await page.getByText("Early tab Agent", { exact: true }).waitFor();
+
+  // Hold the detail's Configuration read so the first tab is still loading when the reader
+  // switches tabs; the switch updates the URL in place.
+  const configurationPattern =
+    "**/namespaces/" + namespace.id + "/configurations/" + agent.configurationId;
+  const configurationHold = await holdRoute(t, page, configurationPattern, (route, response) =>
+    response ? route.fulfill({ response }) : route.continue(),
+  );
+  t.after(() => configurationHold.release());
+  await page.getByRole("link", { name: "Early tab Agent", exact: true }).click();
+  await configurationHold.waitForRelease();
+  await page.getByRole("button", { name: "Workspace files", exact: true }).click();
+  const workspaceNotice = page.getByText(
+    "Workspace files require a deployed Agent with a current version and a reachable gateway.",
+    { exact: true },
+  );
+  await workspaceNotice.waitFor();
+  await releaseHeldRoute(page, configurationPattern, configurationHold);
+  await waitForSettledView(page);
+  assert.equal(new URL(page.url()).searchParams.get("tab"), "workspace");
+  const notice = await workspaceNotice.elementHandle();
+
+  // The view is retained under the URL it shows, so Back reuses it instead of rebuilding it.
+  await page.getByRole("link", { name: "← Agents", exact: true }).click();
+  await page.getByRole("button", { name: "Create Agent", exact: true }).waitFor();
+  await page.goBack();
+  await workspaceNotice.waitFor();
+  await waitForSettledView(page);
+  assert.equal(new URL(page.url()).searchParams.get("tab"), "workspace");
+  assert.equal(
+    await notice.evaluate((node) => node.isConnected),
+    true,
+    "Back restores the retained workspace tab",
+  );
+});
+
 test("Refresh and focus restoration retain rows until fresh data arrives", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
