@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
+import { DELETION_POLL_MS } from "../../apps/controller/src/console/agents/deletion.mjs";
 import { CodexPluginDriver } from "../../apps/controller/src/drivers/plugin/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { WORKSPACE_DEFAULTS } from "../../packages/contracts/src/workspace-defaults.mjs";
@@ -2201,6 +2202,109 @@ test("Agent delete confirmation sends the real delete API and leaves visible que
     .filter({ hasText: "Success Candidate" })
     .getByText("Deleting", { exact: true })
     .waitFor();
+});
+
+test("Agent deletion says access ended when the deleter can no longer read the Agent", async (t) => {
+  const fixture = await createConsoleAppFixture(t, { provisionedPeople: ["scoped-deleter"] });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Delete scoped", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Scoped Candidate", nativeValues("scoped"));
+  const person = fixture.provisionedAccounts[0];
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  const bind = async (permissions, resourceKind, resourceId) => {
+    const role = await fixture.request("POST", `${policyPath}/roles`, { body: { permissions } });
+    assert.equal(role.status, 201);
+    const binding = await fixture.request("POST", `${policyPath}/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: person.principal.id,
+        roleId: role.data.id,
+        resourceKind,
+        resourceId,
+      },
+    });
+    assert.equal(binding.status, 201);
+    return binding.data;
+  };
+  // A member whose only Agent grants target this Agent, as a Namespace administrator shares it.
+  await bind([{ action: "read", resourceKind: "namespace" }], "namespace", namespace.id);
+  const agentBinding = await bind(
+    [
+      { action: "read", resourceKind: "agent" },
+      { action: "delete", resourceKind: "agent" },
+    ],
+    "agent",
+    agent.id,
+  );
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  const agentPath = `/namespaces/${namespace.id}/agents/${agent.id}`;
+  await page.clock.install({ time: new Date("2026-10-04T12:00:00Z") });
+
+  await login(
+    page,
+    fixture,
+    detailUrl(fixture, namespace.id, agent.id, "draft", "configuration"),
+    person.credentials,
+  );
+  await page.getByRole("heading", { name: "Scoped Candidate" }).first().waitFor();
+  await page.getByRole("button", { name: "Delete Agent" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Scoped Candidate?" });
+  await dialog.getByRole("button", { name: "Permanently delete Agent" }).click();
+  await page.getByRole("status").getByText("Deletion in progress").waitFor();
+  const reads = () => pathRequests(requests, "GET", agentPath).length;
+  const accepted = reads();
+
+  // While cleanup runs, the member's grants still hold and the poll follows the deletion.
+  const followed = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}${agentPath}` && response.request().method() === "GET",
+  );
+  await page.clock.runFor(DELETION_POLL_MS);
+  assert.equal((await followed).status(), 200);
+  assert.equal(reads(), accepted + 1);
+  // Refresh is enabled again once that poll finished and scheduled the next one.
+  await page.waitForFunction(() => {
+    const refresh = [...globalThis.document.querySelectorAll("button")].find(
+      (node) => node.textContent === "Refresh deletion status",
+    );
+    return refresh !== undefined && !refresh.disabled;
+  });
+  await page.getByRole("status").getByText("Deletion in progress").waitFor();
+
+  // Finishing the deletion removes the bindings that target the Agent, so the next read is a
+  // real 403 for this member (an administrator would get 404 and return to the list).
+  const removed = await fixture.request(
+    "DELETE",
+    `${policyPath}/access-bindings/${agentBinding.id}`,
+  );
+  assert.ok([200, 204].includes(removed.status), `binding removal answered ${removed.status}`);
+  const denied = page.waitForResponse(
+    (response) =>
+      response.url() === `${fixture.origin}${agentPath}` && response.request().method() === "GET",
+  );
+  await page.clock.runFor(DELETION_POLL_MS);
+  assert.equal((await denied).status(), 403);
+  await page
+    .getByRole("status")
+    .getByText(
+      "Deletion was accepted. Your access to this Agent ended with it, so this page cannot follow the cleanup.",
+    )
+    .waitFor();
+  assert.equal(await page.getByRole("alert").count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Refresh deletion status" }).count(), 0);
+  assert.equal(
+    await page
+      .getByRole("heading", { name: "Delete Agent", exact: true })
+      .evaluate((node) => node.ownerDocument.activeElement === node),
+    true,
+  );
+
+  // Polling stops: no further reads, however long the page stays open.
+  const settled = reads();
+  await page.clock.runFor(DELETION_POLL_MS * 3);
+  assert.equal(reads(), settled);
+  assert.equal((await fixture.request("GET", agentPath)).data.status, "deleting");
 });
 
 test("Agent delete uncertainty requires refresh before another destructive request", async (t) => {
