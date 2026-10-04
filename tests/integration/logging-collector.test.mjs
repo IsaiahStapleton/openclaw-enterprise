@@ -396,7 +396,7 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 7);
+    await waitFor(async () => (await records()).length >= 8);
     const initial = await records();
     assert.equal(initial.length, 8, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [

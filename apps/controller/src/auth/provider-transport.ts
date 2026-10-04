@@ -152,7 +152,8 @@ declare const pinnedEndpoint: unique symbol;
 export type PinnedEndpoint = string & { readonly [pinnedEndpoint]: true };
 
 // A provider's fixed requests share a deadline, including streaming body reads.
-// Only a well-formed 4xx answer is a rejection; every other failure is unavailability.
+// A well-formed 4xx answer is a rejection unless it refuses this client; every other failure
+// is unavailability.
 export async function providerJSON(
   endpoint: ProviderEndpoint | PinnedEndpoint,
   init: RequestInit,
@@ -180,12 +181,14 @@ export async function providerJSON(
 }
 
 // Token errors that refuse this Installation's OAuth client rather than the person: RFC 6749
-// section 5.2's invalid_client and unauthorized_client, and GitHub's own codes for a wrong
-// client secret or callback registration (GitHub answers them with HTTP 200). Every sign-in
-// fails until the operator fixes the client configuration, so they are logged, not rejected.
+// section 5.2's invalid_client, unauthorized_client and unsupported_grant_type (the controller
+// always sends authorization_code), and GitHub's own codes for a wrong client secret or callback
+// registration (GitHub answers them with HTTP 200). Every sign-in fails until the operator fixes
+// the client configuration, so they are logged, not rejected.
 const refusedClientErrors = new Set([
   "invalid_client",
   "unauthorized_client",
+  "unsupported_grant_type",
   "incorrect_client_credentials",
   "redirect_uri_mismatch",
 ]);

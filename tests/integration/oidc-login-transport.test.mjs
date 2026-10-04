@@ -224,6 +224,17 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
     assertNoSecrets(fixture.operationalLogs());
   });
 
+  await t.test("an unreadable 4xx token answer stays a rejection without a warning", async () => {
+    const fixture = loginFixture();
+    serve = (_request, response) => {
+      response.writeHead(401, { "content-type": "text/html" });
+      response.end("<html>invalid_client</html>");
+    };
+    await expectDenied(await fixture.callback());
+    assert.deepEqual(fixture.denials, [["EXTERNAL_IDENTITY_REJECTED", "oidc"]]);
+    assert.deepEqual(fixture.operationalLogs(), []);
+  });
+
   await t.test("GitHub, Google and OIDC share the start budget", async () => {
     const fixture = loginFixture({
       oidc,
