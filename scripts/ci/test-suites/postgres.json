@@ -14,6 +14,66 @@
         "Migration rejects legacy harness_account state without changing persisted rows",
         "Drizzle second migration preserves the applied journal and PostgreSQL schema"
       ]
+    },
+    {
+      "path": "tests/integration/postgres-connection-auth.test.mjs",
+      "expectedTests": [
+        "password authentication preserves the existing pg connection configuration",
+        "the password pool authenticates to the selected real PostgreSQL database",
+        "the real pg client retains the Azure token callback and verified TLS after URL parsing",
+        "workload authentication rejects password fallback and unverified TLS",
+        "an idle pooled client error is logged instead of crashing the process",
+        "the pool survives PostgreSQL terminating an idle backend"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-bootstrap-failures.test.mjs",
+      "expectedTests": [
+        "concurrent development bootstrap subprocesses reject the loser and reload the committed winner",
+        "production bootstrap preserves committed credentials when COMMIT acknowledgement is lost",
+        "known bootstrap failures preserve created artifacts and report safe diagnostics",
+        "development bootstrap preserves credentials when COMMIT acknowledgement is lost"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-platform-state.test.mjs",
+      "expectedTests": [
+        "PostgreSQL rejects platform writes until the singleton Installation is bootstrapped",
+        "real OCC Namespace lifecycle persists provisioning, readiness, deletion, and its tombstone",
+        "PostgreSQL platform state satisfies memory adapter ownership, immutability, and atomicity",
+        "the PostgreSQL worker reloads exact Namespace restrictions and never dispatches revoked provisioning",
+        "API SIGTERM finishes an in-flight keep-alive request and exits within the Pod grace"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-production-wireup.test.mjs",
+      "expectedTests": [
+        "production bootstrap creates a generated-password administrator that can authenticate"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-backend-ownership.test.mjs",
+      "expectedTests": [
+        "development API starts with stale Backend references and permits repair through Agent update",
+        "PostgreSQL Backend ownership persists exact Agent associations and admits only matching managed bindings"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-restart-recovery.test.mjs",
+      "expectedTests": [
+        "Namespace creation and deletion retain distinct durable work targets",
+        "durable work deduplicates exact ownership and rejects actor or owner collisions",
+        "Namespace convergence and admitted revision work share one durable queue with exact resource ownership",
+        "stale and exhausted recovery includes admitted revisions and Namespace lifecycle work",
+        "transaction-scoped queue fencing rolls back Namespace mutation, completion, and audit together",
+        "concurrent claims exclude one Namespace lifecycle and one Agent while distinct Agents progress",
+        "a restarted queue recovers expired claims, fences old tokens, and persists exhausted failures",
+        "batch stale recovery reports each expired claim once and writes one audit event per item",
+        "Agent deletion retains exact cleanup obligations on fail",
+        "Agent deletion retains exact cleanup obligations on retry",
+        "Agent deletion retains exact cleanup obligations on expired claim",
+        "Agent deletion retains exact cleanup obligations on exhausted queued"
+      ]
     }
   ]
 }

@@ -54,8 +54,14 @@ export function createLoginFixture({
       subjects.push([providerId, subject]);
     },
     snapshotPassword: async () => undefined,
-    recordDenied: async (reason, deniedProvider) => {
-      denials.push(deniedProvider === undefined ? [reason] : [reason, deniedProvider]);
+    recordDenied: async (reason, deniedProvider, details) => {
+      denials.push(
+        deniedProvider === undefined
+          ? [reason]
+          : details === undefined
+            ? [reason, deniedProvider]
+            : [reason, deniedProvider, details],
+      );
     },
     ...stateOverrides,
   };

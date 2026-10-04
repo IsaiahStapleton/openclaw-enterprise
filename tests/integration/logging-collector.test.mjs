@@ -375,6 +375,16 @@ test(
         JSON.stringify({
           event: "authentication.provider-unavailable-warning",
           severity: "WARN",
+          provider: "github",
+          providerId: `github:providerkey${fixture.suffix}`,
+          step: "membership",
+          cause: "http_status",
+          status: 403,
+          ...payload,
+        }),
+        JSON.stringify({
+          event: "authentication.provider-unavailable-warning",
+          severity: "WARN",
           provider: "google",
           providerId: `google:providerkey${fixture.suffix}`,
           step: "token",
@@ -396,9 +406,9 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 8);
+    await waitFor(async () => (await records()).length >= 9);
     const initial = await records();
-    assert.equal(initial.length, 8, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 9, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [
       "compute.preflight-warning",
       "authentication.sign-in-limited",
@@ -418,6 +428,7 @@ test(
     }
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
+      "occ-api",
       "occ-api",
       "occ-api",
       "occ-api",
@@ -474,6 +485,14 @@ test(
         "occ.sign_in.step": "profile",
         "occ.sign_in.cause": "http_status",
         "occ.sign_in.status": "503",
+      },
+      {
+        "event.name": "authentication.provider-unavailable-warning",
+        "log.iostream": "stdout",
+        "occ.sign_in.provider": "github",
+        "occ.sign_in.step": "membership",
+        "occ.sign_in.cause": "http_status",
+        "occ.sign_in.status": "403",
       },
       {
         "event.name": "authentication.provider-unavailable-warning",

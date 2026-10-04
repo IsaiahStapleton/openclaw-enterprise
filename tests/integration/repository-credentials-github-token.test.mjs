@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import { connect } from "node:net";
+import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
@@ -64,12 +65,12 @@ async function startGatewayProxy(resources, gatewayHost, gatewayPort) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-async function startTokenService(t) {
+async function startTokenService(t, limits = {}) {
   const resources = createResourceScope();
   t.after(() => resources.close());
   const clock = createControlledClock();
   const tls = await createTlsMaterial(resources);
-  const base = await createServiceConfiguration(resources);
+  const base = await createServiceConfiguration(resources, limits);
   const config = { ...base, gateway: { ...base.gateway, listen: "127.0.0.1:0" } };
   const github = await startGitHubFixture(resources, { clock, tls });
   const git = await startGitSmartHttpFixture(resources, { authorize: github.authorize, tls });
@@ -209,4 +210,41 @@ test("development token git-read sessions are refused receive-pack before any ac
     fixture.git.trace.some((entry) => entry.path.endsWith("/git-receive-pack")),
     false,
   );
+});
+
+test("an oversized development token push is answered 413 before the token is used", async (t) => {
+  const pushLimit = 1048576;
+  const fixture = await startTokenService(t, { gitPushInputBytes: pushLimit });
+  const opened = fixture.service.open({ durationSeconds: 3600, profile: "git-write" });
+  const gitCommand = await stockGit(t, fixture, opened);
+  const checkout = join(await temporaryDirectory(t, "repository-token-large-"), "checkout");
+  await gitCommand(["clone", opened.client.gitRemote, checkout]);
+  await gitCommand(["config", "user.name", "Agent fixture"], { cwd: checkout });
+  await gitCommand(["config", "user.email", "agent@example.test"], { cwd: checkout });
+  // Incompressible content keeps the pack larger than the limit.
+  await writeFile(join(checkout, "large.bin"), randomBytes(8 * pushLimit));
+  await gitCommand(["add", "large.bin"], { cwd: checkout });
+  await gitCommand(["commit", "-m", "Large change"], { cwd: checkout });
+  // Git streams a chunked body above http.postBuffer and declares a length below it.
+  for (const postBuffer of ["1048576", String(64 * pushLimit)]) {
+    const traced = fixture.git.trace.length;
+    const refused = await gitCommand(
+      ["-c", `http.postBuffer=${postBuffer}`, "push", "origin", "HEAD:refs/heads/agent/large"],
+      { cwd: checkout, allowFailure: true },
+    );
+    assert.notEqual(refused.code, 0, postBuffer);
+    // The client reads the refusal instead of a connection reset.
+    assert.match(refused.stderr, /\b413\b/, postBuffer);
+    assert.doesNotMatch(refused.stderr, /reset by peer/, postBuffer);
+    // Only Git's 4-byte auth probe (sent before a chunked body) may reach upstream.
+    assert.deepEqual(
+      fixture.git.trace
+        .slice(traced)
+        .filter((entry) => entry.path.endsWith("/git-receive-pack"))
+        .filter((entry) => entry.contentLength !== "4"),
+      [],
+      postBuffer,
+    );
+  }
+  await assert.rejects(fixture.git.ref("refs/heads/agent/large"));
 });

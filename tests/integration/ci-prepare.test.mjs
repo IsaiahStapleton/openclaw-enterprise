@@ -1653,11 +1653,12 @@ process.exit(2);
   }
 });
 
-test("images packaging lane prepares Codex seccomp before native runtime smoke tests", () => {
+test("runtime startup lane prepares Codex seccomp before native runtime smoke tests", () => {
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
-  const lane = manifest.lanes["images-packaging"];
+  const lane = manifest.lanes["images-runtime-startup"];
 
   assert.equal(lane.prepare?.codexSeccomp, true);
+  assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"));
   assert.ok(
     lane.files.some(({ path }) => path === "tests/integration/runtime-image-startup.test.mjs"),
   );
@@ -1666,7 +1667,7 @@ test("images packaging lane prepares Codex seccomp before native runtime smoke t
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {
   const root = await fixture(t);
   const statePath = join(root, "missing-state.json");
-  const file = "tests/integration/runtime-image-startup.test.mjs";
+  const file = "tests/integration/docker-compute-token-retry.test.mjs";
   const customNodeBaseImage =
     "docker.io/library/node:24-bookworm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 

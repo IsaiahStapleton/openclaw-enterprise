@@ -15,6 +15,7 @@ const allLanes = [
   "postgres-auth",
   "images-packaging",
   "images-model-probes",
+  "images-runtime-startup",
   "runtime-image-fixture",
   "k3d-fixture-configuration",
   "k3d-fixture-state",

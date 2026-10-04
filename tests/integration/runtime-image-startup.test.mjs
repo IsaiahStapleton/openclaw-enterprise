@@ -167,7 +167,7 @@ test("runtime image seccomp option requires the CI-prepared profile record", asy
 
   await assert.rejects(
     reviewedCodexSeccompSecurityOptions({ profile, ciStatePath: "" }),
-    /must be prepared by images-packaging CI state/,
+    /must be prepared by image CI state/,
   );
 
   await writeFile(
@@ -769,7 +769,7 @@ async function reviewedCodexSeccompSecurityOptions({
     assert.equal(
       expected,
       manualReviewedCodexSeccompProfileSha256,
-      "OCC_TEST_CODEX_SECCOMP_PROFILE must be prepared by images-packaging CI state or use the pinned manual reviewed Codex profile.",
+      "OCC_TEST_CODEX_SECCOMP_PROFILE must be prepared by image CI state or use the pinned manual reviewed Codex profile.",
     );
   } else {
     assert.equal(

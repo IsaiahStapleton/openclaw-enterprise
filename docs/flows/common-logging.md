@@ -169,8 +169,9 @@ the local diagnostic message is excluded from remote export.
 `authentication.sign-in-limit-warning` keeps `occ.code`, and
 `authentication.sign-in-limited` keeps only `occ.sign_in.lane`; its local key
 hash is not exported. `authentication.provider-unavailable-warning` keeps
-`occ.sign_in.provider`, `.step`, `.cause` and `.status`, plus a transport code as
-`occ.code`; the provider instance ID stays local.
+`occ.sign_in.provider`, `.step` (`authorization`, `token`, `jwks`, `profile` or
+`membership`), `.cause` and `.status`, plus a transport code as `occ.code`; the provider
+instance ID stays local.
 `worker.repository-cleanup-warning` keeps `occ.code` and its bounded cause as
 `occ.worker.cause`. It drops malformed,
 oversized, unclassified, unspecified-severity, and Codex protocol stdout records.
