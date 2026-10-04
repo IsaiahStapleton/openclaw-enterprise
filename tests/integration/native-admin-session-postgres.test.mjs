@@ -602,9 +602,17 @@ async function waitForAuthorizationDenialAudit(
           AND action = $3
           AND ($4::text IS NULL OR actor_id = $4)
           AND ($5::text IS NULL OR id <> $5)
+          AND ($6::boolean IS NULL OR (details->'nativeAdmin' ? 'revisionId') = $6)
         ORDER BY occurred_at DESC, id DESC
         LIMIT 1`,
-      [namespaceId, agentId, action, actorId ?? null, options.excludeId ?? null],
+      [
+        namespaceId,
+        agentId,
+        action,
+        actorId ?? null,
+        options.excludeId ?? null,
+        options.leaseRenewal ?? null,
+      ],
     );
     row = result.rows[0];
     if (row !== undefined) {
@@ -851,13 +859,18 @@ test(
     });
     t.diagnostic(`IAM administer restriction closed native admin WebSocket in ${closedAfterMs}ms`);
     await assertSocketAuditCloseReason(scenario, "authorization_denied");
+    // Lease renewals check the socket's revision, so their denials record it; the HTTP
+    // denial carries none. That keeps a second, overlapping renewal's denial from passing
+    // for the HTTP one.
     const leaseDenial = await waitForAuthorizationDenialAudit(
       scenario.apiA.pool,
       scenario.namespace.id,
       scenario.agent.id,
       "openclaw.agents.native_admin.proxy.authorize",
       scenario.principal.id,
+      { leaseRenewal: true },
     );
+    assert.equal(leaseDenial.details.nativeAdmin.revisionId, scenario.revision.id);
     await assertRevokedHttp(scenario.apiB, scenario.native, scenario.nativeCookie);
     await waitForAuthorizationDenialAudit(
       scenario.apiA.pool,
@@ -865,7 +878,7 @@ test(
       scenario.agent.id,
       "openclaw.agents.native_admin.proxy.authorize",
       scenario.principal.id,
-      { excludeId: leaseDenial.id },
+      { excludeId: leaseDenial.id, leaseRenewal: false },
     );
   },
 );
