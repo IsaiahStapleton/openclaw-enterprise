@@ -246,8 +246,12 @@ test("pnpm impact rejects dirty tracked and untracked checkout inputs before run
     );
     if (["unstaged", "staged", "cancelled"].includes(kind)) {
       writeFileSync(join(f.repo, "base.txt"), "dirty\n");
-      if (kind !== "unstaged") f.git("add", "base.txt");
-      if (kind === "cancelled") writeFileSync(join(f.repo, "base.txt"), "text\n");
+      if (kind !== "unstaged") {
+        f.git("add", "base.txt");
+      }
+      if (kind === "cancelled") {
+        writeFileSync(join(f.repo, "base.txt"), "text\n");
+      }
     } else {
       const dir = join(f.repo, kind === "ignored" ? "ignored" : "untracked");
       mkdirSync(dir);
@@ -305,7 +309,7 @@ test("affected-package advisory is isolated from required jobs and tolerates sum
   for (const name of ["impact", "pr-safe", "ci-required"]) {
     assert.doesNotMatch(job(name), /affected-packages/);
   }
-  const match = /        run: \|\n((?:          .*\n)+)/.exec(advisory);
+  const match = / {8}run: \|\n((?: {10}.*\n)+)/.exec(advisory);
   assert.ok(match, "summary script exists");
   const script = match[1].replace(/^ {10}/gm, "");
   const dir = mkdtempSync(join(tmpdir(), "ci-advisory-summary-"));
