@@ -808,10 +808,7 @@ test("a cluster denial of runtime credentials names the missing RoleBinding and 
 
   const status = await fixture.request("GET", `${agentPath}/runtime-credentials`);
   assert.equal(status.status, 503, JSON.stringify(status.body));
-  assert.deepEqual(
-    { code: status.body.error.code, message: status.body.error.message },
-    expected,
-  );
+  assert.deepEqual({ code: status.body.error.code, message: status.body.error.message }, expected);
   // The first deployment checks runtime credentials before admitting a revision.
   const deployed = await fixture.request("POST", `${agentPath}/deploy`);
   assert.equal(deployed.status, 503, JSON.stringify(deployed.body));
