@@ -3075,7 +3075,8 @@ export class OpenClawController {
         version.name === seeded.name &&
         isDeepStrictEqual(version.template, seeded.template),
     );
-    if (current === undefined) {
+    // A file reverted to an earlier version lists it as superseded too; current wins.
+    if (current === undefined || this.presetMatchesTemplate(copy, current.template)) {
       return;
     }
     const superseded = this.bundledPresetVersions.find(

@@ -163,7 +163,7 @@ export async function initializeInstallationPresets(
     }
   }
   throw new Error(
-    "Default Preset initialization requires an Installation administrator who can create Presets in every Namespace.",
+    "Default Preset initialization requires an Installation administrator who can create and update Presets in every Namespace.",
     denied === undefined ? undefined : { cause: denied },
   );
 }
@@ -446,8 +446,11 @@ async function loadBundledPresetVersions(): Promise<readonly BundledPresetVersio
   let index: unknown;
   try {
     index = JSON.parse(await readFile(indexPath, "utf8"));
-  } catch {
-    throw new Error(`Bundled Preset version index ${fileURLToPath(indexPath)} is unavailable.`);
+  } catch (cause) {
+    throw new Error(
+      `Bundled Preset version index ${fileURLToPath(indexPath)} is unavailable or invalid.`,
+      { cause },
+    );
   }
   const versions: BundledPresetVersion[] = [];
   for (const [file, history] of Object.entries(object(index, "Bundled Preset versions"))) {

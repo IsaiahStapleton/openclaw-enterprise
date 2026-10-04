@@ -1164,7 +1164,7 @@ test("startup seeds default Presets with an administrator who can create them wh
       runtime.defaultPresets,
     ),
     (error) =>
-      /can create Presets in every Namespace/.test(error.message) &&
+      /can create and update Presets in every Namespace/.test(error.message) &&
       error.cause instanceof AuthorizationDeniedError,
   );
   assert.deepEqual((await fixture.request("GET", collection(unseeded.id))).data, []);
@@ -1315,34 +1315,34 @@ test("startup refreshes untouched copies of superseded bundled defaults in place
     ]),
   );
 
-  // A Namespace seeded by an earlier release: its copies are byte-for-byte earlier
-  // shipped files, the state an upgrade from that release starts in.
-  const upgraded = await fixture.controller.transact((state) =>
-    state.namespaces.createNamespace({
-      id: `ns_${crypto.randomUUID()}`,
-      name: "Seeded by an earlier release",
-      status: "ready",
-      createdAt: new Date().toISOString(),
-    }),
+  // A Namespace seeded by an earlier release: its copies hold earlier shipped files.
+  // Roll this release's copies back by PATCH, which stores them as that seeding did.
+  const upgraded = await fixture.createNamespace("Seeded by an earlier release", {
+    ready: true,
+  });
+  const seeded = Object.fromEntries(
+    (await fixture.request("GET", collection(upgraded.id))).data.map((preset) => [
+      preset.name,
+      preset,
+    ]),
   );
+  const rollBack = async (name, template) => {
+    const response = await fixture.request(
+      "PATCH",
+      `${collection(upgraded.id)}/${seeded[name].id}`,
+      { body: { template } },
+    );
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    return response.data;
+  };
   const staleCodex = await archivedDefault("default-codex.json", "32576b8f13976778");
   const staleOpenClaw = await archivedDefault("standard-openclaw.json", "ed4bae5153f86b94");
   const editedStandard = await archivedDefault("standard-codex.json", "e0e77652015e991b");
   editedStandard.template.variables.name.description = "Operator wording";
   const oldName = await archivedDefault("standard-codex.json", "a07d1e2070d95c99");
-  const stale = await createPreset(fixture, upgraded.id, staleCodex.name, staleCodex.template);
-  const staleStandard = await createPreset(
-    fixture,
-    upgraded.id,
-    staleOpenClaw.name,
-    staleOpenClaw.template,
-  );
-  const edited = await createPreset(
-    fixture,
-    upgraded.id,
-    editedStandard.name,
-    editedStandard.template,
-  );
+  const stale = await rollBack(staleCodex.name, staleCodex.template);
+  const staleStandard = await rollBack(staleOpenClaw.name, staleOpenClaw.template);
+  const edited = await rollBack(editedStandard.name, editedStandard.template);
   const renamed = await createPreset(fixture, upgraded.id, oldName.name, oldName.template);
   assert.equal(stale.template.gateway, undefined);
   assert.notDeepEqual(stale.template, current["default-codex"]);

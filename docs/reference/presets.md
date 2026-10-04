@@ -42,11 +42,12 @@ Restart the API after changing the YAML, keeping the worker configuration in syn
 Earlier shipped versions of the bundled defaults are archived in
 `deploy/presets/archive/`. While `includeDefaults` is enabled, startup replaces
 a same-name copy that still equals an earlier version (normalized JSON) with the
-current template. It keeps its ID and AccessBindings, and the change is audited as
+current template, keeping its ID and AccessBindings, and audits
 `openclaw.presets.update` with `source: installation-defaults-refresh`. Copies
-that match no shipped version are operator edits and are never replaced;
-neither are `presets.files` copies or copies under a retired name, such as
-`standard-codex`. Existing Agents and Configurations keep their settings.
+matching no shipped version are operator edits and stay; so do `presets.files`
+copies and retired names such as `standard-codex`. To keep an earlier version,
+rename the copy or change any field. Existing Agents and Configurations keep
+their settings.
 
 Namespace deletion removes copies that equal, by name and template, a configured
 default or any shipped bundled version, even with `includeDefaults` disabled.

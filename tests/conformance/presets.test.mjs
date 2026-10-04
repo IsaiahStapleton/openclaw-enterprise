@@ -409,10 +409,11 @@ async function bundledPresetArchiveProblems(presetDirectory) {
           `then append "${actual}" to "${file}" in deploy/presets/archive/versions.json.`,
       );
     }
-    if (new Set(history).size !== history.length) {
-      problems.push(`archive/versions.json lists a ${file} version twice.`);
-    }
     const superseded = history.slice(0, -1);
+    // A revert may make an earlier version current again; superseded ones are unique.
+    if (new Set(superseded).size !== superseded.length) {
+      problems.push(`archive/versions.json lists a superseded ${file} version twice.`);
+    }
     const archived = superseded.length === 0 ? [] : await readdir(new URL(`${stem}/`, archive));
     for (const version of superseded) {
       if (!archived.includes(`${version}.json`)) {
@@ -428,6 +429,14 @@ async function bundledPresetArchiveProblems(presetDirectory) {
       if (!superseded.includes(entry.replace(/\.json$/, ""))) {
         problems.push(`archive/${stem}/${entry} is not listed in archive/versions.json.`);
       }
+    }
+  }
+  const stems = Object.entries(versions)
+    .filter(([, history]) => history.length > 1)
+    .map(([file]) => file.replace(/\.json$/, ""));
+  for (const entry of await readdir(archive, { withFileTypes: true })) {
+    if (entry.isDirectory() && !stems.includes(entry.name)) {
+      problems.push(`archive/${entry.name}/ has no superseded versions in archive/versions.json.`);
     }
   }
   return problems;
