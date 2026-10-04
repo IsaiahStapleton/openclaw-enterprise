@@ -37,6 +37,9 @@ const env = {
   SOURCE_SHA: sourceSha,
 };
 const repo = { full_name: repository, private: false, default_branch: "main" };
+// Package rejections shared by the GHCR verification and package validation tests.
+const publicOnly = { message: /^GHCR package must already exist and be public\./ };
+const linkFirst = { message: /^Link the package to Enterprise first\./ };
 
 const releaseImages = ["controller", "runtime"].map((image) => ({
   image,
@@ -411,8 +414,6 @@ test("GHCR publication accepts omitted repository metadata without approval and 
   await verifyGhcr(image, digest, `sha-${sourceSha}`);
   pkg.repository = null;
   await verifyGhcr(image, digest, `sha-${sourceSha}`);
-  const publicOnly = { message: /^GHCR package must already exist and be public\./ };
-  const linkFirst = { message: /^Link the package to Enterprise first\./ };
   for (const [patch, guard] of [
     [{ visibility: "private" }, publicOnly],
     [{ visibility: undefined }, publicOnly],
@@ -543,8 +544,6 @@ test("container publication requires main-only environments and public matching 
     repository: repo,
   };
   validatePackage(pkg, image);
-  const publicOnly = { message: /^GHCR package must already exist and be public\./ };
-  const linkFirst = { message: /^Link the package to Enterprise first\./ };
   // Missing linkage is allowed explicitly; reported conflicting linkage still fails.
   for (const repository of [undefined, null]) {
     const unreported = { ...pkg, repository };
@@ -591,16 +590,12 @@ test("private packages are accepted only for explicit marker bootstrap", () => {
   for (const visibility of ["public", "private"]) {
     validatePackage({ ...pkg, visibility }, image, { allowPrivateBootstrap: true });
   }
-  const publicOnly = { message: /^GHCR package must already exist and be public\./ };
   assert.throws(() => validatePackage({ ...pkg, visibility: "private" }, image), publicOnly);
   for (const [patch, guard] of [
     [{ visibility: "internal" }, publicOnly],
     [{ visibility: undefined }, publicOnly],
     [{ repository: { ...repo, private: true } }, { actual: true, expected: false }],
-    [
-      { repository: { ...repo, full_name: "other/repository" } },
-      { message: /^Link the package to Enterprise first\./ },
-    ],
+    [{ repository: { ...repo, full_name: "other/repository" } }, linkFirst],
     [{ name: "other" }, { actual: "other", expected: "openclaw-enterprise-controller" }],
   ]) {
     assert.throws(
