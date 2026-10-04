@@ -293,6 +293,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-04 23:40: The bundled Collector exports the skipped-refresh warning with only its Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)
 - 2026-10-04 23:30: A refused default refresh, such as one a Namespace deny Restriction on Preset update forbids, keeps the copy and logs a warning instead of stopping API startup.
 - 2026-10-04 22:00: Refresh superseded copies only when `includeDefaults` seeded them; a `presets.files` copy of a bundled file stays.
 - 2026-10-04 14:00: Refresh untouched copies of superseded bundled defaults at startup, and let any shipped version pass the Namespace deletion check.
