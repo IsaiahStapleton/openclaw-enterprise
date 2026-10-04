@@ -431,7 +431,7 @@ async function startController(context, { kubernetesDrivers = false } = {}) {
         email: adminEmail,
         password: adminPassword,
       });
-      return { child, origin, session };
+      return { child, origin, session, output: () => output };
     } catch {
       await delay(40);
     }
