@@ -246,6 +246,9 @@ function formatsPlugin(ajv: Parameters<typeof ajvFormats.default>[0]) {
 function cachedResponseSerializers(): SerializerSelector.SerializerFactory {
   const buildSerializerCompiler = SerializerSelector();
   const sharedSchemaIds = new WeakMap<object, number>();
+  // Never pruned. That is safe only while every serializer is built at route registration,
+  // a fixed set; compiling one per request (a schema assembled at request time) would grow
+  // this Map without bound and must not use this factory.
   const serializers = new Map<string, SerializerSelector.Serializer>();
   let nextSharedSchemaId = 0;
   const sharedSchemaId = (schema: object) => {
@@ -258,9 +261,15 @@ function cachedResponseSerializers(): SerializerSelector.SerializerFactory {
   };
   return (externalSchemas, options) => {
     const compile = buildSerializerCompiler(externalSchemas, options);
+    const sharedSchemas = Object.entries((externalSchemas ?? {}) as Record<string, unknown>);
+    // A shared schema that is not an object has no identity to key on (and WeakMap.set
+    // would throw), so that context compiles uncached.
+    if (sharedSchemas.some(([, schema]) => typeof schema !== "object" || schema === null)) {
+      return compile;
+    }
     // Fastify passes the same stored schema objects each time; identity names the set.
-    const shared = Object.entries((externalSchemas ?? {}) as Record<string, object>)
-      .map(([id, schema]) => `${id}=${sharedSchemaId(schema)}`)
+    const shared = sharedSchemas
+      .map(([id, schema]) => `${id}=${sharedSchemaId(schema as object)}`)
       .join(",");
     const prefix = `${JSON.stringify(options ?? {})}|${shared}|`;
     // Route schemas are fixed at registration. A schema JSON cannot express (a cycle or a
