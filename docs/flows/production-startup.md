@@ -103,7 +103,8 @@ Before the first install, the operator creates the bootstrap PVC named by
 `bootstrap.password.claimName` and runs the helper with explicit kubeconfig,
 context, namespace, claim, approved Node-capable image, and optional repeated
 `--node-selector KEY=VALUE` labels. The helper launches a bounded preparation
-Pod, applies the selectors before WaitForFirstConsumer storage binds, verifies
+Pod with the selected namespace preserved as a string, applies the selectors
+before WaitForFirstConsumer storage binds, verifies
 the mounted root is fresh except for filesystem-owned `lost+found`, sets UID/GID
 `1000` with mode `0700`, and refuses to continue on any other entry.
 

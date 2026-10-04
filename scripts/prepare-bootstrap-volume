@@ -186,7 +186,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: ${pod}
-  namespace: ${namespace}
+  namespace: "${namespace}"
   labels:
     app.kubernetes.io/name: openclaw-enterprise
     app.kubernetes.io/component: bootstrap-volume-preparation
