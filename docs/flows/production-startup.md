@@ -165,21 +165,20 @@ Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Backend
 membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
-operator-managed endpoint.
+operator-managed endpoint. A startup probe on `/healthz` (5-second period, 24
+failures) gives the API 2 minutes to listen before liveness checks begin.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
 On `SIGTERM` the API stops accepting connections and finishes admitted requests.
-Their responses carry `Connection: close`, or close their connection when they end
-if already streaming, so the process exits once they finish instead of holding each
-socket for the 72-second keep-alive. The API Pod keeps the
-default 30-second termination grace and no `preStop` hook: its single `Recreate`
-replica has no peer to take traffic, so a delay would only lengthen the outage. A
-request still running after 30 seconds is cut off. The API logs `shutdown.started`
-with the `signal` when the drain begins and `shutdown.completed` with its
-`durationMs` once every close hook has finished; a failed close logs
-`shutdown.failed` and exits `1`. A log that ends after `shutdown.started` means
-the drain never finished, for example because the grace period ran out.
+Their responses carry `Connection: close` (a streamed one closes its connection
+when it ends), so the process exits without waiting out the 72-second keep-alive.
+The single `Recreate` replica keeps the default 30-second termination grace and
+no `preStop` hook, since no peer takes its traffic; a request still running after
+30 seconds is cut off. The API logs `shutdown.started` with the `signal`, then
+`shutdown.completed` with `durationMs` once every close hook has finished; a
+failed close logs `shutdown.failed` and exits `1`. A log ending at
+`shutdown.started` means the grace period cut the drain off.
 
 When `controlPlane.nodeSelector` is non-empty, the chart places the API and
 worker Pods with that selector. The same selector applies to the initialization
@@ -323,6 +322,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 ## Changelog
 
 - 2026-10-04: Time API startup phases in `listening`.
+- 2026-10-04: Add the API startup probe.
 - 2026-10-04: Log the API's shutdown start and completion.
 - 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
