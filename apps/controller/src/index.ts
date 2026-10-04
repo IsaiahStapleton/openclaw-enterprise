@@ -1074,12 +1074,35 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     kind: AuditEventKind,
     context?: RequestContext,
     evidence?: AuthorizationEvidence,
-    result?: { readonly outcome: "success" | "denied" | "failure"; readonly reasonCode?: string },
+    result?: {
+      readonly outcome: "success" | "denied" | "failure";
+      readonly reasonCode?: string;
+      // A route's own denial explanation. It passes through the factory with the rest of the
+      // event, so its reason is redacted and capped and its details are redacted.
+      readonly decisionReason?: string;
+      readonly details?: Readonly<Record<string, unknown>>;
+    },
     authorization?: NonNullable<AuthorizationDeniedError["authorization"]>,
     validatedAuthorization?: Readonly<DeployAgentAuthorization>,
   ): AuditEvent {
     const authorizationEvidence = validatedAuthorization?.decision.evidence ?? evidence;
     const outcome = result?.outcome ?? (kind === "authorization_denial" ? "denied" : "success");
+    const evidenceDetails =
+      context === undefined || authorizationEvidence === undefined
+        ? undefined
+        : {
+            iamEvidence: {
+              ...(authorizationEvidence.identityId === undefined
+                ? {}
+                : { identityId: authorizationEvidence.identityId }),
+              groupIds: authorizationEvidence.groupIds,
+              bindingIds: authorizationEvidence.bindingIds,
+              roleIds: authorizationEvidence.roleIds,
+              restrictionIds: authorizationEvidence.restrictionIds,
+            },
+          };
+    const details =
+      result?.details === undefined ? evidenceDetails : { ...evidenceDetails, ...result.details };
     return factory.create({
       installationId,
       ...(resource.namespaceId === undefined ? {} : { namespaceId: resource.namespaceId }),
@@ -1117,19 +1140,10 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                   ...(outcome === "denied" && authorizationEvidence.restrictionIds.length > 0
                     ? { decisionReason: "A matching Restriction denied the operation." }
                     : {}),
-                  details: {
-                    iamEvidence: {
-                      ...(authorizationEvidence.identityId === undefined
-                        ? {}
-                        : { identityId: authorizationEvidence.identityId }),
-                      groupIds: authorizationEvidence.groupIds,
-                      bindingIds: authorizationEvidence.bindingIds,
-                      roleIds: authorizationEvidence.roleIds,
-                      restrictionIds: authorizationEvidence.restrictionIds,
-                    },
-                  },
                 }),
           }),
+      ...(result?.decisionReason === undefined ? {} : { decisionReason: result.decisionReason }),
+      ...(details === undefined ? {} : { details }),
       action: auditAction(operation, request),
       resource,
       outcome,
@@ -1333,26 +1347,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     },
   ): Promise<void> {
     try {
-      const base = event(
-        operation,
-        request,
-        operationTarget(operation, installationId, request.params as Record<string, unknown>),
-        kind,
-        context,
-        evidence,
-        explanation?.reasonCode === undefined
-          ? undefined
-          : { outcome: "denied", reasonCode: explanation.reasonCode },
-        authorization,
-      );
       await options.auditSink.append(
-        explanation === undefined
-          ? base
-          : {
-              ...base,
-              decisionReason: explanation.decisionReason,
-              details: { ...base.details, ...explanation.details },
-            },
+        event(
+          operation,
+          request,
+          operationTarget(operation, installationId, request.params as Record<string, unknown>),
+          kind,
+          context,
+          evidence,
+          explanation === undefined ? undefined : { outcome: "denied", ...explanation },
+          authorization,
+        ),
       );
     } catch {
       throw failure(
@@ -2493,28 +2498,29 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             if (covered) {
               return;
             }
-            const base = event(
-              operation,
-              request,
-              target,
-              "authorization_denial",
-              context,
-              decision.evidence,
-              { outcome: "denied", reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED" },
-            );
             try {
-              await options.auditSink.append({
-                ...base,
-                decisionReason:
-                  "The caller does not hold every grant of the target ServicePrincipal.",
-                details: {
-                  ...base.details,
-                  servicePrincipalId,
-                  ...(creating
-                    ? {}
-                    : { serviceKeyId: (request.params as { keyId: string }).keyId }),
-                },
-              });
+              await options.auditSink.append(
+                event(
+                  operation,
+                  request,
+                  target,
+                  "authorization_denial",
+                  context,
+                  decision.evidence,
+                  {
+                    outcome: "denied",
+                    reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED",
+                    decisionReason:
+                      "The caller does not hold every grant of the target ServicePrincipal.",
+                    details: {
+                      servicePrincipalId,
+                      ...(creating
+                        ? {}
+                        : { serviceKeyId: (request.params as { keyId: string }).keyId }),
+                    },
+                  },
+                ),
+              );
             } catch {
               throw dependencyUnavailable();
             }
