@@ -32,16 +32,29 @@ including the bootstrap Namespace; new Namespaces receive them atomically. Start
 skips failed or deleting Namespaces.
 
 Each copy is an ordinary Namespace-owned Preset with its own ID and normal
-read/update/delete permissions. Matching names are preserved without comparing
-or overwriting their templates. Startup can restore a deleted or renamed
-default while enabled; bundle updates do not replace existing copies. Removing the files and disabling
+read/update/delete permissions. Startup can restore a deleted or renamed
+default while enabled. Removing the files and disabling
 `includeDefaults` stops seeding and leaves saved Presets and Agents unchanged.
-Namespace deletion removes copies that still match the current default by name
-and template; edited copies block it with `409 NAMESPACE_NOT_EMPTY`.
 Restart the API after changing the YAML, keeping the worker configuration in sync.
 
+### Bundled default upgrades
+
+Earlier shipped versions of the bundled defaults are archived in
+`deploy/presets/archive/`. While `includeDefaults` is enabled, startup replaces
+a same-name copy that still equals an earlier version (normalized JSON) with the
+current template. It keeps its ID and AccessBindings, and the change is audited as
+`openclaw.presets.update` with `source: installation-defaults-refresh`. Copies
+that match no shipped version are operator edits and are never replaced;
+neither are `presets.files` copies or copies under a retired name, such as
+`standard-codex`. Existing Agents and Configurations keep their settings.
+
+Namespace deletion removes copies that equal, by name and template, a configured
+default or any shipped bundled version, even with `includeDefaults` disabled.
+Other Presets block it with `409 NAMESPACE_NOT_EMPTY`.
+
 Startup selects a persisted Principal authorized to administer the Installation
-and requires `preset:create` wherever defaults are missing. Namespace
+and requires `preset:create` wherever defaults are missing and `preset:update`
+on each copy it refreshes. Namespace
 creators likewise need `preset:create` when this option is enabled. Authorization
 or template validation failure rolls back initialization and prevents startup
 or Namespace creation. The selected Configuration Driver validates native
