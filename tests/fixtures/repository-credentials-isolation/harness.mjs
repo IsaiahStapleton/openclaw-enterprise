@@ -42,7 +42,10 @@ async function pushFeatureBranch(client) {
   return head;
 }
 
-export async function qualifyIsolation(t, { serviceImage, clientImage }) {
+export async function qualifyIsolation(t, { serviceImage, clientImage, authority = "github-app" }) {
+  // "github-token" runs the development authority: one static token in the service's
+  // input mount, never issued, so every Agent surface must stay free of it.
+  const staticToken = authority === "github-token";
   const work = forwardWork(t.signal);
   const run = work.command;
   const docker = (args, options) => run("docker", args, options);
@@ -190,6 +193,8 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     }
     await start(names.provider, [
       ...listener,
+      "--env",
+      `ISOLATION_AUTHORITY=${authority}`,
       "--network",
       network,
       "--network-alias",
@@ -219,6 +224,8 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       }
     }
     await eventually(async () => (await report())?.ready);
+    // The development authority caps sessions at eight hours and buffered pushes at 64 MiB.
+    const sessionSeconds = staticToken ? 28800 : 86400;
     const configuration = {
       gateway: {
         publicOrigin: gateway,
@@ -228,21 +235,34 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
         tlsKeyFile: "/run/repository-credentials/tls.key",
       },
       sessionPolicy: {
-        maximumDurationSeconds: 172800,
+        maximumDurationSeconds: staticToken ? sessionSeconds : 172800,
         defaultProfile: "git-write",
         allowedProfiles: ["git-read", "git-write", "git-full"],
       },
-      limits: { shutdownGraceMs: 5000 },
-      backend: {
-        kind: "github-app",
-        providerInstanceId: "github-isolation-fixture",
-        configVersion: "1",
-        appId: "12345",
-        installationId: "41",
-        repositoryId: "73",
-        repository,
-        privateKeyFile: "/run/repository-credentials/app.pem",
-      },
+      limits: staticToken
+        ? { shutdownGraceMs: 5000, gitPushInputBytes: 67108864 }
+        : { shutdownGraceMs: 5000 },
+      backend: staticToken
+        ? {
+            kind: "github-token",
+            providerInstanceId: "github-isolation-fixture",
+            configVersion: "1",
+            repositoryId: "73",
+            repository,
+            tokenFile: "/run/repository-credentials/token",
+            developmentOnly: true,
+            pushRefAllowlist: ["refs/heads/isolation-feature"],
+          }
+        : {
+            kind: "github-app",
+            providerInstanceId: "github-isolation-fixture",
+            configVersion: "1",
+            appId: "12345",
+            installationId: "41",
+            repositoryId: "73",
+            repository,
+            privateKeyFile: "/run/repository-credentials/app.pem",
+          },
     };
     work.check();
     await writeFile(join(inputs, "config.json"), JSON.stringify(configuration), { mode: 0o600 });
@@ -259,6 +279,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       serviceId,
       "--config",
       "/run/repository-credentials/config.json",
+      ...(staticToken ? ["--development-authority"] : []),
     ]);
     await waitForPath(join(control, "control.sock"));
 
@@ -292,7 +313,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     }
     const opened = await operator("open", [
       "--duration-seconds",
-      "86400",
+      String(sessionSeconds),
       "--profile",
       "git-full",
       "--output",
@@ -302,7 +323,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     ]);
     const sibling = await operator("open", [
       "--duration-seconds",
-      "86400",
+      String(sessionSeconds),
       "--profile",
       "git-full",
       "--output",
@@ -357,6 +378,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       "/app/dist/repository-credentials.js",
       "--config",
       "/run/repository-credentials/config.json",
+      ...(staticToken ? ["--development-authority"] : []),
     ]);
     assert.equal(containers.service.path, "node");
     await docker([
@@ -389,9 +411,20 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
         "no ambient provider token environment",
       );
       const secrets = JSON.parse(await readFile(join(state, "secrets.json"), "utf8"));
+      if (staticToken) {
+        // Positive control on the host only: the compared patterns include the token
+        // the service actually read, so an empty result is not a vacuous pass.
+        const token = (await readFile(join(inputs, "token"), "utf8")).trim();
+        assert.ok(secrets.includes(token), "static token is among the compared patterns");
+      }
+      // The probe does see client files: the selected session's own bearer is there.
+      const bearer = (await readFile(join(session, "bearer"), "utf8")).trim();
+      assert.ok(result.stdout.includes(bearer), "probe observes the selected session files");
       secrets.push(await readFile(join(sessions, "sibling", "bearer"), "utf8"));
       const logs = await docker(["logs", names.agent]);
       const serviceLogs = await docker(["logs", names.service]);
+      // Full inspect output covers each container's environment, labels and arguments.
+      const inspected = await docker(["inspect", names.agent, names.service]);
       assertNoSecrets(
         result.stdout +
           clientOutputs.join("\n") +
@@ -399,6 +432,7 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
           logs.stderr +
           serviceLogs.stdout +
           serviceLogs.stderr +
+          inspected.stdout +
           JSON.stringify(containers),
         secrets,
       );
@@ -421,8 +455,9 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       clientOutputs.push(result.stdout, result.stderr);
       return result;
     }
-    // Hold only the fixture's first token response so the filesystem/process
-    // probe also observes the actual running Git launcher and helper boundary.
+    // Hold the fixture's first credential use (App: the first token response; static
+    // token: the first authenticated Git request) so the filesystem/process probe
+    // also observes the actual running Git launcher and helper boundary.
     const cloning = client("git", [
       "clone",
       `${gateway}/${repository}.git`,
@@ -430,13 +465,26 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     ]);
     cloning.catch(() => {});
     try {
-      await waitForPath(join(state, "issuing"));
+      await waitForPath(join(state, "held"));
       await scan();
     } finally {
-      await writeFile(join(state, "release-issue"), "release", { mode: 0o600 });
+      await writeFile(join(state, "release-hold"), "release", { mode: 0o600 });
       await cloning;
     }
     const head = await pushFeatureBranch(client);
+    // Git configuration as the Agent sees it, with and without the session launcher.
+    await client("git", ["-C", "/workspace/repository", "config", "--list", "--show-origin"]);
+    const plainConfig = await docker([
+      "exec",
+      names.agent,
+      "git",
+      "-C",
+      "/workspace/repository",
+      "config",
+      "--list",
+      "--show-origin",
+    ]);
+    clientOutputs.push(plainConfig.stdout, plainConfig.stderr);
     const api = await client("gh", ["api", `repos/${repository}`]);
     assert.equal(JSON.parse(api.stdout).full_name, repository);
     const beforeClose = await eventually(async () => {
@@ -448,16 +496,25 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
       );
     });
     assert.deepEqual(beforeClose.errors, []);
-    assert.equal(beforeClose.issues.length, 1);
-    assert.deepEqual(beforeClose.issues[0].repositoryIds.map(String), ["73"]);
-    assert.deepEqual(beforeClose.issues[0].permissions, {
-      metadata: "read",
-      contents: "write",
-      pull_requests: "write",
-      issues: "write",
-      checks: "read",
-      statuses: "read",
-    });
+    if (staticToken) {
+      // Nothing was issued: every upstream use carried the one static token.
+      assert.equal(beforeClose.issues.length, 0);
+      assert.deepEqual(
+        beforeClose.tokens.map((token) => token.static),
+        [true],
+      );
+    } else {
+      assert.equal(beforeClose.issues.length, 1);
+      assert.deepEqual(beforeClose.issues[0].repositoryIds.map(String), ["73"]);
+      assert.deepEqual(beforeClose.issues[0].permissions, {
+        metadata: "read",
+        contents: "write",
+        pull_requests: "write",
+        issues: "write",
+        checks: "read",
+        statuses: "read",
+      });
+    }
     assert.ok(beforeClose.gitTrace.some((entry) => entry.gitProtocol === "version=2"));
     assert.ok(beforeClose.gitTrace.some((entry) => entry.path.endsWith("/git-receive-pack")));
     assert.ok(
@@ -498,9 +555,14 @@ export async function qualifyIsolation(t, { serviceImage, clientImage }) {
     assert.equal(summary.pendingCredentials, 0);
     assert.equal(summary.pendingAuxiliary, 0);
     assert.equal(summary.disposedSessions, 2);
+    // An issued token is revoked at close; the owner's static token never is.
     const finalReport = await eventually(async () => {
       const value = await report();
-      return value?.tokens.length === 1 && value.tokens.every((token) => token.revoked) && value;
+      return (
+        value?.tokens.length === 1 &&
+        value.tokens.every((token) => token.revoked !== staticToken) &&
+        value
+      );
     });
     assert.deepEqual(finalReport.errors, []);
     assert.equal(
