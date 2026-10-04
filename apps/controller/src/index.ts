@@ -44,6 +44,7 @@ import {
   type AuthPrincipalSeed,
 } from "@openclaw-enterprise/iam";
 import {
+  AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
@@ -3594,21 +3595,47 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       const context = contexts.get(request);
       if (context) {
         try {
-          await denial(
-            context.operation,
-            request,
-            "authorization_denial",
-            context,
-            error.evidence,
-            error.authorization,
-            error instanceof DeletionRetryOwnedError
-              ? {
-                  decisionReason:
-                    "A deletion can be retried only by its initiating actor while it holds delete.",
-                  details: { initiatingActorId: error.initiatingActorId },
-                }
-              : undefined,
-          );
+          if (error instanceof AgentPrincipalAuthorizationError) {
+            // The caller's own grants passed; the Agent's service principal was denied. Record
+            // the caller's request and name that principal, its grant and its evidence, so the
+            // event never reads as the caller lacking the grant.
+            await denial(
+              context.operation,
+              request,
+              "authorization_denial",
+              context,
+              undefined,
+              undefined,
+              {
+                decisionReason: error.message,
+                reasonCode: "AGENT_PRINCIPAL_NOT_AUTHORIZED",
+                details: {
+                  servicePrincipalId: error.principalId,
+                  action: error.authorization.action,
+                  resource: error.authorization.resource,
+                  ...(error.evidence === undefined
+                    ? {}
+                    : { servicePrincipalEvidence: error.evidence }),
+                },
+              },
+            );
+          } else {
+            await denial(
+              context.operation,
+              request,
+              "authorization_denial",
+              context,
+              error.evidence,
+              error.authorization,
+              error instanceof DeletionRetryOwnedError
+                ? {
+                    decisionReason:
+                      "A deletion can be retried only by its initiating actor while it holds delete.",
+                    details: { initiatingActorId: error.initiatingActorId },
+                  }
+                : undefined,
+            );
+          }
         } catch (auditError) {
           mapped = requestFailure(auditError);
         }
