@@ -614,6 +614,11 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
               resourceKind: "configuration" as const,
               scope: "namespace" as const,
             },
+            {
+              action: "administer" as const,
+              resourceKind: "installation" as const,
+              scope: "requested" as const,
+            },
           ]
         : [
             {
@@ -657,12 +662,34 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
     operation.operationId === "getAgentProvisioning" ||
     operation.operationId === "retryAgentProvisioning"
   ) {
+    // Mirrors OCC authorizeProvisioningRequest, then authorizeProvisioningRecord.
     return [
+      { action: "create", resourceKind: "agent", scope: "namespace" },
+      { action: "create", resourceKind: "configuration", scope: "namespace" },
+      { action: "administer", resourceKind: "installation", scope: "requested" },
+      ...(["read", "operate", "deploy"] as const).map((action) => ({
+        action,
+        resourceKind: "agent" as const,
+        scope: "requested" as const,
+        condition: "provisioning_work" as const,
+      })),
+      ...(["read", "update"] as const).map((action) => ({
+        action,
+        resourceKind: "configuration" as const,
+        scope: "requested" as const,
+        condition: "provisioning_work" as const,
+      })),
       {
-        action: permission.action,
-        resourceKind: "agent",
+        action: "read",
+        resourceKind: "service_account",
         scope: "requested",
-        condition: "provisioning_work",
+        condition: "associated_service_account",
+      },
+      {
+        action: "operate",
+        resourceKind: "secret",
+        scope: "requested",
+        condition: "bound_secret",
       },
     ];
   }
@@ -756,6 +783,13 @@ function permissionDescription(
   permissions: readonly RequiredPermission[],
   operation?: OccApiRoute,
 ): string {
+  if (
+    operation?.operationId === "getAgentProvisioning" ||
+    operation?.operationId === "retryAgentProvisioning"
+  ) {
+    const verb = operation.operationId === "getAgentProvisioning" ? "read" : "retry";
+    return `Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can ${verb} it. The accepted work also needs read, operate and deploy permission on its Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret it binds, and read permission on its Harness ServiceAccount when present.`;
+  }
   const names: Record<ResourceKind, string> = {
     installation: "Installation",
     namespace: "Namespace",
@@ -802,7 +836,7 @@ function permissionDescription(
         return `Requires ${action} permission on each bound ${name} when Secret bindings are present or selected.`;
       }
       if (condition === "provisioning_work") {
-        return `Requires current ${action} authorization for the accepted Agent provisioning record. Before Agent creation, only the initiating actor in the exact Namespace can use the work item.`;
+        return `Requires ${action} permission on the ${name} the provisioning work created, once it exists.`;
       }
       if (condition === "missing_runtime_credentials") {
         return `Requires ${action} permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment.`;
