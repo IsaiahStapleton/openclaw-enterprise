@@ -47,8 +47,9 @@ test(
     });
     const github = await startFakeGitHub(t);
     let memberships = {};
+    // Compare with the fixed paths; never select a handler by the request's own key.
     github.membership = (path, subject) =>
-      new Map(Object.entries(memberships)).get(path)?.(subject) ?? 404;
+      Object.entries(memberships).find(([listed]) => listed === path)?.[1](subject) ?? 404;
 
     const adminPassword = await bootstrapProductionInstallation(t, {
       databaseUrl,

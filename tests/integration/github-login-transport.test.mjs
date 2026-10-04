@@ -694,7 +694,7 @@ test(
     const notFound = (response) => response.writeHead(404).end('{"message":"Not Found"}');
     // answers: path -> (response) => void; unlisted membership paths fail the test.
     function provider(answers, login = "Octo-Cat") {
-      const routes = new Map(Object.entries(answers));
+      const routes = Object.entries(answers);
       return (request, response) => {
         if (request.url === "/login/oauth/access_token") {
           return token(response);
@@ -705,9 +705,13 @@ test(
         }
         assert.equal(request.headers.authorization, "Bearer ghu_fixture_provider_token");
         assert.equal(request.headers.accept, "application/vnd.github+json");
-        const answer = routes.get(request.url);
-        assert.ok(answer, `unexpected membership request ${request.url}`);
-        return answer(response);
+        // Compare with the fixed paths; never select a handler by the request's own key.
+        for (const [path, answer] of routes) {
+          if (path === request.url) {
+            return answer(response);
+          }
+        }
+        assert.fail(`unexpected membership request ${request.url}`);
       };
     }
     async function expectRefused(response, code) {
