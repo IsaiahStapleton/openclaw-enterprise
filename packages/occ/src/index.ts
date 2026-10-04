@@ -138,6 +138,7 @@ import {
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
+  NoActiveAgentRevisionError,
   NotImplementedError,
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
@@ -254,6 +255,7 @@ export {
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
   NativeWorkerSupportError,
+  NoActiveAgentRevisionError,
   NotImplementedError,
   PluginPolicyValidationError,
   RepositoryOptionsUnavailableError,
@@ -2879,7 +2881,7 @@ export class OpenClawController {
         if (action === "administer" && agent.desiredRuntimeState === "stopped") {
           throw new ResourceStateConflictError("A stopped Agent has no active gateway revision.");
         }
-        throw new DependencyUnavailableError("The Agent has no active gateway revision.");
+        throw new NoActiveAgentRevisionError();
       }
       const revision = await state.revisions.findRevision(
         namespace.id,
