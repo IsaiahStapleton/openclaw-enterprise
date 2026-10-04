@@ -167,11 +167,10 @@ are pulled and rechecked before import. Other Docker inspection failures stop
 preparation. Cleanup removes owned import tags and preserves the supplied image.
 
 On GitHub-hosted runners, both observability lanes require 36 GiB free before
-building and importing images. A runner that already has that much free keeps its
-SDKs (the receipt says `removalSkipped`); otherwise the unused SDKs are removed
-concurrently with a ten-minute deadline and per-directory timing receipts, and the
-36 GiB check runs again. Local runs omit this guarded cleanup. Both use single-node clusters and overlap independent pulls,
-builds, and cluster setup, then serialize k3d imports per cluster to avoid
+building and importing images, removing unused SDKs only when less is free
+(concurrently, ten-minute deadline, per-directory timing receipts); local runs
+omit this guarded cleanup. Both use single-node clusters and overlap independent
+pulls, builds, and cluster setup, then serialize k3d imports per cluster to avoid
 importer races. The demo lane imports only its three services and a Node
 image for protocol fixtures; it does not build OCC. State writes remain
 serialized, and all in-flight operations settle before failure cleanup.
