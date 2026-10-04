@@ -2262,7 +2262,7 @@ Get first-time provisioning status for one exact work item
 
 **Operation ID:** `getAgentProvisioning`
 
-**Permissions:** Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can read it. The accepted work also needs read, operate and deploy permission on its Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret it binds, and read permission on its Harness ServiceAccount when present.
+**Permissions:** Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can read it. The caller also needs read, operate and deploy permission on the work's Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret the work binds or uses for Harness authentication, and read permission on its Harness ServiceAccount when present. OCC re-checks these grants against the initiator while the work runs.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -2324,7 +2324,7 @@ Retry failed first-time provisioning for one exact work item
 
 **Operation ID:** `retryAgentProvisioning`
 
-**Permissions:** Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can retry it. The accepted work also needs read, operate and deploy permission on its Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret it binds, and read permission on its Harness ServiceAccount when present.
+**Permissions:** Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can retry it. The caller also needs read, operate and deploy permission on the work's Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret the work binds or uses for Harness authentication, and read permission on its Harness ServiceAccount when present. OCC re-checks these grants against the initiator while the work runs.
 
 | Action | Resource | Scope |
 | --- | --- | --- |

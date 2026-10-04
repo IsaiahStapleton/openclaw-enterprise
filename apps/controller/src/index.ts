@@ -788,7 +788,8 @@ function permissionDescription(
     operation?.operationId === "retryAgentProvisioning"
   ) {
     const verb = operation.operationId === "getAgentProvisioning" ? "read" : "retry";
-    return `Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can ${verb} it. The accepted work also needs read, operate and deploy permission on its Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret it binds, and read permission on its Harness ServiceAccount when present.`;
+    // The provisioning_work rows are described here, not per row.
+    return `Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can ${verb} it. The caller also needs read, operate and deploy permission on the work's Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret the work binds or uses for Harness authentication, and read permission on its Harness ServiceAccount when present. OCC re-checks these grants against the initiator while the work runs.`;
   }
   const names: Record<ResourceKind, string> = {
     installation: "Installation",
@@ -834,9 +835,6 @@ function permissionDescription(
           return `Requires ${action} permission on each ${name} bound by the resulting Configuration.`;
         }
         return `Requires ${action} permission on each bound ${name} when Secret bindings are present or selected.`;
-      }
-      if (condition === "provisioning_work") {
-        return `Requires ${action} permission on the ${name} the provisioning work created, once it exists.`;
       }
       if (condition === "missing_runtime_credentials") {
         return `Requires ${action} permission on the Agent when the selected Compute Driver must generate missing runtime credentials for its first deployment.`;
