@@ -26,6 +26,8 @@ continues through [revision admission](configuration-driver/persistence-and-revi
   collection and exact-resource operations in a Namespace.
 - [OCC Preset methods](../../packages/occ/src/index.ts): `createPreset`,
   `updatePreset`, `listPresets`, `getPreset`, and `deletePreset` own lifecycle.
+- [CLI](../../internal/occcli/cli.go): `presetCommand` provides `occ preset list`,
+  `get`, and `delete` over the same routes; create and update stay HTTP-only.
 - [Console selector](../../apps/controller/src/console/agents/presets.mjs):
   `createPresetFields` requires a selected Namespace and an authenticated user.
   Saving also needs the existing Configuration, Agent, and credential grants.

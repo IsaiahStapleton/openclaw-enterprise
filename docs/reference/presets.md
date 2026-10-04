@@ -320,8 +320,9 @@ bindings, but keeps copied Agents, Configurations, and credential sources.
 
 ## Limits and recovery
 
-Presets are managed through the HTTP API; the console only selects and applies
-them. There are no Preset CLI commands, inheritance, version history, or Agent
+Create and update Presets through the HTTP API; `occ preset list`, `get`, and
+`delete` cover the rest ([CLI reference](cli.md#resource-commands)). The console
+only selects and applies them. There is no inheritance, version history, or Agent
 metadata recording which Preset was used. Creation still saves a Configuration
 and an Agent separately. Follow [partial-save recovery](console/create-and-deploy.md#create-an-agent)
 if the second save fails or a response is lost.
