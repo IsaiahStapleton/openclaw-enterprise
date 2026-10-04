@@ -48,7 +48,8 @@ A new account starts with no access. As a human Installation administrator:
 
 1. [Sign in](../../reference/authentication/service-api-keys.md#sign-in-as-a-human-administrator)
    so `OCC_SESSION_COOKIE_JAR` holds your session, and set `OCC_ORIGIN` to the
-   console origin.
+   console origin. Under `recovery-only` password sign-in, only the recovery
+   account signs in this way.
 2. Create the account from a private file with a generated password, and keep
    the returned `principalId`:
 
@@ -62,7 +63,13 @@ A new account starts with no access. As a human Installation administrator:
      "$OCC_URL/api/auth/accounts" | jq -r .data.principalId)"
    ```
 
-3. Grant access in each Namespace the person needs. With `OCC_NAMESPACE` set,
+3. If the person signs in only through GitHub, Google or OIDC, attach their
+   identity now: see [Google](../deploy/google-sign-in.md#attach-and-detach) or
+   [OIDC](../deploy/oidc-sign-in.md#attach-and-detach). For GitHub, add
+   `"github":{"subject":"<numeric user ID>"}` to the body in step 2 instead,
+   which attaches it in the same transaction. Then delete `account.json`; never
+   hand the password over.
+4. Grant access in each Namespace the person needs. With `OCC_NAMESPACE` set,
    create a Role, then bind it to the Namespace for discovery and to each
    exact resource, such as an Agent:
 
@@ -77,9 +84,26 @@ A new account starts with no access. As a human Installation administrator:
    done
    ```
 
-4. Give the person the password from `account.json` through your own secure
-   channel, then delete the file. With GitHub, Google or OIDC sign-in, also
-   [attach their identity](../../reference/authentication/external-sign-in.md).
+5. For a person who signs in with a password, give them the password from
+   `account.json` through your own secure channel, then delete the file.
+
+Creation always requires a password, so an SSO-only account keeps one that
+nobody uses. It is still a credential:
+
+- Under `auth.passwordSignIn: all`, the default even with a provider enabled, it
+  signs in. Switch to
+  [`recovery-only`](../../reference/authentication/external-sign-in.md#recovery-only-password-sign-in)
+  once everyone has an identity.
+- Under `recovery-only` it is refused, but it works again if the setting returns
+  to `all` or [deactivation](../deploy/auth-maintenance.md#deactivate-external-sign-in)
+  restores password-only sign-in.
+- No API resets or removes it, and detach refuses password methods with `409`.
+  Only disabling the account stops it, and that also stops the person's SSO
+  sign-in.
+- Accounts cannot be deleted. If the attach fails, for example with `409`
+  because another account already holds the subject, correct the subject and
+  attach again. An account you abandon keeps its email, which creation will not
+  reuse, so disable it.
 
 Add actions such as `update` or `deploy` to the Role for more access; see
 [Authorization](../../reference/authorization.md) for actions and scope. A
