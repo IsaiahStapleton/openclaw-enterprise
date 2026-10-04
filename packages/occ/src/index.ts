@@ -1574,7 +1574,7 @@ export class OpenClawController {
     agentId?: string,
     descriptionRefs: readonly string[] = [],
   ): Promise<Readonly<RepositoryOptions>> {
-    const namespace = await this.read((state) => this.exactNamespace(state, namespaceId));
+    this.namespaceIdentity(namespaceId);
     if (agentId !== undefined) {
       const agent = await this.getAuthorizedAgent(principalId, namespaceId, agentId, "update");
       if (agent.status !== "active") {
@@ -1583,10 +1583,11 @@ export class OpenClawController {
     } else {
       await this.authorize(principalId, "create", {
         kind: "agent",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: namespaceId,
+        namespaceId,
       });
     }
+    const namespace = await this.read((state) => this.exactNamespace(state, namespaceId));
     // Checked after authorization: the conflict names the Namespace state.
     if (namespace.status !== "provisioning" && namespace.status !== "ready") {
       throw new ResourceStateConflictError("The Namespace does not accept new Agents.");
@@ -1817,7 +1818,6 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     return this.mutate(async (state) => {
-      await this.lockNamespace(state, namespaceId);
       const { namespace, agent, driver } = await this.admitAgentRuntimeCredentialProvisioning(
         principalId,
         namespaceId,
@@ -2822,6 +2822,11 @@ export class OpenClawController {
     if (!isNonEmptyString(revisionId)) {
       throw new ScopeViolationError("The exact AgentRevision identity is missing.");
     }
+    await this.authorize(principalId, "read", {
+      kind: "agent_revision",
+      id: revisionId,
+      namespaceId,
+    });
     return this.read(async (state) => {
       const namespace = await this.exactNamespace(state, namespaceId);
       const agent = await state.agents.findAgent(namespace.id, agentId);
@@ -2830,11 +2835,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "read", {
-        kind: "agent_revision",
-        id: revisionId,
-        namespaceId: namespace.id,
-      });
       const revision = await state.revisions.findRevision(namespace.id, agent.id, revisionId);
       if (!revision) {
         throw new ScopeViolationError(
@@ -2860,6 +2860,11 @@ export class OpenClawController {
     if (!isNonEmptyString(revisionId)) {
       throw new ScopeViolationError("The exact AgentRevision identity is missing.");
     }
+    await this.authorize(principalId, "read", {
+      kind: "agent_revision",
+      id: revisionId,
+      namespaceId,
+    });
     return this.read(async (state) => {
       const namespace = await this.exactNamespace(state, namespaceId);
       const agent = await state.agents.findAgentForBrowsing(namespace.id, agentId);
@@ -2868,11 +2873,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "read", {
-        kind: "agent_revision",
-        id: revisionId,
-        namespaceId: namespace.id,
-      });
       const revision = await state.revisions.findRevisionForBrowsing(
         namespace.id,
         agent.id,
@@ -3139,13 +3139,14 @@ export class OpenClawController {
     if (!validName(input.name)) {
       throw new PresetValidationError("The Preset name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "preset",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3202,13 +3203,14 @@ export class OpenClawController {
     if (input.name !== undefined && !validName(input.name)) {
       throw new PresetValidationError("The Preset name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "preset",
         id: input.presetId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3309,13 +3311,14 @@ export class OpenClawController {
     if (!validName(input.name)) {
       throw new ScopeViolationError("The Secret name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "secret",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3382,13 +3385,14 @@ export class OpenClawController {
     input: UpdateSecretInput,
   ): Promise<Readonly<SecretMetadata>> {
     this.validateSecretValue(input.value);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "secret",
         id: input.secretId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3409,13 +3413,14 @@ export class OpenClawController {
     namespaceId: string,
     secretId: string,
   ): Promise<readonly RemovedAccessBinding[]> {
+    this.namespaceIdentity(namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
         kind: "secret",
         id: secretId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.lockNamespace(state, namespaceId);
       const secret = await state.secrets.lockSecret(namespace.id, secretId);
       if (!secret) {
         throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
@@ -3451,13 +3456,14 @@ export class OpenClawController {
     }
     const config = Object.freeze({ ...(input.config ?? {}) });
     const secretRefs = Object.freeze({ ...(input.secrets ?? {}) });
+    this.namespaceIdentity(input.namespaceId);
     const { namespace, gateway, source, values } = await this.mutate(async (state) => {
-      const locked = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "credential_source",
-        id: locked.id,
-        namespaceId: locked.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const locked = await this.lockNamespace(state, input.namespaceId);
       // An Installation property, so it is reported before any Namespace state.
       if (!this.selections.has("credential_gateway")) {
         throw new CredentialGatewayNotConfiguredError();
@@ -3570,13 +3576,14 @@ export class OpenClawController {
     principalId: string,
     input: UpdateCredentialSourceInput,
   ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "credential_source",
         id: input.credentialSourceId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3737,13 +3744,14 @@ export class OpenClawController {
     audit?: (removedAccessBindings: readonly RemovedAccessBinding[]) => AuditEvent,
   ): Promise<void> {
     this.assertCredentialSourceTransactionBoundary();
+    this.namespaceIdentity(namespaceId);
     const { namespace, source } = await this.mutate(async (state) => {
-      const locked = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
         kind: "credential_source",
         id: credentialSourceId,
-        namespaceId: locked.id,
+        namespaceId,
       });
+      const locked = await this.lockNamespace(state, namespaceId);
       const found = await state.credentialSources.lockCredentialSource(
         locked.id,
         credentialSourceId,
@@ -3807,13 +3815,14 @@ export class OpenClawController {
       throw new ScopeViolationError("The Configuration kind must identify an Agent.");
     }
     const values = frozenValues(input.values);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "configuration",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       // Checked after authorization: the conflict names the Namespace state.
       if (namespace.status !== "provisioning" && namespace.status !== "ready") {
         throw new ResourceStateConflictError("The Namespace does not accept new Configurations.");
@@ -3858,13 +3867,14 @@ export class OpenClawController {
     if (!validName(input.name)) {
       throw new ScopeViolationError("The ServiceAccount name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "service_account",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.exactNamespace(state, input.namespaceId);
       // Checked after authorization: the conflict names the Namespace state.
       if (namespace.status !== "provisioning" && namespace.status !== "ready") {
         throw new ResourceStateConflictError("The Namespace does not accept new ServiceAccounts.");
@@ -3889,12 +3899,12 @@ export class OpenClawController {
   ): Promise<Readonly<ServiceAccount>> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       await this.authorize(principalId, "update", {
         kind: "service_account",
         id: serviceAccountId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.exactNamespace(state, namespaceId);
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
         serviceAccountId,
@@ -3940,12 +3950,12 @@ export class OpenClawController {
   ): Promise<Readonly<ServiceAccount>> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       await this.authorize(principalId, "update", {
         kind: "service_account",
         id: serviceAccountId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.exactNamespace(state, namespaceId);
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
         serviceAccountId,
@@ -3979,12 +3989,12 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
         kind: "service_account",
         id: serviceAccountId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.lockNamespace(state, namespaceId);
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
         serviceAccountId,
@@ -4053,12 +4063,12 @@ export class OpenClawController {
     }
     const values = frozenValues(input.values);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "configuration",
         id: input.configurationId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       const driver = this.configurationDriver();
       const metadata = await state.configurations.lockConfiguration(
         namespace.id,
@@ -4118,12 +4128,12 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.configurationIdentity(namespaceId, configurationId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, namespaceId);
       await this.authorize(principalId, "delete", {
         kind: "configuration",
         id: configurationId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.lockNamespace(state, namespaceId);
       const driver = this.configurationDriver();
       const configuration = await state.configurations.lockConfiguration(
         namespace.id,
@@ -5025,14 +5035,15 @@ export class OpenClawController {
     const backendId = this.backendId(input.backendId);
     const plugins = normalizeAgentPlugins(input.plugins);
     const pluginApprovers = normalizeAgentPluginApprovers(input.pluginApprovers);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       const target: ResourceRef = {
         kind: "agent",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       };
       await this.authorize(principalId, "create", target);
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       // Checked after authorization: the conflict names the Namespace state.
       if (namespace.status !== "provisioning" && namespace.status !== "ready") {
         throw new ResourceStateConflictError("The Namespace does not accept new Agents.");
@@ -5110,7 +5121,13 @@ export class OpenClawController {
     const plugins = normalizeAgentPlugins(input.plugins);
     const pluginApprovers =
       input.pluginApprovers === null ? null : normalizeAgentPluginApprovers(input.pluginApprovers);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "update", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId: input.namespaceId,
+      });
       const namespace = await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(namespace.id, input.agentId);
       if (!agent) {
@@ -5118,11 +5135,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "update", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       if (agent.status !== "active") {
         throw new AgentDeletingError();
       }
@@ -5291,7 +5303,13 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     await this.validateDeploymentChannels(principalId, input);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
+      const authorization = await this.authorize(principalId, "deploy", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId: input.namespaceId,
+      });
       const namespace = await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.findAgent(namespace.id, input.agentId);
       if (!agent) {
@@ -5299,11 +5317,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      const authorization = await this.authorize(principalId, "deploy", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       await this.guardAgentProvisioning(state, namespace.id, agent.id, true);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
@@ -5568,7 +5581,16 @@ export class OpenClawController {
     principalId: string,
     input: AgentCredentialSourceInput,
   ): Promise<Readonly<CredentialWithdrawalStatus>> {
+    this.namespaceIdentity(input.namespaceId);
+    if (!isNonEmptyString(input.agentId)) {
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId: input.namespaceId,
+      });
       await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(input.namespaceId, input.agentId);
       if (agent === undefined) {
@@ -5576,11 +5598,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "operate", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: agent.namespaceId,
-      });
       const revision = await this.activeCredentialSourceRevision(state, agent, input);
       const withdrawal = await state.credentialSources.requestCredentialWithdrawal(
         Object.freeze({
@@ -5698,6 +5715,11 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
       await this.lockNamespace(state, namespaceId);
       const agent = await state.agents.lockAgent(namespaceId, agentId);
       if (agent === undefined) {
@@ -5705,11 +5727,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "operate", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: agent.namespaceId,
-      });
       if (agent.status === "deleting") {
         return agent;
       }
@@ -5748,17 +5765,17 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Namespace identity is missing.");
     }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "delete", {
+        kind: "namespace",
+        id: namespaceId,
+        namespaceId,
+      });
       const namespace = await state.namespaces.lockNamespace(namespaceId);
       if (!namespace) {
         throw new ScopeViolationError(
           "The Namespace does not belong to the server-owned Installation.",
         );
       }
-      await this.authorize(principalId, "delete", {
-        kind: "namespace",
-        id: namespace.id,
-        namespaceId: namespace.id,
-      });
       // Keep in-flight teardown idempotent. The original caller can explicitly
       // retry terminal work after repairing the dependency or permission failure.
       // Another authorized caller can take over only once the initiating actor
@@ -5924,6 +5941,11 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "delete", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
       const namespace = await state.namespaces.lockNamespace(namespaceId);
       if (!namespace) {
         throw new ScopeViolationError(
@@ -5934,11 +5956,6 @@ export class OpenClawController {
       if (!agent) {
         throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
       }
-      await this.authorize(principalId, "delete", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       await state.provisioning.cancelByAgent(namespace.id, agent.id, {
         code: "PROVISIONING_CANCELLED",
         message: "Provisioning was cancelled by deletion.",
@@ -7513,6 +7530,16 @@ export class OpenClawController {
     readonly driver: ComputeDriver;
   }> {
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "read", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
       const namespace = await this.lockNamespace(state, namespaceId);
       const agent = await state.agents.lockAgent(namespace.id, agentId);
       if (!agent) {
@@ -7520,16 +7547,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "read", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
-      await this.authorize(principalId, "operate", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       if (agent.status !== "active") {
         throw new AgentDeletingError();
       }
@@ -7953,6 +7970,12 @@ export class OpenClawController {
     }
     if (!isNonEmptyString(configurationId)) {
       throw new ScopeViolationError("The exact Configuration identity is missing.");
+    }
+  }
+
+  private namespaceIdentity(namespaceId: string): void {
+    if (!isNonEmptyString(namespaceId)) {
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
     }
   }
 
