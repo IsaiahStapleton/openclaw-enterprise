@@ -10,8 +10,7 @@ Run this check after you [deploy a production Agent](../deploy/production-agents
 after a CNI or NetworkPolicy change, and after an upgrade. Kubernetes combines
 every matching policy, so a stale or extra allow policy can open a path that
 OCC's own policies deny. Only a probe through the enforcing CNI shows the
-combined result. This page covers installations where the control plane and
-Agents run in one cluster.
+combined result. This page covers single-cluster installations.
 
 ## Before you begin
 
