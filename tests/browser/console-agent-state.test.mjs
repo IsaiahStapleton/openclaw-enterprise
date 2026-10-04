@@ -468,11 +468,11 @@ test("Agent detail reports a failed selected version as probably not serving", a
   assert.equal(await page.getByText("Live serving is unverified").count(), 0);
 });
 
-// A startup model check that failed or timed out is not a rejected credential, so its
-// next step points at the Configuration and the failed version's Logs, not at Credentials.
+// A startup model check that failed or timed out, or a Gateway that refused its own CLI,
+// is not a rejected credential, so its next step points at the Configuration and the failed version's Logs, not at Credentials.
 // OpenClaw reports an unreachable provider (refused connection, DNS failure) as a timeout and
 // Codex as a failure, so each text names the harness it applies to.
-test("Deployment activity guides a failed or timed-out startup model check", async (t) => {
+test("Deployment activity guides a failed model check or an unauthorized gateway cli", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Model check", { ready: true });
@@ -504,6 +504,16 @@ test("Deployment activity guides a failed or timed-out startup model check", asy
       },
       guidance:
         /^The startup model check did not get a reply from the model provider in time\. With OpenClaw this includes a provider the runtime cannot reach \(refused connection or unknown host\)\./,
+    },
+    {
+      // The Configuration holds the fix (Enable gateway password access), not Credentials.
+      error: {
+        code: "AGENT_GATEWAY_UNAUTHORIZED",
+        message:
+          "The Agent Gateway refused its own CLI as unauthorized. Check that the Agent's Configuration sets gateway.auth.password to OPENCLAW_GATEWAY_PASSWORD (Enable gateway password access), then deploy again.",
+      },
+      guidance:
+        /^The Agent Gateway refused its own in-Pod CLI, so the version never finished starting\. In the Configuration, select Enable gateway password access, save, then deploy a new version\./,
     },
   ];
   for (const [index, { error, guidance, cause }] of cases.entries()) {
