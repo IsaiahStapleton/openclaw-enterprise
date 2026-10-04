@@ -182,8 +182,39 @@ test(
         await expectDenied(await login.callback());
         assert.deepEqual(login.subjects, []);
         assert.deepEqual(login.denials, [["EXTERNAL_IDENTITY_REJECTED", "github"]]);
+        assert.deepEqual(login.operationalLogs(), []);
       },
     );
+
+    // GitHub answers token errors with HTTP 200. A wrong client secret or callback
+    // registration fails every sign-in, so the operator log must name it.
+    for (const code of ["incorrect_client_credentials", "redirect_uri_mismatch"]) {
+      await t.test(`token error ${code} is logged as a refused client`, async () => {
+        const login = loginFixture();
+        serve = (_request, response) =>
+          response.end(
+            JSON.stringify({ error: code, error_description: "fixture-sensitive-error" }),
+          );
+        await expectDenied(await login.callback());
+        assert.deepEqual(login.subjects, []);
+        assert.deepEqual(login.denials, [["PROVIDER_UNAVAILABLE", "github"]]);
+        assert.deepEqual(login.operationalLogs(), [
+          {
+            severity: "WARN",
+            service: "occ-api",
+            event: "authentication.provider-unavailable-warning",
+            provider: "github",
+            providerId,
+            step: "token",
+            cause: "client_rejected",
+          },
+        ]);
+        assert.doesNotMatch(
+          JSON.stringify(login.operationalLogs()),
+          /fixture-sensitive|fixture-client-secret/,
+        );
+      });
+    }
 
     await t.test(
       "callback denials separate invalid attempts, provider outages and rejected identities",
@@ -587,9 +618,15 @@ test("guarded adapter never lists, counts or mutates raw session rows", async ()
   assert.deepEqual(await context.adapter.findMany({ model: "session" }), []);
   assert.equal(await context.adapter.count({ model: "session" }), 0);
   const where = [{ field: "id", value: "stale-session" }];
-  await assert.rejects(context.adapter.consumeOne({ model: "session", where }));
+  const refused = {
+    name: "APIError",
+    status: "UNAUTHORIZED",
+    message: "Authentication was not accepted.",
+  };
+  await assert.rejects(context.adapter.consumeOne({ model: "session", where }), refused);
   await assert.rejects(
     context.adapter.incrementOne({ model: "session", where, increment: { version: 1 } }),
+    refused,
   );
   assert.equal(login.db.session.length, 1, "the raw row is untouched");
   // Other models still pass through to the underlying adapter.
