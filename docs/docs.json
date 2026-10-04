@@ -513,6 +513,10 @@
                     "label": "Model Response Verification"
                   },
                   {
+                    "page": "guides/operate/network-isolation",
+                    "label": "Network Isolation Check"
+                  },
+                  {
                     "page": "guides/deploy/native-admin",
                     "label": "Native Admin UI"
                   },
