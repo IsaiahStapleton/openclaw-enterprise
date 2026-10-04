@@ -1886,6 +1886,7 @@ async function prepareLane({ lane, statePath }) {
     case "postgres":
     case "postgres-application":
     case "postgres-auth":
+    case "postgres-platform":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "runtime-image-fixture":

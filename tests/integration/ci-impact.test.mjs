@@ -1074,6 +1074,7 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     "postgres",
     "postgres-application",
     "postgres-auth",
+    "postgres-platform",
     "images-packaging",
     "images-model-probes",
     "images-runtime-startup",

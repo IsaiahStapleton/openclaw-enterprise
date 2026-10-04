@@ -7,6 +7,7 @@ const matrixLanes = [
   "postgres",
   "postgres-application",
   "postgres-auth",
+  "postgres-platform",
   "images-packaging",
   "images-model-probes",
   "images-runtime-startup",

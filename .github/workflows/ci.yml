@@ -117,6 +117,7 @@ jobs:
               {"lane": "postgres", "title": "PostgreSQL Migrations", "profile": "postgres", "timeout": 25},
               {"lane": "postgres-application", "title": "PostgreSQL Application", "profile": "postgres", "timeout": 25},
               {"lane": "postgres-auth", "title": "PostgreSQL Authentication", "profile": "postgres", "timeout": 25},
+              {"lane": "postgres-platform", "title": "PostgreSQL Platform", "profile": "postgres", "timeout": 25},
               {"lane": "images-packaging", "title": "Images and Packaging", "profile": "full", "timeout": 45},
               {"lane": "images-model-probes", "title": "Image Model Probes", "profile": "images", "timeout": 25},
               {"lane": "images-runtime-startup", "title": "Image Runtime Startup", "profile": "full", "timeout": 30},
