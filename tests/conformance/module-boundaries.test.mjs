@@ -2153,7 +2153,7 @@ test("requires explicit valid policy and reports CLI success, violations and con
   await assert.rejects(verifyModuleBoundaries({ root }), {
     message: "An explicit module-boundary policy is required.",
   });
-  // One changed field per policy, each refused by its own validation check.
+  // Each policy has one mistake, refused by its own validation check.
   const boundary = { rule: "invalid", message: "bad", from: ["apps/**"], to: ["packages/**"] };
   for (const [change, message] of [
     [{ version: 2 }, "Unsupported module-boundary policy version."],
@@ -2163,9 +2163,12 @@ test("requires explicit valid policy and reports CLI success, violations and con
     [{ boundaries: {} }, "Invalid policy field: boundaries"],
     [{ boundaries: [{ ...boundary, message: " " }] }, "Boundaries require a rule and message."],
     [{ boundaries: [{ ...boundary, from: ["../apps/**"] }] }, "Invalid boundary field: from"],
-    [{ boundaries: [{ ...boundary, specifiers: ["a*b"] }] }, "Invalid boundary field: specifiers"],
     [
-      { boundaries: [{ ...boundary, to: undefined }] },
+      { boundaries: [{ ...boundary, specifiers: ["@fixture/*-internal"] }] },
+      "Invalid boundary field: specifiers",
+    ],
+    [
+      { boundaries: [{ rule: "invalid", message: "bad", from: ["apps/**"] }] },
       "Boundaries require source patterns and target paths or specifiers.",
     ],
     [{ boundaries: [{ ...boundary, kinds: ["eval"] }] }, "Invalid boundary field: kinds"],
