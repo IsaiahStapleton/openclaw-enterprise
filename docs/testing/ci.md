@@ -19,7 +19,7 @@ CI uses [run-ci-lane](../../.github/actions/run-ci-lane/action.yml) for setup, t
 
 The non-required [First Agent smoke](first-agent-smoke.md) installs Local Setup and deploys two Agents against a stand-in model provider on every run.
 
-Full CI has sixteen required lanes. `checks-baseline-1` and `checks-baseline-2` split the baseline conformance and local integration files at one point in the old order, chosen from measured file durations; each file belongs to one lane, and `run-tests.mjs audit` fails on an unmapped or duplicated file. Only part 1 runs the workspace, lint, format, OpenAPI, docs, type and Go CLI checks, so the docs tests stay there; part 2 builds the workspace output its tests read. Register a new baseline file in either part, keeping their job times close. `checks-browser` owns browser tests; `postgres-auth` owns the longer authentication tests and its own PostgreSQL server; `images-model-probes` builds only the runtime image and runs model-probe tests without a cluster.
+Full CI has sixteen required lanes. `checks-baseline-1` and `checks-baseline-2` split the baseline conformance and local integration files at one point in the old order, chosen from measured file durations; each file belongs to one lane, and `run-tests.mjs audit` fails on an unmapped or duplicated file. Only part 1 runs the workspace, lint, format, OpenAPI, docs, type and Go CLI checks, so the docs tests stay there; part 2 builds the workspace output its tests read. Register a new baseline file in either part, keeping their job times close. `checks-browser` owns browser tests; `postgres-auth` owns the sign-in, session and account authentication tests and its own PostgreSQL server; `images-model-probes` builds only the runtime image and runs model-probe tests without a cluster.
 
 Hosted image builds use separate controller/runtime caches. Packaging alone exports; model probes restore. Transfers time out after one minute, export failures are ignored, and builds load locally. Cache credentials stay in preparation. Local builds remain unchanged.
 
@@ -55,8 +55,11 @@ routing, Slack, OpenShell, and additional OpenTelemetry lanes require approval.
 Missing selected prerequisites fail. A PR aggregate is not full credentialed coverage;
 targeted protected runs report only their selected lanes.
 
-The `postgres` lane owns migration compatibility tests; `postgres-application`
-owns the remaining PostgreSQL files. Each has a disposable PostgreSQL server.
+The `postgres` lane owns migration compatibility plus the connection, bootstrap,
+wire-up, platform-state and restart tests; `postgres-auth` owns sign-in, session
+and account authentication; `postgres-application` owns the remaining PostgreSQL
+files. Each has a disposable PostgreSQL server. The split follows measured file
+durations: add a new file where it fits, keeping the three job times close.
 Kubernetes fixture files run in `k3d-fixture-configuration`,
 `k3d-fixture-state`, and `k3d-fixture-plugins`, each with independent cluster,
 database, image, and cleanup state. Files run sequentially within each lane. The audit requires one owner per file; Full Integration aggregates its selected `full` group or targeted lane.
