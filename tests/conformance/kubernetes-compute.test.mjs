@@ -184,7 +184,8 @@ test("repository capability admits only configured Compute-owned native topologi
       () => driver.validateRepositoryCredentials(harness, "selected-sandbox"),
       /without a SandboxDriver/,
     );
-    // Each Driver lacks one prerequisite: a runtime, the credential endpoint, or no SandboxDriver.
+    // Each Driver misses one prerequisite: a runtime, the credential endpoint, or the
+    // absence of a SandboxDriver.
     const unsupported = {
       message:
         "Repository credentials require a configured Kubernetes runtime and credential endpoint without a SandboxDriver.",

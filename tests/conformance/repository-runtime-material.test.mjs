@@ -1742,6 +1742,22 @@ for (const mode of ["embedded", "dedicated"]) {
         );
         assert.equal(f.secrets().length, 0);
         assert.equal(f.deployments().length, 0);
+        if (mode === "embedded") {
+          // Once the shared gateway exists, embedded activation reaches the same refusal and
+          // publishes no Secret for the set while one retained reference is missing.
+          const project = runtimeBinding("session_material_project");
+          await f.driver.prepareRevision(f.revision, f.context([pending, project]));
+          assert.equal(f.deployments().length, 1);
+          const writes = f.calls.length;
+          await assert.rejects(f.driver.activateRevision(f.revision, context), {
+            name: "DependencyUnavailableError",
+            message: "Repository credential material is unavailable for activation.",
+          });
+          assert.deepEqual(
+            f.calls.slice(writes).filter((call) => call.operation === "write"),
+            [],
+          );
+        }
       },
     );
 
@@ -1800,6 +1816,7 @@ for (const mode of ["embedded", "dedicated"]) {
           message: "Repository credential material creation could not be confirmed.",
         });
         assert.equal(f.secrets().length, 0);
+        assert.equal(f.deployments().length, 0);
       },
     );
 

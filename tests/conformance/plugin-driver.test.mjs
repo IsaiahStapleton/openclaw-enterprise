@@ -342,7 +342,6 @@ test("OpenClaw plugin startup translation rejects unsupported policies", () => {
       occSelection({ tools: { diffs: { approval: "sometimes" } } }),
       "Tool approval policy is unsupported.",
     ],
-    [occSelection({ toolDefaults: { reviewer: "robot" } }), "Tool reviewer must be human or auto."],
     [
       occSelection({ tools: { diffs: { reviewer: "human" } } }),
       "Per-tool reviewer selection is unsupported; omit tools[id].reviewer.",
@@ -354,7 +353,8 @@ test("OpenClaw plugin startup translation rejects unsupported policies", () => {
   ]) {
     assert.throws(() => openClawRuntimeArtifact(selection), { message });
   }
-  // Admission refuses an unknown plugin on its own, before any startup translation.
+  // Admission refuses an unknown plugin on its own; translation repeats the check with the
+  // same message, so only a direct admission call shows the admission check exists.
   assert.throws(() => validatePolicies("openclaw", { "occ-plugin:unknown": { enabled: true } }), {
     message: "Unknown OpenClaw plugin selection.",
   });
@@ -887,6 +887,15 @@ test("Codex destructive defaults project to native config and the hosted-app bri
       { message },
     );
   }
+  // Codex accepts toolDefaults.reviewer, so only the value check can refuse this one.
+  assert.throws(
+    () =>
+      validatePolicies(
+        "codex",
+        codexSelection(linearPluginId, { toolDefaults: { reviewer: "robot" } }),
+      ),
+    { message: "Tool reviewer must be human or auto." },
+  );
   // Codex selections must name a plugin from the curated remote marketplace.
   assert.throws(
     () => validatePolicies("codex", codexSelection("codex-plugin:linear@openai-internal-testing")),
