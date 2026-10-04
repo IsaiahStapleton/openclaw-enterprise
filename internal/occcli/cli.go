@@ -107,7 +107,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 		&app.namespace,
 		"namespace",
 		os.Getenv("OCC_NAMESPACE"),
-		"Namespace scope for Configuration, Secret, credential source, IAM, and Agent operations",
+		"Namespace scope for Configuration, Secret, Preset, credential source, IAM, and Agent operations",
 	)
 	flags.StringVarP(&app.output, "output", "o", "table", "Output format: table, json, or yaml")
 
@@ -117,6 +117,7 @@ func New(out, errOut io.Writer) *cobra.Command {
 		app.iamCommand(),
 		app.configurationCommand(),
 		app.secretCommand(),
+		app.presetCommand(),
 		app.credentialSourceCommand(),
 		app.agentCommand(),
 		developmentCommand(),
@@ -591,6 +592,63 @@ func (app *application) secretCommand() *cobra.Command {
 	}
 
 	command.AddCommand(create, list, get, update, deleteCommand)
+	return command
+}
+
+func (app *application) presetCommand() *cobra.Command {
+	command := commandGroup("preset", "Manage Agent Presets in the selected Namespace")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List readable Presets",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			namespace, client, err := app.namespaceClient()
+			if err != nil {
+				return err
+			}
+			presets, err := client.ListPresets(namespace)
+			if err != nil {
+				return err
+			}
+			return app.printPreset(presets, true)
+		},
+	}
+
+	get := &cobra.Command{
+		Use:   "get ID",
+		Short: "Show a Preset; -o json or -o yaml includes its template",
+		Args:  idArgs(presetIDArg),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, client, err := app.namespaceClient()
+			if err != nil {
+				return err
+			}
+			preset, err := client.GetPreset(namespace, args[0])
+			if err != nil {
+				return err
+			}
+			return app.printPreset(preset, false)
+		},
+	}
+
+	deleteCommand := &cobra.Command{
+		Use:   "delete ID",
+		Short: "Delete a Preset; Agents and Configurations created from it are unchanged",
+		Args:  idArgs(presetIDArg),
+		RunE: func(_ *cobra.Command, args []string) error {
+			namespace, client, err := app.namespaceClient()
+			if err != nil {
+				return err
+			}
+			if err := client.DeletePreset(namespace, args[0]); err != nil {
+				return err
+			}
+			return app.printDeletion("preset", args[0])
+		},
+	}
+
+	command.AddCommand(list, get, deleteCommand)
 	return command
 }
 

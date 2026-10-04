@@ -282,6 +282,21 @@ func (client *Client) DeleteSecret(namespaceID, secretID string) error {
 	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "secrets", secretID})
 }
 
+// ListPresets lists the Presets in a Namespace that the caller can read.
+func (client *Client) ListPresets(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "presets")
+}
+
+// GetPreset fetches a Preset with its template.
+func (client *Client) GetPreset(namespaceID, presetID string) (any, error) {
+	return client.get("namespaces", namespaceID, "presets", presetID)
+}
+
+// DeletePreset deletes a Preset and its exact-resource AccessBindings.
+func (client *Client) DeletePreset(namespaceID, presetID string) error {
+	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "presets", presetID})
+}
+
 // CreateCredentialSource registers a Namespace Secret with the selected Credential Gateway.
 func (client *Client) CreateCredentialSource(namespaceID string, body jsontext.Value) (any, error) {
 	return client.send(
