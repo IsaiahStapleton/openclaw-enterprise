@@ -1886,6 +1886,7 @@ async function prepareLane({ lane, statePath }) {
     case "postgres":
     case "postgres-application":
     case "postgres-auth":
+    case "postgres-platform":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "runtime-image-fixture":
@@ -1904,11 +1905,6 @@ async function prepareLane({ lane, statePath }) {
             buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
           )
         ).env,
-      );
-      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
-        state,
-        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
-        "NODE_BASE_IMAGE",
       );
       break;
     case "images-runtime-startup":

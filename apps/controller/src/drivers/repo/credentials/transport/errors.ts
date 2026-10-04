@@ -15,6 +15,7 @@ const SAFE_CODES = new Set([
   "invalid-credential",
   "invalid-binding",
   "route-denied",
+  "push-ref-limit-exceeded",
 ]);
 
 function writeErrorHead(
@@ -22,9 +23,16 @@ function writeErrorHead(
   status: number,
   code: string,
   headers: Readonly<Record<string, string>>,
+  message?: string,
 ): Buffer {
+  const safe = SAFE_CODES.has(code);
   const body = Buffer.from(
-    JSON.stringify({ error: { code: SAFE_CODES.has(code) ? code : "unavailable" } }),
+    JSON.stringify({
+      error: {
+        code: safe ? code : "unavailable",
+        ...(safe && message !== undefined ? { message } : {}),
+      },
+    }),
   );
   response.writeHead(status, {
     ...headers,
@@ -42,6 +50,7 @@ export function sendError(
   status: number,
   code: string,
   headers: Readonly<Record<string, string>> = {},
+  message?: string,
 ): void {
   if (response.destroyed) {
     return;
@@ -50,7 +59,7 @@ export function sendError(
     response.destroy();
     return;
   }
-  response.end(writeErrorHead(response, status, code, headers));
+  response.end(writeErrorHead(response, status, code, headers, message));
 }
 
 /**

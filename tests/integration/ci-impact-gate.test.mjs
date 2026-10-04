@@ -13,6 +13,7 @@ const allLanes = [
   "postgres",
   "postgres-application",
   "postgres-auth",
+  "postgres-platform",
   "images-packaging",
   "images-model-probes",
   "images-runtime-startup",
@@ -37,7 +38,7 @@ function needsFor(mode) {
   };
 }
 
-function runGate(t, mode, needs) {
+function runGate(t, mode, needs, extra = []) {
   const dir = mkdtempSync(join(tmpdir(), "ci-impact-gate-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const input = join(dir, "needs.json");
@@ -45,7 +46,7 @@ function runGate(t, mode, needs) {
   writeFileSync(input, typeof needs === "string" ? needs : JSON.stringify(needs));
   const result = spawnSync(
     process.execPath,
-    [gate, "--needs", input, "--mode", mode, "--output", output],
+    [gate, "--needs", input, "--mode", mode, "--output", output, ...extra],
     {
       encoding: "utf8",
     },
@@ -113,4 +114,102 @@ test("gate fails closed for invalid selection and malformed dependencies", (t) =
   assert.notEqual(runGate(t, "docs", "{not json").status, 0);
   assert.notEqual(runGate(t, "docs", "[]").status, 0);
   assert.notEqual(spawnSync(process.execPath, [gate], { encoding: "utf8" }).status, 0);
+});
+
+function testNeeds(lanes) {
+  const json = JSON.stringify(lanes);
+  return {
+    impact: { result: "success", outputs: { mode: "tests", lanes: json } },
+    audit: { result: "success", outputs: {} },
+    "docs-checks": { result: "skipped", outputs: {} },
+    "pr-safe": { result: "success", outputs: {} },
+    "runtime-image-fixture": {
+      result: lanes.includes("runtime-image-fixture") ? "success" : "skipped",
+      outputs: {},
+    },
+  };
+}
+
+function runTestsGate(t, lanes, needs = testNeeds(lanes)) {
+  return runGate(t, "tests", needs, [
+    "--lanes",
+    typeof lanes === "string" ? lanes : JSON.stringify(lanes),
+  ]);
+}
+
+test("tests mode expands only the selected lanes", (t) => {
+  const plain = runTestsGate(t, ["checks-baseline-1", "postgres"]);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.deepEqual(plain.expanded, {
+    impact: { result: "success" },
+    audit: { result: "success" },
+    "checks-baseline-1": { result: "success" },
+    postgres: { result: "success" },
+  });
+  const fixture = runTestsGate(t, ["checks-baseline-1", "runtime-image-fixture"]);
+  assert.equal(fixture.status, 0, fixture.stderr);
+  assert.deepEqual(Object.keys(fixture.expanded).sort(), [
+    "audit",
+    "checks-baseline-1",
+    "impact",
+    "runtime-image-fixture",
+  ]);
+  // A failed matrix or fixture job reaches the aggregator as a failed lane.
+  const failed = testNeeds(["checks-baseline-1", "runtime-image-fixture"]);
+  failed["runtime-image-fixture"].result = "failure";
+  const result = runTestsGate(t, ["checks-baseline-1", "runtime-image-fixture"], failed);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.expanded["runtime-image-fixture"].result, "failure");
+});
+
+test("tests mode rejects wrong job states and unverifiable lane sets", (t) => {
+  for (const lanes of [
+    ["checks-baseline-1", "postgres"],
+    ["checks-baseline-1", "runtime-image-fixture"],
+  ]) {
+    for (const [job, state] of Object.entries(testNeeds(lanes))) {
+      for (const bad of [
+        "failure",
+        "cancelled",
+        "missing",
+        state.result === "success" ? "skipped" : "success",
+      ]) {
+        const needs = testNeeds(lanes);
+        if (bad === "missing") {
+          delete needs[job];
+        } else {
+          needs[job].result = bad;
+        }
+        const result = runTestsGate(t, lanes, needs);
+        assert.notEqual(result.status, 0, `${job} ${bad}`);
+        assert.match(result.stderr, new RegExp(job));
+      }
+    }
+  }
+  const lanes = ["checks-baseline-1", "postgres"];
+  // The impact job's lanes must be the ones being gated.
+  const other = testNeeds(lanes);
+  other.impact.outputs.lanes = JSON.stringify(["checks-baseline-1"]);
+  assert.notEqual(runTestsGate(t, lanes, other).status, 0);
+  const wrongMode = testNeeds(lanes);
+  wrongMode.impact.outputs.mode = "full";
+  assert.notEqual(runTestsGate(t, lanes, wrongMode).status, 0);
+  for (const bad of [
+    "",
+    "[]",
+    "{}",
+    "not json",
+    '["checks-baseline-1","checks-baseline-1"]',
+    '["checks-baseline-1","unknown"]',
+    '["runtime-image-fixture"]',
+    '["first-agent-smoke"]',
+  ]) {
+    const result = runTestsGate(t, bad, testNeeds(lanes));
+    assert.notEqual(result.status, 0, bad);
+    assert.equal(result.expanded, undefined, bad);
+  }
+  // --lanes belongs to tests mode only and is required there.
+  assert.notEqual(runGate(t, "tests", testNeeds(lanes)).status, 0);
+  assert.notEqual(runGate(t, "full", needsFor("full"), ["--lanes", '["postgres"]']).status, 0);
+  assert.notEqual(runGate(t, "docs", needsFor("docs"), ["--lanes", '["postgres"]']).status, 0);
 });

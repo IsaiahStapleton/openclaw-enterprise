@@ -46,8 +46,9 @@ current template, keeping its ID and AccessBindings, and audits
 `openclaw.presets.update` with `source: installation-defaults-refresh`. Copies
 matching no shipped version are operator edits and stay; so do `presets.files`
 copies and retired names such as `standard-codex`. To keep an earlier version,
-rename the copy or change any field. Existing Agents and Configurations keep
-their settings.
+rename the copy or change any field. A refused refresh (say, a deny Restriction
+on `preset:update`) keeps the copy and logs a `presets.default-refresh-skipped`
+warning.
 
 Namespace deletion removes copies that equal, by name and template, a configured
 default or any shipped bundled version, even with `includeDefaults` disabled.
@@ -88,8 +89,7 @@ through `includeDefaults`, `presets.files`, or Preset POST to enable it.
 console's shared configuration base and ordinary creation permissions.
 
 The shipped default file also supplies the console's shared configuration base
-for empty templates, **Reset template**, and provider/Harness switches. It replaces
-the former inline starter. The installed copy supplies initial draft settings;
+for empty templates, **Reset template**, and provider/Harness switches. The installed copy supplies initial draft settings;
 normal field edits preserve unrelated settings, while **Reset template** explicitly
 returns to the shipped base with the selected model. No installed credential or
 private template is exposed by the public shared-default asset.
