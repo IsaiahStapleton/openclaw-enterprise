@@ -1,7 +1,7 @@
 ---
 created: 2026-09-04
 updated: 2026-10-04
-last_updated_session: ci-split-checks
+last_updated_session: authoring-run/5808365b-c590-4c11-92d6-4ee32efc3626
 ---
 
 # GitHub Actions testing flow
@@ -22,6 +22,7 @@ GitHub Actions selects coverage for each event and ends at `CI Required` and res
 graph TD
   A["PR or other CI event"] --> S["Select impact mode"]
   A --> N["Suite Audit"]
+  A -->|PR| Q["Report affected packages (advisory)"]
   S -->|docs| D["Documentation checks"]
   S -->|full| B["Sixteen CI test lanes"]
   B --> F["Prepare owned resources"]
@@ -61,6 +62,8 @@ CI uses the event checkout without external service credentials. Impact and Suit
 For a PR, the selector verifies the tested checkout and merge parents against the event base and head, then compares the base and tested trees. Git path decoding preserves a leading UTF-8 BOM as filename data; paths outside the allowlist select full. API reference outputs and Markdown under `docs/reference/api/` select full for `openapi:check`. Only nonempty changes to allowlisted regular Markdown files select docs mode; code, configuration, workflow, mixed or unknown changes and non-PR events select full. Missing or unverifiable policy or source evidence selects full or fails closed. Policy comes from the verified PR base; a base without it selects full. `CI Required` independently verifies mode and job outcomes: docs requires successful impact, audit and documentation jobs and skipped full test jobs; full requires successful impact, audit and all sixteen lanes and a skipped documentation job. Missing, failed, cancelled, or unexpectedly skipped selected jobs fail the gate. Full mode aggregates same-source test results; docs mode does not aggregate or invent test artifacts.
 
 The impact job adds an advisory run summary with the selected mode and a fixed reason category. Categories distinguish non-PR events, unavailable event inspection, malformed event JSON, invalid base, head or tested commit identities, checkout or parent mismatch, unavailable base policy, Git inspection failure, empty or malformed diffs, unsupported type changes, non-UTF-8 filenames, ineligible changes and verified documentation selection. Bootstrap guard categories identify their source; selector execution failures fail the impact job. If selection fails or its reason is missing, malformed, or from an older base selector, the summary reports the affected information as unavailable. It includes no changed paths or arbitrary selector output.
+
+Separately, the bounded `affected-packages` PR job uses `scripts/ci/pnpm-impact.mjs` to report declared pnpm workspace dependents for a verified, clean merge checkout. It checks checkout cleanliness before and after inspecting pnpm, reports unavailable for out-of-scope changes such as Go or shared files, and writes only a best-effort summary. This job is not a dependency of `CI Required` and neither selects nor skips tests; its package graph is not proof of test coverage.
 
 The PR can change the `pull_request` workflow definition loaded from its merge checkout, bypassing or replacing these steps despite base-loaded policy. A separately trusted required workflow or equivalent external enforcement is a deployment decision, not an established source property. Hosted behavior, including fork and required-check enforcement, remains unverified.
 
@@ -179,6 +182,8 @@ Per-file cleanup releases its disposable database; job cleanup removes only stat
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-04 03:44: Add a non-required affected-package advisory to the accompanying CI change. (authoring-run/5808365b-c590-4c11-92d6-4ee32efc3626 - 070147565f45e720918de9e649b93cad71820b07)
 
 - 2026-10-04 03:00: Split the baseline lane into two parallel parts. (ci-split-checks - 77323afe4d57960c37e07b62e684942a418d585a)
 

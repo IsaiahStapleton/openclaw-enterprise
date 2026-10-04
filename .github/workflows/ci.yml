@@ -178,6 +178,32 @@ jobs:
       - name: Check and build documentation
         run: pnpm docs:install && pnpm docs:check && pnpm docs:build
 
+  affected-packages:
+    name: Affected Packages (advisory)
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 3
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: "off"
+      - name: Report affected workspace packages
+        if: ${{ always() }}
+        run: |
+          if [[ -z "${GITHUB_STEP_SUMMARY:-}" ]]; then exit 0; fi
+          if ! node scripts/ci/pnpm-impact.mjs --summary >> "$GITHUB_STEP_SUMMARY"; then
+            printf 'Affected workspace packages: unavailable.\n' >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
   pr-safe:
     name: ${{ matrix.title }}
     needs: impact
