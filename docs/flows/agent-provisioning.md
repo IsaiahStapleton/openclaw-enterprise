@@ -63,6 +63,8 @@ Create Agent sends the parsed inline Configuration, ordinary Secret bindings, mo
 
 On ordinary draft creation paths, Console creates the Configuration and Agent, then grants access to the selected Slack Secrets. A grant failure retains the saved Agent and offers Retry credential access on that Agent, without repeating creation.
 
+Kubernetes Configuration requests inherit the provisioning claim cancellation signal. Losing the claim stops an outstanding configuration request instead of holding the serial worker after its owner is gone.
+
 ### 2. OCC admits one job
 
 `packages/occ/src/index.ts:OpenClawController.provisionAgent`
