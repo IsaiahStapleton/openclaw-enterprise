@@ -13,6 +13,7 @@ import { FilesystemConfigurationDriver } from "../../apps/controller/src/drivers
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
+import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
@@ -611,11 +612,8 @@ test(
         "INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind) VALUES ($1, $2, 'update', 'preset')",
         [freezeId, defaultNamespace[0].id],
       );
-      const frozenLog = memoryLog();
-      await restart({ includeDefaults: true }, frozenLog.logger);
-      assert.deepEqual(await readOpenClaw(), refrozen.data);
-      assert.deepEqual(
-        frozenLog.lines
+      const skippedRefreshes = ({ lines }) =>
+        lines
           .filter(({ event }) => event === "presets.default-refresh-skipped")
           .map(({ severity, namespaceId, presetId, presetName, reason, restrictionIds }) => ({
             severity,
@@ -624,18 +622,40 @@ test(
             presetName,
             reason,
             restrictionIds,
-          })),
-        [
-          {
-            severity: "WARN",
-            namespaceId: defaultNamespace[0].id,
-            presetId: copiedOpenClaw.id,
-            presetName: "Standard OpenClaw",
-            reason: "An applicable Restriction denies the exact action and resource.",
-            restrictionIds: [freezeId],
-          },
-        ],
+          }));
+      const frozenWarning = [
+        {
+          severity: "WARN",
+          namespaceId: defaultNamespace[0].id,
+          presetId: copiedOpenClaw.id,
+          presetName: "Standard OpenClaw",
+          reason: "An applicable Restriction denies the exact action and resource.",
+          restrictionIds: [freezeId],
+        },
+      ];
+      const frozenLog = memoryLog();
+      await restart({ includeDefaults: true }, frozenLog.logger);
+      assert.deepEqual(await readOpenClaw(), refrozen.data);
+      assert.deepEqual(skippedRefreshes(frozenLog), frozenWarning);
+      // Development PostgreSQL startup passes the same warning to its logger.
+      const developmentLog = memoryLog();
+      const development = await composePostgresDevelopment(
+        {
+          mode: "development",
+          host: "127.0.0.1",
+          databaseUrl,
+          authSecret,
+          authBaseURL,
+          logger: developmentLog.logger,
+        },
+        await productionDrivers({
+          includeDefaults: true,
+          configurationRoot: join(passwordDirectory, "configurations"),
+        }),
       );
+      await development.close();
+      assert.deepEqual(await readOpenClaw(), refrozen.data);
+      assert.deepEqual(skippedRefreshes(developmentLog), frozenWarning);
       const newNamespace = await request("POST", "/namespaces", {
         name: "Preset startup namespace",
       });

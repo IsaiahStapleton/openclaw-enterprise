@@ -104,7 +104,8 @@ of a bundled default that still equals a superseded shipped version requires
 Preset update permission; its
 template is replaced in place and audited with `source: installation-defaults-refresh`.
 A refresh the policy refuses keeps the copy and logs one
-`presets.default-refresh-skipped` warning naming it and the reason. Startup
+`presets.default-refresh-skipped` warning naming it and the reason (the bundled
+Collector exports only its Namespace and Preset IDs). Startup
 first skips only refusals from a deny Restriction, which binds every
 administrator; only when no single administrator can then complete
 initialization does it skip every refused refresh. Removing the Restriction, or
@@ -292,6 +293,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-04 23:40: The bundled Collector exports the skipped-refresh warning with only its Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)
 - 2026-10-04 23:30: A refused default refresh, such as one a Namespace deny Restriction on Preset update forbids, keeps the copy and logs a warning instead of stopping API startup.
 - 2026-10-04 22:00: Refresh superseded copies only when `includeDefaults` seeded them; a `presets.files` copy of a bundled file stays.
 - 2026-10-04 14:00: Refresh untouched copies of superseded bundled defaults at startup, and let any shipped version pass the Namespace deletion check.
