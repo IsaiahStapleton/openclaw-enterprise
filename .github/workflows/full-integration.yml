@@ -107,7 +107,7 @@ jobs:
             timeout: 30
           - lane: images-runtime-startup-2
             title: Image Runtime Startup 2
-            profile: full
+            profile: images
             timeout: 30
           - lane: k3d-fixture-configuration
             title: k3d Fixture and Configuration

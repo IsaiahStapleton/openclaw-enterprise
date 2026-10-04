@@ -43,10 +43,10 @@ required workflow or other external enforcement is not established by this
 source. See the [testing flow](../flows/github-actions-testing.md) for details.
 
 The repository credential platform lane proves HTTP, PostgreSQL, Unix control and credential material inside
-Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The runtime
-startup lane uses the full tool profile to derive the reviewed Codex seccomp
-profile in an owned k3d cluster and export `OCC_TEST_CODEX_SECCOMP_PROFILE`
-before native runtime image smoke tests; the lane requires that input.
+Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The first
+runtime startup lane derives the reviewed Codex seccomp profile in an owned k3d
+cluster and requires `OCC_TEST_CODEX_SECCOMP_PROFILE`; the second runs no Codex
+sandbox, so it needs no cluster.
 
 Full Integration is manual and uses the immutable event commit. Lanes require
 `main` except `k3d-model`, which also accepts an `integration-model` branch

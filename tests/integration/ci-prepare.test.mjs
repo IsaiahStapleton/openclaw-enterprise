@@ -1730,20 +1730,33 @@ process.exit(2);
   }
 });
 
-test("runtime startup lanes prepare Codex seccomp before native runtime smoke tests", () => {
+test("every lane whose tests run the Codex sandbox prepares the reviewed Docker seccomp profile", async () => {
+  // A test file that calls reviewedCodexSeccompSecurityOptions runs the stock
+  // Codex sandbox under Docker. Its lane must prepare the reviewed profile, or
+  // the helper throws in CI. This is derived from the files, not a lane list,
+  // so moving such a case into another lane fails here first.
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
-  for (const [name, file] of [
-    ["images-runtime-startup", "tests/integration/runtime-image-startup.test.mjs"],
-    ["images-runtime-startup-2", "tests/integration/runtime-image-startup-probe.test.mjs"],
-  ]) {
-    const lane = manifest.lanes[name];
-    assert.equal(lane.prepare?.codexSeccomp, true, name);
-    assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"), name);
-    assert.ok(
-      lane.files.some(({ path }) => path === file),
-      name,
-    );
+  const callers = [];
+  for (const [name, lane] of Object.entries(manifest.lanes)) {
+    for (const { path } of lane.files) {
+      const source = await readFile(join(repositoryRoot, path), "utf8");
+      if (!/\breviewedCodexSeccompSecurityOptions\(/.test(source)) {
+        continue;
+      }
+      callers.push(`${name}:${path}`);
+      assert.equal(lane.prepare?.codexSeccomp, true, `${name} must set prepare.codexSeccomp`);
+      assert.ok(
+        lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"),
+        `${name} must require OCC_TEST_CODEX_SECCOMP_PROFILE`,
+      );
+    }
   }
+  // The Git broker case is a known caller; this keeps the scan from passing
+  // vacuously if the helper is renamed.
+  assert.ok(
+    callers.includes("images-runtime-startup:tests/integration/runtime-image-startup.test.mjs"),
+    callers.join(", "),
+  );
 });
 
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {
