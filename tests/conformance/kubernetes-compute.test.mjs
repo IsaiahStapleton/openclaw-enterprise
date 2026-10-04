@@ -11219,10 +11219,11 @@ test("the production example sizes dedicated Gateway and Harness containers from
     requests: { cpu: "100m", memory: "1792Mi" },
     limits: { cpu: "4", memory: "3Gi" },
   });
-  // The Codex Harness held 0.45-0.57 GiB idle; lint, tsc and tests together were OOM-killed at 2Gi.
+  // The Codex Harness held 0.45-0.57 GiB idle; lint, tsc and tests together were
+  // OOM-killed at 2Gi and reached a 4Gi limit.
   assert.deepEqual(container("agent-").resources, {
     requests: { cpu: "100m", memory: "768Mi" },
-    limits: { cpu: "4", memory: "4Gi" },
+    limits: { cpu: "4", memory: "6Gi" },
   });
 });
 
