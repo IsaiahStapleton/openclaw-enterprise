@@ -263,6 +263,7 @@ export async function composeProductionSignIn(
     drivers: {
       installation,
       defaultPresets: runtime.defaultPresets,
+      bundledPresetVersions: runtime.bundledPresetVersions,
       computeDriver: passiveComputeDriver(installation.drivers.compute.id),
       configurationDriver: createTestConfigurationDriver({
         id: installation.drivers.configuration.id,

@@ -253,6 +253,7 @@ export async function composeProduction(config: ProductionConfig) {
       recordOperations: true,
       backends: installation.backend,
       defaultPresets: config.drivers.defaultPresets ?? [],
+      bundledPresetVersions: config.drivers.bundledPresetVersions ?? [],
       loggingLevel: config.drivers.installation.logging.level,
       ...(installation.runtime === undefined
         ? {}
