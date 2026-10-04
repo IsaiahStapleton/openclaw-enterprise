@@ -1494,6 +1494,7 @@ test(
     await queue.enqueue(revisionWork(namespaceId, sourceKey, agents[0], owner.revisionId));
     const claim = await claimExpected(queue, sourceKey);
     const before = await readRepositoryAttempts(pool, owner.revisionId);
+    const successorBefore = await readRepositoryAttempts(pool, successor.revisionId);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -1515,7 +1516,7 @@ test(
     const cleanupKey = repositoryCleanupKey(owner.revisionId, sourceKey, "terminal-runtime");
     assert.equal(await readQueueRow(pool, cleanupKey), undefined);
     await insertRawQueueWork(pool, {
-      // Same Agent, another revision: only the revision identity collides.
+      // Same Agent, another revision: the key collides and only the revision differs.
       ...revisionWork(namespaceId, cleanupKey, agents[0], successor.revisionId),
       actorId: "principal-conflicting-cleanup",
     });
@@ -1529,6 +1530,7 @@ test(
     assert.equal(source.state, "claimed");
     assert.equal(source.claim_token, claim.claimToken);
     assert.deepEqual(await readRepositoryAttempts(pool, owner.revisionId), before);
+    assert.deepEqual(await readRepositoryAttempts(pool, successor.revisionId), successorBefore);
     assert.equal(
       (
         await pool.query("SELECT id FROM occ.audit_events WHERE resource_id = $1", [
@@ -1674,7 +1676,10 @@ for (const purpose of ["sessions", "terminal-runtime"]) {
         );
         await assert.rejects(
           queue.enqueue(input),
-          undefined,
+          {
+            name: "ScopeViolationError",
+            message: "Repository cleanup work requires an owned cleanup transfer.",
+          },
           `normal enqueue must reserve ${scenario.name}`,
         );
         await insertRawQueueWork(pool, input, 2);
@@ -2067,8 +2072,12 @@ test(
     await queue.complete(claim);
     await completeCleanupWork(queue, previous.revisionId, sourceKey);
     await completeCleanupWork(queue, current.revisionId, sourceKey, "terminal-runtime");
-    // Credential withdrawal names the current revision but owns no repository cleanup. It is
-    // claimable only once the revision's other work is settled.
+    // Credential withdrawal names the active revision but owns no repository cleanup. It is
+    // claimable only once the Agent's other claimed work is settled.
+    await pool.query(
+      "UPDATE occ.agents SET active_revision_id = $2, desired_runtime_state = 'running' WHERE id = $1",
+      [agents[0], current.revisionId],
+    );
     const withdrawalKey = `agent_revision:${current.revisionId}:reconcile:credentials_withdrawn:${randomUUID()}`;
     await queue.enqueue({
       ...revisionWork(namespaceId, withdrawalKey, agents[0], current.revisionId),
