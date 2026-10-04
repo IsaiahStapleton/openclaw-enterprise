@@ -1303,6 +1303,7 @@ test("startup refreshes untouched copies of superseded bundled defaults in place
   const fixture = await createFixture(t, {
     defaultPresets: runtime.defaultPresets,
     bundledPresetVersions: runtime.bundledPresetVersions,
+    refreshBundledDefaultPresets: runtime.installation.presets.includeDefaults,
   });
   const principal = fixture.policy.identities.find((identity) => identity.kind === "principal");
   const iam = fixture.controller.selectDriver("iam", "console-native-iam");
@@ -1433,6 +1434,55 @@ test("startup refreshes untouched copies of superseded bundled defaults in place
   // A second startup finds nothing left to refresh.
   await fixture.controller.initializeDefaultPresets(principal.id);
   assert.equal(refreshes().length, 2);
+});
+
+test("startup never refreshes a presets.files copy, even one that repeats a bundled file", async (t) => {
+  const { initializeInstallationPresets } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { createInstallationDriverConfiguration } =
+    await import("../helpers/installation-driver-configuration.mjs");
+  const { loadInstallationFile } = await import("../helpers/installation-file.mjs");
+  // Seeding one bundled default through files, without the others, is a supported setup.
+  const configuration = createInstallationDriverConfiguration();
+  configuration.presets = {
+    includeDefaults: false,
+    files: [fileURLToPath(new URL("../../deploy/presets/default-codex.json", import.meta.url))],
+  };
+  const runtime = await loadInstallationFile(t, configuration);
+  assert.deepEqual(
+    runtime.defaultPresets.map(({ name }) => name),
+    ["default-codex"],
+  );
+  const fixture = await createFixture(t, {
+    defaultPresets: runtime.defaultPresets,
+    bundledPresetVersions: runtime.bundledPresetVersions,
+    refreshBundledDefaultPresets: runtime.installation.presets.includeDefaults,
+  });
+  const iam = fixture.controller.selectDriver("iam", "console-native-iam");
+  const namespace = await fixture.createNamespace("Files seeded", { ready: true });
+  const copy = (await fixture.request("GET", collection(namespace.id))).data.find(
+    (preset) => preset.name === "default-codex",
+  );
+  const earlier = await archivedDefault("default-codex.json", "32576b8f13976778");
+  const rolledBack = await fixture.request("PATCH", `${collection(namespace.id)}/${copy.id}`, {
+    body: { template: earlier.template },
+  });
+  assert.equal(rolledBack.status, 200, JSON.stringify(rolledBack.body));
+
+  await initializeInstallationPresets(
+    fixture.controller,
+    iam,
+    fixture.policy.identities,
+    runtime.defaultPresets,
+  );
+  const after = await fixture.request("GET", `${collection(namespace.id)}/${copy.id}`);
+  assert.deepEqual(after.data, rolledBack.data);
+  assert.deepEqual(
+    fixture.audit.events.filter(
+      (event) => event.details?.source === "installation-defaults-refresh",
+    ),
+    [],
+  );
 });
 
 test("Namespace deletion treats every shipped bundled version as unmodified, even with defaults off", async (t) => {
