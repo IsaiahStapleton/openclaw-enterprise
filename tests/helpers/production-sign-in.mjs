@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import {
   runBootstrapInstallation,
 } from "./bootstrap-installation.mjs";
 import { cookieHeaderFromSetCookie } from "./auth-session.mjs";
+import { idTokenSigner, rsaSigningKey } from "./id-token.mjs";
 
 // Only Compute is passive: no Agent is deployed, so sign-in proofs need no cluster.
 // Authentication, State, IAM, audit and Fastify are the production implementations.
@@ -445,10 +446,10 @@ export async function githubSignIn(app, origin, subject, remoteAddress = "192.0.
  * and "error" (503).
  */
 export function fakeGoogle(t, { clientId, clientSecret, hd } = {}) {
-  const kid = "fixture-google-kid";
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const foreign = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
-  const { n, e } = publicKey.export({ format: "jwk" });
+  const published = rsaSigningKey("fixture-google-kid");
+  const signToken = idTokenSigner(published);
+  // Same kid, different key: the token names the published key but does not verify under it.
+  const foreign = rsaSigningKey(published.kid);
   const codes = new Map();
   const fixture = {
     mode: "up",
@@ -466,7 +467,7 @@ export function fakeGoogle(t, { clientId, clientSecret, hd } = {}) {
       scopes_supported: ["openid", "email", "profile"],
       code_challenge_methods_supported: ["plain", "S256"],
     }),
-    jwks: Object.freeze({ keys: [{ kid, kty: "RSA", alg: "RS256", use: "sig", n, e }] }),
+    jwks: Object.freeze({ keys: [published.jwk] }),
     authorize(url, { subject, claims = {}, key = "published" }) {
       const parameters = new URL(url).searchParams;
       const code = `fixture-google-code-${randomBytes(12).toString("base64url")}`;
@@ -491,10 +492,7 @@ export function fakeGoogle(t, { clientId, clientSecret, hd } = {}) {
       exp: now + 3600,
       ...claims,
     };
-    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const input = `${encode({ alg: "RS256", kid, typ: "JWT" })}.${encode(payload)}`;
-    const signer = key === "foreign" ? foreign : privateKey;
-    return `${input}.${sign("sha256", Buffer.from(input), signer).toString("base64url")}`;
+    return signToken(payload, key === "foreign" ? { key: foreign.privateKey } : {});
   }
   const json = (status, body) =>
     new Response(JSON.stringify(body), {
@@ -605,14 +603,9 @@ export function fakeOidc(
   t,
   { clientId, clientSecret, issuer = fixtureOidcIssuer, tokenAuth = "client_secret_post" } = {},
 ) {
-  const keyPair = (kid) => {
-    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-    const { n, e } = publicKey.export({ format: "jwk" });
-    return { kid, privateKey, jwk: { kid, kty: "RSA", alg: "RS256", use: "sig", n, e } };
-  };
   let generation = 0;
-  let key = keyPair(`fixture-oidc-kid-${generation}`);
-  const foreign = keyPair("fixture-oidc-foreign");
+  let key = rsaSigningKey(`fixture-oidc-kid-${generation}`);
+  const foreign = rsaSigningKey("fixture-oidc-foreign");
   const codes = new Map();
   const fixture = {
     mode: "up",
@@ -626,7 +619,7 @@ export function fakeOidc(
     },
     rotate() {
       generation += 1;
-      key = keyPair(`fixture-oidc-kid-${generation}`);
+      key = rsaSigningKey(`fixture-oidc-kid-${generation}`);
     },
     authorize(url, { subject, claims = {}, key: signer = "published", codeLength = 0 }) {
       const request = Object.fromEntries(new URL(url).searchParams);
@@ -648,10 +641,7 @@ export function fakeOidc(
       exp: now + 3600,
       ...claims,
     };
-    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const used = signer === "foreign" ? foreign : issuedWith;
-    const input = `${encode({ alg: "RS256", kid: used.kid, typ: "JWT" })}.${encode(payload)}`;
-    return `${input}.${sign("sha256", Buffer.from(input), used.privateKey).toString("base64url")}`;
+    return idTokenSigner(signer === "foreign" ? foreign : issuedWith)(payload);
   }
   const json = (status, body) =>
     new Response(JSON.stringify(body), {
