@@ -48,8 +48,9 @@ export function createTestKubernetesComputeDriver(
   );
 }
 
-// The kubeconfig selection conformance suites configure. Nothing reads the file until a
-// test performs cluster I/O, and those tests write their own kubeconfig.
+// The kubeconfig selection conformance suites configure. Nothing reads the file when the
+// Driver is constructed; tests that perform cluster I/O inject clients or write their own
+// kubeconfig.
 export const conformanceKubeconfig = Object.freeze({
   kubeconfigPath: "/tmp/openclaw-enterprise-conformance/kubeconfig",
   context: "openclaw-enterprise-local",
