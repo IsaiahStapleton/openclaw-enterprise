@@ -165,7 +165,20 @@ Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Backend
 membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
-operator-managed endpoint.
+operator-managed endpoint. A startup probe on `/healthz` (5-second period, 24
+failures) gives the API 2 minutes to listen before liveness checks begin.
+
+`apps/controller/src/index.ts:createFastifyApp`
+
+On `SIGTERM` the API stops accepting connections and finishes admitted requests.
+Their responses carry `Connection: close` (a streamed one closes its connection
+when it ends), so the process exits without waiting out the 72-second keep-alive.
+The single `Recreate` replica keeps the default 30-second termination grace and
+no `preStop` hook, since no peer takes its traffic; a request still running after
+30 seconds is cut off. The API logs `shutdown.started` with the `signal`, then
+`shutdown.completed` with `durationMs` once every close hook has finished; a
+failed close logs `shutdown.failed` and exits `1`. A log ending at
+`shutdown.started` means the grace period cut the drain off.
 
 When `controlPlane.nodeSelector` is non-empty, the chart places the API and
 worker Pods with that selector. The same selector applies to the initialization
@@ -271,7 +284,8 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` requires inspection of
   the selected database; initialization does not repair or rewrite its ledger.
 - The API should emit `listening`; the worker should emit `worker.started`
-  followed by `worker.health`.
+  followed by `worker.health`. A stopping API emits `shutdown.started` and then
+  `shutdown.completed`.
 - `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`
   identifies a server below the supported Kubernetes 1.35 baseline; startup
   continues, but operators should upgrade before treating the deployment as
@@ -310,6 +324,9 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Add the API startup probe.
+- 2026-10-04: Log the API's shutdown start and completion.
+- 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
 - 2026-09-29: Merge current main into release-scoped shared egress documentation. (PR-187)
 

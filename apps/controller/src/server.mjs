@@ -356,16 +356,29 @@ async function start() {
   app.addHook("onClose", async () => {
     await metricsListener?.close();
   });
-  async function shutdown() {
+  async function shutdown(signal) {
     if (closing) {
       return;
     }
     closing = true;
+    // Otherwise nothing marks the start or end of the drain: only the Pod's exit code would
+    // tell a completed drain from one the termination grace cut off.
+    const startedAt = performance.now();
+    emitOccLogEvent(logger, { event: "shutdown.started", signal });
     try {
       await app.close();
       process.exitCode = 0;
+      emitOccLogEvent(logger, {
+        event: "shutdown.completed",
+        durationMs: performance.now() - startedAt,
+      });
     } catch {
       process.exitCode = 1;
+      emitOccLogEvent(logger, {
+        event: "shutdown.failed",
+        code: "SHUTDOWN_FAILED",
+        durationMs: performance.now() - startedAt,
+      });
     }
   }
 
