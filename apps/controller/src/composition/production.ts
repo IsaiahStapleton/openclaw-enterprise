@@ -142,6 +142,12 @@ export async function composeProduction(config: ProductionConfig) {
       ...(config.logger === undefined
         ? {}
         : { onOperationalEvent: (event) => emitOccLogEvent(config.logger!, event) }),
+      ...(config.metrics === undefined
+        ? {}
+        : {
+            onUnmatchedCallback: (provider) =>
+              config.metrics!.observeUnmatchedSignInCallback(provider),
+          }),
     });
     if (config.clientAddress === undefined && config.logger !== undefined) {
       // No trusted proxy: every browser behind the ingress shares its address, so failed
