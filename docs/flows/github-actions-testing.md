@@ -8,7 +8,7 @@ last_updated_session: authoring-run/5808365b-c590-4c11-92d6-4ee32efc3626
 
 ## Overview
 
-GitHub Actions selects coverage for each event and ends at `CI Required` and resource cleanup. Full CI runs seventeen noncredentialed test lanes, prepares disposable resources, and rejects missing or skipped required coverage. A verified documentation-only PR runs Suite Audit and documentation checks without product tests. Neither route establishes protected model or service integrations.
+GitHub Actions selects coverage for each event and ends at `CI Required` and resource cleanup. Full CI runs eighteen noncredentialed test lanes, prepares disposable resources, and rejects missing or skipped required coverage. A verified documentation-only PR runs Suite Audit and documentation checks without product tests. Neither route establishes protected model or service integrations.
 
 ## Entry Points
 
@@ -24,7 +24,7 @@ graph TD
   A --> N["Suite Audit"]
   S -->|full PR| Q["Report affected packages (advisory)"]
   S -->|docs| D["Documentation checks"]
-  S -->|full or tests| B["All seventeen or selected CI test lanes"]
+  S -->|full or tests| B["All eighteen or selected CI test lanes"]
   B --> F["Prepare owned resources"]
   F -->|prepared| H["Run tests and validate cases"]
   F -->|preparation fails| J["Owned-resource cleanup"]
@@ -57,7 +57,7 @@ coverage groups. `loadTestSuites` assembles their `scripts/ci/test-suites/<lane>
 files into a map consumed by the runner and preparation tools. Each lane owns its
 test inventory, environment, required inputs, and preparation settings.
 
-CI uses the event checkout without external service credentials. Impact and Suite Audit start independently. In docs mode, `docs-checks` verifies checkout identity and formatting, then installs, checks, and builds documentation; it runs no conformance, integration, browser, Go, or other product tests. Full mode runs the sixteen-lane matrix, including both `checks-baseline` parts, and `runtime-image-fixture`; tests mode runs only the selected lanes. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` also uses it. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404`; remaining lanes and audit use `blacksmith-8vcpu-ubuntu-2404`.
+CI uses the event checkout without external service credentials. Impact and Suite Audit start independently. In docs mode, `docs-checks` verifies checkout identity and formatting, then installs, checks, and builds documentation; it runs no conformance, integration, browser, Go, or other product tests. Full mode runs the seventeen-lane matrix, including both `checks-baseline` parts, and `runtime-image-fixture`; tests mode runs only the selected lanes. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` also uses it. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404`; remaining lanes and audit use `blacksmith-8vcpu-ubuntu-2404`.
 
 For a PR, the selector verifies the tested checkout and that the event head is the merge's second parent, then compares the first parent (the current base) and tested trees. Git path decoding preserves a leading UTF-8 BOM as filename data; paths outside the allowlist select full. API reference outputs and Markdown under `docs/reference/api/` select full for `openapi:check`. Only nonempty changes to allowlisted regular Markdown files select docs mode. Registered test files (with documentation and their own lane manifest entries) select tests mode: their `ci` lanes in either tree plus `checks-baseline-1`. Other test-tree, code, configuration, workflow or unknown changes and non-PR events select full. Missing or unverifiable policy or source evidence selects full or fails closed. Policy comes from that first parent; a base without it selects full. `CI Required` re-verifies the mode (and tests mode's lane set) and requires impact, audit and every selected job to succeed and the rest skipped. Missing, failed, cancelled, or unexpectedly skipped selected jobs fail the gate. Full and tests modes aggregate same-source results of their lanes; docs mode does not aggregate or invent test artifacts.
 
@@ -87,7 +87,7 @@ The provider job uses the shared `blacksmith-8vcpu-ubuntu-2404` runner for image
 
 For `logging-collector`, `scripts/ci/prepare.mjs:prepareLane` pre-pulls the pinned Collector, Node, Prometheus and Grafana images before publishing lane inputs. The metrics test and preparation share the digests in `scripts/ci/metrics-monitoring-images.mjs:metricsMonitoringImages`. `scripts/ci/prepare.mjs:ensureDockerSourceImage` reuses a verified local repository digest or pulls through `scripts/ci/image-pull.mjs:pullImage`, then verifies that digest before tests start containers. Registry 5xx and rate limits retry within the shared pull budget; missing manifests and authorization refusals fail preparation immediately. Explicit unpinned Node overrides keep the existing test-owned pull behavior.
 
-`checks-browser`, `postgres-auth`, `images-model-probes`, and `images-runtime-startup` use separate runners and required artifacts. `scripts/ci/prepare.mjs:imageBuildArgs` enables scoped BuildKit caches for hosted image jobs: packaging exports; probes, runtime startup and `repository-credentials-platform` restore. Images load into the job's Docker engine; cache credentials stay in preparation.
+`checks-browser`, `postgres-auth`, `images-model-probes`, `images-runtime-startup`, and `images-runtime-startup-2` use separate runners and required artifacts. `scripts/ci/prepare.mjs:imageBuildArgs` enables scoped BuildKit caches for hosted image jobs: packaging exports; probes, runtime startup and `repository-credentials-platform` restore. Images load into the job's Docker engine; cache credentials stay in preparation.
 
 Kubernetes fixture startup records phase timings and host snapshots. On failure,
 bounded reads save `<state-file>.diagnostics.json` outside the cluster directory

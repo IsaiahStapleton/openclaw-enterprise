@@ -305,6 +305,9 @@ export async function composeProduction(config: ProductionConfig) {
       iamDriver,
       iamState.identities,
       config.drivers.defaultPresets ?? [],
+      config.logger === undefined
+        ? undefined
+        : (warning) => emitOccLogEvent(config.logger!, warning),
     );
 
     let workspaceFilesAccess = config.workspaceFilesAccess;

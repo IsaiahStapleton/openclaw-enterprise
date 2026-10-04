@@ -10,6 +10,7 @@ const matrixLanes = [
   "images-packaging",
   "images-model-probes",
   "images-runtime-startup",
+  "images-runtime-startup-2",
   "k3d-fixture-configuration",
   "k3d-fixture-state",
   "k3d-fixture-plugins",
