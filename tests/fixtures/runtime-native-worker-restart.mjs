@@ -48,10 +48,21 @@ async function openGateway() {
   const { GatewayClient } = await import(pathToFileURL(runtime).href);
   assert.equal(typeof GatewayClient, "function", `${runtime} must export GatewayClient`);
   return await new Promise((resolve, reject) => {
-    const deadline = globalThis.setTimeout(() => {
-      client.stop();
-      reject(new Error("Gateway observer did not connect within 30 seconds."));
-    }, 30_000);
+    let settled = false;
+    let deadline;
+    const settle = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(deadline);
+      if (error) {
+        reject(error);
+        client.stop();
+      } else {
+        resolve(client);
+      }
+    };
     const client = new GatewayClient({
       url: "ws://127.0.0.1:8080",
       password: process.env.OPENCLAW_GATEWAY_PASSWORD,
@@ -60,23 +71,25 @@ async function openGateway() {
       clientName: "cli",
       mode: "cli",
       deviceIdentity: null,
-      onHelloOk: () => {
-        clearTimeout(deadline);
-        resolve(client);
-      },
-      onConnectError: (error) => {
-        clearTimeout(deadline);
-        client.stop();
-        reject(error);
-      },
+      onHelloOk: () => settle(),
+      onConnectError: (error) => settle(error),
     });
-    client.start();
+    deadline = globalThis.setTimeout(
+      () => settle(new Error("Gateway observer did not connect within 30 seconds.")),
+      30_000,
+    );
+    try {
+      client.start();
+    } catch (error) {
+      settle(error);
+    }
   });
 }
 
 let gateway;
 async function call(method, params = {}) {
-  return await gateway.request(method, params, { timeoutMs: 30_000 });
+  // `openclaw gateway call` waits 10 s for a response by default.
+  return await gateway.request(method, params, { timeoutMs: 10_000 });
 }
 
 // Simulate a Pod restart after the controller-minted setup code aged out.
@@ -206,5 +219,6 @@ try {
   );
 } finally {
   await stop();
-  await gateway?.stopAndWait();
+  // Report a failed teardown on stderr without replacing the proof's own error.
+  await gateway?.stopAndWait().catch((error) => console.error(error));
 }
