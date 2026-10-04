@@ -10,6 +10,8 @@ after the command exits.
 - Complete [Local setup](quickstart.md) and leave the installation running.
 - Start Local setup without the OpenShell Sandbox Driver, using
   `OCC_DEVELOPMENT_SANDBOX_DRIVER=none`.
+- Leave about 1.75 GiB of cluster memory free: the Agent's Gateway Pod
+  requests `1792Mi` ([sizing](deploy/installation-profiles.md)).
 - Use the same checkout and development state directory. If you set
   `OCC_DEVELOPMENT_STATE_DIRECTORY` during setup, use the same value here.
 - Have an OpenAI API key that can use [`gpt-6-astra`](https://developers.openai.com/api/docs/models/gpt-6-astra), the default model. To use a
@@ -90,6 +92,38 @@ The Agent remains available after the command exits. Run the same command with
 the same Agent name and a different `--prompt` to ask another question; you do
 not need to enter the model key again. Stopping the local stack
 with `dev down` [deletes the installation and its Agents](quickstart.md#clean-up-and-stop).
+
+## Clean up
+
+To remove only this Agent and keep the installation, delete the Agent and then
+the Configuration, Secret, and Role the command created for it. Set
+`OCC_NAMESPACE` to the `ID` shown for `default` in step 1, and `AGENT_ID` to the
+Agent ID the command printed. If the command stopped before printing it, run the
+`export` line first, then find the ID with `./bin/occ agent list`:
+
+```bash
+export OCC_NAMESPACE=<default-namespace-id>
+AGENT_ID=<agent-id>
+AGENT_JSON="$(./bin/occ agent get "$AGENT_ID" -o json)"
+CONFIGURATION_ID="$(jq -r .configurationId <<<"$AGENT_JSON")"
+SECRET_ID="$(jq -r .harnessAuth.source.id <<<"$AGENT_JSON")"
+ROLE_ID="role_local_first_agent_secret_$(printf '%s\0%s' "$AGENT_ID" "$SECRET_ID" |
+  sha256sum | cut -d' ' -f1)"
+./bin/occ agent delete "$AGENT_ID"
+./bin/occ agent get "$AGENT_ID"
+```
+
+Repeat `agent get` until it returns `404`, then delete the rest:
+
+```bash
+./bin/occ configuration delete "$CONFIGURATION_ID"
+./bin/occ secret delete "$SECRET_ID"
+./bin/occ iam role delete "$ROLE_ID"
+```
+
+Each run creates a separate Role named `Local first Agent Secret access`, so
+`occ iam role list` shows one per first Agent until you delete it. The command
+remembers the Agent name; use a new name for the next run.
 
 <span id="troubleshooting"></span>
 

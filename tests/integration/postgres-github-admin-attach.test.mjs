@@ -18,8 +18,8 @@ import {
   startFakeGitHub,
 } from "../helpers/production-sign-in.mjs";
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "attach-recovery@example.test";
 const password = "attach-member-password";
 const authSecret = "attach-admin-auth-test-secret-at-least-32-bytes";
@@ -35,7 +35,7 @@ const secondSubject = "9100002";
 // GitHub identities and manage other accounts' identities, all without contacting GitHub.
 test(
   "Installation administrators attach, detach and re-attach GitHub identities and disable accounts",
-  { skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof." },
+  requiresPostgres,
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
@@ -170,8 +170,13 @@ test(
 
         const memberAccount = await readAccount(app, adminHeaders, member.id);
         const taken = await attach(adminHeaders, member.id, adminSubject, memberAccount.version);
-        // Another account's identity is refused like an unknown account (no disclosure).
-        assert.equal(taken.statusCode, 404, "one GitHub identity signs in to one account");
+        // One GitHub identity signs in to one account. The conflict is named: the caller is an
+        // Installation administrator, who can already list every account's sign-in methods.
+        assert.equal(taken.statusCode, 409, "one GitHub identity signs in to one account");
+        assert.deepEqual(taken.json().error, {
+          code: "RESOURCE_CONFLICT",
+          message: "The external identity is already assigned.",
+        });
         const memberHeaders = await signedInHeaders(app, origin, member, address());
         const unauthorized = await attach(
           memberHeaders,
@@ -461,7 +466,10 @@ test(
         assert.notEqual(winner, -1, responses.map(({ body }) => body).join("\n"));
         const loser = 1 - winner;
         assert.equal(responses[loser].statusCode, 409, responses[loser].body);
-        assert.equal(responses[loser].json().error.code, "RESOURCE_CONFLICT");
+        assert.deepEqual(responses[loser].json().error, {
+          code: "RESOURCE_CONFLICT",
+          message: "The external identity is already assigned.",
+        });
         // The losing account is untouched: same version, no identity, sessions intact.
         assert.deepEqual(await readAccount(app, adminHeaders, targets[loser].id), before[loser]);
         assert.ok(await currentSession(app, targetCookies[loser]));

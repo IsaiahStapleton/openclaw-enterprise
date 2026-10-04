@@ -1,6 +1,6 @@
 # Install the standard Codex Preset
 
-Install [standard-codex](../../../deploy/presets/standard-codex.json) in a ready
+Install the [Standard Codex](../../../deploy/presets/standard-codex.json) Preset in a ready
 Namespace through Installation defaults or the existing Preset API. It creates drafts for a dedicated
 Codex Harness connected to its own separate OpenClaw gateway. The template
 requests cached hosted search and allows the hosts used to build OCE from source.
@@ -26,7 +26,7 @@ Read the enforcement boundary below before deploying.
 
 ## Install and select
 
-To include both bundled Presets (**Standard Codex** and **Standard OpenClaw**) automatically, add this to the Installation YAML
+To include the three [bundled Presets](../../reference/presets.md#configuration-inventory) automatically, add this to the Installation YAML
 selected by `OCC_CONFIG_PATH`, then restart the API:
 
 ```yaml
@@ -52,13 +52,13 @@ bundled file does not overwrite an installed same-name Preset. PATCH existing
 copies to receive the build allowlist; existing Agent drafts and deployments
 keep their independent Configuration until explicitly updated and redeployed.
 
-Open **Agents → Create Agent**, choose **standard-codex**, and supply:
+Open **Agents → Create Agent**, choose **Standard Codex**, and supply:
 
-| Variable      | Value                                                       |
-| ------------- | ----------------------------------------------------------- |
-| `name`        | A unique Agent name.                                        |
-| `model`       | Your available Codex model ID, without the `codex/` prefix. |
-| `modelSecret` | The model API key, entered in a masked password field.      |
+| Variable      | Value                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------- |
+| `name`        | A unique Agent name.                                                                    |
+| `model`       | Your available Codex model ID, without the `codex/` prefix; for example, `gpt-6-astra`. |
+| `modelSecret` | The model API key, entered in a masked password field.                                  |
 
 Select **Use Preset** and review the draft; the API key remains masked.
 **Create Agent** stores it as a Secret in the current Namespace and binds that

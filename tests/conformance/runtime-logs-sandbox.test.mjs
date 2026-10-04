@@ -9,6 +9,7 @@ import {
 } from "../../apps/controller/src/drivers/sandbox/openshell-gateway-client.ts";
 import { OpenShellSandboxDriver } from "../../apps/controller/src/drivers/sandbox/openshell.ts";
 import { RuntimeLogsForbiddenByClusterError } from "../../packages/occ/src/index.ts";
+import { cpuTimeMs } from "../helpers/cpu-time.mjs";
 import {
   createRuntimeLogComputeDriver,
   createRuntimeLogFixture,
@@ -361,6 +362,28 @@ test("sandbox follow resumes after the anchor and labels buffer loss and a full 
   assert.equal(replaced.data.records[0].reason, "stream_replaced");
 });
 
+test("sandbox follow after an empty first window reads no older lines", async () => {
+  const { gateway, target, request } = await sandboxFixture();
+  // Policy decisions from long before the requested window.
+  gateway.state.lines = [
+    sandboxLine(1, "NET:OPEN [INFO] ALLOWED curl(1) -> a.example.com:443"),
+    sandboxLine(2, "NET:OPEN [INFO] ALLOWED curl(1) -> b.example.com:443"),
+  ];
+  const first = await request("GET", target.logsPath("source=sandbox&sinceSeconds=60"));
+  assert.equal(first.status, 200, first.text);
+  assert.deepEqual(first.data.records, []);
+  const windowStart = gateway.requests.at(-1).sinceTime;
+  assert.ok(windowStart);
+  // `occ agent logs --follow` polls send only the cursor.
+  const next = await request(
+    "GET",
+    target.logsPath(`source=sandbox&cursor=${encodeURIComponent(first.data.cursor)}`),
+  );
+  assert.equal(next.status, 200, next.text);
+  assert.deepEqual(next.data.records, []);
+  assert.equal(gateway.requests.at(-1).sinceTime, windowStart);
+});
+
 test("sandbox follow delivers late-stamped lines and counts repeats in one millisecond", async () => {
   const { gateway, target, request } = await sandboxFixture();
   const page = async (cursor) => {
@@ -407,6 +430,33 @@ test("sandbox follow delivers late-stamped lines and counts repeats in one milli
   assert.equal(burst.records.length, 20);
   const settled = await page(burst.cursor);
   assert.deepEqual(hosts(settled), []);
+});
+
+test("sandbox follow drops a whole timestamp group at the cursor capacity boundary", async () => {
+  const { gateway, target, request } = await sandboxFixture();
+  // Fifty lines fit the response, but retaining only part of the older timestamp
+  // would replay its forgotten occurrences when the next poll reads that timestamp.
+  gateway.state.lines = Array.from({ length: 50 }, (_, index) =>
+    sandboxLine(index < 30 ? 7 : 8, `NET:OPEN [INFO] ALLOWED curl(1) -> b${index}.example.com:443`),
+  );
+  const first = await request("GET", target.logsPath("source=sandbox"));
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.data.records.length, 50);
+  assert.ok(first.data.records.every((record) => record.type === "line"));
+
+  gateway.state.lines.push(
+    sandboxLine(8, "NET:OPEN [INFO] ALLOWED curl(1) -> new.example.com:443"),
+  );
+  const next = await request(
+    "GET",
+    target.logsPath(`source=sandbox&cursor=${encodeURIComponent(first.data.cursor)}`),
+  );
+  assert.equal(next.status, 200, next.text);
+  assert.equal(gateway.requests.at(-1).sinceTime, lineTime(8));
+  assert.deepEqual(
+    next.data.records.map((record) => record.fields?.dst_host ?? record.reason),
+    ["new.example.com"],
+  );
 });
 
 test("sandbox follow reports a gap when one millisecond holds more lines than the cursor", async () => {
@@ -616,13 +666,18 @@ test("sandbox sanitization stays linear on hostile 32 KiB OCSF lines", async () 
     `PROC:LAUNCH [INFO] a(1) [cmd:vault login ${"a ".repeat(size / 2)}]`,
     `PROC:LAUNCH [INFO] a(1) ${"-u -p ".repeat(size / 6)}`,
   ];
+  const budgetMs = 250;
   for (const message of hostile) {
-    const started = performance.now();
-    const { records } = sanitizeSandboxLogLines({ source: "sandbox", sandbox: "sb-1" }, [
-      sandboxLine(1, message),
-    ]);
-    const elapsed = performance.now() - started;
+    let records;
+    const elapsed = cpuTimeMs(
+      () => {
+        ({ records } = sanitizeSandboxLogLines({ source: "sandbox", sandbox: "sb-1" }, [
+          sandboxLine(1, message),
+        ]));
+      },
+      { budgetMs },
+    );
     assert.equal(records.length, 1);
-    assert.ok(elapsed < 250, `${message.slice(0, 24)} took ${elapsed.toFixed(0)} ms`);
+    assert.ok(elapsed < budgetMs, `${message.slice(0, 24)} took ${elapsed.toFixed(0)} ms of CPU`);
   }
 });

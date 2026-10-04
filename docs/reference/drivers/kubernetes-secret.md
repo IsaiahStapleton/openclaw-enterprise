@@ -226,8 +226,8 @@ for verification and safe upstream revocation.
 There is no value history, automatic rotation, automatic workload restart, or
 value rollback. Updating or deleting an OCC Secret does not remove credentials
 already delivered to a running process environment, and deletion is blocked while
-current Configurations, Agent drafts, active revisions, or pending deployments still depend on
-the Secret. For a compromised credential, stop the affected workloads and revoke
+current Configurations, credential sources, Agent drafts, active revisions, or pending
+deployments still depend on the Secret. For a compromised credential, stop the affected workloads and revoke
 the credential at the upstream provider; then update the OCC Secret with a
 replacement value and redeploy the intended consumers. Delete the Secret only
 after its reference dependencies are cleared; see [Delete](#delete).
@@ -248,7 +248,7 @@ curl -fsS \
 ```
 
 Successful deletion returns HTTP `204`. OCC denies deletion while the Secret is
-referenced by any current Configuration, credential source, Agent draft, active revision, or pending deployment.
+referenced by any current Configuration, credential source, Agent draft, active revision, pending deployment, or queued or running Agent provisioning request.
 Inactive historical revisions alone do not prevent deletion.
 Namespace removal is also blocked while owned Secrets remain. Agent removal does
 not own or garbage-collect Namespace Secret storage.

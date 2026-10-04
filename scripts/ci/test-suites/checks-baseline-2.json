@@ -4,189 +4,6 @@
   },
   "files": [
     {
-      "path": "tests/conformance/audit.test.mjs"
-    },
-    {
-      "path": "tests/conformance/compute-lifecycle-hooks.test.mjs"
-    },
-    {
-      "path": "tests/conformance/codex-seccomp-profile.test.mjs"
-    },
-    {
-      "path": "tests/conformance/configuration-occ.test.mjs"
-    },
-    {
-      "path": "tests/conformance/console-api-client.test.mjs"
-    },
-    {
-      "path": "tests/conformance/contracts.test.mjs"
-    },
-    {
-      "path": "tests/conformance/harness-device-auth.test.mjs"
-    },
-    {
-      "path": "tests/conformance/credential-source-occ.test.mjs"
-    },
-    {
-      "path": "tests/conformance/docker-compute.test.mjs"
-    },
-    {
-      "path": "tests/conformance/grafana-overview-dashboard.test.mjs"
-    },
-    {
-      "path": "tests/conformance/iam.test.mjs"
-    },
-    {
-      "path": "tests/conformance/kubernetes-compute.test.mjs"
-    },
-    {
-      "path": "tests/conformance/node-enrollment-client.test.mjs"
-    },
-    {
-      "path": "tests/conformance/kubernetes-preflight.test.mjs"
-    },
-    {
-      "path": "tests/conformance/kubernetes-runtime-credentials.test.mjs"
-    },
-    {
-      "path": "tests/conformance/kubernetes-configuration.test.mjs"
-    },
-    {
-      "path": "tests/conformance/kubernetes-ownership.test.mjs"
-    },
-    {
-      "path": "tests/conformance/kubernetes-secret-driver.test.mjs"
-    },
-    {
-      "path": "tests/conformance/occ-api-security.test.mjs"
-    },
-    {
-      "path": "tests/conformance/runtime-logs-content.test.mjs"
-    },
-    {
-      "path": "tests/conformance/runtime-logs-sandbox.test.mjs"
-    },
-    {
-      "path": "tests/conformance/runtime-logs-replay.test.mjs"
-    },
-    {
-      "path": "tests/conformance/codex-stderr-filter.test.mjs"
-    },
-    {
-      "path": "tests/conformance/occ-read.test.mjs"
-    },
-    {
-      "path": "tests/conformance/openshell-gateway-wire.test.mjs"
-    },
-    {
-      "path": "tests/conformance/platform-state-memory.test.mjs"
-    },
-    {
-      "path": "tests/conformance/pr-status.test.mjs"
-    },
-    {
-      "path": "tests/conformance/presets.test.mjs"
-    },
-    {
-      "path": "tests/conformance/secret-gateway-delivery.test.mjs"
-    },
-    {
-      "path": "tests/conformance/secret-occ.test.mjs"
-    },
-    {
-      "path": "tests/conformance/slack-configuration.test.mjs"
-    },
-    {
-      "path": "tests/conformance/service-account-driver.test.mjs"
-    },
-    {
-      "path": "tests/conformance/test-files.test.mjs"
-    },
-    {
-      "path": "tests/conformance/utils.test.mjs"
-    },
-    {
-      "path": "tests/conformance/workspace-files-configuration.test.mjs"
-    },
-    {
-      "path": "tests/conformance/workspace-files.test.mjs"
-    },
-    {
-      "path": "tests/conformance/workspace-node-supervisor.test.mjs"
-    },
-    {
-      "path": "tests/integration/presets-controller.test.mjs"
-    },
-    {
-      "path": "tests/integration/profile-renderer.test.mjs"
-    },
-    {
-      "path": "tests/integration/bootstrap-output.test.mjs"
-    },
-    {
-      "path": "tests/integration/bootstrap-volume.test.mjs"
-    },
-    {
-      "path": "tests/integration/configuration-controller.test.mjs"
-    },
-    {
-      "path": "tests/integration/configuration-startup.test.mjs"
-    },
-    {
-      "path": "tests/integration/console-api.test.mjs"
-    },
-    {
-      "path": "tests/integration/console-build-metadata.test.mjs"
-    },
-    {
-      "path": "tests/integration/controller-lifecycle.test.mjs"
-    },
-    {
-      "path": "tests/integration/driver-plugin-installation.test.mjs"
-    },
-    {
-      "path": "tests/integration/git-hooks.test.mjs"
-    },
-    {
-      "path": "tests/integration/occ-api.test.mjs"
-    },
-    {
-      "path": "tests/integration/production-controller-security.test.mjs"
-    },
-    {
-      "path": "tests/integration/production-healthcheck.test.mjs"
-    },
-    {
-      "path": "tests/integration/production-image-upgrade.test.mjs"
-    },
-    {
-      "path": "tests/integration/sandbox-driver-startup.test.mjs"
-    },
-    {
-      "path": "tests/integration/secret-api.test.mjs"
-    },
-    {
-      "path": "tests/integration/plugin-discovery-api.test.mjs"
-    },
-    {
-      "path": "tests/integration/device-authorization-api.test.mjs"
-    },
-    {
-      "path": "tests/integration/runtime-credentials-api.test.mjs"
-    },
-    {
-      "path": "tests/integration/secret-driver-startup.test.mjs"
-    },
-    {
-      "path": "tests/integration/service-api-keys.test.mjs"
-    },
-    {
-      "path": "tests/integration/startup-ipv6-loopback.test.mjs"
-    },
-    {
-      "path": "tests/integration/common-logging.test.mjs"
-    },
-    {
       "path": "tests/integration/dev-up.test.mjs",
       "expectedTests": [
         "dev-up builds the default runtime only when real Compose leaves runtime images unselected",
@@ -203,10 +20,14 @@
       ]
     },
     {
+      "path": "tests/integration/dev-codex-seccomp-failure.test.mjs"
+    },
+    {
       "path": "tests/integration/first-agent-startup.test.mjs",
       "expectedTests": [
         "first-Agent accepts current Compose-backed Kubernetes development state",
-        "first-Agent rejects OpenShell development state before external calls"
+        "first-Agent rejects OpenShell development state before external calls",
+        "first-Agent runs psql through the k3d PostgreSQL StatefulSet"
       ]
     },
     {
@@ -231,13 +52,11 @@
         "datasource readiness retries a transient HTTP 400",
         "non-retryable Grafana health failures retain their stage and status",
         "non-retryable Grafana datasource failures retain their stage and status",
-        "malformed Grafana datasource responses retain their stage and status",
         "datasource readiness retries an interrupted response body",
-        "invalid Grafana datasource response shapes retain their stage and status",
+        "malformed or invalid Grafana datasource responses retain their stage and status",
         "a timed-out Prometheus response body retries and accepts a later valid query",
         "Prometheus readiness retries an interrupted response body",
-        "a null Prometheus response retains its stage and status",
-        "malformed Prometheus responses remain query errors"
+        "null or malformed Prometheus responses retain their stage and status"
       ]
     },
     {
@@ -251,6 +70,9 @@
     },
     {
       "path": "tests/integration/ci-prepare.test.mjs"
+    },
+    {
+      "path": "tests/integration/ci-image-pull.test.mjs"
     },
     {
       "path": "tests/integration/k3d-launcher.test.mjs"
@@ -344,6 +166,12 @@
       "path": "tests/conformance/repository-credentials-github.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-credentials-github-token.test.mjs"
+    },
+    {
+      "path": "tests/conformance/repository-credentials-receive-pack.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-credentials-sessions.test.mjs"
     },
     {
@@ -371,6 +199,9 @@
     },
     {
       "path": "tests/integration/repository-credentials-config.test.mjs"
+    },
+    {
+      "path": "tests/integration/repository-credentials-github-token.test.mjs"
     },
     {
       "path": "tests/integration/repository-credentials-http.test.mjs"

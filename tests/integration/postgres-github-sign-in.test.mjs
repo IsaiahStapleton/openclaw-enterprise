@@ -19,8 +19,9 @@ import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mj
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
 import { assertReservedLane } from "../helpers/production-sign-in.mjs";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const email = "github-recovery@example.test";
 const password = "github-local-recovery-password";
 const authSecret = "github-composed-auth-test-secret-at-least-32-bytes";
@@ -31,9 +32,7 @@ const providerRefreshToken = "ghr_fixture_provider_refresh_token";
 // Fastify and the browser Console remain their ordinary implementations.
 test(
   "PostgreSQL GitHub sign-in preserves an existing account through the ordinary Console",
-  {
-    skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof.",
-  },
+  requiresPostgres,
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
@@ -71,10 +70,7 @@ test(
       computeDriver: createDevelopmentComputeDriver(),
       configurationDriver,
     });
-    const reservation = createServer();
-    await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
-    const port = reservation.address().port;
-    await new Promise((resolve) => reservation.close(resolve));
+    const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
     const base = {
       mode: "development",
@@ -162,7 +158,9 @@ test(
     const before = await state.loadNativeIAMState(installation.id);
 
     // Exercise the real listener shutdown with a request already admitted by
-    // Fastify. The hook controls timing only; app.close owns stop and drain.
+    // Fastify. The hook controls timing only; app.close owns stop and drain. The
+    // drained response closes its keep-alive socket, so close() does not then wait
+    // for the client's idle timeout (about 70 s against Fastify's 72 s keep-alive).
     const drainingRequest = fetch(`${origin}/api/auth/session?maintenance-drain`, {
       headers: { cookie: legacyCookie },
     });
@@ -716,6 +714,7 @@ test(
     });
     assert.equal(recoveryDisable.statusCode, 409, recoveryDisable.body);
     assert.equal(recoveryDisable.json().error.code, "RESOURCE_CONFLICT");
+    assert.equal(recoveryDisable.json().error.message, "The recovery account cannot be disabled.");
 
     const stale = await start();
     assert.equal(
@@ -1200,25 +1199,26 @@ test(
     );
     await pool.query('DELETE FROM occ."user" WHERE id = $1', [unprovisioned]);
     const limitedVersion = (await readAccount(limited.id, adminHeaders)).version;
+    // Conflicts raised after authorization name what blocks them, not "already exists".
+    const staleHolder = await replaceRecovery({
+      userId: limited.id,
+      expectedCurrentUserId: limited.id,
+      expectedVersion: limitedVersion,
+    });
+    assert.equal(staleHolder.statusCode, 409, staleHolder.body);
     assert.equal(
-      (
-        await replaceRecovery({
-          userId: limited.id,
-          expectedCurrentUserId: limited.id,
-          expectedVersion: limitedVersion,
-        })
-      ).statusCode,
-      409,
+      staleHolder.json().error.message,
+      "The recovery designation changed. Read its current state before a new action.",
     );
+    const staleVersion = await replaceRecovery({
+      userId: limited.id,
+      expectedCurrentUserId: recovery,
+      expectedVersion: limitedVersion + 1,
+    });
+    assert.equal(staleVersion.statusCode, 409, staleVersion.body);
     assert.equal(
-      (
-        await replaceRecovery({
-          userId: limited.id,
-          expectedCurrentUserId: recovery,
-          expectedVersion: limitedVersion + 1,
-        })
-      ).statusCode,
-      409,
+      staleVersion.json().error.message,
+      "The authentication account version changed. Read its current state before a new action.",
     );
     assert.equal(
       (
@@ -1389,15 +1389,14 @@ test(
         })
       ).headers["set-cookie"],
     );
+    const passwordDetach = await accountAction(
+      `/api/auth/accounts/${createdId}/methods/${credentialMethod.methodId}/detach`,
+      withGitHub.version,
+    );
+    assert.equal(passwordDetach.statusCode, 409, "the password method cannot be detached");
     assert.equal(
-      (
-        await accountAction(
-          `/api/auth/accounts/${createdId}/methods/${credentialMethod.methodId}/detach`,
-          withGitHub.version,
-        )
-      ).statusCode,
-      409,
-      "the password method cannot be detached",
+      passwordDetach.json().error.message,
+      "Only an attached external identity can be detached.",
     );
     assert.equal(
       (

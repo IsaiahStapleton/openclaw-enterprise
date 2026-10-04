@@ -90,6 +90,38 @@ the API refuses the same values at startup. The chart adds the API-only NetworkP
 `openclaw-enterprise-api-oidc-login-egress` on TCP 443. Empty `egressCidrs` allows any
 address except link-local `169.254.0.0/16`; list the IdP's ranges to narrow it.
 
+The policy matches the destination Pod port after the Service forwards the connection,
+not the Service port. An IdP outside the cluster is reached on 443. For an IdP that runs
+in the cluster behind a Service whose `targetPort` is not 443 (for example, an ingress
+gateway Service mapping 443 to Pod port 10443), the API's connection is refused, and
+sign-in fails with audit reason `PROVIDER_UNAVAILABLE`. `egressCidrs` cannot help,
+because the port is fixed. Add your own egress policy for the API Pod to the IdP's Pods
+on their target port:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openclaw-enterprise-api-in-cluster-idp-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openclaw-enterprise
+      app.kubernetes.io/component: api
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: idp-gateway # the IdP Service's Namespace
+          podSelector:
+            matchLabels:
+              app: idp-gateway # the Pods behind the IdP Service
+      ports:
+        - protocol: TCP
+          port: 10443 # the Service's targetPort
+```
+
 The API reads these variables; see
 [production settings](../../reference/settings/production.md#oidc-sign-in):
 
@@ -132,10 +164,14 @@ curl -sS -X POST "$OCC_AUTH_BASE_URL/api/auth/accounts/$USER_ID/providers/oidc" 
 ```
 
 The subject is 1–255 printable ASCII characters without spaces. The call returns `409`
-when OIDC is off, the version is stale or the account is disabled, and `404` when
-another account holds the subject. Attachment advances the account version and ends the
-account's sessions. The method's `providerId` starts with `oidc:`; detach it with
-`POST /api/auth/accounts/:userId/methods/:methodId/detach`.
+when OIDC is off, the version is stale, the account is disabled, or another account
+holds the subject ("The external identity is already assigned."). Attachment advances
+the account version and ends the account's sessions. The method's `providerId` starts
+with `oidc:`; detach it with `POST /api/auth/accounts/:userId/methods/:methodId/detach`.
+
+Accounts are created with a password, and an OIDC identity can be attached only
+afterwards. To add someone who should sign in only through the IdP, follow
+[Add a person](../topics/iam.md#add-a-person), which covers the password left behind.
 
 ## Changes, rotation and outages
 
@@ -151,7 +187,8 @@ account's sessions. The method's `providerId` starts with `oidc:`; detach it wit
 - An IdP outage, blocked egress or a rejected ID token fails that sign-in closed and
   returns the browser to `/console/?authError=oidc`; the recovery account's password
   still signs in. OIDC shares the external sign-in budgets with GitHub and Google.
-  An IdP that cannot answer also logs `authentication.provider-unavailable-warning`
+  An IdP that cannot answer, or that refuses the configured client
+  (`cause: client_rejected`), also logs `authentication.provider-unavailable-warning`
   with the failing step and cause; see the
   [external sign-in reference](../../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts).
 

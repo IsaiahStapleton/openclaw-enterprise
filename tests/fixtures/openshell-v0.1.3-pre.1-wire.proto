@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Independent wire oracle extracted from NVIDIA OpenShell commit
-// 496ebba293f5cc2bb2753444dddd534f0b4aeb6a. Keep this fixture pinned to that
+// dde8a9a57f34f9d998618b3d35821608165c980f. Keep this fixture pinned to that
 // upstream contract; do not derive it from the production client proto.
 syntax = "proto3";
 
@@ -13,6 +13,8 @@ import "google/protobuf/timestamp.proto";
 service OpenShell {
   rpc Health(HealthRequest) returns (HealthResponse);
   rpc CreateSandbox(CreateSandboxRequest) returns (SandboxResponse);
+  rpc GetSandbox(GetSandboxRequest) returns (SandboxResponse);
+  rpc GetService(GetServiceRequest) returns (ServiceEndpointResponse);
   rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
   rpc GetSandboxLogs(GetSandboxLogsRequest) returns (GetSandboxLogsResponse);
   rpc GetSandboxProviderStatus(GetSandboxProviderStatusRequest)
@@ -56,11 +58,43 @@ message CreateSandboxRequest {
 message SandboxServiceExposure {
   string service = 1;
   uint32 target_port = 2;
+  ServiceAuthorizationMode authorization_mode = 3;
+}
+
+enum ServiceAuthorizationMode {
+  SERVICE_AUTHORIZATION_MODE_UNSPECIFIED = 0;
+  SERVICE_AUTHORIZATION_MODE_STRIP = 1;
+  SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH = 2;
 }
 
 message DeleteSandboxRequest {
   string name = 1;
   WorkspaceSelector workspace_scope = 2;
+}
+
+message GetSandboxRequest {
+  string name = 1;
+  WorkspaceSelector workspace_scope = 2;
+}
+
+message GetServiceRequest {
+  string sandbox = 1;
+  // Empty selects the unnamed endpoint.
+  string name = 2;
+  WorkspaceSelector workspace_scope = 3;
+}
+
+message ServiceEndpoint {
+  ObjectMeta metadata = 1;
+  string sandbox_id = 2;
+  string sandbox = 3;
+  string name = 4;
+  uint32 target_port = 5;
+}
+
+message ServiceEndpointResponse {
+  ServiceEndpoint endpoint = 1;
+  string url = 2;
 }
 
 message SandboxSpec {
@@ -128,6 +162,7 @@ message ObjectMeta {
   string id = 1;
   string name = 2;
   map<string, string> labels = 4;
+  map<string, string> annotations = 6;
   string workspace = 7;
 }
 

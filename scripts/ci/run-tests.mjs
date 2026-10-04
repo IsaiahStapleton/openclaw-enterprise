@@ -6,12 +6,13 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { startAgentNamespaceCapture } from "./k3d-diagnostics.mjs";
+import { failureSecrets, redactFailure } from "./failure-redaction.mjs";
 import { loadTestSuites } from "./test-suites.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const reporterPath = fileURLToPath(new URL("./reporter.mjs", import.meta.url));
 const defaultManifestPath = "scripts/ci/test-suites.json";
-const testRoots = ["tests/conformance", "tests/integration", "tests/browser"];
+const testRoots = ["tests/conformance", "tests/integration", "tests/browser", "tests/docs"];
 
 function usage() {
   return [
@@ -579,6 +580,10 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       );
 
       const events = parseReporter(nodeResult.stdout);
+      // The job env holds OCC_TEST_* values the child never got; the child env
+      // holds prepared values (database URLs) the job never had. Redact both.
+      const secrets = failureSecrets([process.env, env]);
+      const failureError = (error) => redactFailure(error, secrets, root);
       const rootFailure = events.find(
         (event) =>
           event.type === "test:fail" &&
@@ -587,7 +592,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
       );
       if (rootFailure) {
         fileFailure = {
-          error: rootFailure.data.error,
+          error: failureError(rootFailure.data.error),
           ...(events.some(
             (event) =>
               event.type === "test:diagnostic" && event.data?.kind === "post-test-async-activity",
@@ -609,7 +614,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
           column: event.data.column,
           skip: event.data.skip,
           todo: event.data.todo,
-          error: event.data.error,
+          error: failureError(event.data.error),
           durationMs: event.data.durationMs,
         }));
     }
@@ -765,7 +770,45 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
   };
 
   await writeSummary(resultsPath, summary);
+  logFailures(files);
+  logIssues(allIssues);
   return summary.exitCode;
+}
+
+// One job-log line per entry: a newline in a message or name cannot start a new
+// line (or a workflow command) of its own.
+function oneLine(text) {
+  return (text ?? "").trim().replace(/\s*\n\s*/gu, " | ");
+}
+
+// The job log keeps every attempt, so name each failure there as well. The
+// reporter has already bounded and redacted the message.
+function logFailures(files) {
+  for (const file of files) {
+    const failures = file.tests.filter((testCase) => testCase.status === "failed");
+    if (file.fileFailure) {
+      failures.push({ name: "(file)", line: undefined, error: file.fileFailure.error });
+    }
+    for (const { name, line, error } of failures) {
+      const at = error?.location?.line ?? line;
+      const message = oneLine(error?.message);
+      process.stderr.write(
+        `run-tests: failed ${file.path}${at ? `:${at}` : ""} ${JSON.stringify(name)}${message ? `: ${message}` : ""}${error?.frame ? ` (${oneLine(error.frame)})` : ""}\n`,
+      );
+    }
+  }
+}
+
+// A lane can fail on runner issues alone, with every test passing: an expected
+// test that did not run, a file that hit the runner timeout, an unexpected skip.
+// Name those in the job log too. Issue messages are built by the runner from
+// manifest entries, paths and test names, never from test output.
+function logIssues(issues) {
+  for (const { code, message, file } of issues) {
+    process.stderr.write(
+      `run-tests: issue ${code}${file ? ` ${file}` : ""}: ${oneLine(message)}\n`,
+    );
+  }
 }
 
 function laneNamesForTarget(manifest, target) {

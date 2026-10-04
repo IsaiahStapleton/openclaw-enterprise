@@ -9,7 +9,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createRequire } from "node:module";
-import { connect, createServer } from "node:net";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -31,6 +31,7 @@ import {
   createEnvoyWorkspaceGatewayPlan,
   ensureEnvoyGatewayControllers,
 } from "../helpers/envoy-workspace-gateway.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
 
 const executeFile = promisify(execFile);
 
@@ -49,7 +50,7 @@ const openShellSupervisorImage = process.env.OCC_TEST_OPENSHELL_SUPERVISOR_IMAGE
 const openShellHelmPath = process.env.OCC_TEST_OPENSHELL_HELM;
 const openShellHelmChart = process.env.OCC_TEST_OPENSHELL_HELM_CHART;
 const openShellWorkspaceHelmChart = process.env.OCC_TEST_OPENSHELL_WORKSPACE_HELM_CHART;
-const openShellChartVersion = process.env.OCC_TEST_OPENSHELL_CHART_VERSION ?? "0.1.0";
+const openShellChartVersion = process.env.OCC_TEST_OPENSHELL_CHART_VERSION ?? "0.1.3-pre.1";
 const openShellRuntimeClass = process.env.OCC_TEST_OPENSHELL_RUNTIME_CLASS ?? "openshell-sandbox";
 const providerModel = (process.env.OCC_TEST_OPENAI_MODEL ?? defaultAgentModel).replace(
   /^(?:openai|codex)\//,
@@ -375,20 +376,6 @@ async function waitForLoopbackPort(port) {
   });
 }
 
-async function reserveLoopbackPort() {
-  const reservation = createServer();
-  await new Promise((resolve, reject) => {
-    reservation.once("error", reject);
-    reservation.listen(0, "127.0.0.1", resolve);
-  });
-  const address = reservation.address();
-  assert.ok(address && typeof address === "object");
-  await new Promise((resolve, reject) =>
-    reservation.close((error) => (error ? reject(error) : resolve())),
-  );
-  return address.port;
-}
-
 async function waitForWorkspaceGatewayTls(hostname, port) {
   await waitFor("OpenShell host-side Gateway TLS path", async () => {
     try {
@@ -442,7 +429,7 @@ async function startWorkspaceGatewayHostRelay(context, workspaceGateway) {
     /^(?:\d{1,3}\.){3}\d{1,3}$/,
     "the disposable k3d Gateway must expose an IPv4 ClusterIP.",
   );
-  const endpointPort = usesPodmanMachine ? await reserveLoopbackPort() : 443;
+  const endpointPort = usesPodmanMachine ? await availablePort() : 443;
   if (usesPodmanMachine) {
     const envoyHttpsPort = envoyService.spec.ports.find(({ port }) => port === 443);
     assert.ok(envoyHttpsPort, "the workspace Gateway Service must retain its HTTPS port.");
@@ -693,6 +680,10 @@ function credentialJobName(revisionId) {
   return `openshell-cred-${hash(revisionId)}`;
 }
 
+function bridgedNodeStateParent(agentId) {
+  return `.openclaw/openshell-bootstrap/nodes/${hash(agentId, 32)}`;
+}
+
 function pluginRuntimeConfigMapName(context) {
   return `plugin-runtime-${hash(context.revision.agentId)}-rev-${hash(context.revision.id)}`;
 }
@@ -853,7 +844,9 @@ function credentialBridgeResource(context, claimName, subPath) {
                 [
                   "umask 077",
                   ...(needsPluginRuntime ? ["mkdir -p /bootstrap/plugin-runtime"] : []),
-                  "mkdir -p /bootstrap/node-state",
+                  // Match Compute's Agent-scoped node identity so a replacement reconnects
+                  // with the device already recorded by the Gateway instead of redeeming twice.
+                  "mkdir -p /agent-node-state/node-state",
                   "mkdir -p /bootstrap/runtime-assets",
                   "mkdir -p /bootstrap/openclaw-home",
                   ...(needsNativeTemporary ? ["mkdir -p /bootstrap/native-tmp"] : []),
@@ -862,7 +855,7 @@ function credentialBridgeResource(context, claimName, subPath) {
                   ...(needsPluginRuntime
                     ? ["chmod 0700 /bootstrap/plugin-runtime /bootstrap/service-principal"]
                     : ["chmod 0700 /bootstrap/service-principal"]),
-                  "chmod 0700 /bootstrap/node-state",
+                  "chmod 0700 /agent-node-state/node-state",
                   ...(needsNativeTemporary ? ["chmod 0700 /bootstrap/native-tmp"] : []),
                   "chmod 0600 /bootstrap/app-server-token /bootstrap/openclaw-node-setup-code /bootstrap/openclaw-node-ca.pem 2>/dev/null || true",
                   ...(needsPluginRuntime
@@ -915,6 +908,11 @@ function credentialBridgeResource(context, claimName, subPath) {
               volumeMounts: [
                 { name: "bootstrap", mountPath: "/bootstrap", subPath },
                 { name: "bootstrap", mountPath: "/workspace-home", subPath: "workspace" },
+                {
+                  name: "node-state-bootstrap",
+                  mountPath: "/agent-node-state",
+                  subPath: bridgedNodeStateParent(context.revision.agentId),
+                },
                 ...(needsPluginRuntime
                   ? [
                       {
@@ -939,6 +937,7 @@ function credentialBridgeResource(context, claimName, subPath) {
           ],
           volumes: [
             { name: "bootstrap", persistentVolumeClaim: { claimName } },
+            { name: "node-state-bootstrap", persistentVolumeClaim: { claimName } },
             ...(needsPluginRuntime
               ? [
                   {
@@ -1125,7 +1124,7 @@ ${runtimeCommand[programIndex]}`;
       },
       {
         claimName,
-        subPath: `${subPath}/node-state`,
+        subPath: `${bridgedNodeStateParent(context.revision.agentId)}/node-state`,
         mountPath: effectiveNodeStateMountPath,
         readOnly: false,
       },
@@ -1269,6 +1268,16 @@ function integrationGatewayClient(
       const created = await gateway.createSandbox(compatible, signal);
       observeServiceUrl(created.serviceUrls[""]);
       return created;
+    },
+    getSandbox(request, signal) {
+      return gateway.getSandbox(request, signal);
+    },
+    async getServiceUrl(request, signal) {
+      const serviceUrl = await gateway.getServiceUrl(request, signal);
+      if (serviceUrl !== undefined) {
+        observeServiceUrl(serviceUrl);
+      }
+      return serviceUrl;
     },
     deleteSandbox(request, signal) {
       return gateway.deleteSandbox(request, signal);
@@ -1432,11 +1441,11 @@ function assertBridgedWorkspaceMounts(pod) {
       ({ mountPath, readOnly, subPath }) =>
         mountPath === nodeStateMountPath &&
         readOnly === false &&
-        subPath.startsWith(".openclaw/openshell-bootstrap/") &&
+        subPath.startsWith(".openclaw/openshell-bootstrap/nodes/") &&
         subPath.endsWith("/node-state"),
     ),
     true,
-    "the stock OpenShell bridge requires revision-scoped writable node state.",
+    "the stock OpenShell bridge requires Agent-scoped writable node state.",
   );
   assert.equal(
     mounts.some(
@@ -1490,7 +1499,7 @@ function assertBridgedNativeStateMount(pod) {
       ({ mountPath, readOnly }) => mountPath === bridgedNodeStateMountPath && readOnly !== true,
     ),
     true,
-    "the native bridge requires revision-scoped writable node state.",
+    "the native bridge requires Agent-scoped writable node state.",
   );
   assert.equal(
     mounts.some(({ mountPath }) => mountPath === nodeStateMountPath),
@@ -1830,7 +1839,7 @@ function createIntegrationSandboxDriverFactory(
                 [
                   "chmod -R u+w /bootstrap/plugin-runtime /bootstrap/service-principal",
                   "rm -f /bootstrap/app-server-token /bootstrap/openclaw-node-setup-code /bootstrap/openclaw-node-ca.pem",
-                  "rm -rf /bootstrap/plugin-runtime /bootstrap/service-principal /bootstrap/node-state /bootstrap/runtime-assets /bootstrap/native-tmp /bootstrap/openclaw-home",
+                  "rm -rf /bootstrap/plugin-runtime /bootstrap/service-principal /bootstrap/runtime-assets /bootstrap/native-tmp /bootstrap/openclaw-home",
                 ].join("\n"),
               ];
               container.volumeMounts = container.volumeMounts.filter(
@@ -2433,9 +2442,11 @@ async function prepareProductionInstallation(
   assert.equal(gatewayPods.length, 1, "the Compute-owned Agent gateway must still be separate.");
   if (harnessId === "codex") {
     const agentService = await resource("service", agentServiceName, placement);
+    // Compute keeps provider-owned Harnesses outside its ordinary egress grants.
     assert.deepEqual(agentService.spec.selector, {
       "openclaw.dev/agent": agent.data.id,
       "openclaw.dev/namespace": namespaceId,
+      "openclaw.dev/network-profile": "provider-fenced-v1",
       "openclaw.dev/revision": deployed.data.id,
       "openclaw.dev/workload-role": "agent",
     });
@@ -2454,6 +2465,14 @@ async function prepareProductionInstallation(
     appServerToken: transport.appServerToken,
     controllerUrl,
     credentials: adminCredentials,
+    diagnoseRevision: (revisionId) =>
+      writeWorkerCompletionDiagnostics({
+        pool: observerPool,
+        events,
+        namespaceId,
+        agentId: agent.data.id,
+        revisionId,
+      }),
   };
 }
 
@@ -2873,14 +2892,31 @@ async function assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology) 
   );
   assert.equal(redeployed.status, 202, JSON.stringify(redeployed.error));
   assert.notEqual(redeployed.data.id, topology.revision.id);
-  await waitFor(`replacement OpenShell revision ${redeployed.data.id} activation`, async () => {
-    const observed = await topology.request(
-      "GET",
-      `/namespaces/${topology.namespaceId}/agents/${topology.agent.id}`,
+  try {
+    await waitFor(`replacement OpenShell revision ${redeployed.data.id} activation`, async () => {
+      const observed = await topology.request(
+        "GET",
+        `/namespaces/${topology.namespaceId}/agents/${topology.agent.id}`,
+      );
+      assert.equal(observed.status, 200, JSON.stringify(observed.error));
+      return observed.data.activeRevisionId === redeployed.data.id ? observed.data : undefined;
+    });
+  } catch (error) {
+    await topology.diagnoseRevision(redeployed.data.id);
+    throw error;
+  }
+  // Activation requires the replacement's real workspace node to reconnect. Its identity
+  // mount must survive retiring the prior revision's separate startup credentials.
+  const replacementPod = await waitForProviderHarnessPod(topology.placement, redeployed.data);
+  const nodeMount = (pod) =>
+    bridgedHarnessContainer(pod).volumeMounts.find(
+      ({ mountPath }) => mountPath === nodeStateMountPath,
     );
-    assert.equal(observed.status, 200, JSON.stringify(observed.error));
-    return observed.data.activeRevisionId === redeployed.data.id ? observed.data : undefined;
-  });
+  assert.equal(
+    nodeMount(replacementPod)?.subPath,
+    `${bridgedNodeStateParent(topology.agent.id)}/node-state`,
+  );
+  assert.equal(nodeMount(replacementPod)?.subPath, nodeMount(topology.harnessPod)?.subPath);
   const activeSandboxName = `os-${hash(redeployed.data.id, 16)}`;
   const retiredSandboxName = `os-${hash(topology.revision.id, 16)}`;
   // The revision becomes active before the worker finishes retiring its predecessor. Observe the
@@ -2888,6 +2924,7 @@ async function assertDuplicateReconciliationDoesNotDuplicateOpenShell(topology) 
   const expectedActiveSelector = {
     "openclaw.dev/agent": topology.agent.id,
     "openclaw.dev/namespace": topology.namespaceId,
+    "openclaw.dev/network-profile": "provider-fenced-v1",
     "openclaw.dev/revision": redeployed.data.id,
     "openclaw.dev/workload-role": "agent",
   };
@@ -3083,7 +3120,7 @@ test(
         "OpenShell integration: checking create-time service exposure authentication boundary.\n",
       );
       assert.match(topology.harnessServiceUrl, /^https?:\/\//);
-      // OpenShell v0.1.0 consumes gateway Authorization and strips it before proxying. An
+      // The Driver omits authorization_mode, so OpenShell defaults to STRIP before proxying. An
       // authentication rejection from the protected Codex endpoint proves the route reaches the
       // real app server without weakening its bearer-token requirement or accepting a gateway 5xx.
       let lastServiceObservation = "no response";

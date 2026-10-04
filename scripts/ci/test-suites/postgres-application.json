@@ -5,17 +5,6 @@
   },
   "files": [
     {
-      "path": "tests/integration/postgres-connection-auth.test.mjs",
-      "expectedTests": [
-        "password authentication preserves the existing pg connection configuration",
-        "the password pool authenticates to the selected real PostgreSQL database",
-        "the real pg client retains the Azure token callback and verified TLS after URL parsing",
-        "workload authentication rejects password fallback and unverified TLS",
-        "an idle pooled client error is logged instead of crashing the process",
-        "the pool survives PostgreSQL terminating an idle backend"
-      ]
-    },
-    {
       "path": "tests/integration/occ-metrics.test.mjs",
       "expectedTests": [
         "API metrics follow real authenticated routes and keep replica registries isolated",
@@ -25,34 +14,8 @@
       ]
     },
     {
-      "path": "tests/integration/postgres-auth-accounts.test.mjs",
-      "expectedTests": [
-        "fresh PostgreSQL development bootstrap writes a usable administrator service key",
-        "PostgreSQL auth account provisioning is visible to another controller without rebuilding IAM Driver",
-        "PostgreSQL auth account audit failure rolls back IAM and Better Auth account state"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-bootstrap-failures.test.mjs",
-      "expectedTests": [
-        "concurrent development bootstrap subprocesses reject the loser and reload the committed winner",
-        "production bootstrap preserves committed credentials when COMMIT acknowledgement is lost",
-        "known bootstrap failures preserve created artifacts and report safe diagnostics",
-        "development bootstrap preserves credentials when COMMIT acknowledgement is lost"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-controller-work-targets.test.mjs",
       "expectedTests": ["PostgreSQL controller work requires exactly one complete target shape"]
-    },
-    {
-      "path": "tests/integration/postgres-platform-state.test.mjs",
-      "expectedTests": [
-        "PostgreSQL rejects platform writes until the singleton Installation is bootstrapped",
-        "real OCC Namespace lifecycle persists provisioning, readiness, deletion, and its tombstone",
-        "PostgreSQL platform state satisfies memory adapter ownership, immutability, and atomicity",
-        "the PostgreSQL worker reloads exact Namespace restrictions and never dispatches revoked provisioning"
-      ]
     },
     {
       "path": "tests/integration/postgres-native-iam-policy-barrier.test.mjs",
@@ -60,19 +23,6 @@
         "xid8 comparison preserves the tuple transaction ID across epochs",
         "native IAM barrier fixture rejects unsafe connection targets before connecting",
         "native IAM policy barrier holds the original authority and blocks all six writers"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-production-wireup.test.mjs",
-      "expectedTests": [
-        "production bootstrap creates a generated-password administrator that can authenticate"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-backend-ownership.test.mjs",
-      "expectedTests": [
-        "development API starts with stale Backend references and permits repair through Agent update",
-        "PostgreSQL Backend ownership persists exact Agent associations and admits only matching managed bindings"
       ]
     },
     {
@@ -85,23 +35,6 @@
         "PostgreSQL native IAM authorizes Namespace-local service identities without Agent ownership",
         "PostgreSQL native IAM creates exact AgentRevision bindings with limited app privileges",
         "PostgreSQL native IAM rejects foreign subjects, broad grants, and absent targets"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-restart-recovery.test.mjs",
-      "expectedTests": [
-        "Namespace creation and deletion retain distinct durable work targets",
-        "durable work deduplicates exact ownership and rejects actor or owner collisions",
-        "Namespace convergence and admitted revision work share one durable queue with exact resource ownership",
-        "stale and exhausted recovery includes admitted revisions and Namespace lifecycle work",
-        "transaction-scoped queue fencing rolls back Namespace mutation, completion, and audit together",
-        "concurrent claims exclude one Namespace lifecycle and one Agent while distinct Agents progress",
-        "a restarted queue recovers expired claims, fences old tokens, and persists exhausted failures",
-        "batch stale recovery reports each expired claim once and writes one audit event per item",
-        "Agent deletion retains exact cleanup obligations on fail",
-        "Agent deletion retains exact cleanup obligations on retry",
-        "Agent deletion retains exact cleanup obligations on expired claim",
-        "Agent deletion retains exact cleanup obligations on exhausted queued"
       ]
     },
     {
@@ -125,19 +58,13 @@
       ]
     },
     {
-      "path": "tests/integration/postgres-service-api-keys.test.mjs",
-      "expectedTests": [
-        "PostgreSQL Better Auth keys remain hashed, scoped, and revocable across instances"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-worker-agent-revision.test.mjs",
       "expectedTests": [
         "worker fixture disposal preserves another database's live claim and activation",
         "worker revalidates admitted repository selections through the concrete GitHub Driver and Unix control",
         "worker restart resumes repository maintenance and repairs only Compute's exact missing subset once",
         "credential withdrawal work revokes from the active revision without redeploying it",
-        "an exhausted credential withdrawal stays pending with its reason until a replay retries it",
+        "an exhausted credential withdrawal stays pending, reports no attempt in progress, and a replay retries it",
         "maintenance of a withdrawn revision retries the withdrawal and stops once it is revoked",
         "a deployment retry never re-attaches a source withdrawn while it was finishing",
         "a withdrawal whose requester lost Agent operate fails once with a denial and no revocation",
@@ -175,6 +102,12 @@
         "failed provisioning can retry through the API and resume without duplicating the Agent",
         "Stop and Delete cancel failed pre-handoff provisioning Agents without deployment resurrection",
         "failed provisioning keeps the accepted plan reserved until retry or deletion"
+      ]
+    },
+    {
+      "path": "tests/integration/postgres-agent-deletion-audit.test.mjs",
+      "expectedTests": [
+        "Agent delete audit lists every AccessBinding and Restriction the deletion finalizer removes"
       ]
     },
     {
@@ -232,83 +165,6 @@
     {
       "path": "tests/integration/postgres-repository-broker-receipts.test.mjs",
       "expectedTests": ["confirmed broker disposal survives service restart in PostgreSQL"]
-    },
-    {
-      "path": "tests/integration/postgres-human-authentication.test.mjs",
-      "expectedTests": [
-        "PostgreSQL human authentication preserves exact identity and transactional currentness"
-      ]
-    },
-    {
-      "path": "tests/integration/auth-maintain.test.mjs",
-      "expectedTests": [
-        "auth:maintain requires an explicit writers-stopped claim for every change",
-        "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-password-default.test.mjs",
-      "expectedTests": [
-        "a password-only install without GitHub onboards, signs in and out, and refuses GitHub routes"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-password-default-activation.test.mjs",
-      "expectedTests": [
-        "password accounts from before GitHub activation keep signing in, and creation continues after it"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-admin-attach.test.mjs",
-      "expectedTests": [
-        "Installation administrators attach, detach and re-attach GitHub identities and disable accounts"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-admin-scope.test.mjs",
-      "expectedTests": [
-        "an exact-scope Installation administrator cannot manage an account with broader grants"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-google-sign-in.test.mjs",
-      "expectedTests": [
-        "PostgreSQL Google sign-in admits only attached identities through the guarded profile"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-oidc-sign-in.test.mjs",
-      "expectedTests": ["PostgreSQL OIDC sign-in admits only attached (issuer, subject) pairs"]
-    },
-    {
-      "path": "tests/integration/postgres-external-session-provider.test.mjs",
-      "expectedTests": [
-        "PostgreSQL sessions end when their external provider instance is no longer configured"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
-      "expectedTests": [
-        "online recovery replacement moves the reserved lane and survives a restart with the original seed"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-break-glass-auth-maintain.test.mjs",
-      "expectedTests": [
-        "stopped-maintenance break-glass resets the recovery password and returns to the password profile"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-trusted-proxy.test.mjs",
-      "expectedTests": [
-        "sign-in admission keys on the client behind a trusted ingress and ignores other peers' headers"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-auth-binding.test.mjs",
-      "expectedTests": [
-        "PostgreSQL auth binding pins transactions, rolls back failures, and preserves caller pool ownership"
-      ]
     }
   ]
 }

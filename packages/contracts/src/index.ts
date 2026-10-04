@@ -332,6 +332,16 @@ export interface CredentialWithdrawal {
   readonly lastAttemptAt?: string;
 }
 
+/**
+ * A withdrawal as the API reports it. `withdrawalInProgress` is true while an attempt is queued
+ * or running. A `pending` withdrawal without one has no attempt queued (attempts ran out or a
+ * permanent failure ended them): nothing retries it until the withdraw request is sent again,
+ * or revision maintenance, where Compute or repository credentials schedule it, queues one.
+ */
+export interface CredentialWithdrawalStatus extends CredentialWithdrawal {
+  readonly withdrawalInProgress: boolean;
+}
+
 export type HarnessAuthBinding =
   | { readonly method: "api_key"; readonly source: SecretReference }
   | { readonly method: "codex_pat"; readonly source: SecretReference }
@@ -765,6 +775,38 @@ export const PERMISSION_ACTIONS = Object.freeze([
 
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
 
+/**
+ * The actions some platform operation checks for each resource kind (the per-kind table in
+ * docs/reference/cheatsheets/permissions.md). A Permission outside this table grants nothing,
+ * so Namespace Role writes refuse it.
+ */
+export const SUPPORTED_PERMISSION_ACTIONS: Readonly<
+  Record<ResourceKind, readonly PermissionAction[]>
+> = Object.freeze({
+  installation: Object.freeze(["read", "administer"] as const),
+  namespace: Object.freeze(["create", "read", "delete"] as const),
+  configuration: Object.freeze(["create", "read", "update", "delete"] as const),
+  preset: Object.freeze(["create", "read", "update", "delete"] as const),
+  service_account: Object.freeze(["create", "read", "update", "delete"] as const),
+  secret: Object.freeze(["create", "read", "update", "delete", "operate"] as const),
+  credential_source: Object.freeze(["create", "read", "update", "delete", "operate"] as const),
+  agent: Object.freeze([
+    "create",
+    "read",
+    "update",
+    "delete",
+    "deploy",
+    "operate",
+    "administer",
+    "read_logs",
+  ] as const),
+  agent_revision: Object.freeze(["read"] as const),
+});
+
+export function isSupportedPermission(permission: Readonly<Permission>): boolean {
+  return SUPPORTED_PERMISSION_ACTIONS[permission.resourceKind].includes(permission.action);
+}
+
 export interface Permission {
   readonly action: PermissionAction;
   readonly resourceKind: ResourceKind;
@@ -1019,6 +1061,16 @@ export interface IAMPolicyReadRepository {
     namespaceId: string,
     bindingId: string,
   ): Promise<Readonly<AccessBinding> | undefined>;
+  /**
+   * Lists the deny Restrictions on these exact resources in every scope (Installation and
+   * Namespace), as deleting the resources removes them. A store that keeps no Restrictions
+   * (the in-memory one; its IAM driver seed holds them and no deletion removes them)
+   * returns none.
+   */
+  listRestrictionsTargeting(
+    resourceKind: ResourceKind,
+    resourceIds: readonly string[],
+  ): Promise<readonly Readonly<Restriction>[]>;
 }
 
 export interface IAMPolicyRepository extends IAMPolicyReadRepository {
@@ -1287,12 +1339,30 @@ export interface PluginDeploymentWarning {
   readonly pluginId: string;
 }
 
+/**
+ * Why a runtime startup model check failed, classified by the runtime from a
+ * closed vocabulary. It never carries native output, provider responses or
+ * credentials: `detail` is a short token such as `exit-1` or `rate_limit`.
+ */
+export interface RuntimeFailureCause {
+  readonly kind: "PROCESS_EXIT" | "PROBE_STATUS" | "INVALID_OUTPUT" | "WRAPPER_ERROR";
+  readonly detail?: string;
+}
+
 export interface RuntimeFailureEvidence {
   readonly component: string;
   readonly check: string;
   readonly checkedAt: string;
   readonly code: string;
+  /** Present only with code MODEL_PROBE_FAILED. */
+  readonly cause?: RuntimeFailureCause;
 }
+
+/**
+ * Why an unready revision is still pending, when Compute knows: its Pods cannot be
+ * scheduled, or its workloads are ready but the workspace node has not connected.
+ */
+export type ComputePendingReason = "WORKLOAD_UNSCHEDULABLE" | "WORKSPACE_NODE_PENDING";
 
 export interface ComputeReadiness extends Scope {
   readonly namespaceId: string;
@@ -1301,6 +1371,8 @@ export interface ComputeReadiness extends Scope {
   readonly ready: boolean;
   readonly warnings?: readonly PluginDeploymentWarning[];
   readonly runtimeFailure?: RuntimeFailureEvidence;
+  /** Only on an unready observation; the worker ignores unknown values. */
+  readonly pendingReason?: ComputePendingReason;
   readonly repositoryCredentialMaterialMissing?: readonly RepositoryCredentialMaterialRef[];
 }
 

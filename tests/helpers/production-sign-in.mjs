@@ -217,7 +217,10 @@ function resolveSettings(settings, secrets) {
  * Composes the production API from rendered API Pod settings, parsing the sign-in and
  * native-admin names the way apps/controller/src/server.mjs does.
  */
-export async function composeProductionSignIn(context, { databaseUrl, settings, secrets, logger }) {
+export async function composeProductionSignIn(
+  context,
+  { databaseUrl, settings, secrets, logger, metrics, passwordSlowLaneFloors },
+) {
   const environment = resolveSettings(settings, secrets);
   // The chart mounts the gateway service key Secret at this path; use a private file.
   const keyDirectory = await privateBootstrapDirectory(context, "openclaw-gateway-key-");
@@ -255,9 +258,12 @@ export async function composeProductionSignIn(context, { databaseUrl, settings, 
         }
       : {}),
     ...(logger === undefined ? {} : { logger }),
+    ...(metrics === undefined ? {} : { metrics }),
+    ...(passwordSlowLaneFloors === undefined ? {} : { passwordSlowLaneFloors }),
     drivers: {
       installation,
       defaultPresets: runtime.defaultPresets,
+      bundledPresetVersions: runtime.bundledPresetVersions,
       computeDriver: passiveComputeDriver(installation.drivers.compute.id),
       configurationDriver: createTestConfigurationDriver({
         id: installation.drivers.configuration.id,
@@ -331,14 +337,17 @@ export async function installationRoles(state, pool) {
 /**
  * A local stand-in for github.com and api.github.com. The controller's fixed provider
  * endpoints are redirected here by mocking fetch, as postgres-github-sign-in.test.mjs does.
- * The authorization code names the GitHub subject: `subject-<id>`. Modes: "up", "error"
- * (503) and "hang" (never answers).
+ * The authorization code names the GitHub subject: `subject-<id>`; its login is
+ * `fixture-<id>`. Modes: "up", "error" (503) and "hang" (never answers). Set
+ * `fixture.membership(path, subject)` to answer the allowlist's membership lookups with
+ * "active", "pending" or an HTTP status; `fixture.paths` records each request path.
  */
 export async function startFakeGitHub(t) {
   const server = createServer();
-  const fixture = { mode: "up", requests: 0 };
+  const fixture = { mode: "up", requests: 0, paths: [], membership: undefined };
   server.on("request", async (request, response) => {
     fixture.requests += 1;
+    fixture.paths.push(request.url);
     if (fixture.mode === "hang") {
       return;
     }
@@ -371,6 +380,15 @@ export async function startFakeGitHub(t) {
         return;
       }
       response.end(JSON.stringify({ id: Number(subject[1]), login: `fixture-${subject[1]}` }));
+    } else if (fixture.membership !== undefined) {
+      const subject = /^Bearer ghu_fixture_([0-9]+)$/.exec(request.headers.authorization ?? "");
+      const answer = subject === null ? 401 : fixture.membership(request.url, Number(subject[1]));
+      if (typeof answer === "number") {
+        response.writeHead(answer);
+        response.end("{}");
+        return;
+      }
+      response.end(JSON.stringify({ state: answer, role: "member" }));
     } else {
       response.writeHead(404);
       response.end("{}");

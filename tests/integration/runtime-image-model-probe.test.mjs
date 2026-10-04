@@ -14,6 +14,7 @@ import {
 import { promisify } from "node:util";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
+import { createModelProbeCertificates } from "../helpers/runtime-model-probe-certificates.mjs";
 import {
   GATEWAY_READINESS_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT,
@@ -81,64 +82,11 @@ async function createProbeMaterial(t, configuration) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = (name) => join(directory, name);
   // Sign a leaf with a private CA, as a provider certificate would be.
-  await execute("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-days",
-    "2",
-    "-subj",
-    "/CN=oce-runtime-model-probe-ca",
-    "-addext",
-    "basicConstraints=critical,CA:TRUE",
-    "-addext",
-    "keyUsage=critical,keyCertSign",
-    "-keyout",
-    file("ca-key.pem"),
-    "-out",
-    file("ca.pem"),
-  ]);
-  await execute("openssl", [
-    "req",
-    "-newkey",
-    "rsa:2048",
-    "-nodes",
-    "-subj",
-    "/CN=api.openai.com",
-    "-keyout",
-    file("key.pem"),
-    "-out",
-    file("leaf.csr"),
-  ]);
-  await writeFile(
-    file("leaf.ext"),
-    [
-      "subjectAltName=DNS:api.openai.com",
-      "basicConstraints=critical,CA:FALSE",
-      "extendedKeyUsage=serverAuth",
-      "keyUsage=critical,digitalSignature,keyEncipherment",
-      "",
-    ].join("\n"),
-  );
-  await execute("openssl", [
-    "x509",
-    "-req",
-    "-in",
-    file("leaf.csr"),
-    "-CA",
-    file("ca.pem"),
-    "-CAkey",
-    file("ca-key.pem"),
-    "-CAcreateserial",
-    "-days",
-    "2",
-    "-extfile",
-    file("leaf.ext"),
-    "-out",
-    file("cert.pem"),
-  ]);
+  await createModelProbeCertificates({
+    directory,
+    caName: "oce-runtime-model-probe-ca",
+    run: execute,
+  });
   await rm(file("ca-key.pem"));
   // Only the provider host resolves, to the sidecar; every other name fails at once.
   await writeFile(file("hosts"), "127.0.0.1 localhost\n127.0.0.1 api.openai.com\n");
@@ -469,12 +417,11 @@ test(
   },
 );
 
-// Other work in the container takes most of the Gateway's 500m quota, as a
-// runaway process would: the probe cannot finish its local work within its
-// CPU budget, waits for CPU most of the time, and reports that specific
-// failure at its cap, which the worker turns into a prompt deployment failure.
+// CPU contention may delay the probe past its cap, but faster hosts can still
+// complete the real turn. Require correct settlement in either case. The
+// generated-wrapper conformance tests exercise cap classification deterministically.
 test(
-  "runtime image embedded Gateway reports a CPU-starved model probe at its cap",
+  "runtime image embedded Gateway settles its model probe under CPU contention",
   { ...imageTestOptions, timeout: 900_000 },
   async (t) => {
     let hogs;
@@ -522,14 +469,27 @@ test(
       assert.equal(stress.started, 8, "all eight owned CPU hogs reached their loops");
       assert.ok(probe, `the wrapper logged its probe${detail}`);
       assert.equal(probe.capMs, 110_000, `cap from the 500m cgroup limit${detail}`);
-      assert.ok(probe.elapsedMs >= probe.capMs, `the probe reached its cap${detail}`);
       assert.notEqual(probe.cpuWaitMs, null, `the cgroup reported CPU waiting${detail}`);
       assert.ok(probe.cpuWaitMs > probe.elapsedMs / 4, `mostly waiting for CPU${detail}`);
-      assert.equal(runtimeFailure(events), "MODEL_PROBE_CPU_STARVED", detail);
-      assert.equal(phaseAt(phases, "model-probe")?.outcome, "failed", detail);
-      assert.equal(phaseAt(phases, "native-spawn"), undefined, detail);
+      if (probe.code === "READY") {
+        assert.equal(runtimeFailure(events), undefined, detail);
+        assert.ok(
+          events.some((event) => event.event === "turn-answered"),
+          detail,
+        );
+        assert.equal(phaseAt(phases, "model-probe")?.outcome, "ok", detail);
+        assert.equal(phaseAt(phases, "native-spawn")?.outcome, "ok", detail);
+        assert.ok(events.some(observed("ready", true)), detail);
+        assert.ok(events.some(observed("plugin", "ready")), detail);
+      } else {
+        assert.equal(probe.code, "MODEL_PROBE_CPU_STARVED", detail);
+        assert.ok(probe.elapsedMs >= probe.capMs, `the probe reached its cap${detail}`);
+        assert.equal(runtimeFailure(events), "MODEL_PROBE_CPU_STARVED", detail);
+        assert.equal(phaseAt(phases, "model-probe")?.outcome, "failed", detail);
+        assert.equal(phaseAt(phases, "native-spawn"), undefined, detail);
+      }
       t.diagnostic(
-        `CPU-starved probe at --cpus ${constrainedGatewayCpuLimit}: ${JSON.stringify(probe)}`,
+        `CPU-contended probe at --cpus ${constrainedGatewayCpuLimit}: ${JSON.stringify(probe)}`,
       );
     } catch (error) {
       error.openclawCiDiagnostic = modelProbeDiagnostic(run.snapshot, stress, "classification");

@@ -57,10 +57,19 @@ jobs:
             reason=bootstrap_git_inspection_failed
             parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
             reason=bootstrap_checkout_mismatch
-            [ "$parents" = "$base $head" ] || return 1
+            [[ $parents =~ ^([0-9a-f]{40}|[0-9a-f]{64})\ ([0-9a-f]{40}|[0-9a-f]{64})$ ]] || return 1
+            [ "${BASH_REMATCH[2]}" = "$head" ] || return 1
+            merge_base=${BASH_REMATCH[1]}
             reason=bootstrap_git_inspection_failed
-            git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
-            entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            git cat-file -e "$merge_base^{commit}" && git cat-file -e "$head^{commit}" || return 1
+            # GitHub merges onto the base tip at merge time; base.sha lags it
+            # when the base moved after the push and is then not fetched.
+            reason=bootstrap_checkout_mismatch
+            if [ "$base" != "$merge_base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git merge-base --is-ancestor "$base" "$merge_base" || return 1
+            fi
+            reason=bootstrap_git_inspection_failed
+            entry=$(git ls-tree "$merge_base" -- scripts/ci/impact.mjs) || return 1
             reason=bootstrap_policy_unavailable
             [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
             reason=bootstrap_git_inspection_failed
@@ -178,22 +187,34 @@ jobs:
       - name: Check and build documentation
         run: pnpm docs:install && pnpm docs:check && pnpm docs:build
 
-  checks-baseline:
-    name: Checks and Conformance
+  affected-packages:
+    name: Affected Packages (advisory)
     needs: impact
-    if: ${{ needs.impact.outputs.mode == 'full' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 25
+    if: ${{ github.event_name == 'pull_request' && needs.impact.outputs.mode == 'full' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 2
           persist-credentials: false
-      - uses: ./.github/actions/run-ci-lane
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          lane: checks-baseline
-          profile: baseline
           node-version: ${{ env.NODE_VERSION }}
-          artifact-prefix: ci-results
+      - uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: "off"
+      - name: Report affected workspace packages
+        if: ${{ always() }}
+        run: |
+          # Print to the log too: step summaries are not readable through the API.
+          report=$(node scripts/ci/pnpm-impact.mjs --summary) || report='Affected workspace packages: unavailable.'
+          printf '%s\n' "$report"
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY" || true
+          fi
 
   pr-safe:
     name: ${{ matrix.title }}
@@ -206,6 +227,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The baseline tests are split in two, balanced by measured file
+          # durations; only part 1 runs the lint, format, docs and type checks.
+          - lane: checks-baseline-1
+            title: Checks and Conformance 1
+            profile: baseline
+            timeout: 25
+          - lane: checks-baseline-2
+            title: Checks and Conformance 2
+            profile: baseline
+            timeout: 25
           - lane: checks-browser
             title: Console Browser
             profile: baseline
@@ -230,6 +261,12 @@ jobs:
             title: Image Model Probes
             profile: images
             timeout: 25
+          # Split from Images and Packaging, which it would otherwise lengthen
+          # by about five minutes; it needs the k3d tools for its seccomp profile.
+          - lane: images-runtime-startup
+            title: Image Runtime Startup
+            profile: full
+            timeout: 30
           - lane: k3d-fixture-configuration
             title: k3d Fixture and Configuration
             profile: k3d
@@ -296,6 +333,61 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           artifact-prefix: ci-results
 
+  # Real Local Setup install on every PR and merge, with a stand-in model
+  # provider and no secrets. Deliberately not a CI Required dependency yet.
+  first-agent-smoke:
+    name: First Agent Smoke
+    needs: impact
+    if: ${{ needs.impact.outputs.mode == 'full' }}
+    # Local Setup refuses gateway trust unless NetworkPolicies are enforced,
+    # which needs the bridge netfilter support of this runner kernel.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # The runner starts with about 90 GB free; the smoke uses far less, so it
+      # skips the SDK removal the large image lanes need.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up CI tools
+        run: bash scripts/ci/setup-tools.sh k3d
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Enable Kubernetes bridge packet filtering
+        run: |
+          if [[ ! -e /proc/sys/net/bridge/bridge-nf-call-iptables ]]; then
+            sudo modprobe br_netfilter
+          fi
+          sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+      - name: Build OCC CLI
+        run: go build -trimpath -o bin/occ ./cmd/occ
+      - name: Expose image cache credentials
+        id: image-cache
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) {
+              throw new Error('GitHub Actions cache credentials are unavailable');
+            }
+            core.setSecret(token);
+            core.setOutput('token', token);
+            core.setOutput('url', url);
+      - name: Build checkout images
+        env:
+          ACTIONS_RUNTIME_TOKEN: ${{ steps.image-cache.outputs.token }}
+          ACTIONS_RESULTS_URL: ${{ steps.image-cache.outputs.url }}
+        run: node scripts/ci/first-agent-smoke.mjs images
+      - name: Install, deploy, chat, stop and start
+        run: node scripts/ci/first-agent-smoke.mjs run
+
   ci-required:
     name: CI Required
     runs-on: ubuntu-22.04
@@ -303,7 +395,6 @@ jobs:
       - impact
       - audit
       - docs-checks
-      - checks-baseline
       - pr-safe
       - runtime-image-fixture
     if: always()
@@ -340,10 +431,19 @@ jobs:
             reason=bootstrap_git_inspection_failed
             parents=$(git show -s --format=%P "$GITHUB_SHA") || return 1
             reason=bootstrap_checkout_mismatch
-            [ "$parents" = "$base $head" ] || return 1
+            [[ $parents =~ ^([0-9a-f]{40}|[0-9a-f]{64})\ ([0-9a-f]{40}|[0-9a-f]{64})$ ]] || return 1
+            [ "${BASH_REMATCH[2]}" = "$head" ] || return 1
+            merge_base=${BASH_REMATCH[1]}
             reason=bootstrap_git_inspection_failed
-            git cat-file -e "$base^{commit}" && git cat-file -e "$head^{commit}" || return 1
-            entry=$(git ls-tree "$base" -- scripts/ci/impact.mjs) || return 1
+            git cat-file -e "$merge_base^{commit}" && git cat-file -e "$head^{commit}" || return 1
+            # GitHub merges onto the base tip at merge time; base.sha lags it
+            # when the base moved after the push and is then not fetched.
+            reason=bootstrap_checkout_mismatch
+            if [ "$base" != "$merge_base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              git merge-base --is-ancestor "$base" "$merge_base" || return 1
+            fi
+            reason=bootstrap_git_inspection_failed
+            entry=$(git ls-tree "$merge_base" -- scripts/ci/impact.mjs) || return 1
             reason=bootstrap_policy_unavailable
             [[ $entry =~ ^100644\ blob\ ([0-9a-f]{40}|[0-9a-f]{64})[[:space:]]scripts/ci/impact\.mjs$ ]] || return 1
             reason=bootstrap_git_inspection_failed

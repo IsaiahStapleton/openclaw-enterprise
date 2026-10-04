@@ -21,25 +21,40 @@ export const RUNTIME_WRAPPER_COMMAND: readonly string[] = Object.freeze([
   "-e",
 ]);
 
+// Setup initContainers (workspace, private state, repository material) also run
+// Node, which as PID 1 ignored SIGTERM, so a Pod deleted mid-setup waited for
+// SIGKILL. Under tini Node takes the default SIGTERM action; a stopped setup
+// keeps its failing exit status.
+export const SETUP_WRAPPER_COMMAND: readonly string[] = Object.freeze([
+  "/usr/bin/tini",
+  "-s",
+  "--",
+  "node",
+  "-e",
+]);
+
 export const PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN = "openclaw-plugin-runtime/app-server-token/v1";
 
 const STARTUP_PHASE_EVENT = "runtime.startup_phase";
 
 // One stderr JSON line per startup phase, for deploy-time measurement. Callers
 // pass fixed phase names only: never provider, model, credential or path values.
+// A failed phase may add a fixed upper-case cause code, which the Collector exports.
 // Date.now() keeps this usable in every wrapper, including stubbed test contexts.
-function startupPhaseHelper(container: "gateway" | "agent"): string {
+export function startupPhaseHelper(container: "gateway" | "agent"): string {
   return String.raw`
 const startupPhaseOrigin = Date.now();
-function logStartupPhase(phase, startedAt, outcome = "ok") {
+function logStartupPhase(phase, startedAt, outcome = "ok", code) {
   const now = Date.now();
+  const failed = outcome !== "ok";
   console.error(JSON.stringify({
     event: ${JSON.stringify(STARTUP_PHASE_EVENT)},
     container: ${JSON.stringify(container)},
     phase,
-    outcome: outcome === "ok" ? "ok" : "failed",
+    outcome: failed ? "failed" : "ok",
     ms: now - startedAt,
     sinceStartMs: now - startupPhaseOrigin,
+    ...(failed && typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? { code } : {}),
   }));
 }
 async function timeStartupPhase(phase, run) {
@@ -92,7 +107,7 @@ const {
   timingSafeEqual: pluginTimingSafeEqual,
   randomUUID: pluginRandomUUID,
 } = require("node:crypto");
-const { spawn: pluginSpawn, spawnSync: pluginSpawnSync } = require("node:child_process");
+const { spawnSync: pluginSpawnSync } = require("node:child_process");
 const { createServer: pluginCreateServer } = require("node:http");
 const { isDeepStrictEqual: pluginDeepEqual } = require("node:util");
 
@@ -259,7 +274,7 @@ function publishPluginRuntimeStatus(report) {
   };
 }
 
-function publishRuntimeFailure(check, code) {
+function publishRuntimeFailure(check, code, cause) {
   if (runtimeStatusPort() === undefined) return;
   requireNonEmptyString(check, "Runtime failure check");
   if (!RUNTIME_DIAGNOSTIC_CODES.has(code)) {
@@ -270,6 +285,7 @@ function publishRuntimeFailure(check, code) {
     check,
     checkedAt: new Date().toISOString(),
     code,
+    ...(cause === undefined ? {} : { cause }),
   };
 }
 
@@ -325,63 +341,91 @@ function armTimer(callback, timeoutMs) {
   return timer;
 }
 
-function runNativeRuntimeJson(args, timeoutMs, abortSignal, maxBytes = 65536) {
+// Connect-error codes with which the Gateway refuses this CLI's own credentials.
+// They follow from the admitted configuration (D381: no gateway.auth.password,
+// so the in-Pod CLI connects with none), so every later call is refused too.
+// Refusals that can clear by themselves are excluded: rate limiting, pairing,
+// device identity, and a token mismatch, which OpenClaw retries with a device token.
+// AUTH_UNAUTHORIZED is OpenClaw's catch-all; the one transient reason behind it
+// (a failed local interface check) applies only to a non-loopback client, and
+// this CLI always connects over 127.0.0.1. Re-check the set if that changes.
+const GATEWAY_AUTH_REFUSAL_CODES = new Set([
+  "AUTH_UNAUTHORIZED",
+  "AUTH_TOKEN_MISSING",
+  "AUTH_TOKEN_NOT_CONFIGURED",
+  "AUTH_PASSWORD_MISSING",
+  "AUTH_PASSWORD_MISMATCH",
+  "AUTH_PASSWORD_NOT_CONFIGURED",
+]);
+
+// OpenClaw's internal reason for a refusal, such as trusted_proxy_untrusted_source,
+// kept only when it is a plain token so it is safe to log.
+function gatewayAuthRefusalReason(error) {
+  const reason = error.details.authReason;
+  return typeof reason === "string" && /^[a-z0-9_]{1,64}$/u.test(reason) ? reason : undefined;
+}
+
+function gatewayRefusedAuthentication(gatewayRuntime, error) {
+  return (
+    typeof gatewayRuntime?.isGatewayClientRequestError === "function" &&
+    gatewayRuntime.isGatewayClientRequestError(error) === true &&
+    error.retryable !== true &&
+    isPlainObject(error.details) &&
+    GATEWAY_AUTH_REFUSAL_CODES.has(error.details.code)
+  );
+}
+
+// Query the running Gateway through OpenClaw's public SDK. Starting a CLI here
+// also starts its launcher/respawn lifecycle; killing that launcher cannot bound
+// a probe whose descendant still owns stdout.
+function callNativeGateway(method, params, timeoutMs, abortSignal, maxBytes = 65536) {
   return new Promise((resolve) => {
-    const child = pluginSpawn("node", ["/app/openclaw.mjs", ...args], {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    let stdout = "";
-    let oversized = false;
-    let failed = false;
-    let aborted = false;
-    let killTimer;
+    const controller = new AbortController();
     let settled = false;
+    let timer;
+    let gatewayRuntime;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimer(timer);
-      if (killTimer !== undefined) clearTimer(killTimer);
-      abortSignal?.removeEventListener?.("abort", abortChild);
+      abortSignal?.removeEventListener?.("abort", cancel);
       resolve(result);
     };
-    const abortChild = () => {
-      if (settled || aborted) return;
-      aborted = true;
-      child.kill("SIGTERM");
-      killTimer = armTimer(() => child.kill("SIGKILL"), 1000);
+    const cancel = () => {
+      controller.abort();
+      finish({ ok: false, code: "UNAVAILABLE" });
     };
-    const timer = armTimer(abortChild, timeoutMs);
-    if (abortSignal?.aborted) abortChild();
-    else abortSignal?.addEventListener?.("abort", abortChild, { once: true });
-    child.stdout.on("data", (chunk) => {
-      if (oversized) return;
-      stdout += chunk.toString("utf8");
-      if (Buffer.byteLength(stdout, "utf8") > maxBytes) {
-        oversized = true;
-        child.kill("SIGKILL");
-      }
-    });
-    child.on("error", () => {
-      failed = true;
-    });
-    child.on("close", (code, signal) => {
-      if (oversized) {
+    if (abortSignal?.aborted) {
+      cancel();
+      return;
+    }
+    timer = armTimer(cancel, timeoutMs);
+    abortSignal?.addEventListener?.("abort", cancel, { once: true });
+    Promise.resolve().then(async () => {
+      if (settled) return;
+      gatewayRuntime = require("openclaw/plugin-sdk/gateway-runtime");
+      const value = await gatewayRuntime.callGatewayFromCli(method, { json: true, timeout: String(timeoutMs) }, params, {
+        progress: false,
+        signal: controller.signal,
+      });
+      if (settled) return;
+      if (Buffer.byteLength(JSON.stringify(value), "utf8") > maxBytes) {
         finish({ ok: false, code: "INCOMPATIBLE_RESPONSE" });
         return;
       }
-      if (aborted || signal === "SIGTERM" || signal === "SIGKILL") {
+      finish({ ok: true, value });
+    }).catch((error) => {
+      if (gatewayRuntime?.isGatewayTransportError(error)) {
         finish({ ok: false, code: "UNAVAILABLE" });
         return;
       }
-      if (failed || code !== 0) {
-        finish({ ok: false, code: "PROBE_FAILED" });
-        return;
-      }
-      try {
-        finish({ ok: true, value: JSON.parse(stdout) });
-      } catch {
-        finish({ ok: false, code: "INCOMPATIBLE_RESPONSE" });
-      }
+      finish({
+        ok: false,
+        code: "PROBE_FAILED",
+        ...(gatewayRefusedAuthentication(gatewayRuntime, error)
+          ? { authenticationRefused: true, authenticationRefusalReason: gatewayAuthRefusalReason(error) }
+          : {}),
+      });
     });
   });
 }
@@ -449,24 +493,6 @@ function connectivityCheckFromConnected(connected, checkedAt) {
 }
 
 function slackChecksFromStatusPayload(payload, checkedAt) {
-  if (payload?.configOnly === true) {
-    if (!Array.isArray(payload.configuredChannels)) {
-      return unknownSlackChecks(checkedAt, "INCOMPATIBLE_RESPONSE");
-    }
-    const configured = payload.configuredChannels.includes("slack");
-    if (configured !== true) {
-      return [
-        runtimeDiagnosticCheck("configuration", "failed", checkedAt, "NOT_CONFIGURED"),
-        runtimeDiagnosticCheck("authentication", "unknown", checkedAt),
-        runtimeDiagnosticCheck("connectivity", "unknown", checkedAt),
-      ];
-    }
-    return [
-      runtimeDiagnosticCheck("configuration", "succeeded", checkedAt),
-      runtimeDiagnosticCheck("authentication", "unknown", checkedAt, "UNAVAILABLE"),
-      runtimeDiagnosticCheck("connectivity", "unknown", checkedAt, "UNAVAILABLE"),
-    ];
-  }
   const channelSummary = isPlainObject(payload?.channels) ? payload.channels.slack : undefined;
   const accountsByChannel = isPlainObject(payload?.channelAccounts) ? payload.channelAccounts : undefined;
   const defaultAccounts = isPlainObject(payload?.channelDefaultAccountId)
@@ -511,8 +537,9 @@ function slackChecksFromStatusPayload(payload, checkedAt) {
 
 async function slackChannelDiagnosticChecks(checkedAt, abortSignal) {
   if (runtimeStatusContainer() !== "gateway") return [];
-  const result = await runNativeRuntimeJson(
-    ["channels", "status", "--channel", "slack", "--json", "--probe", "--timeout", "5000"],
+  const result = await callNativeGateway(
+    "channels.status",
+    { channel: "slack", probe: true, timeoutMs: 5000 },
     6000,
     abortSignal,
   );
@@ -709,11 +736,30 @@ function objectAtPath(root, path) {
   return isPlainObject(current) ? current : undefined;
 }
 
-function isManagedOpenClawPluginEntry(value) {
+function isManagedOpenClawPluginEntry(value, pluginId) {
+  if (!isPlainObject(value) || typeof value.enabled !== "boolean") return false;
+  const keys = Object.keys(value);
+  if (keys.length === 1) return true;
+  const managedConfig = pluginRuntimeTranslator.openClawManagedEntryConfig(pluginId);
   return (
-    isPlainObject(value) &&
-    typeof value.enabled === "boolean" &&
-    Object.keys(value).length === 1
+    keys.length === 2 &&
+    hasOwn(value, "config") &&
+    managedConfig !== undefined &&
+    pluginDeepEqual(value.config, managedConfig)
+  );
+}
+
+// The Gateway serves browsers through an OCC-authenticated public origin only
+// when native admin routes that exact origin to it with trusted-proxy auth.
+function gatewayServesPublicOrigin(config) {
+  const gateway = config?.gateway;
+  const raw = gateway?.publicOrigin;
+  return (
+    typeof raw === "string" &&
+    /^https:\/\/[a-z0-9.-]+(:[0-9]{1,5})?$/.test(raw) &&
+    gateway.auth?.mode === "trusted-proxy" &&
+    Array.isArray(gateway.controlUi?.allowedOrigins) &&
+    gateway.controlUi.allowedOrigins.includes(raw)
   );
 }
 
@@ -781,8 +827,8 @@ function assertNoOpenClawPluginConfigConflict(base, overlay, options = {}) {
     ) {
       if (
         options.allowManagedOpenClawPluginReplacement === true &&
-        isManagedOpenClawPluginEntry(baseEntries[pluginId]) &&
-        isManagedOpenClawPluginEntry(overlayEntries[pluginId])
+        isManagedOpenClawPluginEntry(baseEntries[pluginId], pluginId) &&
+        isManagedOpenClawPluginEntry(overlayEntries[pluginId], pluginId)
       ) {
         continue;
       }
@@ -813,7 +859,7 @@ function mergeOpenClawPluginConfiguration(base, overlay, options = {}) {
   const overlayEntries = objectAtPath(overlay, ["plugins", "entries"]);
   if (overlayEntries !== undefined) {
     const disabledManagedTools = Object.entries(overlayEntries)
-      .filter(([pluginId, entry]) => pluginId !== "codex" && isManagedOpenClawPluginEntry(entry) && entry.enabled === false)
+      .filter(([pluginId, entry]) => pluginId !== "codex" && isManagedOpenClawPluginEntry(entry, pluginId) && entry.enabled === false)
       .map(([pluginId]) => pluginId);
     if (disabledManagedTools.length > 0 && Array.isArray(next.tools?.alsoAllow)) {
       next.tools.alsoAllow = next.tools.alsoAllow.filter((tool) => !disabledManagedTools.includes(tool));
@@ -917,14 +963,25 @@ async function waitForPeerPluginRuntimeStatus() {
   }
 }
 
+function samePluginIds(left, right) {
+  const leftIds = new Set(left ?? []);
+  const rightIds = new Set(right ?? []);
+  return leftIds.size === rightIds.size && [...leftIds].every((id) => rightIds.has(id));
+}
+
 function samePluginFailures(left, right) {
   return JSON.stringify([...(left ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId))) ===
     JSON.stringify([...(right ?? [])].sort((a, b) => a.pluginId.localeCompare(b.pluginId)));
 }
 
-function openClawPluginConfiguration(runtime, failures = []) {
+function openClawPluginConfiguration(runtime, failures = [], base) {
   if (runtime.manifest?.kind === "openclaw") {
-    return pluginRuntimeTranslator.openClawRuntimeArtifact(runtime.manifest.selections ?? {}, failures, runtime.manifest.pluginApprovers).configuration;
+    return pluginRuntimeTranslator.openClawRuntimeArtifact(
+      runtime.manifest.selections ?? {},
+      failures,
+      runtime.manifest.pluginApprovers,
+      gatewayServesPublicOrigin(base),
+    ).configuration;
   }
   if (runtime.manifest?.kind === "codex") {
     return pluginRuntimeTranslator.codexOpenClawConfiguration(
@@ -987,9 +1044,9 @@ function holdPluginApproverConfigurationFailure(error) {
 }
 
 function applyOpenClawPluginConfiguration(runtime, failures = [], options = {}) {
-  const overlay = openClawPluginConfiguration(runtime, failures);
-  if (overlay === undefined) return;
   const base = readOpenClawConfig();
+  const overlay = openClawPluginConfiguration(runtime, failures, base);
+  if (overlay === undefined) return;
   if (objectAtPath(overlay, ["approvals", "plugin", "slack"]) !== undefined) {
     const slack = objectAtPath(base, ["channels", "slack"]);
     if (slack === undefined || slack.enabled === false) {
@@ -1699,9 +1756,59 @@ async function installCodexSelectionSet(selections, failures = []) {
   return { successfulPluginIds, failures: failed };
 }
 
+// Codex serves the curated remote catalog only to ChatGPT logins and rejects an
+// API-key login ("api key auth is not supported"), so retrying cannot succeed.
+// Disable every enabled selection as an authentication requirement and turn the
+// plugin features off instead of holding the Harness unready.
+async function disableCodexSelectionsWithoutChatGptLogin(selections, failures = []) {
+  const failed = [...failures];
+  const failedIds = pluginFailureIds(failed);
+  for (const pluginId of enabledCodexSelectionIds(selections)) {
+    if (failedIds.has(pluginId)) continue;
+    const diagnostic = pluginDiagnostic(pluginId, "PLUGIN_AUTH_REQUIRED");
+    if (!pluginBestEffortEnabled()) {
+      throw new PluginTerminalDiagnosticError(
+        diagnostic,
+        "Codex plugins require a ChatGPT login; API-key authentication cannot install them.",
+      );
+    }
+    failed.push(diagnostic);
+    failedIds.add(pluginId);
+  }
+  if (Object.keys(selections).length > 0) {
+    const configuration = {
+      features: { apps: false, plugins: false, remote_plugin: false },
+      apps: { _default: { enabled: false } },
+    };
+    // The app-server may still be starting: retry like the ChatGPT install path.
+    const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
+    let lastError = new Error("Codex plugin disable deadline expired before the first attempt.");
+    while (Date.now() < deadline) {
+      try {
+        await writeCodexAppConfiguration(configuration);
+        verifyCodexAppConfiguration(configuration, await readCodexAppConfiguration());
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        await pluginRuntimeDelay(250);
+      }
+    }
+    if (lastError !== undefined) {
+      const failure = new Error("Codex plugin disable did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+      failure.startupCode = codexPluginStartupFailureCode(lastError);
+      throw failure;
+    }
+  }
+  return { successfulPluginIds: [], failures: failed };
+}
+
 async function installCodexPlugins(runtime, failures = []) {
   assertCodexPluginRuntime(runtime);
   const selections = runtime.manifest.selections ?? {};
+  if (process.env.CODEX_LOGIN_MODE === "api_key") {
+    return disableCodexSelectionsWithoutChatGptLogin(selections, failures);
+  }
   const deadline = Date.now() + CODEX_PLUGIN_RUNTIME_INSTALL_DEADLINE_MS;
   let lastError = new Error("Codex plugin installation deadline expired before the first attempt.");
   let result = { successfulPluginIds: [], failures };
@@ -1716,18 +1823,43 @@ async function installCodexPlugins(runtime, failures = []) {
     }
   }
   if (lastError !== undefined) {
-    throw new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+    const failure = new Error("Codex plugin installation did not reach readiness: " + pluginRuntimeErrorMessage(lastError));
+    failure.startupCode = codexPluginStartupFailureCode(lastError);
+    throw failure;
   }
   return result;
+}
+
+// A fixed cause code for remote logs; the message, which can carry native
+// Codex error text, stays in local container output.
+function codexPluginStartupFailureCode(error) {
+  switch (pluginRuntimeErrorMessage(error)) {
+    case "Codex plugin catalog did not contain the selected plugin.":
+      return "PLUGIN_NOT_IN_CATALOG";
+    case "Codex plugin detail did not contain the selected plugin.":
+      return "PLUGIN_DETAIL_MISSING";
+    default:
+      return "PLUGIN_NOT_READY";
+  }
 }
 `;
 
 // Holds unready until an explicit restart; readiness polls never submit model calls.
+// A failed probe's cause is a closed kind and a fixed token, never native output,
+// provider text or a credential; the controller drops a cause outside that vocabulary.
 const AUTH_PROBE_FAILURE_HELPER = String.raw`
-function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
-  publishRuntimeFailure(check, code);
+function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE", cause) {
+  publishRuntimeFailure(check, code, cause);
   console.error("Harness model authentication probe failed.");
   setInterval(() => {}, 3600000);
+}
+function probeFailure(kind, detail) {
+  return { code: "MODEL_PROBE_FAILED", cause: detail === undefined ? { kind } : { kind, detail } };
+}
+function probeExitFailure({ error, status, signal }) {
+  return probeFailure("PROCESS_EXIT", /^E[A-Z0-9]{1,15}$/.test(error?.code) ? "error-" + error.code
+    : Number.isInteger(status) && status > 0 && status < 1000 ? "exit-" + status
+    : /^SIG[A-Z0-9]{1,10}$/.test(signal) ? "signal-" + signal : undefined);
 }
 `;
 
@@ -1747,22 +1879,60 @@ function holdFailedAuthentication(check = "model-probe", code = "UNAVAILABLE") {
 // without pressure accounting, cpu.stat throttled_usec (throttling only).
 // OpenClaw buckets provider 401/403 and invalid-key responses as "auth". Only
 // that deterministic rejection fails the deployment before its deadline.
+// The turn allows 256 output tokens. A reasoning model spends output tokens on
+// thinking before any text; at 16 it returned none and the probe failed.
 // The Gateway times its model-probe phase from wrapper start: it is the first step.
 // Generated code stays compact: the Gateway program is near the exec limit.
 const OPENCLAW_AUTH_PROBE_HELPERS = String.raw`
 ${AUTH_PROBE_FAILURE_HELPER}
-function probeOpenClawAuthenticationFailureCode() {
+function probeOpenClawAuthenticationFailure() {
   const fs = require("node:fs");
   const cgroup = (name) => { try { return fs.readFileSync("/sys/fs/cgroup/" + name, "utf8"); } catch { return ""; } };
   const [quota, period] = cgroup("cpu.max").split(" ");
   const capMs = Math.min(600000, 20000 + Math.ceil(45000 / Math.min(1, quota / period || 1)));
   const read = (name) => (name === "cpu.pressure" ? /^some .*total=(\d+)/m : /throttled_usec (\d+)/).exec(cgroup(name))?.[1] / 1000;
   const startedAt = Date.now(), pressure = read("cpu.pressure"), metric = Number.isFinite(pressure) ? "cpu.pressure" : "cpu.stat", before = metric === "cpu.pressure" ? pressure : read(metric);
-  let code = runOpenClawAuthenticationProbe(fs, capMs);
+  let code = runOpenClawAuthenticationProbe(fs, capMs), cause;
+  if (typeof code === "object") ({ code, cause } = code);
   const elapsedMs = Date.now() - startedAt, after = read(metric), cpuWaitMs = Math.round(Number.isFinite(after) && after >= before ? after - before : NaN);
   if (code === "CAP") code = cpuWaitMs > elapsedMs / 4 ? "MODEL_PROBE_CPU_STARVED" : "MODEL_PROBE_TIMEOUT";
-  console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY" }));
-  return code;
+  console.error(JSON.stringify({ event: "openclaw.model_probe", elapsedMs, capMs, cpuWaitMs, code: code ?? "READY", cause }));
+  return code === undefined ? undefined : { code, cause };
+}
+
+// The full probe needs 10-20 s of local work before its model request. A
+// rejected credential is found first with one empty request to the default
+// endpoint, sent with the credential exactly as OpenClaw sends it: the provider
+// authenticates before validating, so only 401 means rejection. Anything else
+// (400, an error, the 10 s limit) proves nothing and the full probe decides,
+// so acceptance still needs a real model turn. A configured endpoint, API,
+// headers or request option other than allowPrivateNetwork, a model whose API or
+// endpoint differs from the provider's, or an Anthropic setup token, skips this
+// request. The request goes to the
+// path of the configured API: a key may be scoped to one endpoint, and OpenAI
+// answers 401 for a missing scope.
+const UPFRONT_ENDPOINTS = {
+  openai: ["https://api.openai.com/v1", { "openai-responses": "/responses", "openai-completions": "/chat/completions" }, (key) => ({ authorization: "Bearer " + key })],
+  anthropic: ["https://api.anthropic.com", { "anthropic-messages": "/v1/messages" }, (key) => !key.startsWith("sk-ant-oat") && { "x-api-key": key, "anthropic-version": "2023-06-01" }],
+};
+function credentialRejectedUpfront(provider, fragment, key, stage) {
+  fragment ??= {};
+  const [base, paths, authorize] = UPFRONT_ENDPOINTS[provider] ?? [];
+  const headers = authorize?.(key.trim());
+  const api = fragment.api ?? Object.keys(paths ?? {})[0];
+  if (!headers || Object.keys(fragment).some((name) => !["baseUrl", "api", "models", "request"].includes(name)) ||
+    Object.keys(fragment.request ?? {}).some((name) => name !== "allowPrivateNetwork") ||
+    String(fragment.baseUrl ?? base).replace(/\/+$/, "") !== base || !Object.hasOwn(paths, api) ||
+    JSON.stringify(fragment.models ?? []).includes('"headers"') ||
+    (Array.isArray(fragment.models) && fragment.models.some((model) => (model?.api !== undefined && model.api !== api) || model?.baseUrl !== undefined))) return false;
+  const path = paths[api];
+  stage("preflight");
+  return require("node:child_process").spawnSync(process.execPath, ["-e",
+    'fetch(process.env.U,{method:"POST",headers:JSON.parse(process.env.H),body:"{}",signal:AbortSignal.timeout(8000)}).then((r)=>process.exit(r.status===401?3:0),()=>process.exit(0))',
+  ], {
+    env: { U: base + path, H: JSON.stringify({ ...headers, "content-type": "application/json" }), NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS, SSL_CERT_FILE: process.env.SSL_CERT_FILE },
+    stdio: "ignore", timeout: 10000, killSignal: "SIGKILL",
+  }).status === 3;
 }
 
 function runOpenClawAuthenticationProbe(fs, capMs) {
@@ -1781,6 +1951,7 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
       !process.env[credentialEnvironment]?.trim()) return "UNAVAILABLE";
     const configuration = JSON.parse(process.env.OPENCLAW_HARNESS_PROBE_CONFIG);
     if (configuration.agents?.defaults?.model !== model) return "UNAVAILABLE";
+    if (credentialRejectedUpfront(provider, configuration.models?.providers?.[provider], process.env[credentialEnvironment], stage)) return "AUTHENTICATION_FAILED";
     configuration.agents.defaults.workspace = directory + "/workspace";
     fs.mkdirSync(directory + "/workspace", { mode: 0o700 });
     const configPath = directory + "/openclaw.json";
@@ -1789,7 +1960,7 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
     const result = spawnSync("node", [
       "/app/openclaw.mjs", "models", "status", "--json", "--probe",
       "--probe-provider", provider, "--probe-concurrency", "1",
-      "--probe-timeout", "15000", "--probe-max-tokens", "16",
+      "--probe-timeout", "15000", "--probe-max-tokens", "256",
     ], {
       cwd: directory,
       env: {
@@ -1808,16 +1979,20 @@ function runOpenClawAuthenticationProbe(fs, capMs) {
     });
     stage("returned");
     if (result.error?.code === "ETIMEDOUT") return "CAP";
-    if (result.status !== 0 || result.error) return "MODEL_PROBE_FAILED";
-    const results = JSON.parse(result.stdout).auth?.probes?.results;
+    if (result.status !== 0 || result.error) return probeExitFailure(result);
+    let output;
+    try { output = JSON.parse(result.stdout); } catch { return probeFailure("INVALID_OUTPUT", "json"); }
+    const results = output?.auth?.probes?.results;
     if (!Array.isArray(results) || results.length !== 1 ||
-      results[0].provider !== provider || results[0].model !== model ||
-      results[0].source !== "env") return "MODEL_PROBE_FAILED";
-    if (results[0].status === "ok") return undefined;
-    if (results[0].status === "auth") return "AUTHENTICATION_FAILED";
-    return results[0].status === "timeout" ? "MODEL_PROBE_TIMEOUT" : "MODEL_PROBE_FAILED";
+      results[0]?.provider !== provider || results[0].model !== model ||
+      results[0].source !== "env") return probeFailure("INVALID_OUTPUT", "shape");
+    const status = results[0].status;
+    if (status === "ok") return undefined;
+    if (status === "auth") return "AUTHENTICATION_FAILED";
+    if (status === "timeout") return "MODEL_PROBE_TIMEOUT";
+    return probeFailure("PROBE_STATUS", ["format", "rate_limit", "billing", "unknown", "no_model"].includes(status) ? status : "other");
   } catch {
-    return "MODEL_PROBE_FAILED";
+    return probeFailure("WRAPPER_ERROR");
   } finally {
     stage("cleanup");
     fs.rmSync(directory, { recursive: true, force: true });
@@ -1872,8 +2047,8 @@ function publishAgentPluginSkillPath() {
 `;
 
 export const GATEWAY_RUNTIME_ENTRYPOINT = String.raw`
-const { mkdirSync, rmSync } = require("node:fs");
-const { join } = require("node:path");
+const { accessSync, constants: fsConstants, mkdirSync, rmSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 const { spawn } = require("node:child_process");
 
 // OCE upgrades this runtime by rolling out a selected image.
@@ -1997,6 +2172,10 @@ function configureWorkspaceNodePlugins(config, workspaceNodeId) {
         ...editable.map((name) => remoteRoot + "/" + name),
         ...memoryPaths,
         remoteRoot + "/skills",
+        remoteRoot + "/skills/**",
+        remoteRoot + "/.clawhub/lock.json",
+        remoteRoot + "/.clawdhub/lock.json",
+        remoteRoot + "/.openclaw/skill-installs/**",
         remoteRoot + "/media/inbound/openclaw-staged-*/**",
       ],
       followSymlinks: false,
@@ -2025,7 +2204,7 @@ function excludeGatewayLocalCodexTools(config) {
     // APP_SERVER_URL names a remote Codex Harness: pin its providers even when
     // the Gateway config lacks the plugin entry. A dedicated OpenClaw Gateway
     // (no APP_SERVER_URL) runs its turns with these rows, so it keeps them.
-    if (process.env.APP_SERVER_URL !== undefined) pinCodexProviderTransport(config);
+    if (process.env.APP_SERVER_URL !== undefined) logOverriddenSettings(pinCodexProviderTransport(config));
     return;
   }
   const codexConfig = codex.config ??= {};
@@ -2045,8 +2224,14 @@ function excludeGatewayLocalCodexTools(config) {
   if (!isPlainObject(triggers)) {
     throw new Error("The cron.triggers setting must be an object.");
   }
+  const overridden = triggers.enabled === undefined || triggers.enabled === false ? [] : ["cron.triggers.enabled"];
   triggers.enabled = false;
-  pinCodexProviderTransport(config);
+  logOverriddenSettings([...overridden, ...pinCodexProviderTransport(config)]);
+}
+
+// Say which owner settings this Gateway replaced: setting names only, never values.
+function logOverriddenSettings(settings) {
+  if (settings.length > 0) console.error(JSON.stringify({ event: "runtime.gateway_settings_overridden", container: "gateway", settings }));
 }
 
 // OpenClaw's built-in runtime runs in the Gateway process with Gateway-local
@@ -2068,7 +2253,9 @@ function keepKeys(value, kept) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => kept.has(key)));
 }
 
+// Returns the owner settings it dropped or replaced.
 function pinCodexProviderTransport(config) {
+  const overridden = new Set();
   const models = config.models ??= {};
   if (!isPlainObject(models)) {
     throw new Error("The models setting must be an object.");
@@ -2092,9 +2279,19 @@ function pinCodexProviderTransport(config) {
       throw new Error("The " + id + " model provider setting must be an object.");
     }
     const pinned = keepKeys(provider, CODEX_PROVIDER_KEPT_KEYS);
+    const stub = { baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" };
+    const row = "models.providers." + id + ".";
+    for (const name of Object.keys(provider)) {
+      if (!CODEX_PROVIDER_KEPT_KEYS.has(name) && provider[name] !== stub[name]) overridden.add(row + name);
+    }
     if (provider.models !== undefined) {
       if (!Array.isArray(provider.models) || !provider.models.every(isPlainObject)) {
         throw new Error("The " + id + " model provider models setting must be a list of objects.");
+      }
+      for (const model of provider.models) {
+        for (const name of Object.keys(model)) {
+          if (!CODEX_MODEL_KEPT_KEYS.has(name)) overridden.add(row + "models[]." + name);
+        }
       }
       pinned.models = provider.models.map((model) => keepKeys(model, CODEX_MODEL_KEPT_KEYS));
     }
@@ -2102,10 +2299,9 @@ function pinCodexProviderTransport(config) {
     // no credential in the Gateway, and Codex keeps owning its account's models.
     const authoredTransport =
       id === "codex" || provider.baseUrl !== undefined || provider.api !== undefined;
-    providers[key] = authoredTransport
-      ? { ...pinned, baseUrl: CODEX_PROVIDER_STUB_URL, api: "openai-responses" }
-      : pinned;
+    providers[key] = authoredTransport ? { ...pinned, ...stub } : pinned;
   }
+  return [...overridden];
 }
 
 const WORKSPACE_NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -2156,14 +2352,19 @@ function replaceOpenClawConfig(config) {
 
 // The running Gateway's own view of file-transfer: its runtime state in the
 // live plugin registry ("active", "service-failed", "disabled", "unloaded")
-// and that registry's generation, which every plugin reload replaces.
+// and that registry's generation, which every plugin reload replaces. A Gateway
+// that refused this CLI's credentials answers { refused: true, reason }.
 async function openClawFileTransferState() {
-  const result = await runNativeRuntimeJson(
-    ["gateway", "call", "plugins.list", "--params", "{}", "--json", "--timeout", "5000"],
+  const result = await callNativeGateway(
+    "plugins.list",
+    {},
     8000,
     undefined,
     4 * 1024 * 1024,
   );
+  if (result.authenticationRefused === true) {
+    return { refused: true, reason: result.authenticationRefusalReason };
+  }
   if (!result.ok || !isPlainObject(result.value) || !Array.isArray(result.value.plugins)) {
     return undefined;
   }
@@ -2189,15 +2390,15 @@ function withWorkspaceNodeFailure(code, run) {
   }
 }
 
-const openClawAuthenticationFailureCode =
+const openClawAuthenticationFailure =
   process.env.OPENCLAW_HARNESS_PROBE_CONFIG === undefined
     ? undefined
-    : probeOpenClawAuthenticationFailureCode();
+    : probeOpenClawAuthenticationFailure();
 if (process.env.OPENCLAW_HARNESS_PROBE_CONFIG !== undefined) {
-  logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailureCode === undefined ? "ok" : "failed");
+  logStartupPhase("model-probe", startupPhaseOrigin, openClawAuthenticationFailure === undefined ? "ok" : "failed");
 }
-if (openClawAuthenticationFailureCode !== undefined) {
-  holdFailedAuthentication("model-probe", openClawAuthenticationFailureCode);
+if (openClawAuthenticationFailure !== undefined) {
+  holdFailedAuthentication("model-probe", openClawAuthenticationFailure.code, openClawAuthenticationFailure.cause);
 } else {
 mkdirSync("/home/node/.openclaw", { recursive: true });
 mkdirSync("/home/node/workspace", { recursive: true });
@@ -2272,14 +2473,29 @@ let childRunning = false;
 let childExited;
 let respawning = false;
 let waitingForPeerDuringOutage = false;
+let verifyingServingReplacement = false;
 let stoppingContainer = false;
 let gatewayGeneration = 0;
+
+// OpenClaw backs up a config file it can write. One OCC mounted read-only is
+// externally managed: say so, so OpenClaw skips that backup instead of logging
+// EROFS on every start.
+function gatewayEnvironment() {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (configPath === undefined) return process.env;
+  try {
+    accessSync(dirname(configPath), fsConstants.W_OK);
+    return process.env;
+  } catch {
+    return { ...process.env, OPENCLAW_CONFIG_READONLY: "1" };
+  }
+}
 
 function startGatewayProcess() {
   const spawned = spawn(
     "node",
     ["/app/openclaw.mjs", "gateway", "--port", process.env.OPENCLAW_GATEWAY_PORT],
-    { stdio: "inherit" },
+    { stdio: "inherit", env: gatewayEnvironment() },
   );
   child = spawned;
   childRunning = true;
@@ -2292,7 +2508,7 @@ function startGatewayProcess() {
         process.exit(1);
         return;
       }
-      if (gatewayTerminating || ((!respawning || waitingForPeerDuringOutage) && spawned === child)) {
+      if (gatewayTerminating || ((!respawning || waitingForPeerDuringOutage || verifyingServingReplacement) && spawned === child)) {
         process.exit(code ?? (signal === "SIGTERM" ? 0 : 1));
       }
     });
@@ -2349,11 +2565,18 @@ if (workspaceNodeBindingPath !== undefined) {
     runtimeWorkspaceNodeFailure = undefined;
   };
   resetWorkspaceNodeTracking(startWorkspaceNodeId, childSpawnedAt);
-  const reportFailure = (code) => {
+  const reportFailure = (code, reason) => {
     if (runtimeWorkspaceNodeFailure?.code === code) return;
     runtimeWorkspaceNodeFailure = { code, checkedAt: new Date().toISOString() };
-    // Fixed codes only; a changed cause is logged again.
-    console.error(JSON.stringify({ event: "runtime.workspace_node", container: "gateway", outcome: "failed", code }));
+    // Fixed codes, and OpenClaw's token-shaped refusal reason, only; a changed
+    // cause is logged again.
+    console.error(JSON.stringify({
+      event: "runtime.workspace_node",
+      container: "gateway",
+      outcome: "failed",
+      code,
+      ...(reason === undefined ? {} : { reason }),
+    }));
   };
   const pollWorkspaceNode = async () => {
     const deviceId = readWorkspaceNodeBinding();
@@ -2374,6 +2597,10 @@ if (workspaceNodeBindingPath !== undefined) {
     if (written === undefined) {
       const before = await openClawFileTransferState();
       if (superseded()) return;
+      if (before?.refused) {
+        reportFailure("GATEWAY_UNAUTHORIZED", before.reason);
+        return;
+      }
       if (before === undefined) {
         if (Date.now() - firstSeenAt > WORKSPACE_NODE_APPLY_TIMEOUT_MS) reportFailure("GATEWAY_UNAVAILABLE");
         return;
@@ -2393,6 +2620,11 @@ if (workspaceNodeBindingPath !== undefined) {
     }
     const after = await openClawFileTransferState();
     if (superseded()) return;
+    if (after?.refused) {
+      // The Gateway refuses its own CLI: it cannot confirm this node, now or later.
+      reportFailure("GATEWAY_UNAUTHORIZED", after.reason);
+      return;
+    }
     if (
       after?.state === "active" &&
       (!written.activeBefore || after.generation !== written.generationBefore)
@@ -2428,6 +2660,7 @@ if (followsPeerStatus) {
   const peerChanged = (current) =>
     current.startupId !== peerStatus.startupId ||
     current.podUid !== peerStatus.podUid ||
+    !samePluginIds(current.successfulPluginIds, peerStatus.successfulPluginIds) ||
     !samePluginFailures(current.failures, pluginResult.failures);
   // Stop the native Gateway within its drain budget; one that outlives SIGKILL
   // leaves only the container restart.
@@ -2448,7 +2681,7 @@ if (followsPeerStatus) {
     if (timedOut) throw new Error("The native Gateway did not stop.");
   };
   // Serving means the new process answers its own readiness endpoint; the
-  // plugin status stays "starting", so the Pod stays unready, until then.
+  // plugin status stays "starting" until the peer is rechecked.
   const waitForGatewayServing = async () => {
     const deadline = Date.now() + GATEWAY_RESPAWN_READY_TIMEOUT_MS;
     while (childRunning && Date.now() < deadline) {
@@ -2457,19 +2690,22 @@ if (followsPeerStatus) {
           "http://127.0.0.1:" + process.env.OPENCLAW_GATEWAY_PORT + "/readyz",
           { signal: AbortSignal.timeout(2_000), redirect: "error" },
         );
-        if (response.status === 200 && childRunning) return true;
+        if (response.status === 200 && childRunning) {
+          verifyingServingReplacement = true;
+          return true;
+        }
       } catch {}
       await pluginRuntimeDelay(GATEWAY_RESPAWN_READY_POLL_MS);
     }
     return false;
   };
-  // A changed Harness peer invalidates the app-server credential and possibly
-  // the plugin result the Gateway was configured with. Respawn only the native
-  // process: the container, its volumes and runtime assets stay, and there is
-  // no kubelet crash-loop backoff.
+  // A changed Harness peer requires a new credential for the replacement and
+  // may change the configured plugin result. Respawn only the native process:
+  // the container, its volumes and runtime assets stay, and there is no kubelet
+  // crash-loop backoff.
   const respawnForPeerStatus = async (current) => {
     respawning = true;
-    // Readiness drops first; nothing routes to this Gateway until it is replaced.
+    // Mark plugin status unready before replacing the native Gateway.
     publishPluginRuntimeStatus({ phase: "starting", ...pluginResult });
     const respawnStartedAt = Date.now();
     logStartupPhase("peer-status-changed", startupPhaseOrigin);
@@ -2480,7 +2716,8 @@ if (followsPeerStatus) {
         waitingForPeerDuringOutage = true;
         const returned = await waitForPeerPluginRuntimeStatus();
         waitingForPeerDuringOutage = false;
-        if (!peerChanged(returned) && childRunning) {
+        if (gatewayTerminating || !childRunning) return;
+        if (!peerChanged(returned)) {
           publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
           logStartupPhase("peer-status-restored", respawnStartedAt);
           return;
@@ -2502,12 +2739,31 @@ if (followsPeerStatus) {
         if (gatewayTerminating) return;
         const spawnedAt = startGatewayProcess();
         resetWorkspaceNodeTracking(configured.workspaceNodeId, spawnedAt);
-        if (await waitForGatewayServing()) break;
+        const serving = await waitForGatewayServing();
+        if (gatewayTerminating) return;
+        if (serving) break;
         if (attempt >= GATEWAY_RESPAWN_ATTEMPTS) {
           throw new Error("The respawned native Gateway did not become ready.");
         }
         await stopGatewayProcess();
         await pluginRuntimeDelay(1_000 * 2 ** (attempt - 1));
+      }
+      // Recheck the Harness before marking the replacement ready.
+      let verifiedPeer;
+      try {
+        verifiedPeer = await readPeerPluginRuntimeStatus();
+      } catch {
+        verifiedPeer = undefined;
+      } finally {
+        verifyingServingReplacement = false;
+      }
+      if (gatewayTerminating || !childRunning) return;
+      if (verifiedPeer === undefined) {
+        throw new Error("The Harness peer became unavailable during Gateway startup.");
+      }
+      if (peerChanged(verifiedPeer)) {
+        logStartupPhase("peer-verification-changed", respawnStartedAt, "failed");
+        throw new Error("The Harness peer changed during Gateway startup.");
       }
       publishPluginRuntimeStatus({ phase: "ready", ...pluginResult });
       logStartupPhase("gateway-respawn", respawnStartedAt);
@@ -2516,6 +2772,7 @@ if (followsPeerStatus) {
       stopContainer();
     } finally {
       waitingForPeerDuringOutage = false;
+      verifyingServingReplacement = false;
       respawning = false;
     }
   };
@@ -2637,13 +2894,18 @@ if (receipt?.sourceUid === expected.sourceUid) {
 // policy says; only the first such warning per app-server is kept. Codex's
 // startup ERROR that no bubblewrap is on PATH is dropped: the image runs the
 // bubblewrap Codex ships on purpose, because a bwrap on PATH makes Codex run a
-// namespace probe that the reviewed seccomp profile denies. Everything else is
-// forwarded unchanged.
+// namespace probe that the reviewed seccomp profile denies. Codex's startup
+// ERROR that project-local config is disabled until the project is trusted is
+// dropped when the only folder it names is the workspace's own .codex: an empty
+// one appears once any session has run, the workspace is deliberately not
+// trusted, and the line is not a fault. Everything else is forwarded unchanged.
 export const CODEX_STDERR_FILTER_HELPER = String.raw`
 const codexVerboseLog = /^(?:debug|trace)(?:,|$)/i.test(process.env.RUST_LOG ?? "");
 const CODEX_REMOTE_CONTROL_WAIT = "waiting to resolve remote control preference until authentication is available";
 const CODEX_MISSING_BWRAP_WARNING = "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.";
 const CODEX_UNIX_SOCKETS_PLATFORM_WARNING = "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform";
+const CODEX_UNTRUSTED_PROJECT_WARNING = "until the project is trusted";
+const CODEX_UNTRUSTED_WORKSPACE_MESSAGE = /^Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load\.\n {4}1\. \/home\/node\/workspace\/\.codex\n {7}To load project-local config, hooks, and exec policies, add \/home\/node\/workspace as a trusted project in \S+\/config\.toml\.\n?$/;
 const CODEX_STDERR_LINE_LIMIT = 65536;
 let codexRemoteControlWaitAt = -Infinity;
 let codexUnixSocketsPlatformWarned = false;
@@ -2657,7 +2919,8 @@ function codexStderrLineKept(line, now = Date.now()) {
     !line.includes('"message":"websocket client connected"') &&
     !line.includes(CODEX_REMOTE_CONTROL_WAIT) &&
     !line.includes(CODEX_UNIX_SOCKETS_PLATFORM_WARNING) &&
-    !line.includes(CODEX_MISSING_BWRAP_WARNING)
+    !line.includes(CODEX_MISSING_BWRAP_WARNING) &&
+    !line.includes(CODEX_UNTRUSTED_PROJECT_WARNING)
   ) return true;
   let record;
   try { record = JSON.parse(line); } catch { return true; }
@@ -2690,6 +2953,7 @@ function codexStderrLineKept(line, now = Date.now()) {
     codexRemoteControlWaitAt = now;
   }
   if (record.target === "codex_app_server" && message === CODEX_MISSING_BWRAP_WARNING) return false;
+  if (record.target === "codex_app_server" && typeof message === "string" && CODEX_UNTRUSTED_WORKSPACE_MESSAGE.test(message)) return false;
   if (record.target === "codex_network_proxy::proxy" && message === CODEX_UNIX_SOCKETS_PLATFORM_WARNING) {
     if (codexUnixSocketsPlatformWarned) return false;
     codexUnixSocketsPlatformWarned = true;
@@ -2864,8 +3128,8 @@ function isRecoveredNativeStreamError(event) {
 
 function probeCodexAuthentication(timeout) {
   let result;
-  const finish = (code) => ({
-    code,
+  const finish = (failure) => ({
+    ...(typeof failure === "string" ? { code: failure } : failure),
     exitCode: Number.isInteger(result?.status) ? result.status : null,
     signal: ["SIGKILL", "SIGTERM", "SIGINT"].includes(result?.signal) ? result.signal : null,
   });
@@ -2915,7 +3179,13 @@ function probeCodexAuthentication(timeout) {
       timeout, killSignal: "SIGKILL", maxBuffer: 262144,
     });
     const output = result.stdout?.trim() ?? "";
-    const events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
+    let events;
+    try {
+      events = output === "" ? [] : output.split("\n").map((line) => JSON.parse(line));
+    } catch {
+      return finish(probeFailure("INVALID_OUTPUT", "json"));
+    }
+    if (events.some((event) => typeof event?.type !== "string")) return finish(probeFailure("INVALID_OUTPUT", "shape"));
     // A failed turn caused by provider 401/403 is a deterministic credential
     // rejection; timeouts, 5xx, and transport errors keep their existing codes.
     if (events.some((event) => event.type === "turn.failed" && codexAuthenticationRejected(event.error?.message))) {
@@ -2933,25 +3203,28 @@ function probeCodexAuthentication(timeout) {
       if (event.type === "turn.started") turnStarted = true;
       if (event.type === "error") {
         if (!turnStarted || turnCompleted || !isRecoveredNativeStreamError(event) ||
-          ++recoveredStreamErrors > MAX_RECOVERED_STREAM_RETRIES) return finish("MODEL_PROBE_FAILED");
+          ++recoveredStreamErrors > MAX_RECOVERED_STREAM_RETRIES) return finish(probeFailure("PROBE_STATUS", "error-event"));
         continue;
       }
       if (!allowed.has(event.type) ||
-        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) return finish("MODEL_PROBE_FAILED");
+        (event.type.startsWith("item.") && !["agent_message", "reasoning", "error"].includes(event.item?.type))) {
+        return finish(probeFailure("PROBE_STATUS", event.type === "turn.failed" ? "turn-failed"
+          : event.type.startsWith("item.") ? "tool-event" : "unexpected-event"));
+      }
       if (event.type === "turn.completed") turnCompleted = true;
     }
     // A timeout cannot make an observed tool call or protocol failure retryable.
     if (result.error?.code === "ETIMEDOUT") return finish("MODEL_PROBE_TIMEOUT");
-    if (result.status !== 0 || result.error) return finish("MODEL_PROBE_FAILED");
+    if (result.status !== 0 || result.error) return finish(probeExitFailure(result));
     return finish(events.filter((event) => event.type === "turn.completed").length === 1 &&
       events.filter((event) => event.type === "turn.started").length === 1 &&
       events.at(-1)?.type === "turn.completed" &&
       events.some((event) => event.type === "item.completed" && event.item?.type === "agent_message" &&
         typeof event.item.text === "string" && event.item.text.trim().length > 0)
         ? undefined
-        : "MODEL_PROBE_FAILED");
+        : probeFailure("PROBE_STATUS", "no-reply"));
   } catch {
-    return finish("MODEL_PROBE_FAILED");
+    return finish(probeFailure("WRAPPER_ERROR"));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -2976,6 +3249,7 @@ function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 610
     exitCode: result.exitCode,
     signal: result.signal,
     code: result.code ?? "READY",
+    cause: result.cause,
   }));
   if (result.code === "MODEL_PROBE_TIMEOUT" && attempt === 1 && performance.now() + 1000 < deadline) {
     setTimeout(() => startAuthenticatedCodex(2, deadline), 1000);
@@ -2983,7 +3257,7 @@ function startAuthenticatedCodex(attempt = 1, deadline = performance.now() + 610
   }
   if (result.code !== undefined) {
     logStartupPhase("model-probe", modelProbeStartedAt, "failed");
-    holdFailedAuthentication("model-probe", result.code);
+    holdFailedAuthentication("model-probe", result.code, result.cause);
     return;
   }
   logStartupPhase("model-probe", modelProbeStartedAt);
@@ -3044,17 +3318,24 @@ child.on("exit", (code, signal) => {
   codexStderrDone.then(() => process.exit(status));
 });
 (async () => {
+  const pluginInstallStartedAt = Date.now();
+  let pluginInstallLogged = false;
   try {
     if (pluginRuntime !== undefined) {
-      const pluginInstallStartedAt = Date.now();
       const result = await installCodexPlugins(pluginRuntime);
       logStartupPhase("plugin-install", pluginInstallStartedAt);
+      pluginInstallLogged = true;
       publishPluginRuntimeStatus({ phase: "ready", ...result });
     } else {
       publishPluginRuntimeStatus({ phase: "ready", successfulPluginIds: [], failures: [] });
     }
     pluginRuntimeReady();
   } catch (error) {
+    // The phase line (with a fixed code) reaches the log backend; the message stays local.
+    // A failure after a logged install (publishing status) is not a plugin-install failure.
+    if (pluginRuntime !== undefined && !pluginInstallLogged) {
+      logStartupPhase("plugin-install", pluginInstallStartedAt, "failed", error?.startupCode ?? "PLUGIN_NOT_READY");
+    }
     console.error("Codex plugin runtime initialization failed: " + pluginRuntimeErrorMessage(error));
     child.kill("SIGTERM");
     process.exit(1);
@@ -3284,9 +3565,9 @@ if (
 mkdirSync(temporary, { recursive: true, mode: 0o700 });
 chmodSync(temporary, 0o700);
 initializeRuntimeAssets();
-const authenticationFailureCode = probeOpenClawAuthenticationFailureCode();
-if (authenticationFailureCode !== undefined) {
-  holdFailedAuthentication("model-probe", authenticationFailureCode);
+const authenticationFailure = probeOpenClawAuthenticationFailure();
+if (authenticationFailure !== undefined) {
+  holdFailedAuthentication("model-probe", authenticationFailure.code, authenticationFailure.cause);
 } else {
 mkdirSync(state, { recursive: true });
 const workerConfigPath = join(state, "openclaw.json");

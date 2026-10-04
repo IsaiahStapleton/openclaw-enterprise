@@ -19,6 +19,7 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { authenticatedHeaders, signInWithEmailPassword } from "../helpers/auth-session.mjs";
 import { createInstallationDriverConfiguration } from "../helpers/installation-driver-configuration.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { normalizePresetTemplate } from "../../packages/contracts/src/index.ts";
 import { BOOTSTRAP_DEFAULT_NAMESPACE_NAME } from "../../packages/occ/src/index.ts";
 
 const databaseUrl = process.env.OCC_PRODUCTION_WIREUP_DATABASE_URL;
@@ -126,6 +127,7 @@ async function productionDrivers({ includeDefaults = false, configurationRoot } 
   return {
     installation,
     defaultPresets: runtime.defaultPresets,
+    bundledPresetVersions: runtime.bundledPresetVersions,
     computeDriver: createPassiveComputeDriver(),
     configurationDriver: configurationRoot
       ? new FilesystemConfigurationDriver(configurationRoot)
@@ -390,12 +392,14 @@ test(
       assert.equal(privileges.rows[0].can_create_schema, false);
 
       const apiLog = memoryLog();
+      const startupPhases = [];
       app = await composeProduction({
         mode: "production",
         host: "127.0.0.1",
         databaseUrl,
         authSecret,
         authBaseURL,
+        onStartupPhase: (phase, durationMs) => startupPhases.push({ phase, durationMs }),
         // Leftover pilot settings must not change authentication when the feature is disabled.
         nativeAdmin: {
           enabled: false,
@@ -429,6 +433,12 @@ test(
         ],
         "production API composition must emit the Compute warning and continue startup",
       );
+      // The API's `listening` line reports these, so an operator can see which phase was slow.
+      assert.deepEqual(
+        startupPhases.map(({ phase }) => phase),
+        ["database", "authentication", "identity", "computePreflight", "controller", "routes"],
+      );
+      assert.ok(startupPhases.every(({ durationMs }) => Number.isSafeInteger(durationMs)));
       endpoint = await app.listen({ port: 0, host: "127.0.0.1" });
 
       await assert.rejects(
@@ -502,6 +512,7 @@ test(
       assert.deepEqual(defaults.data.map((preset) => preset.name).sort(), [
         "Standard Codex",
         "Standard OpenClaw",
+        "default-codex",
       ]);
       const copied = defaults.data.find((preset) => preset.name === "Standard Codex");
       const copiedOpenClaw = defaults.data.find((preset) => preset.name === "Standard OpenClaw");
@@ -535,6 +546,18 @@ test(
         template: { agent: { name: "Kept across restart" } },
       });
       assert.equal(customized.status, 200);
+      // Roll Standard OpenClaw back to an earlier shipped version, as a Namespace seeded
+      // by that release holds it. The restart below must refresh it in place.
+      const archivedPreset = async (path) =>
+        JSON.parse(
+          await readFile(new URL(`../../deploy/presets/archive/${path}`, import.meta.url), "utf8"),
+        );
+      const earlierOpenClaw = await archivedPreset("standard-openclaw/ed4bae5153f86b94.json");
+      const rolledBack = await request("PATCH", `${presetPath}/${copiedOpenClaw.id}`, {
+        template: earlierOpenClaw.template,
+      });
+      assert.equal(rolledBack.status, 200);
+      assert.notDeepEqual(rolledBack.data.template, copiedOpenClaw.template);
       await app.close();
       app = await composeProduction({
         mode: "production",
@@ -552,11 +575,13 @@ test(
       assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
         "Standard Codex",
         "Standard OpenClaw",
+        "default-codex",
       ]);
       assert.deepEqual(
         afterRestart.data.find((preset) => preset.name === "Standard Codex"),
         customized.data,
       );
+      // Refreshed from the stored JSONB: same ID, current template. The edit above stays.
       assert.deepEqual(
         afterRestart.data.find((preset) => preset.name === "Standard OpenClaw"),
         copiedOpenClaw,
@@ -569,6 +594,7 @@ test(
       assert.deepEqual(newPresets.data.map((preset) => preset.name).sort(), [
         "Standard Codex",
         "Standard OpenClaw",
+        "default-codex",
       ]);
       assert.notEqual(
         newPresets.data.find((preset) => preset.name === "Standard Codex").id,
@@ -577,6 +603,18 @@ test(
       assert.notEqual(
         newPresets.data.find((preset) => preset.name === "Standard OpenClaw").id,
         copiedOpenClaw.id,
+      );
+      // An earlier release seeded this default under a name the bundle no longer ships.
+      // The Namespace is still provisioning, so write the row as that seeding did.
+      const earlierCodex = await archivedPreset("standard-codex/a07d1e2070d95c99.json");
+      await pool.query(
+        "INSERT INTO occ.presets (id, namespace_id, name, template, created_at) VALUES ($1, $2, $3, $4, now())",
+        [
+          `pre_${randomUUID()}`,
+          newNamespace.data.id,
+          earlierCodex.name,
+          JSON.stringify(normalizePresetTemplate(earlierCodex.template, newNamespace.data.id)),
+        ],
       );
       // Only unmodified seeded defaults remain, so deletion removes them with the Namespace.
       const deletedNamespace = await request("DELETE", `/namespaces/${newNamespace.data.id}`);

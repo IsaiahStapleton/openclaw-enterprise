@@ -47,14 +47,32 @@ type responseEnvelope struct {
 }
 
 // APIError is an OCC error response. RetryAfter is set when OCC sent Retry-After.
+// Location is the absolute redirect target of a 3xx response, without userinfo,
+// query, or fragment; occ never follows redirects, so the service key is only
+// ever sent to the configured origin.
 type APIError struct {
 	Status     int
 	Code       string
 	Message    string
 	RetryAfter time.Duration
+	Location   string
+	// redirectOrigin is the Location's scheme://host when it differs from OCC_URL.
+	redirectOrigin string
 }
 
 func (err *APIError) Error() string {
+	if err.Location != "" {
+		if err.redirectOrigin == "" {
+			return fmt.Sprintf(
+				"OCC operation failed (HTTP %d): the server redirected to %s; occ does not follow redirects, and OCC_URL must be the origin that serves the OCC API directly, without a path prefix",
+				err.Status, err.Location,
+			)
+		}
+		return fmt.Sprintf(
+			"OCC operation failed (HTTP %d): the server redirected to %s; occ does not follow redirects, so set OCC_URL (or --url) to %s if that is the OCC endpoint",
+			err.Status, err.Location, err.redirectOrigin,
+		)
+	}
 	if err.Code == "" {
 		return fmt.Sprintf("OCC operation failed (HTTP %d)", err.Status)
 	}
@@ -79,6 +97,14 @@ type errorEnvelope struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// WithContext returns a client sharing transport and credentials whose requests
+// use ctx. The original client remains unchanged.
+func (client *Client) WithContext(ctx context.Context) *Client {
+	clone := *client
+	clone.ctx = ctx
+	return &clone
 }
 
 // New validates the client configuration and prepares authenticated transport.
@@ -256,6 +282,21 @@ func (client *Client) DeleteSecret(namespaceID, secretID string) error {
 	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "secrets", secretID})
 }
 
+// ListPresets lists the Presets in a Namespace that the caller can read.
+func (client *Client) ListPresets(namespaceID string) (any, error) {
+	return client.get("namespaces", namespaceID, "presets")
+}
+
+// GetPreset fetches a Preset with its template.
+func (client *Client) GetPreset(namespaceID, presetID string) (any, error) {
+	return client.get("namespaces", namespaceID, "presets", presetID)
+}
+
+// DeletePreset deletes a Preset and its exact-resource AccessBindings.
+func (client *Client) DeletePreset(namespaceID, presetID string) error {
+	return client.sendEmpty(http.MethodDelete, []string{"namespaces", namespaceID, "presets", presetID})
+}
+
 // CreateCredentialSource registers a Namespace Secret with the selected Credential Gateway.
 func (client *Client) CreateCredentialSource(namespaceID string, body jsontext.Value) (any, error) {
 	return client.send(
@@ -405,7 +446,7 @@ func (client *Client) GetAgentRuntimeLogs(
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, apiErrorWithHeader(status, header, responseBody)
+		return nil, client.apiError(status, header, responseBody)
 	}
 	var envelope responseEnvelope
 	if err := json.Unmarshal(responseBody, &envelope); err != nil || len(envelope.Data) == 0 {
@@ -441,12 +482,12 @@ func (client *Client) get(segments ...string) (any, error) {
 }
 
 func (client *Client) send(method string, segments []string, body any) (any, error) {
-	status, responseBody, err := client.execute(method, segments, body)
+	status, header, responseBody, err := client.execute(method, segments, body)
 	if err != nil {
 		return nil, err
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return nil, apiError(status, responseBody)
+		return nil, client.apiError(status, header, responseBody)
 	}
 
 	var envelope responseEnvelope
@@ -461,12 +502,12 @@ func (client *Client) send(method string, segments []string, body any) (any, err
 }
 
 func (client *Client) sendEmpty(method string, segments []string) error {
-	status, responseBody, err := client.execute(method, segments, nil)
+	status, header, responseBody, err := client.execute(method, segments, nil)
 	if err != nil {
 		return err
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return apiError(status, responseBody)
+		return client.apiError(status, header, responseBody)
 	}
 	if status != http.StatusNoContent || len(responseBody) != 0 {
 		return fmt.Errorf("OCC returned an invalid empty response (HTTP %d)", status)
@@ -474,9 +515,8 @@ func (client *Client) sendEmpty(method string, segments []string) error {
 	return nil
 }
 
-func (client *Client) execute(method string, segments []string, body any) (int, []byte, error) {
-	status, _, responseBody, err := client.executeQuery(method, segments, nil, body)
-	return status, responseBody, err
+func (client *Client) execute(method string, segments []string, body any) (int, http.Header, []byte, error) {
+	return client.executeQuery(method, segments, nil, body)
 }
 
 func (client *Client) executeQuery(
@@ -520,7 +560,13 @@ func (client *Client) executeQuery(
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("failed to read the OCC response: %w", err)
 	}
-	return response.StatusCode, response.Header, responseBody, nil
+	header := response.Header
+	if location, err := response.Location(); err == nil {
+		// Resolve a relative Location against the request so the error names an absolute URL.
+		header = header.Clone()
+		header.Set("location", location.String())
+	}
+	return response.StatusCode, header, responseBody, nil
 }
 
 func parseOrigin(value string) (*url.URL, error) {
@@ -552,11 +598,7 @@ func resourceURL(baseURL *url.URL, segments []string) (*url.URL, error) {
 	return resource, nil
 }
 
-func apiError(status int, body []byte) error {
-	return apiErrorWithHeader(status, nil, body)
-}
-
-func apiErrorWithHeader(status int, header http.Header, body []byte) error {
+func (client *Client) apiError(status int, header http.Header, body []byte) error {
 	result := &APIError{Status: status}
 	var envelope errorEnvelope
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Code != "" {
@@ -565,6 +607,20 @@ func apiErrorWithHeader(status int, header http.Header, body []byte) error {
 	}
 	if seconds, err := strconv.Atoi(header.Get("retry-after")); err == nil && seconds > 0 && seconds <= 3600 {
 		result.RetryAfter = time.Duration(seconds) * time.Second
+	}
+	if status >= http.StatusMultipleChoices && status < http.StatusBadRequest {
+		// Drop userinfo, query, and fragment: a sign-in redirect can carry tokens there.
+		if target, err := url.Parse(header.Get("location")); err == nil && target.Scheme != "" && target.Host != "" {
+			target.User = nil
+			target.RawQuery = ""
+			target.ForceQuery = false
+			target.Fragment = ""
+			target.RawFragment = ""
+			result.Location = target.String()
+			if target.Scheme != client.baseURL.Scheme || target.Host != client.baseURL.Host {
+				result.redirectOrigin = target.Scheme + "://" + target.Host
+			}
+		}
 	}
 	return result
 }

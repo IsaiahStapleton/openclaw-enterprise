@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { loadTestSuites } from "../../scripts/ci/test-suites.mjs";
 import { prepareCodexSeccompProfile } from "../../scripts/ci/codex-seccomp.mjs";
+import { metricsMonitoringImages } from "../../scripts/ci/metrics-monitoring-images.mjs";
+import { defaultK3sImage } from "../../scripts/ci/prepare.mjs";
 import { createKubernetesInstallationConfiguration } from "../helpers/kubernetes-real.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -269,7 +271,10 @@ if (command === "k3d") {
   if (equals(args, ["version"])) finish("k3d version v5.8.3\n");
   if (equals(args.slice(0, 2), ["cluster", "create"]) && [13, 15, 16].includes(args.length)) {
     assert.match(args[2], /^openclaw-k8s-/);
-    assert.deepEqual(args.slice(3, 5), ["--image", process.env.OPENCLAW_CI_K3S_IMAGE || "+v1.35"]);
+    assert.deepEqual(args.slice(3, 5), ["--image", process.env.OPENCLAW_CI_K3S_IMAGE || ${JSON.stringify(defaultK3sImage)}]);
+    // A channel such as +v1.35 makes k3d query update.k3s.io on every cluster
+    // create; the forwarded node image must be a digest-pinned K3s 1.35 image.
+    assert.match(args[4], /:v1\.35\.\d+-k3s\d+@sha256:[a-f0-9]{64}$/);
     if (args.length >= 15) {
     assert.deepEqual(args.slice(5, 10), ["--servers", "1", "--agents", "1", "--volume"]);
     const storage = args[10].split(":");
@@ -495,7 +500,7 @@ for (const { scenario, error } of [
     }
 
     const cluster = state.resources.find((resource) => resource.kind === "k3d-cluster");
-    assert.equal(cluster.nodeImage, "+v1.35");
+    assert.equal(cluster.nodeImage, defaultK3sImage);
     assert.equal(cluster.kubernetesVersion, "v1.35.8+k3s1");
     const localImage = state.resources.find((resource) => resource.kind === "image-tag");
     const importedImage = state.resources.find((resource) => resource.kind === "k3d-image");
@@ -621,7 +626,7 @@ for (const { scenario, stage, error } of [
     const artifactText = await readFile(artifactPath, "utf8");
     const evidence = JSON.parse(artifactText);
     assert.equal(evidence.lane, "k3d-fixture-configuration");
-    assert.equal(evidence.nodeImage, "+v1.35");
+    assert.equal(evidence.nodeImage, defaultK3sImage);
     if (scenario === "cluster-create-failed") {
       // Container diagnostics remain available before a kubeconfig can be written.
       for (const field of ["nodes", "pods", "events"]) {
@@ -1021,86 +1026,84 @@ test("repository platform preparation refuses a public relay gateway before buil
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
-test("installed repository preparation requires explicit authorization and protected inputs before side effects", async (t) => {
+test("installed repository preparation is refused before prerequisite checks or side effects", async (t) => {
   const root = await fixture(t);
   const statePath = join(root, "installed-state.json");
   const configPath = join(root, "app.json");
   const keyPath = join(root, "app.pem");
   await writeFile(configPath, "{}", { mode: 0o600 });
   await writeFile(keyPath, "test-only key", { mode: 0o600 });
-  const env = {
+  const args = ["--lane", "repository-credentials-installed", "--state", statePath];
+
+  // An operator who selects the lane without any inputs learns that it is
+  // unavailable, instead of being asked for model, App and image inputs first.
+  const unprepared = runPrepare(args, {});
+  assert.equal(unprepared.status, 1);
+  assert.match(unprepared.stderr, /Installed repository qualification is temporarily unavailable/);
+  assert.doesNotMatch(unprepared.stderr, /Missing required CI input/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+
+  // Inputs that previously passed the early checks cannot create a preparation state
+  // while remote cleanup lacks a safe ownership boundary.
+  const blocked = runPrepare(args, {
     OPENAI_API_KEY: "test-only-model-key",
     OCC_TEST_OPENAI_MODEL: "test-model",
-    NODE_BASE_IMAGE: `docker.io/library/node:24-bookworm@sha256:${digest}`,
-    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "0",
+    NODE_BASE_IMAGE: "",
+    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
     OCC_TEST_REPOSITORY_CREDENTIALS_REPOSITORY: "fixture/repository",
     OCC_TEST_REPOSITORY_CREDENTIALS_APP_CONFIG_FILE: configPath,
     OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE: keyPath,
     OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE: immutableImage,
-    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "203.0.113.1/32",
-    OCC_TEST_PRODUCTION_POSTGRES_IMAGE: immutableImage,
-    OCC_TEST_PRODUCTION_NODE_IMAGE: immutableImage,
-  };
-  const args = ["--lane", "repository-credentials-installed", "--state", statePath];
-  const unauthorized = runPrepare(args, env);
-  assert.equal(unauthorized.status, 1);
-  assert.match(unauthorized.stderr, /explicit write and cleanup authorization/);
-  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
-
-  await chmod(keyPath, 0o644);
-  const unprotected = runPrepare(args, { ...env, OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1" });
-  assert.equal(unprotected.status, 1);
-  assert.match(unprotected.stderr, /must have mode 0600/);
-  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
-
-  await chmod(keyPath, 0o600);
-  const linkedKey = join(root, "linked-key.pem");
-  await symlink(keyPath, linkedKey);
-  const linked = runPrepare(args, {
-    ...env,
-    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
-    OCC_TEST_REPOSITORY_CREDENTIALS_APP_KEY_FILE: linkedKey,
-  });
-  assert.equal(linked.status, 1);
-  assert.match(linked.stderr, /bounded regular private file/);
-  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
-
-  const invalidScope = runPrepare(args, {
-    ...env,
-    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
-    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "10.0.0.1/32",
-  });
-  assert.equal(invalidScope.status, 1);
-  assert.match(invalidScope.stderr, /approved public IPv4/);
-  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
-
-  const releaseEnv = {
-    ...env,
-    OCC_TEST_REPOSITORY_CREDENTIALS_AUTHORIZED: "1",
     OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "release",
+    OCC_TEST_REPOSITORY_CREDENTIALS_UPSTREAM_CIDRS: "203.0.113.1/32",
     OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: immutableImage,
     OCC_TEST_KUBERNETES_RUNTIME_IMAGE: immutableImage,
-    NODE_BASE_IMAGE: "",
-  };
-  for (const [override, expected] of [
-    [{ OCC_TEST_PRODUCTION_CONTROLLER_IMAGE: "" }, /OCC_TEST_PRODUCTION_CONTROLLER_IMAGE/],
-    [{ OCC_TEST_KUBERNETES_RUNTIME_IMAGE: "runtime:latest" }, /OCC_TEST_KUBERNETES_RUNTIME_IMAGE/],
-    [{ OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "unexpected" }, /must be source or release/],
-    [{ OCC_TEST_REPOSITORY_CREDENTIALS_IMAGE_MODE: "source" }, /NODE_BASE_IMAGE/],
-  ]) {
-    const rejected = runPrepare(args, { ...releaseEnv, ...override });
-    assert.equal(rejected.status, 1);
-    assert.match(rejected.stderr, expected);
-    await assert.rejects(() => stat(statePath), { code: "ENOENT" });
-  }
+    OCC_TEST_PRODUCTION_POSTGRES_IMAGE: immutableImage,
+    OCC_TEST_PRODUCTION_NODE_IMAGE: immutableImage,
+  });
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /Installed repository qualification is temporarily unavailable/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
 
-  // A complete release selection reaches tool discovery without a build base;
-  // no cluster or image is created by this preflight check.
-  const admitted = runPrepare(args, { ...releaseEnv, OCC_HELM_BIN: join(root, "missing-helm") });
-  assert.equal(admitted.status, 1);
-  assert.match(admitted.stderr, /missing-helm/);
-  const state = JSON.parse(await readFile(statePath, "utf8"));
-  assert.deepEqual(state.resources, []);
+  // Per-file preparation, which the test runner uses, is refused the same way.
+  const perFile = runPrepare(
+    [...args, "--file", "tests/integration/repository-credentials-k3d-real.test.mjs"],
+    {},
+  );
+  assert.equal(perFile.status, 1);
+  assert.match(perFile.stderr, /Installed repository qualification is temporarily unavailable/);
+  await assert.rejects(() => stat(statePath), { code: "ENOENT" });
+});
+
+test("the installed repository journey refuses direct execution before fixture setup", async (t) => {
+  const root = await fixture(t);
+  // Direct execution must fail at the safety guard even without credentials or
+  // a cluster, before any setup or provider operation can be attempted.
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--test",
+      "--test-name-pattern=^installed ",
+      "tests/integration/repository-credentials-k3d-real.test.mjs",
+    ],
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        PATH: process.env.PATH,
+        OCC_TEST_REPOSITORY_CREDENTIALS_REAL: "1",
+      },
+      timeout: 15000,
+    },
+  );
+  assert.equal(result.status, 1);
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.match(output, /tests 3/);
+  assert.equal(
+    (output.match(/Installed repository qualification is temporarily unavailable/g) ?? []).length,
+    3,
+  );
 });
 
 test("production upgrade preparation requires two distinct immutable image pairs before creating resources", async (t) => {
@@ -1425,6 +1428,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
         const localhostProfile =
           manifest?.spec?.containers?.[0]?.securityContext?.seccompProfile?.localhostProfile;
         if (localhostProfile?.includes("missing-")) {
+          const missingProfilePath = `/var/lib/kubelet/seccomp/${localhostProfile}`;
           return {
             stdout: JSON.stringify({
               metadata: { name },
@@ -1435,7 +1439,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
                     state: {
                       waiting: {
                         reason: "CreateContainerError",
-                        message: "seccomp profile is not found",
+                        message: `failed to create containerd container: cannot load seccomp profile ${JSON.stringify(missingProfilePath)}: open ${missingProfilePath}: no such file or directory`,
                       },
                     },
                   },
@@ -1549,31 +1553,112 @@ test("prepareLane fails closed instead of overwriting an existing CI state file"
   assert.equal((await stat(statePath)).mode & 0o777, 0o600);
 });
 
-test("prepareLane preserves an explicit logging Collector Node image over its default", async (t) => {
-  const root = await fixture(t);
-  const statePath = join(root, "logging-state.json");
-  const githubEnv = join(root, "github.env");
-  const customNodeImage =
-    "docker.io/library/node:24-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+test("prepareLane pre-pulls logging and metrics images with retry and preserves its Node override", async (t) => {
+  for (const failure of ["transient", "missing-manifest"]) {
+    await t.test(failure, async (t) => {
+      const root = await fixture(t);
+      const statePath = join(root, "logging-state.json");
+      const githubEnv = join(root, "github.env");
+      const customNodeImage =
+        "docker.io/library/node:24-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const collectorImage = loadYaml(
+        await readFile(join(repositoryRoot, "compose.logging.yaml"), "utf8"),
+      ).services.collector.image;
+      // Images are absent until pulled; a registry 503 must retry, while a
+      // missing Prometheus manifest must stop preparation before publishing env.
+      // Two images are prepared concurrently, so the fake counts each image's
+      // pulls in its own file: reading the shared call log while the other
+      // image's process creates or appends to it can return an empty or torn line.
+      const dockerPath = join(root, "docker");
+      await writeFile(
+        dockerPath,
+        `#!${process.execPath}
+const { appendFileSync, existsSync, readFileSync } = require("node:fs");
+const { createHash } = require("node:crypto");
+const log = ${JSON.stringify(join(root, "docker.jsonl"))};
+const args = process.argv.slice(2);
+appendFileSync(log, JSON.stringify(args) + "\\n");
+const image = args.at(-1);
+const pullLog = log + "." + createHash("sha256").update(image).digest("hex") + ".pulls";
+const pulls = existsSync(pullLog) ? readFileSync(pullLog, "utf8").length : 0;
+if (args[0] === "pull") {
+  appendFileSync(pullLog, "p");
+  if (process.env.CI_METRICS_PULL_FAILURE === "missing-manifest" && image === ${JSON.stringify(metricsMonitoringImages.prometheus)}) {
+    process.stderr.write("Error response from daemon: manifest unknown\\n");
+    process.exit(1);
+  }
+  if (process.env.CI_METRICS_PULL_FAILURE === "transient" && pulls === 0) {
+    process.stderr.write("Error response from daemon: HTTP 503 Service Unavailable\\n");
+    process.exit(1);
+  }
+  process.exit(0);
+}
+if (args[0] === "image" && args[1] === "inspect") {
+  if (pulls < (process.env.CI_METRICS_PULL_FAILURE === "transient" ? 2 : 1)) {
+    process.stderr.write("Error response from daemon: No such image: " + image + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(args[3] === "{{.Id}}" ? "sha256:${"e".repeat(64)}\\n" : JSON.stringify([image]));
+  process.exit(0);
+}
+process.stderr.write("unexpected docker " + args.join(" ") + "\\n");
+process.exit(2);
+`,
+        { mode: 0o700 },
+      );
 
-  const result = runPrepare(
-    ["--lane", "logging-collector", "--state", statePath, "--github-env", githubEnv],
-    {
-      OCC_TEST_LOGGING_NODE_IMAGE: customNodeImage,
-    },
-  );
+      const result = runPrepare(
+        ["--lane", "logging-collector", "--state", statePath, "--github-env", githubEnv],
+        {
+          OCC_DOCKER_BIN: dockerPath,
+          OCC_TEST_LOGGING_NODE_IMAGE: customNodeImage,
+          CI_METRICS_PULL_FAILURE: failure,
+        },
+      );
 
-  assert.equal(result.status, 0, result.stderr);
-  const exported = await readFile(githubEnv, "utf8");
-  assert.match(exported, /OCC_TEST_LOGGING_COLLECTOR=1/);
-  assert.match(exported, new RegExp(`OCC_TEST_LOGGING_NODE_IMAGE=${customNodeImage}`));
+      const pulls = (await readFile(join(root, "docker.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((args) => args[0] === "pull")
+        .map((args) => args[1]);
+      if (failure === "missing-manifest") {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /manifest unknown/);
+        assert.doesNotMatch(result.stderr, /Transient image pull failure/);
+        assert.equal(
+          pulls.filter((image) => image === metricsMonitoringImages.prometheus).length,
+          1,
+        );
+        await assert.rejects(readFile(githubEnv), { code: "ENOENT" });
+        return;
+      }
+      assert.equal(result.status, 0, result.stderr);
+      const exported = await readFile(githubEnv, "utf8");
+      assert.match(exported, /OCC_TEST_LOGGING_COLLECTOR=1/);
+      assert.match(exported, new RegExp(`OCC_TEST_LOGGING_NODE_IMAGE=${customNodeImage}`));
+      // Every container image is prepared before the tests run; the real
+      // pullImage classifier and retry loop handle the injected registry failure.
+      assert.deepEqual(
+        pulls.toSorted(),
+        [collectorImage, customNodeImage, ...Object.values(metricsMonitoringImages)]
+          .flatMap((image) => [image, image])
+          .toSorted(),
+      );
+      assert.match(
+        result.stderr,
+        /Transient image pull failure \(Error response from daemon: HTTP 503/,
+      );
+    });
+  }
 });
 
-test("images packaging lane prepares Codex seccomp before native runtime smoke tests", () => {
+test("runtime startup lane prepares Codex seccomp before native runtime smoke tests", () => {
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
-  const lane = manifest.lanes["images-packaging"];
+  const lane = manifest.lanes["images-runtime-startup"];
 
   assert.equal(lane.prepare?.codexSeccomp, true);
+  assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"));
   assert.ok(
     lane.files.some(({ path }) => path === "tests/integration/runtime-image-startup.test.mjs"),
   );
@@ -1582,7 +1667,7 @@ test("images packaging lane prepares Codex seccomp before native runtime smoke t
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {
   const root = await fixture(t);
   const statePath = join(root, "missing-state.json");
-  const file = "tests/integration/runtime-image-startup.test.mjs";
+  const file = "tests/integration/docker-compute-token-retry.test.mjs";
   const customNodeBaseImage =
     "docker.io/library/node:24-bookworm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 

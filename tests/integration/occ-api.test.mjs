@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { createServer } from "node:net";
+import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AuthAccountRoleNotFoundError } from "../../apps/controller/src/auth/index.ts";
@@ -21,6 +22,7 @@ import { NativeIAMDriver, validateAuthAccountPrincipalSeed } from "../../package
 import {
   AgentDeletingError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  ConfigurationHarnessError,
   InMemoryPlatformState,
   OpenClawController,
 } from "../../packages/occ/src/index.ts";
@@ -32,28 +34,15 @@ import {
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { availablePort } from "../helpers/available-port.mjs";
+import { stopProcess } from "../helpers/stop-process.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const entrypoint = fileURLToPath(new URL("../../apps/controller/src/server.mjs", import.meta.url));
-const developmentEmail = "admin@openclaw.local";
-const developmentPassword = "openclaw-development-password";
 const uuidV4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const identifier = (prefix) => new RegExp(`^${prefix}_${uuidV4}$`);
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
 const missingAgentId = "agt_6f1c9b2d-8e34-4a1f-9c57-2d0b8e4a71c3";
-
-async function availableLoopbackPort() {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  assert.equal(typeof address, "object");
-  assert.notEqual(address, null);
-  await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
 
 function childEnvironment(port, overrides = {}) {
   const environment = {
@@ -63,8 +52,6 @@ function childEnvironment(port, overrides = {}) {
     OCC_PORT: String(port),
     OCC_AUTH_BASE_URL: `http://127.0.0.1:${port}`,
     OCC_AUTH_SECRET: "openclaw-development-auth-secret-minimum-32-bytes",
-    OPENCLAW_DEV_EMAIL: developmentEmail,
-    OPENCLAW_DEV_PASSWORD: developmentPassword,
     ...overrides,
   };
 
@@ -96,44 +83,38 @@ function startChild(port, overrides = {}) {
   return { child, output: () => output };
 }
 
-async function stopChild(child) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  const exited = once(child, "exit");
-  child.kill("SIGTERM");
-  const forced = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }, 1_000);
-  forced.unref();
-
-  try {
-    await exited;
-  } finally {
-    clearTimeout(forced);
-  }
-}
-
+// Each case points OCC_DATABASE_URL at a closed port, so a case whose own check stopped
+// firing would still exit nonzero once startup tried the database (PERSISTENCE_UNAVAILABLE).
+// The startup-error code proves startup refused it before that. STARTUP_FAILED is the
+// catch-all code, so the bind and production cases prove only that much.
 async function assertUnsafeStartupRejected() {
   const configuredDatabase = { OCC_DATABASE_URL: "postgresql://127.0.0.1:1/openclaw" };
-  for (const [description, overrides] of [
-    ["missing development database", {}],
-    ["production mode", { ...configuredDatabase, NODE_ENV: "production", OCC_HOST: "192.0.2.10" }],
-    ["nonloopback bind", { ...configuredDatabase, OCC_HOST: "192.0.2.10" }],
-    ["unsafe container bind", { ...configuredDatabase, OCC_HOST: "0.0.0.0" }],
-    ["low-entropy auth secret", { ...configuredDatabase, OCC_AUTH_SECRET: "insecure" }],
-    ["invalid auth base URL", { ...configuredDatabase, OCC_AUTH_BASE_URL: "not-a-url" }],
+  for (const [description, overrides, code] of [
+    ["missing development database", {}, "DATABASE_CONFIGURATION_INVALID"],
+    [
+      "production mode",
+      { ...configuredDatabase, NODE_ENV: "production", OCC_HOST: "192.0.2.10" },
+      "STARTUP_FAILED",
+    ],
+    ["nonloopback bind", { ...configuredDatabase, OCC_HOST: "192.0.2.10" }, "STARTUP_FAILED"],
+    ["unsafe container bind", { ...configuredDatabase, OCC_HOST: "0.0.0.0" }, "STARTUP_FAILED"],
+    [
+      "low-entropy auth secret",
+      { ...configuredDatabase, OCC_AUTH_SECRET: "insecure" },
+      "AUTH_SECRET_INVALID",
+    ],
+    [
+      "invalid auth base URL",
+      { ...configuredDatabase, OCC_AUTH_BASE_URL: "not-a-url" },
+      "AUTH_BASE_URL_INVALID",
+    ],
     [
       "nonloopback auth base URL",
       { ...configuredDatabase, OCC_AUTH_BASE_URL: "http://192.0.2.10:3000" },
+      "AUTH_BASE_URL_INVALID",
     ],
-    ["missing development email", { ...configuredDatabase, OPENCLAW_DEV_EMAIL: "" }],
-    ["missing development password", { ...configuredDatabase, OPENCLAW_DEV_PASSWORD: "" }],
   ]) {
-    const port = await availableLoopbackPort();
+    const port = await availablePort();
     const processState = startChild(port, overrides);
     let deadline;
 
@@ -149,9 +130,10 @@ async function assertUnsafeStartupRejected() {
       ]);
       const [exitCode] = result;
       assert.notEqual(exitCode, 0, `${description} must fail closed:\n${processState.output()}`);
+      assert.match(processState.output(), new RegExp(`"code":"${code}"`), description);
     } finally {
       clearTimeout(deadline);
-      await stopChild(processState.child);
+      await stopProcess(processState.child, { graceMs: 1_000 });
     }
   }
 }
@@ -289,7 +271,7 @@ function exactSecretRef(namespaceId, id) {
   return { kind: "secret", namespaceId, id };
 }
 
-function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
+function provisioningRequestBody(namespaceId, secrets, { configuration, ...overrides } = {}) {
   return {
     requestId: `req_${randomUUID()}`,
     name: `Provisioned Agent ${randomUUID().slice(0, 8)}`,
@@ -302,7 +284,7 @@ function provisioningRequestBody(namespaceId, secrets, overrides = {}) {
           source: exactSecretRef(namespaceId, secrets.toolApiKey.id),
         },
       },
-      ...overrides.configuration,
+      ...configuration,
     },
     harnessAuth: {
       method: "api_key",
@@ -1043,7 +1025,8 @@ test("Namespace IAM routes bind existing humans to the exact Namespace and Agent
     [member.principal.id, "agent", namespace.id],
   ]) {
     const denied = await bind(subjectId, resourceKind, resourceId);
-    assert.equal(denied.status, 404, JSON.stringify(denied.body));
+    assert.equal(denied.status, 400, JSON.stringify(denied.body));
+    assert.equal(denied.body.error.code, "INVALID_REQUEST");
   }
 
   const memberApp = fixture.createApp(member.principal);
@@ -1106,8 +1089,22 @@ test("credential withdrawal routes authorize the Agent, not the credential sourc
   ]);
   const conflict = await injectedRequest(agentOperator, "POST", `${path}/withdraw`);
   assert.equal(conflict.status, 409, JSON.stringify(conflict.body));
+  assert.equal(conflict.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(conflict.body.error.message, /has no active revision to withdraw/);
   const status = await injectedRequest(agentOperator, "GET", `${path}/withdrawal`);
   assert.notEqual(status.status, 403, JSON.stringify(status.body));
+
+  // An in-use conflict names what blocks it instead of the generic "already exists" text.
+  const configurationInUse = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/configurations/${agent.configurationId}`,
+  );
+  assert.equal(configurationInUse.status, 409, JSON.stringify(configurationInUse.body));
+  assert.equal(configurationInUse.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(
+    configurationInUse.body.error.message,
+    /An Agent still references the Configuration/,
+  );
 
   // The denial's audit evidence names the Agent the route declares, not the source.
   const withdrawalEvents = fixture.auditSink.events.filter(
@@ -1117,6 +1114,151 @@ test("credential withdrawal routes authorize the Agent, not the credential sourc
     withdrawalEvents.map((event) => [event.kind, event.resource]),
     [["authorization_denial", { kind: "agent", id: agent.id, namespaceId: namespace.id }]],
   );
+});
+
+test("Namespace IAM refuses bindings whose Role cannot apply to the target", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("inapplicable-role-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "inapplicable-role");
+  const agent = await createAgent(controller, namespace.id, "inapplicable-role-agent");
+  const createRole = async (permissions) => {
+    const role = await controller.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+      body: { permissions },
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    return role.data.id;
+  };
+  const bind = (roleId, resourceKind, resourceId) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId,
+        resourceKind,
+        resourceId,
+      },
+    });
+
+  // The dogfood "share the Namespace" attempt: create is authorized against the Namespace,
+  // never an exact resource, so these Permissions would be silently dropped at evaluation.
+  const creator = await createRole([
+    { action: "read", resourceKind: "namespace" },
+    { action: "create", resourceKind: "agent" },
+    { action: "create", resourceKind: "configuration" },
+    { action: "create", resourceKind: "secret" },
+  ]);
+  for (const [resourceKind, resourceId] of [
+    ["namespace", namespace.id],
+    ["agent", agent.id],
+  ]) {
+    const rejected = await bind(creator, resourceKind, resourceId);
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.deepEqual(rejected.body.error.details, [{ path: "/roleId", code: "INVALID_VALUE" }]);
+    assert.match(
+      rejected.body.error.message,
+      /agent:create, configuration:create, secret:create\. No AccessBinding grants create: only Installation administrators/,
+    );
+  }
+
+  // A Role with no Permission for the target's kind would grant nothing there.
+  const agentReader = await createRole([{ action: "read", resourceKind: "agent" }]);
+  const nothing = await bind(agentReader, "namespace", namespace.id);
+  assert.equal(nothing.status, 400, JSON.stringify(nothing.body));
+  assert.match(nothing.body.error.message, /grants nothing on the namespace target.*agent:read/);
+
+  // The same Role still binds to a target its Permissions name.
+  const granted = await bind(agentReader, "agent", agent.id);
+  assert.equal(granted.status, 201, JSON.stringify(granted.body));
+  const bindings = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/iam/access-bindings`,
+  );
+  assert.deepEqual(
+    bindings.data.map((binding) => binding.id),
+    [granted.data.id],
+    "refused bindings must leave policy unchanged",
+  );
+});
+
+test("credential source registration names the missing Credential Gateway", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "no-credential-gateway");
+  // This Installation selects no Credential Gateway, like the Kubernetes production profile;
+  // the missing gateway is reported before Namespace readiness or the source catalog.
+  const rejected = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/credential-sources`,
+    { body: { name: "openai-key", type: "openai" } },
+  );
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
+  assert.equal(rejected.body.error.code, "CREDENTIAL_GATEWAY_NOT_CONFIGURED");
+  assert.match(
+    rejected.body.error.message,
+    /no Credential Gateway.*docs-enterprise\.openclaw\.org\/reference\/credential-sources\//,
+  );
+});
+
+test("a duplicate Secret name answers 409 naming the taken Secret name", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "secret-duplicate-name");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Model API key", value: "first-value" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+
+  // The caller chose only the name, so the conflict says the name is taken here.
+  const duplicate = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Model API key", value: "second-value" },
+  });
+  assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    duplicate.body.error.message,
+    "A Secret with this name already exists in this Namespace. Choose a different name.",
+  );
+});
+
+test("Secret values with an unpaired surrogate are refused as an invalid value", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "secret-value-validation");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Valid value", value: "valid-secret-\u{1F511}" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+
+  // The request schema admits these strings; OCC refuses them because they are not UTF-8.
+  for (const value of ["\ud800", "prefix-\udfff-suffix"]) {
+    for (const [method, path, body] of [
+      ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Unpaired surrogate", value }],
+      ["PATCH", `/namespaces/${namespace.id}/secrets/${secret.body.data.id}`, { value }],
+    ]) {
+      const rejected = await controller.request(method, path, { body });
+      assert.equal(rejected.status, 400, `${method} ${JSON.stringify(rejected.body)}`);
+      assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+      assert.match(rejected.body.error.message, /Secret value must be nonempty UTF-8/);
+      assert.deepEqual(rejected.body.error.details, [{ path: "/value", code: "INVALID_VALUE" }]);
+    }
+  }
 });
 
 test("Namespace IAM routes bind humans enrolled after bootstrap through the live resolver", async () => {
@@ -1176,13 +1318,325 @@ test("Namespace IAM routes bind humans enrolled after bootstrap through the live
     [member.principal.id, "agent", foreignAgent.id],
   ]) {
     const denied = await bind(subjectId, resourceKind, resourceId);
-    assert.equal(denied.status, 404, `${subjectId}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.status, 400, `${subjectId}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "INVALID_REQUEST");
   }
   const bindings = await controller.request(
     "GET",
     `/namespaces/${namespace.id}/iam/access-bindings`,
   );
   assert.equal(bindings.data.length, 4, "rejected subjects must leave policy unchanged");
+});
+
+test("access removed by deleting its target or Namespace is audited and leaves no policy behind", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("side-effect-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "side-effect-access");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const secret = await controller.request("POST", `/namespaces/${namespace.id}/secrets`, {
+    body: { name: "Side effect key", value: "side-effect-secret" },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+  const configuration = await createConfiguration(controller, namespace.id);
+  const agent = await createAgent(controller, namespace.id, "side-effect-agent");
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  const role = await controller.request("POST", `${policyPath}/roles`, {
+    body: {
+      permissions: [
+        { action: "read", resourceKind: "secret" },
+        { action: "read", resourceKind: "configuration" },
+        { action: "delete", resourceKind: "agent" },
+      ],
+    },
+  });
+  assert.equal(role.status, 201, JSON.stringify(role.body));
+  const bind = async (resourceKind, resourceId) => {
+    const binding = await controller.request("POST", `${policyPath}/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: role.data.id,
+        resourceKind,
+        resourceId,
+      },
+    });
+    assert.equal(binding.status, 201, JSON.stringify(binding.body));
+    return binding.data;
+  };
+  const secretBinding = await bind("secret", secret.data.id);
+  const configurationBinding = await bind("configuration", configuration.id);
+  const agentBinding = await bind("agent", agent.id);
+  const removedEntry = (binding) => ({
+    id: binding.id,
+    subjectKind: "identity",
+    subjectId: member.principal.id,
+    roleId: role.data.id,
+    resourceKind: binding.resourceKind,
+    resourceId: binding.resourceId,
+  });
+  const lastEvent = (action) =>
+    fixture.auditSink.events.findLast((event) => event.action === action);
+
+  assert.equal(
+    (await controller.request("DELETE", `/namespaces/${namespace.id}/secrets/${secret.data.id}`))
+      .status,
+    204,
+  );
+  assert.deepEqual(lastEvent("openclaw.secrets.delete").details.removedAccessBindings, [
+    removedEntry(secretBinding),
+  ]);
+  assert.equal(
+    (
+      await controller.request(
+        "DELETE",
+        `/namespaces/${namespace.id}/configurations/${configuration.id}`,
+      )
+    ).status,
+    204,
+  );
+  assert.deepEqual(lastEvent("openclaw.configurations.delete").details.removedAccessBindings, [
+    removedEntry(configurationBinding),
+  ]);
+  const deleting = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(deleting.status, 202, JSON.stringify(deleting.body));
+  assert.deepEqual(lastEvent("openclaw.agents.delete").details.accessBindingsRemovedOnCompletion, [
+    removedEntry(agentBinding),
+  ]);
+
+  // A Namespace tombstone keeps none of its own Roles or AccessBindings.
+  const empty = await createNamespace(controller, "side-effect-empty");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, empty.id, "ready");
+  const reader = await controller.request("POST", `/namespaces/${empty.id}/iam/roles`, {
+    body: { permissions: [{ action: "read", resourceKind: "namespace" }] },
+  });
+  assert.equal(reader.status, 201, JSON.stringify(reader.body));
+  const unused = await controller.request("POST", `/namespaces/${empty.id}/iam/roles`, {
+    body: { permissions: [{ action: "read", resourceKind: "agent" }] },
+  });
+  assert.equal(unused.status, 201, JSON.stringify(unused.body));
+  const readerBinding = await controller.request(
+    "POST",
+    `/namespaces/${empty.id}/iam/access-bindings`,
+    {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: reader.data.id,
+        resourceKind: "namespace",
+        resourceId: empty.id,
+      },
+    },
+  );
+  assert.equal(readerBinding.status, 201, JSON.stringify(readerBinding.body));
+  assert.equal((await controller.request("DELETE", `/namespaces/${empty.id}`)).status, 202);
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, empty.id, "deleted");
+  assert.equal((await controller.request("GET", `/namespaces/${empty.id}`)).status, 404);
+  const remaining = await fixture.controller.transact(async (unit) => ({
+    bindings: await unit.iamPolicy.listAccessBindings(empty.id),
+    roles: await unit.iamPolicy.listRoles(empty.id),
+  }));
+  assert.deepEqual(remaining, { bindings: [], roles: [] });
+  const teardown = fixture.auditSink.events.findLast(
+    (event) =>
+      event.action === "openclaw.namespaces.lifecycle.delete" && event.resource.id === empty.id,
+  );
+  assert.equal(teardown.outcome, "success");
+  assert.deepEqual(teardown.details.removedAccessBindings, [
+    {
+      id: readerBinding.data.id,
+      subjectKind: "identity",
+      subjectId: member.principal.id,
+      roleId: reader.data.id,
+      resourceKind: "namespace",
+      resourceId: empty.id,
+    },
+  ]);
+  assert.deepEqual(
+    [...teardown.details.removedRoleIds].sort(),
+    [reader.data.id, unused.data.id].sort(),
+  );
+});
+
+test("a state conflict names what blocks the request, after authorization only", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("state-conflict-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "state-conflict");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const deletion = await controller.request("DELETE", `/namespaces/${namespace.id}`);
+  assert.equal(deletion.status, 202, JSON.stringify(deletion.body));
+
+  // A plain conflict would answer "already exists"; the caller needs the actual reason.
+  for (const [path, body, message] of [
+    [
+      "configurations",
+      { kind: "agent", values: {} },
+      "The Namespace does not accept new Configurations.",
+    ],
+    [
+      "service-accounts",
+      { name: "late-account" },
+      "The Namespace does not accept new ServiceAccounts.",
+    ],
+    [
+      "agents",
+      { name: "late-agent", configurationId: "cfg_00000000-0000-4000-8000-000000000000" },
+      "The Namespace does not accept new Agents.",
+    ],
+  ]) {
+    const refused = await controller.request("POST", `/namespaces/${namespace.id}/${path}`, {
+      body,
+    });
+    assert.equal(refused.status, 409, `${path}: ${JSON.stringify(refused.body)}`);
+    assert.equal(refused.body.error.code, "RESOURCE_CONFLICT");
+    assert.equal(refused.body.error.message, message);
+  }
+
+  const options = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/repository-options`,
+  );
+  assert.equal(options.status, 409, JSON.stringify(options.body));
+  assert.equal(options.body.error.message, "The Namespace does not accept new Agents.");
+
+  // A caller without create permission learns nothing about the Namespace lifecycle.
+  const memberApp = fixture.createApp(member.principal);
+  for (const [method, path, body] of [
+    ["POST", "configurations", { kind: "agent", values: {} }],
+    ["POST", "service-accounts", { name: "late-account" }],
+    [
+      "POST",
+      "agents",
+      { name: "late-agent", configurationId: "cfg_00000000-0000-4000-8000-000000000000" },
+    ],
+    ["GET", "agents/repository-options"],
+  ]) {
+    const denied = await injectedRequest(
+      memberApp,
+      method,
+      `/namespaces/${namespace.id}/${path}`,
+      body === undefined ? {} : { body },
+    );
+    assert.equal(denied.status, 403, `${path}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+  }
+});
+
+test("Namespace IAM reports invalid policy input as 400 with the field and refuses inert Permissions", async () => {
+  const fixture = await createInjectedFixture();
+  const member = await fixture.createAuthPrincipal("policy-validation-member");
+  fixture.state.identities.push(member.principal);
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "policy-validation");
+  const other = await createNamespace(controller, "policy-validation-other");
+  const createRole = (namespaceId, permissions) =>
+    controller.request("POST", `/namespaces/${namespaceId}/iam/roles`, {
+      body: { permissions },
+    });
+
+  // Pairs that no operation checks would be stored and grant nothing.
+  for (const [action, resourceKind] of [
+    ["read_logs", "secret"],
+    ["administer", "secret"],
+    ["deploy", "configuration"],
+    ["update", "agent_revision"],
+    ["operate", "preset"],
+  ]) {
+    const rejected = await createRole(namespace.id, [
+      { action: "read", resourceKind: "agent" },
+      { action, resourceKind },
+    ]);
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.deepEqual(rejected.body.error.details, [
+      { path: "/permissions", code: "INVALID_VALUE" },
+    ]);
+    assert.match(
+      rejected.body.error.message,
+      new RegExp(`grant nothing: ${resourceKind}:${action}\\.`),
+    );
+  }
+  const duplicate = await createRole(namespace.id, [
+    { action: "read", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent" },
+  ]);
+  assert.equal(duplicate.status, 400, JSON.stringify(duplicate.body));
+  assert.deepEqual(duplicate.body.error.details, [
+    { path: "/permissions/1", code: "INVALID_VALUE" },
+  ]);
+  assert.match(duplicate.body.error.message, /agent:read more than once/);
+  const lifecycle = await createRole(namespace.id, [
+    { action: "delete", resourceKind: "namespace" },
+  ]);
+  assert.equal(lifecycle.status, 400, JSON.stringify(lifecycle.body));
+  assert.deepEqual(lifecycle.body.error.details, [
+    { path: "/permissions/0/action", code: "INVALID_VALUE" },
+  ]);
+  const roles = await controller.request("GET", `/namespaces/${namespace.id}/iam/roles`);
+  assert.deepEqual(roles.data, [], "rejected Roles must not be persisted");
+
+  // Every supported pair is still accepted.
+  const supported = await createRole(namespace.id, [
+    { action: "read", resourceKind: "namespace" },
+    { action: "operate", resourceKind: "secret" },
+    { action: "read_logs", resourceKind: "agent" },
+    { action: "administer", resourceKind: "agent" },
+    { action: "read", resourceKind: "agent_revision" },
+    { action: "operate", resourceKind: "credential_source" },
+  ]);
+  assert.equal(supported.status, 201, JSON.stringify(supported.body));
+  const reader = await createRole(namespace.id, [{ action: "read", resourceKind: "namespace" }]);
+  const foreignRole = await createRole(other.id, [{ action: "read", resourceKind: "namespace" }]);
+  assert.equal(foreignRole.status, 201, JSON.stringify(foreignRole.body));
+
+  const bind = (body) =>
+    controller.request("POST", `/namespaces/${namespace.id}/iam/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId: member.principal.id,
+        roleId: reader.data.id,
+        resourceKind: "namespace",
+        resourceId: namespace.id,
+        ...body,
+      },
+    });
+  for (const [body, path] of [
+    [{ resourceId: other.id }, "/resourceId"],
+    [{ roleId: foreignRole.data.id }, "/roleId"],
+    [{ roleId: `role_${randomUUID()}` }, "/roleId"],
+    [{ subjectId: `prn_${randomUUID()}` }, "/subjectId"],
+  ]) {
+    const rejected = await bind(body);
+    assert.equal(rejected.status, 400, `${path}: ${JSON.stringify(rejected.body)}`);
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
+    assert.deepEqual(rejected.body.error.details, [{ path, code: "INVALID_VALUE" }]);
+  }
+
+  // A Role still referenced by an AccessBinding names the reason, not "already exists".
+  const binding = await bind({});
+  assert.equal(binding.status, 201, JSON.stringify(binding.body));
+  const inUse = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/iam/roles/${reader.data.id}`,
+  );
+  assert.equal(inUse.status, 409, JSON.stringify(inUse.body));
+  assert.equal(inUse.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(inUse.body.error.message, /referenced by AccessBindings/);
 });
 
 test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespace binding", async () => {
@@ -1211,9 +1665,8 @@ test("Namespace IAM Roles cannot grant Namespace lifecycle actions to a Namespac
       { action: "read", resourceKind: "namespace" },
       { action, resourceKind: "namespace" },
     ]);
-    // OCC reports the ScopeViolation as not found, like other out-of-scope policy input.
-    assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
-    assert.equal(rejected.body.error.code, "NOT_FOUND");
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
   }
   const roles = await controller.request("GET", `/namespaces/${namespace.id}/iam/roles`);
   assert.deepEqual(roles.data, [], "rejected Namespace Roles must not be persisted");
@@ -1303,8 +1756,8 @@ test("OCC rejects Namespace lifecycle Role Permissions before any IAM Driver or 
     "read_logs",
   ]) {
     const rejected = await createRole([{ action, resourceKind: "namespace" }]);
-    assert.equal(rejected.status, 404, JSON.stringify(rejected.body));
-    assert.equal(rejected.body.error.code, "NOT_FOUND");
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, "INVALID_REQUEST");
   }
   assert.deepEqual(driverCalls, [], "OCC must reject before delegating to the IAM Driver");
 
@@ -1939,6 +2392,77 @@ test("Agent deployment status polls the admitted revision work with exact read a
   const deniedApp = fixture.createApp(revisionReader);
   const denied = await injectedRequest(deniedApp, "GET", path);
   assert.equal(denied.status, 403);
+});
+
+test("a deletion retry by another delete holder names the initiator condition and audits it", async () => {
+  const deploymentWorks = new Map();
+  const fixture = await createInjectedFixture({ deploymentWorks, recordOperations: true });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "deletion-takeover");
+  const agent = await createAgent(controller, namespace.id, "takeover-agent");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const started = await controller.request(
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  // The administrator's teardown failed permanently; it still holds delete.
+  deploymentWorks.set(`agent:${agent.id}:reconcile:deleted`, {
+    idempotencyKey: `agent:${agent.id}:reconcile:deleted`,
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    actorId: fixture.principal.id,
+    state: "failed_permanent",
+    availableAt: new Date(0),
+    attemptCount: 1,
+    completedAt: new Date(1),
+    reasonCode: "AUTHORIZATION_DENIED",
+    createdAt: new Date(0),
+    updatedAt: new Date(1),
+  });
+
+  const { principal: other } = await fixture.createAuthPrincipal("deletion-takeover-other");
+  fixture.state.identities.push(other);
+  fixture.state.roles.push({
+    id: "role-deletion-takeover",
+    namespaceId: namespace.id,
+    permissions: [{ action: "delete", resourceKind: "agent" }],
+  });
+  fixture.state.bindings.push({
+    id: "binding-deletion-takeover",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: other.id,
+    roleId: "role-deletion-takeover",
+    resourceKind: "agent",
+    resourceId: agent.id,
+  });
+  const refused = await injectedRequest(
+    fixture.createApp(other),
+    "DELETE",
+    `/namespaces/${namespace.id}/agents/${agent.id}`,
+  );
+  assert.equal(refused.status, 403, JSON.stringify(refused.body));
+  assert.equal(refused.body.error.code, "FORBIDDEN");
+  assert.match(refused.body.error.message, /Only the actor that started this deletion/);
+  assert.match(refused.body.error.message, /remove its delete permission first/);
+  assert.equal(JSON.stringify(refused.body).includes(fixture.principal.id), false);
+
+  const denial = fixture.auditSink.events.findLast(
+    (event) => event.kind === "authorization_denial" && event.actorId === other.id,
+  );
+  assert.ok(denial, "the refusal must be audited");
+  assert.equal(denial.authorization.action, "delete");
+  assert.deepEqual(denial.authorization.resource, {
+    kind: "agent",
+    id: agent.id,
+    namespaceId: namespace.id,
+  });
+  assert.match(denial.decisionReason, /initiating actor/);
+  assert.equal(denial.details.initiatingActorId, fixture.principal.id);
 });
 
 test("Installation deployment inventory fails closed on incomplete authorization and reports in-flight work", async () => {
@@ -2758,6 +3282,10 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const missingCredential = await controller.request("POST", deploymentPath);
   assert.equal(missingCredential.status, 409);
   assert.equal(missingCredential.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    missingCredential.body.error.message,
+    "ChatGPT Harness authentication requires an issued account access-token credential.",
+  );
 
   const initialCredential = {
     kind: "api_key",
@@ -2821,9 +3349,20 @@ test("native ServiceAccounts keep private credential references and cannot admit
     [],
   );
 
+  // The caller holds delete on the account, so the conflict names what still depends on it.
   const boundDeletion = await controller.request("DELETE", accountPath);
   assert.equal(boundDeletion.status, 409);
   assert.equal(boundDeletion.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    boundDeletion.body.error.message,
+    "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
+  );
+  // Authorization precedes the reference check: a caller without delete learns nothing about references.
+  const outsider = await controller.fixture.createAuthPrincipal("service-account-outsider");
+  controller.fixture.state.identities.push(outsider.principal);
+  const forbidden = await controller.request("DELETE", accountPath, { session: outsider.session });
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.body.error.code, "FORBIDDEN");
 
   const detached = await controller.request(
     "PATCH",
@@ -2895,6 +3434,12 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     { body: { name: "account-a" } },
   );
   assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error.code, "RESOURCE_CONFLICT");
+  // The caller chose only the name, so the conflict says the name is taken here.
+  assert.equal(
+    duplicate.body.error.message,
+    "A ServiceAccount with this name already exists in this Namespace. Choose a different name.",
+  );
 
   // Account ownership participates in Namespace emptiness even before any Agent is created.
   const occupiedNamespace = await controller.request("DELETE", `/namespaces/${namespaceA.id}`);
@@ -3315,6 +3860,7 @@ test("administrator-created auth accounts sign in and receive only provisioned I
       email: namespaceRoleEmail,
       password: namespaceRolePassword,
     }),
+    /sign-in failed with HTTP 401: .*"code":\s*"UNAUTHENTICATED"/s,
   );
 
   // An explicit but blank or null roleId is a malformed request, never the zero-grant path.
@@ -3471,6 +4017,10 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   });
   assert.equal(duplicateNamespace.status, 409);
   assert.equal(duplicateNamespace.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    duplicateNamespace.body.error.message,
+    "A Namespace with this name already exists. Choose a different name.",
+  );
 
   const invalidAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
     body: { name: "" },
@@ -3483,6 +4033,11 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   });
   assert.equal(duplicateAgent.status, 409);
   assert.equal(duplicateAgent.body.error.code, "RESOURCE_CONFLICT");
+  // The caller chose only the name, so the conflict says the name is taken here.
+  assert.equal(
+    duplicateAgent.body.error.message,
+    "An Agent with this name already exists in this Namespace. Choose a different name.",
+  );
 
   for (const configurationId of [null, [], "invalid"]) {
     const invalidCreation = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
@@ -3559,9 +4114,32 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
 
   const malformedIdentifier = await controller.request("GET", "/namespaces/ns_not-a-uuid");
   assert.equal(malformedIdentifier.status, 400);
+  // Path-parameter failures name the parameter and its syntax, like body failures name fields.
+  assert.deepEqual(malformedIdentifier.body.error.details, [
+    { path: "/namespaceId", code: "INVALID_FORMAT" },
+  ]);
+  assert.match(malformedIdentifier.body.error.message, /params \/namespaceId .* expected ns_ /);
 
   const wrongResourceKind = await controller.request("GET", `/namespaces/${agent.id}`);
   assert.equal(wrongResourceKind.status, 400);
+
+  const nonV4Agent = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/agt_00000000-0000-0000-0000-000000000000`,
+  );
+  assert.equal(nonV4Agent.status, 400);
+  assert.deepEqual(nonV4Agent.body.error.details, [{ path: "/agentId", code: "INVALID_FORMAT" }]);
+
+  // A deployment is addressed by its revision ID, so the message names the rev_ prefix.
+  const malformedDeployment = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${agent.id}/deployments/rev_bogus/runtime/logs?source=gateway`,
+  );
+  assert.equal(malformedDeployment.status, 400);
+  assert.deepEqual(malformedDeployment.body.error.details, [
+    { path: "/deploymentId", code: "INVALID_FORMAT" },
+  ]);
+  assert.match(malformedDeployment.body.error.message, /params \/deploymentId .* expected rev_ /);
 
   const oversized = await controller.request("POST", "/namespaces", {
     body: { name: "x".repeat(64 * 1024) },
@@ -3627,6 +4205,150 @@ test("OCC Fastify enforces strict schemas, canonical errors, and its real 64 KiB
   assertOnlyDefaultNamespace(untouched);
 });
 
+test("Configuration and Agent writes reject invalid Secret bindings as invalid requests", async () => {
+  const fixture = await createInjectedFixture();
+  const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
+    body: { name: "Binding validation installation" },
+  });
+  assert.equal(installation.status, 201);
+  const namespace = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "binding-validation" },
+  });
+  assert.equal(namespace.status, 201);
+  const namespaceId = namespace.data.id;
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespaceId, "ready");
+  const secret = await injectedRequest(fixture.app, "POST", `/namespaces/${namespaceId}/secrets`, {
+    body: { name: "tool-api-key", value: `tool-key-${randomUUID()}` },
+  });
+  assert.equal(secret.status, 201, JSON.stringify(secret.body));
+  const own = exactSecretRef(namespaceId, secret.data.id);
+  const foreign = exactSecretRef(`ns_${randomUUID()}`, secret.data.id);
+  const missing = exactSecretRef(namespaceId, `sec_${randomUUID()}`);
+  const values = { agents: { defaults: { model: "codex/gpt-6-astra" } } };
+  const bindingsTo = (name, source) => ({ [name]: { source, delivery: { type: "env" } } });
+
+  const configuration = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespaceId}/configurations`,
+    { body: { kind: "agent", values, secretBindings: bindingsTo("TOOL_API_KEY", own) } },
+  );
+  assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+  const configurationPath = `/namespaces/${namespaceId}/configurations/${configuration.data.id}`;
+  const agent = await injectedRequest(fixture.app, "POST", `/namespaces/${namespaceId}/agents`, {
+    body: { name: "binding-validation-agent", configurationId: configuration.data.id },
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  const agentPath = `/namespaces/${namespaceId}/agents/${agent.data.id}`;
+
+  const reserved = "A secret binding uses a reserved or invalid environment destination.";
+  const crossNamespace = "Secret references cannot cross Namespaces.";
+  const writes = [
+    [
+      "Configuration create",
+      "POST",
+      `/namespaces/${namespaceId}/configurations`,
+      (bindings) => ({
+        kind: "agent",
+        values,
+        secretBindings: bindings,
+      }),
+    ],
+    [
+      "Configuration update",
+      "PATCH",
+      configurationPath,
+      (bindings) => ({
+        values,
+        secretBindings: bindings,
+      }),
+    ],
+  ];
+  // Each invalid case must fail on its own rule (the exact message); a Secret the Namespace
+  // does not hold stays a not-found.
+  for (const [path, method, url, body] of writes) {
+    for (const [description, bindings, status, message] of [
+      ["reserved destination", bindingsTo("OPENCLAW_TOKEN", own), 400, reserved],
+      ["cross-Namespace Secret", bindingsTo("TOOL_API_KEY", foreign), 400, crossNamespace],
+      ["missing Secret", bindingsTo("TOOL_API_KEY", missing), 404, undefined],
+    ]) {
+      const result = await injectedRequest(fixture.app, method, url, { body: body(bindings) });
+      const label = `${path}, ${description}: ${JSON.stringify(result.body)}`;
+      assert.equal(result.status, status, label);
+      assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
+      if (message !== undefined) {
+        assert.equal(result.body.error.message, message, label);
+      }
+    }
+  }
+
+  // Agents select Secrets only through their Harness authentication source.
+  for (const [path, method, url, body] of [
+    [
+      "Agent create",
+      "POST",
+      `/namespaces/${namespaceId}/agents`,
+      (harnessAuth) => ({
+        name: `binding-validation-${randomUUID().slice(0, 8)}`,
+        configurationId: configuration.data.id,
+        harnessAuth,
+      }),
+    ],
+    [
+      "Agent update",
+      "PATCH",
+      agentPath,
+      (harnessAuth) => ({
+        configurationId: configuration.data.id,
+        harnessAuth,
+      }),
+    ],
+  ]) {
+    for (const [description, source, status, message] of [
+      ["cross-Namespace Secret", foreign, 400, crossNamespace],
+      ["missing Secret", missing, 404, undefined],
+    ]) {
+      const result = await injectedRequest(fixture.app, method, url, {
+        body: body({ method: "api_key", source }),
+      });
+      const label = `${path}, ${description}: ${JSON.stringify(result.body)}`;
+      assert.equal(result.status, status, label);
+      assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
+      if (message !== undefined) {
+        assert.equal(result.body.error.message, message, label);
+      }
+    }
+  }
+
+  // A resource the caller cannot find stays a not-found even when the request is invalid.
+  for (const [path, url, body] of [
+    [
+      "Configuration update",
+      `/namespaces/${namespaceId}/configurations/cfg_${randomUUID()}`,
+      { values, secretBindings: bindingsTo("OPENCLAW_TOKEN", own) },
+    ],
+    [
+      "Agent update",
+      `/namespaces/${namespaceId}/agents/agt_${randomUUID()}`,
+      {
+        configurationId: configuration.data.id,
+        harnessAuth: { method: "api_key", source: foreign },
+      },
+    ],
+  ]) {
+    const result = await injectedRequest(fixture.app, "PATCH", url, { body });
+    assert.equal(result.status, 404, `${path}: ${JSON.stringify(result.body)}`);
+    assert.equal(result.body.error.code, "NOT_FOUND", path);
+  }
+
+  // The rejected writes changed nothing.
+  const stored = await injectedRequest(fixture.app, "GET", configurationPath);
+  assert.equal(stored.data.generation, 1);
+  assert.deepEqual(stored.data.secretBindings, bindingsTo("TOOL_API_KEY", own));
+  const storedAgent = await injectedRequest(fixture.app, "GET", agentPath);
+  assert.deepEqual(storedAgent.data.harnessAuth, agent.data.harnessAuth);
+});
+
 test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
   const fixture = await createInjectedFixture({
     computeDriver: createProvisioningCapableComputeDriver(),
@@ -3673,6 +4395,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
         ...provisioningRequestBody(namespace.data.id, secrets),
         secrets: [{ name: "tool-api-key", value: `tool-key-${randomUUID()}` }],
       },
+      "The request does not match the operation contract: body /secrets is not an accepted field.",
     ],
     [
       "request-local Secret binding sources",
@@ -3685,6 +4408,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
+      "The request does not match the operation contract: body /configuration/secretBindings/TOOL_API_KEY/source/namespaceId is required.",
     ],
     [
       "request-local Harness Secret source",
@@ -3694,12 +4418,14 @@ test("Agent provisioning API validates inline configuration with existing Secret
           source: { kind: "provisioning-secret", name: "model-api-key" },
         },
       }),
+      /^The request does not match the operation contract: body \/harnessAuth\/source is not an accepted field;/,
     ],
     [
       "too many binding destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: { secretBindings: oversizedBindings },
       }),
+      "The request does not match the operation contract: body /configuration/secretBindings has an unsupported value (expected at most 64 fields).",
     ],
     [
       "non-env delivery",
@@ -3713,6 +4439,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
+      'The request does not match the operation contract: body /configuration/secretBindings/TOOL_API_KEY/delivery/type has an unsupported value (expected "env").',
     ],
     [
       "cross-Namespace Secret references",
@@ -3724,8 +4451,8 @@ test("Agent provisioning API validates inline configuration with existing Secret
             },
           },
         },
-        harnessAuth: { method: "runtime" },
       }),
+      "Secret references cannot cross Namespaces.",
     ],
     [
       "reserved environment destinations",
@@ -3737,21 +4464,50 @@ test("Agent provisioning API validates inline configuration with existing Secret
             },
           },
         },
-        harnessAuth: { method: "runtime" },
       }),
+      "A secret binding uses a reserved or invalid environment destination.",
     ],
   ];
 
-  for (const [description, body] of invalidBodies) {
+  // Each case must fail on its own rule (the exact message), not on an unrelated one.
+  for (const [description, body, message] of invalidBodies) {
     const result = await injectedRequest(
       fixture.app,
       "POST",
       `/namespaces/${namespace.data.id}/agents/provision`,
       { body },
     );
-    assert.equal(result.status, 400, description);
+    assert.equal(result.status, 400, `${description}: ${JSON.stringify(result.body)}`);
     assert.equal(result.body.error.code, "INVALID_REQUEST", description);
+    if (message instanceof RegExp) {
+      assert.match(result.body.error.message, message, description);
+    } else {
+      assert.equal(result.body.error.message, message, description);
+    }
   }
+
+  // A model provider baseUrl the runtime cannot use is refused at admission with the field
+  // named, instead of surfacing later as an unexplained startup model check failure.
+  const badBaseUrl = provisioningRequestBody(namespace.data.id, secrets);
+  badBaseUrl.configuration.values = {
+    ...badBaseUrl.configuration.values,
+    models: { providers: { codex: { baseUrl: "not a url", api: "openai-responses" } } },
+  };
+  const refusedBaseUrl = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: badBaseUrl },
+  );
+  assert.equal(refusedBaseUrl.status, 400, JSON.stringify(refusedBaseUrl.body));
+  assert.equal(
+    refusedBaseUrl.body.error.message,
+    "Configuration field /models/providers/codex/baseUrl must be an absolute http or https URL.",
+  );
+  assert.deepEqual(
+    await fixture.platformState.read((view) => view.agents.listAgents(namespace.data.id)),
+    [],
+  );
 
   const pluginDriver = new CodexPluginDriver();
   fixture.controller.registerDriver(pluginDriver);
@@ -3910,6 +4666,50 @@ test("bodyless OCC routes reject request payloads before IAM or domain side effe
   }
 });
 
+test("API response serializers keep same-$id shared schemas of sibling plugins apart", async () => {
+  // The serializer cache keys shared schemas by identity: two plugins that each add a
+  // different schema under one $id, with identical route schemas, must not share a build.
+  const fixture = await createInjectedFixture();
+  const app = fixture.createApp(fixture.principal, createFastifyApp);
+  try {
+    for (const field of ["first", "second"]) {
+      app.register(async (scope) => {
+        scope.addSchema({
+          $id: "SerializerCacheSibling",
+          type: "object",
+          properties: { [field]: { type: "string" } },
+        });
+        scope.get(
+          `/serializer-cache/${field}`,
+          { schema: { response: { 200: { $ref: "SerializerCacheSibling#" } } } },
+          async () => ({ first: "one", second: "two" }),
+        );
+      });
+    }
+    for (const [field, value] of [
+      ["first", "one"],
+      ["second", "two"],
+    ]) {
+      const response = await app.inject({ method: "GET", url: `/serializer-cache/${field}` });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.deepEqual(response.json(), { [field]: value });
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("API serializer compiler is the copy Fastify itself loads", () => {
+  // apps/controller pins @fastify/fast-json-stringify-compiler for its serializer cache. When
+  // a Fastify upgrade moves its own compiler, move the pin with it so one copy serves both.
+  const controller = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
+  const fastify = createRequire(controller.resolve("fastify"));
+  assert.equal(
+    realpathSync(controller.resolve("@fastify/fast-json-stringify-compiler")),
+    realpathSync(fastify.resolve("@fastify/fast-json-stringify-compiler")),
+  );
+});
+
 test("OCC isolates Namespace ownership and filters collections by exact IAM grants", async () => {
   const controller = await configuredController();
   await bootstrap(controller);
@@ -4039,12 +4839,14 @@ test("OCC isolates Namespace ownership and filters collections by exact IAM gran
   assert.equal(exactRevision.status, 404);
   assert.equal(exactRevision.body.error.code, "NOT_FOUND");
 
+  // The reader holds no grant in tenant A, so the misplaced parent is refused before any
+  // lookup, as getAgent does; a 404 here would confirm which Agents tenant A lacks.
   const wrongParent = await injectedRequest(
     revisionReaderApp,
     "GET",
     `/namespaces/${tenantA.data.id}/agents/${ownAgent.data.id}/revisions/${missingRevisionId}`,
   );
-  assert.equal(wrongParent.status, 404);
+  assert.equal(wrongParent.status, 403);
 
   fixture.state.roles.find((role) => role.id === "role-revision-only-reader").permissions.length =
     0;
@@ -4252,6 +5054,17 @@ test("two Namespaces become independently ready and deletion tombstones only its
   );
   const stillReady = await injectedRequest(fixture.app, "GET", `/namespaces/${namespaceA.data.id}`);
   assert.equal(stillReady.data.status, "ready");
+  // The tombstone keeps its name: a new Namespace cannot reuse it, and the 409 says the name
+  // belongs to a deleted Namespace rather than one the caller could find in the list.
+  const reused = await injectedRequest(fixture.app, "POST", "/namespaces", {
+    body: { name: "lifecycle-b" },
+  });
+  assert.equal(reused.status, 409);
+  assert.equal(reused.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    reused.body.error.message,
+    "This name belongs to a deleted Namespace and cannot be reused. Choose a different name.",
+  );
 });
 
 test("bootstrap, mutations, and denials emit attributable private audit events", async () => {
@@ -4475,6 +5288,41 @@ test("authorization rejects sparse decision evidence", async () => {
   });
   assert.equal(response.status, 503);
   assert.equal(response.body.error.code, "DEPENDENCY_UNAVAILABLE");
+});
+
+test("deploy reports Configuration content a Compute Driver names as unsupported", async () => {
+  // D321: a refused Codex Gateway setting surfaced as "resource already exists".
+  const computeDriver = createProvisioningCapableComputeDriver();
+  let refusal;
+  computeDriver.validateHarnessAuth = () => {
+    throw refusal;
+  };
+  const fixture = await createInjectedFixture({ computeDriver });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller, "Unsupported Configuration content");
+  const namespace = await createNamespace(controller, "unsupported-configuration");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const agent = await createAgent(controller, namespace.id, "unsupported-configuration-agent");
+  await bindHarnessKey(fixture, namespace.id, agent);
+  const deploy = () =>
+    controller.request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/deploy`);
+
+  refusal = new ConfigurationHarnessError(
+    "Configuration setting cron must be an object: a dedicated Codex Gateway cannot apply it otherwise.",
+  );
+  const named = await deploy();
+  assert.equal(named.status, 400, JSON.stringify(named.body));
+  assert.equal(named.body.error.code, "INVALID_REQUEST");
+  assert.equal(named.body.error.message, refusal.message);
+
+  // Other driver refusals can carry internal detail and stay generic.
+  refusal = new Error("internal driver detail");
+  const generic = await deploy();
+  assert.equal(generic.status, 409, JSON.stringify(generic.body));
+  assert.equal(generic.body.error.code, "RESOURCE_CONFLICT");
+  assert.doesNotMatch(JSON.stringify(generic.body), /internal driver detail/);
 });
 
 test("deploy audit preserves its authorization decision and rolls back with append failure", async () => {
@@ -4817,6 +5665,27 @@ test("Slack validation rejects swapped credentials and preserves authorization",
         { configuration },
       ),
     });
+  // A foreign channel Secret is an invalid request, not a scope miss from channel validation.
+  const foreignBot = { ...bot.ref, namespaceId: `ns_${randomUUID()}` };
+  const foreign = await controller.request("POST", `${base}/agents/provision`, {
+    body: provisioningRequestBody(
+      namespace.id,
+      { modelApiKey: model, toolApiKey: model },
+      {
+        configuration: {
+          ...configuration,
+          secretBindings: {
+            ...configuration.secretBindings,
+            SLACK_BOT_TOKEN: { source: foreignBot, delivery: { type: "env" } },
+          },
+        },
+      },
+    ),
+  });
+  assert.equal(foreign.status, 400, JSON.stringify(foreign.body));
+  assert.equal(foreign.body.error.code, "INVALID_REQUEST");
+  assert.equal(foreign.body.error.message, "Secret references cannot cross Namespaces.");
+  assert.equal(calls, 0);
   const swapped = await provision();
   assert.equal(swapped.status, 400, JSON.stringify(swapped.body));
   assert.equal(swapped.body.error.code, "CHANNEL_CREDENTIAL_ROLE_MISMATCH");
@@ -4882,6 +5751,47 @@ test("Slack validation rejects swapped credentials and preserves authorization",
   response = { ok: true, bot_id: "B123", team_id: "T123" };
   const good = await controller.request("POST", `${base}/agents/${agent.data.id}/deploy`);
   assert.equal(good.status, 202, JSON.stringify(good.body));
+  // Named accounts do not hide the top-level tokens: OpenClaw starts them as the
+  // implicit default account, so they need Secret-backed refs too.
+  const namedAccounts = structuredClone(configuration);
+  namedAccounts.values.channels.slack.appToken = "xapp-plaintext-default";
+  namedAccounts.values.channels.slack.botToken = "xoxb-plaintext-default";
+  namedAccounts.values.channels.slack.accounts = {
+    work: {
+      appToken: { source: "env", provider: "default", id: "SLACK_WORK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_WORK_BOT_TOKEN" },
+    },
+  };
+  // OpenClaw also reads SLACK_BOT_TOKEN/SLACK_APP_TOKEN from the environment for the
+  // implicit account, so the named account uses other names.
+  namedAccounts.secretBindings = {
+    SLACK_WORK_APP_TOKEN: { source: app.ref, delivery: { type: "env" } },
+    SLACK_WORK_BOT_TOKEN: { source: bot.ref, delivery: { type: "env" } },
+  };
+  const provisionNamed = () =>
+    controller.request("POST", `${base}/agents/provision`, {
+      body: provisioningRequestBody(
+        namespace.id,
+        { modelApiKey: model, toolApiKey: model },
+        { configuration: namedAccounts },
+      ),
+    });
+  const plaintextDefault = await provisionNamed();
+  assert.equal(plaintextDefault.status, 400, JSON.stringify(plaintextDefault.body));
+  assert.equal(plaintextDefault.body.error.code, "CHANNEL_CREDENTIAL_BINDING_REQUIRED");
+  assert.equal(plaintextDefault.body.error.details[0].path, "/channels/slack/appToken");
+  // An account named "default" replaces the implicit one and inherits the top level.
+  namedAccounts.values.channels.slack.accounts.default = {};
+  const explicitDefault = await provisionNamed();
+  assert.equal(explicitDefault.status, 400, JSON.stringify(explicitDefault.body));
+  assert.equal(
+    explicitDefault.body.error.details[0].path,
+    "/channels/slack/accounts/default/appToken",
+  );
+  delete namedAccounts.values.channels.slack.accounts.default;
+  delete namedAccounts.values.channels.slack.appToken;
+  delete namedAccounts.values.channels.slack.botToken;
+  assert.equal((await provisionNamed()).body.error.code, "DEPENDENCY_UNAVAILABLE");
   const beforeDisabled = calls;
   configuration.values.channels.slack.enabled = false;
   configuration.secretBindings = {};

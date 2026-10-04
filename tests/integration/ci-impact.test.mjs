@@ -12,10 +12,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const selector = fileURLToPath(new URL("../../scripts/ci/impact.mjs", import.meta.url));
+const pnpmImpact = fileURLToPath(new URL("../../scripts/ci/pnpm-impact.mjs", import.meta.url));
 const gate = fileURLToPath(new URL("../../scripts/ci/impact-gate.mjs", import.meta.url));
 const runner = fileURLToPath(new URL("../../scripts/ci/run-tests.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -26,7 +27,10 @@ function command(cwd, program, args, options = {}) {
   return result.stdout.trim();
 }
 
-function fixture(t, change, initial = {}, initialModes = {}) {
+// `moveMain`, when given, commits to the base branch after the pull request
+// branched, then merges onto that newer base. The event keeps the older
+// base.sha, as GitHub's pull_request payload does when main moves after a push.
+function fixture(t, change, initial = {}, initialModes = {}, { moveMain } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ci-impact-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, "repo");
@@ -55,6 +59,12 @@ function fixture(t, change, initial = {}, initialModes = {}) {
   git("commit", "-qm", "change", "--allow-empty");
   const head = git("rev-parse", "HEAD");
   git("checkout", "-q", "--detach", base);
+  if (moveMain) {
+    moveMain({ repo, put, git });
+    git("add", "-A");
+    git("commit", "-qm", "main moved");
+  }
+  const mergeBase = git("rev-parse", "HEAD");
   git("merge", "--no-ff", "-qm", "merge", head);
   const tested = git("rev-parse", "HEAD");
   const eventPath = join(dir, "event.json");
@@ -87,8 +97,282 @@ function fixture(t, change, initial = {}, initialModes = {}) {
     assert.equal(run(["--verify-mode", mode], overrides).status, 0);
     assert.notEqual(run(["--verify-mode", mode === "docs" ? "full" : "docs"], overrides).status, 0);
   };
-  return { dir, repo, git, event, eventPath, base, head, tested, run, expect };
+  return { dir, repo, git, put, event, eventPath, base, mergeBase, head, tested, run, expect };
 }
+
+function workspaceFiles() {
+  const manifest = (name, dependencies = {}) =>
+    JSON.stringify({ name, version: "1.0.0", private: true, dependencies });
+  return {
+    "package.json": manifest("impact-fixture"),
+    "pnpm-workspace.yaml": "packages:\n  - apps/*\n  - packages/*\n",
+    "packages/shared/package.json": manifest("@fixture/shared"),
+    "packages/consumer/package.json": manifest("@fixture/consumer", {
+      "@fixture/shared": "workspace:*",
+    }),
+    "apps/app/package.json": manifest("@fixture/app", {
+      "@fixture/consumer": "workspace:*",
+    }),
+  };
+}
+
+function affectedPackages(f, overrides = {}) {
+  const result = spawnSync(process.execPath, [pnpmImpact], {
+    cwd: f.repo,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: f.eventPath,
+      GITHUB_SHA: f.tested,
+      ...overrides,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+test("pnpm impact reports a changed workspace package and its dependents", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const expected = {
+    status: "affected",
+    reason: "workspace_typescript",
+    packages: ["@fixture/app", "@fixture/consumer", "@fixture/shared"],
+  };
+  assert.deepEqual(affectedPackages(f), expected);
+  // GitHub merges onto the current base, which can be newer than base.sha.
+  const stale = join(f.dir, "stale-event.json");
+  writeFileSync(
+    stale,
+    JSON.stringify({ pull_request: { base: { sha: "1".repeat(40) }, head: { sha: f.head } } }),
+  );
+  assert.deepEqual(affectedPackages(f, { GITHUB_EVENT_PATH: stale }), expected);
+});
+
+test("pnpm impact reports affected packages from a depth-two merge checkout", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const shallow = join(f.dir, "shallow");
+  command(f.dir, "git", ["clone", "--quiet", "--depth=2", pathToFileURL(f.repo).href, shallow]);
+  assert.equal(command(shallow, "git", ["rev-parse", "HEAD"]), f.tested);
+  assert.deepEqual(affectedPackages({ ...f, repo: shallow }), {
+    status: "affected",
+    reason: "workspace_typescript",
+    packages: ["@fixture/app", "@fixture/consumer", "@fixture/shared"],
+  });
+});
+
+test("pnpm impact keeps non-workspace and unverified changes unclassified", (t) => {
+  const f = fixture(t, ({ put }) => put("cmd/tool.go", "package main\n"), workspaceFiles());
+  assert.deepEqual(affectedPackages(f), {
+    status: "unavailable",
+    reason: "outside_typescript_workspace",
+    packages: [],
+  });
+  assert.deepEqual(affectedPackages(f, { GITHUB_SHA: f.head }), {
+    status: "unavailable",
+    reason: "checkout_mismatch",
+    packages: [],
+  });
+  assert.deepEqual(affectedPackages(f, { GITHUB_EVENT_NAME: "push" }), {
+    status: "unavailable",
+    reason: "not_pull_request",
+    packages: [],
+  });
+  const mixed = fixture(
+    t,
+    ({ put }) => {
+      put("packages/shared/src/example.ts", "export const value = 1;\n");
+      put("cmd/tool.go", "package main\n");
+    },
+    workspaceFiles(),
+  );
+  assert.deepEqual(affectedPackages(mixed), {
+    status: "unavailable",
+    reason: "outside_typescript_workspace",
+    packages: [],
+  });
+});
+
+test("pnpm impact does not classify workspace manifest or symlink changes", (t) => {
+  const manifest = fixture(
+    t,
+    ({ put }) => put("packages/shared/package.json", '{"name":"@fixture/shared"}\n'),
+    workspaceFiles(),
+  );
+  assert.deepEqual(affectedPackages(manifest), {
+    status: "unavailable",
+    reason: "outside_typescript_workspace",
+    packages: [],
+  });
+
+  const symlink = fixture(
+    t,
+    ({ repo }) => {
+      mkdirSync(join(repo, "packages/shared/src"), { recursive: true });
+      symlinkSync("../package.json", join(repo, "packages/shared/src/example.ts"));
+    },
+    workspaceFiles(),
+  );
+  assert.deepEqual(affectedPackages(symlink), {
+    status: "unavailable",
+    reason: "inspection_failed",
+    packages: [],
+  });
+});
+
+test("pnpm impact reports unavailable without exposing a failed tool's output", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const bin = join(f.dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nprintf 'untrusted tool output\\n' >&2\nexit 1\n", {
+    mode: 0o755,
+  });
+  assert.deepEqual(affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }), {
+    status: "unavailable",
+    reason: "inspection_failed",
+    packages: [],
+  });
+  writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nprintf 'not valid json with private text\\n'\n", {
+    mode: 0o755,
+  });
+  assert.deepEqual(affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }), {
+    status: "unavailable",
+    reason: "inspection_failed",
+    packages: [],
+  });
+});
+
+test("pnpm impact summary prints only validated package names", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const summary = (overrides = {}) => {
+    const result = spawnSync(process.execPath, [pnpmImpact, "--summary"], {
+      cwd: f.repo,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: f.eventPath,
+        GITHUB_SHA: f.tested,
+        ...overrides,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  assert.match(summary(), /^- `@fixture\/shared`$/m);
+  const bin = join(f.dir, "bin");
+  mkdirSync(bin);
+  const project = JSON.stringify([
+    { name: "x`<img src=x>", path: join(f.repo, "packages/shared") },
+  ]);
+  writeFileSync(join(bin, "pnpm"), `#!/bin/sh\nprintf '%s\\n' '${project}'\n`, { mode: 0o755 });
+  const unsafe = summary({ PATH: `${bin}:${process.env.PATH}` });
+  assert.match(unsafe, /^Unavailable: inspection_failed\.$/m);
+  assert.doesNotMatch(unsafe, /<img|`x/);
+});
+
+test("pnpm impact rejects dirty tracked and untracked checkout inputs before running pnpm", (t) => {
+  for (const kind of ["unstaged", "staged", "cancelled", "untracked", "ignored"]) {
+    const f = fixture(
+      t,
+      ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+      { ...workspaceFiles(), ".gitignore": "ignored/\n" },
+    );
+    if (["unstaged", "staged", "cancelled"].includes(kind)) {
+      writeFileSync(join(f.repo, "base.txt"), "dirty\n");
+      if (kind !== "unstaged") {
+        f.git("add", "base.txt");
+      }
+      if (kind === "cancelled") {
+        writeFileSync(join(f.repo, "base.txt"), "text\n");
+      }
+    } else {
+      const dir = join(f.repo, kind === "ignored" ? "ignored" : "untracked");
+      mkdirSync(dir);
+      writeFileSync(join(dir, "package.json"), "{}\n");
+    }
+    const bin = join(f.dir, "unavailable-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    assert.deepEqual(
+      affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }),
+      {
+        status: "unavailable",
+        reason: "dirty_checkout",
+        packages: [],
+      },
+      kind,
+    );
+  }
+});
+
+test("pnpm impact rejects a checkout changed during graph inspection", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const originalPath = process.env.PATH ?? "";
+  const bin = join(f.dir, "mutating-bin");
+  mkdirSync(bin);
+  const wrapper = `#!${process.execPath}\nconst { spawnSync } = require("node:child_process");\nconst { writeFileSync } = require("node:fs");\nconst result = spawnSync("pnpm", process.argv.slice(2), { encoding: "utf8", env: { ...process.env, PATH: ${JSON.stringify(originalPath)} } });\nprocess.stdout.write(result.stdout || "");\nif (process.argv.includes("--filter")) writeFileSync("base.txt", "dirty\\n");\nprocess.exit(result.status ?? 1);\n`;
+  writeFileSync(join(bin, "pnpm"), wrapper, { mode: 0o755 });
+  assert.deepEqual(affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }), {
+    status: "unavailable",
+    reason: "dirty_checkout",
+    packages: [],
+  });
+});
+
+test("affected-package advisory is isolated from required jobs and tolerates summary failure", (t) => {
+  const workflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const job = (name) => {
+    const match = new RegExp(
+      `^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:|(?![\\s\\S]))`,
+      "m",
+    ).exec(workflow);
+    assert.ok(match, `workflow contains ${name}`);
+    return match[1];
+  };
+  const advisory = job("affected-packages");
+  assert.match(advisory, /needs: impact/);
+  assert.match(advisory, /needs\.impact\.outputs\.mode == 'full'/);
+  assert.match(advisory, /timeout-minutes: 3/);
+  assert.match(advisory, /continue-on-error: true/);
+  assert.doesNotMatch(advisory, /ci-results-|GITHUB_OUTPUT/);
+  for (const name of ["impact", "pr-safe", "ci-required"]) {
+    assert.doesNotMatch(job(name), /affected-packages/);
+  }
+  const match = / {8}run: \|\n((?: {10}.*\n)+)/.exec(advisory);
+  assert.ok(match, "summary script exists");
+  const script = match[1].replace(/^ {10}/gm, "");
+  const dir = mkdtempSync(join(tmpdir(), "ci-advisory-summary-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const summary of ["", join(dir, "missing", "summary")]) {
+    const result = spawnSync("bash", ["-e", "-c", script], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
 
 // Preserve raw path identity so out-of-scope BOM names select full coverage.
 for (const [name, pathBytes, expected] of [
@@ -293,12 +577,19 @@ test("missing, mismatched or incomplete merge evidence selects full", (t) => {
   for (const event of [
     {},
     { pull_request: { base: { sha: f.head }, head: { sha: f.base } } },
-    { pull_request: { base: { sha: "0".repeat(40) }, head: { sha: f.head } } },
+    { pull_request: { base: { sha: f.head }, head: { sha: f.head } } },
     { pull_request: { base: { sha: f.base }, head: {} } },
   ]) {
     writeFileSync(f.eventPath, JSON.stringify(event));
     f.expect("full");
   }
+  // An event base absent from the checkout is the stale base.sha of a base
+  // that moved after the push; the tested merge's first parent decides.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: "0".repeat(40) }, head: { sha: f.head } } }),
+  );
+  f.expect("docs");
   writeFileSync(f.eventPath, "{");
   f.expect("full");
   const empty = fixture(t, () => {});
@@ -442,6 +733,164 @@ test("workflow executes only the base policy on a shallow merge checkout", (t) =
   shallowBootstrap(t, code).expect("full");
 });
 
+// Finding 413: GitHub builds the merge ref on the base branch tip at merge
+// time, so when main moves after a push the event's base.sha is older than the
+// tested merge's first parent, and a shallow checkout does not contain it.
+function selectorOutput(f, overrides = {}) {
+  const output = join(f.dir, "moved-output");
+  writeFileSync(output, "");
+  const result = f.run(["--github-output", output], overrides);
+  assert.equal(result.status, 0, result.stderr);
+  return readFileSync(output, "utf8");
+}
+
+test("a documentation-only pull request stays documentation-only after main moves", (t) => {
+  const policy = readFileSync(selector, "utf8");
+  const f = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    { "scripts/ci/impact.mjs": policy },
+    {},
+    {
+      // Main's own code change is in the merge but not in the pull request.
+      moveMain: ({ put }) => {
+        put("src/main.ts", "export const value = 1;\n");
+        put("docs/main.md");
+      },
+    },
+  );
+  assert.notEqual(f.base, f.mergeBase);
+  assert.equal(f.git("rev-parse", `${f.tested}^1`), f.mergeBase);
+  f.expect("docs");
+  assert.equal(selectorOutput(f), "mode=docs\nreason=docs_only\n");
+
+  const shallow = shallowBootstrap(t, f);
+  // As on a hosted runner, the stale event base is not in the depth-two checkout.
+  assert.notEqual(
+    spawnSync("git", ["cat-file", "-e", `${f.base}^{commit}`], { cwd: shallow.checkout }).status,
+    0,
+  );
+  shallow.expect("docs");
+  assert.equal(shallow.run("select").output, "mode=docs\nreason=docs_only\n");
+});
+
+test("a non-documentation change still selects full after main moves", (t) => {
+  const policy = readFileSync(selector, "utf8");
+  const initial = { "scripts/ci/impact.mjs": policy };
+  const moveMain = ({ put }) => put("docs/main.md");
+  for (const change of [
+    ({ put }) => put("src/app.ts"),
+    ({ put }) => {
+      put("docs/change.md");
+      put("src/app.ts");
+    },
+    ({ put }) => put(".github/workflows/ci.yml", "name: changed\n"),
+  ]) {
+    const f = fixture(t, change, initial, {}, { moveMain });
+    assert.notEqual(f.base, f.mergeBase);
+    f.expect("full");
+    assert.equal(selectorOutput(f), "mode=full\nreason=ineligible_change\n");
+    const shallow = shallowBootstrap(t, f);
+    shallow.expect("full");
+    assert.equal(shallow.run("select").output, "mode=full\nreason=ineligible_change\n");
+  }
+
+  // The pull request's own selector still never runs, even on a moved base.
+  const marker = join(tmpdir(), `ci-impact-untrusted-${process.pid}-${Date.now()}`);
+  t.after(() => rmSync(marker, { force: true }));
+  const malicious = fixture(
+    t,
+    ({ put }) => {
+      put(
+        "scripts/ci/impact.mjs",
+        `import { writeFileSync, appendFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nappendFileSync(process.argv[3], 'mode=docs\\n');\n`,
+      );
+      put("docs/change.md");
+    },
+    initial,
+    {},
+    { moveMain },
+  );
+  shallowBootstrap(t, malicious).expect("full");
+  assert.equal(existsSync(marker), false);
+});
+
+test("the tested merge's first parent supplies the trusted policy", (t) => {
+  // The stale event base has no policy; the moved base adds the real one.
+  const added = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    {},
+    {},
+    {
+      moveMain: ({ put }) => put("scripts/ci/impact.mjs", readFileSync(selector, "utf8")),
+    },
+  );
+  shallowBootstrap(t, added).expect("docs");
+
+  // The stale event base has the policy; the moved base removed it.
+  const removed = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    { "scripts/ci/impact.mjs": readFileSync(selector, "utf8") },
+    {},
+    { moveMain: ({ git }) => git("rm", "-q", "scripts/ci/impact.mjs") },
+  );
+  const shallow = shallowBootstrap(t, removed);
+  shallow.expect("full");
+  assert.equal(shallow.run("select").output, "mode=full\nreason=bootstrap_policy_unavailable\n");
+});
+
+test("an event base that is present but not behind the tested base selects full", (t) => {
+  const policy = readFileSync(selector, "utf8");
+  const f = fixture(
+    t,
+    ({ put }) => put("docs/change.md"),
+    { "scripts/ci/impact.mjs": policy },
+    {},
+    {
+      moveMain: ({ put }) => put("docs/main.md"),
+    },
+  );
+  // A commit the tested base does not contain, such as a rewritten main.
+  f.git("checkout", "-q", "--detach", f.base);
+  f.put("docs/side.md");
+  f.git("add", "-A");
+  f.git("commit", "-qm", "side");
+  const side = f.git("rev-parse", "HEAD");
+  f.git("checkout", "-q", "--detach", f.tested);
+  const shallow = shallowBootstrap(t, f);
+  for (const base of [side, f.head]) {
+    writeFileSync(
+      f.eventPath,
+      JSON.stringify({ pull_request: { base: { sha: base }, head: { sha: f.head } } }),
+    );
+    f.expect("full");
+    assert.equal(selectorOutput(f), "mode=full\nreason=checkout_mismatch\n");
+  }
+  // A depth-two checkout lacks the side commit, so it is ignored like any
+  // stale base: the ancestor rule can only add full selections there.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: side }, head: { sha: f.head } } }),
+  );
+  shallow.expect("docs");
+  // The pull request head is in the shallow checkout and is not an ancestor.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: f.head }, head: { sha: f.head } } }),
+  );
+  shallow.expect("full");
+  assert.equal(shallow.run("select").output, "mode=full\nreason=bootstrap_checkout_mismatch\n");
+  // A head that is not the tested merge's second parent still selects full.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: f.base }, head: { sha: f.mergeBase } } }),
+  );
+  f.expect("full");
+  shallow.expect("full");
+});
+
 test("workflow falls back to full without trustworthy event, parents or base policy", (t) => {
   const noPolicy = fixture(t, ({ put }) => put("docs/change.md"));
   shallowBootstrap(t, noPolicy).expect("full");
@@ -520,7 +969,7 @@ test("documentation workflow selects documentation checks and omits product test
     docs,
     /run-ci-lane|run-tests\.mjs\s+(?:run|aggregate)|\b(?:pnpm|npm)\s+(?:run\s+)?test(?::|\b)|\bnode\s+--test\b|\bgo\s+test\b/,
   );
-  for (const name of ["checks-baseline", "pr-safe", "runtime-image-fixture"]) {
+  for (const name of ["pr-safe", "runtime-image-fixture"]) {
     assert.match(job(name), /needs\.impact\.outputs\.mode == 'full'/, name);
   }
   const required = job("ci-required");
@@ -531,13 +980,15 @@ test("documentation workflow selects documentation checks and omits product test
 
 test("workflow selection flows through the gate and full-mode source-bound aggregate", (t) => {
   const lanes = [
-    "checks-baseline",
+    "checks-baseline-1",
+    "checks-baseline-2",
     "checks-browser",
     "postgres",
     "postgres-application",
     "postgres-auth",
     "images-packaging",
     "images-model-probes",
+    "images-runtime-startup",
     "runtime-image-fixture",
     "k3d-fixture-configuration",
     "k3d-fixture-state",
@@ -556,10 +1007,7 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     readFileSync(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
   );
   assert.deepEqual([...suiteIndex.groups.ci].sort(), [...lanes].sort());
-  assert.deepEqual(
-    ["checks-baseline", "runtime-image-fixture", ...matrixLanes(ciWorkflow)].sort(),
-    [...lanes].sort(),
-  );
+  assert.deepEqual(["runtime-image-fixture", ...matrixLanes(ciWorkflow)].sort(), [...lanes].sort());
   const fullWorkflow = readFileSync(
     join(repositoryRoot, ".github/workflows/full-integration.yml"),
     "utf8",
@@ -596,7 +1044,6 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
       impact: { result: "success", outputs: { mode } },
       audit: { result: "success", outputs: {} },
       "docs-checks": { result: mode === "docs" ? "success" : "skipped", outputs: {} },
-      "checks-baseline": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
       "pr-safe": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
       "runtime-image-fixture": { result: mode === "docs" ? "skipped" : "success", outputs: {} },
     };
@@ -621,14 +1068,14 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
       needs["docs-checks"].result = "failure";
       assert.notEqual(runGate().status, 0);
       needs["docs-checks"].result = "success";
-      needs["checks-baseline"].result = "success";
+      needs["pr-safe"].result = "success";
       assert.notEqual(runGate().status, 0);
       continue;
     }
 
-    // Two synthetic lanes cover cross-lane aggregation and failures.
+    // Three synthetic lanes cover cross-lane aggregation and failures.
     // The inventory checks above still require every production CI lane.
-    const fixtureLanes = ["checks-baseline", "postgres"];
+    const fixtureLanes = ["checks-baseline-1", "checks-baseline-2", "postgres"];
     const selectedNeeds = JSON.parse(readFileSync(expanded, "utf8"));
     assert.deepEqual(Object.keys(selectedNeeds).sort(), ["impact", "audit", ...lanes].sort());
     for (const lane of lanes) {
@@ -679,13 +1126,29 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     assert.notEqual(wrongRevision.status, 0);
     assert.ok(
       JSON.parse(wrongRevision.stdout).issues.some(
-        (issue) => issue.code === "source-sha-mismatch" && issue.lane === "checks-baseline",
+        (issue) => issue.code === "source-sha-mismatch" && issue.lane === "checks-baseline-1",
       ),
     );
     command(root, "git", ["checkout", "-q", "--detach", f.tested]);
 
     {
-      const lane = "postgres";
+      const lane = "checks-baseline-2";
+      const artifact = join(root, `results/${lane}.json`);
+      const original = readFileSync(artifact);
+      const wrongSource = JSON.parse(original);
+      wrongSource.sourceSha = f.head;
+      writeFileSync(artifact, JSON.stringify(wrongSource));
+      const result = aggregate();
+      assert.notEqual(result.status, 0);
+      assert.ok(
+        JSON.parse(result.stdout).issues.some(
+          (issue) => issue.code === "source-sha-mismatch" && issue.lane === lane,
+        ),
+      );
+      writeFileSync(artifact, original);
+    }
+
+    for (const lane of ["checks-baseline-2", "postgres"]) {
       const artifact = join(root, `results/${lane}.json`);
       const original = readFileSync(artifact);
       rmSync(artifact);
@@ -710,6 +1173,8 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
         ),
       );
       writeFileSync(artifact, original);
+    }
+    {
       needs["pr-safe"].result = "failure";
       assert.notEqual(runGate().status, 0);
       const failedJob = aggregate();

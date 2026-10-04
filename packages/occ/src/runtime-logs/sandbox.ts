@@ -172,12 +172,13 @@ function overlapWindow(
     since = floor;
   }
   let kept = ordered.filter((line) => compareRuntimeLogTime(line.time, since) >= 0);
-  while (kept.length > SANDBOX_LOG_OVERLAP_LINES) {
-    const oldest = kept[0]!.time;
-    if (compareRuntimeLogTime(oldest, newest) === 0) {
+  if (kept.length > SANDBOX_LOG_OVERLAP_LINES) {
+    // Drop the boundary timestamp whole so every retained occurrence fits in the cursor.
+    const cutoff = kept[kept.length - SANDBOX_LOG_OVERLAP_LINES - 1]!.time;
+    if (compareRuntimeLogTime(cutoff, newest) === 0) {
       return { since: shiftTime(newest, 0, 1), hashes: [], overflow: newest };
     }
-    kept = kept.filter((line) => compareRuntimeLogTime(line.time, oldest) > 0);
+    kept = kept.filter((line) => compareRuntimeLogTime(line.time, cutoff) > 0);
     since = kept[0]!.time;
   }
   return { since, hashes: kept.map(({ hash }) => hash), overflow: null };
@@ -328,7 +329,9 @@ export async function readSandboxLogPage(input: ReadSandboxLogPageInput): Promis
         .filter((line) => line.time !== null)
         .map((line) => ({ time: line.time!, hash: sandboxLogLineHash(line) })),
     ],
-    gapFloor ?? (continuing ? resume.lastTime : null),
+    // A view's first page floors the resume time at its requested window start, so a
+    // cursor poll without `sinceSeconds` (after an empty page) reads nothing older.
+    gapFloor ?? (continuing ? resume.lastTime : (sinceTime ?? null)),
   );
   const records = [
     ...leading,

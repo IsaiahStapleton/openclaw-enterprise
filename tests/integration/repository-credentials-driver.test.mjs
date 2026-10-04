@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
-import { createServer as createNetServer } from "node:net";
 import { request } from "node:https";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,17 +17,6 @@ import {
   defaultRegistryRepositories,
   startRegistryCredentialServiceFixture,
 } from "../fixtures/repository-credentials/registry.mjs";
-
-async function unusedPort() {
-  const server = createNetServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
 
 function driverFor(registry, socket, sessionDurationSeconds = 3600, publicCa) {
   return new GitHubRepoDriver(
@@ -95,7 +83,7 @@ test(
           ? { ...entry, pushRefAllowlist: ["refs/heads/agent/*"] }
           : entry,
       ),
-      gateway: { listen: `127.0.0.1:${await unusedPort()}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const signal = new AbortController().signal;
     const local = driverFor(fixture.registry, "/nonexistent/repository-control.sock");
@@ -727,7 +715,9 @@ test("durable admission capability rejects an old response, malformed replies, a
     if (response === undefined) {
       return;
     }
-    outgoing.writeHead(response.status, { "content-type": "application/json" });
+    outgoing.writeHead(response.status, {
+      "content-type": response.contentType ?? "application/json",
+    });
     outgoing.end(JSON.stringify(response.body));
   });
   await new Promise((resolve) => server.listen(socket, resolve));
@@ -739,18 +729,25 @@ test("durable admission capability rejects an old response, malformed replies, a
   const client = new UnixRepositoryCredentialControlClient({ controlSocket: socket });
   // An older broker reports healthy protocol 1 but does not recognize this endpoint.
   await client.health(AbortSignal.timeout(1000));
-  await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(1000)));
+  // Every refusal is the retryable control error, never a parse or type error.
+  const unavailable = { name: "RepositoryCredentialControlError", retryable: true };
+  await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(1000)), unavailable);
   for (const value of [
     { status: 200, body: {} },
     { status: 200, body: { durableAdmissionVersion: 2 } },
     { status: 200, body: { durableAdmissionVersion: "1" } },
     { status: 503, body: { error: "unavailable" } },
+    // A well-formed reply still needs both a 200 status and a JSON content type.
+    { status: 503, body: { durableAdmissionVersion: 1 } },
+    { status: 200, body: { durableAdmissionVersion: 1 }, contentType: "text/plain" },
   ]) {
     response = value;
-    await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(1000)));
+    await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(1000)), unavailable);
   }
+  response = { status: 200, body: { durableAdmissionVersion: 1 } };
+  await client.checkAdmissionReady(AbortSignal.timeout(1000));
   response = undefined;
-  await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(50)));
+  await assert.rejects(client.checkAdmissionReady(AbortSignal.timeout(50)), unavailable);
 });
 
 test(
@@ -760,7 +757,7 @@ test(
     const fixture = await startRegistryCredentialServiceFixture(t, {
       autoOpen: false,
       clock: { ...createControlledClock(), wallNow: Date.now },
-      gateway: { listen: `127.0.0.1:${await unusedPort()}` },
+      gateway: { listen: "127.0.0.1:0" },
     });
     const receipts = [];
     let hideReceiptObservation = false;

@@ -202,9 +202,8 @@ test("REST issue and PR responses preserve informational URLs on reads and succe
         };
         const output = plan.responsePolicy.rewriteJson(scenario.list ? [input] : input);
         assert.deepEqual(JSON.parse(JSON.stringify(output)), scenario.list ? [expected] : expected);
-        assert.doesNotThrow(() =>
-          plan.responsePolicy.headers(scenario.status, { "content-type": "application/json" }),
-        );
+        const headers = { "content-type": "application/json" };
+        assert.deepEqual(plan.responsePolicy.headers(scenario.status, headers), headers);
       });
     }
   }
@@ -331,6 +330,29 @@ test("followed JSON links validate field purpose while GraphQL human URLs remain
   };
   assert.deepEqual(planFor("POST", "/graphql").responsePolicy.rewriteJson(graphql), graphql);
 });
+test("GraphQL input policy refuses clone credential selections hidden by JSON encoding", async (t) => {
+  const { bind } = await createGitHubPlanningFixture(t);
+  const bound = bind();
+  const { inputPolicy } = bound.plan(head("POST", "/graphql"));
+  const allows = (text) => inputPolicy(Buffer.from(text));
+  assert.equal(allows('{"query":"query { viewer { login } }"}'), true);
+  assert.equal(
+    allows('{"query":"query($q: String!) { viewer { login } }","variables":{"q":"\\""}}'),
+    true,
+  );
+  for (const text of [
+    '{"query":"{ repository(owner: \\"o\\", name: \\"r\\") { tempCloneToken } }"}',
+    '{"query":"{ repository(owner: \\"o\\", name: \\"r\\") { \\u0074empCloneToken } }"}',
+    '{"query":"{ viewer { login } }","query":"{ repository { tempCloneToken } }"}',
+    '{"query":"{ repository { tempCloneToken } }","query":"{ viewer { login } }"}',
+    '{"query":"{ viewer { login } }"',
+  ]) {
+    assert.equal(allows(text), false, text);
+  }
+  assert.equal(bound.plan(head("GET", "/repos/fixture/repository")).inputPolicy, undefined);
+  // An empty query string cannot select another spelling of the GraphQL route.
+  assert.equal(bound.plan(head("POST", "/graphql?")).kind, "denied");
+});
 test("response policy rewrites admitted machine links without changing human content or forwarding credential headers", async (t) => {
   const { bind } = await createGitHubPlanningFixture(t);
   const bound = bind();
@@ -359,15 +381,30 @@ test("response policy rewrites admitted machine links without changing human con
   assert.equal(body.url, "https://credentials.example/repos/fixture/repository/issues/comments/1");
   assert.equal(body.body, link);
   assert.equal(body.user.url, "https://api.github.com/users/person");
-  assert.throws(() => plan.responsePolicy.headers(302, { location: link }));
-  assert.throws(() =>
-    plan.responsePolicy.headers(200, { link: '<https://other.example/steal>; rel="next"' }),
+  const unsafe = { message: "unsafe-upstream-url" };
+  assert.throws(() => plan.responsePolicy.headers(302, { location: link }), {
+    message: "upstream-redirect",
+  });
+  // Each link breaks one guard: foreign origin, unadmitted route, then total length.
+  const foreign = link.replace("https://api.github.com/", "https://other.example/");
+  assert.throws(
+    () => plan.responsePolicy.headers(200, { link: `<${foreign}>; rel="next"` }),
+    unsafe,
   );
-  assert.throws(() =>
-    plan.responsePolicy.headers(200, {
-      link: '<https://api.github.com/repos/fixture/repository/labels/bug>; rel="next"',
-    }),
+  assert.throws(
+    () =>
+      plan.responsePolicy.headers(200, {
+        link: '<https://api.github.com/repos/fixture/repository/labels/bug>; rel="next"',
+      }),
+    unsafe,
   );
+  const long = Array.from({ length: 100 }, () => `<${link}>; rel="next"`).join(", ");
+  assert.ok(long.length > 8192);
+  assert.throws(() => plan.responsePolicy.headers(200, { link: long }), unsafe);
+  // Git responses never carry pagination links, even admitted ones.
+  const git = bound.plan(head("GET", "/fixture/repository.git/info/refs?service=git-upload-pack"));
+  assert.equal(git.kind, undefined);
+  assert.throws(() => git.responsePolicy.headers(200, { link: `<${link}>; rel="next"` }), unsafe);
 });
 
 test("response policy rejects 304 without a redirect location", async (t) => {

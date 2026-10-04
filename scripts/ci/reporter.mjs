@@ -1,3 +1,5 @@
+import { failureInputLimit } from "./failure-redaction.mjs";
+
 const safeOccErrorCodes = new Set([
   "INVALID_REQUEST",
   "UNAUTHENTICATED",
@@ -36,6 +38,13 @@ const safeRepositoryPlatformSetupStages = new Set([
   "relay-creation",
   "relay-readiness",
   "controller-restart",
+]);
+
+const safeCredentialServiceFailures = new Set([
+  "gateway-listener",
+  "child-exited",
+  "child-deadline",
+  "other",
 ]);
 
 const postTestAsyncActivityPrefix =
@@ -389,9 +398,14 @@ function failureDiagnostic(error) {
         return undefined;
       }
     }
-    result.probeStage = ["prepare", "spawn", "returned", "cleanup", "complete"].includes(
-      diagnostic.probeStage,
-    )
+    result.probeStage = [
+      "prepare",
+      "preflight",
+      "spawn",
+      "returned",
+      "cleanup",
+      "complete",
+    ].includes(diagnostic.probeStage)
       ? diagnostic.probeStage
       : "not-observed";
     return result;
@@ -404,6 +418,8 @@ function failureDiagnostic(error) {
       "cross-tenant Agent traffic",
       "same-tenant Agent-to-Agent traffic",
       "gateway-to-candidate Agent traffic",
+      "same-tenant gateway-to-Agent traffic",
+      "cross-tenant gateway-to-Agent traffic",
     ].includes(diagnostic.stage)
       ? { kind: "network-policy", stage: diagnostic.stage }
       : undefined;
@@ -429,6 +445,11 @@ function failureDiagnostic(error) {
             stage === "relay-readiness" ? relayPodDiagnostic(diagnostic.relayPod) : undefined,
           relayNode:
             stage === "relay-readiness" ? relayNodeDiagnostic(diagnostic.relayNode) : undefined,
+          credentialService:
+            stage === "credential-service-startup" &&
+            safeCredentialServiceFailures.has(diagnostic.credentialService)
+              ? diagnostic.credentialService
+              : undefined,
         }
       : undefined;
   }
@@ -505,6 +526,28 @@ function upstreamDiagnostic(value) {
   return { kind: "chatgpt-admin-http", operation, status };
 }
 
+// Failure messages and the top stack frame make flakes attributable. They are
+// raw here and travel only over the pipe to run-tests, which redacts and
+// truncates them (failure-redaction.mjs) before anything reaches an artifact
+// or the job log.
+function failureText(cause) {
+  const message =
+    typeof cause === "string" ? cause : typeof cause?.message === "string" ? cause.message : "";
+  const stack = typeof cause?.stack === "string" ? cause.stack : "";
+  // The stack starts with the message, which can quote another process's stack.
+  const messageEnd =
+    message && stack.includes(message) ? stack.indexOf(message) + message.length : 0;
+  const frame = stack
+    .slice(messageEnd)
+    .split("\n")
+    .find((line) => /^\s+at\s/u.test(line))
+    ?.trim();
+  return {
+    message: message ? message.slice(0, failureInputLimit) : undefined,
+    frame: frame ? frame.slice(0, failureInputLimit) : undefined,
+  };
+}
+
 function location(data = {}) {
   const error = data.details?.error;
   const cause = error?.cause ?? error;
@@ -554,6 +597,7 @@ function location(data = {}) {
               : undefined,
           location: failureLocation,
           diagnostic: failureDiagnostic(cause),
+          ...failureText(cause),
         }
       : undefined,
     durationMs:
@@ -562,6 +606,8 @@ function location(data = {}) {
   };
 }
 
+// Only for scripts/ci/run-tests.mjs: failure text here is unredacted, so never
+// point a step whose stdout reaches a log or artifact at this reporter directly.
 export default async function* jsonLinesReporter(source) {
   for await (const event of source) {
     if (event.type === "test:diagnostic") {

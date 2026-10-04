@@ -1,7 +1,7 @@
 ---
 created: "2026-09-26"
-updated: "2026-09-30"
-last_updated_session: "pr-553-alignment"
+updated: 2026-10-01
+last_updated_session: authoring-run/b158c89c-3010-42ae-95b4-350b05de7441
 ---
 
 # Credential source lifecycle Flow
@@ -70,8 +70,9 @@ commits, OCC calls `registerSource` or `removeSource`.
 
 The route schema accepts `name`, `type`, optional `config`, and optional
 `secrets` keyed by lowercase field names. Inside one transaction, OCC locks the
-Namespace, authorizes `credential_source:create` on it, and requires a `ready`
-Namespace. It asks the selected gateway for `listSourceTypes` and rejects an
+Namespace, authorizes `credential_source:create` on it, returns
+`409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` when the Installation selects no
+Credential Gateway, and requires a `ready` Namespace. It asks the selected gateway for `listSourceTypes` and rejects an
 unknown type, an unknown field, or a missing required field with
 `ScopeViolationError` (`404`) before any Secret read or gateway write.
 
@@ -79,8 +80,11 @@ unknown type, an unknown field, or a missing required field with
 
 `packages/occ/src/index.ts:createCredentialSource`
 
-For each Secret reference, OCC rejects a foreign Namespace, authorizes
-`secret:operate`, locks the Secret, and calls the owning Driver's optional
+OCC first rejects any Secret reference to another Namespace with
+`SecretBindingValidationError` (`400 INVALID_REQUEST`, "Credential source
+Secrets cannot cross Namespaces."). For each Secret reference, it then authorizes
+`secret:operate`, locks the Secret (a Secret the Namespace does not hold is
+`404`), and calls the owning Driver's optional
 `withValue`. The Kubernetes Secret Driver verifies the stored object's ownership
 labels, UID, and key before decoding it. A Driver without `withValue` fails the
 request with `503`. The values exist only in memory for the next call.
@@ -216,9 +220,15 @@ attempt records its reason code in `last_reason` and `last_attempt_at`, in the
 transaction that completes, retries, or fails the claim. `revoked` or `absent`
 also marks the row `revoked` and appends
 `openclaw.agents.lifecycle.credentials_withdraw`. Any other state retries with
-backoff until attempts run out; the row then stays `pending`.
+backoff until attempts run out; the row then stays `pending`. The API derives
+`withdrawalInProgress` from outstanding withdrawal work
+(`packages/occ/src/index.ts:readAgentCredentialWithdrawal`), so an exhausted
+withdrawal reads `false` whether its last attempt failed or its claim expired.
+Only a replay of the withdraw request, or maintenance where it exists, queues
+another attempt.
 
-Maintenance of the active revision checks for a withdrawal before it resolves
+Maintenance of the active revision (scheduled only when the Compute Driver or
+the revision's repository credentials declare an interval) checks for a withdrawal before it resolves
 the revision's credentials
 (`apps/controller/src/worker.ts:completeWithdrawnRevisionMaintenance`). While
 the withdrawal is `pending`, the pass queues withdrawal work as the requester if
@@ -236,7 +246,7 @@ than re-attach the source.
   methods with a gateway selected. It uses an in-process gateway double, not
   OpenShell.
 - `node --test tests/conformance/openshell-gateway-wire.test.mjs` checks the
-  provider, profile, update, and detach RPC encoding against the pinned `v0.1.0`
+  provider, profile, update, and detach RPC encoding against the pinned `v0.1.3-pre.1`
   wire fixture.
 - The credential withdrawal cases in
   `tests/integration/postgres-worker-agent-revision.test.mjs` run the real queue
@@ -273,6 +283,11 @@ than re-attach the source.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)
+- 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)
+- 2026-10-01 20:30: Report a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` at registration. (fix-d93-d100)
+- 2026-09-30 21:14: Updated the independent OpenShell wire-contract verification pointer to v0.1.3-pre.1. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 
 - 2026-09-30 04:00: Recorded withdrawal attempt reasons, replay deduplication, and maintenance of a withdrawn revision; corrected the update ordering. (pr-553-alignment - 3a5e48035)
 - 2026-09-28 18:00: Added source update and per-Agent withdrawal through worker-executed revocation. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - 7cd4a210)

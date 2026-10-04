@@ -11,6 +11,12 @@ internal Kubernetes `ClusterIP` Service and a default-deny ingress
 selectors. The cluster must enforce NetworkPolicies. Do not expose the listener
 through a `NodePort`, `LoadBalancer`, `hostNetwork`, or public endpoint.
 
+The Helm charts allow DNS egress on UDP/TCP ports `53` and `5353` to their
+configured `dns.namespace` and `dns.podLabels` peers. Port `5353` supports
+OpenShift DNS backends after Service address translation. These grants cover
+API, worker, initialization, collector, Slack proxy, Envoy, and observability
+demo workloads.
+
 The trusted-operator native admin pilot is the only documented public-ingress
 exception: the console host and Agent wildcard hosts route to OCC through the
 procedure in [Deploy native admin UI access](../../guides/deploy/native-admin.md).
@@ -120,15 +126,17 @@ Revoking one account's cookies needs no rotation: reset its password.
 These optional variables apply to the API only. The chart never passes them to
 the worker or initialization Job.
 
-| Variable                           | Helm value                                 | Behavior                                                                                                                                                                                                           |
-| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OCC_AUTH_GITHUB_CLIENT_ID`        | `auth.github` Secret key `clientIdKey`     | GitHub App client ID. Set the client ID, client secret, and recovery user ID together or not at all.                                                                                                               |
-| `OCC_AUTH_GITHUB_CLIENT_SECRET`    | `auth.github` Secret key `clientSecretKey` | GitHub App client secret, read from the dedicated `auth.github.secretName` Secret.                                                                                                                                 |
-| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | `auth.recoveryUserId`                      | Existing local password administrator's user ID; designates the recovery account on first activation.                                                                                                              |
-| `OCC_AUTH_PASSWORD_SIGN_IN`        | `auth.passwordSignIn`                      | `all` (default, not rendered) or `recovery-only`: only the recovery account may use a password. Needs GitHub or Google; see [recovery-only](../authentication/external-sign-in.md#recovery-only-password-sign-in). |
-| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, never `/0`. Requests whose socket peer is inside them may carry forwarded headers.                                                                                             |
-| `OCC_AUTH_TRUSTED_PROXY_PRESET`    | `api.trustedProxy.preset`                  | `ingress-nginx` (default), `aws` or `generic`. Named presets read `x-forwarded-for`. Set with the CIDRs.                                                                                                           |
-| `OCC_AUTH_CLIENT_IP_HEADER`        | `api.trustedProxy.clientAddressHeader`     | Lowercase header name, up to 64 characters, `generic` only. Sign-in limits key on the client address it carries from a trusted peer.                                                                               |
+| Variable                           | Helm value                                 | Behavior                                                                                                                                                                                                                 |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OCC_AUTH_GITHUB_CLIENT_ID`        | `auth.github` Secret key `clientIdKey`     | GitHub App client ID. Set the client ID, client secret, and recovery user ID together or not at all.                                                                                                                     |
+| `OCC_AUTH_GITHUB_CLIENT_SECRET`    | `auth.github` Secret key `clientSecretKey` | GitHub App client secret, read from the dedicated `auth.github.secretName` Secret.                                                                                                                                       |
+| `OCC_AUTH_GITHUB_ALLOWED_ORGS`     | `auth.github.allowedOrgs`, comma-joined    | Optional GitHub organization logins whose active members may sign in; see [allowlist](../authentication/external-sign-in.md#organization-and-team-allowlist). At most 10 entries with the teams. Requires the client ID. |
+| `OCC_AUTH_GITHUB_ALLOWED_TEAMS`    | `auth.github.allowedTeams`, comma-joined   | Optional `org/team-slug` entries whose active members may sign in. The GitHub App needs organization permission Members: read.                                                                                           |
+| `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | `auth.recoveryUserId`                      | Existing local password administrator's user ID; designates the recovery account on first activation.                                                                                                                    |
+| `OCC_AUTH_PASSWORD_SIGN_IN`        | `auth.passwordSignIn`                      | `all` (default, not rendered) or `recovery-only`: only the recovery account may use a password. Needs GitHub, Google or OIDC; see [recovery-only](../authentication/external-sign-in.md#recovery-only-password-sign-in). |
+| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, never `/0`. Requests whose socket peer is inside them may carry forwarded headers.                                                                                                   |
+| `OCC_AUTH_TRUSTED_PROXY_PRESET`    | `api.trustedProxy.preset`                  | `ingress-nginx` (default), `aws` or `generic`. Named presets read `x-forwarded-for`. Set with the CIDRs.                                                                                                                 |
+| `OCC_AUTH_CLIENT_IP_HEADER`        | `api.trustedProxy.clientAddressHeader`     | Lowercase header name, up to 64 characters, `generic` only. Sign-in limits key on the client address it carries from a trusted peer.                                                                                     |
 
 The chart's API Deployment always uses the `Recreate` strategy: an upgrade stops
 the old API Pod before starting the new one, so two controllers never serve
@@ -142,7 +150,7 @@ for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
 `api.trustedProxy` is off by default: the API rejects `Forwarded`,
 `X-Forwarded-*`, and `X-Real-IP` with `403`. Failed password sign-ins are then
 limited per email only, because every browser behind a proxy shares its address.
-With GitHub or Google, start, callback, and result then key on the browser's own
+With GitHub, Google or OIDC, start, callback, and result then key on the browser's own
 cookies, not the address; start has no per-client limit, only an active cap and
 the 1,000 pending attempts. Startup logs `authentication.sign-in-limit-warning`,
 and Helm's install notes and the profile renderer warn; none of them fail. Set
@@ -156,7 +164,8 @@ and Helm's install notes and the profile renderer warn; none of them fail. Set
 - `generic`: `cidrs` and `clientAddressHeader`, such as `x-real-ip`, are required.
 
 Trust only proxies that overwrite or append the header, and admit them through
-`api.clients`. Rendering fails on incomplete GitHub values, a shared Secret,
+`api.clients`. Rendering fails on incomplete GitHub values, an allowlist entry that is
+not an organization login or `org/team-slug`, more than 10 allowlist entries, a shared Secret,
 `agentNativeAdmin.enabled` with GitHub, `/0` proxy CIDRs, another header with a
 named preset, or credential, routing and internal headers such as `cookie`.
 
@@ -195,7 +204,9 @@ recovery user; see [OIDC sign-in](../../guides/deploy/oidc-sign-in.md).
 
 With `auth.oidc.enabled`, the chart adds the API-only egress policy
 `openclaw-enterprise-api-oidc-login-egress` on TCP 443. Empty `auth.oidc.egressCidrs`
-allows any address except `169.254.0.0/16`. Rendering fails on values the API refuses,
+allows any address except `169.254.0.0/16`. The port is the destination Pod's port; an
+IdP inside the cluster on another target port needs
+[its own egress policy](../../guides/deploy/oidc-sign-in.md#configure-the-chart). Rendering fails on values the API refuses,
 a Secret shared with GitHub, Google or any other chart Secret, `agentNativeAdmin.enabled`
 with OIDC, or an HTTP base URL.
 
@@ -249,7 +260,9 @@ and delivery checks, use
 When enabled, the chart requires a digest-pinned image, an exact exporter
 destination (IPv4 `/32` or paired namespace/Pod selectors), a TCP port, and
 nonempty dedicated configuration and environment Secret names. Neither Secret
-may reuse the Installation, database, auth, or ChatGPT Backend Secret. The named
+may reuse the Installation, database, auth, or ChatGPT Backend Secret, or, when
+the feature is enabled, a GitHub, Google, or OIDC sign-in Secret, the gateway API
+key, a repository-credentials Secret, or an execution-cluster kubeconfig. The named
 Secrets must be in the control-plane namespace:
 
 - `configSecretName` supplies `collector.yaml`, `kubernetes.yaml`, and

@@ -76,13 +76,16 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	if err != nil {
 		return err
 	}
+	if apiPort == kubernetesPort {
+		return fmt.Errorf("development API and Kubernetes API ports must differ")
+	}
 	browserPort := 0
 	if sandboxDriver == "none" {
 		browserPort, err = positiveSetting(r, "OCC_DEVELOPMENT_BROWSER_PORT", 8443, 65535)
 		if err != nil {
 			return err
 		}
-		if browserPort == apiPort || browserPort == kubernetesPort || apiPort == kubernetesPort {
+		if browserPort == apiPort || browserPort == kubernetesPort {
 			return fmt.Errorf("browser, development API, and Kubernetes API ports must differ")
 		}
 	}
@@ -111,8 +114,8 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	if err := validateClusterName(state.Cluster); err != nil {
 		return err
 	}
-	if !namespaceName.MatchString(state.PlatformNamespace) {
-		return fmt.Errorf("invalid OCC_DEVELOPMENT_KUBERNETES_NAMESPACE %q: the name must match %s", state.PlatformNamespace, namespaceName)
+	if !namespaceName.MatchString(state.PlatformNamespace) || len(state.PlatformNamespace) > 63 {
+		return fmt.Errorf("invalid OCC_DEVELOPMENT_KUBERNETES_NAMESPACE %q: the name must match %s and be at most 63 characters", state.PlatformNamespace, namespaceName)
 	}
 	if state.KeyOwned {
 		state.KeyPath = filepath.Join(directory, "initial-admin-service-key.json")
@@ -224,6 +227,9 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	clusterAttempted = true
 	if err := r.createK3dCluster(ctx, clusterArgs...); err != nil {
 		clusterCreationFailed = true
+		return err
+	}
+	if err := r.checkDevelopmentNodeDNS(ctx, state); err != nil {
 		return err
 	}
 	if err := r.writeKubeconfigs(ctx, state); err != nil {
@@ -346,6 +352,11 @@ func upK3d(ctx context.Context, opts Options, sandboxDriver string) (result erro
 	if state.BrowserPort != 0 {
 		consoleHost, _, _ := developmentBrowserHosts(state.Cluster)
 		fmt.Fprintf(r.opts.Out, "Browser console: https://%s:%d/console/\nBrowser CA certificate: %s\n", consoleHost, state.BrowserPort, filepath.Join(directory, "browser-ca.crt"))
+	} else {
+		fmt.Fprintf(r.opts.Out, "Console: %s/console/\n", apiURL)
+	}
+	if routingPodCIDR == "" {
+		fmt.Fprintln(r.opts.Out, "Note: this profile installs no private gateway routing, so dedicated Agent deployments fail with DEPENDENCY_UNAVAILABLE. See docs/guides/deploy/openshell-credential-sources.md.")
 	}
 	fmt.Fprintf(r.opts.Out, "OpenClaw Enterprise development stack is ready.\nContainer engine: %s\nCompute Driver: Kubernetes\nSandbox Driver: %s\nDeployment: Kubernetes only\nPlatform Namespace: %s\nAPI URL: %s\nInstallation ID: %s\nService key file: %s\nAdministrator: admin@development.openclaw.invalid\nAdministrator password file: %s\nKubeconfig: %s\nKubernetes context: k3d-%s\n\nCleanup:\n  env OCC_DEVELOPMENT_COMPUTE_DRIVER=kubernetes OCC_DEVELOPMENT_SANDBOX_DRIVER=%s OCC_DEVELOPMENT_STATE_DIRECTORY=%s %s dev down\n", r.engine, sandboxDriver, state.PlatformNamespace, apiURL, installation, state.KeyPath, filepath.Join(directory, "initial-admin-password"), filepath.Join(directory, "kubeconfig"), state.Cluster, sandboxDriver, shellQuote(directory), shellQuote(filepath.Join(opts.Repository, "bin", "occ")))
 	return nil

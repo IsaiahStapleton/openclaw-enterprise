@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
+import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
   bootstrapProductionInstallation,
   composeProductionSignIn,
@@ -12,8 +14,9 @@ import {
   memoryLogger,
   signedInHeaders,
 } from "../helpers/production-sign-in.mjs";
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
+import { assertSpentDeviceProofRefusal } from "../helpers/password-proof-refusal.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "limit-admin@example.test";
 const authSecret = "password-limit-auth-test-secret-at-least-32-bytes";
 const secrets = { "occ-auth/secret": authSecret };
@@ -22,13 +25,67 @@ const wrongPassword = "wrong-guess-password";
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
+// A subtest sets this to see the slow-lane floors start and to keep them from ending.
+let floorWatch;
+
+// The production slow lane with its floor capped at 2 s instead of 8 s. Every paced attempt
+// waits its floor in real time, so the cap sets this suite's length; the 1 s first floor,
+// the doubling, the slots and the per-minute budgets stay the production values. An attempt
+// holds its email's slot from the start of its floor, which floorWatch observes.
+const slowLane = {
+  floorMs: passwordFailureBudget.slow.floorMs,
+  maxFloorMs: 2000,
+  async waitFloor(floorMs) {
+    const watch = floorWatch;
+    watch?.started();
+    await delay(floorMs, undefined, { ref: false });
+    await watch?.released;
+  },
+};
+
+// Counts the floors that start from now on and holds each one past its time until release().
+function watchFloors(expected) {
+  const reached = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const watch = {
+    count: 0,
+    released: release.promise,
+    started() {
+      watch.count += 1;
+      if (watch.count === expected) {
+        reached.resolve();
+      }
+    },
+    // Resolves once `expected` floors have started; fails after the deadline.
+    async reached(deadlineMs) {
+      const timeout = new AbortController();
+      try {
+        await Promise.race([
+          reached.promise,
+          delay(deadlineMs, undefined, { signal: timeout.signal }).then(() =>
+            assert.fail(`${watch.count} of ${expected} slow-lane floors started`),
+          ),
+        ]);
+      } finally {
+        timeout.abort();
+      }
+    },
+    release() {
+      floorWatch = undefined;
+      release.resolve();
+    },
+  };
+  floorWatch = watch;
+  return watch;
+}
+
 // The default install (no external provider), composed twice over one database: behind a
 // trusted ingress, where admission keys on the resolved client address and the email, and
 // with the chart's defaults (no trusted proxy), where only the email lane applies. Only
 // failures count; once the budget is spent, administrators are slowed, never refused.
 test(
   "password-only sign-in limits failures per client and email with a reserved administrator lane",
-  { skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof." },
+  requiresPostgres,
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
@@ -52,6 +109,7 @@ test(
       settings: { ...defaultInstallSettings, OCC_AUTH_TRUSTED_PROXY_CIDRS: "10.0.0.0/24" },
       secrets,
       logger: proxiedLog.logger,
+      passwordSlowLaneFloors: slowLane,
     });
     const plainLog = memoryLogger();
     plainApp = await composeProductionSignIn(t, {
@@ -59,6 +117,7 @@ test(
       settings: { ...defaultInstallSettings },
       secrets,
       logger: plainLog.logger,
+      passwordSlowLaneFloors: slowLane,
     });
     // Without a trusted proxy every browser reaches the API from the ingress address.
     const plainSignIn = (account) =>
@@ -413,99 +472,30 @@ test(
           const response = await plainSignInWith(cookie, { ...account, password: wrongPassword });
           assert.equal(response.statusCode, 401, `attempt ${index}: ${response.body}`);
         }
-        // Hold two admitted readers before their genuine database operation. A third
-        // request must finish through refusal, not enter another reader and later return
-        // 429 merely because the device's password allowance was already spent.
-        const releaseReads = Promise.withResolvers();
-        const twoReads = Promise.withResolvers();
-        const thirdRead = Promise.withResolvers();
-        let readCount = 0;
-        let completedReads = 0;
-        const pending = [];
-        let settled;
-        let timer;
-        const deadline = new Promise((resolve) => {
-          timer = setTimeout(() => resolve({ kind: "deadline" }), 10_000);
+        await assertSpentDeviceProofRefusal({
+          installReader(holdRead) {
+            const query = pg.Pool.prototype.query;
+            return t.mock.method(pg.Pool.prototype, "query", function (...args) {
+              const [statement, parameters] = args;
+              // This is passwordKnownDeviceState's read, not a replacement SQL result.
+              // Unrelated queries, callback signatures and other accounts pass through.
+              if (
+                typeof statement === "string" &&
+                statement.includes(
+                  "SELECT u.id AS user_id, m.id AS method_id, m.authentication_version",
+                ) &&
+                statement.includes("WHERE u.email = $1") &&
+                parameters?.[0] === account.email &&
+                typeof args[2] !== "function"
+              ) {
+                return holdRead(() => query.apply(this, args));
+              }
+              return query.apply(this, args);
+            });
+          },
+          signIn: () => plainSignInWith(cookie, { ...account, password: wrongPassword }),
+          knownDeviceOf,
         });
-        const holdRead = async (read) => {
-          readCount += 1;
-          if (readCount === 2) {
-            twoReads.resolve({ kind: "two-reads" });
-          } else if (readCount > 2) {
-            thirdRead.resolve({ kind: "third-read" });
-          }
-          await releaseReads.promise;
-          const result = await read();
-          completedReads += 1;
-          return result;
-        };
-        const query = pg.Pool.prototype.query;
-        const reader = t.mock.method(pg.Pool.prototype, "query", function (...args) {
-          const [statement, parameters] = args;
-          // This is passwordKnownDeviceState's read, not a replacement SQL result.
-          // Unrelated queries, callback signatures and other accounts pass through.
-          if (
-            typeof statement === "string" &&
-            statement.includes(
-              "SELECT u.id AS user_id, m.id AS method_id, m.authentication_version",
-            ) &&
-            statement.includes("WHERE u.email = $1") &&
-            parameters?.[0] === account.email &&
-            typeof args[2] !== "function"
-          ) {
-            return holdRead(() => query.apply(this, args));
-          }
-          return query.apply(this, args);
-        });
-        const launch = () => {
-          const request = Promise.resolve(
-            plainSignInWith(cookie, { ...account, password: wrongPassword }),
-          ).then(
-            (response) => ({ kind: "response", response }),
-            (error) => ({ kind: "request-error", error }),
-          );
-          pending.push(request);
-          return request;
-        };
-        try {
-          launch();
-          launch();
-          const started = await Promise.race([twoReads.promise, ...pending, deadline]);
-          if (started.kind === "request-error") {
-            throw started.error;
-          }
-          assert.equal(started.kind, "two-reads", "both admitted readers must be held");
-          const refused = await Promise.race([thirdRead.promise, launch(), deadline]);
-          if (refused.kind === "request-error") {
-            throw refused.error;
-          }
-          assert.equal(
-            refused.kind,
-            "response",
-            "proof refusal must answer without admitting a third account-state read",
-          );
-          assert.equal(readCount, 2, "refused proof never reaches the account-state reader");
-          assert.equal(refused.response.statusCode, 429, refused.response.body);
-          assert.equal(knownDeviceOf(refused.response), undefined, "refusal issues no device");
-        } finally {
-          // Never abandon the injected requests or leave the real reader wrapped after a
-          // failed assertion (including the genuine unbounded-reader negative control).
-          clearTimeout(timer);
-          releaseReads.resolve();
-          try {
-            settled = await Promise.all(pending);
-          } finally {
-            reader.mock.restore();
-          }
-        }
-        assert.equal(readCount, 2);
-        assert.equal(completedReads, 2, "both held reads completed their real database work");
-        for (const result of settled) {
-          if (result.kind === "request-error") {
-            throw result.error;
-          }
-          assert.equal(result.response.statusCode, 429, result.response.body);
-        }
       },
     );
 
@@ -554,17 +544,34 @@ test(
           const response = await plainSignIn({ ...knownAdmin, password: wrongPassword });
           assert.equal(response.statusCode, 401, `guess ${index}: ${response.body}`);
         }
-        // Strangers hold both of the email's slow-lane slots and queue behind them; each
-        // holds its slot for a floor of 1 s up to 8 s.
-        const flood = Array.from({ length: 4 }, () =>
-          plainSignIn({ ...knownAdmin, password: wrongPassword }),
-        );
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const started = performance.now();
-        const response = await plainSignInWith(adminDevice, knownAdmin);
-        const elapsed = performance.now() - started;
-        assert.equal(response.statusCode, 200, response.body);
-        assert.ok(elapsed < 1000, `the known browser waited ${elapsed} ms`);
+        // Strangers hold both of the email's slow-lane slots and queue behind them. Each
+        // holds its slot from the start of its floor, and the watch keeps those floors from
+        // ending until the known browser has its answer.
+        const floors = watchFloors(passwordFailureBudget.slow.concurrentPerEmail);
+        const deadline = new AbortController();
+        let flood;
+        let answered;
+        try {
+          flood = Array.from({ length: 4 }, () =>
+            plainSignIn({ ...knownAdmin, password: wrongPassword }),
+          );
+          await floors.reached(30_000);
+          // A browser that queued behind those slots, or was paced itself, would not answer
+          // while the floors are held; after the deadline they end and the test fails.
+          const signingIn = plainSignInWith(adminDevice, knownAdmin);
+          answered = await Promise.race([
+            signingIn.then((response) => ({ response, floors: floors.count })),
+            delay(30_000, undefined, { signal: deadline.signal }).catch(() => undefined),
+          ]);
+        } finally {
+          deadline.abort();
+          floors.release();
+        }
+        assert.ok(answered !== undefined, "the known browser waited for strangers' floors");
+        assert.equal(answered.response.statusCode, 200, answered.response.body);
+        // Only the two strangers holding the slots started floors: the others queued, and
+        // the known browser was not paced.
+        assert.equal(answered.floors, passwordFailureBudget.slow.concurrentPerEmail);
         assert.deepEqual(
           (await Promise.all(flood)).map((refused) => refused.statusCode),
           Array(4).fill(429),
@@ -599,9 +606,9 @@ test(
           401,
         );
       }
-      // Exhausted client: its refusals are paced by a floor that doubles up to 8 s. Warm it
-      // to the cap, then ordinary, unknown and wrong administrator attempts all wait out the
-      // same floor and return the same 429.
+      // Exhausted client: its refusals are paced by a floor that doubles up to the cap. Warm
+      // it to the cap, then ordinary, unknown and wrong administrator attempts all wait out
+      // the same floor, no longer, and return the same 429.
       const warmUp = await Promise.all(
         [0, 1, 2].map((index) =>
           signIn(client, { email: `warm-${index}@example.test`, password: wrongPassword }),
@@ -626,7 +633,14 @@ test(
         }),
       );
       const elapsed = refusals.map((refusal) => refusal.elapsed);
-      assert.ok(Math.min(...elapsed) >= 7990, `refusal floor: ${elapsed.join(", ")}`);
+      assert.ok(
+        Math.min(...elapsed) >= slowLane.maxFloorMs - 10,
+        `refusal floor: ${elapsed.join(", ")}`,
+      );
+      assert.ok(
+        Math.max(...elapsed) < slowLane.maxFloorMs + 1000,
+        `refusal cap: ${elapsed.join(", ")}`,
+      );
       assert.ok(Math.max(...elapsed) - Math.min(...elapsed) < 400, `spread: ${elapsed.join(", ")}`);
       for (const { retryAfter } of refusals) {
         assert.ok(Number(retryAfter) >= 1 && Number(retryAfter) <= 60, `Retry-After ${retryAfter}`);

@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: 2026-09-30
-last_updated_session: authoring-run/f1c1bde3-0893-42d4-89ed-3251c885a893
+last_updated_session: authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -20,7 +20,7 @@ The model credential no longer needs a Secret projection: a
 [credential source](credential-source-lifecycle.md) attaches an OpenShell
 provider to the Sandbox, and the supervisor proxy injects the key. The regular
 Agent workflow with stock OpenShell still stops before Sandbox creation because
-`v0.1.0` cannot accept the Secret-backed app-server token or projected workload
+`v0.1.3-pre.1` cannot accept the Secret-backed app-server token or projected workload
 identity. The verification-only compatibility path stages those inputs without
 changing the production fail-closed contract and completes real model turns
 inside the Sandbox.
@@ -57,7 +57,7 @@ graph TD
   G -- "yes" --> R["<b>Reject provisioning</b><br/>Candidate stays inactive"]
   G -- "no" --> H["<b>Create Sandbox</b><br/>Providers and exposure"]
   H --> I{"<b>Native projections</b><br/>Supported?"}
-  I -- "no: stock v0.1.0" --> R
+  I -- "no: stock v0.1.3-pre.1" --> R
   I -. "verification bridge" .-> V{"<b>Harness</b>"}
   V -- "Codex" --> J["<b>Sandbox ready</b><br/>App-server route"]
   J --> K["<b>Verify route</b><br/>Protected 401"]
@@ -96,14 +96,16 @@ endpoint, the Sandbox, and a Credential Gateway whose `binaries` list holds the
 native Codex executable. The Sandbox policy has no model-egress rule; the
 credential source's provider profile supplies it.
 
-The environment selects Kubernetes Compute and OpenShell. `scripts/dev-up`
-validates that combination and delegates lifecycle ownership to `occ dev up`.
-The control plane defaults to Compose; `OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes`
-selects the Kubernetes-only profile. Both verify the `v0.1.0` source archive
-before packaging its Gateway and Workspace charts, and import the matching
-digest-pinned Gateway, Sandbox, and supervisor images. The launcher supplies v0.1.0's separate
-image registry, repository, and digest values for each component and omits the
-NetworkPolicy acknowledgement removed from that chart.
+`scripts/dev-up` validates Kubernetes Compute with OpenShell and delegates to
+`occ dev up`. Compose is the default control plane;
+`OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` selects Kubernetes-only.
+Both verify the `v0.1.3-pre.1` source archive, package its Gateway and Workspace
+charts, and import digest-pinned Gateway, Sandbox, and supervisor images using
+separate registry, repository, and digest values. The removed NetworkPolicy
+acknowledgement is omitted.
+Before tool discovery or state creation, Kubernetes-only `upK3d` rejects equal
+development and Kubernetes API host ports, with or without OpenShell. Without a
+Sandbox Driver, it also rejects browser-port collisions.
 The CLI records the exact engine endpoint, cluster,
 platform Namespace, API port, and key destination before creating resources.
 The Kubernetes-only mode creates k3d without a Compose network, imports the OCE controller, Agent
@@ -162,7 +164,7 @@ namespace name. It reads the Workspace, creates it when missing, or rereads it
 after a concurrent `ALREADY_EXISTS`. Adoption requires the expected name, OCC
 Namespace ID label, managed-by label, and active phase. Any conflict fails the
 Namespace operation. Kubernetes Compute uses `oce-` plus a 15-character digest
-so the same name satisfies OpenShell v0.1.0's 19-character limit.
+so the same name satisfies OpenShell v0.1.3-pre.1's 19-character limit.
 
 ### 2. Derive the provider-owned Harness request
 
@@ -183,10 +185,13 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 
 OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
+It always sends `hard_requirement` Landlock compatibility; Installation startup
+rejects any other `policy.landlockCompatibility` value. On a node that cannot
+enforce Landlock, the OpenShell supervisor refuses to launch the workload.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
-allowlists before they are converted to the exact `v0.1.0` protobuf enums.
+allowlists before they are converted to the exact `v0.1.3-pre.1` protobuf enums.
 It rejects inherited object names and the old `passthrough` TLS spelling,
-which v0.1.0 defines as an automatic inspection alias; use `skip` instead. Each network policy also requires at
+which v0.1.3-pre.1 defines as an automatic inspection alias; use `skip` instead. Each network policy also requires at
 least one executable path and sends those binary identities with its endpoints.
 
 The regular Harness requirements still contain the Secret-backed
@@ -199,7 +204,7 @@ profile to the exact native Codex executable in the runtime image's pnpm tree.
 A dependency-layout change must update that path; a stale one fails the Codex
 startup model probe.
 
-The verification-only v0.1.0 Gateway permits caller driver configuration and
+The verification-only v0.1.3-pre.1 Gateway permits caller driver configuration and
 disables OpenShell resource admission so the compatibility request can attach
 OCE-owned PVCs without OpenShell approval labels. The Enterprise Driver still
 limits the request to the Harness mounts approved by Kubernetes Compute. The
@@ -213,21 +218,40 @@ enrollment CA.
 
 `apps/controller/src/drivers/sandbox/openshell-gateway-client.ts:createSandbox`
 
-The client sends the Sandbox identity, spec, Namespace Workspace scope, and
-revision UUID as `request_id`. Codex requests one unnamed exposure for
-`APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
-outbound, so it requests no exposure and rejects any returned URL. A replay
-returns the same result; a Sandbox that predates replayable creation fails.
+The client sends the Sandbox identity, spec, Namespace Workspace scope, and a
+`request_id`: the revision UUID first. OpenShell keeps a `request_id` whose create
+errored server-side unresolved forever, so when the Gateway refuses one
+(`REQUEST_OUTCOME_UNCERTAIN`, `REQUEST_ID_PAYLOAD_MISMATCH`, or
+`REQUEST_REPLAY_UNAVAILABLE`) and `getSandbox` finds no Sandbox, the Driver tries
+the next of 16 IDs: the revision UUID, then 15 derived from it. Each failing pass
+spends at most one new ID. The Sandbox name is unique per Workspace, so these
+attempts never yield two Sandboxes. Unresolved IDs never expire. Once the controller
+identity holds 1000 unresolved or unexpired admission records, OpenShell rejects
+every new `request_id` with `RESOURCE_EXHAUSTED`, so repeated server-side create
+failures count against that quota. Completed records free up after 24 hours.
+`unary` maps that exact refusal to `OpenShellAdmissionLimitError`, a
+`TransientDependencyError` (`SANDBOX_ADMISSION_LIMIT_REACHED`): revision
+provisioning waits for it until the convergence deadline without spending
+attempts; Namespace work retries it as usual. Codex requests one unnamed
+exposure for `APP_SERVER_PORT` and requires its `service_urls` entry. Native
+OpenClaw connects outbound, so it requests no exposure and rejects any returned
+URL. The Driver
+calls `getSandbox` first and creates only an absent Sandbox; it adopts an
+existing or `ALREADY_EXISTS` Sandbox only when its annotations name this
+revision, it is not deleting or stopped, and, for Codex, `getServiceUrl` finds
+the unnamed endpoint. Workspace `sandbox:write` is the trust boundary here: a
+holder could already delete and replace the Sandbox.
 
 For each unary Gateway call, the client checks cancellation after client setup
 and credential-metadata preparation and before dispatch. An abort during setup
 is observed when the pending setup step settles; it does not bound a stalled
-initialization or file read. Once dispatched, an abort requests cancellation
+initialization or file read. The Backend shares one client per gateway endpoint;
+a failed setup is not cached, so the next call retries it. Once dispatched, an abort requests cancellation
 of the local gRPC call and rejects the caller. That request does not prove a
 remote mutation stopped; the calling lifecycle must handle any uncertain
 effect through its existing recovery and cleanup path.
 
-Stock `v0.1.0` still lacks the exact projected identity and volume support
+Stock `v0.1.3-pre.1` still lacks the exact projected identity and volume support
 required by the request, including the immutable plugin-runtime ConfigMap
 mounted by Kubernetes Compute. Any request that reaches
 the gateway without those shapes still fails closed. Any other gateway failure
@@ -286,7 +310,7 @@ Kubernetes Compute delete the Kubernetes namespace.
   recorded Compose and cluster cleanup.
 - `OCC_TEST_OPENSHELL_K3D_REAL=1 node --env-file="$TEST_ENV_FILE" --test tests/integration/sandbox-driver-openshell-k3d-real.test.mjs`
   exercises the selected real gateway and cluster prerequisites. Set
-  `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` for stock `v0.1.0`; the expected
+  `OCC_TEST_OPENSHELL_SECRET_PROJECTION=0` for stock `v0.1.3-pre.1`; the expected
   result is `APP_SERVER_TOKEN` projection rejection before activation, which
   does not prove a model turn. Both modes register an `openai` credential source
   through the API. Mode `1` selects a verification-only compatibility path: an
@@ -294,16 +318,16 @@ Kubernetes Compute delete the Kubernetes namespace.
   workload token in revision-specific PVC subpaths, never the model key. The
   test asserts that Harness processes hold only the OpenShell placeholder. The provider-owned
   Sandbox exposes its app-server port at create time. The test observes the
-  protected app server's authentication rejection because v0.1.0 strips its bearer header,
+  protected app server's authentication rejection because the Driver omits the service authorization mode and OpenShell defaults to `STRIP`,
   then runs the real model and tool checks from inside the Pod. This mode proves
-  v0.1.0 containment, the Compute-created node route, Helm NetworkPolicy
+  v0.1.3-pre.1 containment, the Compute-created node route, Helm NetworkPolicy
   enforcement, exposed-route reachability, and lifecycle behavior. It does not
   prove native workload projection or an authenticated model turn through the
   exposed route. The tested runtime uses the OpenClaw source commit pinned by
   `deploy/runtime/Dockerfile`; that source provides the native worker's
   `connect --ephemeral` path and the workspace-node
   `--pair-if-needed` and `--commands` options required by the test.
-- `OpenShell v0.1.0 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
+- `OpenShell v0.1.3-pre.1 cannot receive secretKeyRef environment APP_SERVER_TOKEN ...`
   identifies the current fail-closed boundary.
 - `OCC_TEST_OPENSHELL_HARNESS=openclaw` runs two native sessions over one
   outbound connection with no inbound Harness service.
@@ -321,6 +345,10 @@ Kubernetes Compute delete the Kubernetes namespace.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 23:45: Required hard Landlock compatibility in the OpenShell Sandbox request and rejected weaker Installation settings. (authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a - 129723ab)
+
+- 2026-09-30 21:14: Updated the OpenShell source, images, charts, and wire fixture to v0.1.3-pre.1 while preserving the default service authorization and fail-closed projection boundaries. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 
 - 2026-09-30 09:49: Documented Gateway call cancellation and uncertain remote effects. (authoring-run/f1c1bde3-0893-42d4-89ed-3251c885a893 - 90899dc55ab79d0244533b7dcde657fecf35bb08)
 

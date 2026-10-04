@@ -9,6 +9,7 @@ import {
   KubernetesConfigurationDriver,
   kubernetesConfigurationName,
 } from "../../apps/controller/src/drivers/configuration/kubernetes/index.ts";
+import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
 
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
 const configuration = {
@@ -109,18 +110,43 @@ test("Kubernetes configuration implementations expose a closed preconstruction s
     KubernetesConfigurationDriver.validateConfiguration({ authentication: { mode: "inCluster" } }),
   );
 
-  for (const invalid of [
-    undefined,
-    {},
-    { authentication: { mode: "ambient" } },
-    { authentication: { mode: "inCluster", context: "unexpected" } },
-    { authentication: { mode: "kubeconfig", kubeconfigPath: "relative", context: "tenant" } },
-    { authentication: { mode: "kubeconfig", kubeconfigPath: "/tmp/config", context: "" } },
-    { authentication: { mode: "inCluster" }, token: "not-allowed" },
-    { authentication: { mode: "inCluster" }, clients: {} },
+  const injected = /Injected clients and unknown Kubernetes configuration options/;
+  for (const [invalid, refusal] of [
+    [undefined, /Kubernetes configuration options are required/],
+    [{}, /Explicit Kubernetes authentication is required/],
+    [{ authentication: { mode: "ambient" } }, /explicit Kubernetes authentication mode/],
+    [
+      { authentication: { mode: "inCluster", context: "unexpected" } },
+      /In-cluster authentication does not accept additional options/,
+    ],
+    [
+      {
+        authentication: {
+          mode: "kubeconfig",
+          kubeconfigPath: "/tmp/config",
+          context: "tenant",
+          token: "x",
+        },
+      },
+      /Unknown kubeconfig authentication options are forbidden/,
+    ],
+    [
+      { authentication: { mode: "kubeconfig", kubeconfigPath: "", context: "tenant" } },
+      /Dedicated kubeconfig path must be a nonempty string/,
+    ],
+    [
+      { authentication: { mode: "kubeconfig", kubeconfigPath: "relative", context: "tenant" } },
+      /Dedicated kubeconfig path must be absolute/,
+    ],
+    [
+      { authentication: { mode: "kubeconfig", kubeconfigPath: "/tmp/config", context: "" } },
+      /Explicit Kubernetes context must be a nonempty string/,
+    ],
+    [{ authentication: { mode: "inCluster" }, token: "not-allowed" }, injected],
+    [{ authentication: { mode: "inCluster" }, clients: {} }, injected],
   ]) {
-    assert.throws(() => KubernetesConfigurationDriver.validateConfiguration(invalid));
-    assert.throws(() => new KubernetesConfigurationDriver(invalid));
+    assert.throws(() => KubernetesConfigurationDriver.validateConfiguration(invalid), refusal);
+    assert.throws(() => new KubernetesConfigurationDriver(invalid), refusal);
   }
 
   // Inherited client injection must not evade the closed own-property schema.
@@ -339,7 +365,15 @@ test("the official Kubernetes client rejects ambiguous identities and insecure A
     { name: "missing-user", users: [] },
     { name: "plaintext-api", server: "http://127.0.0.1:1" },
     { name: "unverified-tls", skipTLSVerify: true },
-    { name: "embedded-credentials", server: "https://user:password@127.0.0.1:1" },
+    {
+      name: "embedded-credentials",
+      server: syntheticCredentialUrl({
+        username: "user",
+        password: "password",
+        host: "127.0.0.1",
+        port: 1,
+      }),
+    },
     { name: "unexpected-api-path", server: "https://127.0.0.1:1/untrusted" },
   ]) {
     const path = join(directory, `${scenario.name}.json`);
@@ -401,7 +435,10 @@ test("Kubernetes Configuration rejects literal model credentials before writes a
     const unsafe = { ...configuration, values };
     for (const operation of ["create", "update"]) {
       await assert.rejects(driver[operation](unsafe), (error) => {
-        assert.match(error.message, /Model credentials must use unresolved references/);
+        assert.match(
+          error.message,
+          /holds a credential value inline, where a reference is required/,
+        );
         assert.equal(error.message.includes(sentinel), false);
         return true;
       });

@@ -15,6 +15,12 @@
   },
   "files": [
     {
+      "path": "tests/integration/kubelet-volume-refresh-k3d.test.mjs",
+      "expectedTests": [
+        "optional Secret and ConfigMap volumes populate in running Pods within the measured kubelet refresh bounds"
+      ]
+    },
+    {
       "path": "tests/integration/kubernetes-plugin-status-real.test.mjs",
       "expectedTests": [
         "real Kubernetes Compute reads plugin runtime status from the exact gateway Pod",

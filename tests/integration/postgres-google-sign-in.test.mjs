@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
   assertReservedLane,
   bootstrapProductionInstallation,
@@ -23,8 +24,8 @@ import {
   startFakeGitHub,
 } from "../helpers/production-sign-in.mjs";
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
+import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 
-const databaseUrl = process.env.OCC_TEST_DATABASE_URL;
 const adminEmail = "google-recovery@example.test";
 const password = "google-member-password";
 const authSecret = "google-sign-in-auth-test-secret-at-least-32-bytes";
@@ -38,6 +39,12 @@ const secrets = {
   "occ-github-login/client-id": "google-suite-github-client-id",
   "occ-github-login/client-secret": "google-suite-github-client-secret",
 };
+// The production slow lane with its floor capped at 2 s instead of 8 s, as in
+// postgres-password-sign-in-limit. This suite spends password budgets but does not measure
+// pacing, and each paced attempt waits its floor in real time: the reserved-lane check and
+// the admin sign-ins after it reach the 4 s and 8 s floors otherwise.
+const slowLane = { floorMs: passwordFailureBudget.slow.floorMs, maxFloorMs: 2000 };
+
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const googleProviderId = `google:${digest(googleClientId)}`;
 const githubProviderId = `github:${digest("google-suite-github-client-id")}`;
@@ -52,7 +59,7 @@ const sessionCookieName = "__Host-openclaw_occ.session_token";
 // audit, IAM, Better Auth, the guarded human-login profile and Fastify are production code.
 test(
   "PostgreSQL Google sign-in admits only attached identities through the guarded profile",
-  { skip: databaseUrl ? false : "Set OCC_TEST_DATABASE_URL for real PostgreSQL proof." },
+  requiresPostgres,
   async (t) => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const state = new PostgresPlatformState(pool);
@@ -78,6 +85,7 @@ test(
     // Password onboarding on the default install, before Google is configured.
     app = await composeProductionSignIn(t, {
       databaseUrl,
+      passwordSlowLaneFloors: slowLane,
       settings: defaultInstallSettings,
       secrets,
     });
@@ -105,6 +113,7 @@ test(
     // A Google-only upgrade: no OCC_AUTH_GITHUB_CLIENT_*, hosted domain restricted.
     app = await composeProductionSignIn(t, {
       databaseUrl,
+      passwordSlowLaneFloors: slowLane,
       settings: googleUpgradeSettings(admin.id, [hostedDomain]),
       secrets,
     });
@@ -499,6 +508,7 @@ test(
       await startFakeGitHub(t);
       app = await composeProductionSignIn(t, {
         databaseUrl,
+        passwordSlowLaneFloors: slowLane,
         settings: {
           ...githubUpgradeSettings(admin.id),
           ...googleUpgradeSettings(admin.id, [hostedDomain]),

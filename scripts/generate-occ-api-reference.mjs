@@ -6,7 +6,16 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const documentPath = new URL("../packages/contracts/openapi/occ-api.openapi.json", import.meta.url);
 const referenceDirectoryPath = new URL("../docs/reference/api/", import.meta.url);
-const httpMethods = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);
+export const httpMethods = new Set([
+  "get",
+  "put",
+  "post",
+  "delete",
+  "options",
+  "head",
+  "patch",
+  "trace",
+]);
 
 // Curated entity order and subdivisions; unmatched operations keep their OpenAPI tag.
 const cheatSheetEntities = [
@@ -208,7 +217,9 @@ function operationReference(path, method, operation, document, { headingLevel = 
                   ? " (when bound)"
                   : condition === "read_logs_alternative"
                     ? " (instead of `read_logs`)"
-                    : "";
+                    : condition === "provisioning_work"
+                      ? " (once created)"
+                      : "";
           return `| \`${action}\` | \`${resourceKind}\` | \`${scope}\`${qualifier} |`;
         }),
       ].join("\n"),
