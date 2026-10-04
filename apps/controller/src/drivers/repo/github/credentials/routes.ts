@@ -2,6 +2,7 @@ import type { Denied, RequestHead, RequestPlan } from "../../credentials/backend
 import type { ServiceLimits } from "../../credentials/service-contracts.ts";
 import type { GitHubTokenProfile } from "./types.ts";
 import { allowsGraphqlInput } from "./graphql-input.ts";
+import { allowsReceivePackInput } from "./routes/receive-pack.ts";
 import { createResponsePolicy } from "./response.ts";
 import { classifyRoute, nativeGraphqlAccept } from "./routes/classification.ts";
 import type { Route } from "./routes/classification.ts";
@@ -22,11 +23,16 @@ interface RoutePolicyOptions {
   readonly gitOrigin: string;
   readonly apiOrigin: string;
   readonly limits: ServiceLimits;
+  /** "deny" removes the /graphql route; the default keeps token-bounded GraphQL. */
+  readonly graphql?: "token-bounded" | "deny";
+  /** When set, git-push plans inspect receive-pack commands before credential use. */
+  readonly pushRefAllowlist?: readonly string[];
 }
 
 interface PlanDependencies {
   readonly route: RoutePolicy["route"];
   readonly responsePolicy: ReturnType<typeof createResponsePolicy>;
+  readonly receivePackInput: ((body: Uint8Array) => boolean) | undefined;
 }
 
 function inputLimit(kind: Route["kind"], limits: ServiceLimits): number {
@@ -113,6 +119,9 @@ function planRequest(
     }),
     responsePolicy: dependencies.responsePolicy(git, selected.target, selected.rawResponse),
     ...(selected.graphql === true ? { inputPolicy: allowsGraphqlInput } : {}),
+    ...(selected.kind === "git-push" && dependencies.receivePackInput
+      ? { inputPolicy: dependencies.receivePackInput }
+      : {}),
   }) as RequestPlan;
 }
 
@@ -122,9 +131,17 @@ export function createRoutePolicy(options: RoutePolicyOptions): RoutePolicy {
       repository: options.repository,
       profile: options.profile,
       targetBytes: options.limits.targetBytes,
+      graphql: options.graphql ?? "token-bounded",
     });
   const responsePolicy = createResponsePolicy(options, (head) => route(head) !== undefined);
-  const dependencies: PlanDependencies = { route, responsePolicy };
+  const dependencies: PlanDependencies = {
+    route,
+    responsePolicy,
+    receivePackInput:
+      options.pushRefAllowlist === undefined
+        ? undefined
+        : allowsReceivePackInput(options.pushRefAllowlist),
+  };
   return Object.freeze({
     route,
     plan: (head: RequestHead) => planRequest(head, options, dependencies),

@@ -166,6 +166,12 @@
       "path": "tests/conformance/repository-credentials-github.test.mjs"
     },
     {
+      "path": "tests/conformance/repository-credentials-github-token.test.mjs"
+    },
+    {
+      "path": "tests/conformance/repository-credentials-receive-pack.test.mjs"
+    },
+    {
       "path": "tests/conformance/repository-credentials-sessions.test.mjs"
     },
     {
@@ -193,6 +199,9 @@
     },
     {
       "path": "tests/integration/repository-credentials-config.test.mjs"
+    },
+    {
+      "path": "tests/integration/repository-credentials-github-token.test.mjs"
     },
     {
       "path": "tests/integration/repository-credentials-http.test.mjs"

@@ -117,12 +117,16 @@ interface ApiRoutePolicy {
   readonly rawMedia?: readonly string[];
 }
 
-function matchApiRoute(path: string, repository: string): ApiRoutePolicy | undefined {
+function matchApiRoute(
+  path: string,
+  repository: string,
+  graphql: "token-bounded" | "deny",
+): ApiRoutePolicy | undefined {
   const prefix = `/repos/${repository}`;
   if (path === prefix || path === "/meta") {
     return { methods: ["GET"], queryParameters: [] };
   }
-  if (path === "/graphql") {
+  if (path === "/graphql" && graphql === "token-bounded") {
     return { methods: ["POST"], queryParameters: [] };
   }
   if (!path.startsWith(`${prefix}/`)) {
@@ -239,9 +243,10 @@ function classifyApiRoute(
   target: ParsedTarget,
   repository: string,
   profile: GitHubTokenProfile,
+  graphql: "token-bounded" | "deny",
 ): Route | undefined {
   const { raw, path, query } = target;
-  const policy = matchApiRoute(path, repository);
+  const policy = matchApiRoute(path, repository, graphql);
   if (!policy || !policy.methods.includes(head.method)) {
     return;
   }
@@ -289,7 +294,12 @@ function classifyApiRoute(
 
 export function classifyRoute(
   head: RequestHead,
-  policy: Readonly<{ repository: string; profile: GitHubTokenProfile; targetBytes: number }>,
+  policy: Readonly<{
+    repository: string;
+    profile: GitHubTokenProfile;
+    targetBytes: number;
+    graphql: "token-bounded" | "deny";
+  }>,
 ): Route | undefined {
   const target = parseTarget(head.rawTarget, policy.targetBytes);
   if (!target) {
@@ -313,5 +323,5 @@ export function classifyRoute(
   if (head.contentEncoding !== "identity") {
     return;
   }
-  return classifyApiRoute(head, target, policy.repository, policy.profile);
+  return classifyApiRoute(head, target, policy.repository, policy.profile, policy.graphql);
 }
