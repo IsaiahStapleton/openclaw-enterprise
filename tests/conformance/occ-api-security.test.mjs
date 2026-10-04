@@ -1739,6 +1739,30 @@ test("runtime log reads are rate limited per principal and Agent with Retry-Afte
     statuses.length,
   );
   assert.equal(fixture.computeDriver.calls.length, 0);
+  // The denials took no token: once granted, the same principal still has its full burst.
+  for (const grant of operateGrants) {
+    const id = `runtime-outsider-${grant.resourceKind}-${grant.action}`;
+    fixture.policy.roles.push({
+      id,
+      namespaceId: target.namespace.id,
+      permissions: [{ action: grant.action, resourceKind: grant.resourceKind }],
+    });
+    fixture.policy.bindings.push({
+      id,
+      namespaceId: target.namespace.id,
+      subjectKind: "identity",
+      subjectId: outsider.principal.id,
+      roleId: id,
+      resourceKind: grant.resourceKind,
+      resourceId: grant.resourceKind === "agent_revision" ? target.revisionId : target.agent.id,
+    });
+  }
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const granted = await fixture.request("GET", target.runtimePath, {
+      session: outsider.session,
+    });
+    assert.equal(granted.status, 200, granted.text);
+  }
   const operator = await fixture.createPrincipal("runtime-limit-operator", target, operateGrants);
   const unaffected = await fixture.request("GET", target.runtimePath, {
     session: operator.session,

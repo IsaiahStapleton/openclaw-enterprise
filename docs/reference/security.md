@@ -265,8 +265,8 @@ to the Collector, and responses carry `Cache-Control: no-store`.
 - **Ordering.** The operator switch (`501`) runs before authorization, so a
   principal without grants learns only whether the feature is on. The
   per-principal rate limit and the replica's concurrent-read limit apply after
-  authorization: every denial is refused and audited, and only an authorized
-  caller's Driver reads spend its request budget.
+  authorization: every denial is refused and audited, and only authorized
+  requests spend the caller's request budget.
 - **Cluster access.** The tenant API, Gateway observer and execution tenant API
   roles gain read-only `pods/log get` and `events get,list` through
   `agentRuntimeLogs.enabled`. RBAC cannot separate Agents, so OCC reads only
