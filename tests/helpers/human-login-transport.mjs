@@ -27,6 +27,7 @@ export function createLoginFixture({
   const attempts = [];
   const subjects = [];
   const denials = [];
+  const unmatched = [];
   const errors = [];
   const authLogs = [];
   const operationalLines = [];
@@ -64,6 +65,7 @@ export function createLoginFixture({
     {
       trustedClientAddress,
       onOperationalEvent: (event) => emitOccLogEvent(logger, event),
+      onUnmatchedCallback: (name) => unmatched.push(name),
     },
   );
   if (recoveryEmail !== undefined) {
@@ -109,6 +111,7 @@ export function createLoginFixture({
     attempts,
     subjects,
     denials,
+    unmatched,
     errors,
     authLogs,
     // Operational log records without their timestamp.

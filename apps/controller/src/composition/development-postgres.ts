@@ -160,6 +160,12 @@ export async function composePostgresDevelopment(
             onWarning: (warning) => emitOccLogEvent(config.logger!, warning),
             onOperationalEvent: (event) => emitOccLogEvent(config.logger!, event),
           }),
+      ...(config.metrics === undefined
+        ? {}
+        : {
+            onUnmatchedCallback: (provider) =>
+              config.metrics!.observeUnmatchedSignInCallback(provider),
+          }),
       secureCookies: config.nativeAdmin?.enabled === true,
       ...(config.nativeAdmin?.enabled === true
         ? { sharedCookieDomain: config.nativeAdmin.sharedCookieDomain }
