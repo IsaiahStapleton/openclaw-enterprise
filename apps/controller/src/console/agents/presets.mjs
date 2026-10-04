@@ -454,7 +454,7 @@ export function createPresetFields(context, apply) {
       }
       if (presets.length === 0) {
         status.textContent =
-          "No Presets available to you in this Namespace. Ask an administrator to install default-codex or another Preset, or to give you read access to one.";
+          "No Presets available to you in this Namespace. Ask an administrator to install default-codex or another Preset, or to give you read access to a Preset.";
       } else {
         status.textContent = chooseHint();
       }
