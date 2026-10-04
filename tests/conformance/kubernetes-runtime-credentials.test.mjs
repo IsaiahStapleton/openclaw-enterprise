@@ -96,6 +96,7 @@ function credentialFixture({
   namespaceReadStatus = 200,
   secretReadStatus = undefined,
   secretCreateStatus = undefined,
+  deploymentListStatus = undefined,
 } = {}) {
   const driver = createKubernetesComputeDriver(options(runtime ? {} : { runtime: undefined }));
   const namespaceName = kubernetesNamespaceName(namespace.id);
@@ -207,6 +208,9 @@ function credentialFixture({
   const apps = {
     async listNamespacedDeployment(request) {
       calls.push({ kind: "listDeployments", request: structuredClone(request) });
+      if (deploymentListStatus !== undefined && request.namespace === namespaceName) {
+        throw httpError(deploymentListStatus);
+      }
       assert.ok(
         [namespaceName, kubernetesGatewayNamespaceName(namespace.id)].includes(request.namespace),
       );
@@ -434,13 +438,28 @@ test("a cluster denial of runtime credential Secrets names the Kubernetes operat
   assert.equal(denied.kubernetesNamespace, kubernetesGatewayNamespaceName(namespace.id));
   assert.equal(created.length, 0);
 
-  // Other failures keep the generic, sanitized outage.
-  const unavailable = credentialFixture({ secretReadStatus: 400 });
-  await assert.rejects(unavailable.driver.getAgentRuntimeCredentialStatus(binding()), (error) => {
-    assert.ok(error instanceof DependencyUnavailableError);
-    assert.equal(error instanceof RuntimeCredentialsForbiddenByClusterError, false);
-    return true;
-  });
+  // A dedicated Agent's preflight also lists Deployments in the data-plane namespace.
+  const preflight = credentialFixture({ deploymentListStatus: 403 });
+  const listDenied = await preflight.driver.provisionAgentRuntimeCredentials(binding(), {}).then(
+    () => assert.fail("a denied Deployment list must fail"),
+    (error) => error,
+  );
+  assert.ok(listDenied instanceof RuntimeCredentialsForbiddenByClusterError);
+  assert.deepEqual(
+    [listDenied.verb, listDenied.resource, listDenied.kubernetesNamespace, listDenied.plane],
+    ["list", "deployments", kubernetesNamespaceName(namespace.id), "execution"],
+  );
+  assert.equal(preflight.created.length, 0);
+
+  // Other failures, including a rejected API credential (401), keep the generic outage.
+  for (const status of [400, 401]) {
+    const unavailable = credentialFixture({ secretReadStatus: status });
+    await assert.rejects(unavailable.driver.getAgentRuntimeCredentialStatus(binding()), (error) => {
+      assert.ok(error instanceof DependencyUnavailableError, String(status));
+      assert.equal(error instanceof RuntimeCredentialsForbiddenByClusterError, false);
+      return true;
+    });
+  }
 });
 
 test("mocked Kubernetes client preflights the transport Secret before initial create", async () => {

@@ -5957,14 +5957,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
     try {
       return await operation();
     } catch (error) {
-      const status = numericErrorStatus(error);
-      if (status === 401 || status === 403) {
+      // A 401 is a rejected API credential, which no RoleBinding fixes; it stays generic.
+      if (numericErrorStatus(error) === 403) {
         throw new RuntimeCredentialsForbiddenByClusterError({
           verb,
           resource,
           kubernetesNamespace: namespace.name,
           plane: namespace.plane,
-          status,
+          status: 403,
         });
       }
       throw error;

@@ -414,7 +414,7 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(
       503,
       "RUNTIME_CREDENTIALS_CLUSTER_RBAC",
-      "The cluster denied OCC access to this Agent's runtime credential Secrets. Ask a platform operator to bind the API ServiceAccount to the openclaw-tenant-api ClusterRole in the Agent's Kubernetes namespaces.",
+      "The cluster denied OCC access needed for this Agent's runtime credentials. Ask a platform operator to grant the API ServiceAccount the documented tenant RoleBindings in the Agent's Kubernetes namespaces.",
     );
   }
   if (error instanceof ChannelCredentialError) {

@@ -785,7 +785,7 @@ test("a cluster denial of runtime credentials names the missing RoleBinding and 
       },
     },
   });
-  // The data-plane tenant-api RoleBinding is missing (oce-dogfood-b round 1, D396).
+  // The data-plane tenant-api RoleBinding is missing (D396).
   const fixture = await createFixture(t, {
     logger,
     computeDriver: createRuntimeCredentialComputeDriver({
@@ -803,7 +803,7 @@ test("a cluster denial of runtime credentials names the missing RoleBinding and 
   const expected = {
     code: "RUNTIME_CREDENTIALS_CLUSTER_RBAC",
     message:
-      "The cluster denied OCC access to this Agent's runtime credential Secrets. Ask a platform operator to bind the API ServiceAccount to the openclaw-tenant-api ClusterRole in the Agent's Kubernetes namespaces.",
+      "The cluster denied OCC access needed for this Agent's runtime credentials. Ask a platform operator to grant the API ServiceAccount the documented tenant RoleBindings in the Agent's Kubernetes namespaces.",
   };
 
   const status = await fixture.request("GET", `${agentPath}/runtime-credentials`);

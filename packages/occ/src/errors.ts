@@ -521,7 +521,7 @@ export class RuntimeCredentialsForbiddenByClusterError extends DependencyUnavail
   readonly resource: "secrets" | "deployments";
   readonly kubernetesNamespace: string;
   readonly plane: "control" | "execution";
-  readonly status: 401 | 403;
+  readonly status: 403;
 
   constructor(denial: {
     readonly verb: RuntimeCredentialsForbiddenByClusterError["verb"];
