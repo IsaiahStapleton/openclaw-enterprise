@@ -285,7 +285,14 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` requires inspection of
   the selected database; initialization does not repair or rewrite its ledger.
 - The API should emit `listening`; the worker should emit `worker.started`
-  followed by `worker.health`. A stopping API emits `shutdown.started` and then
+  followed by `worker.health`. `listening` carries `startupMs`, the time from
+  process start, and `phasesMs`: `modules` (loading the TypeScript module graph),
+  `configuration` (settings, Installation YAML and Drivers), `database`
+  (pool, Installation and IAM state), `authentication` (Better Auth and
+  sign-in activation), `identity`, `computePreflight`, `controller` (Driver
+  registration, Backend checks and presets), `routes`, `ready` (Fastify
+  compiles validators and response serializers) and `listen`. A slow boot
+  shows up there first. A stopping API emits `shutdown.started` and then
   `shutdown.completed`.
 - `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`
   identifies a server below the supported Kubernetes 1.35 baseline; startup
@@ -325,6 +332,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Time the API's startup phases in its `listening` line.
 - 2026-10-04: Log the API's shutdown start and completion.
 - 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
