@@ -81,6 +81,9 @@ function classify() {
     // merge's first parent is the base of the tested tree. A depth-two
     // checkout lacks an older base.sha; when it is present it must be behind.
     const mergeBase = parents[0];
+    git("cat-file", "-e", `${mergeBase}^{commit}`);
+    git("cat-file", "-e", `${head}^{commit}`);
+    // A failed spawn reads as absent here and fails the diff below.
     if (base !== mergeBase && gitStatus("cat-file", "-e", `${base}^{commit}`) === 0) {
       const status = gitStatus("merge-base", "--is-ancestor", base, mergeBase);
       if (status === 1) {
@@ -93,8 +96,6 @@ function classify() {
         throw new InspectionError("Git inspection failed", "git_inspection_failed");
       }
     }
-    git("cat-file", "-e", `${mergeBase}^{commit}`);
-    git("cat-file", "-e", `${head}^{commit}`);
     const diff = git(
       "diff",
       "--raw",

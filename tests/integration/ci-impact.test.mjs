@@ -868,7 +868,18 @@ test("an event base that is present but not behind the tested base selects full"
     f.expect("full");
     assert.equal(selectorOutput(f), "mode=full\nreason=checkout_mismatch\n");
   }
+  // A depth-two checkout lacks the side commit, so it is ignored like any
+  // stale base: the ancestor rule can only add full selections there.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: side }, head: { sha: f.head } } }),
+  );
+  shallow.expect("docs");
   // The pull request head is in the shallow checkout and is not an ancestor.
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({ pull_request: { base: { sha: f.head }, head: { sha: f.head } } }),
+  );
   shallow.expect("full");
   assert.equal(shallow.run("select").output, "mode=full\nreason=bootstrap_checkout_mismatch\n");
   // A head that is not the tested merge's second parent still selects full.
