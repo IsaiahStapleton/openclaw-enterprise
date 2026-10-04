@@ -4742,18 +4742,20 @@ export class OpenClawController {
   /**
    * Rechecks Namespace plugin discovery grants after a stored credential's backend read and
    * immediately before it is sent to the external catalog, as saved-Agent discovery does.
+   * Request-supplied or absent credentials have no read to race, so they skip the recheck.
    */
   private async authorizeNamespacePluginDiscovery(
     principalId: string,
     namespaceId: string,
     credential: PluginDiscoveryCredential,
   ): Promise<void> {
-    await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
-    for (const source of [credential.secretRef, credential.oauthLogin]) {
-      if (source !== undefined) {
-        await this.authorize(principalId, "operate", source);
-      }
+    const source = credential.secretRef ?? credential.oauthLogin;
+    if (source === undefined) {
+      return;
     }
+    await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
+    await this.authorize(principalId, "operate", source);
+    await this.read((state) => this.exactNamespace(state, namespaceId));
   }
 
   private async withPluginDiscoveryCredential<T>(
