@@ -312,18 +312,27 @@ test("repository init refuses drift in the selected push-ref policy", async (t) 
   await assert.rejects(lstat(fixture.targetRoot), { code: "ENOENT" });
 });
 
-for (const [name, corrupt] of [
+const brokerCa = "-----BEGIN CERTIFICATE-----\nfixture-broker-ca\n-----END CERTIFICATE-----\n";
+
+for (const [name, options, corrupt] of [
   [
     "malformed UTF-8",
+    { publicCa: Buffer.from(brokerCa) },
+    // ca.pem is the one projected file whose content no pattern or exact comparison pins,
+    // so only the strict UTF-8 decoder stands between these bytes and the Agent's CA bundle.
     async (directory) => {
-      await rm(join(directory, "bearer"));
-      await writeFile(join(directory, "bearer"), Buffer.from([0xc3, 0x28]));
+      await rm(join(directory, "ca.pem"));
+      const [head, tail] = brokerCa.split("fixture-broker-ca");
+      await writeFile(
+        join(directory, "ca.pem"),
+        Buffer.concat([Buffer.from(head), Buffer.from([0xc3, 0x28]), Buffer.from(tail)]),
+      );
     },
   ],
-  ["an undeclared file", (directory) => writeFile(join(directory, "extra.json"), "{}")],
+  ["an undeclared file", {}, (directory) => writeFile(join(directory, "extra.json"), "{}")],
 ]) {
   test(`repository init refuses ${name} in the projected session`, async (t) => {
-    const fixture = await projectionFixture(t);
+    const fixture = await projectionFixture(t, options);
     const directory = basename(fixture.descriptor.manifest.bindings[0].directory);
     await corrupt(join(fixture.generation, directory));
     const result = fixture.run();
