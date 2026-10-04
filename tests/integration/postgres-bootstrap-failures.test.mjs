@@ -730,7 +730,10 @@ const ADMINISTRATOR_PRINCIPAL = "(SELECT id FROM occ.iam_identities WHERE kind =
 // check must not accept any of them; the full check then fails exactly as before.
 const PARTIAL_INSTALLATIONS = [
   ["administrator account", `UPDATE occ."user" SET email = 'moved-' || email`],
-  ["Principal subject", "UPDATE occ.iam_identities SET subject = 'another-user' WHERE kind = 'principal'"],
+  [
+    "Principal subject",
+    "UPDATE occ.iam_identities SET subject = 'another-user' WHERE kind = 'principal'",
+  ],
   [
     "Principal issuer",
     "UPDATE occ.iam_identities SET issuer = issuer || ':moved' WHERE kind = 'principal'",
@@ -772,7 +775,9 @@ async function bootstrapExistingInstallation(context, label) {
 }
 
 function alreadyBootstrappedEvent(result) {
-  return jsonLines(result.stderr).find((line) => line.event === "installation.already-bootstrapped");
+  return jsonLines(result.stderr).find(
+    (line) => line.event === "installation.already-bootstrapped",
+  );
 }
 
 test(
