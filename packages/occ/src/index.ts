@@ -4485,32 +4485,39 @@ export class OpenClawController {
   ): Promise<PluginCatalogPage> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
-      const driver = this.pluginDriver();
-      if (!driver.discoverCatalog) {
-        throw new NotImplementedError(
-          "agent_plugins.discovery",
-          "Plugin discovery is unavailable.",
-        );
-      }
-      return (authentication) => {
-        if (
-          authentication.accessToken === undefined &&
-          authentication.credential === undefined &&
-          driver.discoveryCredential !== "none"
-        ) {
-          throw new PluginDiscoveryError("credentials_rejected");
+    const recheck = () => this.authorizeNamespacePluginDiscovery(principalId, namespaceId, input);
+    return this.withPluginDiscoveryCredential(
+      principalId,
+      namespaceId,
+      input,
+      () => {
+        const driver = this.pluginDriver();
+        if (!driver.discoverCatalog) {
+          throw new NotImplementedError(
+            "agent_plugins.discovery",
+            "Plugin discovery is unavailable.",
+          );
         }
-        return driver.discoverCatalog!(
-          {
-            ...authentication,
-            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-            ...(input.q === undefined ? {} : { q: input.q }),
-          },
-          signal,
-        );
-      };
-    });
+        return (authentication) => {
+          if (
+            authentication.accessToken === undefined &&
+            authentication.credential === undefined &&
+            driver.discoveryCredential !== "none"
+          ) {
+            throw new PluginDiscoveryError("credentials_rejected");
+          }
+          return driver.discoverCatalog!(
+            {
+              ...authentication,
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+              ...(input.q === undefined ? {} : { q: input.q }),
+            },
+            signal,
+          );
+        };
+      },
+      recheck,
+    );
   }
 
   async lookupChannelDirectory(
@@ -4704,25 +4711,49 @@ export class OpenClawController {
   ): Promise<PluginCatalogEntry> {
     await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
     await this.read((state) => this.exactNamespace(state, namespaceId));
-    return this.withPluginDiscoveryCredential(principalId, namespaceId, input, () => {
-      const driver = this.pluginDriver();
-      if (!driver.getCatalogPlugin) {
-        throw new NotImplementedError(
-          "agent_plugins.discovery",
-          "Plugin tool discovery is unavailable.",
-        );
-      }
-      return (authentication) => {
-        if (
-          authentication.accessToken === undefined &&
-          authentication.credential === undefined &&
-          driver.discoveryCredential !== "none"
-        ) {
-          throw new PluginDiscoveryError("credentials_rejected");
+    const recheck = () => this.authorizeNamespacePluginDiscovery(principalId, namespaceId, input);
+    return this.withPluginDiscoveryCredential(
+      principalId,
+      namespaceId,
+      input,
+      () => {
+        const driver = this.pluginDriver();
+        if (!driver.getCatalogPlugin) {
+          throw new NotImplementedError(
+            "agent_plugins.discovery",
+            "Plugin tool discovery is unavailable.",
+          );
         }
-        return driver.getCatalogPlugin!({ ...authentication, pluginId: input.pluginId }, signal);
-      };
-    });
+        return (authentication) => {
+          if (
+            authentication.accessToken === undefined &&
+            authentication.credential === undefined &&
+            driver.discoveryCredential !== "none"
+          ) {
+            throw new PluginDiscoveryError("credentials_rejected");
+          }
+          return driver.getCatalogPlugin!({ ...authentication, pluginId: input.pluginId }, signal);
+        };
+      },
+      recheck,
+    );
+  }
+
+  /**
+   * Rechecks Namespace plugin discovery grants after a stored credential's backend read and
+   * immediately before it is sent to the external catalog, as saved-Agent discovery does.
+   */
+  private async authorizeNamespacePluginDiscovery(
+    principalId: string,
+    namespaceId: string,
+    credential: PluginDiscoveryCredential,
+  ): Promise<void> {
+    await this.authorize(principalId, "create", { kind: "agent", id: namespaceId, namespaceId });
+    for (const source of [credential.secretRef, credential.oauthLogin]) {
+      if (source !== undefined) {
+        await this.authorize(principalId, "operate", source);
+      }
+    }
   }
 
   private async withPluginDiscoveryCredential<T>(
