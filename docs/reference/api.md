@@ -4943,10 +4943,11 @@ List readable Presets in one Namespace
 
 **Operation ID:** `listPresets`
 
-**Permissions:** Only Preset resources with individual read permission are returned.
+**Permissions:** Requires read permission on the requested Namespace. Only Preset resources with individual read permission are returned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
+| `read` | `namespace` | `requested` |
 | `read` | `preset` | `each_returned` |
 
 ##### Parameters

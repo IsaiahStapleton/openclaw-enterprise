@@ -19665,7 +19665,7 @@
     },
     "/namespaces/{namespaceId}/presets": {
       "get": {
-        "description": "Only Preset resources with individual read permission are returned.",
+        "description": "Requires read permission on the requested Namespace. Only Preset resources with individual read permission are returned.",
         "operationId": "listPresets",
         "parameters": [
           {
@@ -19869,6 +19869,7 @@
         "summary": "List readable Presets in one Namespace",
         "tags": ["Presets"],
         "x-openclaw-permissions": [
+          { "action": "read", "resourceKind": "namespace", "scope": "requested" },
           { "action": "read", "resourceKind": "preset", "scope": "each_returned" }
         ]
       },

@@ -2040,6 +2040,7 @@ export class OpenClawController {
     namespaceId: string,
     workId: string,
   ): Promise<Readonly<ProvisionAgentResult>> {
+    await this.authorizeProvisioningRequest(principalId, namespaceId);
     return this.mutate(async (state) => {
       const { record, work } = await this.exactProvisioningWork(
         state,
@@ -2059,6 +2060,7 @@ export class OpenClawController {
     namespaceId: string,
     workId: string,
   ): Promise<Readonly<ProvisionAgentResult>> {
+    await this.authorizeProvisioningRequest(principalId, namespaceId);
     return this.mutate(async (state) => {
       const namespace = await this.lockNamespace(state, namespaceId);
       const { record, work: observed } = await this.exactProvisioningWork(
@@ -3165,8 +3167,8 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
   ): Promise<readonly Readonly<Preset>[]> {
+    const namespace = await this.getNamespace(principalId, namespaceId);
     return this.read(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       const readable: Readonly<Preset>[] = [];
       for (const preset of await state.presets.listPresets(namespace.id)) {
         if (
@@ -6514,12 +6516,16 @@ export class OpenClawController {
     }
   }
 
-  private async authorizeProvisioningRecord(
-    state: PlatformUnitOfWork,
+  /**
+   * The provisioning grants that need only the requested Namespace. Status and retry check them
+   * before any lookup, so a caller without them gets the same audited denial whether or not the
+   * Namespace or work item exists.
+   */
+  private async authorizeProvisioningRequest(
     principalId: string,
-    record: Readonly<AgentProvisioningRecord>,
+    namespaceId: string,
   ): Promise<void> {
-    const namespaceId = record.namespaceId;
+    this.namespaceIdentity(namespaceId);
     await this.authorize(principalId, "create", { kind: "agent", namespaceId, id: namespaceId });
     await this.authorize(principalId, "create", {
       kind: "configuration",
@@ -6530,6 +6536,15 @@ export class OpenClawController {
       kind: "installation",
       id: this.installation.id,
     });
+  }
+
+  private async authorizeProvisioningRecord(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    record: Readonly<AgentProvisioningRecord>,
+  ): Promise<void> {
+    const namespaceId = record.namespaceId;
+    await this.authorizeProvisioningRequest(principalId, namespaceId);
     if (record.agentId !== undefined) {
       for (const action of ["read", "operate", "deploy"] as const) {
         await this.authorize(principalId, action, {

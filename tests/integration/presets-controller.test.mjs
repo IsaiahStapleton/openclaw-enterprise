@@ -80,7 +80,9 @@ test("Preset CRUD keeps Namespace names unique and filters reads by exact Native
   assert.equal(conflictingRename.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(conflictingRename.body.error.message, presetNameConflict);
 
+  let limitedPrincipalId;
   const limited = await fixture.createAccountWithPolicy("preset-reader", (principal) => {
+    limitedPrincipalId = principal.id;
     fixture.policy.roles.push({
       id: "preset-reader",
       namespaceId: alpha.id,
@@ -97,6 +99,22 @@ test("Preset CRUD keeps Namespace names unique and filters reads by exact Native
     });
   });
   const session = await fixture.signIn(limited.credentials);
+  // Listing needs Namespace read, like every Namespace-scoped list; an exact Preset grant alone
+  // does not open the collection, so a refusal looks the same as for a missing Namespace.
+  const unlisted = await fixture.request("GET", collection(alpha.id), { session });
+  assert.equal(unlisted.status, 403, JSON.stringify(unlisted.body));
+  fixture.policy.roles.push({
+    id: "alpha-namespace-reader",
+    namespaceId: alpha.id,
+    permissions: [{ action: "read", resourceKind: "namespace" }],
+  });
+  fixture.policy.bindings.push({
+    id: "read-alpha",
+    namespaceId: alpha.id,
+    subjectKind: "identity",
+    subjectId: limitedPrincipalId,
+    roleId: "alpha-namespace-reader",
+  });
   const readable = await fixture.request("GET", collection(alpha.id), { session });
   assert.equal(readable.status, 200, JSON.stringify(readable.body));
   assert.deepEqual(
@@ -119,8 +137,7 @@ test("Preset CRUD keeps Namespace names unique and filters reads by exact Native
   });
   assert.equal(deniedCreate.status, 403);
   const otherNamespace = await fixture.request("GET", collection(beta.id), { session });
-  assert.equal(otherNamespace.status, 200);
-  assert.deepEqual(otherNamespace.data, []);
+  assert.equal(otherNamespace.status, 403);
   const wrongOwner = await fixture.request("GET", `${collection(beta.id)}/${visible.id}`);
   assert.equal(wrongOwner.status, 404);
 

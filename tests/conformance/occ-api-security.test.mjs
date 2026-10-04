@@ -922,6 +922,9 @@ test("a caller without a grant gets the same audited denial whether or not the t
   // 403 whether the Namespace or Agent exists, so a refusal never reveals which ids are real.
   const namespaceRoutes = [
     ["GET", "agents/repository-options"],
+    ["GET", `agents/provision/${child("work")}`],
+    ["POST", `agents/provision/${child("work")}/retry`],
+    ["GET", "presets"],
     ["POST", "agents", { name: "probe", configurationId: agent.configurationId }],
     ["POST", "configurations", { kind: "agent", values: {} }],
     ["PATCH", `configurations/${child("cfg")}`, { values: {} }],

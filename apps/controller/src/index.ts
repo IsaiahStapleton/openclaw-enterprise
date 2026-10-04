@@ -727,7 +727,6 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
   switch (operation.authorizationTarget) {
     case "namespace_collection":
       return [{ ...permission, scope: "namespace" }];
-    case "preset_candidates":
     case "namespace_candidates":
       return [{ ...permission, scope: "each_returned" }];
     case "namespace_and_agent_candidates":
@@ -737,6 +736,7 @@ function requiredPermissions(operation: OccApiRoute): readonly RequiredPermissio
       ];
     case "namespace_and_service_account_candidates":
     case "namespace_and_secret_candidates":
+    case "namespace_and_preset_candidates":
     case "namespace_and_credential_source_candidates":
       return [
         { action: "read", resourceKind: "namespace", scope: "requested" },
