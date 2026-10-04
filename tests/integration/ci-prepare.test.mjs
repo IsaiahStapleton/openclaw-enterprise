@@ -241,12 +241,16 @@ if (command === "docker" || command === "podman") {
       args[2] === "k3d-" + state.cluster + "-" + suffix)) {
     const node = args[2];
     assert.deepEqual(args.slice(3), ["ctr", "-n", "k8s.io", "images", "import", "--all-platforms", "-"]);
-    if (scenario === "nonzero-import" ||
-        (scenario === "nonzero-worker-import" && node.endsWith("-agent-0"))) {
+    // The worker fails before reading, which stops the export early.
+    if (scenario === "nonzero-worker-import" && node.endsWith("-agent-0")) {
       process.stderr.write("synthetic import command failure\n");
       process.exit(17);
     }
     const archive = await readInput();
+    if (scenario === "nonzero-import") {
+      process.stderr.write("synthetic import command failure\n");
+      process.exit(17);
+    }
     if (archive !== "synthetic image archive " + state.tag + "\n") {
       process.stderr.write("ctr: unexpected EOF\n");
       process.exit(1);
@@ -558,11 +562,16 @@ for (const { scenario, error } of [
       ({ command, args }) =>
         ["docker", "podman"].includes(command) && args[0] === "image" && args[1] === "save",
     );
-    assert.ok(save, "registration must export the task-owned image");
-    // The export streams into each node; no archive is written or copied.
-    assert.equal(save.args.includes("--output"), false);
-    assert.equal(save.args.at(-1), localImage.name);
-    assert.equal(save.args.includes("--platform"), scenario !== "podman-success");
+    // An early node failure can stop the export before the engine records it.
+    if (scenario !== "nonzero-worker-import") {
+      assert.ok(save, "registration must export the task-owned image");
+    }
+    if (save) {
+      // The export streams into each node; no archive is written or copied.
+      assert.equal(save.args.includes("--output"), false);
+      assert.equal(save.args.at(-1), localImage.name);
+      assert.equal(save.args.includes("--platform"), scenario !== "podman-success");
+    }
     assert.equal(
       preparation.some(({ args }) => args[0] === "cp"),
       false,

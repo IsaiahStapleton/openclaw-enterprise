@@ -1504,12 +1504,15 @@ async function streamImageIntoK3dNodes(cluster, saveArgs) {
   // Settled below, after the imports; never let an early failure go unhandled.
   saved.catch(() => {});
   let stoppedExport = false;
+  let firstImportError;
   const imports = cluster.nodes.map((node) =>
     execFile(
       containerEngine,
       ["exec", "-i", node, "ctr", "-n", "k8s.io", "images", "import", "--all-platforms", "-"],
       { timeoutMs: 600_000, input: save.stdout },
     ).catch((error) => {
+      // The first node failure is the cause; later ones may follow from it.
+      firstImportError ??= error;
       // A failed node stops reading. Stop a still-running export so it cannot
       // block on a full pipe until its timeout.
       if (save.exitCode === null && save.signalCode === null) {
@@ -1519,7 +1522,7 @@ async function streamImageIntoK3dNodes(cluster, saveArgs) {
       throw error;
     }),
   );
-  const imported = await Promise.allSettled(imports);
+  await Promise.allSettled(imports);
   // An importer may stop before the archive's trailing padding; discard the
   // rest so the export can exit instead of blocking on a full pipe.
   save.stdout.resume();
@@ -1529,9 +1532,8 @@ async function streamImageIntoK3dNodes(cluster, saveArgs) {
   if (exported.status === "rejected" && !stoppedExport) {
     throw exported.reason;
   }
-  const failedImport = imported.find(({ status }) => status === "rejected");
-  if (failedImport) {
-    throw failedImport.reason;
+  if (firstImportError) {
+    throw firstImportError;
   }
   if (exported.status === "rejected") {
     throw exported.reason;
