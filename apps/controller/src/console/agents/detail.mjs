@@ -112,6 +112,12 @@ const DEPLOYMENT_FAILURE_GUIDANCE = {
     text: "The startup model check did not get a reply from the model provider in time. With OpenClaw this includes a provider the runtime cannot reach (refused connection or unknown host). Check that the runtime can reach the provider (network egress, proxy, or a custom baseUrl in the Configuration) and that the provider is responding, then deploy a new version.",
     link: "configuration",
   },
+  // Kubernetes Compute fails activation at once when the Gateway refuses its own in-Pod
+  // CLI (#1128); the Configuration's gateway password reference is what lets it in.
+  AGENT_GATEWAY_UNAUTHORIZED: {
+    text: "The Agent Gateway refused its own in-Pod CLI, so the version never finished starting. In the Configuration, select Enable gateway password access if it is not already enabled, save, then deploy a new version.",
+    link: "configuration",
+  },
 };
 
 // The runtime classifies a failed startup model check into one of these kinds and
