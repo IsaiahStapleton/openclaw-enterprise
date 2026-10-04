@@ -263,8 +263,14 @@ jobs:
             timeout: 25
           # Split from Images and Packaging, which it would otherwise lengthen
           # by about five minutes; it needs the k3d tools for its seccomp profile.
+          # The runtime image startup tests are split in two, balanced by
+          # measured case durations.
           - lane: images-runtime-startup
             title: Image Runtime Startup
+            profile: full
+            timeout: 30
+          - lane: images-runtime-startup-2
+            title: Image Runtime Startup 2
             profile: full
             timeout: 30
           - lane: k3d-fixture-configuration

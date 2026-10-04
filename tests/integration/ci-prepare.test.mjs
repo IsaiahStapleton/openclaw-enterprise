@@ -1730,15 +1730,20 @@ process.exit(2);
   }
 });
 
-test("runtime startup lane prepares Codex seccomp before native runtime smoke tests", () => {
+test("runtime startup lanes prepare Codex seccomp before native runtime smoke tests", () => {
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
-  const lane = manifest.lanes["images-runtime-startup"];
-
-  assert.equal(lane.prepare?.codexSeccomp, true);
-  assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"));
-  assert.ok(
-    lane.files.some(({ path }) => path === "tests/integration/runtime-image-startup.test.mjs"),
-  );
+  for (const [name, file] of [
+    ["images-runtime-startup", "tests/integration/runtime-image-startup.test.mjs"],
+    ["images-runtime-startup-2", "tests/integration/runtime-image-startup-probe.test.mjs"],
+  ]) {
+    const lane = manifest.lanes[name];
+    assert.equal(lane.prepare?.codexSeccomp, true, name);
+    assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"), name);
+    assert.ok(
+      lane.files.some(({ path }) => path === file),
+      name,
+    );
+  }
 });
 
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {
