@@ -62,9 +62,10 @@ user ID (1–20 digits, no leading zero) through
 `{"subject":"12345678","expectedVersion":1}`, using the version just read.
 
 Attachment keeps the user, Principal, and grants, advances the version,
-and invalidates sessions and pending proofs. Subjects owned by another
-user, email association, signup, identity transfer, and self-service linking are
-rejected. For unknown identities, follow the
+and invalidates sessions and pending proofs. A subject another account already
+holds returns `409 RESOURCE_CONFLICT` ("The external identity is already
+assigned."), as account creation does. Email association, signup, identity
+transfer, and self-service linking are rejected. For unknown identities, follow the
 [enrollment procedure](../../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
 `GET /api/auth/providers` returns `github`, `google`, `oidc`, and `sessionBinding` as `true` when enabled,

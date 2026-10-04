@@ -94,6 +94,20 @@ export class UserAlreadyExistsError extends ResourceConflictError {
   }
 }
 
+// Account creation answers a taken identity with the same message (createAuthAccount route).
+const EXTERNAL_IDENTITY_ASSIGNED = "The external identity is already assigned.";
+
+/** The unique violation raised when another account already holds the external identity. */
+function isExternalIdentityConflict(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "23505" &&
+    "constraint" in error &&
+    error.constraint === "account_provider_account_unique"
+  );
+}
+
 /** A validated password account whose hash was computed before the State transaction. */
 export interface PreparedPasswordAccount {
   readonly id: string;
@@ -536,14 +550,8 @@ export class PostgresHumanAuthentication {
             [methodId, external.subject, external.providerId, prepared.id],
           );
         } catch (error) {
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            error.code === "23505" &&
-            "constraint" in error &&
-            error.constraint === "account_provider_account_unique"
-          ) {
-            throw new ResourceConflictError("The external identity is already assigned.");
+          if (isExternalIdentityConflict(error)) {
+            throw new ResourceConflictError(EXTERNAL_IDENTITY_ASSIGNED);
           }
           throw error;
         }
@@ -897,17 +905,27 @@ export class PostgresHumanAuthentication {
         [providerId, subject],
       );
       if (existing !== undefined) {
+        // The caller administers the Installation and can list every account's sign-in
+        // methods, so naming the conflict discloses nothing it cannot already read.
         if (existing.user_id !== userId || existing.identity_only !== true) {
-          throw new ScopeViolationError("The external identity is already assigned.");
+          throw new ResourceStateConflictError(EXTERNAL_IDENTITY_ASSIGNED);
         }
         return { methodId: existing.id as string, created: false };
       }
       const methodId = randomUUID();
-      await this.query(
-        unit,
-        `INSERT INTO occ.account (id, account_id, provider_id, user_id, created_at, updated_at, identity_only) VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), true)`,
-        [methodId, subject, providerId, userId],
-      );
+      try {
+        await this.query(
+          unit,
+          `INSERT INTO occ.account (id, account_id, provider_id, user_id, created_at, updated_at, identity_only) VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), true)`,
+          [methodId, subject, providerId, userId],
+        );
+      } catch (error) {
+        // A concurrent attach of the same identity committed first.
+        if (isExternalIdentityConflict(error)) {
+          throw new ResourceStateConflictError(EXTERNAL_IDENTITY_ASSIGNED);
+        }
+        throw error;
+      }
       await this.query(
         unit,
         `UPDATE occ.human_authentication_accounts SET version = version + 1, changed_at = clock_timestamp() WHERE user_id = $1`,
