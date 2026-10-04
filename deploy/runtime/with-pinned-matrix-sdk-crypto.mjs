@@ -30,8 +30,9 @@ const server = createServer((request, response) => {
       return;
     }
   } catch {}
+  const requested = `${request.method} ${request.url}`.replace(/[\r\n]/g, "");
   console.error(
-    `with-pinned-matrix-sdk-crypto: no pinned file for ${request.method} ${request.url}; update the matrix-sdk-crypto pin in deploy/runtime/Dockerfile`,
+    `with-pinned-matrix-sdk-crypto: no pinned file for ${requested}; update the matrix-sdk-crypto pin in deploy/runtime/Dockerfile`,
   );
   response.writeHead(404).end();
 });
