@@ -1345,6 +1345,8 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByRole("button", { name: "Create Agent", exact: true }).click();
   await page.getByLabel("Agent name", { exact: true }).waitFor();
+  // The draft is mounted again, so the form repeats its reads.
+  await waitForCreateFormReads(page);
   assert.equal(await page.getByLabel("Agent name", { exact: true }).inputValue(), "Edited name");
   // Plugin catalog discovery is a read sent as POST. A mounted draft with the rendered codex_pat
   // Secret prefetches it after a 300 ms debounce, so it may or may not have been sent yet.
@@ -1357,8 +1359,6 @@ test("Presets render variables into independent Agent drafts and keep partial-sa
   // Canceling Start over keeps the ordinary draft and its ability to save.
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "Start over" }).click();
-  // The draft was mounted again from Agents, so the form repeats its reads.
-  await waitForCreateFormReads(page);
   assert.equal(await save.isEnabled(), true);
   assert.deepEqual(
     JSON.parse(await page.getByLabel("Configuration JSON", { exact: true }).inputValue()),

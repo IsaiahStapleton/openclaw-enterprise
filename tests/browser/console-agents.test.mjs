@@ -662,7 +662,7 @@ test("Agent creation distinguishes unavailable repository choices from denied Ag
   await login(deniedPage, deniedFixture, `/console/agents/new?namespace=${deniedNamespace.id}`);
   await deniedPage.getByRole("button", { name: "Start with default Preset" }).click();
   await deniedPage.getByText(/Repository choices are denied/).waitFor();
-  // Settled capabilities leave denied repository discovery as the only reason Create is disabled.
+  // The disabled state must reflect both reads' outcome, not a read still pending.
   await waitForCreateFormReads(deniedPage);
   assert.equal(await deniedPage.getByRole("button", { name: "Create Agent" }).isDisabled(), true);
   await deniedPage.locator("#create-agent-form").evaluate((form) => form.requestSubmit());

@@ -802,9 +802,10 @@ test("Back restores a followed Logs view without replaying its reads and keeps p
   // Both timers fire while the view is cached and stop.
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("heading", { name: "Namespaces" }).waitFor();
-  // The heading shows before the Namespaces page has checked the session. Advancing the clock
-  // past the console's 15 s request timeout while that check is pending fails it ("Session
-  // unavailable"), which drops every cached view, so let the page finish its reads first.
+  // The heading shows before the Namespaces page has checked access. Advancing the clock past
+  // the console's 15 s request timeout while a session or Namespace read is pending fails it
+  // ("Session unavailable" or "Namespace access unavailable") and drops every cached view, so
+  // let the page finish its reads first.
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
   await waitForIdleFetches(page);
   await page.clock.runFor(25_000);
