@@ -388,6 +388,27 @@ export class ActivationPendingError extends Error {
   }
 }
 
+/** An activation step that cannot complete for this revision. */
+export type ActivationFailedCode = "AGENT_GATEWAY_UNAUTHORIZED";
+
+/**
+ * Activation found its workloads running but one of them can never complete
+ * activation for this revision: the dedicated Gateway refuses its own in-Pod CLI
+ * as unauthorized, so it cannot confirm its workspace node. The cause is fixed
+ * by the admitted Configuration, so the worker fails the deployment with `code`
+ * instead of waiting for the convergence deadline. The message stays in the
+ * controller; status shows a fixed text.
+ */
+export class ActivationFailedError extends Error {
+  readonly code: ActivationFailedCode;
+
+  constructor(code: ActivationFailedCode, message: string) {
+    super(message);
+    this.name = "ActivationFailedError";
+    this.code = code;
+  }
+}
+
 /**
  * A Sandbox Driver cannot run this exact AgentRevision with the installed
  * driver. Retrying cannot change the outcome, so the worker fails the deployment

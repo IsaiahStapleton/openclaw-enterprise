@@ -83,6 +83,7 @@ import type {
 } from "@openclaw-enterprise/contracts";
 import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterprise/contracts";
 import {
+  ActivationFailedError,
   ActivationPendingError,
   ConfigurationHarnessError,
   DependencyUnavailableError,
@@ -7424,6 +7425,14 @@ export class KubernetesComputeDriver implements ComputeDriver {
           const failure = asRecord(status.workspaceNodeFailure);
           if (failure === undefined || !this.validRuntimeStatusIdentifier(failure.code)) {
             throw new DependencyUnavailableError("Runtime status returned invalid data.");
+          }
+          // The Gateway refuses its own CLI as unauthorized (no gateway.auth.password):
+          // it can never confirm the node for this revision, so fail activation now.
+          if (failure.code === "GATEWAY_UNAUTHORIZED") {
+            throw new ActivationFailedError(
+              "AGENT_GATEWAY_UNAUTHORIZED",
+              "The exact AgentRevision gateway refused its own CLI as unauthorized.",
+            );
           }
           // OpenClaw did not load the node: say why instead of timing out.
           throw new DependencyUnavailableError(
