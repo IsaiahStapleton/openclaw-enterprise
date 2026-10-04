@@ -15,6 +15,7 @@ import {
   newPage,
   settledFetches,
   trackSettledFetches,
+  waitForIdleFetches,
   waitForSettledFetches,
 } from "./console-agents-browser-helpers.mjs";
 
@@ -453,6 +454,14 @@ async function releaseHeldRoute(page, pattern, hold) {
   await page.unroute(pattern);
 }
 
+// The console retains a view for Back and in-app returns only if it finished its reads before
+// the reader left; otherwise the return rebuilds it. Wait for this before leaving a view whose
+// DOM a test later expects to be reused. The page must run trackSettledFetches().
+async function waitForSettledView(page) {
+  await page.locator('.content [aria-live="polite"][aria-busy="false"]').waitFor();
+  await waitForIdleFetches(page);
+}
+
 async function expectRetainedPreview(page, visibleText) {
   if (visibleText) {
     await page.getByText(visibleText, { exact: true }).waitFor();
@@ -469,15 +478,18 @@ test("console keeps loaded route families visible while return reads refresh", a
   await fixture.createNamespace("A second Namespace", { ready: true });
   const agent = await fixture.createAgent(namespace.id, "Retained route Agent");
   const { page } = await newPage(t, fixture);
+  await trackSettledFetches(page);
 
   await login(page, fixture, "/console/agents?namespace=" + namespace.id);
   await page.getByText("Retained route Agent", { exact: true }).waitFor();
+  await waitForSettledView(page);
   const originalAgentRow = await page
     .getByRole("link", { name: "Retained route Agent", exact: true })
     .elementHandle();
 
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+  await waitForSettledView(page);
   const originalNamespaceList = await page
     .getByRole("list", { name: "Namespaces", exact: true })
     .elementHandle();
@@ -500,6 +512,7 @@ test("console keeps loaded route families visible while return reads refresh", a
 
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();
   await page.getByRole("list", { name: "Namespaces", exact: true }).waitFor();
+  await waitForSettledView(page);
   await page.getByRole("link", { name: "Agents", exact: true }).click();
   await page.getByText("Retained route Agent", { exact: true }).waitFor();
   const namespacesPattern = "**/namespaces";
@@ -559,6 +572,7 @@ test("console keeps loaded route families visible while return reads refresh", a
     "Workspace files require a deployed Agent with a current version and a reachable gateway.";
   await page.getByText(workspaceNotice, { exact: true }).waitFor();
   await page.locator(".native-admin-access").waitFor({ state: "attached" });
+  await waitForSettledView(page);
   const originalNativePanel = await page.locator(".native-admin-access").elementHandle();
   await page.getByRole("link", { name: "← Agents", exact: true }).click();
   await page.getByText("Retained route Agent", { exact: true }).waitFor();

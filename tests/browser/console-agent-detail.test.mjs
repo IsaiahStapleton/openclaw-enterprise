@@ -30,7 +30,9 @@ import {
   secretPostRequests,
   selectSecret,
   settlePageRequests,
+  trackSettledFetches,
   waitForCondition,
+  waitForIdleFetches,
   waitForInputValue,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
@@ -1476,7 +1478,10 @@ test("Agent credentials bind a Secret typed by its exact name without picking th
   const savedSource = async () =>
     (await fixture.request("GET", `/namespaces/${namespace.id}/agents/${agent.id}`)).data
       .harnessAuth.source;
+  // A successful save checks Secret access, then re-renders the tab. Until the new picker has
+  // loaded the Secrets again it can only restore "Bound Secret", so wait for that load.
   const save = async () => {
+    const savedPicker = await picker.elementHandle();
     const saved = page.waitForResponse(
       (response) =>
         response.url().endsWith(`/namespaces/${namespace.id}/agents/${agent.id}`) &&
@@ -1484,14 +1489,14 @@ test("Agent credentials bind a Secret typed by its exact name without picking th
     );
     await page.getByRole("button", { name: "Save authentication source" }).click();
     assert.equal((await saved).status(), 200);
+    await page.waitForFunction((node) => !node.isConnected, savedPicker);
+    await page.getByText("Choose an existing Secret or create a new one.").waitFor();
   };
 
   // Clicking Save straight after typing the full name used to keep the old Secret silently.
   await picker.fill(typedSecret.name);
   await save();
   assert.deepEqual(await savedSource(), typedSecret.ref);
-  // A successful save re-renders the tab; wait for its picker to load the Secrets again.
-  await page.getByText("Choose an existing Secret or create a new one.").waitFor();
   assert.equal(await picker.inputValue(), typedSecret.name);
 
   // Enter commits an exact name the same way, before any save.
@@ -3133,10 +3138,13 @@ test("Agent tabs replace only their content and preserve surrounding panels and 
   );
   const { page } = await newPage(t, fixture);
   await page.setViewportSize({ width: 1200, height: 650 });
+  await trackSettledFetches(page);
   const requests = apiRequests(page, fixture.origin);
   const url = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
   await login(page, fixture, url);
   await page.getByRole("heading", { name: "Configuration draft", exact: true }).waitFor();
+  // Late reads (for example the sharing policy) change the page height; measure after them.
+  await waitForIdleFetches(page);
   await page.getByRole("button", { name: "Channels", exact: true }).scrollIntoViewIfNeeded();
   const panels = await page
     .locator("h1, .agent-toolbar, .native-admin-access, .revision-selector, .agent-tabs")
@@ -3155,6 +3163,8 @@ test("Agent tabs replace only their content and preserve surrounding panels and 
   await page.getByRole("button", { name: "Credentials", exact: true }).click();
   const secret = page.getByLabel("API key Secret");
   await secret.waitFor();
+  // A tab is kept for Back only if its reads (here the Secret list) finished before leaving it.
+  await waitForIdleFetches(page);
   const secretElement = await secret.elementHandle();
   await page.getByRole("button", { name: "Workspace files", exact: true }).click();
   await page
