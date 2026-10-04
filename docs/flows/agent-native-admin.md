@@ -197,7 +197,7 @@ The init container cannot write through the gateway's later mount path.
 
 ## Changelog
 
-- 2026-10-04 07:30: Only a missing active revision reports `unavailable`; IAM and other dependency outages return `503`. (bh11-native-status)
+- 2026-10-04 07:30: Only a missing active revision reports `unavailable`; IAM and other dependency outages return `503`, and close or refuse proxied requests as `dependency_failure`. (bh11-native-status)
 
 - 2026-10-03 12:00: Reread availability once when deployment polling observes a new active revision or runtime state.
 

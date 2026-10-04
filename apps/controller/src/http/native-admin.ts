@@ -45,6 +45,7 @@ import {
   dependencyUnavailable,
   failure,
   isAuthorizationDenied,
+  isDependencyUnavailable,
   requestFailure,
 } from "./errors.ts";
 import type { RequestContext } from "./types.ts";
@@ -778,6 +779,11 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
         gatewayBase: resolved.gatewayBase,
       };
     } catch (error) {
+      // A dependency outage (IAM or State) is not a denial, though its error class extends
+      // AuthorizationDeniedError: close or refuse it as a dependency failure.
+      if (isDependencyUnavailable(error)) {
+        return nativeAdminProxyDenial("dependency_failure");
+      }
       if (isAuthorizationDenied(error)) {
         return nativeAdminProxyDenial("authorization_denied", {
           actorId: currentActor,
