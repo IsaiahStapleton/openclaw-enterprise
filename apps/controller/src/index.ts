@@ -2465,28 +2465,29 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             if (covered) {
               return;
             }
-            const base = event(
-              operation,
-              request,
-              target,
-              "authorization_denial",
-              context,
-              decision.evidence,
-              { outcome: "denied", reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED" },
-            );
             try {
-              await options.auditSink.append({
-                ...base,
-                decisionReason:
-                  "The caller does not hold every grant of the target ServicePrincipal.",
-                details: {
-                  ...base.details,
-                  servicePrincipalId,
-                  ...(creating
-                    ? {}
-                    : { serviceKeyId: (request.params as { keyId: string }).keyId }),
-                },
-              });
+              await options.auditSink.append(
+                event(
+                  operation,
+                  request,
+                  target,
+                  "authorization_denial",
+                  context,
+                  decision.evidence,
+                  {
+                    outcome: "denied",
+                    reasonCode: "SERVICE_PRINCIPAL_GRANTS_NOT_COVERED",
+                    decisionReason:
+                      "The caller does not hold every grant of the target ServicePrincipal.",
+                    details: {
+                      servicePrincipalId,
+                      ...(creating
+                        ? {}
+                        : { serviceKeyId: (request.params as { keyId: string }).keyId }),
+                    },
+                  },
+                ),
+              );
             } catch {
               throw dependencyUnavailable();
             }
