@@ -118,7 +118,6 @@ export async function composePostgresDevelopment(
   const pool = await createPostgresPool(config.databaseUrl, {
     ...(config.poolMax === undefined ? {} : { max: config.poolMax }),
   });
-  let poolClosed = false;
 
   try {
     const state = new PostgresPlatformState(pool);
@@ -325,14 +324,11 @@ export async function composePostgresDevelopment(
       return { status: "ready" };
     });
     app.addHook("onClose", async () => {
-      poolClosed = true;
       await state.close();
     });
     return app;
   } catch (error) {
-    if (!poolClosed) {
-      await pool.end();
-    }
+    await pool.end();
     throw error;
   }
 }
