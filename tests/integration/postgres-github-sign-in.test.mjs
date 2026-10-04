@@ -159,8 +159,12 @@ test(
 
     // Exercise the real listener shutdown with a request already admitted by
     // Fastify. The hook controls timing only; app.close owns stop and drain.
+    // `connection: close` ends the socket with the drained response. Without it the
+    // socket is busy when close() runs, so close() does not reap it and then waits
+    // for the client's idle timeout (about 70 s against Fastify's 72 s keep-alive)
+    // after the drain. This block checks the drain, not that shutdown wait.
     const drainingRequest = fetch(`${origin}/api/auth/session?maintenance-drain`, {
-      headers: { cookie: legacyCookie },
+      headers: { cookie: legacyCookie, connection: "close" },
     });
     await admitted.promise;
     let closed = false;
