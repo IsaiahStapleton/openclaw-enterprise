@@ -759,3 +759,27 @@ func TestRedirectIsReportedWithItsTargetAndNotFollowed(t *testing.T) {
 		})
 	}
 }
+
+func TestUnknownTopLevelCommandFailsInsteadOfPrintingHelp(t *testing.T) {
+	for _, args := range [][]string{{"preset", "list"}, {"agnet", "list"}} {
+		var out, errOut strings.Builder
+		command := New(&out, &errOut)
+		command.SetArgs(args)
+		err := command.Execute()
+		if want := fmt.Sprintf("unknown command %q for \"occ\"", args[0]); err == nil || err.Error() != want {
+			t.Fatalf("occ %v error = %v, want %q", args, err, want)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("occ %v stdout = %q, want nothing", args, out.String())
+		}
+	}
+	var out strings.Builder
+	command := New(&out, io.Discard)
+	command.SetArgs(nil)
+	if err := command.Execute(); err != nil {
+		t.Fatalf("bare occ error = %v", err)
+	}
+	if !strings.Contains(out.String(), "Available Commands:") {
+		t.Fatalf("bare occ stdout = %q, want help", out.String())
+	}
+}

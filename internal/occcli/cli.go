@@ -69,6 +69,11 @@ func New(out, errOut io.Writer) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
+		// Runnable like commandGroup, so cobra checks Args and rejects an unknown
+		// command instead of printing help and exiting 0.
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
 		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
 			app.ctx = command.Context()
 			return app.validateOptions(command)
