@@ -324,6 +324,9 @@ Installation with `occclient`. Its ID must match the bootstrap response before
 the final key file is written exclusively. With OpenShell, startup waits for the
 bootstrap Kubernetes Namespace and for OCC to report it ready, proving the
 Sandbox Driver created or adopted its operator-mode Workspace.
+Namespace readiness and repository discovery bind each OCC request to the
+polling deadline and caller cancellation via `occclient.Client.WithContext`.
+The original client remains available for later startup operations.
 
 Both Kubernetes profiles pass `OCC_DEVELOPMENT_STARTUP_TIMEOUT_SECONDS` to
 `k3d cluster create --timeout`, so a node that never becomes ready fails startup
