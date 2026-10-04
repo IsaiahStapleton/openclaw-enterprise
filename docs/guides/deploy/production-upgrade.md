@@ -160,12 +160,13 @@ keep the image references in `values.yaml` unchanged:
 set -euo pipefail
 cp /secure/occ/installation.yaml /secure/occ/installation.yaml.before
 # Edit /secure/occ/installation.yaml and review the diff, then:
-export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName' /secure/occ/values.yaml)"
-kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
-  --namespace openclaw-system create secret generic "$OCC_INSTALLATION_SECRET" \
-  --from-file=installation.yaml=/secure/occ/installation.yaml \
-  --dry-run=client -o yaml |
-  kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' apply -f -
+export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
+export OCC_INSTALLATION_KEY="$(yq -er '.installation.key // "installation.yaml"' /secure/occ/values.yaml)"
+jq -n --arg key "$OCC_INSTALLATION_KEY" --rawfile document /secure/occ/installation.yaml \
+  '{data: {($key): ($document | @base64)}}' |
+  kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
+    --namespace openclaw-system patch secret "$OCC_INSTALLATION_SECRET" \
+    --type merge --patch-file /dev/stdin
 OCC_CHECKSUM="$(sha256sum /secure/occ/installation.yaml | cut -d ' ' -f 1)" \
   yq -i '.controlPlane.installationChecksum = strenv(OCC_CHECKSUM)' /secure/occ/values.yaml
 helm upgrade oce deploy/helm/openclaw-enterprise \
@@ -174,7 +175,10 @@ helm upgrade oce deploy/helm/openclaw-enterprise \
 ```
 
 The new checksum restarts the API and worker so they read the new Installation.
-Use your configured Secret key if it is not `installation.yaml`. Settings that
+The patch replaces only the Installation key and keeps the Secret's
+`openclaw.dev/installation-id` annotation. Do not re-create the Secret with
+`kubectl apply`: if its last applied configuration carries that annotation,
+apply deletes it and the next upgrade refuses the Secret. Settings that
 shape Agent Pods, such as Gateway resources, apply only to Pods created
 afterward; deploy an Agent to apply them to it. To undo, restore the `.before`
 file and repeat the commands. The edited files are the baseline for the next
@@ -190,7 +194,7 @@ bootstrap key and annotate the Secret:
 
 ```bash
 export OCC_INSTALLATION_ID="$(jq -er '.meta.installationId' "$OCC_BOOTSTRAP_KEY_FILE")"
-export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName' /secure/occ/values.yaml)"
+export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
 kubectl --kubeconfig /secure/occ/kubeconfig \
   --context '<reviewed-context>' --namespace openclaw-system \
   annotate secret "$OCC_INSTALLATION_SECRET" \
