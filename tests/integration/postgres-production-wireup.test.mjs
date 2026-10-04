@@ -109,12 +109,7 @@ function parseLogEvents(stderr) {
     .map((line) => JSON.parse(line));
 }
 
-async function productionDrivers({
-  includeDefaults = false,
-  files,
-  configurationRoot,
-  restrict,
-} = {}) {
+async function productionDrivers({ includeDefaults = false, files, configurationRoot } = {}) {
   const configuration = createInstallationDriverConfiguration();
   configuration.presets = { includeDefaults, ...(files === undefined ? {} : { files }) };
   configuration.drivers.compute.id = "compute-production-wireup";
@@ -141,26 +136,10 @@ async function productionDrivers({
       id: installation.drivers.secret.id,
     }),
     createIAMDriver(state) {
-      const driver = new NativeIAMDriver(state, {
+      return new NativeIAMDriver(state, {
         id: installation.drivers.iam.id,
         implementation: installation.drivers.iam.implementation,
       });
-      if (restrict !== undefined) {
-        // Answers as an applicable Restriction would; the API's role cannot write one.
-        const authorize = driver.authorize.bind(driver);
-        driver.authorize = async (request) => {
-          const decision = await authorize(request);
-          return restrict.matches(request)
-            ? {
-                ...decision,
-                allowed: false,
-                reason: "An applicable Restriction denies the exact action and resource.",
-                evidence: { ...decision.evidence, restrictionIds: [restrict.id] },
-              }
-            : decision;
-        };
-      }
-      return driver;
     },
   };
 }
@@ -605,23 +584,36 @@ test(
         ],
       });
       assert.deepEqual(await readOpenClaw(), rolledBack.data);
-      // A Restriction freezing the Namespace's Presets keeps the copy, and startup only warns.
-      const freezeId = "freeze-presets";
-      const frozenLog = memoryLog();
-      await restart(
-        {
-          includeDefaults: true,
-          restrict: {
-            id: freezeId,
-            matches: ({ action, resource }) =>
-              action === "update" &&
-              resource.kind === "preset" &&
-              resource.namespaceId === defaultNamespace[0].id,
-          },
-        },
-        frozenLog.logger,
+      await restart({ includeDefaults: true });
+      const afterRestart = await request("GET", presetPath);
+      assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
+        "Standard Codex",
+        "Standard OpenClaw",
+        "default-codex",
+      ]);
+      assert.deepEqual(
+        afterRestart.data.find((preset) => preset.name === "Standard Codex"),
+        customized.data,
       );
-      assert.deepEqual(await readOpenClaw(), rolledBack.data);
+      // Refreshed from the stored JSONB: same ID, current template. The edit above stays.
+      assert.deepEqual(
+        afterRestart.data.find((preset) => preset.name === "Standard OpenClaw"),
+        copiedOpenClaw,
+      );
+      // A Restriction freezing the Namespace's Presets keeps an earlier copy, and startup
+      // only warns. It stays for the rest of this test, which never updates these Presets.
+      const refrozen = await request("PATCH", `${presetPath}/${copiedOpenClaw.id}`, {
+        template: earlierOpenClaw.template,
+      });
+      assert.equal(refrozen.status, 200);
+      const freezeId = `freeze-presets-${randomUUID()}`;
+      await pool.query(
+        "INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind) VALUES ($1, $2, 'update', 'preset')",
+        [freezeId, defaultNamespace[0].id],
+      );
+      const frozenLog = memoryLog();
+      await restart({ includeDefaults: true }, frozenLog.logger);
+      assert.deepEqual(await readOpenClaw(), refrozen.data);
       assert.deepEqual(
         frozenLog.lines
           .filter(({ event }) => event === "presets.default-refresh-skipped")
@@ -643,22 +635,6 @@ test(
             restrictionIds: [freezeId],
           },
         ],
-      );
-      await restart({ includeDefaults: true });
-      const afterRestart = await request("GET", presetPath);
-      assert.deepEqual(afterRestart.data.map((preset) => preset.name).sort(), [
-        "Standard Codex",
-        "Standard OpenClaw",
-        "default-codex",
-      ]);
-      assert.deepEqual(
-        afterRestart.data.find((preset) => preset.name === "Standard Codex"),
-        customized.data,
-      );
-      // Refreshed from the stored JSONB: same ID, current template. The edit above stays.
-      assert.deepEqual(
-        afterRestart.data.find((preset) => preset.name === "Standard OpenClaw"),
-        copiedOpenClaw,
       );
       const newNamespace = await request("POST", "/namespaces", {
         name: "Preset startup namespace",

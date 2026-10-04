@@ -103,9 +103,11 @@ storage and mutation audit. While `includeDefaults` is enabled, an existing copy
 of a bundled default that still equals a superseded shipped version requires
 Preset update permission; its
 template is replaced in place and audited with `source: installation-defaults-refresh`.
-A refresh the policy refuses (a deny Restriction first, then any refusal when no
-administrator holds the grant) keeps the copy and logs one
-`presets.default-refresh-skipped` warning naming it and the reason.
+A refresh the policy refuses keeps the copy and logs one
+`presets.default-refresh-skipped` warning naming it and the reason. Startup
+first skips only refusals from a deny Restriction, which binds every
+administrator; only when no single administrator can then complete
+initialization does it skip every refused refresh.
 Other existing copies are untouched. Any other failure rolls back
 the transaction and prevents API startup. Namespace creation uses the same
 helper before queuing provisioning, so denied or invalid defaults also roll back

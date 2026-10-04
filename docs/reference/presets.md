@@ -57,15 +57,19 @@ Startup selects a persisted Principal authorized to administer the Installation
 and requires `preset:create` wherever defaults are missing. Namespace
 creators likewise need `preset:create` when this option is enabled. Authorization
 or template validation failure rolls back initialization and prevents startup
-or Namespace creation.
-
-Refreshing a copy also needs `preset:update` on it, preferring an administrator
-who holds it. A refresh the policy refuses never prevents startup: for example,
-a Namespace deny Restriction on `preset:update` that freezes its Presets keeps
-the earlier version. The API logs one `presets.default-refresh-skipped` warning
-per kept copy, naming its Namespace, Preset ID and name, the refusal reason, and
-any Restriction IDs. Remove the Restriction and restart the API to refresh it. The selected Configuration Driver validates native
+or Namespace creation. The selected Configuration Driver validates native
 values; seeding does not create workloads or credentials.
+
+Refreshing a copy also needs `preset:update` on it. A refresh the policy
+refuses never prevents startup; the copy keeps its earlier version. A Namespace
+deny Restriction on `preset:update` that freezes its Presets binds every
+administrator. Startup first looks for one administrator who can refresh every
+unrestricted copy; if none can, it uses the first who can create the missing
+defaults and keeps every copy that administrator is refused.
+The API logs one `presets.default-refresh-skipped` warning per kept copy,
+naming its Namespace, Preset ID and name, the refusal reason, and any
+Restriction IDs. To refresh it, remove the Restriction, or grant `preset:update`
+to an Installation administrator, and restart the API.
 
 ## Configuration inventory
 
