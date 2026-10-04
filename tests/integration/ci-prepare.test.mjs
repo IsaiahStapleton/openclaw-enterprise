@@ -813,22 +813,44 @@ test("repository platform preparation restores the runtime image cache without e
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
-test("repository platform preparation refuses the image cache without its credentials", async (t) => {
-  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform", {
+test("image cache preparation refuses missing credentials and unmapped lanes before building", async (t) => {
+  const credentials = {
     GITHUB_ACTIONS: "true",
     OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
     ACTIONS_RESULTS_URL: "https://cache.example.test/",
-  });
-  const prepared = commands.prepare();
-  assert.notEqual(prepared.status, 0);
-  assert.match(prepared.stderr, /Image caching requires the hosted image lane/);
-  const calls = await commands.commands();
-  assert.equal(
-    calls.some(({ args }) => args[0] === "buildx" || args[0] === "build"),
-    false,
-  );
-  // The refused build's planned tag is still owned; this shim cannot remove images.
-  commands.cleanup();
+  };
+  const nodeBaseImage = JSON.parse(
+    await readFile(join(repositoryRoot, "scripts/ci/test-suites/images-packaging.json"), "utf8"),
+  ).prepare.defaultEnv.NODE_BASE_IMAGE;
+  for (const [lane, env] of [
+    // A cache lane without its runtime token.
+    ["repository-credentials-platform", { ...credentials, ACTIONS_RUNTIME_TOKEN: "" }],
+    // A lane outside the cache map, even with credentials.
+    [
+      "docker-model",
+      {
+        ...credentials,
+        OPENAI_API_KEY: "synthetic-model-key",
+        OCC_TEST_OPENAI_MODEL: "gpt-synthetic",
+        NODE_BASE_IMAGE: nodeBaseImage,
+      },
+    ],
+  ]) {
+    const commands = await fixtureImageCommands(t, "success", lane, env);
+    const prepared = commands.prepare();
+    assert.notEqual(prepared.status, 0, lane);
+    assert.match(prepared.stderr, /Image caching requires the hosted image lane/, lane);
+    const calls = await commands.commands();
+    assert.equal(
+      calls.some(({ args }) => args[0] === "buildx" || args[0] === "build"),
+      false,
+      lane,
+    );
+    assert.doesNotMatch(prepared.stdout + prepared.stderr, /synthetic-cache-credential/, lane);
+    // Cleanup is not run: the refused build's planned tag stays owned, and this
+    // shim cannot remove images. The fixture directory is removed with the test.
+  }
 });
 
 test("ordinary k3d preparation rejects mutable K3s overrides before creating state", async (t) => {
