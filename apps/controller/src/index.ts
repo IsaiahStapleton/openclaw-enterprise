@@ -152,6 +152,11 @@ export interface ControllerAppOptions {
   readonly workspaceFileRequestTimeoutMs?: number;
   readonly nativeAdmin?: NativeAdminAccessConfig;
   readonly nativeAdminGatewayApiKey?: () => Promise<string>;
+  /**
+   * How often a native admin WebSocket rechecks its admission (default 25 s). The server
+   * leaves it unset; tests shorten it so revocation closes do not wait the full interval.
+   */
+  readonly nativeAdminWebSocketLeaseIntervalMs?: number;
   /** Absent or disabled: both runtime routes answer 501. */
   readonly agentRuntimeLogs?: AgentRuntimeLogsConfig;
   readonly publicOrigin?: string;
@@ -910,6 +915,14 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
   if (!Number.isSafeInteger(workspaceFileRequestTimeoutMs) || workspaceFileRequestTimeoutMs < 1) {
     throw new Error("The workspace file request timeout must be a positive integer.");
   }
+  const nativeAdminWebSocketLeaseIntervalMs = options.nativeAdminWebSocketLeaseIntervalMs;
+  if (
+    nativeAdminWebSocketLeaseIntervalMs !== undefined &&
+    (!Number.isSafeInteger(nativeAdminWebSocketLeaseIntervalMs) ||
+      nativeAdminWebSocketLeaseIntervalMs < 1)
+  ) {
+    throw new Error("The native admin WebSocket lease interval must be a positive integer.");
+  }
   let publicOrigin: string | undefined;
   if (options.publicOrigin !== undefined) {
     try {
@@ -1407,6 +1420,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     auth: options.auth,
     nativeAdmin: options.nativeAdmin,
     nativeAdminGatewayApiKey: options.nativeAdminGatewayApiKey,
+    webSocketLeaseIntervalMs: nativeAdminWebSocketLeaseIntervalMs,
     auditSink: options.auditSink,
   });
 
