@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -945,14 +945,12 @@ test("password Presets reject stored credentials and password substitution outsi
 });
 
 test("Installation YAML seeds authorized default Presets for new and existing Namespaces without replacing copies", async (t) => {
-  const { loadInstallationConfiguration, initializeInstallationPresets } =
+  const { initializeInstallationPresets } =
     await import("../../apps/controller/src/composition/installation-config.ts");
   const { createInstallationDriverConfiguration } =
     await import("../helpers/installation-driver-configuration.mjs");
+  const { loadInstallationFile } = await import("../helpers/installation-file.mjs");
   const { OpenClawController } = await import("../../packages/occ/src/index.ts");
-  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "installation.yaml");
   const configuration = createInstallationDriverConfiguration();
   const customPreset = JSON.parse(
     await readFile(new URL("../../deploy/presets/swe-preset.json", import.meta.url), "utf8"),
@@ -961,11 +959,7 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
     includeDefaults: true,
     files: [fileURLToPath(new URL("../../deploy/presets/swe-preset.json", import.meta.url))],
   };
-  await writeFile(path, JSON.stringify(configuration));
-  const runtime = await loadInstallationConfiguration({
-    mode: "production",
-    environment: { OCC_CONFIG_PATH: path },
-  });
+  const runtime = await loadInstallationFile(t, configuration);
   const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
   const namespace = await fixture.createNamespace("Default catalog", { ready: true });
   const list = await fixture.request("GET", collection(namespace.id));
@@ -1075,11 +1069,7 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
   );
   // Disabling startup defaults never removes a saved Preset.
   configuration.presets = { includeDefaults: false };
-  await writeFile(path, JSON.stringify(configuration));
-  const disabledRuntime = await loadInstallationConfiguration({
-    mode: "production",
-    environment: { OCC_CONFIG_PATH: path },
-  });
+  const disabledRuntime = await loadInstallationFile(t, configuration);
   const disabled = new OpenClawController(fixture.controller.installation, {
     state: fixture.state,
     defaultPresets: disabledRuntime.defaultPresets,
@@ -1094,22 +1084,16 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
 });
 
 test("startup seeds default Presets with an administrator who can create them when an Installation-only administrator is returned first", async (t) => {
-  const { loadInstallationConfiguration, initializeInstallationPresets } =
+  const { initializeInstallationPresets } =
     await import("../../apps/controller/src/composition/installation-config.ts");
   const { createInstallationDriverConfiguration } =
     await import("../helpers/installation-driver-configuration.mjs");
+  const { loadInstallationFile } = await import("../helpers/installation-file.mjs");
   const { AuthorizationDeniedError, DependencyUnavailableError } =
     await import("../../packages/occ/src/index.ts");
-  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "installation.yaml");
   const configuration = createInstallationDriverConfiguration();
   configuration.presets = { includeDefaults: true };
-  await writeFile(path, JSON.stringify(configuration));
-  const runtime = await loadInstallationConfiguration({
-    mode: "production",
-    environment: { OCC_CONFIG_PATH: path },
-  });
+  const runtime = await loadInstallationFile(t, configuration);
   const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
   const iam = fixture.controller.selectDriver("iam", "console-native-iam");
   const installationId = fixture.controller.installation.id;
@@ -1209,20 +1193,12 @@ test("startup seeds default Presets with an administrator who can create them wh
 });
 
 test("Namespace deletion removes unmodified default Presets and names what still blocks it", async (t) => {
-  const { loadInstallationConfiguration } =
-    await import("../../apps/controller/src/composition/installation-config.ts");
   const { createInstallationDriverConfiguration } =
     await import("../helpers/installation-driver-configuration.mjs");
-  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-delete-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "installation.yaml");
+  const { loadInstallationFile } = await import("../helpers/installation-file.mjs");
   const configuration = createInstallationDriverConfiguration();
   configuration.presets = { includeDefaults: true };
-  await writeFile(path, JSON.stringify(configuration));
-  const runtime = await loadInstallationConfiguration({
-    mode: "production",
-    environment: { OCC_CONFIG_PATH: path },
-  });
+  const runtime = await loadInstallationFile(t, configuration);
   assert.ok(runtime.defaultPresets.length > 0);
   const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
 
