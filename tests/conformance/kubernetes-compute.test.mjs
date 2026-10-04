@@ -7156,6 +7156,8 @@ test("the official Kubernetes client rejects ambiguous identity and insecure API
     );
 
     // Unsafe cluster configuration is permanently rejected before contacting its API server.
+    // An unrefused fixture fails later at the unreachable port, which is retryable, so
+    // `permanent` is what proves the validator refused it.
     assert.deepEqual(
       await driver.ensureNamespace(tenant),
       {
