@@ -23,6 +23,7 @@ export function createLoginFixture({
   state: stateOverrides = {},
   trustedClientAddress = true,
   recoveryEmail,
+  providerDeadlineMs,
 }) {
   const attempts = [];
   const subjects = [];
@@ -64,6 +65,7 @@ export function createLoginFixture({
     {
       trustedClientAddress,
       onOperationalEvent: (event) => emitOccLogEvent(logger, event),
+      ...(providerDeadlineMs === undefined ? {} : { providerDeadlineMs }),
     },
   );
   if (recoveryEmail !== undefined) {
