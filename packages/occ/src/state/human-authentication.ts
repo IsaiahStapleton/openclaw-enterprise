@@ -905,8 +905,9 @@ export class PostgresHumanAuthentication {
         [providerId, subject],
       );
       if (existing !== undefined) {
-        // The caller administers the Installation and can list every account's sign-in
-        // methods, so naming the conflict discloses nothing it cannot already read.
+        // The route admits only an Installation administrator covering the target Principal
+        // (controller humanAccountActor), who can already list every account's sign-in
+        // methods, so naming the conflict discloses nothing new. Keep that gate in front.
         if (existing.user_id !== userId || existing.identity_only !== true) {
           throw new ResourceStateConflictError(EXTERNAL_IDENTITY_ASSIGNED);
         }
