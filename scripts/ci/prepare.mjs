@@ -1904,11 +1904,6 @@ async function prepareLane({ lane, statePath }) {
           )
         ).env,
       );
-      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
-        state,
-        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
-        "NODE_BASE_IMAGE",
-      );
       break;
     case "images-runtime-startup":
       // Runtime image smoke tests run apart from packaging to shorten CI wall time.
