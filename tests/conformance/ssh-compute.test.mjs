@@ -374,8 +374,8 @@ test("SSH closed schema and semantic validation reject every invalid option", ()
       /connectTimeoutSeconds must be a positive safe/,
     ],
     [["hosts", "stable", "address"], "", /Host address is required/],
-    [["hosts", "stable", "address"], "-oProxyCommand=bad", /must be a hostname or IP address/],
-    [["hosts", "stable", "address"], "host;false", /must be a hostname or IP address/],
+    [["hosts", "stable", "address"], "-oProxyCommand=bad", /Host address must be a hostname or IP/],
+    [["hosts", "stable", "address"], "host;false", /Host address must be a hostname or IP/],
     [["hosts", "stable", "user"], "nobody", /SSH hosts require user root/],
     [["hosts", "stable", "port"], 0, /Host port must be an integer from 1 to 65535/],
     [["hosts", "stable", "port"], 65536, /Host port must be an integer from 1 to 65535/],
@@ -925,7 +925,7 @@ test("SSH revisions fail closed on unbound identities, unsupported topology, san
       /gateway authentication|OPENCLAW_GATEWAY_PASSWORD/,
     );
   }
-  // Another Agent binds a second Namespace, so a revision naming it reaches the ownership check.
+  // Bind an Agent in a second Namespace; a revision naming it reaches the ownership check.
   const otherNamespace = { ...tenant, id: "ns-ssh-other" };
   bind(f.driver, revision(f.driver, 1, "agent-ssh-other"), otherNamespace);
   const ownership = /AgentRevision ownership or selected Compute Driver differs/;
@@ -934,7 +934,7 @@ test("SSH revisions fail closed on unbound identities, unsupported topology, san
     [{ namespaceId: "foreign" }, /SSH revision requires a bound Namespace and Agent/],
     [{ agentId: "agent-ssh-unbound" }, /SSH revision requires a bound Namespace and Agent/],
     [{ namespaceId: otherNamespace.id }, ownership],
-    [{ compute: { id: "foreign", implementation: "occ/ssh" } }, ownership],
+    [{ compute: { ...rev.compute, id: "foreign" } }, ownership],
     [{ compute: { ...rev.compute, implementation: "occ/foreign" } }, ownership],
   ]) {
     await assert.rejects(f.driver.prepareRevision({ ...rev, ...change }), refusal);
