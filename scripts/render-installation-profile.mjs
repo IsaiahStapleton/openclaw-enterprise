@@ -107,16 +107,6 @@ async function readProfile(name) {
   return profile;
 }
 
-function clone(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => clone(entry));
-  }
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, clone(entry)]));
-  }
-  return value;
-}
-
 function yamlScalar(value) {
   if (typeof value === "string") {
     if (value.length === 0) {
@@ -1008,7 +998,7 @@ function buildRendered(profile, parsed, diagnostics) {
         : { files: stringArray(presets, ["presets", "files"], diagnostics, { nonempty: false }) }),
     },
     drivers: {
-      plugin: clone(profile.installation.drivers.plugin),
+      plugin: profile.installation.drivers.plugin,
       configuration: {
         id: "config-kubernetes",
         configuration: {
