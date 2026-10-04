@@ -6,9 +6,9 @@ The feature is disabled by default. When enabled, the console shows **Native adm
 
 ## Who can open it
 
-Native admin UI needs a human console session and exact Agent `administer`. Agent `read`, `deploy`, and `operate` grants do not open it, and service API keys cannot. OCE has no other chat surface: people without `administer` message the Agent through a channel its Configuration sets up, such as [Slack](../guides/integrations/slack.md), or ask an Agent administrator. An operator with cluster access can check a real response with [model verification](../guides/operate/model-verification.md).
+Native admin UI is the only Agent chat surface in the console, and it is for exact Agent `administer` holders with a human session (see [Authorization and availability](#authorization-and-availability)). Other people message the Agent through a channel its Configuration sets up, such as [Slack](../guides/integrations/slack.md), or ask someone who can edit that Configuration to let them in. An operator with cluster access can check a real response with [model verification](../guides/operate/model-verification.md) or the [OpenClaw TUI](../guides/deploy/production-tui.md).
 
-Native admin UI is unavailable under external sign-in. With GitHub, Google, or OIDC sign-in configured, startup rejects native admin enablement (`<Provider> sign-in does not support native administration`) and any shared cookie domain. On HTTPS, external sign-in issues host-only `__Host-` session and known-device cookies, and a `__Host-` cookie cannot carry the `Domain` attribute that lets derived Agent hosts read the parent-domain `__Secure-openclaw_occ_shared` session. Password sign-in keeps the [shared session](#shared-session-boundary).
+Native admin UI is unavailable under GitHub, Google, or OIDC sign-in: startup rejects enablement (`<Provider> sign-in does not support native administration.`). That profile issues a host-only `__Host-openclaw_occ.session_token` session cookie on HTTPS, which cannot carry the `Domain` attribute that lets Agent hosts read the [shared session](authentication.md#native-admin-shared-sessions).
 
 ## Requirements
 

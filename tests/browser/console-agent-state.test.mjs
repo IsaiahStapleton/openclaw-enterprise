@@ -384,10 +384,12 @@ test("Agent detail says when the current or requested version cannot be read", a
     .getByText(/The current version, rev_.*, is one you cannot read; v1 is an older version\./)
     .waitFor();
   // Members have no chat or native admin surface, so the hint names only paths that work.
-  assert.match(
-    await page.locator(".agent-status-line").textContent(),
-    /Ask an Agent administrator for read access to new versions\. You can still message this Agent through a channel it is configured for, such as Slack, if that channel allows you\.$/,
-  );
+  await page
+    .locator(".agent-status-line")
+    .getByText(
+      /Ask an Agent administrator for read access to new versions\. If this Agent is set up for a channel such as Slack, you can message it there when that channel allows you\.$/,
+    )
+    .waitFor();
   await page.getByRole("heading", { name: "You cannot read this version" }).waitFor();
   assert.equal(await page.getByText("Configuration unavailable").count(), 0);
 
@@ -438,7 +440,7 @@ test("Agent detail reports a failed dedicated replacement as probably not servin
   await page
     .locator(".agent-status-line")
     .getByText(
-      /^v2 deployment failed\. v1 is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: it cannot answer in its channels or anywhere else until a new version deploys\. Fix the failure, then deploy a new version\.$/,
+      /^v2 deployment failed\. v1 is still recorded as current, but deploying a dedicated Agent stops the previous version first, so this Agent is probably not serving: expect no answers in its channels or anywhere else until a new version deploys\. Fix the failure, then deploy a new version\.$/,
     )
     .waitFor();
 });
@@ -467,7 +469,7 @@ test("Agent detail reports a failed selected version as probably not serving", a
   await page
     .locator(".agent-status-line")
     .getByText(
-      /^v2 deployment failed\. v2 is still selected because its runtime already replaced the previous version, so this Agent is probably not serving: it cannot answer in its channels or anywhere else until a new version deploys\. Fix the failure, then deploy a new version\.$/,
+      /^v2 deployment failed\. v2 is still selected because its runtime already replaced the previous version, so this Agent is probably not serving: expect no answers in its channels or anywhere else until a new version deploys\. Fix the failure, then deploy a new version\.$/,
     )
     .waitFor();
   assert.equal(await page.getByText("Live serving is unverified").count(), 0);

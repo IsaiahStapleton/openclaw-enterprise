@@ -240,8 +240,9 @@ The console has no chat panel. To give an Agent a task:
 - With Agent `administer`, use the [native admin panel](#conditional-native-admin-panel)
   when the Installation enables it. It is unavailable under GitHub, Google, or
   OIDC sign-in.
-- Otherwise ask an Agent administrator. An operator with cluster access can
-  check a real response with [model verification](../operate/model-verification.md).
+- Otherwise ask someone who can edit the Agent's Configuration to let you into
+  its channel. An operator with cluster access can check a real response with
+  [model verification](../operate/model-verification.md).
 
 ## Conditional native admin panel
 
