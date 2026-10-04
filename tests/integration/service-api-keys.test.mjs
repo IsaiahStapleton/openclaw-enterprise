@@ -127,6 +127,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       { action: "read", resourceKind: "secret" },
       { action: "update", resourceKind: "secret" },
       { action: "delete", resourceKind: "secret" },
+      { action: "read", resourceKind: "preset" },
       { action: "read", resourceKind: "agent" },
       { action: "operate", resourceKind: "agent" },
       { action: "delete", resourceKind: "agent" },
@@ -308,6 +309,47 @@ test("service API keys authenticate scoped automation without replacing sessions
       { env },
     );
     assert.deepEqual(JSON.parse(secretUpdated.stdout), cliSecret);
+
+    // Presets: the key may read them but not delete them until it is granted delete.
+    const preset = await request("POST", `/namespaces/${namespaceId}/presets`, {
+      body: { name: "cli-preset", template: { agent: { name: "CLI Preset Agent" } } },
+    });
+    assert.equal(preset.status, 201);
+    const presetList = await run(occCli, ["preset", "list", "-o", "json"], { env });
+    assert.deepEqual(
+      JSON.parse(presetList.stdout).map(({ id, name }) => ({ id, name })),
+      [{ id: preset.data.id, name: "cli-preset" }],
+    );
+    const presetRead = await run(occCli, ["preset", "get", preset.data.id, "-o", "json"], {
+      env,
+    });
+    assert.deepEqual(JSON.parse(presetRead.stdout), preset.data);
+    await assert.rejects(run(occCli, ["preset", "delete", preset.data.id], { env }), (error) => {
+      assert.match(error.stderr, /HTTP 403\)/);
+      return true;
+    });
+    assert.equal(
+      (await request("GET", `/namespaces/${namespaceId}/presets/${preset.data.id}`)).status,
+      200,
+    );
+    // The grant stays on the key's Role for the rest of this test.
+    policy.roles
+      .find((candidate) => candidate.id === "tenant-automation")
+      .permissions.push({ action: "delete", resourceKind: "preset" });
+    const presetDeleted = await run(
+      occCli,
+      ["preset", "delete", preset.data.id, "--output", "json"],
+      { env },
+    );
+    assert.deepEqual(JSON.parse(presetDeleted.stdout), {
+      deleted: true,
+      id: preset.data.id,
+      kind: "preset",
+    });
+    assert.equal(
+      (await request("GET", `/namespaces/${namespaceId}/presets/${preset.data.id}`)).status,
+      404,
+    );
 
     // Seed the server-owned resource through the administrator session so the
     // scoped CLI credential exercises only its granted Agent operations.
