@@ -128,8 +128,9 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
       } else if (error.status === 404) {
         context.navigate("agents");
       } else if (error.status === 403 && state.deleting) {
-        // The finished deletion removed the bindings that target this Agent, so a reader with
-        // only those grants can no longer follow it. Stop polling instead of showing a denial.
+        // Most likely the finished deletion removed the bindings that target this Agent, so a
+        // reader with only those grants can no longer follow it. Stop polling instead of
+        // showing a denial.
         state.accessEnded = true;
         clearTimeout(pollTimer);
       } else {
@@ -146,7 +147,7 @@ export function createAgentDeletion(context, path, agent, onDeleting) {
         if (state.accessEnded) {
           // Refresh is gone, so keep focus in this section on its heading.
           if (focusedHere) {
-            heading.focus();
+            heading.focus({ preventScroll: true });
           }
         } else if (!poll) {
           (state.deleting || state.needsRefresh ? refresh : remove).focus();

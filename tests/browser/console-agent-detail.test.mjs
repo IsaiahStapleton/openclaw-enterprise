@@ -2256,12 +2256,20 @@ test("Agent deletion says access ended when the deleter can no longer read the A
   const accepted = reads();
 
   // While cleanup runs, the member's grants still hold and the poll follows the deletion.
-  await page.clock.runFor(DELETION_POLL_MS);
-  await page.waitForResponse(
+  const followed = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}${agentPath}` && response.request().method() === "GET",
   );
+  await page.clock.runFor(DELETION_POLL_MS);
+  assert.equal((await followed).status(), 200);
   assert.equal(reads(), accepted + 1);
+  // Refresh is enabled again once that poll finished and scheduled the next one.
+  await page.waitForFunction(() => {
+    const refresh = [...globalThis.document.querySelectorAll("button")].find(
+      (node) => node.textContent === "Refresh deletion status",
+    );
+    return refresh !== undefined && !refresh.disabled;
+  });
   await page.getByRole("status").getByText("Deletion in progress").waitFor();
 
   // Finishing the deletion removes the bindings that target the Agent, so the next read is a
