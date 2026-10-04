@@ -341,6 +341,7 @@ test("runtime fixture records pending effects and successful cleanup", async () 
       ),
       (error) =>
         error instanceof AggregateError &&
+        error.errors.length === 2 &&
         error.errors[0].message === "image removal response lost" &&
         /image cleanup incomplete or outcome unknown/.test(error.errors.at(-1).message),
     );

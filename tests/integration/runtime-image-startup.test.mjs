@@ -2287,10 +2287,14 @@ try {
       "-e",
       deniedReadProbe,
     ]);
-    // The init runs, cannot read the root-only source, and reports its one redacted failure.
+    // The init runs, cannot read a source owned by another uid, and exits 1 with its one
+    // redacted failure; Docker's own failures exit 125. The command line embeds the same
+    // text, so match the child's stderr rather than the error message.
     await assert.rejects(
       runRepositoryMaterialInitProbe(deniedMaterialVolumeName, descriptor),
-      /Repository credential material initialization failed\./,
+      (error) =>
+        error.code === 1 &&
+        /^Repository credential material initialization failed\.$/m.test(error.stderr),
     );
     await runRepositoryMaterialInitProbe(materialVolumeName, descriptor);
 
@@ -2721,6 +2725,7 @@ const timeout = setTimeout(() => {
     assert.equal(unadmitted.git.trace.length, 0, "unadmitted requests must not reach the upstream");
     assert.equal(await guarded.git.ref(`refs/heads/${workspaceBranch}`), proof.commit);
     // `git rev-parse` exits 128 in the upstream bare repository: the refused pushes created no ref.
+    assert.match(await readOnly.git.ref("refs/heads/main"), /^[0-9a-f]{40,64}$/);
     await assert.rejects(guarded.git.ref("refs/heads/disallowed"), /command failed \(exit 128\)/);
     await assert.rejects(readOnly.git.ref("refs/heads/denied"), /command failed \(exit 128\)/);
     assert.equal(
