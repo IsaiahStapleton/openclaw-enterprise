@@ -8,6 +8,7 @@ import type {
   OccApiRoute,
 } from "@openclaw-enterprise/contracts";
 import {
+  NoActiveAgentRevisionError,
   ResourceConflictError,
   type AuthorizationDeniedError,
   type OpenClawController,
@@ -44,7 +45,6 @@ import {
   dependencyUnavailable,
   failure,
   isAuthorizationDenied,
-  isDependencyUnavailable,
   requestFailure,
 } from "./errors.ts";
 import type { RequestContext } from "./types.ts";
@@ -530,7 +530,9 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
       if (error instanceof ResourceConflictError) {
         return { status: "stopped" };
       }
-      if (isDependencyUnavailable(error)) {
+      // A running Agent still activating its first revision is a state the console shows.
+      // Every other dependency failure, an IAM outage included, reaches the error handler.
+      if (error instanceof NoActiveAgentRevisionError) {
         return { status: "unavailable" };
       }
       throw error;

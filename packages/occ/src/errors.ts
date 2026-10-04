@@ -95,6 +95,18 @@ export class DependencyUnavailableError extends AuthorizationDeniedError {
   }
 }
 
+/**
+ * A running Agent has no active revision yet (its first deployment, or a redeploy after a
+ * stop, is still activating). A lifecycle state, not an outage; it stays a
+ * DependencyUnavailableError so callers that need a revision still answer 503.
+ */
+export class NoActiveAgentRevisionError extends DependencyUnavailableError {
+  constructor() {
+    super("The Agent has no active gateway revision.");
+    this.name = "NoActiveAgentRevisionError";
+  }
+}
+
 export class RepositoryOptionsUnavailableError extends Error {
   constructor(message = "Repository options are unavailable.") {
     super(message);
