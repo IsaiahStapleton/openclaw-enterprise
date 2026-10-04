@@ -30,8 +30,8 @@ You need:
   grants the control plane.
 
 The probe runs with `node`, which the OCC controller image, the OpenClaw gateway
-and the dedicated Codex Harness provide. Harness Pods provisioned by a
-SandboxDriver such as OpenShell are outside this check: their provider fences
+and the dedicated Codex Harness provide. Harness Pods that a SandboxDriver
+such as OpenShell provisions are outside this check: their provider fences
 their egress.
 
 ## Set up the probe
@@ -97,7 +97,7 @@ HARNESS_IP=$(pod_ip "$TENANT_NAMESPACE" "$HARNESS_POD")
 AGENT_PORTS="$HARNESS_IP:8080 $HARNESS_IP:18791"
 ```
 
-Then set the shared targets. Replace `openclaw-system` if you installed the
+Set the shared targets. Replace `openclaw-system` if you installed the
 release elsewhere, and omit `ENVOY` without private Agent routing:
 
 ```bash
@@ -149,8 +149,6 @@ create the release's pull Secret in the test Pod's namespace and add
 `imagePullSecrets` to the Pod.
 
 ## Run the checks
-
-Run each row and compare:
 
 | Source        | Command                                                                   | Expected                                                                                                                                                                                                                                                                                                                                                               |
 | ------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
