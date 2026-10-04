@@ -456,9 +456,6 @@ Next, verify a model response from the same revision.
 
 ## Verify production workloads
 
-[Check Agent network isolation](../operate/network-isolation.md) by probing
-from inside the workload Pods.
-
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
 expected `activeRevisionId`, then require a real model response from that
 Agent. Use its optional loopback password to [attach with the OpenClaw
@@ -469,6 +466,9 @@ operator's local Kubernetes connection.
 If model access fails, check the Pod's
 [network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles):
 model egress requires an explicit grant. See [what each check establishes](../operate/model-verification.md#what-each-check-establishes).
+
+Then [check Agent network isolation](../operate/network-isolation.md) by probing
+from inside the workload Pods.
 
 ## Attach with the OpenClaw TUI
 
