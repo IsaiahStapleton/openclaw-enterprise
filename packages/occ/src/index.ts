@@ -217,6 +217,7 @@ import type {
 } from "./state/agent-provisioning.ts";
 
 export {
+  ActivationFailedError,
   ActivationPendingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
@@ -252,6 +253,7 @@ export {
   SecretBindingValidationError,
   SecretValueError,
   TransientDependencyError,
+  type ActivationFailedCode,
   type ActivationPendingCode,
   type RuntimeLogsErrorCode,
   type TransientDependency,
