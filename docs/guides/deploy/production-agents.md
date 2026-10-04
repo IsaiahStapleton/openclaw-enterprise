@@ -456,8 +456,8 @@ Next, verify a model response from the same revision.
 
 ## Verify production workloads
 
-Verify NetworkPolicies against the
-[platform access matrix](../../testing/production-network-access.md).
+[Check Agent network isolation](../operate/network-isolation.md) by probing
+from inside the workload Pods.
 
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
 expected `activeRevisionId`, then require a real model response from that
