@@ -481,6 +481,66 @@ for (const scenario of declaredInputCases) {
 }
 
 test(
+  "a refused upload is answered while it still arrives, then cut after the linger bound",
+  { timeout: 15000 },
+  async (t) => {
+    const fixture = await startTransport(
+      t,
+      (incoming, outgoing) => {
+        incoming.resume();
+        incoming.once("end", () => outgoing.writeHead(200, replyHeaders).end("0000"));
+      },
+      { gitPushInputBytes: inputLimit, stallMs: 300 },
+    );
+    // The declared size is refused before any body byte is read. This raw client keeps
+    // sending regardless, so only the gateway's linger bound can end the connection.
+    const client = connectTlsClient(fixture);
+    const authorization = Buffer.from(
+      `${fixture.opened.client.gitUsername}:${fixture.opened.bearer}`,
+    ).toString("base64");
+    client.socket.write(
+      [
+        `POST ${push} HTTP/1.1`,
+        `host: ${new URL(fixture.config.gateway.publicOrigin).host}`,
+        `authorization: Basic ${authorization}`,
+        "content-type: application/x-git-receive-pack-request",
+        `content-length: ${1 << 30}`,
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    let answer = "";
+    let answeredAt;
+    client.socket.on("data", (chunk) => {
+      answer += chunk.toString("latin1");
+      answeredAt ??= Date.now();
+    });
+    const chunk = Buffer.alloc(16384, 42);
+    const pump = setInterval(() => client.closed || client.socket.write(chunk), 2);
+    t.after(() => clearInterval(pump));
+    await eventually(() => client.closed, {
+      timeoutMs: 5000,
+      message: "refused upload kept lingering",
+    });
+    clearInterval(pump);
+    assert.match(answer, /^HTTP\/1\.1 413 /);
+    assert.match(answer, /"limit-exceeded"/);
+    // The answer arrived at once; the connection stayed only for the linger bound.
+    const lingered = Date.now() - answeredAt;
+    assert.ok(lingered >= 200 && lingered < 3000, `lingered ${lingered} ms`);
+    assert.deepEqual(fixture.received, []);
+    assert.equal(fixture.github.issuesOfTokens.length, 0);
+    // The sole exchange slot was released before lingering began.
+    assert.deepEqual(await readDiscovery(fixture), {
+      kind: "completed",
+      status: 200,
+      bytes: 4,
+      complete: true,
+    });
+  },
+);
+
+test(
   "chunked gzip enforces the wire limit even when decoded input fits",
   { timeout: 15000 },
   async (t) => {

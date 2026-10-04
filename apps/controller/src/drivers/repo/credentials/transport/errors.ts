@@ -1,4 +1,5 @@
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Clock } from "../backend-contracts.ts";
 
 const SAFE_CODES = new Set([
   "limit-exceeded",
@@ -16,6 +17,25 @@ const SAFE_CODES = new Set([
   "route-denied",
 ]);
 
+function writeErrorHead(
+  response: ServerResponse,
+  status: number,
+  code: string,
+  headers: Readonly<Record<string, string>>,
+): Buffer {
+  const body = Buffer.from(
+    JSON.stringify({ error: { code: SAFE_CODES.has(code) ? code : "unavailable" } }),
+  );
+  response.writeHead(status, {
+    ...headers,
+    "content-type": "application/json",
+    "content-length": String(body.length),
+    "cache-control": "no-store",
+    connection: "close",
+  });
+  return body;
+}
+
 /** All error text is service-owned; no upstream exception is serialized. */
 export function sendError(
   response: ServerResponse,
@@ -30,15 +50,55 @@ export function sendError(
     response.destroy();
     return;
   }
-  const body = Buffer.from(
-    JSON.stringify({ error: { code: SAFE_CODES.has(code) ? code : "unavailable" } }),
-  );
-  response.writeHead(status, {
-    ...headers,
-    "content-type": "application/json",
-    "content-length": String(body.length),
-    "cache-control": "no-store",
-    connection: "close",
-  });
-  response.end(body);
+  response.end(writeErrorHead(response, status, code, headers));
+}
+
+/**
+ * Answer a request whose body is still arriving. Closing a socket with unread input
+ * makes the kernel send a reset that can overtake the answer, so the client would see
+ * only "connection reset". The complete answer is written first (Connection: close),
+ * then the rest of the body is discarded, never buffered, until the client finishes or
+ * goes away, for at most `lingerMs`.
+ */
+export function refuseUnreadInput(
+  request: IncomingMessage,
+  response: ServerResponse,
+  status: number,
+  code: string,
+  clock: Clock,
+  lingerMs: number,
+): void {
+  if (request.readableEnded) {
+    sendError(response, status, code);
+    return;
+  }
+  if (response.destroyed || response.headersSent) {
+    request.destroy();
+    response.destroy();
+    return;
+  }
+  response.write(writeErrorHead(response, status, code, {}));
+  let closed = false;
+  const close = (completed: boolean) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    stop();
+    request.off("end", ended);
+    request.off("close", aborted);
+    if (completed) {
+      response.end();
+    } else {
+      request.destroy();
+      response.destroy();
+    }
+  };
+  const ended = () => close(true);
+  const aborted = () => close(request.readableEnded);
+  const stop = clock.schedule(lingerMs, () => close(false));
+  request.once("end", ended);
+  request.once("close", aborted);
+  request.on("error", () => {});
+  request.resume();
 }
