@@ -448,7 +448,7 @@ export async function githubSignIn(app, origin, subject, remoteAddress = "192.0.
 export function fakeGoogle(t, { clientId, clientSecret, hd } = {}) {
   const published = rsaSigningKey("fixture-google-kid");
   const signToken = idTokenSigner(published);
-  // Same kid, different key: the token names the published key but does not verify under it.
+  // An unpublished key: its token's header still names the published kid, so it does not verify.
   const foreign = rsaSigningKey(published.kid);
   const codes = new Map();
   const fixture = {
