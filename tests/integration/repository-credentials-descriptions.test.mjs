@@ -319,12 +319,16 @@ test("ordinary registry and standalone session admission reject the private meta
     autoOpen: false,
     gateway: { listen: "127.0.0.1:0" },
   });
-  assert.throws(() =>
-    resolveGitHubRepositoryBinding(registry.registry, {
-      namespaceId: registry.namespaceId,
-      repositoryRef: "repo-a",
-      profile: "metadata-read",
-    }),
+  // The registry's profile set excludes the private metadata profile outright, before any
+  // Namespace policy lookup.
+  assert.throws(
+    () =>
+      resolveGitHubRepositoryBinding(registry.registry, {
+        namespaceId: registry.namespaceId,
+        repositoryRef: "repo-a",
+        profile: "metadata-read",
+      }),
+    /invalid-repository-registry/,
   );
   const binding = resolveGitHubRepositoryBinding(registry.registry, {
     namespaceId: registry.namespaceId,
