@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allowsPushRef } from "../../../credentials/client-contracts.ts";
+import { allowsPushRef, decodePushedBranchRef } from "../../../credentials/client-contracts.ts";
 import { readClientConfiguration } from "./config.ts";
 import {
   inheritedRepositoryBinding,
@@ -83,7 +83,9 @@ async function checkPush(destination: string, input: Buffer): Promise<boolean> {
     return true;
   }
   requireCurrentBinding(binding);
-  const lines = input.toString("utf8").split("\n");
+  // Read as latin1 so each byte is one character; the remote ref is then decoded as
+  // strict UTF-8 with the gateway's rules, so both refuse the same refs.
+  const lines = input.toString("latin1").split("\n");
   if (lines.pop() !== "") {
     throw new Error("invalid-pre-push-input");
   }
@@ -95,7 +97,8 @@ async function checkPush(destination: string, input: Buffer): Promise<boolean> {
     if (!fields) {
       throw new Error("invalid-pre-push-input");
     }
-    if (!allowsPushRef(binding.client.pushRefAllowlist, fields[3]!)) {
+    const ref = decodePushedBranchRef(Buffer.from(fields[3]!, "latin1"));
+    if (ref === undefined || !allowsPushRef(binding.client.pushRefAllowlist, ref)) {
       return false;
     }
   }

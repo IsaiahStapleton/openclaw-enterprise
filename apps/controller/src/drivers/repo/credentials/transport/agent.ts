@@ -123,8 +123,13 @@ export function createAgentHandler(
           }
           return;
         }
-        if (!plan.inputPolicy(body)) {
-          sendError(response, 400, "unsupported-request");
+        const verdict = plan.inputPolicy(body);
+        if (verdict !== true) {
+          if (verdict === false) {
+            sendError(response, 400, "unsupported-request");
+          } else {
+            sendError(response, verdict.status, verdict.code, {}, verdict.message);
+          }
           return;
         }
         // One retained copy, written in slices so the TLS sender never queues a
