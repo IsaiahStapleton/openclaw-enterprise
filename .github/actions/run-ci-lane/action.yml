@@ -140,7 +140,20 @@ runs:
         # and navigation log) here only when a test fails. Limited to the
         # fixture-only browser lane.
         OPENCLAW_CI_BROWSER_FAILURE_DIR: ${{ inputs.lane == 'checks-browser' && format('{0}/browser-failures/{1}', runner.temp, inputs.lane) || '' }}
-      run: node scripts/ci/run-tests.mjs run "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --results "$RUNNER_TEMP/results/${{ inputs.lane }}.json"
+      run: |
+        if [[ "${{ inputs.lane }}" == k3d-fixture-configuration ]]; then
+          # Hosted runners have been lost mid-lane (suspected memory pressure); a
+          # lost runner skips every later step, so the sampler also logs live.
+          bash scripts/ci/memory-sampler.sh "$RUNNER_TEMP/memory/${{ inputs.lane }}.log" &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
+        fi
+        node scripts/ci/run-tests.mjs run "${{ inputs.lane }}" --state "$RUNNER_TEMP/state/${{ inputs.lane }}.json" --results "$RUNNER_TEMP/results/${{ inputs.lane }}.json"
+    - name: Show last memory samples
+      if: (failure() || cancelled()) && inputs.lane == 'k3d-fixture-configuration'
+      continue-on-error: true
+      shell: bash
+      run: tail -n 120 "$RUNNER_TEMP/memory/${{ inputs.lane }}.log" || true
     - name: Cleanup lane
       if: always()
       shell: bash
@@ -176,6 +189,15 @@ runs:
         name: diagnostics-${{ inputs.artifact-prefix }}-${{ inputs.lane }}
         path: ${{ runner.temp }}/state/${{ inputs.lane }}.json.diagnostics.json
         overwrite: true
+        if-no-files-found: ignore
+        retention-days: 7
+    - name: Upload memory samples
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      if: always() && inputs.lane == 'k3d-fixture-configuration'
+      continue-on-error: true
+      with:
+        name: memory-${{ inputs.artifact-prefix }}-${{ inputs.lane }}-attempt-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/memory/${{ inputs.lane }}.log
         if-no-files-found: ignore
         retention-days: 7
     - name: Upload browser failure diagnostics
