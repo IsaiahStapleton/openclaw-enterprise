@@ -45,7 +45,7 @@ diff <(yq -o=json . /secure/occ/values.yaml | jq -S .) \
 OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' "$BASELINE/live-values.yaml")"
 OCC_INSTALLATION_KEY="$(yq -er '.installation.key // "installation.yaml"' "$BASELINE/live-values.yaml")"
 "${kube[@]}" -n openclaw-system get secret "$OCC_INSTALLATION_SECRET" -o json |
-  jq '{annotations: .metadata.annotations}' >"$BASELINE/installation-secret.json"
+  jq '{installationId: .metadata.annotations["openclaw.dev/installation-id"]}' >"$BASELINE/installation-secret.json"
 "${kube[@]}" -n openclaw-system get secret "$OCC_INSTALLATION_SECRET" -o json |
   jq -j --arg key "$OCC_INSTALLATION_KEY" '.data[$key] | @base64d' >"$BASELINE/live-installation.yaml"
 diff <(yq -o=json . /secure/occ/installation.yaml | jq -S .) \
@@ -87,9 +87,10 @@ after the upgrade: a new UID means the volume and its Agent data were replaced.
 "${occ_json[@]}" installation deployment-inventory >"$BASELINE/deployment-inventory.json"
 "${occ_json[@]}" namespace list >"$BASELINE/occ-namespaces.json"
 jq -r '.[].id' "$BASELINE/occ-namespaces.json" | while read -r ns; do
-  for list in "agent list" "secret list" "iam role list" "iam access-binding list"; do
-    "${occ_json[@]}" --namespace "$ns" $list >"$BASELINE/occ-$ns-${list// /-}.json"
-  done
+  "${occ_json[@]}" --namespace "$ns" agent list >"$BASELINE/occ-$ns-agents.json"
+  "${occ_json[@]}" --namespace "$ns" secret list >"$BASELINE/occ-$ns-secrets.json"
+  "${occ_json[@]}" --namespace "$ns" iam role list >"$BASELINE/occ-$ns-roles.json"
+  "${occ_json[@]}" --namespace "$ns" iam access-binding list >"$BASELINE/occ-$ns-access-bindings.json"
 done
 ```
 
@@ -129,7 +130,8 @@ HARNESS_POD=$("${kube[@]}" -n "$TENANT_NAMESPACE" get pods \
   >"$BASELINE/workspace-$AGENT_ID.txt"
 ```
 
-For an embedded Agent, use its gateway Pod and container `gateway`. If the
+For an embedded Agent, use its gateway Pod (`openclaw.dev/workload-role=gateway`),
+container `gateway`, and `/home/node/.openclaw/workspace`. If the
 dedicated Codex seccomp profile is in use, also record its file hash on every
 eligible node, as the [Codex sandbox procedure](codex-sandbox.md) shows.
 
