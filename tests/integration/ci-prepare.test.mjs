@@ -996,7 +996,7 @@ const settled = JSON.parse(await readFile(statePath, "utf8"));
 assert.equal(settled.resources.filter((resource) => resource.kind === "postgres-database").length, 0);
 const other = await prepareFile({
   lane,
-  file: "tests/integration/postgres-platform-state.test.mjs",
+  file: "tests/integration/postgres-worker-agent-revision.test.mjs",
   statePath,
 });
 assert.equal(other.env.OCC_TEST_NATIVE_IAM_BARRIER_CI, undefined);
