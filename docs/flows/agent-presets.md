@@ -88,14 +88,21 @@ remain in the application bundle; OCC owns generic Preset lifecycle. The
 on-request approvals with the user as reviewer, cached hosted search, and the exact build hosts in the
 [standard Preset guide](../guides/topics/standard-codex-preset.md#build-network-allowlist).
 Seeding and rendering copy that native policy; the deployed Codex plugin owns
-its enforcement. Updating the bundle does not replace already installed copies.
+its enforcement. `loadBundledPresetVersions` also loads every shipped version
+listed in `deploy/presets/archive/versions.json`, whether or not defaults are
+enabled, into `ControllerOptions.bundledPresetVersions`. A conformance test in
+`tests/conformance/presets.test.mjs` fails when a bundled file changes without
+its previous version archived there.
 
 `packages/occ/src/index.ts:OpenClawController.initializeDefaultPresets`
 
 Initialization authorizes Installation administration, locks Namespaces in ID
 order in one transaction, and skips failed/deleting Namespaces. Missing names
 require Preset create permission and ordinary template/Driver validation before
-storage and mutation audit. Existing names are untouched. Any failure rolls back
+storage and mutation audit. An existing copy of a bundled default that still
+equals a superseded shipped version requires Preset update permission; its
+template is replaced in place and audited with `source: installation-defaults-refresh`.
+Other existing copies are untouched. Any failure rolls back
 the transaction and prevents API startup. Namespace creation uses the same
 helper before queuing provisioning, so denied or invalid defaults also roll back
 the new Namespace. Disabling defaults leaves persisted copies alone.
@@ -277,6 +284,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-04 14:00: Refresh untouched copies of superseded bundled defaults at startup, and let any shipped version pass the Namespace deletion check.
 - 2026-10-03 20:30: Seed default Presets with the next Installation administrator when one cannot create them, so an upgrade that adds a default no longer stops API startup.
 - 2026-09-28 10:36: Restore explicit creation without a Preset. (authoring-run/c140c47a-799b-48c8-929a-5d1a37eb31d1 - 9f7ae3cfb749a58394f8446f3a429db6ffa6f129)
 

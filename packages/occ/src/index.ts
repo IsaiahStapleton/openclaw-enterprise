@@ -467,10 +467,29 @@ export interface ControllerOptions {
   readonly recordOperations?: boolean;
   readonly backends?: readonly BackendDefinition[];
   readonly defaultPresets?: readonly Pick<Preset, "name" | "template">[];
+  /**
+   * Every shipped version of the bundled default Presets, current and superseded, loaded
+   * whether or not `presets.includeDefaults` seeds them. Startup refreshes Namespace copies
+   * still equal to a superseded version, and Namespace deletion treats any of them as
+   * unmodified release content.
+   */
+  readonly bundledPresetVersions?: readonly BundledPresetVersion[];
   readonly loggingLevel?: LoggingLevel;
   readonly configuredServiceAccountDriverId?: string;
   /** Installation startup `runtime.nativeWorkerSupport`; never set from the API. */
   readonly nativeWorkerSupport?: NativeWorkerSupport;
+}
+
+/** One shipped version of a bundled default Preset (`deploy/presets/archive/versions.json`). */
+export interface BundledPresetVersion {
+  readonly name: string;
+  readonly template: PresetTemplate;
+  /** Bundled file this version shipped as, for example `standard-codex.json`. */
+  readonly file: string;
+  /** Canonical-JSON digest that names this version in the archive. */
+  readonly version: string;
+  /** True for the version the running release ships. */
+  readonly current: boolean;
 }
 
 export interface CreateNamespaceInput {
@@ -924,6 +943,7 @@ export class OpenClawController {
   private readonly selections = new Map<DriverCapability, RegisteredDriver>();
   private readonly backends: readonly BackendDefinition[];
   private readonly defaultPresets: readonly Pick<Preset, "name" | "template">[];
+  private readonly bundledPresetVersions: readonly BundledPresetVersion[];
   private readonly loggingLevel: LoggingLevel;
   private readonly backendMap: ReadonlyMap<string, BackendDefinition>;
   private readonly configuredServiceAccountDriverId: string | undefined;
@@ -957,6 +977,7 @@ export class OpenClawController {
       }
       presetNames.add(preset.name);
     }
+    this.bundledPresetVersions = immutableCopy(options.bundledPresetVersions ?? []);
     this.loggingLevel = normalizeLoggingLevel(options.loggingLevel);
     if (
       options.nativeWorkerSupport !== undefined &&
@@ -2965,7 +2986,10 @@ export class OpenClawController {
     });
   }
 
-  /** Apply trusted Installation defaults without replacing Namespace-owned copies. */
+  /**
+   * Apply trusted Installation defaults: create missing names and refresh copies still equal
+   * to a superseded bundled version. Edited copies are never replaced.
+   */
   async initializeDefaultPresets(principalId: string): Promise<void> {
     if (this.defaultPresets.length === 0) {
       return;
@@ -2995,11 +3019,13 @@ export class OpenClawController {
     if (this.defaultPresets.length === 0) {
       return;
     }
-    const existing = new Set(
-      (await state.presets.listPresets(namespace.id)).map((preset) => preset.name),
+    const existing = new Map(
+      (await state.presets.listPresets(namespace.id)).map((preset) => [preset.name, preset]),
     );
     for (const preset of this.defaultPresets) {
-      if (existing.has(preset.name)) {
+      const copy = existing.get(preset.name);
+      if (copy !== undefined) {
+        await this.refreshSupersededDefaultPreset(state, principalId, namespace, preset, copy);
         continue;
       }
       await this.authorize(principalId, "create", {
@@ -3029,6 +3055,67 @@ export class OpenClawController {
         details: { source: "installation-defaults" },
       });
     }
+  }
+
+  /**
+   * Replace a bundled default's Namespace copy that still equals a superseded shipped
+   * version of it, keeping its ID and grants. Any other content is an operator edit and stays.
+   */
+  private async refreshSupersededDefaultPreset(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    namespace: Readonly<Namespace>,
+    seeded: Pick<Preset, "name" | "template">,
+    copy: Readonly<Preset>,
+  ): Promise<void> {
+    // Only bundled defaults have a history; `presets.files` entries are never refreshed.
+    const current = this.bundledPresetVersions.find(
+      (version) =>
+        version.current &&
+        version.name === seeded.name &&
+        isDeepStrictEqual(version.template, seeded.template),
+    );
+    // A file reverted to an earlier version lists it as superseded too; current wins.
+    if (current === undefined || this.presetMatchesTemplate(copy, current.template)) {
+      return;
+    }
+    const superseded = this.bundledPresetVersions.find(
+      (version) =>
+        !version.current &&
+        version.file === current.file &&
+        version.name === copy.name &&
+        this.presetMatchesTemplate(copy, version.template),
+    );
+    if (superseded === undefined) {
+      return;
+    }
+    await this.authorize(principalId, "update", {
+      kind: "preset",
+      id: copy.id,
+      namespaceId: namespace.id,
+    });
+    const template = await this.admitPresetTemplate(seeded.template, namespace.id);
+    const updated = await state.presets.updatePreset(namespace.id, copy.id, { template });
+    if (!updated) {
+      throw new ResourceStateConflictError("The Preset changed during default refresh.");
+    }
+    await state.audit.append({
+      id: `aud_${crypto.randomUUID()}`,
+      installationId: this.installation.id,
+      namespaceId: namespace.id,
+      occurredAt: this.timestamp(),
+      kind: "mutation",
+      actorId: principalId,
+      source: "occ",
+      action: "openclaw.presets.update",
+      resource: { kind: "preset", id: copy.id, namespaceId: namespace.id },
+      outcome: "success",
+      details: {
+        source: "installation-defaults-refresh",
+        previousVersion: superseded.version,
+        version: current.version,
+      },
+    });
   }
 
   async createPreset(principalId: string, input: CreatePresetInput): Promise<Readonly<Preset>> {
@@ -3168,15 +3255,20 @@ export class OpenClawController {
     return removed;
   }
 
-  /** True when a Preset is still the exact Installation default seeded into its Namespace. */
+  /**
+   * True when a Preset still equals, by name and template, an Installation default or any
+   * shipped version of a bundled default, so it is release content rather than an operator's.
+   */
   private isUnmodifiedDefaultPreset(preset: Readonly<Preset>): boolean {
-    const seeded = this.defaultPresets.find((candidate) => candidate.name === preset.name);
-    if (seeded === undefined) {
-      return false;
-    }
+    return [...this.defaultPresets, ...this.bundledPresetVersions].some(
+      (known) => known.name === preset.name && this.presetMatchesTemplate(preset, known.template),
+    );
+  }
+
+  private presetMatchesTemplate(preset: Readonly<Preset>, template: PresetTemplate): boolean {
     try {
       return isDeepStrictEqual(
-        normalizePresetTemplate(seeded.template, preset.namespaceId),
+        normalizePresetTemplate(template, preset.namespaceId),
         preset.template,
       );
     } catch {

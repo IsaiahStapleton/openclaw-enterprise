@@ -12,10 +12,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const selector = fileURLToPath(new URL("../../scripts/ci/impact.mjs", import.meta.url));
+const pnpmImpact = fileURLToPath(new URL("../../scripts/ci/pnpm-impact.mjs", import.meta.url));
 const gate = fileURLToPath(new URL("../../scripts/ci/impact-gate.mjs", import.meta.url));
 const runner = fileURLToPath(new URL("../../scripts/ci/run-tests.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -89,6 +90,280 @@ function fixture(t, change, initial = {}, initialModes = {}) {
   };
   return { dir, repo, git, event, eventPath, base, head, tested, run, expect };
 }
+
+function workspaceFiles() {
+  const manifest = (name, dependencies = {}) =>
+    JSON.stringify({ name, version: "1.0.0", private: true, dependencies });
+  return {
+    "package.json": manifest("impact-fixture"),
+    "pnpm-workspace.yaml": "packages:\n  - apps/*\n  - packages/*\n",
+    "packages/shared/package.json": manifest("@fixture/shared"),
+    "packages/consumer/package.json": manifest("@fixture/consumer", {
+      "@fixture/shared": "workspace:*",
+    }),
+    "apps/app/package.json": manifest("@fixture/app", {
+      "@fixture/consumer": "workspace:*",
+    }),
+  };
+}
+
+function affectedPackages(f, overrides = {}) {
+  const result = spawnSync(process.execPath, [pnpmImpact], {
+    cwd: f.repo,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: f.eventPath,
+      GITHUB_SHA: f.tested,
+      ...overrides,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+test("pnpm impact reports a changed workspace package and its dependents", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const expected = {
+    status: "affected",
+    reason: "workspace_typescript",
+    packages: ["@fixture/app", "@fixture/consumer", "@fixture/shared"],
+  };
+  assert.deepEqual(affectedPackages(f), expected);
+  // GitHub merges onto the current base, which can be newer than base.sha.
+  const stale = join(f.dir, "stale-event.json");
+  writeFileSync(
+    stale,
+    JSON.stringify({ pull_request: { base: { sha: "1".repeat(40) }, head: { sha: f.head } } }),
+  );
+  assert.deepEqual(affectedPackages(f, { GITHUB_EVENT_PATH: stale }), expected);
+});
+
+test("pnpm impact reports affected packages from a depth-two merge checkout", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const shallow = join(f.dir, "shallow");
+  command(f.dir, "git", ["clone", "--quiet", "--depth=2", pathToFileURL(f.repo).href, shallow]);
+  assert.equal(command(shallow, "git", ["rev-parse", "HEAD"]), f.tested);
+  assert.deepEqual(affectedPackages({ ...f, repo: shallow }), {
+    status: "affected",
+    reason: "workspace_typescript",
+    packages: ["@fixture/app", "@fixture/consumer", "@fixture/shared"],
+  });
+});
+
+test("pnpm impact keeps non-workspace and unverified changes unclassified", (t) => {
+  const f = fixture(t, ({ put }) => put("cmd/tool.go", "package main\n"), workspaceFiles());
+  assert.deepEqual(affectedPackages(f), {
+    status: "unavailable",
+    reason: "outside_typescript_workspace",
+    packages: [],
+  });
+  assert.deepEqual(affectedPackages(f, { GITHUB_SHA: f.head }), {
+    status: "unavailable",
+    reason: "checkout_mismatch",
+    packages: [],
+  });
+  assert.deepEqual(affectedPackages(f, { GITHUB_EVENT_NAME: "push" }), {
+    status: "unavailable",
+    reason: "not_pull_request",
+    packages: [],
+  });
+  const mixed = fixture(
+    t,
+    ({ put }) => {
+      put("packages/shared/src/example.ts", "export const value = 1;\n");
+      put("cmd/tool.go", "package main\n");
+    },
+    workspaceFiles(),
+  );
+  assert.deepEqual(affectedPackages(mixed), {
+    status: "unavailable",
+    reason: "outside_typescript_workspace",
+    packages: [],
+  });
+});
+
+test("pnpm impact does not classify workspace manifest or symlink changes", (t) => {
+  const manifest = fixture(
+    t,
+    ({ put }) => put("packages/shared/package.json", '{"name":"@fixture/shared"}\n'),
+    workspaceFiles(),
+  );
+  assert.deepEqual(affectedPackages(manifest), {
+    status: "unavailable",
+    reason: "outside_typescript_workspace",
+    packages: [],
+  });
+
+  const symlink = fixture(
+    t,
+    ({ repo }) => {
+      mkdirSync(join(repo, "packages/shared/src"), { recursive: true });
+      symlinkSync("../package.json", join(repo, "packages/shared/src/example.ts"));
+    },
+    workspaceFiles(),
+  );
+  assert.deepEqual(affectedPackages(symlink), {
+    status: "unavailable",
+    reason: "inspection_failed",
+    packages: [],
+  });
+});
+
+test("pnpm impact reports unavailable without exposing a failed tool's output", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const bin = join(f.dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nprintf 'untrusted tool output\\n' >&2\nexit 1\n", {
+    mode: 0o755,
+  });
+  assert.deepEqual(affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }), {
+    status: "unavailable",
+    reason: "inspection_failed",
+    packages: [],
+  });
+  writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nprintf 'not valid json with private text\\n'\n", {
+    mode: 0o755,
+  });
+  assert.deepEqual(affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }), {
+    status: "unavailable",
+    reason: "inspection_failed",
+    packages: [],
+  });
+});
+
+test("pnpm impact summary prints only validated package names", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const summary = (overrides = {}) => {
+    const result = spawnSync(process.execPath, [pnpmImpact, "--summary"], {
+      cwd: f.repo,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: f.eventPath,
+        GITHUB_SHA: f.tested,
+        ...overrides,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  assert.match(summary(), /^- `@fixture\/shared`$/m);
+  const bin = join(f.dir, "bin");
+  mkdirSync(bin);
+  const project = JSON.stringify([
+    { name: "x`<img src=x>", path: join(f.repo, "packages/shared") },
+  ]);
+  writeFileSync(join(bin, "pnpm"), `#!/bin/sh\nprintf '%s\\n' '${project}'\n`, { mode: 0o755 });
+  const unsafe = summary({ PATH: `${bin}:${process.env.PATH}` });
+  assert.match(unsafe, /^Unavailable: inspection_failed\.$/m);
+  assert.doesNotMatch(unsafe, /<img|`x/);
+});
+
+test("pnpm impact rejects dirty tracked and untracked checkout inputs before running pnpm", (t) => {
+  for (const kind of ["unstaged", "staged", "cancelled", "untracked", "ignored"]) {
+    const f = fixture(
+      t,
+      ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+      { ...workspaceFiles(), ".gitignore": "ignored/\n" },
+    );
+    if (["unstaged", "staged", "cancelled"].includes(kind)) {
+      writeFileSync(join(f.repo, "base.txt"), "dirty\n");
+      if (kind !== "unstaged") {
+        f.git("add", "base.txt");
+      }
+      if (kind === "cancelled") {
+        writeFileSync(join(f.repo, "base.txt"), "text\n");
+      }
+    } else {
+      const dir = join(f.repo, kind === "ignored" ? "ignored" : "untracked");
+      mkdirSync(dir);
+      writeFileSync(join(dir, "package.json"), "{}\n");
+    }
+    const bin = join(f.dir, "unavailable-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    assert.deepEqual(
+      affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }),
+      {
+        status: "unavailable",
+        reason: "dirty_checkout",
+        packages: [],
+      },
+      kind,
+    );
+  }
+});
+
+test("pnpm impact rejects a checkout changed during graph inspection", (t) => {
+  const f = fixture(
+    t,
+    ({ put }) => put("packages/shared/src/example.ts", "export const value = 1;\n"),
+    workspaceFiles(),
+  );
+  const originalPath = process.env.PATH ?? "";
+  const bin = join(f.dir, "mutating-bin");
+  mkdirSync(bin);
+  const wrapper = `#!${process.execPath}\nconst { spawnSync } = require("node:child_process");\nconst { writeFileSync } = require("node:fs");\nconst result = spawnSync("pnpm", process.argv.slice(2), { encoding: "utf8", env: { ...process.env, PATH: ${JSON.stringify(originalPath)} } });\nprocess.stdout.write(result.stdout || "");\nif (process.argv.includes("--filter")) writeFileSync("base.txt", "dirty\\n");\nprocess.exit(result.status ?? 1);\n`;
+  writeFileSync(join(bin, "pnpm"), wrapper, { mode: 0o755 });
+  assert.deepEqual(affectedPackages(f, { PATH: `${bin}:${process.env.PATH}` }), {
+    status: "unavailable",
+    reason: "dirty_checkout",
+    packages: [],
+  });
+});
+
+test("affected-package advisory is isolated from required jobs and tolerates summary failure", (t) => {
+  const workflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const job = (name) => {
+    const match = new RegExp(
+      `^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:|(?![\\s\\S]))`,
+      "m",
+    ).exec(workflow);
+    assert.ok(match, `workflow contains ${name}`);
+    return match[1];
+  };
+  const advisory = job("affected-packages");
+  assert.match(advisory, /needs: impact/);
+  assert.match(advisory, /needs\.impact\.outputs\.mode == 'full'/);
+  assert.match(advisory, /timeout-minutes: 3/);
+  assert.match(advisory, /continue-on-error: true/);
+  assert.doesNotMatch(advisory, /ci-results-|GITHUB_OUTPUT/);
+  for (const name of ["impact", "pr-safe", "ci-required"]) {
+    assert.doesNotMatch(job(name), /affected-packages/);
+  }
+  const match = / {8}run: \|\n((?: {10}.*\n)+)/.exec(advisory);
+  assert.ok(match, "summary script exists");
+  const script = match[1].replace(/^ {10}/gm, "");
+  const dir = mkdtempSync(join(tmpdir(), "ci-advisory-summary-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const summary of ["", join(dir, "missing", "summary")]) {
+    const result = spawnSync("bash", ["-e", "-c", script], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
 
 // Preserve raw path identity so out-of-scope BOM names select full coverage.
 for (const [name, pathBytes, expected] of [

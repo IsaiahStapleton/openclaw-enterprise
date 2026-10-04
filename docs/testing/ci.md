@@ -19,7 +19,7 @@ CI uses [run-ci-lane](../../.github/actions/run-ci-lane/action.yml) for setup, t
 
 The non-required [First Agent smoke](first-agent-smoke.md) installs Local Setup and deploys two Agents against a stand-in model provider on every run.
 
-Full CI has seventeen required lanes. `checks-baseline-1` and `checks-baseline-2` split the baseline conformance and local integration files at one point in the old order, chosen from measured file durations; each file belongs to one lane, and `run-tests.mjs audit` fails on an unmapped or duplicated file. Only part 1 runs the workspace, lint, format, OpenAPI, docs, type and Go CLI checks, so the docs tests stay there; part 2 builds the workspace output its tests read. Register a new baseline file in either part, keeping their job times close. `checks-browser` owns browser tests; `postgres-auth` owns the longer authentication tests and its own PostgreSQL server; `images-model-probes` builds only the runtime image and runs model-probe tests without a cluster; `images-runtime-startup` builds the runtime image and runs its startup smoke tests apart from packaging, which they would otherwise lengthen by about five minutes.
+Full CI has seventeen required lanes. `checks-baseline-1` and `checks-baseline-2` split the baseline conformance and local integration files at one point in the old order, chosen from measured file durations; each file belongs to one lane, and `run-tests.mjs audit` fails on an unmapped or duplicated file. Only part 1 runs the workspace, lint, format, OpenAPI, docs, type and Go CLI checks, so the docs tests stay there; part 2 builds the workspace output its tests read. Register a new baseline file in either part, keeping their job times close. `checks-browser` owns browser tests; `postgres-auth` owns the sign-in, session and account authentication tests and its own PostgreSQL server; `images-model-probes` builds only the runtime image and runs model-probe tests without a cluster; `images-runtime-startup` builds the runtime image and runs its startup smoke tests apart from packaging, which they would otherwise lengthen by about five minutes.
 
 Hosted image builds use separate controller/runtime caches. Packaging alone exports; model probes and runtime startup restore. Transfers time out after one minute, export failures are ignored, and builds load locally. Cache credentials stay in preparation. Local builds remain unchanged.
 
@@ -30,6 +30,8 @@ Compare per-file `wallDurationMs`, preparation `[ci-timing]` phases and Actions 
 CI Impact and Suite Audit start independently. Full mode runs the sixteen-lane matrix and `runtime-image-fixture`; `CI Required` requires their outcomes and same-source artifacts. Kubernetes fixture and observability lanes use `ubuntu-22.04` for bridge netfilter support; `runtime-image-fixture` and `CI Required` also use it. The repository credential platform lane uses `blacksmith-16vcpu-ubuntu-2404` to build the delivered runtime image and platform fixture in one job; other lanes and the audit use `blacksmith-8vcpu-ubuntu-2404`.
 
 For a verified documentation-only PR merge tree, `docs-checks` verifies checkout identity and runs formatting, `docs:install`, `docs:check`, and `docs:build`. The check covers word limits, site links and navigation, but not outgoing links in root or `specs/` Markdown. Docs mode runs no conformance, integration, browser, Go, or other product tests. `CI Required` verifies the mode and requires successful impact, audit and documentation jobs, with full test jobs skipped. Missing, failed, cancelled or unexpectedly skipped selected jobs fail. Docs mode does not run the test-result aggregator or require test artifacts.
+
+An independent full-mode PR advisory job reports pnpm's affected TypeScript workspace packages for verified, clean PR merge checkouts. It uses declared package dependencies; Go, files outside a workspace package, non-TypeScript changes and missing evidence are reported as unavailable. It does not select or skip tests and cannot change the required CI result.
 
 API reference outputs and Markdown under `docs/reference/api/` select full for `openapi:check`. The selector loads policy from the verified PR base. Code, configuration, workflow, mixed or unknown changes and non-PR events select full; unavailable or unverifiable evidence selects full or fails closed. A base without the selector also selects full. Hosted validation is not yet established.
 
@@ -53,8 +55,11 @@ routing, Slack, OpenShell, and additional OpenTelemetry lanes require approval.
 Missing selected prerequisites fail. A PR aggregate is not full credentialed coverage;
 targeted protected runs report only their selected lanes.
 
-The `postgres` lane owns migration compatibility tests; `postgres-application`
-owns the remaining PostgreSQL files. Each has a disposable PostgreSQL server.
+The `postgres` lane owns migration compatibility plus the connection, bootstrap,
+wire-up, platform-state and restart tests; `postgres-auth` owns sign-in, session
+and account authentication; `postgres-application` owns the remaining PostgreSQL
+files. Each has a disposable PostgreSQL server. The split follows measured file
+durations: add a new file where it fits, keeping the three job times close.
 Kubernetes fixture files run in `k3d-fixture-configuration`,
 `k3d-fixture-state`, and `k3d-fixture-plugins`, each with independent cluster,
 database, image, and cleanup state. Files run sequentially within each lane. The audit requires one owner per file; Full Integration aggregates its selected `full` group or targeted lane.
