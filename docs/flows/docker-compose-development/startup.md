@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-10-02
-last_updated_session: authoring-run/20771b6e-d59b-4737-8a63-cb33c420218e
+updated: 2026-10-04
+last_updated_session: authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76
 ---
 
 # Compose development startup
@@ -125,7 +125,7 @@ attempts, and failure recovery.
 ### 4. The API admits only local development traffic
 
 `apps/controller/src/server.mjs:start`,
-`apps/controller/src/composition/development-postgres.ts:createDevelopmentConfigurationDriver`,
+`apps/controller/src/composition/development-postgres.ts:composePostgresDevelopment`,
 `apps/controller/src/drivers/configuration/filesystem/index.ts:FilesystemConfigurationDriver`
 
 The API starts in `NODE_ENV=development`, binds inside the Compose network, and
@@ -361,6 +361,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-04 01:12: Pointed the API startup step at the existing composition function. (authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76 - 7a8a64046ac8ef3e7b5a4ed46b1d4cef9f1573f3)
 
 - 2026-10-02 11:01: Polled CRD status instead of `kubectl wait`. (authoring-run/20771b6e-d59b-4737-8a63-cb33c420218e - 67302dd99e03d28053dbb72ba2569418f6aca1d0)
 
