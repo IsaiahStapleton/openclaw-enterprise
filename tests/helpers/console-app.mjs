@@ -226,6 +226,7 @@ export async function createConsoleAppFixture(t, options = {}) {
         recordOperations: options.recordOperations ?? false,
         backends,
         defaultPresets: options.defaultPresets ?? [],
+        bundledPresetVersions: options.bundledPresetVersions ?? [],
         ...(options.nativeWorkerSupport === undefined
           ? {}
           : { nativeWorkerSupport: options.nativeWorkerSupport }),
