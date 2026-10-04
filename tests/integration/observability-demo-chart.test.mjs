@@ -107,10 +107,14 @@ for (const value of ["407", "true", "null", "1e3"]) {
       let checked = 0;
       function check(object) {
         if (Array.isArray(object)) {
-          for (const entry of object) check(entry);
+          for (const entry of object) {
+            check(entry);
+          }
           return;
         }
-        if (!object || typeof object !== "object") return;
+        if (!object || typeof object !== "object") {
+          return;
+        }
         for (const [key, field] of Object.entries(object)) {
           if (["name", "namespace", "key"].includes(key) && field !== undefined) {
             assert.equal(typeof field, "string", `${key} must be a string`);
@@ -125,7 +129,9 @@ for (const value of ["407", "true", "null", "1e3"]) {
           check(field);
         }
       }
-      for (const object of loadAllYaml(stdout)) check(object);
+      for (const object of loadAllYaml(stdout)) {
+        check(object);
+      }
       assert.ok(
         checked > 50,
         "the rendered workloads, RBAC, Secret references and selectors were checked",
