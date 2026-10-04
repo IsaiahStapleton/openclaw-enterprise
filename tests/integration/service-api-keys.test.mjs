@@ -1066,6 +1066,45 @@ test("service key issuance cannot exceed the caller's own IAM grants", async (t)
   assert.match(coverageDenial.decisionReason, /every grant of the target ServicePrincipal/);
   assert.equal(coverageDenial.details.servicePrincipalId, bootstrapService.id);
 
+  // The administrator Role grants Agent administer but not read_logs. Administer already
+  // admits log reads, so it covers a principal that was delegated read_logs on an Agent.
+  const logReader = {
+    kind: "service_principal",
+    id: `spn_${randomUUID()}`,
+    namespaceId: namespace.data.id,
+  };
+  policy.identities.push(logReader);
+  policy.roles.push({
+    id: "agent-log-reader",
+    namespaceId: namespace.data.id,
+    permissions: [
+      { action: "read", resourceKind: "agent" },
+      { action: "read_logs", resourceKind: "agent" },
+    ],
+  });
+  policy.bindings.push({
+    id: "agent-log-reader-binding",
+    namespaceId: namespace.data.id,
+    subjectKind: "identity",
+    subjectId: logReader.id,
+    roleId: "agent-log-reader",
+    resourceKind: "agent",
+    resourceId: `agt_${randomUUID()}`,
+  });
+  const logReaderKey = await request("POST", "/api/auth/service-keys", {
+    headers: asAdmin,
+    body: { servicePrincipalId: logReader.id, namespaceId: namespace.data.id, name: "logs" },
+  });
+  assert.equal(logReaderKey.status, 201, JSON.stringify(logReaderKey));
+  assert.equal(
+    (
+      await request("DELETE", `/api/auth/service-keys/${logReaderKey.data.id}`, {
+        headers: asAdmin,
+      })
+    ).status,
+    200,
+  );
+
   // Revocation needs the same authority as issuance.
   const revokePath = `/api/auth/service-keys/${bootstrapKey.data.id}`;
   const revokeEscalation = await request("DELETE", revokePath, { headers: asOperator });
