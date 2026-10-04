@@ -142,7 +142,9 @@ refused with its capability error even when the Agent principal also lacks a
 grant. When only the Agent principal's grant is missing, the `403` names that
 `servicePrincipalId`, the action, and the exact Secret or credential source,
 for example `The Agent service principal <id> is not authorized to operate
-secret <id>`. Denials of your own permissions stay generic.
+secret <id>`. Its audit event records your own request with reason code
+`AGENT_PRINCIPAL_NOT_AUTHORIZED` and names that principal, action, resource and
+IAM evidence in its details. Denials of your own permissions stay generic.
 
 ### Pending deployment progress
 

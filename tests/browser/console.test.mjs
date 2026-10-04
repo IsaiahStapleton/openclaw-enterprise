@@ -698,6 +698,7 @@ test("console retained views clear after session expiry and exact Agent denial",
   const namespace = await fixture.createNamespace("Retained invalidation", { ready: true });
   const agent = await fixture.createAgent(namespace.id, "Denied retained Agent");
   const { page } = await newPage(t, fixture);
+  await trackSettledFetches(page);
 
   await login(page, fixture, "/console/agents?namespace=" + namespace.id);
   await page.getByText("Denied retained Agent", { exact: true }).waitFor();
@@ -721,6 +722,8 @@ test("console retained views clear after session expiry and exact Agent denial",
   fixture.memoryDatabase.session.length = 0;
   await login(page, fixture, "/console/agents/" + agent.id + "?namespace=" + namespace.id);
   await page.getByRole("heading", { name: "Denied retained Agent", exact: true }).waitFor();
+  // The heading shows before the detail finishes loading; leaving earlier keeps no preview.
+  await waitForSettledView(page);
   await page.getByRole("link", { name: "← Agents", exact: true }).click();
   await page.getByText("Denied retained Agent", { exact: true }).waitFor();
   fixture.policy.restrictions.push({
@@ -953,6 +956,56 @@ test("OIDC sign-in uses the discovered label and accepts only the discovered end
   await page.goto(`${fixture.origin}/console/login`);
   await page.getByLabel("Username").waitFor();
   await expectNoText(page, /Continue with Acme SSO/);
+});
+
+test("GitHub allowlist refusals tell the person why, and other reasons stay generic", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const { page } = await newPage(t, fixture);
+  let password = true;
+  // Discovery models GitHub sign-in with password sign-in for everyone, then recovery-only.
+  await page.route("**/api/auth/providers", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { github: true, google: false, password, sessionBinding: true },
+        meta: { requestId: "browser-github-allowlist" },
+      }),
+    }),
+  );
+  const cases = [
+    [
+      "membership",
+      "Your GitHub account is not a member of an organization or team allowed to sign in here. If you were invited, accept the invitation on GitHub and try again; otherwise ask an administrator for access or use your password.",
+      "Your GitHub account is not a member of an organization or team allowed to sign in here. If you were invited, accept the invitation on GitHub and try again; otherwise ask an administrator for access.",
+    ],
+    [
+      "membership-unavailable",
+      "Could not check your GitHub organization membership. Try again later or use your password.",
+      "Could not check your GitHub organization membership. Try again later; if this keeps happening, ask an administrator.",
+    ],
+    [
+      "toString",
+      "Could not sign in with GitHub. Try again or use your password.",
+      "Could not sign in with GitHub. Try again, or ask an administrator to attach your GitHub identity to your account.",
+    ],
+  ];
+  for (const [reason, withPassword, recoveryOnly] of cases) {
+    for (const [available, message] of [
+      [true, withPassword],
+      [false, recoveryOnly],
+    ]) {
+      password = available;
+      await page.goto(`${fixture.origin}/console/?authError=github&authReason=${reason}`);
+      await page.getByText(message, { exact: true }).waitFor();
+    }
+  }
+  // The reason applies only to GitHub's own error.
+  password = true;
+  await page.goto(`${fixture.origin}/console/?authError=google&authReason=membership`);
+  await page.getByRole("button", { name: "Login" }).waitFor();
+  await expectNoText(page, /organization/);
 });
 
 test("recovery-only password sign-in keeps the form behind Recovery sign-in", async (t) => {

@@ -169,7 +169,7 @@ if (command === "docker" || command === "podman") {
     state.tag = args[args.indexOf("-t") + 1];
     finish();
   }
-  if (args[0] === "build" && args.includes("-f")) {
+  if ((args[0] === "build" || equals(args.slice(0, 2), ["buildx", "build"])) && args.includes("-f")) {
     assert.ok(args[args.indexOf("-f") + 1].endsWith("/deploy/runtime/Dockerfile"));
     state.runtime = args[args.indexOf("-t") + 1];
     finish();
@@ -776,6 +776,83 @@ test("ordinary k3d preparation forwards an immutable K3s override and retains th
   }
 });
 
+// The docker shim records argv only: this proves the cache credential stays out of
+// build arguments and every output preparation hands on, not out of docker's environment.
+test("repository platform preparation restores the runtime image cache without exporting it", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform", {
+    GITHUB_ACTIONS: "true",
+    OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+    ACTIONS_RESULTS_URL: "https://cache.example.test/",
+  });
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const calls = (await commands.commands()).filter(({ command }) => command === "docker");
+  const runtime = calls.filter(({ args }) => args[0] === "buildx");
+  assert.equal(runtime.length, 1);
+  const { args } = runtime[0];
+  assert.deepEqual(args.slice(0, 3), ["buildx", "build", "--load"]);
+  assert.equal(
+    args[args.indexOf("--cache-from") + 1],
+    `type=gha,version=2,scope=oce-ci-runtime-${process.platform}-${process.arch}-v1,timeout=60s`,
+  );
+  assert.equal(args.includes("--cache-to"), false);
+  // The fixture derives from the loaded runtime image through the engine's own builder.
+  const fixtureBuilds = calls.filter(({ args }) => args[0] === "build");
+  assert.equal(fixtureBuilds.length, 1);
+  assert.equal(fixtureBuilds[0].args[fixtureBuilds[0].args.indexOf("--builder") + 1], "default");
+  assert.ok(fixtureBuilds[0].args.includes(`RUNTIME_IMAGE=${args[args.indexOf("-t") + 1]}`));
+  const state = await readFile(commands.statePath, "utf8");
+  const githubEnv = await readFile(commands.githubEnv, "utf8");
+  assert.match(githubEnv, /^OCC_TEST_REPOSITORY_CREDENTIALS_PLATFORM_IMAGE=/m);
+  assert.doesNotMatch(
+    JSON.stringify(calls) + state + githubEnv + prepared.stdout + prepared.stderr,
+    /synthetic-cache-credential/,
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("image cache preparation refuses missing credentials and unmapped lanes before building", async (t) => {
+  const credentials = {
+    GITHUB_ACTIONS: "true",
+    OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+    ACTIONS_RESULTS_URL: "https://cache.example.test/",
+  };
+  const nodeBaseImage = JSON.parse(
+    await readFile(join(repositoryRoot, "scripts/ci/test-suites/images-packaging.json"), "utf8"),
+  ).prepare.defaultEnv.NODE_BASE_IMAGE;
+  for (const [lane, env] of [
+    // A cache lane without its runtime token.
+    ["repository-credentials-platform", { ...credentials, ACTIONS_RUNTIME_TOKEN: "" }],
+    // A lane outside the cache map, even with credentials.
+    [
+      "docker-model",
+      {
+        ...credentials,
+        OPENAI_API_KEY: "synthetic-model-key",
+        OCC_TEST_OPENAI_MODEL: "gpt-synthetic",
+        NODE_BASE_IMAGE: nodeBaseImage,
+      },
+    ],
+  ]) {
+    const commands = await fixtureImageCommands(t, "success", lane, env);
+    const prepared = commands.prepare();
+    assert.notEqual(prepared.status, 0, lane);
+    assert.match(prepared.stderr, /Image caching requires the hosted image lane/, lane);
+    const calls = await commands.commands();
+    assert.equal(
+      calls.some(({ args }) => args[0] === "buildx" || args[0] === "build"),
+      false,
+      lane,
+    );
+    assert.doesNotMatch(prepared.stdout + prepared.stderr, /synthetic-cache-credential/, lane);
+    // Cleanup is not run: the refused build's planned tag stays owned, and this
+    // shim cannot remove images. The fixture directory is removed with the test.
+  }
+});
+
 test("ordinary k3d preparation rejects mutable K3s overrides before creating state", async (t) => {
   const root = await fixture(t);
   const statePath = join(root, "state.json");
@@ -919,7 +996,7 @@ const settled = JSON.parse(await readFile(statePath, "utf8"));
 assert.equal(settled.resources.filter((resource) => resource.kind === "postgres-database").length, 0);
 const other = await prepareFile({
   lane,
-  file: "tests/integration/postgres-platform-state.test.mjs",
+  file: "tests/integration/postgres-worker-agent-revision.test.mjs",
   statePath,
 });
 assert.equal(other.env.OCC_TEST_NATIVE_IAM_BARRIER_CI, undefined);
@@ -1428,6 +1505,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
         const localhostProfile =
           manifest?.spec?.containers?.[0]?.securityContext?.seccompProfile?.localhostProfile;
         if (localhostProfile?.includes("missing-")) {
+          const missingProfilePath = `/var/lib/kubelet/seccomp/${localhostProfile}`;
           return {
             stdout: JSON.stringify({
               metadata: { name },
@@ -1438,7 +1516,7 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
                     state: {
                       waiting: {
                         reason: "CreateContainerError",
-                        message: "seccomp profile is not found",
+                        message: `failed to create containerd container: cannot load seccomp profile ${JSON.stringify(missingProfilePath)}: open ${missingProfilePath}: no such file or directory`,
                       },
                     },
                   },
@@ -1652,20 +1730,26 @@ process.exit(2);
   }
 });
 
-test("images packaging lane prepares Codex seccomp before native runtime smoke tests", () => {
+test("runtime startup lanes prepare Codex seccomp before native runtime smoke tests", () => {
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
-  const lane = manifest.lanes["images-packaging"];
-
-  assert.equal(lane.prepare?.codexSeccomp, true);
-  assert.ok(
-    lane.files.some(({ path }) => path === "tests/integration/runtime-image-startup.test.mjs"),
-  );
+  for (const [name, file] of [
+    ["images-runtime-startup", "tests/integration/runtime-image-startup.test.mjs"],
+    ["images-runtime-startup-2", "tests/integration/runtime-image-startup-probe.test.mjs"],
+  ]) {
+    const lane = manifest.lanes[name];
+    assert.equal(lane.prepare?.codexSeccomp, true, name);
+    assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"), name);
+    assert.ok(
+      lane.files.some(({ path }) => path === file),
+      name,
+    );
+  }
 });
 
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {
   const root = await fixture(t);
   const statePath = join(root, "missing-state.json");
-  const file = "tests/integration/runtime-image-startup.test.mjs";
+  const file = "tests/integration/docker-compute-token-retry.test.mjs";
   const customNodeBaseImage =
     "docker.io/library/node:24-bookworm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 

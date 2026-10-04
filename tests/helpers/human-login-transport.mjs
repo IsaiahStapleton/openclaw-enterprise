@@ -23,10 +23,12 @@ export function createLoginFixture({
   state: stateOverrides = {},
   trustedClientAddress = true,
   recoveryEmail,
+  providerDeadlineMs,
 }) {
   const attempts = [];
   const subjects = [];
   const denials = [];
+  const unmatched = [];
   const errors = [];
   const authLogs = [];
   const operationalLines = [];
@@ -52,8 +54,14 @@ export function createLoginFixture({
       subjects.push([providerId, subject]);
     },
     snapshotPassword: async () => undefined,
-    recordDenied: async (reason, deniedProvider) => {
-      denials.push(deniedProvider === undefined ? [reason] : [reason, deniedProvider]);
+    recordDenied: async (reason, deniedProvider, details) => {
+      denials.push(
+        deniedProvider === undefined
+          ? [reason]
+          : details === undefined
+            ? [reason, deniedProvider]
+            : [reason, deniedProvider, details],
+      );
     },
     ...stateOverrides,
   };
@@ -64,6 +72,8 @@ export function createLoginFixture({
     {
       trustedClientAddress,
       onOperationalEvent: (event) => emitOccLogEvent(logger, event),
+      ...(providerDeadlineMs === undefined ? {} : { providerDeadlineMs }),
+      onUnmatchedCallback: (name) => unmatched.push(name),
     },
   );
   if (recoveryEmail !== undefined) {
@@ -109,6 +119,7 @@ export function createLoginFixture({
     attempts,
     subjects,
     denials,
+    unmatched,
     errors,
     authLogs,
     // Operational log records without their timestamp.
@@ -199,6 +210,12 @@ export async function startProviderServer(t, handle) {
     requests.push(request.url);
     handle(request, response);
   });
+  // Pooled connections outlive each subtest. A subtest that never yields to the event loop
+  // (the 4096-callback admission sweep) stalls every timer. If it runs past the server's
+  // idle timeout (about 6 s), the next fetch is written to a pooled socket before the
+  // overdue server timer destroys it, and fails as a provider outage. Only the client
+  // closes idle connections here.
+  server.keepAliveTimeout = 0;
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
     server.closeAllConnections();

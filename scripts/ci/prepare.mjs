@@ -750,14 +750,24 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
   }
 }
 
+// Lanes that may restore the hosted BuildKit cache. Only images-packaging
+// exports it. The repository platform lane loads its runtime image into the
+// Docker engine so a default-builder fixture build can derive from it.
+const imageCacheLanes = new Map([
+  ["images-packaging", { localStore: false }],
+  ["images-model-probes", { localStore: false }],
+  ["images-runtime-startup", { localStore: false }],
+  ["images-runtime-startup-2", { localStore: false }],
+  ["repository-credentials-platform", { localStore: true }],
+]);
+
 function imageBuildArgs(state, role, localStore) {
   if (process.env.OCC_CI_IMAGE_CACHE === "1") {
     if (
       process.env.GITHUB_ACTIONS !== "true" ||
-      !["images-packaging", "images-model-probes"].includes(state.lane) ||
+      imageCacheLanes.get(state.lane)?.localStore !== localStore ||
       !process.env.ACTIONS_RUNTIME_TOKEN ||
-      !process.env.ACTIONS_RESULTS_URL ||
-      localStore
+      !process.env.ACTIONS_RESULTS_URL
     ) {
       throw new Error("Image caching requires the hosted image lane and its cache credentials.");
     }
@@ -768,7 +778,7 @@ function imageBuildArgs(state, role, localStore) {
       "--load",
       "--cache-from",
       `${cache},timeout=60s`,
-      // One writer per image avoids competing exports from the parallel probe lane.
+      // One writer per image avoids competing exports from the parallel image lanes.
       ...(state.lane === "images-packaging"
         ? ["--cache-to", `${cache},mode=max,ignore-error=true,timeout=60s`]
         : []),
@@ -1700,7 +1710,7 @@ async function prepareK3dRuntimeImages(
   }
 }
 
-async function prepareImagesPackagingCodexSeccompProfile(statePath, state, env) {
+async function prepareRuntimeSmokeCodexSeccompProfile(statePath, state, env) {
   const cluster = await timedPreparation(state.lane, "k3d-create", () =>
     ensureK3dCluster(statePath, state),
   );
@@ -1756,7 +1766,7 @@ export async function prepareRuntimeImageSmoke({ image, statePath }) {
     // Import the caller's exact loaded config ID without rebuilding or pulling.
     await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["tag", image, tag]);
     await markResourceReady(path, state, resource);
-    await prepareImagesPackagingCodexSeccompProfile(path, state, env);
+    await prepareRuntimeSmokeCodexSeccompProfile(path, state, env);
     await saveLaneEnv(path, state, env);
     return { env, cleanup: () => cleanupResourceIds(path) };
   } catch (error) {
@@ -1876,6 +1886,7 @@ async function prepareLane({ lane, statePath }) {
     case "postgres":
     case "postgres-application":
     case "postgres-auth":
+    case "postgres-platform":
       await ensurePostgresServer(resolvedStatePath, state);
       break;
     case "runtime-image-fixture":
@@ -1895,11 +1906,22 @@ async function prepareLane({ lane, statePath }) {
           )
         ).env,
       );
-      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
-        state,
-        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
-        "NODE_BASE_IMAGE",
+      break;
+    case "images-runtime-startup":
+    case "images-runtime-startup-2":
+      // Runtime image smoke tests run apart from packaging, in two lanes, to
+      // shorten CI wall time.
+      Object.assign(
+        env,
+        (
+          await timedPreparation(name, "runtime-image-build", () =>
+            buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
+          )
+        ).env,
       );
+      if (lanePrepare(name).codexSeccomp) {
+        await prepareRuntimeSmokeCodexSeccompProfile(resolvedStatePath, state, env);
+      }
       break;
     case "images-packaging":
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
@@ -1922,9 +1944,6 @@ async function prepareLane({ lane, statePath }) {
         effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
         "NODE_BASE_IMAGE",
       );
-      if (lanePrepare(name).codexSeccomp) {
-        await prepareImagesPackagingCodexSeccompProfile(resolvedStatePath, state, env);
-      }
       break;
     case "repository-credentials-container":
       Object.assign(

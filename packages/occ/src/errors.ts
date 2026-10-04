@@ -95,6 +95,18 @@ export class DependencyUnavailableError extends AuthorizationDeniedError {
   }
 }
 
+/**
+ * A running Agent has no active revision yet (its first deployment, or a redeploy after a
+ * stop, is still activating). A lifecycle state, not an outage; it stays a
+ * DependencyUnavailableError so callers that need a revision still answer 503.
+ */
+export class NoActiveAgentRevisionError extends DependencyUnavailableError {
+  constructor() {
+    super("The Agent has no active gateway revision.");
+    this.name = "NoActiveAgentRevisionError";
+  }
+}
+
 export class RepositoryOptionsUnavailableError extends Error {
   constructor(message = "Repository options are unavailable.") {
     super(message);
@@ -507,6 +519,36 @@ export class RuntimeLogsForbiddenByClusterError extends Error {
   constructor() {
     super("The cluster denied a runtime log or Event read.");
     this.name = "RuntimeLogsForbiddenByClusterError";
+  }
+}
+
+/**
+ * The cluster refused the API access to an Agent's runtime credential Secrets or their
+ * Deployment preflight: an operator must grant the documented tenant RoleBinding. It stays a
+ * dependency outage for callers that fail closed, and carries only fixed operation names and
+ * the Kubernetes namespace, for the server log.
+ */
+export class RuntimeCredentialsForbiddenByClusterError extends DependencyUnavailableError {
+  readonly verb: "get" | "list" | "create";
+  readonly resource: "secrets" | "deployments";
+  readonly kubernetesNamespace: string;
+  readonly plane: "control" | "execution";
+  readonly status: 403;
+
+  constructor(denial: {
+    readonly verb: RuntimeCredentialsForbiddenByClusterError["verb"];
+    readonly resource: RuntimeCredentialsForbiddenByClusterError["resource"];
+    readonly kubernetesNamespace: string;
+    readonly plane: RuntimeCredentialsForbiddenByClusterError["plane"];
+    readonly status: RuntimeCredentialsForbiddenByClusterError["status"];
+  }) {
+    super("The cluster denied access to Agent runtime credentials.");
+    this.name = "RuntimeCredentialsForbiddenByClusterError";
+    this.verb = denial.verb;
+    this.resource = denial.resource;
+    this.kubernetesNamespace = denial.kubernetesNamespace;
+    this.plane = denial.plane;
+    this.status = denial.status;
   }
 }
 
