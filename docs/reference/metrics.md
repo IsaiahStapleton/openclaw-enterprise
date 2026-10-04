@@ -132,9 +132,10 @@ upgrades must explicitly review this list; new defaults are filtered out.
 
 For `R` observed registered route/method pairs, HTTP has at most `20R` series
 (six statuses plus fourteen histogram series). Unmatched methods add at most
-eight pairs. Sign-in callbacks add three API series. Worker application metrics have at most 136 series (30 outcomes,
-70 pass-duration series, 28 operation-duration series, and eight gauges). Process collectors add at most 53 series
-per process. Do not preallocate the route/status Cartesian product.
+eight pairs. Sign-in callbacks add three API series. Worker application metrics
+have at most 136 series (30 outcomes, 70 pass-duration series, 28
+operation-duration series, and eight gauges). Process collectors add at most 53
+series per process. Do not preallocate the route/status Cartesian product.
 
 ## Replica aggregation
 
