@@ -3858,6 +3858,7 @@ test("administrator-created auth accounts sign in and receive only provisioned I
       email: namespaceRoleEmail,
       password: namespaceRolePassword,
     }),
+    /sign-in failed with HTTP 401: .*"code":"UNAUTHENTICATED"/,
   );
 
   // An explicit but blank or null roleId is a malformed request, never the zero-grant path.
