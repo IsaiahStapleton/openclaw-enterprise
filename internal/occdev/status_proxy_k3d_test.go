@@ -100,7 +100,7 @@ func TestDevelopmentInstallationSizesAgentsFromMeasuredUse(t *testing.T) {
 	// Requests cover measured use between turns and limits cover measured peaks:
 	// a dedicated Codex Gateway was OOM-killed at 2Gi (D200), and a Codex Harness
 	// running lint, tsc and tests together was OOM-killed at 2Gi and reached a
-	// 4Gi limit (D393).
+	// 4Gi limit.
 	state := &developmentState{Cluster: "occ-dev-test", SandboxDriver: "none", DeploymentMode: "k3d", PlatformNamespace: "oce-system", directory: t.TempDir()}
 	if err := writeInstallation(state, "runtime@sha256:abc", nil, "", "10.42.0.1/32"); err != nil {
 		t.Fatal(err)

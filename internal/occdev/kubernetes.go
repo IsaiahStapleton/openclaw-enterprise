@@ -347,7 +347,7 @@ func writeInstallation(s *developmentState, reference string, openShell *openShe
 	// Gateways held 1.2-1.6 GiB and peaked at 2.2 GiB; a dedicated Codex Gateway
 	// with native admin chat was OOM-killed at 2Gi. A Codex Harness held about
 	// 0.5 GiB; running lint, tsc and tests together it was OOM-killed at 2Gi and
-	// reached a 4Gi limit (memory.peak 4096 MiB, survived by page-cache reclaim).
+	// reached a 4Gi limit.
 	gatewayResources := map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "1792Mi"}, "limits": map[string]string{"cpu": "2", "memory": "3Gi"}}
 	harnessResources := map[string]any{"requests": map[string]string{"cpu": "100m", "memory": "768Mi"}, "limits": map[string]string{"cpu": "2", "memory": "6Gi"}}
 	config := map[string]any{

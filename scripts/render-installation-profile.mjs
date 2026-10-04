@@ -1044,7 +1044,8 @@ function buildRendered(profile, parsed, diagnostics) {
             // 1 GiB running a test suite and 1.9 GiB running tsc; lint, tsc and
             // tests together were OOM-killed at 2Gi, and the same turn reached a
             // 4Gi limit (memory.peak 4096 MiB, about 3.2 GiB anonymous) and
-            // survived only by page-cache reclaim. Limits reserve no node memory.
+            // survived only by page-cache reclaim; the limit reserves no node
+            // memory, so raising it leaves scheduling unchanged.
             agent: {
               requests: { cpu: "100m", memory: "768Mi" },
               limits: { cpu: "4", memory: "6Gi" },

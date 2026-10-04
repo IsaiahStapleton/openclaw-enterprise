@@ -55,8 +55,11 @@ dedicated Codex Agent reserves `2560Mi` (Gateway plus Harness). A Harness runs
 the Agent's shell commands, so builds and test suites in large repositories can
 need more than `6Gi`; raise `resources.agent.limits.memory` in the Installation
 for such workloads. Limits reserve no node memory, so Harnesses building at the
-same time on one node can together exhaust it; size agents nodes for the turns
-you expect to run concurrently. Denying the 11 bundled plugins an OpenAI-only Agent does not use
+same time on one node can together exhaust it, and the kubelet then evicts Pods
+using more than their requests first; size agents nodes for the turns
+you expect to run concurrently.
+
+Denying the 11 bundled plugins an OpenAI-only Agent does not use
 (`plugins.deny`) saved only about 50 MiB. Profile input cannot change these
 values; for others, write the Installation from the production example (see
 [Images and resources](../../reference/drivers/kubernetes-compute.md#images-and-resources)).
