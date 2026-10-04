@@ -68,6 +68,14 @@ assigned."), as account creation does. Email association, signup, identity
 transfer, and self-service linking are rejected. For unknown identities, follow the
 [enrollment procedure](../../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
+OCE does not check GitHub organization or team membership: any attached GitHub user
+ID signs in. OCE does not learn when someone leaves the organization or GitHub
+suspends them: someone who left can still sign in, and live sessions continue until
+they expire (at most 8 hours). Offboarding also means acting in OCE
+([account controls](#session-and-recovery-controls)): disable the account to end all
+access and its sessions, or detach its GitHub method to end GitHub sign-in and those
+sessions; revoke ends sessions but allows a fresh sign-in.
+
 `GET /api/auth/providers` returns `github`, `google`, `oidc`, and `sessionBinding` as `true` when enabled,
 with `oidcSignIn` (`label`, `authorizationUrl`) while OIDC is configured,
 and `password` as `false` only when [password sign-in is recovery-only](#recovery-only-password-sign-in). A
