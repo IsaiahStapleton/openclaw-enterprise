@@ -2,9 +2,9 @@
 
 Confirm that your cluster enforces the
 [documented network boundaries](../../reference/drivers/kubernetes-compute/networking-and-isolation.md)
-for the control plane and tenant Agents. You run short TCP and DNS probes from
-inside the real workload Pods and from test Pods that carry chosen labels, then
-compare each result with the expected outcome below.
+for the control plane and tenant Agents. You probe TCP and DNS from inside the
+workload Pods and from labeled test Pods, then compare each result with the
+expected outcome.
 
 Run this check after you [deploy a production Agent](../deploy/production-agents.md),
 after a CNI or NetworkPolicy change, and after an upgrade. Kubernetes combines
@@ -17,7 +17,7 @@ Agents run in one cluster.
 
 You need:
 
-- An enforcing NetworkPolicy implementation. Without one, every probe connects.
+- An enforcing NetworkPolicy implementation.
 - Bash, Python 3, and `kubectl` permission to `exec` into Pods, `get pods/proxy`,
   and create and delete Pods and a Namespace.
 - `KUBECONFIG_FILE`, `CONTEXT`, `TENANT_NAMESPACE`, `GATEWAY_RUNTIME_NAMESPACE`
@@ -104,8 +104,10 @@ release elsewhere, and omit `ENVOY` without private Agent routing:
 API_SERVICE="$(kc -n default get service kubernetes -o jsonpath='{.spec.clusterIP}'):443"
 API_ENDPOINT=$(kc -n default get endpointslice kubernetes \
   -o jsonpath='{.endpoints[0].addresses[0]}:{.ports[0].port}')
-ENVOY="$(kc -n envoy-gateway-system get pods \
-  -l gateway.envoyproxy.io/owning-gateway-name=oce-agent-gateways \
+ENVOY_NAMESPACE='envoy-gateway-system' # gatewayRouting.envoyNamespace
+AGENT_GATEWAY='oce-agent-gateways'     # gatewayRouting.gatewayName
+ENVOY="$(kc -n "$ENVOY_NAMESPACE" get pods \
+  -l "gateway.envoyproxy.io/owning-gateway-name=$AGENT_GATEWAY" \
   -o jsonpath='{.items[0].status.podIP}'):10443"
 DATABASE='db.internal.example:5432'   # your PostgreSQL host:port
 PRIVATE_HTTPS='10.0.0.10:443'         # a private address that serves HTTPS, such as an internal load balancer
@@ -153,7 +155,7 @@ create the release's pull Secret in the test Pod's namespace and add
 | Source        | Command                                                                   | Expected                                                                                                                                                                                                                                                                                                                                                               |
 | ------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | API           | `probe openclaw-system deploy/openclaw-enterprise-api api $TARGETS`       | DNS, both Kubernetes API addresses, the database and `ENVOY` are `OPEN`. The API also reaches the destinations your values grant, including sign-in on TCP/443: an empty GitHub or Google `egressCidrs` allows any address, and an empty OIDC `egressCidrs` any address except `169.254.0.0/16`. Without private routing, a gateway client can reach the gateway port. |
-| Worker        | `probe openclaw-system deploy/openclaw-enterprise-worker worker $TARGETS` | As the API, without sign-in egress. With repository credentials, `repositoryCredentials.upstreamCidrs` is open on TCP/443.                                                                                                                                                                                                                                             |
+| Worker        | `probe openclaw-system deploy/openclaw-enterprise-worker worker $TARGETS` | DNS, both Kubernetes API addresses, the database and `ENVOY` are `OPEN`; no sign-in, model discovery or channel directory egress. With repository credentials, `repositoryCredentials.upstreamCidrs` is open on TCP/443.                                                                                                                                               |
 | Agent egress  | `probe $TENANT_NAMESPACE $HARNESS_POD $HARNESS_CONTAINER $TARGETS`        | DNS resolves and `1.1.1.1:443` is `OPEN`. Port 80, `PRIVATE_HTTPS`, the Kubernetes API, the database and the other Agent ports are denied. A dedicated Harness also reaches `ENVOY`; an embedded gateway does not.                                                                                                                                                     |
 | Gateway       | `probe $GATEWAY_RUNTIME_NAMESPACE $GATEWAY_POD gateway $TARGETS`          | DNS and its own Harness, `$HARNESS_IP:18790` and `:18791`, are `OPEN`. Everything else is denied: no internet, Kubernetes API or database. With channels enabled, the channel proxy is also open.                                                                                                                                                                      |
 | Other Agent   | Add the other Agent's ports to `TARGETS` and repeat both rows             | Denied, for Agents in the same OCC Namespace and across Namespaces. Repeat from the other Agent's Pods to check the reverse direction.                                                                                                                                                                                                                                 |
@@ -194,7 +196,7 @@ While these Pods exist, OCC counts them as the Agent's Pods: stopping, deleting
 or redeploying the Agent waits for them, and its plugin status and runtime logs
 are incomplete. Use a test Agent, change nothing on it while they run, and
 delete them right after the probes as shown. They count against the
-namespace's Pod quota. No Agent Service selects them.
+namespace's Pod quota.
 
 ### Check the status port
 
@@ -228,18 +230,18 @@ egress grant is temporary; see [network security](../../reference/security.md).
 
 ## Clean up
 
-Delete the control Namespace, and confirm the profile test Pods are gone:
+Delete the control Namespace and any profile test Pods left by an interrupted run:
 
 ```bash
 kc delete namespace oce-netcheck
-kc -n "$TENANT_NAMESPACE" get pod netcheck-profile-missing netcheck-profile-unknown --ignore-not-found
+kc -n "$TENANT_NAMESPACE" delete pod netcheck-profile-missing netcheck-profile-unknown --ignore-not-found
 ```
 
 ## If a check fails
 
-- A target that should be denied is `OPEN`: list every NetworkPolicy in the
-  source Pod's namespace (`kc get networkpolicy -A`) and look for an extra allow
-  policy. Kubernetes grants the union of all matching policies. An in-cluster
+- A target that should be denied is `OPEN`: list the NetworkPolicies in the
+  source and target namespaces (`kc get networkpolicy -A`) and look for an extra
+  allow policy. Kubernetes grants the union of all matching policies. An in-cluster
   model endpoint you opened with your own policy also shows `OPEN`.
 - Every probe connects: the CNI does not enforce NetworkPolicy.
 - An Agent cannot reach its model: check its
