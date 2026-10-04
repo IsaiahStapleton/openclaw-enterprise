@@ -97,6 +97,13 @@ to `/console/?authError=github` without automatic retry. The starting tab sends 
 which returns the callback session's `sessionKey` once, only while that session's
 cookie is current. It never issues or extends a session.
 
+A callback that is malformed, or whose state and browser cookie match no pending,
+unexpired attempt, writes no audit event: its sender is unauthenticated and can mint
+both values. The API counts it in
+[`occ_sign_in_unmatched_callbacks_total`](../metrics.md#application-families) by
+`provider` instead; with metrics disabled only its `http.completed` log record
+remains. Once a callback matches its attempt, every denial is audited.
+
 When a provider cannot answer a consumed attempt (transport failure, deadline,
 redirect, 429 or 5xx, an oversized or malformed body, or its own `server_error`
 or `temporarily_unavailable`), or its token endpoint refuses the configured client

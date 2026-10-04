@@ -168,7 +168,7 @@ test("GitHub factory snapshots a registry-selected write grant through session a
   const factory = createGitHubDriverFactory({
     configuration,
     binding: selection,
-    key,
+    authority: key,
     clock,
     gatewayOrigin: config.gateway.publicOrigin,
     limits: config.limits,

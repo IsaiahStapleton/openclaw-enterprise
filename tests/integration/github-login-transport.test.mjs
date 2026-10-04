@@ -218,7 +218,7 @@ test(
     }
 
     await t.test(
-      "callback denials separate invalid attempts, provider outages and rejected identities",
+      "callbacks count unmatched attempts and audit provider outages and rejected identities",
       async () => {
         const profile = (status, body) => (request, response) => {
           if (request.url === "/login/oauth/access_token") {
@@ -228,12 +228,13 @@ test(
         };
         const unreachable = () => assert.fail("The provider must not be called");
         const withState = (query) => `state=${callbackState}&${query}`;
-        // [case, expected reason, provider handler, callback query, State overrides]
+        // [case, expected audit reason (none: counted as unmatched), provider handler,
+        // callback query, State overrides]
         const cases = [
-          ["malformed state", "INVALID_ATTEMPT", unreachable, "state=short&code=c"],
+          ["malformed state", undefined, unreachable, "state=short&code=c"],
           [
             "unknown attempt",
-            "INVALID_ATTEMPT",
+            undefined,
             unreachable,
             undefined,
             {
@@ -275,7 +276,8 @@ test(
           const login = loginFixture(overrides);
           serve = handler;
           await expectDenied(await login.callback(query));
-          assert.deepEqual(login.denials, [[reason, "github"]], name);
+          assert.deepEqual(login.denials, reason === undefined ? [] : [[reason, "github"]], name);
+          assert.deepEqual(login.unmatched, reason === undefined ? ["github"] : [], name);
         }
       },
     );

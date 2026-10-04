@@ -81,7 +81,6 @@ export interface HumanAuthenticationAttempt extends HumanAuthenticationAttemptKe
 
 export type HumanAuthenticationDenial =
   | "INVALID_CREDENTIALS"
-  | "INVALID_ATTEMPT"
   | "EXTERNAL_IDENTITY_REJECTED"
   | "SESSION_REJECTED"
   | "PROVIDER_UNAVAILABLE"
@@ -1266,7 +1265,6 @@ export class PostgresHumanAuthentication {
     if (
       ![
         "INVALID_CREDENTIALS",
-        "INVALID_ATTEMPT",
         "EXTERNAL_IDENTITY_REJECTED",
         "SESSION_REJECTED",
         "PROVIDER_UNAVAILABLE",

@@ -443,6 +443,11 @@ export interface HumanLoginAdmissionOptions {
    * carries only the provider instance and a bounded cause, never codes, tokens or users.
    */
   readonly onOperationalEvent?: (event: Readonly<Record<string, unknown>>) => void;
+  /**
+   * Counts one callback refused before it matched a pending attempt. Such a callback is
+   * unauthenticated, so it writes no audit event.
+   */
+  readonly onUnmatchedCallback?: (provider: ExternalProviderName) => void;
 }
 
 export function createHumanLogin(
@@ -516,10 +521,10 @@ export function createHumanLogin(
     }
   }
 
-  // Callback denials say whether the attempt, the provider, or the identity failed.
+  // Denials of a matched attempt say whether the provider or the identity failed.
   async function rejectExternal(
     provider: ExternalProviderName,
-    reason: "INVALID_ATTEMPT" | "EXTERNAL_IDENTITY_REJECTED" | "PROVIDER_UNAVAILABLE",
+    reason: "EXTERNAL_IDENTITY_REJECTED" | "PROVIDER_UNAVAILABLE",
   ): Promise<never> {
     await state.recordDenied(reason, provider);
     throw rejected();
@@ -537,6 +542,17 @@ export function createHumanLogin(
       message: "Authentication was not accepted.",
       code: reason,
     });
+  }
+
+  // A malformed, unknown, replayed or expired attempt proves nothing about its sender, who
+  // can mint state and cookie values freely, so it is counted and not audited.
+  function refuseUnmatched(provider: ExternalProviderName): never {
+    try {
+      admission.onUnmatchedCallback?.(provider);
+    } catch {
+      // Counting never changes the sign-in outcome.
+    }
+    throw rejected();
   }
 
   function database(original: DBAdapterInstance): DBAdapterInstance {
@@ -733,7 +749,7 @@ export function createHumanLogin(
                 (!error && (!code || code.length > authorizationCodeLimit)) ||
                 (error && (error.length > 200 || code))
               ) {
-                return rejectExternal(name, "INVALID_ATTEMPT");
+                return refuseUnmatched(name);
               }
               const attempt = await state.consumeAttempt({
                 stateHash: digest(stateValue),
@@ -742,7 +758,7 @@ export function createHumanLogin(
                 callbackURL: provider.callbackURL,
               });
               if (!attempt) {
-                return rejectExternal(name, "INVALID_ATTEMPT");
+                return refuseUnmatched(name);
               }
               if (error) {
                 // RFC 6749 section 4.1.2.1: the provider reports its own failure.
