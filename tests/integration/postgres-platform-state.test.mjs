@@ -2164,7 +2164,8 @@ test(
     ]);
     assert.ok(admitted, "the API must admit the request before its body arrives");
 
-    const exited = once(api.child, "exit");
+    // "close" also waits for stdio to end, so the last log lines are read before parsing.
+    const exited = once(api.child, "close");
     api.child.kill("SIGTERM");
     // Finish the request only after the listener has closed, so it completes during the drain.
     const deadline = Date.now() + 5_000;
@@ -2197,5 +2198,32 @@ test(
       }),
     ]).finally(() => clearTimeout(timer));
     assert.deepEqual({ code, signal }, { code: 0, signal: null });
+
+    // The Pod log alone must show that the drain began on SIGTERM and that every onClose
+    // hook finished; otherwise only the exit code tells a clean drain from a cut-off one.
+    const events = api
+      .output()
+      .split("\n")
+      .flatMap((line) => {
+        // stdout and stderr share one buffer, so skip anything that is not a whole JSON line.
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      });
+    const started = events.findIndex(({ event }) => event === "shutdown.started");
+    const completed = events.findIndex(({ event }) => event === "shutdown.completed");
+    // startController's readiness sign-in logs first; the drained request is the last one.
+    const drained = events.findLastIndex(
+      ({ event, route }) => event === "http.completed" && route === "/api/auth/sign-in/email",
+    );
+    assert.ok(started >= 0, `no shutdown.started event:\n${api.output()}`);
+    assert.ok(completed >= 0, `no shutdown.completed event:\n${api.output()}`);
+    assert.ok(started < drained && drained < completed, "the drained request logs between them");
+    assert.equal(events[started].severity, "INFO");
+    assert.equal(events[started].signal, "SIGTERM");
+    assert.equal(events[completed].severity, "INFO");
+    assert.equal(typeof events[completed].durationMs, "number");
   },
 );
