@@ -321,7 +321,7 @@ async function waitForPodReady(selection, namespace, name, options) {
 }
 
 async function waitForMissingProfileFailure(selection, namespace, name, options) {
-  return waitFor(
+  const pod = await waitFor(
     `Pod ${namespace}/${name} to fail closed on a missing localhost seccomp profile`,
     async () => {
       const pod = await kubectlJson(
@@ -331,7 +331,8 @@ async function waitForMissingProfileFailure(selection, namespace, name, options)
       );
       const status = pod.status?.containerStatuses?.find((entry) => entry.name === "probe");
       if (status?.containerID) {
-        throw new Error("Missing localhost seccomp profile unexpectedly started a container.");
+        // End polling before rejecting: waitFor retries thrown read failures.
+        return pod;
       }
       const waiting = status?.state?.waiting;
       if (
@@ -344,6 +345,11 @@ async function waitForMissingProfileFailure(selection, namespace, name, options)
     },
     options.timeoutMs,
   );
+  const status = pod.status?.containerStatuses?.find((entry) => entry.name === "probe");
+  if (status?.containerID) {
+    throw new Error("Missing localhost seccomp profile unexpectedly started a container.");
+  }
+  return pod;
 }
 
 async function runtimeDefaultProfileForNode(selection, namespace, nodeName, image, options) {
