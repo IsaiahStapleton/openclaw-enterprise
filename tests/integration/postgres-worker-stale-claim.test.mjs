@@ -419,8 +419,9 @@ test(
     );
     // A healthy worker recovers the expired claim and becomes the owner.
     assert.ok((await recoveryQueue.recoverStale()).recovered >= 1);
-    takeover = await waitFor("the healthy worker's fresh claim", () => recoveryQueue.claim());
-    assert.equal(takeover.idempotencyKey, idempotencyKey);
+    const claimed = await waitFor("the healthy worker's fresh claim", () => recoveryQueue.claim());
+    assert.equal(claimed.idempotencyKey, idempotencyKey);
+    takeover = claimed;
     const takeoverAt = Date.now();
 
     // The silent worker cannot learn about the takeover, so it must stop on its own once

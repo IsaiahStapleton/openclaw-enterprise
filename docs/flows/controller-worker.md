@@ -222,8 +222,8 @@ heartbeat failure, or shutdown aborts Compute and raises `WorkClaimLostError`;
 expired or replaced claim tokens cannot publish results. A renewal that gets no
 answer, such as on a database connection that went silent, cannot extend the
 claim: Compute is aborted when the last confirmed lease runs out, measured from
-when that renewal was sent, so the worker stops writing before another worker
-can recover the claim. Successful renewals
+when that renewal was sent. That is no later than the moment another worker
+could recover the claim; a request already in flight can still complete. Successful renewals
 request throttled health updates without delaying effects or renewal; health
 failure does not imply lease loss.
 
