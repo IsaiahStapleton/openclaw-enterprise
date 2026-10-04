@@ -63,7 +63,7 @@ For a PR, the selector verifies the tested checkout and merge parents against th
 
 The impact job adds an advisory run summary with the selected mode and a fixed reason category. Categories distinguish non-PR events, unavailable event inspection, malformed event JSON, invalid base, head or tested commit identities, checkout or parent mismatch, unavailable base policy, Git inspection failure, empty or malformed diffs, unsupported type changes, non-UTF-8 filenames, ineligible changes and verified documentation selection. Bootstrap guard categories identify their source; selector execution failures fail the impact job. If selection fails or its reason is missing, malformed, or from an older base selector, the summary reports the affected information as unavailable. It includes no changed paths or arbitrary selector output.
 
-For full-mode PRs, `affected-packages` checks checkout cleanliness before and after `scripts/ci/pnpm-impact.mjs` reports pnpm workspace dependents. Go, non-TypeScript and non-workspace changes report unavailable. This best-effort job neither selects tests nor gates `CI Required`.
+For full-mode PRs, `affected-packages` verifies merge identity and checkout cleanliness around pnpm inspection, then reports declared workspace dependents. Unsupported changes report unavailable. This advisory does not prove test coverage, select tests, or gate `CI Required`.
 
 The PR can change the `pull_request` workflow definition loaded from its merge checkout, bypassing or replacing these steps despite base-loaded policy. A separately trusted required workflow or equivalent external enforcement is a deployment decision, not an established source property. Hosted behavior, including fork and required-check enforcement, remains unverified.
 
