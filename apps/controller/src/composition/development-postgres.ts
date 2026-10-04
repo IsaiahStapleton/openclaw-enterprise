@@ -224,6 +224,7 @@ export async function composePostgresDevelopment(
       recordOperations: true,
       defaultPresets: drivers?.defaultPresets ?? [],
       bundledPresetVersions: drivers?.bundledPresetVersions ?? [],
+      refreshBundledDefaultPresets: drivers?.installation.presets?.includeDefaults === true,
       ...(loggingLevel === undefined ? {} : { loggingLevel }),
       ...(drivers === undefined ? {} : { backends: drivers.installation.backend }),
       ...(drivers?.installation.runtime === undefined

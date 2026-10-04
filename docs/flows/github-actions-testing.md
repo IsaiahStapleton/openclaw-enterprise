@@ -87,7 +87,7 @@ The provider job uses the shared `blacksmith-8vcpu-ubuntu-2404` runner for image
 
 For `logging-collector`, `scripts/ci/prepare.mjs:prepareLane` pre-pulls the pinned Collector, Node, Prometheus and Grafana images before publishing lane inputs. The metrics test and preparation share the digests in `scripts/ci/metrics-monitoring-images.mjs:metricsMonitoringImages`. `scripts/ci/prepare.mjs:ensureDockerSourceImage` reuses a verified local repository digest or pulls through `scripts/ci/image-pull.mjs:pullImage`, then verifies that digest before tests start containers. Registry 5xx and rate limits retry within the shared pull budget; missing manifests and authorization refusals fail preparation immediately. Explicit unpinned Node overrides keep the existing test-owned pull behavior.
 
-`checks-browser`, `postgres-auth`, `images-model-probes`, and `images-runtime-startup` use separate runners and required artifacts. `scripts/ci/prepare.mjs:imageBuildArgs` enables scoped BuildKit caches for hosted image jobs: packaging exports; probes and runtime startup restore. Images load into the job's Docker engine; cache credentials stay in preparation.
+`checks-browser`, `postgres-auth`, `images-model-probes`, and `images-runtime-startup` use separate runners and required artifacts. `scripts/ci/prepare.mjs:imageBuildArgs` enables scoped BuildKit caches for hosted image jobs: packaging exports; probes, runtime startup and `repository-credentials-platform` restore. Images load into the job's Docker engine; cache credentials stay in preparation.
 
 Kubernetes fixture startup records phase timings and host snapshots. On failure,
 bounded reads save `<state-file>.diagnostics.json` outside the cluster directory
