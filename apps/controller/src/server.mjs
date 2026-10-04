@@ -257,7 +257,7 @@ function configuration() {
 }
 
 async function start() {
-  // Time since process start: loading the TypeScript module graph before start() runs.
+  // Time since process start: Node bootstrap and loading the module graph before start().
   const phasesMs = { modules: Math.round(performance.now()) };
   let phaseStartedAt = performance.now();
   const phaseCompleted = (phase) => {
