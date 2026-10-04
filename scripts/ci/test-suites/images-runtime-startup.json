@@ -15,19 +15,11 @@
         "runtime image keeps Codex auth writable with a nested generated images mount",
         "runtime image publishes dedicated assets with the Kubernetes gateway entrypoint",
         "runtime image tells OpenClaw that a read-only Kubernetes configuration is externally managed",
-        "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
         "runtime image Gateway hot-loads its workspace node binding without restarting OpenClaw",
         "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
         "runtime image Gateway rejects a peer changed during replacement startup",
         "runtime image Gateway respawns OpenClaw in place when its Harness peer changes",
-        "runtime image validates the configuration dedicated native OpenClaw renders",
-        "runtime image Codex Harness stays unready until its model probe passes",
-        "runtime image Codex Harness fails fast when the provider rejects its credential",
-        "runtime image embedded Gateway probes its model before it starts OpenClaw",
-        "runtime image embedded Gateway fails fast when the provider rejects its credential",
-        "runtime image Codex Harness exits promptly on SIGTERM in every startup phase",
-        "runtime image embedded Gateway exits promptly on SIGTERM in every startup phase",
-        "runtime image dedicated Gateway exits promptly on SIGTERM while it waits for its Harness"
+        "runtime image validates the configuration dedicated native OpenClaw renders"
       ]
     }
   ]
