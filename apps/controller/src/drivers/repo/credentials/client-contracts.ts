@@ -45,7 +45,7 @@ const c1Control = /[\u0080-\u009f]/u;
 const invisibleCharacter = /[\u061c\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/u;
 
 /** The first invisible or direction-changing code point in `value`, as `U+XXXX`, or undefined. */
-export function invisibleRefCharacter(value: string): string | undefined {
+function invisibleRefCharacter(value: string): string | undefined {
   const found = invisibleCharacter.exec(value);
   return found
     ? "U+" + found[0].codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")
@@ -77,6 +77,9 @@ export function readPushedBranchRef(bytes: Uint8Array): PushedBranchRef {
     return {
       refused: `the ref name contains ${invisible}, an invisible or direction-changing character`,
     };
+  }
+  if (!ref.startsWith("refs/heads/")) {
+    return { refused: "only branches under refs/heads/ can be pushed" };
   }
   return isWellFormedBranchRef(ref)
     ? { ref }

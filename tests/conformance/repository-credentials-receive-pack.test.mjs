@@ -161,6 +161,9 @@ test("a pushed ref is refused with a readable reason that names the character", 
   assert.deepEqual(read("refs/heads/agent/x.lock"), {
     refused: "the ref name is not a branch name Git accepts",
   });
+  assert.deepEqual(read("refs/tags/v1"), {
+    refused: "only branches under refs/heads/ can be pushed",
+  });
   // Neighbors of the refused ranges stay ordinary text.
   for (const code of [
     0x061b, 0x061d, 0x200a, 0x2010, 0x2027, 0x202f, 0x205f, 0x2061, 0x2065, 0x206a, 0xfefe, 0xff01,
