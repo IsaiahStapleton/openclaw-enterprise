@@ -99,6 +99,20 @@ function managedCodexInput(overrides = {}) {
   });
 }
 
+function repositoryConfiguration(upstreamCidrs = ["192.0.2.30/32"]) {
+  return {
+    enabled: true,
+    image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
+    backendId: "github-primary",
+    registryConfigMapName: "occ-repository-registry-v1",
+    serviceConfigSecretName: "occ-repository-service-config",
+    appKeySecretName: "occ-repository-app-key",
+    tlsSecretName: "occ-repository-tls",
+    publicCaSecretName: "occ-repository-public-ca",
+    upstreamCidrs,
+  };
+}
+
 function render(
   profile,
   input,
@@ -356,17 +370,7 @@ test("both profiles preserve provider ranges and public Slack egress", { skip: h
   for (const profile of ["openclaw", "codex"]) {
     // Provider ranges must survive rendering; individual DNS answers are not stable.
     const input = profile === "codex" ? codexInput() : baseInput();
-    input.repository = {
-      enabled: true,
-      image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-      backendId: "github-primary",
-      registryConfigMapName: "occ-repository-registry-v1",
-      serviceConfigSecretName: "occ-repository-service-config",
-      appKeySecretName: "occ-repository-app-key",
-      tlsSecretName: "occ-repository-tls",
-      publicCaSecretName: "occ-repository-public-ca",
-      upstreamCidrs: ["140.82.112.0/20", "192.30.252.0/22"],
-    };
+    input.repository = repositoryConfiguration(["140.82.112.0/20", "192.30.252.0/22"]);
     const output = render(profile, input);
     const manifests = helmTemplate(output);
     assert.match(manifests, /repository-credentials/);
@@ -450,17 +454,7 @@ test("Helm catches generated profile Secret collisions", { skip: helmSkip }, () 
   const repositoryOutput = render(
     "codex",
     managedCodexInput({
-      repository: {
-        enabled: true,
-        image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-        backendId: "github-primary",
-        registryConfigMapName: "occ-repository-registry-v1",
-        serviceConfigSecretName: "occ-repository-service-config",
-        appKeySecretName: "occ-repository-app-key",
-        tlsSecretName: "occ-repository-tls",
-        publicCaSecretName: "occ-repository-public-ca",
-        upstreamCidrs: ["192.0.2.30/32"],
-      },
+      repository: repositoryConfiguration(),
     }),
   );
   const collision = join(repositoryOutput.directory, "secret-collision.yaml");
@@ -522,17 +516,7 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
   const output = render(
     "codex",
     codexInput({
-      repository: {
-        enabled: true,
-        image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-        backendId: "github-primary",
-        registryConfigMapName: "occ-repository-registry-v1",
-        serviceConfigSecretName: "occ-repository-service-config",
-        appKeySecretName: "occ-repository-app-key",
-        tlsSecretName: "occ-repository-tls",
-        publicCaSecretName: "occ-repository-public-ca",
-        upstreamCidrs: ["192.0.2.30/32"],
-      },
+      repository: repositoryConfiguration(),
     }),
   );
   assert.equal(output.summary.ok, true);
@@ -550,17 +534,7 @@ test("repository opt-in is explicit and keeps the two-stage placeholders separat
 });
 
 test("repository serviceName is left to the chart so its upgrade guard applies", () => {
-  const repositoryInput = {
-    enabled: true,
-    image: `registry.example.invalid/openclaw-enterprise/repository-credentials@sha256:${digestC}`,
-    backendId: "github-primary",
-    registryConfigMapName: "occ-repository-registry-v1",
-    serviceConfigSecretName: "occ-repository-service-config",
-    appKeySecretName: "occ-repository-app-key",
-    tlsSecretName: "occ-repository-tls",
-    publicCaSecretName: "occ-repository-public-ca",
-    upstreamCidrs: ["192.0.2.30/32"],
-  };
+  const repositoryInput = repositoryConfiguration();
   const omitted = render("codex", codexInput({ repository: repositoryInput }));
   assert.doesNotMatch(omitted.values, /serviceName: git/);
   if (!helmSkip) {
