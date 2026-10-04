@@ -253,6 +253,10 @@ jobs:
             title: PostgreSQL Authentication
             profile: postgres
             timeout: 25
+          - lane: postgres-platform
+            title: PostgreSQL Platform
+            profile: postgres
+            timeout: 25
           - lane: images-packaging
             title: Images and Packaging
             profile: full
