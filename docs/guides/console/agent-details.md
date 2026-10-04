@@ -41,9 +41,10 @@ another version or the draft. Its milestones use the persisted record:
 
 A `failed` result shows the stored error and an **Open vN Logs** link to that
 version's [Logs tab](../topics/agent-logs.md), which the draft does not have.
-For `RUNTIME_AUTHENTICATION_FAILED`, `RUNTIME_MODEL_PROBE_FAILED`, and
-`RUNTIME_MODEL_PROBE_TIMEOUT` it also states the next step and links
-**Credentials** or the draft **Configuration**. A provider the runtime cannot
+For `RUNTIME_AUTHENTICATION_FAILED`, `RUNTIME_MODEL_PROBE_FAILED`,
+`RUNTIME_MODEL_PROBE_TIMEOUT` and `AGENT_GATEWAY_UNAUTHORIZED` it also states
+the next step and links **Credentials** or the draft **Configuration** (for
+`AGENT_GATEWAY_UNAUTHORIZED`, select **Enable gateway password access** there). A provider the runtime cannot
 reach (refused connection, unknown host) usually reports
 `RUNTIME_MODEL_PROBE_TIMEOUT` with OpenClaw and `RUNTIME_MODEL_PROBE_FAILED`
 with Codex.

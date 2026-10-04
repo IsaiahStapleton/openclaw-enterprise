@@ -4262,6 +4262,24 @@ export class PostgresPlatformState implements PlatformStateStore {
           }
           return provisioningRecordFromRow(retried[0]);
         },
+        releaseConfiguration: async (namespaceId, configurationId) => {
+          const released = await client.query(
+            `UPDATE occ.agent_provisioning_work AS provisioning
+             SET configuration_id = NULL,
+                 updated_at = clock_timestamp()
+             WHERE provisioning.namespace_id = $1
+               AND provisioning.configuration_id = $2
+               AND provisioning.status = 'succeeded'
+               AND NOT EXISTS (
+                 SELECT 1 FROM occ.agents AS agent
+                 WHERE agent.namespace_id = provisioning.namespace_id
+                   AND agent.id = provisioning.agent_id
+                   AND agent.configuration_id = provisioning.configuration_id
+               )`,
+            [namespaceId, configurationId],
+          );
+          return released.rowCount === 1;
+        },
       },
       audit: {
         append: async (event) => {

@@ -76,9 +76,11 @@ each name/template definition, and rejects missing, malformed, invalid, or
 duplicate-name definitions before composition. API and worker share the startup
 snapshot and its source path; files are not watched. [Production composition](../../apps/controller/src/composition/production.ts)
 and [development composition](../../apps/controller/src/composition/development-postgres.ts)
-pass generic definitions into `ControllerOptions.defaultPresets`, select an
-authorized persisted administrator through IAM, and initialize defaults after
-selecting Configuration and IAM Drivers. Native template contents
+pass generic definitions into `ControllerOptions.defaultPresets` and initialize
+defaults after selecting Configuration and IAM Drivers. They try each persisted
+Installation administrator in turn; one whose grant stops at the Installation
+cannot create Presets in a Namespace, so a Preset create denial moves on to the
+next, and startup fails only when none can seed. Native template contents
 remain in the application bundle; OCC owns generic Preset lifecycle. The
 [standard Codex artifact](../../deploy/presets/standard-codex.json) requests
 on-request approvals with the user as reviewer, cached hosted search, and the exact build hosts in the
@@ -126,10 +128,11 @@ path records mutations and denials without template or variable contents.
 `apps/controller/src/console/agents/presets.mjs:createPresetFields`
 
 [`createPresetFields`](../../apps/controller/src/console/agents/presets.mjs)
-lists only readable Presets, then reads the selected resource once. The
-**Start with default Preset** button uses the listed `default-codex` ID through
-that same exact-resource read. It applies variable-free templates immediately;
-customized variable definitions retain the ordinary chooser. If that chooser is
+lists only readable Presets (the list requires Namespace read), then reads the
+selected resource once. The **Start with default Preset** button uses the listed
+`default-codex` ID through that same exact-resource read. It applies
+variable-free templates immediately; customized variable definitions retain the
+ordinary chooser. If that chooser is
 restored, it preserves the shortcut origin for the eventual form. Missing defaults or
 failed list/read requests cannot open a hidden hardcoded starter. Other readable
 Presets remain selectable. The separate **Start without Preset** action opens
@@ -272,6 +275,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-03 20:30: Seed default Presets with the next Installation administrator when one cannot create them, so an upgrade that adds a default no longer stops API startup.
 - 2026-09-28 10:36: Restore explicit creation without a Preset. (authoring-run/c140c47a-799b-48c8-929a-5d1a37eb31d1 - 9f7ae3cfb749a58394f8446f3a429db6ffa6f129)
 
 - 2026-09-27 01:09: Preserve exit discard for the default Preset shortcut and retain explicitly selected Preset drafts. (authoring-run/048d8546-acd0-4d1a-8231-61c9d9ccb9dc - 7d0da53a8f092b0e2533464424dcb9c7fe15b139)

@@ -645,7 +645,12 @@ export const ProvisionAgentBody = Type.Object(
     name: Name,
     configuration: ProvisionAgentConfigurationBody,
     backendId: Type.Optional(Type.Union([BackendId, Type.Null()])),
-    harnessAuth: Type.Optional(Type.Union([HarnessAuthBindingSchema, Type.Null()])),
+    harnessAuth: Type.Optional(
+      Type.Union([HarnessAuthBindingSchema, Type.Null()], {
+        description:
+          "Dedicated Harness authentication. `credential_source` is refused with 400 INVALID_REQUEST: create the Agent with the source, then deploy it.",
+      }),
+    ),
     executionMode: Type.Optional(HarnessExecutionModeSchema),
     plugins: Type.Optional(Type.Ref("PluginDesiredState")),
     pluginApprovers: Type.Optional(Type.Ref("PluginApprovers")),
@@ -782,6 +787,7 @@ export const ERROR_CODES = Object.freeze([
   "RUNTIME_LOGS_UNAVAILABLE",
   "RUNTIME_LOGS_AUDIT_UNAVAILABLE",
   "RUNTIME_LOGS_TIMEOUT",
+  "RUNTIME_CREDENTIALS_CLUSTER_RBAC",
 ] as const);
 
 export const ErrorDetail = Type.Object(
@@ -858,6 +864,7 @@ export const ErrorResponse = Type.Object(
           Type.Literal("RUNTIME_LOGS_UNAVAILABLE"),
           Type.Literal("RUNTIME_LOGS_AUDIT_UNAVAILABLE"),
           Type.Literal("RUNTIME_LOGS_TIMEOUT"),
+          Type.Literal("RUNTIME_CREDENTIALS_CLUSTER_RBAC"),
         ]),
         message: Type.String({ minLength: 1, maxLength: 256 }),
         details: Type.Optional(Type.Array(ErrorDetail, { maxItems: 32 })),

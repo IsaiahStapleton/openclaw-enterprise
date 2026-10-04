@@ -62,9 +62,10 @@ user ID (1–20 digits, no leading zero) through
 `{"subject":"12345678","expectedVersion":1}`, using the version just read.
 
 Attachment keeps the user, Principal, and grants, advances the version,
-and invalidates sessions and pending proofs. Subjects owned by another
-user, email association, signup, identity transfer, and self-service linking are
-rejected. For unknown identities, follow the
+and invalidates sessions and pending proofs. A subject another account already
+holds returns `409 RESOURCE_CONFLICT` ("The external identity is already
+assigned."), as account creation does. Email association, signup, identity
+transfer, and self-service linking are rejected. For unknown identities, follow the
 [enrollment procedure](../../guides/deploy/production-installation.md#enable-github-browser-sign-in).
 
 `GET /api/auth/providers` returns `github`, `google`, `oidc`, and `sessionBinding` as `true` when enabled,
@@ -86,13 +87,16 @@ cookie is current. It never issues or extends a session.
 
 When a provider cannot answer a consumed attempt (transport failure, deadline,
 redirect, 429 or 5xx, an oversized or malformed body, or its own `server_error`
-or `temporarily_unavailable`), the denial is audited as `PROVIDER_UNAVAILABLE` and the
-API logs one `authentication.provider-unavailable-warning` at WARN. It carries
-`provider` (`github`, `google`, or `oidc`), the provider instance `providerId`, `step`
+or `temporarily_unavailable`), or its token endpoint refuses the configured client
+(`invalid_client`, `unauthorized_client`, `unsupported_grant_type`, or GitHub's
+`incorrect_client_credentials` or `redirect_uri_mismatch`: check the client ID, secret
+and registered callback), the denial is audited as `PROVIDER_UNAVAILABLE` and the API
+logs one `authentication.provider-unavailable-warning` at WARN. It carries `provider`
+(`github`, `google`, or `oidc`), the provider instance `providerId`, `step`
 (`authorization`, `token`, `jwks`, or `profile`), a bounded `cause` (`connect_refused`,
 `dns`, `timeout`, `tls`, `connection_reset`, `network`, `redirect`, `http_status`,
-`oversized_response`, `malformed_response`, or `provider_error`), and, when present, the
-HTTP `status` or transport `code` such as `ECONNREFUSED`. It never carries URLs,
+`oversized_response`, `malformed_response`, `provider_error`, or `client_rejected`), and,
+when present, the HTTP `status` or transport `code` such as `ECONNREFUSED`. It never carries URLs,
 authorization codes, tokens, response bodies, or user data. A rejected identity logs nothing.
 
 ## Recovery-only password sign-in
@@ -162,7 +166,10 @@ seeds first activation; a differing value warns, and each start re-checks the ho
 
 Account reads and mutations require a human session, exact `Origin`, and
 Installation `administer`; service keys are refused. Account mutations also
-require every IAM grant of the target account's Principal (else `403`). State locks actor and target
+require every IAM grant of the target account's Principal (else `403`, audited as
+`ACCOUNT_PRINCIPAL_GRANTS_NOT_COVERED` with the target `userId` and `principalId`, the current
+holder's for a recovery move); Agent `administer`
+counts for a delegated Agent `read_logs` grant, as for [service keys](service-api-keys.md#issuance). State locks actor and target
 accounts (retryable `503` after five-second lock waits) and rechecks the actor
 session. A stale
 `expectedVersion` or disabled target returns `409 RESOURCE_CONFLICT`.

@@ -226,17 +226,18 @@ name or the deliberate cutover name.
 
 ## Install and verify
 
-Update the operator-owned startup Secret from the edited Installation YAML; use
-your configured Secret name/key if they differ from the defaults below. The
-command reads the file and does not print its contents. Render and review the
+Update the operator-owned startup Secret from the edited Installation YAML. The
+command replaces only the Installation key, which keeps the Secret's
+`openclaw.dev/installation-id` annotation, and does not print the file. Render and review the
 complete chart, then apply the values through the existing release:
 
 ```bash
-kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
-  create secret generic occ-installation-startup \
-  --from-file=installation.yaml="$OCC_INPUT_DIRECTORY/installation.yaml" \
-  --dry-run=client -o yaml | \
-  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" apply -f -
+export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' "$OCC_INPUT_DIRECTORY/values.yaml")"
+export OCC_INSTALLATION_KEY="$(yq -er '.installation.key // "installation.yaml"' "$OCC_INPUT_DIRECTORY/values.yaml")"
+jq -n --arg key "$OCC_INSTALLATION_KEY" --rawfile document "$OCC_INPUT_DIRECTORY/installation.yaml" \
+  '{data: {($key): ($document | @base64)}}' |
+  kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system \
+    patch secret "$OCC_INSTALLATION_SECRET" --type merge --patch-file /dev/stdin
 helm template oce deploy/helm/openclaw-enterprise --namespace openclaw-system \
   -f "$OCC_INPUT_DIRECTORY/values.yaml" > /tmp/oce-rendered.yaml
 helm upgrade --install oce deploy/helm/openclaw-enterprise \

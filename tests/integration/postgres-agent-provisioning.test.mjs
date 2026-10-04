@@ -428,6 +428,59 @@ async function createFixture(context, options = {}) {
   };
 }
 
+async function assertProvisionedSecretAccess(fixture, namespace, status, secretCreateCallCount) {
+  assert.equal(
+    fixture.secretDriver.calls.filter(({ operation }) => operation === "create").length,
+    secretCreateCallCount,
+    "provisioning must reuse Console-created Secrets instead of creating new Secret values",
+  );
+
+  const persistedSecrets = await fixture.pool.query(
+    "SELECT id, name FROM occ.secrets WHERE namespace_id = $1 ORDER BY name",
+    [namespace.id],
+  );
+  assert.deepEqual(
+    persistedSecrets.rows.map(({ name }) => name),
+    ["external-service-token", "model-api-key", "slack-bot-token", "slack-signing-secret"],
+  );
+  const grantRoleId = `role_${namespace.id}_agent_secret_operate`;
+  const grantRole = await fixture.pool.query(
+    "SELECT permissions FROM occ.iam_roles WHERE namespace_id = $1 AND id = $2",
+    [namespace.id, grantRoleId],
+  );
+  assert.equal(grantRole.rowCount, 1);
+  assert.deepEqual(grantRole.rows[0].permissions, [{ action: "operate", resourceKind: "secret" }]);
+  const grants = await fixture.pool.query(
+    `SELECT binding.resource_id
+       FROM occ.iam_access_bindings AS binding
+       JOIN occ.agents AS agent
+         ON agent.namespace_id = binding.namespace_id
+        AND agent.service_principal_id = binding.identity_subject_id
+       WHERE binding.namespace_id = $1
+         AND agent.id = $2
+         AND binding.role_id = $3
+         AND binding.resource_kind = 'secret'
+       ORDER BY binding.resource_id`,
+    [namespace.id, status.agentId, grantRoleId],
+  );
+  assert.deepEqual(
+    grants.rows.map(({ resource_id: resourceId }) => resourceId),
+    persistedSecrets.rows.map(({ id }) => id).sort(),
+    "provisioning must grant the Agent service principal exact operate access to each referenced Secret",
+  );
+  const configuration = await fixture.pool.query(
+    "SELECT generation, secret_bindings FROM occ.configurations WHERE namespace_id = $1 AND id = $2",
+    [namespace.id, status.configurationId],
+  );
+  assert.equal(configuration.rowCount, 1);
+  assert.equal(Number(configuration.rows[0].generation), 1);
+  assert.deepEqual(Object.keys(configuration.rows[0].secret_bindings).sort(), [
+    "EXTERNAL_SERVICE_TOKEN",
+    "SLACK_BOT_TOKEN",
+    "SLACK_SIGNING_SECRET",
+  ]);
+}
+
 async function provisioningRow(pool, namespaceId, requestId) {
   const result = await pool.query(
     "SELECT * FROM occ.agent_provisioning_work WHERE namespace_id = $1 AND request_id = $2",
@@ -638,58 +691,7 @@ test(
     assert.match(status.agentId, identifier("agt"));
     assert.match(status.configurationId, identifier("cfg"));
 
-    assert.equal(
-      fixture.secretDriver.calls.filter(({ operation }) => operation === "create").length,
-      secretCreateCallCount,
-      "provisioning must reuse Console-created Secrets instead of creating new Secret values",
-    );
-
-    const persistedSecrets = await fixture.pool.query(
-      "SELECT id, name FROM occ.secrets WHERE namespace_id = $1 ORDER BY name",
-      [namespace.id],
-    );
-    assert.deepEqual(
-      persistedSecrets.rows.map(({ name }) => name),
-      ["external-service-token", "model-api-key", "slack-bot-token", "slack-signing-secret"],
-    );
-    const grantRoleId = `role_${namespace.id}_agent_secret_operate`;
-    const grantRole = await fixture.pool.query(
-      "SELECT permissions FROM occ.iam_roles WHERE namespace_id = $1 AND id = $2",
-      [namespace.id, grantRoleId],
-    );
-    assert.equal(grantRole.rowCount, 1);
-    assert.deepEqual(grantRole.rows[0].permissions, [
-      { action: "operate", resourceKind: "secret" },
-    ]);
-    const grants = await fixture.pool.query(
-      `SELECT binding.resource_id
-       FROM occ.iam_access_bindings AS binding
-       JOIN occ.agents AS agent
-         ON agent.namespace_id = binding.namespace_id
-        AND agent.service_principal_id = binding.identity_subject_id
-       WHERE binding.namespace_id = $1
-         AND agent.id = $2
-         AND binding.role_id = $3
-         AND binding.resource_kind = 'secret'
-       ORDER BY binding.resource_id`,
-      [namespace.id, status.agentId, grantRoleId],
-    );
-    assert.deepEqual(
-      grants.rows.map(({ resource_id: resourceId }) => resourceId),
-      persistedSecrets.rows.map(({ id }) => id).sort(),
-      "provisioning must grant the Agent service principal exact operate access to each referenced Secret",
-    );
-    const configuration = await fixture.pool.query(
-      "SELECT generation, secret_bindings FROM occ.configurations WHERE namespace_id = $1 AND id = $2",
-      [namespace.id, status.configurationId],
-    );
-    assert.equal(configuration.rowCount, 1);
-    assert.equal(Number(configuration.rows[0].generation), 1);
-    assert.deepEqual(Object.keys(configuration.rows[0].secret_bindings).sort(), [
-      "EXTERNAL_SERVICE_TOKEN",
-      "SLACK_BOT_TOKEN",
-      "SLACK_SIGNING_SECRET",
-    ]);
+    await assertProvisionedSecretAccess(fixture, namespace, status, secretCreateCallCount);
     const revisions = await fixture.state.read((view) =>
       view.revisions.listRevisions(namespace.id, status.agentId),
     );
@@ -804,58 +806,7 @@ for (const authMethod of ["api_key", "codex_pat"]) {
       assert.match(status.agentId, identifier("agt"));
       assert.match(status.configurationId, identifier("cfg"));
       fixture.cancelProvisioningAtTeardown(namespace.id, status.agentId);
-      assert.equal(
-        fixture.secretDriver.calls.filter(({ operation }) => operation === "create").length,
-        secretCreateCallCount,
-        "provisioning must reuse Console-created Secrets instead of creating new Secret values",
-      );
-
-      const persistedSecrets = await fixture.pool.query(
-        "SELECT id, name FROM occ.secrets WHERE namespace_id = $1 ORDER BY name",
-        [namespace.id],
-      );
-      assert.deepEqual(
-        persistedSecrets.rows.map(({ name }) => name),
-        ["external-service-token", "model-api-key", "slack-bot-token", "slack-signing-secret"],
-      );
-      const grantRoleId = `role_${namespace.id}_agent_secret_operate`;
-      const grantRole = await fixture.pool.query(
-        "SELECT permissions FROM occ.iam_roles WHERE namespace_id = $1 AND id = $2",
-        [namespace.id, grantRoleId],
-      );
-      assert.equal(grantRole.rowCount, 1);
-      assert.deepEqual(grantRole.rows[0].permissions, [
-        { action: "operate", resourceKind: "secret" },
-      ]);
-      const grants = await fixture.pool.query(
-        `SELECT binding.resource_id
-       FROM occ.iam_access_bindings AS binding
-       JOIN occ.agents AS agent
-         ON agent.namespace_id = binding.namespace_id
-        AND agent.service_principal_id = binding.identity_subject_id
-       WHERE binding.namespace_id = $1
-         AND agent.id = $2
-         AND binding.role_id = $3
-         AND binding.resource_kind = 'secret'
-       ORDER BY binding.resource_id`,
-        [namespace.id, status.agentId, grantRoleId],
-      );
-      assert.deepEqual(
-        grants.rows.map(({ resource_id: resourceId }) => resourceId),
-        persistedSecrets.rows.map(({ id }) => id).sort(),
-        "provisioning must grant the Agent service principal exact operate access to each referenced Secret",
-      );
-      const configuration = await fixture.pool.query(
-        "SELECT generation, secret_bindings FROM occ.configurations WHERE namespace_id = $1 AND id = $2",
-        [namespace.id, status.configurationId],
-      );
-      assert.equal(configuration.rowCount, 1);
-      assert.equal(Number(configuration.rows[0].generation), 1);
-      assert.deepEqual(Object.keys(configuration.rows[0].secret_bindings).sort(), [
-        "EXTERNAL_SERVICE_TOKEN",
-        "SLACK_BOT_TOKEN",
-        "SLACK_SIGNING_SECRET",
-      ]);
+      await assertProvisionedSecretAccess(fixture, namespace, status, secretCreateCallCount);
       const revisions = await fixture.state.read((view) =>
         view.revisions.listRevisions(namespace.id, status.agentId),
       );
@@ -1409,6 +1360,86 @@ test(
   },
 );
 
+// Provision Agents through the worker and return their settled provisioning views.
+async function provisionAgents(fixture, namespaceId, count = 1) {
+  const secrets = await createProvisioningSecrets(fixture, namespaceId);
+  const admitted = [];
+  for (let index = 0; index < count; index += 1) {
+    const response = await fixture.request("POST", `/namespaces/${namespaceId}/agents/provision`, {
+      body: provisioningBody(namespaceId, secrets),
+    });
+    assert.equal(response.status, 202, JSON.stringify(response.body));
+    admitted.push(response.data.provisioning.url);
+  }
+  await fixture.startWorker();
+  const created = [];
+  try {
+    for (const url of admitted) {
+      created.push(
+        await waitFor("Agent provisioning to succeed", async () => {
+          const observed = await fixture.request("GET", url);
+          assert.equal(observed.status, 200, JSON.stringify(observed.body));
+          return observed.data.status === "succeeded" ? observed.data : undefined;
+        }),
+      );
+    }
+  } finally {
+    await fixture.stopWorker();
+  }
+  for (const provisioned of created) {
+    fixture.cancelProvisioningAtTeardown(namespaceId, provisioned.agentId);
+  }
+  return created;
+}
+
+function recordingConfigurationDriver() {
+  const configurationDriver = createProvisioningConfigurationDriver({
+    id: "configuration-provisioning",
+  });
+  const deleted = [];
+  const deleteStored = configurationDriver.delete.bind(configurationDriver);
+  configurationDriver.delete = async (reference) => {
+    deleted.push(reference.id);
+    return deleteStored(reference);
+  };
+  return { configurationDriver, deleted };
+}
+
+async function selectConfiguration(fixture, namespaceId, agentId, configurationId) {
+  const switched = await fixture.request("PATCH", `/namespaces/${namespaceId}/agents/${agentId}`, {
+    body: { configurationId },
+  });
+  assert.equal(switched.status, 200, JSON.stringify(switched.body));
+  assert.equal(switched.data.configurationId, configurationId);
+}
+
+async function createAgentConfiguration(fixture, namespaceId) {
+  const created = await fixture.request("POST", `/namespaces/${namespaceId}/configurations`, {
+    body: { kind: "agent", values: { agents: { defaults: agentDefaults() } } },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  return created.data.id;
+}
+
+async function provisioningConfigurationId(pool, workId) {
+  const result = await pool.query(
+    "SELECT configuration_id FROM occ.agent_provisioning_work WHERE work_id = $1",
+    [workId],
+  );
+  assert.equal(result.rowCount, 1);
+  return result.rows[0].configuration_id;
+}
+
+async function assertConfigurationDeletionRefused(fixture, namespaceId, configurationId, message) {
+  const path = `/namespaces/${namespaceId}/configurations/${configurationId}`;
+  const refused = await fixture.request("DELETE", path);
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.equal(refused.body.error.code, "RESOURCE_CONFLICT");
+  assert.match(refused.body.error.message, message);
+  const kept = await fixture.request("GET", path);
+  assert.equal(kept.status, 200, JSON.stringify(kept.body));
+}
+
 test(
   "pending provisioning blocks deleting its ServiceAccount; a failed plan's retry names the deleted one",
   { ...requiresPostgres, timeout: 60_000 },
@@ -1499,63 +1530,130 @@ test(
 );
 
 test(
-  "a provisioned Agent's first Configuration is refused for deletion with 409 after a switch",
+  "a provisioned Agent's first Configuration is deletable after the Agent switches away",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
-    const configurationDriver = createProvisioningConfigurationDriver({
-      id: "configuration-provisioning",
-    });
-    const deleted = [];
-    const deleteStored = configurationDriver.delete.bind(configurationDriver);
-    configurationDriver.delete = async (reference) => {
-      deleted.push(reference.id);
-      return deleteStored(reference);
-    };
+    const { configurationDriver, deleted } = recordingConfigurationDriver();
     const fixture = await createFixture(context, { configurationDriver });
     const namespace = await fixture.bootstrapNamespace();
-    const secrets = await createProvisioningSecrets(fixture, namespace.id);
-    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
-      body: provisioningBody(namespace.id, secrets),
-    });
-    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
-    await fixture.startWorker();
-    let created;
-    try {
-      created = await waitFor("Agent provisioning to succeed", async () => {
-        const observed = await fixture.request("GET", admitted.data.provisioning.url);
-        assert.equal(observed.status, 200, JSON.stringify(observed.body));
-        return observed.data.status === "succeeded" ? observed.data : undefined;
-      });
-    } finally {
-      await fixture.stopWorker();
-    }
-    fixture.cancelProvisioningAtTeardown(namespace.id, created.agentId);
+    const [created] = await provisionAgents(fixture, namespace.id);
+    const replacement = await createAgentConfiguration(fixture, namespace.id);
+    await selectConfiguration(fixture, namespace.id, created.agentId, replacement);
 
-    // Move the Agent to another Configuration, so no Agent references the first one.
-    const replacement = await fixture.request(
-      "POST",
-      `/namespaces/${namespace.id}/configurations`,
-      { body: { kind: "agent", values: { agents: { defaults: agentDefaults() } } } },
-    );
-    assert.equal(replacement.status, 201, JSON.stringify(replacement.body));
-    const switched = await fixture.request(
-      "PATCH",
-      `/namespaces/${namespace.id}/agents/${created.agentId}`,
-      { body: { configurationId: replacement.data.id } },
-    );
-    assert.equal(switched.status, 200, JSON.stringify(switched.body));
-
-    // The provisioning record still names the first Configuration until the Agent is
-    // deleted, so deletion is a state conflict, not a missing resource, and the stored
-    // document is never touched.
+    // No Agent selects the first Configuration, so the succeeded provisioning record
+    // releases it and the ordinary deletion proceeds.
     const configurationPath = `/namespaces/${namespace.id}/configurations/${created.configurationId}`;
-    const refused = await fixture.request("DELETE", configurationPath);
-    assert.equal(refused.status, 409, JSON.stringify(refused.body));
-    assert.equal(refused.body.error.code, "RESOURCE_CONFLICT");
-    assert.match(refused.body.error.message, /provision/);
+    const removed = await fixture.request("DELETE", configurationPath);
+    assert.equal(removed.status, 204, JSON.stringify(removed.body));
+    assert.deepEqual(deleted, [created.configurationId]);
+    const gone = await fixture.request("GET", configurationPath);
+    assert.equal(gone.status, 404, JSON.stringify(gone.body));
+    assert.equal(await provisioningConfigurationId(fixture.pool, created.workId), null);
+    const status = await fixture.request("GET", created.url);
+    assert.equal(status.status, 200, JSON.stringify(status.body));
+    assert.equal(status.data.status, "succeeded");
+    assert.equal(status.data.agentId, created.agentId);
+    assert.equal(status.data.configurationId, undefined);
+  },
+);
+
+test(
+  "a provisioned Agent's first Configuration stays held while the Agent selects it, including after switching back",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const { configurationDriver, deleted } = recordingConfigurationDriver();
+    const fixture = await createFixture(context, { configurationDriver });
+    const namespace = await fixture.bootstrapNamespace();
+    const [created] = await provisionAgents(fixture, namespace.id);
+    const agentReference = /An Agent still references the Configuration/;
+    await assertConfigurationDeletionRefused(
+      fixture,
+      namespace.id,
+      created.configurationId,
+      agentReference,
+    );
+    // The database refuses a release while the provisioned Agent selects the Configuration.
+    await assert.rejects(
+      fixture.pool.query(
+        "UPDATE occ.agent_provisioning_work SET configuration_id = NULL WHERE work_id = $1",
+        [created.workId],
+      ),
+      { code: "23514", message: /terminal agent provisioning work is immutable/ },
+    );
+
+    const replacement = await createAgentConfiguration(fixture, namespace.id);
+    // A release may only clear the Configuration, never move the record to another one.
+    await assert.rejects(
+      fixture.pool.query(
+        "UPDATE occ.agent_provisioning_work SET configuration_id = $2 WHERE work_id = $1",
+        [created.workId, replacement],
+      ),
+      { code: "23514" },
+    );
+    await selectConfiguration(fixture, namespace.id, created.agentId, replacement);
+    await selectConfiguration(fixture, namespace.id, created.agentId, created.configurationId);
+    await assertConfigurationDeletionRefused(
+      fixture,
+      namespace.id,
+      created.configurationId,
+      agentReference,
+    );
+    assert.equal(
+      await provisioningConfigurationId(fixture.pool, created.workId),
+      created.configurationId,
+    );
     assert.deepEqual(deleted, []);
-    const kept = await fixture.request("GET", configurationPath);
-    assert.equal(kept.status, 200, JSON.stringify(kept.body));
+
+    await selectConfiguration(fixture, namespace.id, created.agentId, replacement);
+    const removed = await fixture.request(
+      "DELETE",
+      `/namespaces/${namespace.id}/configurations/${created.configurationId}`,
+    );
+    assert.equal(removed.status, 204, JSON.stringify(removed.body));
+    assert.deepEqual(deleted, [created.configurationId]);
+  },
+);
+
+test(
+  "a provisioned Configuration another Agent selects stays held after its own Agent switches away",
+  { ...requiresPostgres, timeout: 90_000 },
+  async (context) => {
+    const { configurationDriver, deleted } = recordingConfigurationDriver();
+    const fixture = await createFixture(context, { configurationDriver });
+    const namespace = await fixture.bootstrapNamespace();
+    const [first, second] = await provisionAgents(fixture, namespace.id, 2);
+    // Swap the two Agents' Configurations: each provisioned Configuration loses its own
+    // Agent but is still selected by the other one.
+    await selectConfiguration(fixture, namespace.id, first.agentId, second.configurationId);
+    await selectConfiguration(fixture, namespace.id, second.agentId, first.configurationId);
+    for (const provisioned of [first, second]) {
+      await assertConfigurationDeletionRefused(
+        fixture,
+        namespace.id,
+        provisioned.configurationId,
+        /An Agent still references the Configuration/,
+      );
+      assert.equal(
+        await provisioningConfigurationId(fixture.pool, provisioned.workId),
+        provisioned.configurationId,
+      );
+    }
+    assert.deepEqual(deleted, []);
+
+    // Once the other Agent leaves too, the first provisioned Configuration is free.
+    await selectConfiguration(fixture, namespace.id, second.agentId, second.configurationId);
+    const removed = await fixture.request(
+      "DELETE",
+      `/namespaces/${namespace.id}/configurations/${first.configurationId}`,
+    );
+    assert.equal(removed.status, 204, JSON.stringify(removed.body));
+    assert.deepEqual(deleted, [first.configurationId]);
+    await assertConfigurationDeletionRefused(
+      fixture,
+      namespace.id,
+      second.configurationId,
+      /An Agent still references the Configuration/,
+    );
   },
 );
 
@@ -1914,6 +2012,21 @@ test(
       reserved.map(({ status }) => status),
       [409, 409, 409, 409],
       "failed pre-handoff provisioning must reserve direct credential, deploy, Agent, and Configuration mutations",
+    );
+    const agentReserved =
+      "The Agent is reserved for provisioning. Stop or delete it, or retry its failed provisioning request.";
+    assert.deepEqual(
+      reserved.map(({ body }) => [body.error.code, body.error.message]),
+      [
+        ["RESOURCE_CONFLICT", agentReserved],
+        ["RESOURCE_CONFLICT", agentReserved],
+        ["RESOURCE_CONFLICT", agentReserved],
+        [
+          "RESOURCE_CONFLICT",
+          "The Configuration is reserved for provisioning and is not available for this operation.",
+        ],
+      ],
+      "each refusal names the provisioning reservation, not a duplicate",
     );
     // The transport write has no receipt, so the failed job still counts as in flight.
     const occupied = await fixture.request("DELETE", `/namespaces/${namespace.id}`);
