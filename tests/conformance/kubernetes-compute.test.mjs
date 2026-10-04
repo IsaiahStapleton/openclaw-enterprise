@@ -11207,16 +11207,19 @@ test("the production example sizes dedicated Gateway and Harness containers from
     resources,
   });
   await driver.prepareRevision(revision, context);
-  const container = (prefix) =>
-    [...objects.values()].find(
+  const container = (prefix) => {
+    const deployment = [...objects.values()].find(
       ({ kind, metadata }) => kind === "Deployment" && metadata.name.startsWith(prefix),
-    ).spec.template.spec.containers[0];
+    );
+    assert.ok(deployment, `${prefix} Deployment rendered`);
+    return deployment.spec.template.spec.containers[0];
+  };
   // A dedicated Codex Gateway held 1.2-1.6 GiB between turns and peaked at 2.2 GiB.
   assert.deepEqual(container("gateway-").resources, {
     requests: { cpu: "100m", memory: "1792Mi" },
     limits: { cpu: "4", memory: "3Gi" },
   });
-  // The Codex Harness held 0.45-0.6 GiB idle; lint, tsc and tests together were OOM-killed at 2Gi.
+  // The Codex Harness held 0.45-0.57 GiB idle; lint, tsc and tests together were OOM-killed at 2Gi.
   assert.deepEqual(container("agent-").resources, {
     requests: { cpu: "100m", memory: "768Mi" },
     limits: { cpu: "4", memory: "4Gi" },

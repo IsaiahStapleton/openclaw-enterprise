@@ -44,11 +44,11 @@ neighbors, and a `limits.cpu` namespace quota counts the whole limit.
 Memory requests cover the use measured between turns, so the scheduler reserves
 what each Agent actually holds; limits cover measured peaks:
 
-| Pod                             | Request  | Limit | Measured                                                                                                                                |
-| ------------------------------- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Gateway (embedded or dedicated) | `1792Mi` | `3Gi` | 1.2 to 1.6 GiB between turns, peaks of 1.8 to 2.2 GiB; a dedicated Codex Gateway serving native admin chat was OOM-killed at `2Gi`      |
-| Codex Harness                   | `768Mi`  | `4Gi` | about 0.6 GiB between turns, 1 GiB running a test suite, 1.9 GiB running `tsc`; lint, `tsc` and tests together were OOM-killed at `2Gi` |
-| Container default               | `128Mi`  | `2Gi` | containers that set no resources                                                                                                        |
+| Pod                             | Request  | Limit | Measured                                                                                                                                   |
+| ------------------------------- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Gateway (embedded or dedicated) | `1792Mi` | `3Gi` | 1.2 to 1.6 GiB between turns, peaks of 1.8 to 2.2 GiB; a dedicated Codex Gateway serving native admin chat was OOM-killed at `2Gi`         |
+| Codex Harness                   | `768Mi`  | `4Gi` | 0.45 to 0.57 GiB between turns, 1 GiB running a test suite, 1.9 GiB running `tsc`; lint, `tsc` and tests together were OOM-killed at `2Gi` |
+| Container default               | `128Mi`  | `2Gi` | containers that set no resources                                                                                                           |
 
 Plan node memory per Agent: an embedded OpenClaw Agent reserves `1792Mi`, and a
 dedicated Codex Agent reserves `2560Mi` (Gateway plus Harness). A Harness runs
@@ -59,7 +59,9 @@ for such workloads. Denying the 11 bundled plugins an OpenAI-only Agent does not
 values; for others, write the Installation from the production example (see
 [Images and resources](../../reference/drivers/kubernetes-compute.md#images-and-resources)).
 An existing Installation keeps its values on upgrade; adopted values apply to
-each Agent at its next deployment.
+each Agent at its next deployment. Before adopting them, check each agents node's
+free memory: during a rollout the old and new Harness Pods of an Agent can run
+together on one node, because they share its workspace volume.
 
 Seeding both Presets does not change the profile's PluginDriver. An Agent
 created from the other profile's Preset still needs a compatible driver,
