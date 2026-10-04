@@ -22,7 +22,7 @@ GitHub Actions selects coverage for each event and ends at `CI Required` and res
 graph TD
   A["PR or other CI event"] --> S["Select impact mode"]
   A --> N["Suite Audit"]
-  A -->|PR| Q["Report affected packages (advisory)"]
+  S -->|full PR| Q["Report affected packages (advisory)"]
   S -->|docs| D["Documentation checks"]
   S -->|full| B["Sixteen CI test lanes"]
   B --> F["Prepare owned resources"]
@@ -63,7 +63,7 @@ For a PR, the selector verifies the tested checkout and merge parents against th
 
 The impact job adds an advisory run summary with the selected mode and a fixed reason category. Categories distinguish non-PR events, unavailable event inspection, malformed event JSON, invalid base, head or tested commit identities, checkout or parent mismatch, unavailable base policy, Git inspection failure, empty or malformed diffs, unsupported type changes, non-UTF-8 filenames, ineligible changes and verified documentation selection. Bootstrap guard categories identify their source; selector execution failures fail the impact job. If selection fails or its reason is missing, malformed, or from an older base selector, the summary reports the affected information as unavailable. It includes no changed paths or arbitrary selector output.
 
-Separately, the bounded `affected-packages` PR job uses `scripts/ci/pnpm-impact.mjs` to report declared pnpm workspace dependents for a verified, clean merge checkout. It checks checkout cleanliness before and after inspecting pnpm, reports unavailable for out-of-scope changes such as Go or files outside a workspace package, and writes only a best-effort summary. This job is not a dependency of `CI Required` and neither selects nor skips tests; its package graph is not proof of test coverage.
+Separately, the bounded `affected-packages` full-mode PR job uses `scripts/ci/pnpm-impact.mjs` to report declared pnpm workspace dependents for a verified, clean merge checkout. It checks checkout cleanliness before and after inspecting pnpm, reports unavailable for out-of-scope changes such as Go or files outside a workspace package, and writes only a best-effort summary. This job is not a dependency of `CI Required` and neither selects nor skips tests; its package graph is not proof of test coverage.
 
 The PR can change the `pull_request` workflow definition loaded from its merge checkout, bypassing or replacing these steps despite base-loaded policy. A separately trusted required workflow or equivalent external enforcement is a deployment decision, not an established source property. Hosted behavior, including fork and required-check enforcement, remains unverified.
 

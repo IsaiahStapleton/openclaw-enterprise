@@ -297,6 +297,8 @@ test("affected-package advisory is isolated from required jobs and tolerates sum
     return match[1];
   };
   const advisory = job("affected-packages");
+  assert.match(advisory, /needs: impact/);
+  assert.match(advisory, /needs\.impact\.outputs\.mode == 'full'/);
   assert.match(advisory, /timeout-minutes: 3/);
   assert.match(advisory, /continue-on-error: true/);
   assert.doesNotMatch(advisory, /ci-results-|GITHUB_OUTPUT/);

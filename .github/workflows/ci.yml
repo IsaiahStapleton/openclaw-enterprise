@@ -180,7 +180,8 @@ jobs:
 
   affected-packages:
     name: Affected Packages (advisory)
-    if: ${{ github.event_name == 'pull_request' }}
+    needs: impact
+    if: ${{ github.event_name == 'pull_request' && needs.impact.outputs.mode == 'full' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 3
     continue-on-error: true
