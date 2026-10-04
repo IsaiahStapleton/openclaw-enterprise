@@ -31,6 +31,16 @@ each push in memory to inspect it. The
 [development example](../../../deploy/examples/repository-credentials/service-config.development-token.json)
 uses four hours and 64 MiB.
 
+A push larger than `limits.gitPushInputBytes` is refused before the token is used
+for it: the gateway answers `413` `limit-exceeded`, the oversized body never reaches
+GitHub, and Git prints `error: RPC failed; HTTP 413`. (Before a chunked upload Git
+sends a 4-byte authentication probe, which does go to GitHub with the token.) This holds whether Git declares the size
+(`Content-Length`, below `http.postBuffer`) or streams it chunked; the gateway stops
+buffering at the limit and discards the rest of the upload for at most
+`limits.stallMs` so the client reads the answer. Budget about twice the push size of
+memory per concurrent push while it is buffered (measured: a 60 MB push peaked at
+about 117 MiB). Push larger changes with the App authority, or split them.
+
 | Backend field                                                       | Rule                                                                                   |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `providerInstanceId`, `configVersion`, `repositoryId`, `repository` | As for the App backend; one repository per service.                                    |
