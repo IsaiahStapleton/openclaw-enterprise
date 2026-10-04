@@ -20,6 +20,32 @@ const pnpmImpact = fileURLToPath(new URL("../../scripts/ci/pnpm-impact.mjs", imp
 const gate = fileURLToPath(new URL("../../scripts/ci/impact-gate.mjs", import.meta.url));
 const runner = fileURLToPath(new URL("../../scripts/ci/run-tests.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+const reasons = [
+  "docs_only",
+  "tests_only",
+  "ineligible_change",
+  "manifest_change",
+  "manifest_unavailable",
+  "unmapped_test",
+  "referenced_test",
+  "non_pr_event",
+  "invalid_event",
+  "invalid_identity",
+  "event_unavailable",
+  "checkout_mismatch",
+  "git_inspection_failed",
+  "bootstrap_non_pr_event",
+  "bootstrap_event_unavailable",
+  "bootstrap_invalid_identity",
+  "bootstrap_checkout_mismatch",
+  "bootstrap_git_inspection_failed",
+  "bootstrap_policy_unavailable",
+  "malformed_diff",
+  "empty_diff",
+  "unsupported_change",
+  "filename_not_utf8",
+  "unavailable",
+].join("|");
 
 function command(cwd, program, args, options = {}) {
   const result = spawnSync(program, args, { cwd, encoding: "utf8", ...options });
@@ -89,15 +115,49 @@ function fixture(t, change, initial = {}, initialModes = {}, { moveMain } = {}) 
     assert.equal(selected.status, 0, selected.stderr);
     assert.match(
       readFileSync(output, "utf8"),
-      new RegExp(
-        `^prior=value\nmode=${mode}\nreason=(?:docs_only|ineligible_change|non_pr_event|invalid_event|invalid_identity|event_unavailable|checkout_mismatch|git_inspection_failed|bootstrap_non_pr_event|bootstrap_event_unavailable|bootstrap_invalid_identity|bootstrap_checkout_mismatch|bootstrap_git_inspection_failed|bootstrap_policy_unavailable|malformed_diff|empty_diff|unsupported_change|filename_not_utf8|unavailable)\n$`,
-      ),
+      new RegExp(`^prior=value\nmode=${mode}\nreason=(?:${reasons})\n$`),
       selected.stdout,
     );
     assert.equal(run(["--verify-mode", mode], overrides).status, 0);
     assert.notEqual(run(["--verify-mode", mode === "docs" ? "full" : "docs"], overrides).status, 0);
+    const lanes = JSON.stringify(["checks-baseline-1"]);
+    assert.notEqual(run(["--verify-mode", "tests", "--lanes", lanes], overrides).status, 0);
   };
-  return { dir, repo, git, put, event, eventPath, base, mergeBase, head, tested, run, expect };
+  const expectTests = (lanes, overrides = {}) => {
+    const output = join(dir, "output");
+    writeFileSync(output, "");
+    const selected = run(["--github-output", output], overrides);
+    assert.equal(selected.status, 0, selected.stderr);
+    const json = JSON.stringify(lanes);
+    assert.equal(readFileSync(output, "utf8"), `mode=tests\nreason=tests_only\nlanes=${json}\n`);
+    assert.equal(run(["--verify-mode", "tests", "--lanes", json], overrides).status, 0);
+    for (const bad of [
+      ["--verify-mode", "tests"],
+      ["--verify-mode", "docs"],
+      ["--verify-mode", "full"],
+      ["--verify-mode", "docs", "--lanes", json],
+      ["--verify-mode", "tests", "--lanes", JSON.stringify(lanes.slice(1))],
+      ["--verify-mode", "tests", "--lanes", JSON.stringify([...lanes, "postgres-auth"])],
+      ["--verify-mode", "tests", "--lanes", JSON.stringify(lanes, null, 1)],
+    ]) {
+      assert.notEqual(run(bad, overrides).status, 0, bad.join(" "));
+    }
+  };
+  return {
+    dir,
+    repo,
+    git,
+    put,
+    event,
+    eventPath,
+    base,
+    mergeBase,
+    head,
+    tested,
+    run,
+    expect,
+    expectTests,
+  };
 }
 
 function workspaceFiles() {
@@ -675,15 +735,38 @@ function shallowBootstrap(t, f) {
     assert.equal(selected.status, 0, selected.stderr);
     assert.match(
       selected.output,
-      new RegExp(
-        `^mode=${mode}\n(?:reason=(?:docs_only|ineligible_change|non_pr_event|invalid_event|invalid_identity|event_unavailable|checkout_mismatch|git_inspection_failed|bootstrap_non_pr_event|bootstrap_event_unavailable|bootstrap_invalid_identity|bootstrap_checkout_mismatch|bootstrap_git_inspection_failed|bootstrap_policy_unavailable|malformed_diff|empty_diff|unsupported_change|filename_not_utf8|unavailable)\n)?$`,
-      ),
+      new RegExp(`^mode=${mode}\n(?:reason=(?:${reasons})\n)?$`),
       selected.stdout,
     );
     assert.equal(run("verify", mode, overrides).status, 0);
     assert.notEqual(run("verify", mode === "docs" ? "full" : "docs", overrides).status, 0);
+    const lanes = { EXPECTED_LANES: JSON.stringify(["checks-baseline-1"]), ...overrides };
+    assert.notEqual(run("verify", "tests", lanes).status, 0);
   };
-  return { checkout, run, expect };
+  const expectTests = (lanes, overrides = {}) => {
+    const json = JSON.stringify(lanes);
+    const selected = run("select", "", overrides);
+    assert.equal(selected.status, 0, selected.stderr);
+    assert.equal(selected.output, `mode=tests\nreason=tests_only\nlanes=${json}\n`);
+    assert.equal(run("verify", "tests", { ...overrides, EXPECTED_LANES: json }).status, 0);
+    for (const [mode, other] of [
+      ["tests", ""],
+      ["tests", "[]"],
+      ["tests", JSON.stringify(lanes.slice(1))],
+      ["full", json],
+      ["docs", json],
+    ]) {
+      assert.notEqual(run("verify", mode, { ...overrides, EXPECTED_LANES: other }).status, 0);
+    }
+  };
+  return { checkout, run, expect, expectTests };
+}
+
+// The pr-safe matrix rows, from the CI Impact "Build lane matrix" step.
+function laneTable(workflow) {
+  const match = /^ {10}LANE_TABLE: \|\n((?: {12}.*\n)+)/m.exec(workflow);
+  assert.ok(match, "workflow has a lane table");
+  return JSON.parse(match[1]);
 }
 
 test("the checked-in policy can select a documentation-only pull request", (t) => {
@@ -1003,11 +1086,13 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
   const ciWorkflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
   const matrixLanes = (source) =>
     [...source.matchAll(/- lane: ([a-z0-9-]+)/g)].map((match) => match[1]);
+  const tableLanes = (source) => laneTable(source).map((row) => row.lane);
   const suiteIndex = JSON.parse(
     readFileSync(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
   );
   assert.deepEqual([...suiteIndex.groups.ci].sort(), [...lanes].sort());
-  assert.deepEqual(["runtime-image-fixture", ...matrixLanes(ciWorkflow)].sort(), [...lanes].sort());
+  assert.deepEqual(matrixLanes(ciWorkflow), []);
+  assert.deepEqual(["runtime-image-fixture", ...tableLanes(ciWorkflow)].sort(), [...lanes].sort());
   const fullWorkflow = readFileSync(
     join(repositoryRoot, ".github/workflows/full-integration.yml"),
     "utf8",
@@ -1030,10 +1115,7 @@ test("workflow selection flows through the gate and full-mode source-bound aggre
     const bootstrap = shallowBootstrap(t, f);
     const selected = bootstrap.run("select");
     assert.equal(selected.status, 0, selected.stderr);
-    const match =
-      /^mode=(docs|full)\nreason=(docs_only|ineligible_change|non_pr_event|invalid_event|invalid_identity|event_unavailable|checkout_mismatch|git_inspection_failed|bootstrap_non_pr_event|bootstrap_event_unavailable|bootstrap_invalid_identity|bootstrap_checkout_mismatch|bootstrap_git_inspection_failed|bootstrap_policy_unavailable|malformed_diff|empty_diff|unsupported_change|filename_not_utf8|unavailable)\n$/.exec(
-        selected.output,
-      );
+    const match = new RegExp(`^mode=(docs|full)\nreason=(${reasons})\n$`).exec(selected.output);
     assert.ok(match);
     const mode = match[1];
     assert.equal(mode, expected);
@@ -1245,7 +1327,7 @@ test("impact summary reports real selector categories from shallow merge checkou
 
 test("legacy base output and selector failures remain honest", (t) => {
   const policy = readFileSync(selector, "utf8").replace(
-    '`mode=${result.mode}\\nreason=${result.category ?? "unavailable"}\\n`',
+    '`mode=${result.mode}\\nreason=${result.category ?? "unavailable"}\\n${lanes ? `lanes=${lanes}\\n` : ""}`',
     "`mode=${result.mode}\\n`",
   );
   const f = fixture(t, ({ put }) => put("docs/change.md"), { "scripts/ci/impact.mjs": policy });
@@ -1565,4 +1647,617 @@ test("event inspection failures in actual bootstrap and selector are unavailable
       /SECRET/,
     );
   }
+});
+
+// A small suite index with the shape of scripts/ci/test-suites.json: three CI
+// lanes, the separate fixture job and one manual (non-CI) lane.
+const suiteLanes = {
+  "checks-baseline-1": ["tests/conformance/lint-rules.test.mjs"],
+  postgres: ["tests/integration/postgres-a.test.mjs", "tests/integration/postgres-b.test.mjs"],
+  "k3d-fixture-state": ["tests/integration/k3d-a.test.mjs"],
+  "runtime-image-fixture": ["tests/integration/fixture-image.test.mjs"],
+  openshell: ["tests/integration/openshell-real.test.mjs"],
+};
+
+function laneManifest(paths, env = { NODE_OPTIONS: "--max-old-space-size=4096" }) {
+  return `${JSON.stringify({ env, files: paths.map((path) => ({ path })) }, null, 2)}\n`;
+}
+
+function suiteFiles(policy = readFileSync(selector, "utf8")) {
+  const files = {
+    "scripts/ci/impact.mjs": policy,
+    "scripts/ci/prepare.mjs": "export const prepared = true;\n",
+    "scripts/ci/test-suites.json": `${JSON.stringify(
+      {
+        version: 1,
+        lanes: Object.fromEntries(
+          Object.keys(suiteLanes).map((lane) => [lane, `./test-suites/${lane}.json`]),
+        ),
+        groups: {
+          ci: ["checks-baseline-1", "postgres", "k3d-fixture-state", "runtime-image-fixture"],
+          full: Object.keys(suiteLanes),
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "tests/helpers/shared.mjs": "export const shared = 1;\n",
+    "tests/fixtures/data.json": "{}\n",
+  };
+  for (const [lane, paths] of Object.entries(suiteLanes)) {
+    files[`scripts/ci/test-suites/${lane}.json`] = laneManifest(paths);
+    for (const path of paths) {
+      files[path] = 'import test from "node:test";\ntest("case", () => {});\n';
+    }
+  }
+  return files;
+}
+
+const editTest =
+  (path) =>
+  ({ put }) =>
+    put(path, `// edited\n${readFileSync(selector, "utf8").length}\n`);
+
+test("a test-only change selects the lanes that list its files", (t) => {
+  const initial = suiteFiles();
+  const cases = [
+    [editTest("tests/integration/postgres-a.test.mjs"), ["checks-baseline-1", "postgres"]],
+    [
+      ({ put }) => {
+        put("tests/integration/postgres-b.test.mjs", "// edited\n");
+        put("docs/testing.md", "Notes on tests/integration/postgres-b.test.mjs.\n");
+      },
+      ["checks-baseline-1", "postgres"],
+    ],
+    [
+      ({ put }) => {
+        put("tests/integration/k3d-a.test.mjs", "// edited\n");
+        put("tests/integration/fixture-image.test.mjs", "// edited\n");
+      },
+      ["checks-baseline-1", "k3d-fixture-state", "runtime-image-fixture"],
+    ],
+    [editTest("tests/conformance/lint-rules.test.mjs"), ["checks-baseline-1"]],
+    // A new file registered in its lane's manifest.
+    [
+      ({ put }) => {
+        put("tests/integration/postgres-c.test.mjs", "// new\n");
+        put(
+          "scripts/ci/test-suites/postgres.json",
+          laneManifest([...suiteLanes.postgres, "tests/integration/postgres-c.test.mjs"]),
+        );
+      },
+      ["checks-baseline-1", "postgres"],
+    ],
+    // A deleted file and its manifest entry.
+    [
+      ({ git, put }) => {
+        git("rm", "-q", "tests/integration/postgres-b.test.mjs");
+        put(
+          "scripts/ci/test-suites/postgres.json",
+          laneManifest(["tests/integration/postgres-a.test.mjs"]),
+        );
+      },
+      ["checks-baseline-1", "postgres"],
+    ],
+    // A file that moves between lanes runs in both.
+    [
+      ({ put }) => {
+        put("tests/integration/k3d-a.test.mjs", "// moved\n");
+        put("scripts/ci/test-suites/k3d-fixture-state.json", laneManifest([]));
+        put(
+          "scripts/ci/test-suites/postgres.json",
+          laneManifest([...suiteLanes.postgres, "tests/integration/k3d-a.test.mjs"]),
+        );
+      },
+      ["checks-baseline-1", "k3d-fixture-state", "postgres"],
+    ],
+  ];
+  for (const [change, lanes] of cases) {
+    const f = fixture(t, change, initial);
+    f.expectTests(lanes);
+    shallowBootstrap(t, f).expectTests(lanes);
+  }
+});
+
+test("a test-only change keeps its lanes after main moves", (t) => {
+  const f = fixture(
+    t,
+    editTest("tests/integration/k3d-a.test.mjs"),
+    suiteFiles(),
+    {},
+    {
+      moveMain: ({ put }) => {
+        put("src/main.ts", "export const value = 1;\n");
+        put("tests/helpers/shared.mjs", "export const shared = 2;\n");
+      },
+    },
+  );
+  assert.notEqual(f.base, f.mergeBase);
+  f.expectTests(["checks-baseline-1", "k3d-fixture-state"]);
+  shallowBootstrap(t, f).expectTests(["checks-baseline-1", "k3d-fixture-state"]);
+});
+
+test("helper, fixture and other test-tree changes select full", (t) => {
+  const initial = suiteFiles();
+  for (const path of [
+    "tests/helpers/shared.mjs",
+    "tests/helpers/new.test.mjs",
+    "tests/fixtures/data.json",
+    "tests/integration/support.mjs",
+    "tests/integration/nested/deep.test.mjs",
+    "tests/unknown/other.test.mjs",
+    "tests/integration/postgres-a.test.ts",
+  ]) {
+    const f = fixture(
+      t,
+      ({ put }) => {
+        put("tests/integration/postgres-a.test.mjs", "// edited\n");
+        put(path, "// changed\n");
+      },
+      initial,
+    );
+    f.expect("full");
+    const shallow = shallowBootstrap(t, f);
+    shallow.expect("full");
+    assert.equal(shallow.run("select").output, "mode=full\nreason=ineligible_change\n", path);
+  }
+});
+
+test("mixed test and code, tooling, workflow or package changes select full", (t) => {
+  const initial = {
+    ...suiteFiles(),
+    "package.json": "{}\n",
+    "pnpm-lock.yaml": "lockfileVersion: 9\n",
+  };
+  for (const path of [
+    "src/app.ts",
+    "scripts/ci/prepare.mjs",
+    "scripts/ci/run-tests.mjs",
+    "scripts/ci/impact-gate.mjs",
+    ".github/workflows/ci.yml",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/ci/test-suites.json",
+    "charts/app/values.yaml",
+  ]) {
+    const f = fixture(
+      t,
+      ({ put }) => {
+        put("tests/integration/postgres-a.test.mjs", "// edited\n");
+        put(path, "changed\n");
+      },
+      initial,
+    );
+    f.expect("full");
+    assert.equal(
+      shallowBootstrap(t, f).run("select").output,
+      "mode=full\nreason=ineligible_change\n",
+      path,
+    );
+  }
+});
+
+test("manifest changes beyond the changed test files select full", (t) => {
+  const initial = suiteFiles();
+  const cases = [
+    // Another file's entry removed, added or moved.
+    ({ put }) => {
+      put("tests/integration/postgres-a.test.mjs", "// edited\n");
+      put(
+        "scripts/ci/test-suites/postgres.json",
+        laneManifest(["tests/integration/postgres-a.test.mjs"]),
+      );
+    },
+    ({ put }) => {
+      put("tests/integration/postgres-a.test.mjs", "// edited\n");
+      put(
+        "scripts/ci/test-suites/k3d-fixture-state.json",
+        laneManifest([...suiteLanes["k3d-fixture-state"], "tests/integration/postgres-b.test.mjs"]),
+      );
+    },
+    // Other files reordered (the changed file's own position may change).
+    ({ put }) => {
+      put("tests/integration/k3d-a.test.mjs", "// edited\n");
+      put("scripts/ci/test-suites/postgres.json", laneManifest([...suiteLanes.postgres].reverse()));
+    },
+    // Lane environment.
+    ({ put }) => {
+      put("tests/integration/postgres-a.test.mjs", "// edited\n");
+      put("scripts/ci/test-suites/postgres.json", laneManifest(suiteLanes.postgres, {}));
+    },
+    // A manifest change without any test change.
+    ({ put }) =>
+      put(
+        "scripts/ci/test-suites/postgres.json",
+        laneManifest(["tests/integration/postgres-a.test.mjs"]),
+      ),
+    // A new lane manifest.
+    ({ put }) => {
+      put("tests/integration/postgres-a.test.mjs", "// edited\n");
+      put("scripts/ci/test-suites/extra.json", laneManifest([]));
+    },
+  ];
+  for (const change of cases) {
+    const f = fixture(t, change, initial);
+    f.expect("full");
+    assert.equal(
+      shallowBootstrap(t, f).run("select").output,
+      "mode=full\nreason=manifest_change\n",
+    );
+  }
+});
+
+test("unmapped, non-CI, referenced or irregular test files select full", (t) => {
+  const initial = suiteFiles();
+  const reason = (change, expected, extra = {}, modes = {}) => {
+    const f = fixture(t, change, { ...initial, ...extra }, modes);
+    f.expect("full");
+    assert.equal(shallowBootstrap(t, f).run("select").output, `mode=full\nreason=${expected}\n`);
+  };
+  // Not registered in any lane, or only in a manual lane.
+  reason(({ put }) => put("tests/integration/unlisted.test.mjs", "// new\n"), "unmapped_test");
+  reason(editTest("tests/integration/openshell-real.test.mjs"), "unmapped_test");
+  // Another file reads, copies or runs it; Markdown mentions do not count.
+  reason(editTest("tests/integration/postgres-b.test.mjs"), "referenced_test", {
+    "scripts/ci/prepare.mjs": 'if (file.endsWith("postgres-b.test.mjs")) {}\n',
+  });
+  reason(editTest("tests/integration/k3d-a.test.mjs"), "referenced_test", {
+    "tests/integration/postgres-a.test.mjs": 'new URL("./k3d-a.test.mjs", import.meta.url);\n',
+  });
+  const mentioned = fixture(t, editTest("tests/integration/k3d-a.test.mjs"), {
+    ...initial,
+    "docs/testing.md": "See tests/integration/k3d-a.test.mjs.\n",
+  });
+  mentioned.expectTests(["checks-baseline-1", "k3d-fixture-state"]);
+  // Executable or symlinked test files.
+  reason(
+    ({ repo }) => chmodSync(join(repo, "tests/integration/postgres-a.test.mjs"), 0o755),
+    "ineligible_change",
+  );
+  reason(({ repo }) => {
+    symlinkSync("postgres-a.test.mjs", join(repo, "tests/integration/postgres-c.test.mjs"));
+  }, "ineligible_change");
+  // A malformed or missing manifest is never trusted.
+  reason(editTest("tests/integration/postgres-a.test.mjs"), "manifest_unavailable", {
+    "scripts/ci/test-suites/k3d-fixture-state.json": "{not json",
+  });
+  reason(editTest("tests/integration/postgres-a.test.mjs"), "manifest_unavailable", {
+    "scripts/ci/test-suites.json": "{}\n",
+  });
+  const noBaseline = JSON.parse(initial["scripts/ci/test-suites.json"]);
+  noBaseline.groups.ci = ["postgres"];
+  reason(editTest("tests/integration/postgres-a.test.mjs"), "manifest_unavailable", {
+    "scripts/ci/test-suites.json": JSON.stringify(noBaseline),
+  });
+});
+
+test("the pull request's own selector never decides test-only mode", (t) => {
+  const marker = join(tmpdir(), `ci-impact-tests-untrusted-${process.pid}-${Date.now()}`);
+  t.after(() => rmSync(marker, { force: true }));
+  const untrusted = `import { writeFileSync, appendFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nappendFileSync(process.argv[3], 'mode=tests\\nreason=tests_only\\nlanes=["checks-baseline-1"]\\n');\n`;
+  const f = fixture(
+    t,
+    ({ put }) => {
+      put("scripts/ci/impact.mjs", untrusted);
+      put("tests/integration/postgres-a.test.mjs", "// edited\n");
+    },
+    suiteFiles(),
+  );
+  const shallow = shallowBootstrap(t, f);
+  shallow.expect("full");
+  assert.equal(shallow.run("select").output, "mode=full\nreason=ineligible_change\n");
+  assert.equal(existsSync(marker), false);
+
+  // A base policy that only knows documentation selects full for tests.
+  const docsOnly = fixture(
+    t,
+    editTest("tests/integration/postgres-a.test.mjs"),
+    suiteFiles(untrusted.replace("mode=tests", "mode=bogus")),
+  );
+  const legacy = shallowBootstrap(t, docsOnly);
+  assert.notEqual(
+    legacy.run("verify", "tests", { EXPECTED_LANES: '["checks-baseline-1"]' }).status,
+    0,
+  );
+  // Without a base policy the bootstrap falls back to full.
+  const missing = suiteFiles();
+  delete missing["scripts/ci/impact.mjs"];
+  const none = fixture(t, editTest("tests/integration/postgres-a.test.mjs"), missing);
+  const fallback = shallowBootstrap(t, none);
+  fallback.expect("full");
+  assert.equal(fallback.run("select").output, "mode=full\nreason=bootstrap_policy_unavailable\n");
+});
+
+test("test-only selection is limited to pull request events", (t) => {
+  const f = fixture(t, editTest("tests/integration/postgres-a.test.mjs"), suiteFiles());
+  const shallow = shallowBootstrap(t, f);
+  for (const event of ["push", "merge_group", "workflow_dispatch"]) {
+    f.expect("full", { GITHUB_EVENT_NAME: event });
+    shallow.expect("full", { GITHUB_EVENT_NAME: event });
+  }
+});
+
+function buildMatrix(t, mode, lanes) {
+  const dir = mkdtempSync(join(tmpdir(), "ci-impact-matrix-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const output = join(dir, "output");
+  writeFileSync(output, "");
+  const workflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const result = spawnSync(
+    "bash",
+    ["-e", "-o", "pipefail", "-c", workflowBootstrap("      - id: matrix\n")],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        SELECT_MODE: mode,
+        SELECT_LANES: lanes,
+        LANE_TABLE: JSON.stringify(laneTable(workflow)),
+      },
+    },
+  );
+  const values = Object.fromEntries(
+    readFileSync(output, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+  );
+  return { ...result, matrix: values.matrix && JSON.parse(values.matrix), fixture: values.fixture };
+}
+
+test("the lane matrix runs every lane in full mode and only selected lanes in tests mode", (t) => {
+  const table = laneTable(readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8"));
+  for (const row of table) {
+    assert.deepEqual(Object.keys(row), ["lane", "title", "profile", "timeout"]);
+  }
+  for (const mode of ["full", "docs"]) {
+    const full = buildMatrix(t, mode, "");
+    assert.equal(full.status, 0, full.stderr);
+    assert.deepEqual(full.matrix, table);
+    assert.equal(full.fixture, "true");
+  }
+  const selected = buildMatrix(t, "tests", '["checks-baseline-1","k3d-fixture-state"]');
+  assert.equal(selected.status, 0, selected.stderr);
+  assert.deepEqual(
+    selected.matrix,
+    table.filter((row) => ["checks-baseline-1", "k3d-fixture-state"].includes(row.lane)),
+  );
+  assert.equal(selected.fixture, "false");
+  const fixture = buildMatrix(t, "tests", '["checks-baseline-1","runtime-image-fixture"]');
+  assert.equal(fixture.status, 0, fixture.stderr);
+  assert.deepEqual(
+    fixture.matrix.map((row) => row.lane),
+    ["checks-baseline-1"],
+  );
+  assert.equal(fixture.fixture, "true");
+  // Unknown, empty, malformed or runner-less selections fail the impact job.
+  for (const lanes of [
+    "",
+    "[]",
+    "{}",
+    "not json",
+    '["checks-baseline-1","unknown-lane"]',
+    '["runtime-image-fixture"]',
+    "[1]",
+  ]) {
+    const result = buildMatrix(t, "tests", lanes);
+    assert.notEqual(result.status, 0, lanes);
+    assert.equal(result.matrix, undefined, lanes);
+  }
+});
+
+test("impact summary lists validated test-only lanes and nothing else", (t) => {
+  const run = (mode, reason, lanes, matrix = "success") => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-impact-summary-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const summary = join(dir, "summary");
+    writeFileSync(summary, "");
+    const result = spawnSync(
+      "bash",
+      [
+        "-e",
+        "-o",
+        "pipefail",
+        "-c",
+        workflowBootstrap("      - name: Summarize impact selection\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_STEP_SUMMARY: summary,
+          SELECT_OUTCOME: "success",
+          SELECT_MODE: mode,
+          SELECT_REASON: reason,
+          SELECT_LANES: lanes,
+          MATRIX_OUTCOME: matrix,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return readFileSync(summary, "utf8");
+  };
+  const text = (mode, reason, lanes) =>
+    `### CI impact selection (advisory)\n\nMode: ${mode}\n\nReason category: ${reason}\n\n${lanes ? `Selected lanes: ${lanes}\n\n` : ""}This PR-controlled workflow is not trusted enforcement.\n`;
+  assert.equal(
+    run("tests", "tests_only", '["checks-baseline-1","postgres"]'),
+    text("tests", "tests_only", "checks-baseline-1, postgres"),
+  );
+  for (const lanes of ['["a b"]', '["x"]\n## injected', '["$(touch injected)"]', "", "[]"]) {
+    assert.equal(
+      run("tests", "tests_only", lanes),
+      text("tests", "tests_only", "unavailable"),
+      lanes,
+    );
+  }
+  assert.equal(
+    run("tests", "tests_only", '["checks-baseline-1"]', "failure"),
+    text("tests", "tests_only", "unavailable"),
+  );
+  for (const reason of ["docs_only", "ineligible_change", "unknown"]) {
+    assert.equal(run("tests", reason, '["checks-baseline-1"]'), text("tests", "unavailable"));
+  }
+  for (const reason of [
+    "manifest_change",
+    "manifest_unavailable",
+    "unmapped_test",
+    "referenced_test",
+  ]) {
+    assert.equal(run("full", reason, '["checks-baseline-1"]'), text("full", reason));
+    assert.equal(run("docs", reason, ""), text("docs", "unavailable"));
+  }
+  assert.equal(run("full", "tests_only", '["checks-baseline-1"]'), text("full", "unavailable"));
+});
+
+test("workflow runs selected lanes in tests mode and gates them by the verified lane set", () => {
+  const workflow = readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const job = (name) => {
+    const match = new RegExp(
+      `^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:|(?![\\s\\S]))`,
+      "m",
+    ).exec(workflow);
+    assert.ok(match, `workflow contains ${name}`);
+    return match[1];
+  };
+  const prSafe = job("pr-safe");
+  assert.match(
+    prSafe,
+    /if: \$\{\{ needs\.impact\.outputs\.mode == 'full' \|\| needs\.impact\.outputs\.mode == 'tests' \}\}/,
+  );
+  assert.match(prSafe, /include: \$\{\{ fromJSON\(needs\.impact\.outputs\.matrix\) \}\}/);
+  assert.match(
+    job("runtime-image-fixture"),
+    /needs\.impact\.outputs\.mode == 'tests' && needs\.impact\.outputs\.fixture == 'true'/,
+  );
+  // Documentation checks, the smoke and the advisory job stay off in tests mode.
+  assert.match(job("docs-checks"), /if: \$\{\{ needs\.impact\.outputs\.mode == 'docs' \}\}/);
+  for (const name of ["first-agent-smoke", "affected-packages"]) {
+    assert.doesNotMatch(job(name), /'tests'/, name);
+  }
+  const required = job("ci-required");
+  assert.match(required, /EXPECTED_LANES: \$\{\{ needs\.impact\.outputs\.lanes \}\}/);
+  assert.match(required, /impact-gate\.mjs [^\n]*--mode tests [^\n]*--lanes "\$EXPECTED_LANES"/);
+  assert.match(required, /run-tests\.mjs aggregate ci [^\n]*--lanes "\$EXPECTED_LANES"/);
+  const impact = job("impact");
+  for (const output of ["mode", "lanes"]) {
+    assert.match(
+      impact,
+      new RegExp(`${output}: \\$\\{\\{ steps\\.select\\.outputs\\.${output} \\}\\}`),
+    );
+  }
+  for (const output of ["matrix", "fixture"]) {
+    assert.match(
+      impact,
+      new RegExp(`${output}: \\$\\{\\{ steps\\.matrix\\.outputs\\.${output} \\}\\}`),
+    );
+  }
+});
+
+test("tests mode flows through the gate to a source-bound aggregate of only its lanes", (t) => {
+  const f = fixture(t, editTest("tests/integration/postgres-a.test.mjs"), suiteFiles());
+  const bootstrap = shallowBootstrap(t, f);
+  const selected = bootstrap.run("select");
+  assert.equal(selected.status, 0, selected.stderr);
+  const lanes = /\nlanes=(.*)\n$/.exec(selected.output)[1];
+  assert.equal(lanes, '["checks-baseline-1","postgres"]');
+  assert.equal(bootstrap.run("verify", "tests", { EXPECTED_LANES: lanes }).status, 0);
+
+  const root = bootstrap.checkout;
+  const needs = {
+    impact: { result: "success", outputs: { mode: "tests", lanes } },
+    audit: { result: "success", outputs: {} },
+    "docs-checks": { result: "skipped", outputs: {} },
+    "pr-safe": { result: "success", outputs: {} },
+    "runtime-image-fixture": { result: "skipped", outputs: {} },
+  };
+  const raw = join(root, "raw-needs.json");
+  const expanded = join(root, "needs.json");
+  writeFileSync(raw, JSON.stringify(needs));
+  const gated = spawnSync(
+    process.execPath,
+    [gate, "--needs", raw, "--mode", "tests", "--output", expanded, "--lanes", lanes],
+    { encoding: "utf8" },
+  );
+  assert.equal(gated.status, 0, gated.stderr);
+
+  // Synthetic lanes in a group that also has an unselected lane; the fixture's
+  // stand-in prepare module is not a runner preparation hook.
+  rmSync(join(root, "scripts/ci/prepare.mjs"));
+  const group = ["checks-baseline-1", "postgres", "k3d-fixture-state"];
+  mkdirSync(join(root, "results"));
+  const manifest = { version: 1, lanes: {}, groups: { ci: group } };
+  for (const lane of group) {
+    const path = `tests/integration/synthetic-${lane}.test.mjs`;
+    writeFileSync(
+      join(root, path),
+      `import test from "node:test"; test("case ${lane}", () => {});\n`,
+    );
+    manifest.lanes[lane] = { files: [{ path, expectedTests: [`case ${lane}`] }] };
+  }
+  writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest));
+  const invoke = (args) =>
+    spawnSync(process.execPath, [runner, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_SHA: f.tested },
+    });
+  const common = ["--manifest", "manifest.json", "--root", root];
+  for (const lane of ["checks-baseline-1", "postgres"]) {
+    const result = invoke([
+      "run",
+      lane,
+      ...common,
+      "--state",
+      join(root, `${lane}.state`),
+      "--results",
+      join(root, `results/${lane}.json`),
+    ]);
+    assert.equal(result.status, 0, `${lane}: ${result.stderr} ${result.stdout}`);
+  }
+  const aggregate = (selection) =>
+    invoke([
+      "aggregate",
+      "ci",
+      ...common,
+      "--results-dir",
+      "results",
+      "--needs",
+      "needs.json",
+      ...(selection === undefined ? [] : ["--lanes", selection]),
+    ]);
+  const passed = aggregate(lanes);
+  assert.equal(passed.status, 0, `${passed.stderr} ${passed.stdout}`);
+  assert.deepEqual(
+    JSON.parse(passed.stdout).lanes.map((lane) => lane.lane),
+    ["checks-baseline-1", "postgres"],
+  );
+  // Without the selection, or with a lane that did not run, results are missing.
+  for (const selection of [undefined, '["checks-baseline-1","postgres","k3d-fixture-state"]']) {
+    const result = aggregate(selection);
+    assert.notEqual(result.status, 0);
+    assert.ok(JSON.parse(result.stdout).issues.some((issue) => issue.code === "missing-need"));
+  }
+  for (const selection of ["[]", "not json", '["postgres","postgres"]', '["openshell"]', "{}"]) {
+    const result = aggregate(selection);
+    assert.notEqual(result.status, 0, selection);
+    assert.ok(
+      JSON.parse(result.stdout).issues.some((issue) => issue.code === "invalid-lane-selection"),
+      selection,
+    );
+  }
+  // A selected lane's failure or missing evidence still fails.
+  const artifact = join(root, "results/postgres.json");
+  const original = readFileSync(artifact);
+  rmSync(artifact);
+  assert.notEqual(aggregate(lanes).status, 0);
+  const failedSummary = JSON.parse(original);
+  failedSummary.status = "failed";
+  writeFileSync(artifact, JSON.stringify(failedSummary));
+  assert.notEqual(aggregate(lanes).status, 0);
+  const wrongSource = JSON.parse(original);
+  wrongSource.sourceSha = f.head;
+  writeFileSync(artifact, JSON.stringify(wrongSource));
+  assert.notEqual(aggregate(lanes).status, 0);
+  writeFileSync(artifact, original);
+  assert.equal(aggregate(lanes).status, 0);
 });
