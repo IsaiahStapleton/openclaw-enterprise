@@ -1905,11 +1905,6 @@ async function prepareLane({ lane, statePath }) {
           )
         ).env,
       );
-      env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
-        state,
-        effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
-        "NODE_BASE_IMAGE",
-      );
       break;
     case "images-runtime-startup":
     case "images-runtime-startup-2":
