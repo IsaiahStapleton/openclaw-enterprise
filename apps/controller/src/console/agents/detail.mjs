@@ -1647,13 +1647,16 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
             context.onExpired();
             return;
           }
-          deployFeedback.textContent =
-            error.status === 403
+          // The cluster refused the credential check before admission: no version was created.
+          const clusterRbac = error.code === "RUNTIME_CREDENTIALS_CLUSTER_RBAC";
+          deployFeedback.textContent = clusterRbac
+            ? "Deployment refused: the cluster denied OCC access to this Agent's connection credentials. Ask a platform operator to grant the documented tenant RoleBindings, then deploy again."
+            : error.status === 403
               ? "Deployment denied. Check Agent deploy permission and access to selected Secrets. First deployment also needs Agent read and operate permissions to create connection credentials. Ask a Namespace administrator to confirm the required grants."
               : error.status === 409
                 ? "Deployment conflicts with the saved Agent state. Refresh this Agent to check for changed Configuration or missing connection credentials. If credentials are missing after an earlier version, ask an operator to restore them."
                 : rejectionMessage(error, submitted);
-          if (!submitted || [400, 403, 404, 409, 429].includes(error.status)) {
+          if (!submitted || clusterRbac || [400, 403, 404, 409, 429].includes(error.status)) {
             deployPending = false;
           }
         } finally {

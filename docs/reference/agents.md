@@ -384,6 +384,9 @@ its compatibility limits before planning deployment.
   for deployment.
 - `503 DEPENDENCY_UNAVAILABLE`: A selected Harness descriptor, Compute
   implementation, or other required dependency is unavailable.
+- `503 RUNTIME_CREDENTIALS_CLUSTER_RBAC`: The cluster denied the API
+  ServiceAccount access to the Agent's runtime credential Secrets or Deployment
+  preflight. An operator must [grant the tenant RoleBindings](../guides/deploy/production-agents.md#grant-tenant-rolebindings).
 
 ## Related
 
