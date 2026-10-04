@@ -258,8 +258,15 @@ function cachedResponseSerializers(): SerializerSelector.SerializerFactory {
       .map(([id, schema]) => `${id}=${sharedSchemaId(schema)}`)
       .join(",");
     const prefix = `${JSON.stringify(options ?? {})}|${shared}|`;
+    // Route schemas are fixed at registration. A schema JSON cannot express (a cycle or a
+    // BigInt keyword) compiles uncached rather than failing registration here.
     return (route) => {
-      const key = prefix + JSON.stringify(route.schema);
+      let key: string;
+      try {
+        key = prefix + JSON.stringify(route.schema);
+      } catch {
+        return compile(route);
+      }
       let serializer = serializers.get(key);
       if (serializer === undefined) {
         serializer = compile(route);
