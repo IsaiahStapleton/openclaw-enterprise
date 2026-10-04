@@ -161,9 +161,9 @@ import type {
   AdmittedSession,
 } from "../admission/admission-verifier.ts";
 import { AdmissionFailure } from "../admission/admission-verifier.ts";
-import { betterAuthIssuer } from "./issuer.ts";
+import { betterAuthIssuer, validHttpBaseURL } from "./configuration.ts";
 
-export { betterAuthIssuer, OCC_BETTER_AUTH_ISSUER_PREFIX } from "./issuer.ts";
+export { betterAuthIssuer, OCC_BETTER_AUTH_ISSUER_PREFIX } from "./configuration.ts";
 
 export const OCC_AUTH_COOKIE_PREFIX = "openclaw_occ";
 const LOCAL_PASSWORD_MIN_LENGTH = 12;
@@ -383,22 +383,6 @@ export interface ControllerAuth {
   }): Promise<ServiceKey & { readonly key: string }>;
   getServiceKey(id: string): Promise<ServiceKey | undefined>;
   revokeServiceKey(key: ServiceKey): Promise<void>;
-}
-
-function validHttpBaseURL(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.username.length === 0 &&
-      parsed.password.length === 0 &&
-      parsed.pathname === "/" &&
-      parsed.search.length === 0 &&
-      parsed.hash.length === 0
-    );
-  } catch {
-    return false;
-  }
 }
 
 export function normalizeSharedCookieDomain(domain: string | undefined): string | undefined {

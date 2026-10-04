@@ -67,10 +67,11 @@ graph TD
 loads the singleton Installation. Existing Installations only verify the
 configured administrator's immutable account/IAM identity: no key issuance,
 output changes, or identity/grant repair, including Installations predating service-administrator bootstrap.
-`verifiedWithoutAuth` first checks the administrator's `occ."user"` row and IAM
-Principal with plain SQL, before loading Better Auth, and logs
-`installation.already-bootstrapped` with `step: "fast-path"`. Any miss or error
-runs the full Better Auth check, which fails as before.
+`verifiedWithoutAuth` first runs the same check before loading Better Auth: plain
+SQL for the administrator's `occ."user"` row, then the same IAM state and
+administrator Principal check. Success logs `installation.already-bootstrapped`
+with `step: "fast-path"`. Any miss or error runs the full Better Auth check, which
+succeeds or fails exactly as before. The base URL is checked first on both paths.
 
 For fresh setup, production creates a Better Auth account with a random password;
 development creates the configured `OPENCLAW_DEV_EMAIL`/`OPENCLAW_DEV_PASSWORD`

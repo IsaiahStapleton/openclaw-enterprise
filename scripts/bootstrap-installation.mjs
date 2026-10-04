@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
-import { betterAuthIssuer } from "../apps/controller/src/auth/issuer.ts";
+import { betterAuthIssuer, validHttpBaseURL } from "../apps/controller/src/auth/configuration.ts";
 import {
   bootstrapOutputPath,
   writeProtectedBootstrapFile,
@@ -79,7 +79,13 @@ function authBaseURL(raw, mode) {
   ) {
     throw new Error("Development OCC_AUTH_BASE_URL must identify a loopback HTTP(S) URL.");
   }
-  return parsed.toString().replace(/\/$/, "");
+  const baseURL = parsed.toString().replace(/\/$/, "");
+  // The auth stack rejects the same values; check here so the already-bootstrapped path,
+  // which never loads it, still fails the Job on them.
+  if (!validHttpBaseURL(baseURL)) {
+    throw new Error("OCC_AUTH_BASE_URL must be an absolute HTTP origin URL.");
+  }
+  return baseURL;
 }
 
 function passwordOutputPath(raw) {
@@ -286,6 +292,7 @@ async function verifiedWithoutAuth(pool, state, installation, email) {
       undefined
     );
   } catch {
+    // The full verification reproduces and reports the error.
     return false;
   }
 }
@@ -312,8 +319,13 @@ try {
     (await verifiedWithoutAuth(pool, state, existing, config.adminEmail))
   ) {
     process.stdout.write(`${JSON.stringify({ event: "installation.already-bootstrapped" })}\n`);
-    emitOccLogEvent(logger, { event: "installation.already-bootstrapped", step: "fast-path" });
+    emitOccLogEvent(logger, {
+      event: "installation.already-bootstrapped",
+      installationId: existing.id,
+      step: "fast-path",
+    });
   } else if (existing !== undefined) {
+    emitOccLogEvent(logger, { event: "installation.fast-path-skipped" });
     const auth = await createAuth(pool, config, existing.id);
     const user = await findCredentialUser(auth, config.adminEmail);
     if (user === null) {

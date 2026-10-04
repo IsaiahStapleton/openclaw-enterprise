@@ -742,14 +742,14 @@ const PARTIAL_INSTALLATIONS = [
     "administrator binding",
     `DELETE FROM occ.iam_access_bindings WHERE identity_subject_id = ${ADMINISTRATOR_PRINCIPAL}`,
   ],
-  [
-    "administrator Role permission",
+  ...["administer", "read"].map((action) => [
+    `${action} installation permission`,
     `UPDATE occ.iam_roles AS role SET permissions = (
        SELECT jsonb_agg(permission) FROM jsonb_array_elements(role.permissions) AS permission
-       WHERE NOT (permission->>'action' = 'administer' AND permission->>'resourceKind' = 'installation'))
+       WHERE NOT (permission->>'action' = '${action}' AND permission->>'resourceKind' = 'installation'))
      WHERE id IN (SELECT role_id FROM occ.iam_access_bindings
        WHERE identity_subject_id = ${ADMINISTRATOR_PRINCIPAL})`,
-  ],
+  ]),
   [
     "readable IAM state",
     `UPDATE occ.iam_access_bindings SET resource_kind = 'unknown-kind', resource_id = 'x'
@@ -824,6 +824,37 @@ test(
   },
 );
 
+test(
+  "production bootstrap takes the fast path whatever the administrator's sign-in accounts",
+  requiresFailurePostgres,
+  async (context) => {
+    // Both checks look up the user only; its credential accounts do not count.
+    const { environment } = await bootstrapExistingInstallation(context, "no-accounts");
+    await withPool(migratorDatabaseUrl(), (pool) => pool.query("DELETE FROM occ.account"));
+    const repeated = await runProductionBootstrap(environment);
+    assert.equal(repeated.ok, true, repeated.stderr);
+    assert.equal(alreadyBootstrappedEvent(repeated)?.step, "fast-path", repeated.stderr);
+  },
+);
+
+test(
+  "production bootstrap of a complete Installation still rejects a non-origin auth base URL",
+  requiresFailurePostgres,
+  async (context) => {
+    const { environment } = await bootstrapExistingInstallation(context, "base-url");
+    const repeated = await runProductionBootstrap({
+      ...environment,
+      OCC_AUTH_BASE_URL: "http://127.0.0.1:0/auth",
+    });
+    assert.equal(repeated.ok, false, repeated.stdout);
+    assert.equal(alreadyBootstrappedEvent(repeated), undefined, repeated.stderr);
+    const failure = jsonLines(repeated.stderr).find(
+      (line) => line.event === "installation.bootstrap-failed",
+    );
+    assert.equal(failure?.code, "AUTH_BASE_URL_INVALID", repeated.stderr);
+  },
+);
+
 for (const [invariant, breakInvariant] of PARTIAL_INSTALLATIONS) {
   test(
     `production bootstrap without the ${invariant} takes the full path and fails`,
@@ -842,7 +873,7 @@ for (const [invariant, breakInvariant] of PARTIAL_INSTALLATIONS) {
       const failure = jsonLines(repeated.stderr).find(
         (line) => line.event === "installation.bootstrap-failed",
       );
-      assert.ok(failure, repeated.stderr);
+      assert.equal(failure?.code, "BOOTSTRAP_FAILED", repeated.stderr);
       assert.equal(failure.attempt, undefined);
       // The existing-Installation path never repairs.
       assert.deepEqual(await rowCounts(), counts);
