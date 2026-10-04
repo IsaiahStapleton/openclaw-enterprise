@@ -59,7 +59,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
 
 If the Namespace will run embedded Agents, also let the API store their combined
 transport bundle in the data plane. Without this grant, an embedded Agent's
-`runtime-credentials` request answers `503 DEPENDENCY_UNAVAILABLE`:
+`runtime-credentials` request and first deployment answer
+`503 RUNTIME_CREDENTIALS_CLUSTER_RBAC`, and the API logs
+`agent_runtime_credentials.cluster_denied` with the denied call and namespace:
 
 ```bash
 kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" \
@@ -456,9 +458,6 @@ Next, verify a model response from the same revision.
 
 ## Verify production workloads
 
-Verify NetworkPolicies against the
-[platform access matrix](../../testing/production-network-access.md).
-
 Wait for `GET /namespaces/$NAMESPACE_ID/agents/$AGENT_ID` to report the
 expected `activeRevisionId`, then require a real model response from that
 Agent. Use its optional loopback password to [attach with the OpenClaw
@@ -469,6 +468,9 @@ operator's local Kubernetes connection.
 If model access fails, check the Pod's
 [network profile](../../reference/drivers/kubernetes-compute/networking-and-isolation.md#explicit-network-profiles):
 model egress requires an explicit grant. See [what each check establishes](../operate/model-verification.md#what-each-check-establishes).
+
+Then [check Agent network isolation](../operate/network-isolation.md) by probing
+from inside the workload Pods.
 
 ## Attach with the OpenClaw TUI
 

@@ -269,15 +269,7 @@ func (app *application) iamRoleCommand() *cobra.Command {
 		Example: iamRoleCreateExample,
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(createFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(createFile)
 			if err != nil {
 				return err
 			}
@@ -355,15 +347,7 @@ func (app *application) iamAccessBindingCommand() *cobra.Command {
 		Example: iamAccessBindingCreateExample,
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(createFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(createFile)
 			if err != nil {
 				return err
 			}
@@ -441,15 +425,7 @@ func (app *application) configurationCommand() *cobra.Command {
 		Example: configurationCreateExample,
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(createFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(createFile)
 			if err != nil {
 				return err
 			}
@@ -486,15 +462,7 @@ func (app *application) configurationCommand() *cobra.Command {
 		Short: "Update a Configuration from a JSON document",
 		Args:  idArgs(configurationIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(updateFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(updateFile)
 			if err != nil {
 				return err
 			}
@@ -538,15 +506,7 @@ func (app *application) secretCommand() *cobra.Command {
 		Example: secretCreateExample,
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(createFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(createFile)
 			if err != nil {
 				return err
 			}
@@ -583,15 +543,7 @@ func (app *application) secretCommand() *cobra.Command {
 		Short: "Update a Secret from a JSON document",
 		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(updateFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(updateFile)
 			if err != nil {
 				return err
 			}
@@ -655,15 +607,7 @@ func (app *application) credentialSourceCommand() *cobra.Command {
 		Example: credentialSourceCreateExample,
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(createFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(createFile)
 			if err != nil {
 				return err
 			}
@@ -776,15 +720,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Example: agentCreateExample,
 		Args:    cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(createFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(createFile)
 			if err != nil {
 				return err
 			}
@@ -838,15 +774,7 @@ func (app *application) agentCommand() *cobra.Command {
 		Short: "Update an Agent from a JSON document",
 		Args:  idArgs(agentIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
-			namespace, err := app.requiredNamespace()
-			if err != nil {
-				return err
-			}
-			body, err := readJSON(updateFile)
-			if err != nil {
-				return err
-			}
-			client, err := app.client()
+			namespace, body, client, err := app.namespaceJSONClient(updateFile)
 			if err != nil {
 				return err
 			}
@@ -1435,6 +1363,20 @@ func (app *application) validateOptions(command *cobra.Command) error {
 	}
 	app.parsedTimeout = time.Duration(seconds) * time.Second
 	return nil
+}
+
+// Namespace and JSON errors must win over client configuration and key-file errors.
+func (app *application) namespaceJSONClient(path string) (string, jsontext.Value, *occclient.Client, error) {
+	namespace, err := app.requiredNamespace()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	body, err := readJSON(path)
+	if err != nil {
+		return namespace, nil, nil, err
+	}
+	client, err := app.client()
+	return namespace, body, client, err
 }
 
 // Invalid namespace input must win over client configuration and key-file errors.
