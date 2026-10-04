@@ -32,24 +32,34 @@ Both profiles enable:
 
 Both profiles give Gateway Pods (embedded or dedicated), Harness Pods, and the
 tenant namespace container default a `100m` CPU request and a four-core (`"4"`)
-CPU limit. Harness Pods and the container default have `2Gi` memory limits.
-Gateway Pods request `1280Mi` of memory and are limited to `3Gi`: an embedded
-OpenClaw Gateway measured about 1 GiB after start, peaked at 1.6 GiB during its
-first turns, and settled near 1.2 GiB; dedicated Gateways used 0.8 to 1.2 GiB
-idle, but a dedicated Codex Gateway serving native admin chat peaked at 1.9 GiB
-and was OOM-killed at a `2Gi` limit on its first coding turn. Denying the 11 bundled plugins an OpenAI-only Agent does not
-use (`plugins.deny`) saved only about 50 MiB. Harness Pods and the container
-default request `128Mi`. The CPU limit only
-permits bursts: an embedded OpenClaw Gateway runs a full agent turn as its
-startup model probe, about 16 CPU-seconds of local work, and was ready 24 to 30
-seconds after start at one core against 51 to 72 seconds at `500m`. The probe
-uses about one core, so cores beyond the first serve later work, not startup. The CPU request
-sets the scheduling reservation, so the higher limit reserves no node capacity.
-The trade-off is overcommit: several busy runtimes on one node can each take up
-to four cores from their neighbors, and a `limits.cpu` namespace quota counts
-the whole limit. Profile input cannot change these values; for others, write
-the Installation from the production example (see
+CPU limit. The CPU limit only permits bursts: an embedded OpenClaw Gateway runs
+a full agent turn as its startup model probe, about 16 CPU-seconds of local
+work, and was ready 24 to 30 seconds after start at one core against 51 to 72
+seconds at `500m`. The probe uses about one core, so cores beyond the first
+serve later work, not startup. The CPU request sets the scheduling reservation,
+so the higher limit reserves no node capacity. The trade-off is overcommit:
+several busy runtimes on one node can each take up to four cores from their
+neighbors, and a `limits.cpu` namespace quota counts the whole limit.
+
+Memory requests cover the use measured between turns, so the scheduler reserves
+what each Agent actually holds; limits cover measured peaks:
+
+| Pod                             | Request  | Limit | Measured                                                                                                                                |
+| ------------------------------- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway (embedded or dedicated) | `1792Mi` | `3Gi` | 1.2 to 1.6 GiB between turns, peaks of 1.8 to 2.2 GiB; a dedicated Codex Gateway serving native admin chat was OOM-killed at `2Gi`      |
+| Codex Harness                   | `768Mi`  | `4Gi` | about 0.6 GiB between turns, 1 GiB running a test suite, 1.9 GiB running `tsc`; lint, `tsc` and tests together were OOM-killed at `2Gi` |
+| Container default               | `128Mi`  | `2Gi` | containers that set no resources                                                                                                        |
+
+Plan node memory per Agent: an embedded OpenClaw Agent reserves `1792Mi`, and a
+dedicated Codex Agent reserves `2560Mi` (Gateway plus Harness). A Harness runs
+the Agent's shell commands, so builds and test suites in large repositories can
+need more than `4Gi`; raise `resources.agent.limits.memory` in the Installation
+for such workloads. Denying the 11 bundled plugins an OpenAI-only Agent does not use
+(`plugins.deny`) saved only about 50 MiB. Profile input cannot change these
+values; for others, write the Installation from the production example (see
 [Images and resources](../../reference/drivers/kubernetes-compute.md#images-and-resources)).
+An existing Installation keeps its values on upgrade; adopted values apply to
+each Agent at its next deployment.
 
 Seeding both Presets does not change the profile's PluginDriver. An Agent
 created from the other profile's Preset still needs a compatible driver,

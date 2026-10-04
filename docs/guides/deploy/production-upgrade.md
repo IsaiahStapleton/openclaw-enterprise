@@ -145,9 +145,10 @@ not update it. The command reads that Secret and stops before mutation when its
 ### Apply other Installation changes
 
 An upgrade keeps your Installation YAML. A release that changes recommended
-Installation values, such as the Gateway Pod memory request of `1280Mi` in the
-[installation profiles](installation-profiles.md) and production example, does
-not change an existing Installation. A candidate that changes any setting other
+Installation values, such as the Gateway and Harness memory requests and limits
+in the [installation profiles](installation-profiles.md) and production example,
+does not change an existing Installation; adopted resource values apply to each
+Agent at its next deployment. A candidate that changes any setting other
 than the Plugin Driver selection stops the helper with `candidate Installation
 changes a protected setting`. Diff `deploy/examples/production/installation.yaml`
 and `scripts/render-installation-profile.mjs` between the deployed and candidate

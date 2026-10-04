@@ -1030,17 +1030,22 @@ function buildRendered(profile, parsed, diagnostics) {
           },
           resources: {
             // Tenant runtimes may burst to four cores; 100m requests keep the
-            // scheduling reservation unchanged. An OpenClaw Gateway settles
-            // near 1.2 GiB once it has served a few turns; a dedicated Codex
-            // Gateway with native admin chat peaked at 1.9 GiB and was
-            // OOM-killed at 2Gi on its first coding turn.
+            // scheduling reservation unchanged. Memory requests cover measured
+            // use between turns, so a full node evicts instead of overcommitting
+            // silently; limits cover measured peaks.
+            // Gateways, embedded or dedicated, held 1.2-1.6 GiB between turns
+            // and peaked at 1.8-2.2 GiB; a dedicated Codex Gateway serving native
+            // admin chat was OOM-killed at 2Gi on its first coding turn.
             gateway: {
-              requests: { cpu: "100m", memory: "1280Mi" },
+              requests: { cpu: "100m", memory: "1792Mi" },
               limits: { cpu: "4", memory: "3Gi" },
             },
+            // A Codex Harness held 0.45-0.6 GiB between turns and peaked at
+            // 1 GiB running a test suite and 1.9 GiB running tsc; lint, tsc and
+            // tests together need about 2.2 GiB and were OOM-killed at 2Gi.
             agent: {
-              requests: { cpu: "100m", memory: "128Mi" },
-              limits: { cpu: "4", memory: "2Gi" },
+              requests: { cpu: "100m", memory: "768Mi" },
+              limits: { cpu: "4", memory: "4Gi" },
             },
             namespace: {
               quota: { pods: "10" },
