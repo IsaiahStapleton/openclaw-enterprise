@@ -58,7 +58,9 @@ test("cancelled queue entries release capacity while dispatched owner retains it
   assert.equal(queue.pending, 0);
 });
 
-function uncertainLifecycle({ kind = "uncertain" } = {}) {
+// `failure` makes the Driver fail after dispatch instead: "acquire" throws, "settle"
+// throws while settling an acquired outcome, "outcome" returns no outcome at all.
+function uncertainLifecycle({ kind = "uncertain", failure } = {}) {
   const clock = createControlledClock(1700000000000);
   const authority = Object.freeze({
     sessionId: "session",
@@ -89,12 +91,24 @@ function uncertainLifecycle({ kind = "uncertain" } = {}) {
       custody.driver.assertAttempt(attempt, "acquire");
       attempt.observeDispatch();
       acquires++;
-      const result = Object.freeze({ kind, attemptId: attempt.id });
+      if (failure === "acquire") {
+        throw new Error("fixture acquire failed");
+      }
+      if (failure === "outcome") {
+        return undefined;
+      }
+      const result = Object.freeze({
+        kind: failure === "settle" ? "acquired" : kind,
+        attemptId: attempt.id,
+      });
       originals.add(result);
       return result;
     },
     async settle(original) {
       assert.ok(originals.has(original));
+      if (failure === "settle") {
+        throw new Error("fixture settle failed");
+      }
     },
     async finalize() {
       finalizes++;
@@ -126,26 +140,46 @@ function uncertainLifecycle({ kind = "uncertain" } = {}) {
 }
 
 test("settled unknown issue without captured material occupies its reservation and blocks remint", async () => {
-  const { lifecycle, custody, acquires, finalizes, close } = uncertainLifecycle();
-  await assert.rejects(lifecycle.acquire(1000, new AbortController().signal));
-  await tick();
-  assert.equal(custody.reservations.size, 1);
-  assert.equal(lifecycle.activeActions, 0);
-  await assert.rejects(lifecycle.acquire(1000, new AbortController().signal));
-  assert.equal(acquires(), 1);
-  close();
-  await tick();
-  assert.equal(lifecycle.finalized, false);
-  assert.equal(finalizes(), 0);
+  // A Driver that fails after dispatch leaves the same unknown issue; the failures that
+  // never settle keep their provider action open.
+  for (const { failure, activeActions } of [
+    { failure: undefined, activeActions: 0 },
+    { failure: "acquire", activeActions: 1 },
+    { failure: "settle", activeActions: 1 },
+    { failure: "outcome", activeActions: 0 },
+  ]) {
+    const { lifecycle, custody, acquires, finalizes, close } = uncertainLifecycle({ failure });
+    // The waiter sees only that the provider action failed.
+    await assert.rejects(lifecycle.acquire(1000, new AbortController().signal), {
+      message: "ACTION_FAILED",
+    });
+    await tick();
+    assert.equal(custody.reservations.size, 1, failure);
+    assert.equal([...custody.reservations][0].unknown, true, failure);
+    assert.equal(lifecycle.activeActions, activeActions, failure);
+    assert.equal(lifecycle.blocked, true, failure);
+    await assert.rejects(lifecycle.acquire(1000, new AbortController().signal), {
+      message: "SESSION_UNAVAILABLE",
+    });
+    assert.equal(acquires(), 1);
+    close();
+    await tick();
+    assert.equal(lifecycle.finalized, false);
+    assert.equal(finalizes(), 0);
+  }
 });
 
 test("a result cannot clear the original dispatch latch by claiming not-dispatched", async () => {
   const { lifecycle, custody, acquires, close } = uncertainLifecycle({ kind: "not-dispatched" });
-  await assert.rejects(lifecycle.acquire(1000, new AbortController().signal));
+  await assert.rejects(lifecycle.acquire(1000, new AbortController().signal), {
+    message: "ACTION_FAILED",
+  });
   await tick();
   assert.equal(custody.reservations.size, 1);
   assert.equal(lifecycle.blocked, true);
-  await assert.rejects(lifecycle.acquire(1000, new AbortController().signal));
+  await assert.rejects(lifecycle.acquire(1000, new AbortController().signal), {
+    message: "SESSION_UNAVAILABLE",
+  });
   assert.equal(acquires(), 1);
   close();
 });

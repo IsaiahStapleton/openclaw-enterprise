@@ -202,22 +202,28 @@ test("service admission bounds are finite and retain an explicit long-task polic
     },
   };
   assert.equal(validateServiceConfig(input).sessionPolicy.maximumDurationSeconds, 172800);
-  for (const value of [0, -1, Infinity, NaN]) {
-    assert.throws(() => validateServiceConfig({ ...input, limits: { exchangeMs: value } }));
+  // Every guard refuses with the same message, so each input breaks exactly one guard:
+  // removing any guard lets its input through.
+  const gateway = (patch) => ({ ...input, gateway: { ...input.gateway, ...patch } });
+  const policy = (patch) => ({ ...input, sessionPolicy: { ...input.sessionPolicy, ...patch } });
+  const profiles = Array.from({ length: 16 }, (_, index) => `profile-${index}`);
+  for (const changed of [
+    ...[0, -1, Infinity, NaN].map((exchangeMs) => ({ ...input, limits: { exchangeMs } })),
+    { ...input, limits: { providerActions: 2 } },
+    { ...input, limits: { unknownLimit: 1 } },
+    { ...input, extra: true },
+    gateway({ publicOrigin: "https://credentials.example/alias" }),
+    gateway({ listen: "127.0.0.1:0" }),
+    gateway({ controlSocket: "run/credentials/control.sock" }),
+    policy({ maximumDurationSeconds: undefined }),
+    policy({ maximumDurationSeconds: Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1 }),
+    policy({ allowedProfiles: ["git-write", ...profiles] }),
+    policy({ allowedProfiles: ["git-write", "git-write"] }),
+    policy({ allowedProfiles: ["git-write", "x".repeat(129)] }),
+  ]) {
+    assert.throws(() => validateServiceConfig(changed), { message: "invalid-configuration" });
   }
-  assert.throws(() =>
-    validateServiceConfig({
-      ...input,
-      sessionPolicy: { ...input.sessionPolicy, maximumDurationSeconds: undefined },
-    }),
-  );
-  assert.throws(() =>
-    validateServiceConfig({
-      ...input,
-      gateway: { ...input.gateway, publicOrigin: "https://credentials.example/alias" },
-    }),
-  );
-  assert.throws(() => validateServiceConfig({ ...input, limits: { providerActions: 2 } }));
+  assert.throws(() => validateServiceConfig(null), { message: "invalid-configuration" });
 });
 
 test("protected file transfers its candidate only after descriptor cleanup", async (t) => {
