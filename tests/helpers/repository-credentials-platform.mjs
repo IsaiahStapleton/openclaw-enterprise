@@ -778,7 +778,17 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     await request("POST", `/namespaces/${namespace.id}/agents/${agent.id}/runtime-credentials`, {});
     return agent;
   }
-  async function readyPod(agent, revision, previousUid) {
+  // Periodic maintenance and repository cleanup retries run every 30 s (the
+  // repository Driver's fixed interval). A test waiting on such a pass pulls the
+  // revision's queued Work forward instead of waiting the interval out. Only Work
+  // scheduled more than 5 s ahead moves, so readiness rechecks keep their cadence.
+  async function expediteWork(revision) {
+    await pool.query(
+      "UPDATE occ.controller_work SET available_at=clock_timestamp() WHERE revision_id=$1 AND state='queued' AND available_at > clock_timestamp() + interval '5 seconds'",
+      [revision.id],
+    );
+  }
+  async function readyPod(agent, revision, previousUid, { expedite = false } = {}) {
     await kube.waitFor(
       "exact active AgentRevision",
       async () =>
@@ -806,6 +816,9 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
           ),
       );
       assert.ok(matches.length <= 1, "exact revision has multiple Ready gateway Pods");
+      if (matches.length === 0 && expedite) {
+        await expediteWork(revision);
+      }
       return matches[0];
     });
   }
@@ -980,6 +993,7 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
     request,
     createAgent,
     readyPod,
+    expediteWork,
     tool,
     podNode,
     material,
