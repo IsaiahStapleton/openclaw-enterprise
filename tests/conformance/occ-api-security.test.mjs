@@ -932,6 +932,9 @@ test("a caller without a grant gets the same audited denial whether or not the t
     ["POST", "credential-sources", { name: "probe", type: "openai" }],
     ["PATCH", `credential-sources/${child("cs")}`, {}],
     ["DELETE", `credential-sources/${child("cs")}`],
+    ["POST", "presets", { name: "probe", template: {} }],
+    ["PATCH", `presets/${child("pre")}`, { name: "probe" }],
+    ["DELETE", `presets/${child("pre")}`],
     ["POST", "service-accounts", { name: "probe" }],
     ["POST", `service-accounts/${child("sa")}/credentials`, {}],
     [

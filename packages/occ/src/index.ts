@@ -3238,7 +3238,11 @@ export class OpenClawController {
     namespaceId: string,
     presetId: string,
   ): Promise<readonly RemovedAccessBinding[]> {
+    this.namespaceIdentity(namespaceId);
     return this.mutate(async (state) => {
+      // Before any lookup, so a missing target is refused like an existing one;
+      // deletePresetInState re-checks under the Namespace lock.
+      await this.authorize(principalId, "delete", { kind: "preset", id: presetId, namespaceId });
       const namespace = await this.lockNamespace(state, namespaceId);
       return this.deletePresetInState(state, principalId, namespace.id, presetId);
     });
@@ -3415,12 +3419,11 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.namespaceIdentity(namespaceId);
     return this.mutate(async (state) => {
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "secret",
         id: secretId,
         namespaceId,
       });
-      const namespace = await this.lockNamespace(state, namespaceId);
       const secret = await state.secrets.lockSecret(namespace.id, secretId);
       if (!secret) {
         throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
@@ -3746,12 +3749,11 @@ export class OpenClawController {
     this.assertCredentialSourceTransactionBoundary();
     this.namespaceIdentity(namespaceId);
     const { namespace, source } = await this.mutate(async (state) => {
-      await this.authorize(principalId, "delete", {
+      const locked = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "credential_source",
         id: credentialSourceId,
         namespaceId,
       });
-      const locked = await this.lockNamespace(state, namespaceId);
       const found = await state.credentialSources.lockCredentialSource(
         locked.id,
         credentialSourceId,
@@ -3989,12 +3991,11 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "service_account",
         id: serviceAccountId,
         namespaceId,
       });
-      const namespace = await this.lockNamespace(state, namespaceId);
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
         serviceAccountId,
@@ -4128,12 +4129,11 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.configurationIdentity(namespaceId, configurationId);
     return this.mutate(async (state) => {
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "configuration",
         id: configurationId,
         namespaceId,
       });
-      const namespace = await this.lockNamespace(state, namespaceId);
       const driver = this.configurationDriver();
       const configuration = await state.configurations.lockConfiguration(
         namespace.id,
@@ -5765,17 +5765,11 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Namespace identity is missing.");
     }
     return this.mutate(async (state) => {
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "namespace",
         id: namespaceId,
         namespaceId,
       });
-      const namespace = await state.namespaces.lockNamespace(namespaceId);
-      if (!namespace) {
-        throw new ScopeViolationError(
-          "The Namespace does not belong to the server-owned Installation.",
-        );
-      }
       // Keep in-flight teardown idempotent. The original caller can explicitly
       // retry terminal work after repairing the dependency or permission failure.
       // Another authorized caller can take over only once the initiating actor
@@ -6409,6 +6403,23 @@ export class OpenClawController {
         "The Namespace does not belong to the server-owned Installation.",
       );
     }
+    return namespace;
+  }
+
+  /**
+   * Authorizes a delete that also removes IAM policy, then locks its Namespace. The first
+   * check runs before any lookup, so a caller without the grant gets the same audited denial
+   * whether or not the target exists. The second runs under the Namespace lock, which orders
+   * it after a concurrent revocation, as holdIAMPolicyAuthority does for policy writes.
+   */
+  private async lockNamespaceForPolicyDelete(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    target: ResourceRef & { readonly namespaceId: string },
+  ): Promise<Readonly<Namespace>> {
+    await this.authorize(principalId, "delete", target);
+    const namespace = await this.lockNamespace(state, target.namespaceId);
+    await this.authorize(principalId, "delete", target);
     return namespace;
   }
 
