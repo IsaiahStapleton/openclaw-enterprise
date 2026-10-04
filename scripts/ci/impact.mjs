@@ -123,7 +123,7 @@ function selectTestLanes(mergeBase, tested, tests, manifests) {
   const changedManifests = new Set(manifests);
   for (const path of changedManifests) {
     if (!lanePaths.has(path)) {
-      throw new InspectionError("a changed manifest is not a CI lane", "manifest_change");
+      throw new InspectionError("a changed manifest is not an indexed lane", "manifest_change");
     }
     // A manifest may only add, remove or edit entries for the changed tests.
     if (
@@ -144,6 +144,11 @@ function selectTestLanes(mergeBase, tested, tests, manifests) {
         owners.get(file.path)?.add(name);
       }
     }
+  }
+  // Git grep does not read symbolic link targets, so a link could name a test unseen.
+  const tree = git("ls-tree", "-r", "-z", "--full-tree", tested).toString("binary");
+  if (tree.split("\0").some((entry) => entry.startsWith("120000 "))) {
+    throw new InspectionError("the tested tree contains a symbolic link", "referenced_test");
   }
   const selected = new Set([alwaysSelected]);
   for (const [path, lanes] of owners) {

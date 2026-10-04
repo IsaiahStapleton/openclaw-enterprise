@@ -139,6 +139,9 @@ function fixture(t, change, initial = {}, initialModes = {}, { moveMain } = {}) 
       ["--verify-mode", "tests", "--lanes", JSON.stringify(lanes.slice(1))],
       ["--verify-mode", "tests", "--lanes", JSON.stringify([...lanes, "postgres-auth"])],
       ["--verify-mode", "tests", "--lanes", JSON.stringify(lanes, null, 1)],
+      ...(lanes.length > 1
+        ? [["--verify-mode", "tests", "--lanes", JSON.stringify([...lanes].reverse())]]
+        : []),
     ]) {
       assert.notEqual(run(bad, overrides).status, 0, bad.join(" "));
     }
@@ -753,6 +756,8 @@ function shallowBootstrap(t, f) {
       ["tests", ""],
       ["tests", "[]"],
       ["tests", JSON.stringify(lanes.slice(1))],
+      ["tests", JSON.stringify(lanes, null, 1)],
+      ...(lanes.length > 1 ? [["tests", JSON.stringify([...lanes].reverse())]] : []),
       ["full", json],
       ["docs", json],
     ]) {
@@ -1917,6 +1922,22 @@ test("unmapped, non-CI, referenced or irregular test files select full", (t) => 
   reason(({ repo }) => {
     symlinkSync("postgres-a.test.mjs", join(repo, "tests/integration/postgres-c.test.mjs"));
   }, "ineligible_change");
+  // Git grep cannot see a symbolic link's target, so a link on main selects full.
+  const linked = fixture(
+    t,
+    editTest("tests/integration/postgres-a.test.mjs"),
+    initial,
+    {},
+    {
+      moveMain: ({ repo }) =>
+        symlinkSync("../integration/k3d-a.test.mjs", join(repo, "tests/helpers/linked.mjs")),
+    },
+  );
+  linked.expect("full");
+  assert.equal(
+    shallowBootstrap(t, linked).run("select").output,
+    "mode=full\nreason=referenced_test\n",
+  );
   // A malformed or missing manifest is never trusted.
   reason(editTest("tests/integration/postgres-a.test.mjs"), "manifest_unavailable", {
     "scripts/ci/test-suites/k3d-fixture-state.json": "{not json",
@@ -2260,4 +2281,30 @@ test("tests mode flows through the gate to a source-bound aggregate of only its 
   assert.notEqual(aggregate(lanes).status, 0);
   writeFileSync(artifact, original);
   assert.equal(aggregate(lanes).status, 0);
+});
+
+test("the checked-in suite index and manifests support test-only selection", (t) => {
+  // Copy the real index and lane manifests, so an index shape the policy does
+  // not accept fails here instead of silently selecting full for every PR.
+  const index = JSON.parse(
+    readFileSync(join(repositoryRoot, "scripts/ci/test-suites.json"), "utf8"),
+  );
+  const initial = {
+    "scripts/ci/impact.mjs": readFileSync(selector, "utf8"),
+    "scripts/ci/test-suites.json": readFileSync(
+      join(repositoryRoot, "scripts/ci/test-suites.json"),
+      "utf8",
+    ),
+  };
+  for (const target of Object.values(index.lanes)) {
+    const path = join("scripts/ci", target);
+    initial[path] = readFileSync(join(repositoryRoot, path), "utf8");
+  }
+  const lane = index.groups.ci.find((name) => name !== "checks-baseline-1");
+  const manifest = JSON.parse(initial[join("scripts/ci", index.lanes[lane])]);
+  const file = manifest.files[0].path;
+  const f = fixture(t, ({ put }) => put(file, "// edited\n"), initial);
+  const expected = ["checks-baseline-1", lane].sort();
+  f.expectTests(expected);
+  shallowBootstrap(t, f).expectTests(expected);
 });
