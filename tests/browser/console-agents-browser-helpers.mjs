@@ -183,11 +183,11 @@ export async function settlePageRequests(page) {
 }
 
 // Test-only page hook: counts, per URL path, the page's fetches that have settled, meaning the
-// fetch rejected or the page finished reading the response body (or the response has none).
-// Install it before the page loads. A count observed by waitForSettledFetches() or
-// waitForIdleFetches() is read in a later task, so the page's own continuation of that fetch
-// (for example dropping a stale response, or finishing the view's read bookkeeping) has
-// already run.
+// fetch rejected or the page finished reading the response body. It also counts fetches still
+// in flight; for that count a response without a body ends its fetch at once. Install it before
+// the page loads. A count observed by waitForSettledFetches() or waitForIdleFetches() is read in
+// a later task, so the page's own continuation of that fetch (for example dropping a stale
+// response, or finishing the view's read bookkeeping) has already run.
 export async function trackSettledFetches(page) {
   await page.addInitScript(() => {
     const settled = new Map();
@@ -249,10 +249,11 @@ export async function waitForSettledFetches(page, path, count) {
   );
 }
 
-// Waits until every fetch the page has started has settled (see trackSettledFetches). The
+// Waits until no fetch the page has started is still in flight (see trackSettledFetches). The
 // console retains a view, or an Agent tab, for a later return only if none of its reads were
 // still pending when the reader left it; otherwise the return rebuilds it. Call this before
-// leaving a view whose DOM a test later expects to be reused.
+// leaving a view whose DOM a test later expects to be reused. It checks one moment: a read the
+// page starts later (after a timer) is not covered, so wait for the view's content first.
 export async function waitForIdleFetches(page) {
   await page.waitForFunction(() => globalThis.inFlightFetchCount() === 0);
 }
