@@ -192,10 +192,15 @@ Secret server-side. Pagination is upstream; filtering is local. Selecting a plug
 Credential, provider, and Harness changes clear results and invalidate pending reads.
 
 `create.mjs:MODEL_CHOICES` supplies unauthenticated static model lists and manual
-entry. In `renderAgentForm`, the model-entry button switches `manualModel`, clears
-both model inputs, and calls `updateModelConfiguration` and `updateControls`.
+entry. In `renderAgentForm`, the model-entry button switches `manualModel` and
+calls `updateModelConfiguration` and `updateControls`. Entering manual mode
+keeps `model.value` and clears the hidden dropdown selection.
 Returning to the list uses `resetModelChoices` to rebuild the current provider's
-options, including after Configuration JSON changes the provider.
+options, including after Configuration JSON changes the provider. It retains
+the model only if that provider's list contains it; otherwise it clears both
+inputs. Provider and authentication changes call the same reset without a model
+to retain. `model.value` supplies one Configuration model, and submission checks
+that its primary model matches that value.
 `updateControls` updates the button label, visibility, and required input; focus moves
 to that input. Switching back to the list preserves credentials and unrelated
 Configuration values. Saved Configuration and pending-request locks apply to
@@ -338,6 +343,7 @@ refresh and inspection.
 
 ## Changelog
 
+- 2026-10-03 22:38: Preserve listed models across entry-mode switches while retaining one submitted model in the accompanying console update. (01a10328-9de5-7081-ada2-d88ff80161e4 - 7ac9f02abc912e93078bb6e0900a988f26e339d3)
 - 2026-10-03 15:22: Trace switching between listed and manual model entry in the accompanying console fix. (01a10328-9de5-7081-ada2-d88ff80161e4 - be09a25a8c13088f4bc700b99e71e7a5072851a3)
 
 - 2026-10-03 20:00: Rebuild a view retained without a Namespace selection once one is readable, so the header selector shows the default.

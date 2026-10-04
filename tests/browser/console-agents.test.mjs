@@ -2657,11 +2657,34 @@ test("Agent creation can return from manual model entry to the list and save the
     "anthropic/claude-opus-5-5",
   );
   await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  assert.equal(await choice.inputValue(), "");
+  assert.equal(JSON.parse(await configuration.inputValue()).agents?.defaults?.model, undefined);
   const secret = await createModelCredentialSecret(page, "round-trip-model-key");
   await choice.selectOption("gpt-6-astra");
   await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
   assert.equal(await choice.isVisible(), false);
   assert.equal(await model.evaluate((input) => input.ownerDocument.activeElement === input), true);
+  assert.equal(await model.inputValue(), "gpt-6-astra");
+  assert.equal(await model.evaluate((input) => input.required), true);
+  assert.equal(await choice.evaluate((input) => input.required), false);
+  // A manual edit replaces the previous list selection in the same Configuration.
+  await model.fill("gpt-6-sol");
+  await model.press("Tab");
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "codex/gpt-6-sol",
+  );
+  await page.getByRole("button", { name: "Choose a model from the list", exact: true }).click();
+  assert.equal(await choice.inputValue(), "gpt-6-sol");
+  assert.equal(await model.isVisible(), false);
+  assert.equal(await choice.isVisible(), true);
+  assert.equal(await model.evaluate((input) => input.required), false);
+  assert.equal(await choice.evaluate((input) => input.required), true);
+  assert.equal(
+    JSON.parse(await configuration.inputValue()).agents.defaults.model,
+    "codex/gpt-6-sol",
+  );
+  await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
   await model.fill("custom-model-id");
   await model.press("Tab");
 
@@ -2683,9 +2706,9 @@ test("Agent creation can return from manual model entry to the list and save the
 
   // Repeated switches must still offer both modes without leaving a hidden required input.
   await page.getByRole("button", { name: "Enter model ID manually", exact: true }).click();
-  assert.equal(await model.inputValue(), "");
+  assert.equal(await model.inputValue(), "gpt-6-sol");
   await page.getByRole("button", { name: "Choose a model from the list", exact: true }).click();
-  await choice.selectOption("gpt-6-sol");
+  assert.equal(await choice.inputValue(), "gpt-6-sol");
   const saved = page.waitForResponse(
     (response) =>
       response.url() === `${fixture.origin}/namespaces/${namespace.id}/agents` &&
@@ -2740,6 +2763,8 @@ test("Agent creation accepts a manual model outside the static list and saves th
     ).status,
     200,
   );
+  // Submit manual entry after a different list choice; only the manual model may be saved.
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-astra");
   const selectedSecret = await enterManualModel(
     page,
     "manual-model-key",

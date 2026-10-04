@@ -428,10 +428,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   );
   const toggleModel = button("Enter model ID manually", () => {
     if (manualModel) {
-      resetModelChoices();
+      resetModelChoices(false, model.value);
     } else {
       manualModel = true;
-      model.value = "";
       modelChoice.value = "";
       updateModelConfiguration();
       updateControls();
@@ -450,13 +449,14 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
     ...(useModelChoices ? [choiceField, toggleModel] : []),
     modelField,
   );
-  function resetModelChoices(resetTransport = false) {
+  function resetModelChoices(resetTransport = false, selectedModel = "") {
     manualModel = !useModelChoices;
-    model.value = "";
+    model.value = MODEL_CHOICES[nativeProvider.value].includes(selectedModel) ? selectedModel : "";
     modelChoice.replaceChildren(
       element("option", { value: "" }, "Choose a model"),
       ...MODEL_CHOICES[nativeProvider.value].map((id) => element("option", { value: id }, id)),
     );
+    modelChoice.value = model.value;
     updateModelConfiguration(resetTransport);
     updateControls();
   }
@@ -630,7 +630,7 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
       typeof previousModel === "string"
         ? previousModel.slice(previousModel.indexOf("/") + 1)
         : pendingProviderModel;
-    // Keep transport and model metadata while switching to manual entry clears the model.
+    // Keep transport and model metadata while no model is selected.
     pendingProviderModel = selectedModel || resetTransport ? undefined : previousId;
     if (resetTransport) {
       delete providers.openai;
