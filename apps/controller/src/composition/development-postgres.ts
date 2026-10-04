@@ -270,6 +270,9 @@ export async function composePostgresDevelopment(
       iamDriver,
       iamState.identities,
       drivers?.defaultPresets ?? [],
+      config.logger === undefined
+        ? undefined
+        : (warning) => emitOccLogEvent(config.logger!, warning),
     );
 
     let workspaceFilesAccess = config.workspaceFilesAccess;

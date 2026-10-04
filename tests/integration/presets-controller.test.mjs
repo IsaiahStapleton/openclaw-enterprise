@@ -1164,7 +1164,7 @@ test("startup seeds default Presets with an administrator who can create them wh
       runtime.defaultPresets,
     ),
     (error) =>
-      /can create and update Presets in every Namespace/.test(error.message) &&
+      /can create Presets in every Namespace/.test(error.message) &&
       error.cause instanceof AuthorizationDeniedError,
   );
   assert.deepEqual((await fixture.request("GET", collection(unseeded.id))).data, []);
@@ -1482,6 +1482,141 @@ test("startup never refreshes a presets.files copy, even one that repeats a bund
       (event) => event.details?.source === "installation-defaults-refresh",
     ),
     [],
+  );
+});
+
+test("startup skips and warns about a default refresh the policy refuses instead of failing", async (t) => {
+  const { initializeInstallationPresets } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { emitOccLogEvent } = await import("../../apps/controller/src/logging.ts");
+  const { DependencyUnavailableError } = await import("../../packages/occ/src/index.ts");
+  const runtime = await bundledRuntime(t, true);
+  const fixture = await createFixture(t, {
+    defaultPresets: runtime.defaultPresets,
+    bundledPresetVersions: runtime.bundledPresetVersions,
+    refreshBundledDefaultPresets: runtime.installation.presets.includeDefaults,
+  });
+  const iam = fixture.controller.selectDriver("iam", "console-native-iam");
+  const installationId = fixture.controller.installation.id;
+  const principal = fixture.policy.identities.find((identity) => identity.kind === "principal");
+  const adminRoleId = fixture.policy.bindings.find(
+    (binding) => binding.subjectId === principal.id,
+  ).roleId;
+  // Administers the Installation but holds no grant inside a Namespace.
+  const { principal: scoped } = await fixture.createAccountWithPolicy(
+    "installation-only",
+    (identity) => {
+      fixture.policy.bindings.push({
+        id: "installation-only-admin",
+        subjectKind: "identity",
+        subjectId: identity.id,
+        roleId: adminRoleId,
+        resourceKind: "installation",
+        resourceId: installationId,
+      });
+    },
+  );
+  const staleCodex = await archivedDefault("default-codex.json", "32576b8f13976778");
+  const staleCopy = async (label) => {
+    const namespace = await fixture.createNamespace(label, { ready: true });
+    const copy = (await fixture.request("GET", collection(namespace.id))).data.find(
+      (preset) => preset.name === staleCodex.name,
+    );
+    const rolledBack = await fixture.request("PATCH", `${collection(namespace.id)}/${copy.id}`, {
+      body: { template: staleCodex.template },
+    });
+    assert.equal(rolledBack.status, 200, JSON.stringify(rolledBack.body));
+    return { namespace, copy: rolledBack.data };
+  };
+  const frozen = await staleCopy("Frozen presets");
+  const open = await staleCopy("Open presets");
+  // An administrator froze one Namespace's Presets before the upgrade.
+  fixture.policy.restrictions.push({
+    id: "freeze-presets",
+    namespaceId: frozen.namespace.id,
+    action: "update",
+    resourceKind: "preset",
+    effect: "deny",
+  });
+  const lines = [];
+  const logger = Object.fromEntries(
+    ["error", "warn", "info", "debug"].map((level) => [
+      level,
+      (record) => lines.push({ level, ...record }),
+    ]),
+  );
+  const refreshes = () =>
+    fixture.audit.events.filter(
+      (event) => event.details?.source === "installation-defaults-refresh",
+    );
+
+  // The Installation-only administrator comes first; it must not stand in for the one
+  // who can refresh the open Namespace.
+  await initializeInstallationPresets(
+    fixture.controller,
+    iam,
+    [scoped, principal],
+    runtime.defaultPresets,
+    (event) => emitOccLogEvent(logger, event),
+  );
+  const read = async ({ namespace, copy }) =>
+    (await fixture.request("GET", `${collection(namespace.id)}/${copy.id}`)).data;
+  assert.deepEqual(await read(frozen), frozen.copy);
+  assert.notDeepEqual((await read(open)).template, open.copy.template);
+  assert.deepEqual(
+    refreshes().map((event) => [event.resource.id, event.actorId]),
+    [[open.copy.id, principal.id]],
+  );
+  assert.deepEqual(lines, [
+    {
+      level: "warn",
+      event: "presets.default-refresh-skipped",
+      namespaceId: frozen.namespace.id,
+      presetId: frozen.copy.id,
+      presetName: staleCodex.name,
+      reason: "An applicable Restriction denies the exact action and resource.",
+      restrictionIds: ["freeze-presets"],
+    },
+  ]);
+
+  // With no administrator able to update Presets at all, startup still completes.
+  const unbound = await staleCopy("Unbound administrators");
+  lines.length = 0;
+  await initializeInstallationPresets(
+    fixture.controller,
+    iam,
+    [scoped],
+    runtime.defaultPresets,
+    (event) => emitOccLogEvent(logger, event),
+  );
+  assert.deepEqual(await read(unbound), unbound.copy);
+  assert.deepEqual(
+    lines.map(({ level, event, presetId, reason }) => ({ level, event, presetId, reason })),
+    [frozen, unbound]
+      .sort((a, b) => a.namespace.id.localeCompare(b.namespace.id))
+      .map(({ copy }) => ({
+        level: "warn",
+        event: "presets.default-refresh-skipped",
+        presetId: copy.id,
+        reason: "No explicit scoped binding grants the exact action and resource.",
+      })),
+  );
+  assert.equal(refreshes().length, 1);
+
+  // An authorization outage is not a refusal: startup still stops with it.
+  const authorize = iam.authorize.bind(iam);
+  iam.authorize = async (request) => {
+    if (request.action === "update" && request.resource.kind === "preset") {
+      throw new Error("IAM outage");
+    }
+    return authorize(request);
+  };
+  t.after(() => {
+    iam.authorize = authorize;
+  });
+  await assert.rejects(
+    initializeInstallationPresets(fixture.controller, iam, [principal], runtime.defaultPresets),
+    DependencyUnavailableError,
   );
 });
 
