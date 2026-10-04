@@ -12,7 +12,7 @@
       "owner": "Driver package composition",
       "reason": "The installed Driver loader validates configured package identity, trusted root and entrypoint at runtime; its target is deliberately not a statically enumerable workspace import.",
       "removeWhen": "Remove this exception if the supported installed Driver loader is removed or replaced by static registration.",
-      "loaderIdentity": "loader:sha256:7c60dbbcbdbfeb35d75840dc27f4cde78cd3f2e2116401a1a5d4baa010646df6"
+      "loaderIdentity": "loader:sha256:28e2b011449dea38b831de4eb171501bf833b73e450b7d2d3afdcf6b90624a8b"
     },
     {
       "rule": "cross-provider-implementation",

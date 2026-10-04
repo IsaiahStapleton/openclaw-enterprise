@@ -2816,6 +2816,14 @@ export class PostgresPlatformState implements PlatformStateStore {
                  WHERE w.namespace_id = $1
                    AND w.state IN ('queued', 'claimed')
                    AND r.admitted_spec #>> '{harness_auth,serviceAccountId}' = $2
+               ) OR EXISTS (
+                 -- A queued or running guided provisioning plan creates its Agent from this
+                 -- account later. A failed plan does not block: nothing removes it, and
+                 -- reading or retrying it then names the deleted ServiceAccount.
+                 SELECT 1 FROM occ.agent_provisioning_work AS p
+                 WHERE p.namespace_id = $1 AND p.status IN ('queued', 'running')
+                   AND p.plan #>> '{harnessAuth,method}' = 'chatgpt_service_account'
+                   AND p.plan #>> '{harnessAuth,serviceAccountId}' = $2
                ) AS present`,
               [namespaceId, serviceAccountId],
             )
@@ -4253,6 +4261,24 @@ export class PostgresPlatformState implements PlatformStateStore {
             throw new ResourceConflictError("The Agent provisioning work is not retryable.");
           }
           return provisioningRecordFromRow(retried[0]);
+        },
+        releaseConfiguration: async (namespaceId, configurationId) => {
+          const released = await client.query(
+            `UPDATE occ.agent_provisioning_work AS provisioning
+             SET configuration_id = NULL,
+                 updated_at = clock_timestamp()
+             WHERE provisioning.namespace_id = $1
+               AND provisioning.configuration_id = $2
+               AND provisioning.status = 'succeeded'
+               AND NOT EXISTS (
+                 SELECT 1 FROM occ.agents AS agent
+                 WHERE agent.namespace_id = provisioning.namespace_id
+                   AND agent.id = provisioning.agent_id
+                   AND agent.configuration_id = provisioning.configuration_id
+               )`,
+            [namespaceId, configurationId],
+          );
+          return released.rowCount === 1;
         },
       },
       audit: {

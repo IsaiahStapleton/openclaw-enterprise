@@ -1,7 +1,10 @@
 import { immutableCopy, isNonEmptyString, isPositiveSafeInteger } from "@openclaw-enterprise/utils";
-import type { RuntimeFailureCause, RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
+import type { RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
 
 import { ScopeViolationError } from "../errors.ts";
+import { runtimeFailureCause } from "../runtime-failure-cause.ts";
+
+export { runtimeFailureCause };
 
 export type { RuntimeFailureCause, RuntimeFailureEvidence } from "@openclaw-enterprise/contracts";
 
@@ -80,6 +83,11 @@ export function deploymentProgressForWork(
       code = attempt.code;
       message =
         "The Kubernetes API was unavailable. The controller will retry until the deployment deadline.";
+      break;
+    case "SANDBOX_ADMISSION_LIMIT_REACHED":
+      code = attempt.code;
+      message =
+        "The Sandbox gateway refuses new requests from the controller until its request admissions free up. The controller will retry until the deployment deadline.";
       break;
     case "ACTIVE_REVISION_CHANGED":
       code = attempt.code;
@@ -209,18 +217,6 @@ export interface PermanentFailure {
 }
 
 const RUNTIME_FAILURE_IDENTIFIER = /^[A-Za-z0-9._~:@-]{1,64}$/u;
-// The closed vocabulary of a model-probe failure cause. Each kind admits only
-// these detail tokens (WRAPPER_ERROR none), so a cause can never carry native
-// output, a provider response or a credential across the runtime boundary.
-const RUNTIME_FAILURE_CAUSE_DETAILS: Readonly<
-  Record<RuntimeFailureCause["kind"], RegExp | undefined>
-> = Object.freeze({
-  PROCESS_EXIT: /^(?:exit-[1-9][0-9]{0,2}|signal-SIG[A-Z0-9]{1,10}|error-E[A-Z0-9]{1,15})$/u,
-  PROBE_STATUS:
-    /^(?:format|rate_limit|billing|unknown|no_model|other|turn-failed|error-event|tool-event|unexpected-event|no-reply)$/u,
-  INVALID_OUTPUT: /^(?:json|shape)$/u,
-  WRAPPER_ERROR: undefined,
-});
 const ISO_TIMESTAMP =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
 
@@ -275,29 +271,6 @@ function validIsoTimestamp(value: string): boolean {
     offsetHour <= 23 &&
     offsetMinute <= 59
   );
-}
-
-/** Returns the cause when it is in the closed vocabulary, otherwise undefined. */
-export function runtimeFailureCause(value: unknown): RuntimeFailureCause | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const { kind, detail, ...rest } = value as Record<string, unknown>;
-  if (
-    Object.keys(rest).length > 0 ||
-    typeof kind !== "string" ||
-    !Object.hasOwn(RUNTIME_FAILURE_CAUSE_DETAILS, kind)
-  ) {
-    return undefined;
-  }
-  const details = RUNTIME_FAILURE_CAUSE_DETAILS[kind as RuntimeFailureCause["kind"]];
-  if (detail === undefined) {
-    return Object.freeze({ kind: kind as RuntimeFailureCause["kind"] });
-  }
-  if (details === undefined || typeof detail !== "string" || !details.test(detail)) {
-    return undefined;
-  }
-  return Object.freeze({ kind: kind as RuntimeFailureCause["kind"], detail });
 }
 
 export function validateRuntimeFailureEvidence(value: unknown): RuntimeFailureEvidence {
@@ -533,12 +506,16 @@ function deploymentErrorMessage(code: string): string {
       return "Deployment ended because the Agent was stopped.";
     case "AGENT_GATEWAY_UNAVAILABLE":
       return "The Agent Gateway was still not reachable through its route at the deployment deadline.";
+    case "AGENT_GATEWAY_UNAUTHORIZED":
+      return "The Agent Gateway refused its own CLI as unauthorized. Check that the Agent's Configuration sets gateway.auth.password to OPENCLAW_GATEWAY_PASSWORD (Enable gateway password access), then deploy again.";
     case "KUBERNETES_API_UNAVAILABLE":
       return "The Kubernetes API was still unavailable at the deployment deadline.";
     case "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED":
       return "The Sandbox Driver cannot deliver Secret-backed environment variables to the Harness.";
     case "SANDBOX_HARNESS_UNSUPPORTED":
       return "The Sandbox Driver does not support this revision's Harness.";
+    case "SANDBOX_ADMISSION_LIMIT_REACHED":
+      return "The Sandbox gateway still refused new requests from the controller (request admission limit reached) at the deployment deadline.";
     default:
       return "Deployment reconciliation failed.";
   }

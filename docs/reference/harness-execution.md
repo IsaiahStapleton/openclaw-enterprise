@@ -157,7 +157,8 @@ number, elapsed milliseconds, exit code, recognized termination signal, and
 final code (`READY`, `MODEL_PROBE_TIMEOUT`, `MODEL_PROBE_FAILED`,
 `AUTHENTICATION_FAILED`, or `UNAVAILABLE`). Both probe logs add a
 `MODEL_PROBE_FAILED` [cause](agents/deployment.md#model-check-failure-cause) and
-omit credentials and raw provider output. The runtime failure status is
+omit credentials and raw provider output. `occ agent logs` and the console Logs
+tab show it as `causeKind` and `causeDetail`. The runtime failure status is
 published only after retries end.
 
 `AUTHENTICATION_FAILED` means the provider rejected the credential: OpenClaw

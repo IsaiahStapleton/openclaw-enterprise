@@ -906,6 +906,94 @@ test("exact Namespace ownership prevents cross-tenant access and resource traver
   }
 });
 
+test("a caller without a grant gets the same audited denial whether or not the target exists", async () => {
+  const fixture = await createFixture();
+  await bootstrap(fixture);
+  await createNamespace(fixture, "Tenant A");
+  const namespace = await createNamespace(fixture, "Tenant B");
+  const agent = await createAgent(fixture, namespace, "Agent B");
+  const missingNamespaceId = "ns_9e5b1c7a-5d2f-4c1e-8a3b-0f6d2e7c9a41";
+  const missingAgentId = "agt_4b8e2d1f-7a3c-4e9b-9c5d-2a1f8e6b3d70";
+  const child = (prefix) => `${prefix}_6c2a9f1e-3b7d-4a8c-b5e1-9d4f2a7c8e03`;
+  const reader = fixture.tenantAReader;
+  const readerApp = fixture.createApp(reader);
+
+  // The reader holds no grant in Tenant B. Every target below must answer the same audited
+  // 403 whether the Namespace or Agent exists, so a refusal never reveals which ids are real.
+  const namespaceRoutes = [
+    ["GET", "agents/repository-options"],
+    ["POST", "agents", { name: "probe", configurationId: agent.configurationId }],
+    ["POST", "configurations", { kind: "agent", values: {} }],
+    ["PATCH", `configurations/${child("cfg")}`, { values: {} }],
+    ["DELETE", `configurations/${child("cfg")}`],
+    ["POST", "secrets", { name: "probe", value: "probe-value" }],
+    ["PATCH", `secrets/${child("sec")}`, { value: "probe-value" }],
+    ["DELETE", `secrets/${child("sec")}`],
+    ["POST", "credential-sources", { name: "probe", type: "openai" }],
+    ["PATCH", `credential-sources/${child("cs")}`, {}],
+    ["DELETE", `credential-sources/${child("cs")}`],
+    ["POST", "presets", { name: "probe", template: {} }],
+    ["PATCH", `presets/${child("pre")}`, { name: "probe" }],
+    ["DELETE", `presets/${child("pre")}`],
+    ["POST", "service-accounts", { name: "probe" }],
+    ["POST", `service-accounts/${child("sa")}/credentials`, {}],
+    [
+      "PATCH",
+      `service-accounts/${child("sa")}/credential`,
+      { kind: "api_key", secretRef: { name: "probe", key: "probe" } },
+    ],
+    ["DELETE", `service-accounts/${child("sa")}`],
+    ["DELETE", ""],
+  ];
+  const agentRoutes = [
+    ["GET", ""],
+    ["GET", `revisions/${missingRevisionId}`],
+    ["GET", `deployments/${missingRevisionId}`],
+    ["GET", "repository-options"],
+    ["PATCH", "", { configurationId: agent.configurationId }],
+    ["POST", "deploy"],
+    ["POST", "stop"],
+    ["POST", `credential-sources/${child("cs")}/withdraw`],
+    ["DELETE", ""],
+  ];
+  const probes = [
+    ...namespaceRoutes.flatMap(([method, suffix, body]) =>
+      [namespace.id, missingNamespaceId].map((namespaceId) => ({
+        method,
+        body,
+        pathname: `/namespaces/${namespaceId}${suffix ? `/${suffix}` : ""}`,
+      })),
+    ),
+    ...agentRoutes.flatMap(([method, suffix, body]) =>
+      [
+        [namespace.id, agent.id],
+        [namespace.id, missingAgentId],
+        [missingNamespaceId, missingAgentId],
+      ].map(([namespaceId, agentId]) => ({
+        method,
+        body,
+        pathname: `/namespaces/${namespaceId}/agents/${agentId}${suffix ? `/${suffix}` : ""}`,
+      })),
+    ),
+  ];
+
+  const leaks = [];
+  for (const { method, pathname, body } of probes) {
+    const auditCount = fixture.auditSink.events.length;
+    const result = await request(readerApp, pathname, {
+      method,
+      ...(body === undefined ? {} : { body }),
+    });
+    const denials = fixture.auditSink.events
+      .slice(auditCount)
+      .filter((event) => event.kind === "authorization_denial" && event.actorId === reader.id);
+    if (result.response.status !== 403 || denials.length !== 1) {
+      leaks.push(`${method} ${pathname}: ${result.response.status}, ${denials.length} denials`);
+    }
+  }
+  assert.deepEqual(leaks, []);
+});
+
 test("Namespace deletion authorizes the exact target and rejects nonempty resources", async () => {
   const fixture = await createFixture();
   await bootstrap(fixture);

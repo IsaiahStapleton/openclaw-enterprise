@@ -210,7 +210,7 @@ The Kubernetes Configuration Driver stores live native documents in tenant Confi
   Configuration. Reassign every referencing Agent, or
   [delete the Agents](agents.md#deletion) and wait for teardown before retrying.
   A Configuration created by guided Agent provisioning stays referenced until
-  that Agent is deleted, even after the Agent selects another Configuration.
+  that provisioning succeeds and its Agent selects another Configuration.
 - **Configuration operation returns `503`:** Confirm the selected Driver and
   IAM service are available, Kubernetes authentication and TLS are valid,
   tenant placement is ready, exact namespaced ConfigMap access exists, and the

@@ -226,9 +226,14 @@ spends at most one new ID. The Sandbox name is unique per Workspace, so these
 attempts never yield two Sandboxes. Unresolved IDs never expire. Once the controller
 identity holds 1000 unresolved or unexpired admission records, OpenShell rejects
 every new `request_id` with `RESOURCE_EXHAUSTED`, so repeated server-side create
-failures count against that quota. Codex requests one unnamed exposure for
-`APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
-outbound, so it requests no exposure and rejects any returned URL. The Driver
+failures count against that quota. Completed records free up after 24 hours.
+`unary` maps that exact refusal to `OpenShellAdmissionLimitError`, a
+`TransientDependencyError` (`SANDBOX_ADMISSION_LIMIT_REACHED`): revision
+provisioning waits for it until the convergence deadline without spending
+attempts; Namespace work retries it as usual. Codex requests one unnamed
+exposure for `APP_SERVER_PORT` and requires its `service_urls` entry. Native
+OpenClaw connects outbound, so it requests no exposure and rejects any returned
+URL. The Driver
 calls `getSandbox` first and creates only an absent Sandbox; it adopts an
 existing or `ALREADY_EXISTS` Sandbox only when its annotations name this
 revision, it is not deleting or stopped, and, for Codex, `getServiceUrl` finds

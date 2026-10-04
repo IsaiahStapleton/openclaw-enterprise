@@ -168,7 +168,7 @@ A page never silently skips output; it labels each gap:
 | Row                 | Meaning                                                            |
 | ------------------- | ------------------------------------------------------------------ |
 | Container restarted | The Pod or container instance changed since the last page.         |
-| Lines skipped       | New output exceeded one page between polls.                        |
+| Lines skipped       | New output exceeded one page between polls, or a line over 1 MiB.  |
 | View resumed        | The cursor was older than one hour; reading restarted at the tail. |
 | Page limit reached  | The page hit its byte limit; later lines were not read.            |
 | Sandbox buffer lost | The sandbox buffer no longer holds the lines after the last page.  |

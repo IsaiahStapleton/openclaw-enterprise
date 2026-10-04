@@ -230,6 +230,7 @@ export {
 } from "./iam-policy-cleanup.ts";
 export type { RemovedAccessBinding } from "./iam-policy-cleanup.ts";
 export {
+  ActivationFailedError,
   ActivationPendingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
@@ -265,6 +266,7 @@ export {
   SecretBindingValidationError,
   SecretValueError,
   TransientDependencyError,
+  type ActivationFailedCode,
   type ActivationPendingCode,
   type RuntimeLogsErrorCode,
   type TransientDependency,
@@ -1439,21 +1441,23 @@ export class OpenClawController {
     agentId?: string,
     descriptionRefs: readonly string[] = [],
   ): Promise<Readonly<RepositoryOptions>> {
-    const namespace = await this.read((state) => this.exactNamespace(state, namespaceId));
-    if (namespace.status !== "provisioning" && namespace.status !== "ready") {
-      throw new ResourceConflictError("The Namespace does not accept new Agents.");
-    }
+    this.namespaceIdentity(namespaceId);
     if (agentId !== undefined) {
       const agent = await this.getAuthorizedAgent(principalId, namespaceId, agentId, "update");
       if (agent.status !== "active") {
-        throw new ResourceConflictError("The Agent does not accept repository changes.");
+        throw new ResourceStateConflictError("The Agent does not accept repository changes.");
       }
     } else {
       await this.authorize(principalId, "create", {
         kind: "agent",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: namespaceId,
+        namespaceId,
       });
+    }
+    const namespace = await this.read((state) => this.exactNamespace(state, namespaceId));
+    // Checked after authorization: the conflict names the Namespace state.
+    if (namespace.status !== "provisioning" && namespace.status !== "ready") {
+      throw new ResourceStateConflictError("The Namespace does not accept new Agents.");
     }
     let compute: ComputeDriver;
     try {
@@ -1681,13 +1685,13 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     return this.mutate(async (state) => {
-      await this.lockNamespace(state, namespaceId);
-      await this.guardAgentProvisioning(state, namespaceId, agentId);
       const { namespace, agent, driver } = await this.admitAgentRuntimeCredentialProvisioning(
         principalId,
         namespaceId,
         agentId,
       );
+      // After authorization: the provisioning reservation names the Agent's state.
+      await this.guardAgentProvisioning(state, namespace.id, agent.id);
       return this.runtimeCredentialStatus(
         await this.runtimeCredentialOperation(() =>
           driver.provisionAgentRuntimeCredentials!({ namespace, agent }, credentials),
@@ -1797,7 +1801,8 @@ export class OpenClawController {
       const replay = await state.provisioning.findByRequest(namespace.id, principalId, requestId);
       if (replay !== undefined) {
         if (replay.requestFingerprint !== requestFingerprintHex) {
-          throw new ResourceConflictError(
+          // The replay is keyed by this principal, so this names only the caller's own request.
+          throw new ResourceStateConflictError(
             "The Agent provisioning request ID has a different plan.",
           );
         }
@@ -1937,13 +1942,17 @@ export class OpenClawController {
           ? undefined
           : await state.agents.lockAgent(namespace.id, record.agentId);
       if (namespace.status !== "ready") {
-        throw new ResourceConflictError("The Agent lifecycle does not allow provisioning retry.");
+        throw new ResourceStateConflictError(
+          "The Agent lifecycle does not allow provisioning retry.",
+        );
       }
       if (
         agent !== undefined &&
         (agent.status !== "active" || agent.desiredRuntimeState !== "stopped")
       ) {
-        throw new ResourceConflictError("The Agent lifecycle does not allow provisioning retry.");
+        throw new ResourceStateConflictError(
+          "The Agent lifecycle does not allow provisioning retry.",
+        );
       }
       if (
         record.status === "cancelled" ||
@@ -1951,7 +1960,7 @@ export class OpenClawController {
         (record.agentId !== undefined &&
           (await state.revisions.listRevisions(namespaceId, record.agentId)).length !== 0)
       ) {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "Provisioning cannot retry after cancellation or deployment handoff.",
         );
       }
@@ -2052,7 +2061,7 @@ export class OpenClawController {
           current.status === "failed" ||
           current.agentId === undefined
         ) {
-          throw new ResourceConflictError(
+          throw new ResourceStateConflictError(
             "The Agent provisioning lifecycle changed before handoff.",
           );
         }
@@ -2680,6 +2689,11 @@ export class OpenClawController {
     if (!isNonEmptyString(revisionId)) {
       throw new ScopeViolationError("The exact AgentRevision identity is missing.");
     }
+    await this.authorize(principalId, "read", {
+      kind: "agent_revision",
+      id: revisionId,
+      namespaceId,
+    });
     return this.read(async (state) => {
       const namespace = await this.exactNamespace(state, namespaceId);
       const agent = await state.agents.findAgent(namespace.id, agentId);
@@ -2688,11 +2702,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "read", {
-        kind: "agent_revision",
-        id: revisionId,
-        namespaceId: namespace.id,
-      });
       const revision = await state.revisions.findRevision(namespace.id, agent.id, revisionId);
       if (!revision) {
         throw new ScopeViolationError(
@@ -2718,6 +2727,11 @@ export class OpenClawController {
     if (!isNonEmptyString(revisionId)) {
       throw new ScopeViolationError("The exact AgentRevision identity is missing.");
     }
+    await this.authorize(principalId, "read", {
+      kind: "agent_revision",
+      id: revisionId,
+      namespaceId,
+    });
     return this.read(async (state) => {
       const namespace = await this.exactNamespace(state, namespaceId);
       const agent = await state.agents.findAgentForBrowsing(namespace.id, agentId);
@@ -2726,11 +2740,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "read", {
-        kind: "agent_revision",
-        id: revisionId,
-        namespaceId: namespace.id,
-      });
       const revision = await state.revisions.findRevisionForBrowsing(
         namespace.id,
         agent.id,
@@ -2835,13 +2844,13 @@ export class OpenClawController {
         throw new AgentDeletingError();
       }
       if (action === "operate" && agent.desiredRuntimeState !== "running") {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "The Agent workspace is not writable while it is stopping.",
         );
       }
       if (!isNonEmptyString(agent.activeRevisionId)) {
         if (action === "administer" && agent.desiredRuntimeState === "stopped") {
-          throw new ResourceConflictError("A stopped Agent has no active gateway revision.");
+          throw new ResourceStateConflictError("A stopped Agent has no active gateway revision.");
         }
         throw new DependencyUnavailableError("The Agent has no active gateway revision.");
       }
@@ -2892,7 +2901,7 @@ export class OpenClawController {
         try {
           compute = this.selectedDriver("compute");
         } catch {
-          throw new ResourceConflictError(
+          throw new ResourceStateConflictError(
             "Existing namespace adoption requires the bundled Kubernetes Compute Driver.",
           );
         }
@@ -2900,7 +2909,7 @@ export class OpenClawController {
           compute.implementation !== "occ/kubernetes" &&
           compute.implementation !== "kubernetes-local"
         ) {
-          throw new ResourceConflictError(
+          throw new ResourceStateConflictError(
             "Existing namespace adoption requires the bundled Kubernetes Compute Driver.",
           );
         }
@@ -2997,13 +3006,14 @@ export class OpenClawController {
     if (!validName(input.name)) {
       throw new PresetValidationError("The Preset name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "preset",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3060,13 +3070,14 @@ export class OpenClawController {
     if (input.name !== undefined && !validName(input.name)) {
       throw new PresetValidationError("The Preset name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "preset",
         id: input.presetId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3082,7 +3093,7 @@ export class OpenClawController {
         ...(template === undefined ? {} : { template }),
       });
       if (!updated) {
-        throw new ResourceConflictError("The Preset changed during update.");
+        throw new ResourceStateConflictError("The Preset changed during update.");
       }
       return updated;
     });
@@ -3094,7 +3105,11 @@ export class OpenClawController {
     namespaceId: string,
     presetId: string,
   ): Promise<readonly RemovedAccessBinding[]> {
+    this.namespaceIdentity(namespaceId);
     return this.mutate(async (state) => {
+      // Before any lookup, so a missing target is refused like an existing one;
+      // deletePresetInState re-checks under the Namespace lock.
+      await this.authorize(principalId, "delete", { kind: "preset", id: presetId, namespaceId });
       const namespace = await this.lockNamespace(state, namespaceId);
       return this.deletePresetInState(state, principalId, namespace.id, presetId);
     });
@@ -3119,7 +3134,7 @@ export class OpenClawController {
       await state.iamPolicy.deleteAccessBinding(namespaceId, binding.id);
     }
     if (!(await state.presets.deletePreset(namespaceId, presetId))) {
-      throw new ResourceConflictError("The Preset changed during deletion.");
+      throw new ResourceStateConflictError("The Preset changed during deletion.");
     }
     return removed;
   }
@@ -3167,13 +3182,14 @@ export class OpenClawController {
     if (!validName(input.name)) {
       throw new ScopeViolationError("The Secret name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "secret",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3240,13 +3256,14 @@ export class OpenClawController {
     input: UpdateSecretInput,
   ): Promise<Readonly<SecretMetadata>> {
     this.validateSecretValue(input.value);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "secret",
         id: input.secretId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3267,12 +3284,12 @@ export class OpenClawController {
     namespaceId: string,
     secretId: string,
   ): Promise<readonly RemovedAccessBinding[]> {
+    this.namespaceIdentity(namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, namespaceId);
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "secret",
         id: secretId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
       const secret = await state.secrets.lockSecret(namespace.id, secretId);
       if (!secret) {
@@ -3287,7 +3304,7 @@ export class OpenClawController {
       const driver = this.secretDriver(secret.driverId);
       await this.secretOperation(() => driver.delete(secret));
       if (!(await state.secrets.deleteSecret(namespace.id, secret.id))) {
-        throw new ResourceConflictError("The Secret changed during deletion.");
+        throw new ResourceStateConflictError("The Secret changed during deletion.");
       }
       return removed;
     });
@@ -3309,13 +3326,14 @@ export class OpenClawController {
     }
     const config = Object.freeze({ ...(input.config ?? {}) });
     const secretRefs = Object.freeze({ ...(input.secrets ?? {}) });
+    this.namespaceIdentity(input.namespaceId);
     const { namespace, gateway, source, values } = await this.mutate(async (state) => {
-      const locked = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "create", {
         kind: "credential_source",
-        id: locked.id,
-        namespaceId: locked.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const locked = await this.lockNamespace(state, input.namespaceId);
       // An Installation property, so it is reported before any Namespace state.
       if (!this.selections.has("credential_gateway")) {
         throw new CredentialGatewayNotConfiguredError();
@@ -3381,7 +3399,7 @@ export class OpenClawController {
     if (ready === undefined) {
       // A concurrent deletion won; remove the copy this registration may have stored after it.
       await this.abandonCredentialRegistration(placed, gateway, source, true);
-      throw new ResourceConflictError("The credential source changed during registration.");
+      throw new ResourceStateConflictError("The credential source changed during registration.");
     }
     return this.credentialSourceMetadata(ready, status);
   }
@@ -3428,13 +3446,14 @@ export class OpenClawController {
     principalId: string,
     input: UpdateCredentialSourceInput,
   ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "credential_source",
         id: input.credentialSourceId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3448,7 +3467,7 @@ export class OpenClawController {
         );
       }
       if (source.state !== "ready") {
-        throw new ResourceConflictError("Only a ready credential source can be updated.");
+        throw new ResourceStateConflictError("Only a ready credential source can be updated.");
       }
       const gateway = this.credentialGatewayDriver(source.driverId);
       const type = await this.credentialSourceType(gateway, source.type);
@@ -3484,7 +3503,7 @@ export class OpenClawController {
               secretRefs,
             );
       if (updated === undefined) {
-        throw new ResourceConflictError("The credential source changed during the update.");
+        throw new ResourceStateConflictError("The credential source changed during the update.");
       }
       return this.credentialSourceMetadata(updated, status);
     });
@@ -3595,12 +3614,12 @@ export class OpenClawController {
     audit?: (removedAccessBindings: readonly RemovedAccessBinding[]) => AuditEvent,
   ): Promise<void> {
     this.assertCredentialSourceTransactionBoundary();
+    this.namespaceIdentity(namespaceId);
     const { namespace, source } = await this.mutate(async (state) => {
-      const locked = await this.lockNamespace(state, namespaceId);
-      await this.authorize(principalId, "delete", {
+      const locked = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "credential_source",
         id: credentialSourceId,
-        namespaceId: locked.id,
+        namespaceId,
       });
       const found = await state.credentialSources.lockCredentialSource(
         locked.id,
@@ -3621,7 +3640,7 @@ export class OpenClawController {
           ? found
           : await state.credentialSources.markCredentialSourceDeleting(locked.id, found.id);
       if (deleting === undefined) {
-        throw new ResourceConflictError("The credential source changed during deletion.");
+        throw new ResourceStateConflictError("The credential source changed during deletion.");
       }
       return { namespace: locked, source: deleting };
     });
@@ -3649,7 +3668,7 @@ export class OpenClawController {
         source.id,
       );
       if (!(await state.credentialSources.deleteCredentialSource(namespace.id, source.id))) {
-        throw new ResourceConflictError("The credential source changed during deletion.");
+        throw new ResourceStateConflictError("The credential source changed during deletion.");
       }
       if (audit !== undefined) {
         await state.audit.append(audit(removed));
@@ -3665,16 +3684,18 @@ export class OpenClawController {
       throw new ScopeViolationError("The Configuration kind must identify an Agent.");
     }
     const values = frozenValues(input.values);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
-      if (namespace.status !== "provisioning" && namespace.status !== "ready") {
-        throw new ResourceConflictError("The Namespace does not accept new Configurations.");
-      }
       await this.authorize(principalId, "create", {
         kind: "configuration",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
+      // Checked after authorization: the conflict names the Namespace state.
+      if (namespace.status !== "provisioning" && namespace.status !== "ready") {
+        throw new ResourceStateConflictError("The Namespace does not accept new Configurations.");
+      }
       if (namespace.existingNamespace !== undefined && namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -3715,16 +3736,18 @@ export class OpenClawController {
     if (!validName(input.name)) {
       throw new ScopeViolationError("The ServiceAccount name is invalid.");
     }
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, input.namespaceId);
-      if (namespace.status !== "provisioning" && namespace.status !== "ready") {
-        throw new ResourceConflictError("The Namespace does not accept new ServiceAccounts.");
-      }
       await this.authorize(principalId, "create", {
         kind: "service_account",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.exactNamespace(state, input.namespaceId);
+      // Checked after authorization: the conflict names the Namespace state.
+      if (namespace.status !== "provisioning" && namespace.status !== "ready") {
+        throw new ResourceStateConflictError("The Namespace does not accept new ServiceAccounts.");
+      }
       const account = await state.serviceAccounts.createServiceAccount({
         id: this.nextIdentifier("service_account"),
         namespaceId: namespace.id,
@@ -3745,12 +3768,12 @@ export class OpenClawController {
   ): Promise<Readonly<ServiceAccount>> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       await this.authorize(principalId, "update", {
         kind: "service_account",
         id: serviceAccountId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.exactNamespace(state, namespaceId);
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
         serviceAccountId,
@@ -3759,7 +3782,7 @@ export class OpenClawController {
         throw new ScopeViolationError("The ServiceAccount does not belong to the exact Namespace.");
       }
       if (account.credential !== undefined) {
-        throw new ResourceConflictError("The ServiceAccount already has a credential.");
+        throw new ResourceStateConflictError("The ServiceAccount already has a credential.");
       }
       const driver = this.serviceAccountDriver();
       if (driver === undefined) {
@@ -3780,7 +3803,9 @@ export class OpenClawController {
         credential,
       );
       if (updated === undefined) {
-        throw new ResourceConflictError("The ServiceAccount credential changed during its update.");
+        throw new ResourceStateConflictError(
+          "The ServiceAccount credential changed during its update.",
+        );
       }
       return updated;
     });
@@ -3794,12 +3819,12 @@ export class OpenClawController {
   ): Promise<Readonly<ServiceAccount>> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.exactNamespace(state, namespaceId);
       await this.authorize(principalId, "update", {
         kind: "service_account",
         id: serviceAccountId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
+      const namespace = await this.exactNamespace(state, namespaceId);
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
         serviceAccountId,
@@ -3808,7 +3833,7 @@ export class OpenClawController {
         throw new ScopeViolationError("The ServiceAccount does not belong to the exact Namespace.");
       }
       if (account.credential?.kind === "access_token" || credential.kind === "access_token") {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "A managed ServiceAccount credential cannot be manually updated.",
         );
       }
@@ -3818,7 +3843,9 @@ export class OpenClawController {
         credential,
       );
       if (updated === undefined) {
-        throw new ResourceConflictError("The ServiceAccount credential changed during its update.");
+        throw new ResourceStateConflictError(
+          "The ServiceAccount credential changed during its update.",
+        );
       }
       return updated;
     });
@@ -3831,11 +3858,10 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.serviceAccountIdentity(namespaceId, serviceAccountId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, namespaceId);
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "service_account",
         id: serviceAccountId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
       const account = await state.serviceAccounts.lockServiceAccount(
         namespace.id,
@@ -3846,7 +3872,7 @@ export class OpenClawController {
       }
       if (await state.serviceAccounts.hasReferences(namespace.id, account.id)) {
         throw new ResourceStateConflictError(
-          "An Agent draft, active revision, or pending deployment still references the ServiceAccount. Remove those references first.",
+          "An Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the ServiceAccount. Remove those references, or let provisioning finish, first.",
         );
       }
       const driver = this.serviceAccountDriver();
@@ -3863,7 +3889,7 @@ export class OpenClawController {
         account.id,
       );
       if (!(await state.serviceAccounts.deleteServiceAccount(namespace.id, account.id))) {
-        throw new ResourceConflictError("The ServiceAccount changed during deletion.");
+        throw new ResourceStateConflictError("The ServiceAccount changed during deletion.");
       }
       return removed;
     });
@@ -3905,12 +3931,12 @@ export class OpenClawController {
     }
     const values = frozenValues(input.values);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
       await this.authorize(principalId, "update", {
         kind: "configuration",
         id: input.configurationId,
-        namespaceId: namespace.id,
+        namespaceId: input.namespaceId,
       });
+      const namespace = await this.lockNamespace(state, input.namespaceId);
       const driver = this.configurationDriver();
       const metadata = await state.configurations.lockConfiguration(
         namespace.id,
@@ -3941,7 +3967,9 @@ export class OpenClawController {
         secretBindings,
       );
       if (!advanced) {
-        throw new ResourceConflictError("The Configuration generation changed during its update.");
+        throw new ResourceStateConflictError(
+          "The Configuration generation changed during its update.",
+        );
       }
       const configuration: Configuration = Object.freeze({
         id: advanced.id,
@@ -3968,11 +3996,10 @@ export class OpenClawController {
   ): Promise<readonly RemovedAccessBinding[]> {
     this.configurationIdentity(namespaceId, configurationId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, namespaceId);
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "configuration",
         id: configurationId,
-        namespaceId: namespace.id,
+        namespaceId,
       });
       const driver = this.configurationDriver();
       const configuration = await state.configurations.lockConfiguration(
@@ -3988,13 +4015,15 @@ export class OpenClawController {
           "An Agent still references the Configuration. Delete the Agent or select another Configuration first.",
         );
       }
-      // Guided provisioning keeps its record, which references the Configuration it created,
-      // until the provisioned Agent is deleted, even after that Agent selects another one.
+      // A provisioning record references the Configuration it created. Once its Agent has
+      // succeeded and selects another Configuration (checked above), the record releases it.
       if (
-        (await state.provisioning.findByConfiguration(namespace.id, configuration.id)) !== undefined
+        (await state.provisioning.findByConfiguration(namespace.id, configuration.id)) !==
+          undefined &&
+        !(await state.provisioning.releaseConfiguration(namespace.id, configuration.id))
       ) {
         throw new ResourceStateConflictError(
-          "An Agent provisioning record still references the Configuration. Delete the Agent it provisioned first.",
+          "An Agent provisioning request that has not succeeded still references the Configuration. Let it finish or retry it, or delete the Agent it provisioned, first.",
         );
       }
       const previous = this.exactConfiguration(
@@ -4016,7 +4045,7 @@ export class OpenClawController {
         configuration.id,
       );
       if (!(await state.configurations.deleteConfiguration(namespace.id, configuration.id))) {
-        throw new ResourceConflictError("The Configuration changed during deletion.");
+        throw new ResourceStateConflictError("The Configuration changed during deletion.");
       }
       return removed;
     });
@@ -4185,7 +4214,7 @@ export class OpenClawController {
       session.phase === "cancelled" ||
       Date.parse(session.expiresAt) <= Date.parse(this.timestamp())
     ) {
-      throw new ResourceConflictError("Device login expired or was cancelled. Connect again.");
+      throw new ResourceStateConflictError("Device login expired or was cancelled. Connect again.");
     }
     const response = (status: "pending" | "ready", expiresAt = session.expiresAt) => ({
       source: this.secretMetadata(secret).ref,
@@ -4204,7 +4233,7 @@ export class OpenClawController {
     }
     const compute = this.selectedDriver("compute");
     if (compute.id !== session.computeDriverId || !compute.pollHarnessDeviceAuthorization) {
-      throw new ResourceConflictError("The login Driver changed. Connect again.");
+      throw new ResourceStateConflictError("The login Driver changed. Connect again.");
     }
     const claimed = JSON.stringify({ ...session, phase: "polling" });
     if (!(await this.secretOperation(() => driver.compareAndSwap!(secret, value, claimed)))) {
@@ -4252,7 +4281,7 @@ export class OpenClawController {
         driver.compareAndSwap!(secret, claimed, JSON.stringify(next)),
       ))
     ) {
-      throw new ResourceConflictError("The login changed while completing. Connect again.");
+      throw new ResourceStateConflictError("The login changed while completing. Connect again.");
     }
     return response(result.status, next.expiresAt);
   }
@@ -4277,7 +4306,7 @@ export class OpenClawController {
       credential: undefined,
     });
     if (!(await this.secretOperation(() => driver.compareAndSwap!(secret, value, discarded)))) {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "The login changed or belongs to the runtime. Refresh and retry.",
       );
     }
@@ -4409,7 +4438,7 @@ export class OpenClawController {
           const current = await this.channelDirectorySecret(principalId, namespaceId, input);
           if (!sameSecretBackend(first.secret, current.secret)) {
             return {
-              validationError: new ResourceConflictError(
+              validationError: new ResourceStateConflictError(
                 "The channel directory credential changed. Refresh and retry.",
               ),
             };
@@ -4630,7 +4659,7 @@ export class OpenClawController {
         session.phase !== "ready" ||
         Date.parse(session.expiresAt) <= Date.parse(this.timestamp())
       ) {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "Connect again to configure plugins. This login is no longer available in OCE.",
         );
       }
@@ -4793,7 +4822,7 @@ export class OpenClawController {
           current.backendRef.namespaceName !== first.backendRef.namespaceName ||
           current.backendRef.key !== first.backendRef.key
         ) {
-          throw new ResourceConflictError(
+          throw new ResourceStateConflictError(
             "The Agent's plugin credential changed. Refresh and retry.",
           );
         }
@@ -4873,17 +4902,19 @@ export class OpenClawController {
     const backendId = this.backendId(input.backendId);
     const plugins = normalizeAgentPlugins(input.plugins);
     const pluginApprovers = normalizeAgentPluginApprovers(input.pluginApprovers);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
-      const namespace = await this.lockNamespace(state, input.namespaceId);
-      if (namespace.status !== "provisioning" && namespace.status !== "ready") {
-        throw new ResourceConflictError("The Namespace does not accept new Agents.");
-      }
       const target: ResourceRef = {
         kind: "agent",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: input.namespaceId,
+        namespaceId: input.namespaceId,
       };
       await this.authorize(principalId, "create", target);
+      const namespace = await this.lockNamespace(state, input.namespaceId);
+      // Checked after authorization: the conflict names the Namespace state.
+      if (namespace.status !== "provisioning" && namespace.status !== "ready") {
+        throw new ResourceStateConflictError("The Namespace does not accept new Agents.");
+      }
       await this.authorize(principalId, "read", {
         kind: "configuration",
         id: input.configurationId,
@@ -4957,7 +4988,13 @@ export class OpenClawController {
     const plugins = normalizeAgentPlugins(input.plugins);
     const pluginApprovers =
       input.pluginApprovers === null ? null : normalizeAgentPluginApprovers(input.pluginApprovers);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "update", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId: input.namespaceId,
+      });
       const namespace = await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(namespace.id, input.agentId);
       if (!agent) {
@@ -4965,11 +5002,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "update", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       if (agent.status !== "active") {
         throw new AgentDeletingError();
       }
@@ -5022,7 +5054,7 @@ export class OpenClawController {
         repositoryAccess,
       );
       if (!updated) {
-        throw new ResourceConflictError("The Agent Configuration changed during its update.");
+        throw new ResourceStateConflictError("The Agent Configuration changed during its update.");
       }
       return updated;
     });
@@ -5138,7 +5170,13 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     await this.validateDeploymentChannels(principalId, input);
+    this.namespaceIdentity(input.namespaceId);
     return this.mutate(async (state) => {
+      const authorization = await this.authorize(principalId, "deploy", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId: input.namespaceId,
+      });
       const namespace = await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.findAgent(namespace.id, input.agentId);
       if (!agent) {
@@ -5146,11 +5184,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      const authorization = await this.authorize(principalId, "deploy", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       await this.guardAgentProvisioning(state, namespace.id, agent.id, true);
       if (namespace.status !== "ready") {
         throw new NamespaceNotReadyError();
@@ -5331,7 +5364,7 @@ export class OpenClawController {
         );
         if (!status.transportConfigured) {
           if (previous.length > 0) {
-            throw new ResourceConflictError(
+            throw new ResourceStateConflictError(
               "Agent runtime credentials are missing after a historical revision. Ask an operator to restore them before deploying.",
             );
           }
@@ -5389,7 +5422,7 @@ export class OpenClawController {
         "running",
       );
       if (running === undefined) {
-        throw new ResourceConflictError("The Agent lifecycle changed during deployment.");
+        throw new ResourceStateConflictError("The Agent lifecycle changed during deployment.");
       }
       await this.record(state, {
         kind: "agent_revision",
@@ -5415,7 +5448,16 @@ export class OpenClawController {
     principalId: string,
     input: AgentCredentialSourceInput,
   ): Promise<Readonly<CredentialWithdrawalStatus>> {
+    this.namespaceIdentity(input.namespaceId);
+    if (!isNonEmptyString(input.agentId)) {
+      throw new ScopeViolationError("The exact Agent identity is missing.");
+    }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: input.agentId,
+        namespaceId: input.namespaceId,
+      });
       await this.lockNamespace(state, input.namespaceId);
       const agent = await state.agents.lockAgent(input.namespaceId, input.agentId);
       if (agent === undefined) {
@@ -5423,11 +5465,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "operate", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: agent.namespaceId,
-      });
       const revision = await this.activeCredentialSourceRevision(state, agent, input);
       const withdrawal = await state.credentialSources.requestCredentialWithdrawal(
         Object.freeze({
@@ -5545,6 +5582,11 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
       await this.lockNamespace(state, namespaceId);
       const agent = await state.agents.lockAgent(namespaceId, agentId);
       if (agent === undefined) {
@@ -5552,11 +5594,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "operate", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: agent.namespaceId,
-      });
       if (agent.status === "deleting") {
         return agent;
       }
@@ -5571,7 +5608,7 @@ export class OpenClawController {
         "stopped",
       );
       if (stopped === undefined) {
-        throw new ResourceConflictError("The Agent lifecycle changed during stop.");
+        throw new ResourceStateConflictError("The Agent lifecycle changed during stop.");
       }
       await this.record(state, {
         kind: "agent",
@@ -5595,16 +5632,10 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Namespace identity is missing.");
     }
     return this.mutate(async (state) => {
-      const namespace = await state.namespaces.lockNamespace(namespaceId);
-      if (!namespace) {
-        throw new ScopeViolationError(
-          "The Namespace does not belong to the server-owned Installation.",
-        );
-      }
-      await this.authorize(principalId, "delete", {
+      const namespace = await this.lockNamespaceForPolicyDelete(state, principalId, {
         kind: "namespace",
-        id: namespace.id,
-        namespaceId: namespace.id,
+        id: namespaceId,
+        namespaceId,
       });
       // Keep in-flight teardown idempotent. The original caller can explicitly
       // retry terminal work after repairing the dependency or permission failure.
@@ -5639,7 +5670,9 @@ export class OpenClawController {
               principalId,
             ))
           ) {
-            throw new ResourceConflictError("The Namespace deletion work changed during retry.");
+            throw new ResourceStateConflictError(
+              "The Namespace deletion work changed during retry.",
+            );
           }
           await state.audit.append({
             id: `aud_${crypto.randomUUID()}`,
@@ -5737,7 +5770,7 @@ export class OpenClawController {
         "deleting",
       );
       if (!deleting) {
-        throw new ResourceConflictError("The Namespace lifecycle changed during deletion.");
+        throw new ResourceStateConflictError("The Namespace lifecycle changed during deletion.");
       }
       await this.record(state, {
         kind: "namespace",
@@ -5769,6 +5802,11 @@ export class OpenClawController {
       throw new ScopeViolationError("The exact Agent identity is missing.");
     }
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "delete", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
       const namespace = await state.namespaces.lockNamespace(namespaceId);
       if (!namespace) {
         throw new ScopeViolationError(
@@ -5779,11 +5817,6 @@ export class OpenClawController {
       if (!agent) {
         throw new ScopeViolationError("The Agent does not belong to the exact Namespace.");
       }
-      await this.authorize(principalId, "delete", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       await state.provisioning.cancelByAgent(namespace.id, agent.id, {
         code: "PROVISIONING_CANCELLED",
         message: "Provisioning was cancelled by deletion.",
@@ -5824,7 +5857,7 @@ export class OpenClawController {
               principalId,
             ))
           ) {
-            throw new ResourceConflictError("The Agent deletion work changed during retry.");
+            throw new ResourceStateConflictError("The Agent deletion work changed during retry.");
           }
           await state.audit.append({
             id: `aud_${crypto.randomUUID()}`,
@@ -5854,7 +5887,7 @@ export class OpenClawController {
         "stopped",
       );
       if (!stopped) {
-        throw new ResourceConflictError("The Agent runtime state changed during deletion.");
+        throw new ResourceStateConflictError("The Agent runtime state changed during deletion.");
       }
       const deleting = await state.agents.transitionAgentStatus(
         namespace.id,
@@ -5863,7 +5896,7 @@ export class OpenClawController {
         "deleting",
       );
       if (!deleting) {
-        throw new ResourceConflictError("The Agent lifecycle changed during deletion.");
+        throw new ResourceStateConflictError("The Agent lifecycle changed during deletion.");
       }
       await this.record(state, {
         kind: "agent",
@@ -6240,6 +6273,23 @@ export class OpenClawController {
     return namespace;
   }
 
+  /**
+   * Authorizes a delete that also removes IAM policy, then locks its Namespace. The first
+   * check runs before any lookup, so a caller without the grant gets the same audited denial
+   * whether or not the target exists. The second runs under the Namespace lock, which orders
+   * it after a concurrent revocation, as holdIAMPolicyAuthority does for policy writes.
+   */
+  private async lockNamespaceForPolicyDelete(
+    state: PlatformUnitOfWork,
+    principalId: string,
+    target: ResourceRef & { readonly namespaceId: string },
+  ): Promise<Readonly<Namespace>> {
+    await this.authorize(principalId, "delete", target);
+    const namespace = await this.lockNamespace(state, target.namespaceId);
+    await this.authorize(principalId, "delete", target);
+    return namespace;
+  }
+
   private bindings(input: unknown): SecretBindings {
     try {
       return normalizeSecretBindings(input);
@@ -6390,8 +6440,8 @@ export class OpenClawController {
       configuration: plan.configuration.values,
     });
     if (record.status === "failed") {
-      // A failed plan does not keep its Secrets from deletion; say which one is gone.
-      await this.assertProvisioningSecretsExist(state, namespaceId, plan);
+      // A failed plan does not keep its Secrets or ServiceAccount from deletion; say which is gone.
+      await this.assertProvisioningSourcesExist(state, namespaceId, plan);
     }
     await this.authorizeProvisioningSecretSources(
       state,
@@ -6409,7 +6459,7 @@ export class OpenClawController {
     // TODO(credential-gateway provisioning): admit credential sources in guided provisioning
     // plans; until then those Agents are created first and deployed through deployAgent.
     if (binding.method === "credential_source") {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "Agent provisioning does not yet support credential-source Harness authentication.",
       );
     }
@@ -6451,7 +6501,7 @@ export class OpenClawController {
     try {
       compute.validateHarnessAuth(harness, auth, configuration, plan.configuration.secretBindings);
     } catch {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "The configured model, authentication, or channel bindings cannot be provisioned.",
       );
     }
@@ -6515,7 +6565,7 @@ export class OpenClawController {
       (record.status === "failed" && record.revisionId === undefined) ||
       (record.status === "cancelled" && this.provisioningHasUnresolvedEffect(record))
     ) {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "The Agent is reserved for provisioning. Stop or delete it, or retry its failed provisioning request.",
       );
     }
@@ -6538,7 +6588,7 @@ export class OpenClawController {
           (record.status === "failed" && record.revisionId === undefined) ||
           (record.status === "cancelled" && this.provisioningHasUnresolvedEffect(record)))
     ) {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "The Configuration is reserved for provisioning and is not available for this operation.",
       );
     }
@@ -6637,7 +6687,7 @@ export class OpenClawController {
         agent.status !== "active" ||
         agent.desiredRuntimeState !== "stopped"
       ) {
-        throw new ResourceConflictError("The Agent lifecycle changed during provisioning.");
+        throw new ResourceStateConflictError("The Agent lifecycle changed during provisioning.");
       }
     }
     await this.authorizeProvisioningRecord(state, record.actorId, record);
@@ -6940,7 +6990,7 @@ export class OpenClawController {
     });
   }
 
-  private async assertProvisioningSecretsExist(
+  private async assertProvisioningSourcesExist(
     state: PlatformUnitOfWork,
     namespaceId: string,
     plan: ReturnType<OpenClawController["provisioningPlan"]>,
@@ -6958,6 +7008,15 @@ export class OpenClawController {
           `Secret ${id}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
         );
       }
+    }
+    if (
+      auth?.method === "chatgpt_service_account" &&
+      (await state.serviceAccounts.findServiceAccount(namespaceId, auth.serviceAccountId)) ===
+        undefined
+    ) {
+      throw new ResourceStateConflictError(
+        `ServiceAccount ${auth.serviceAccountId}, which this provisioning request uses, was deleted. Submit a new Agent provisioning request.`,
+      );
     }
   }
 
@@ -7148,7 +7207,7 @@ export class OpenClawController {
       binding.serviceAccountId,
     );
     if (account?.credential?.kind !== "access_token") {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "ChatGPT Harness authentication requires an issued account access-token credential.",
       );
     }
@@ -7177,7 +7236,7 @@ export class OpenClawController {
   ): Promise<HarnessAuthSnapshot> {
     const binding = this.harnessAuthBinding(agent.harnessAuth);
     if (binding === null) {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "Deployment requires an explicit Harness authentication binding.",
       );
     }
@@ -7224,7 +7283,7 @@ export class OpenClawController {
       const gateway = this.credentialGatewayDriver(source.driverId);
       const type = await this.credentialSourceType(gateway, source.type);
       if (type.harnessAuth === undefined) {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "The credential source type cannot authenticate a Harness.",
         );
       }
@@ -7241,7 +7300,7 @@ export class OpenClawController {
       binding.serviceAccountId,
     );
     if (account?.credential?.kind !== "access_token") {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "ChatGPT Harness authentication requires an issued account access-token credential.",
       );
     }
@@ -7271,7 +7330,7 @@ export class OpenClawController {
       binding.method !== "credential_source" &&
       binding.method !== "runtime"
     ) {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "The selected Credential Gateway requires credential-source Harness authentication.",
       );
     }
@@ -7284,7 +7343,7 @@ export class OpenClawController {
   ): Promise<CredentialSourceType | undefined> {
     if (auth.method === "credential_source") {
       if (sandbox === undefined) {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "Credential-source Harness authentication requires a selected Sandbox Driver.",
         );
       }
@@ -7349,6 +7408,16 @@ export class OpenClawController {
     readonly driver: ComputeDriver;
   }> {
     return this.mutate(async (state) => {
+      await this.authorize(principalId, "read", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
+      await this.authorize(principalId, "operate", {
+        kind: "agent",
+        id: agentId,
+        namespaceId,
+      });
       const namespace = await this.lockNamespace(state, namespaceId);
       const agent = await state.agents.lockAgent(namespace.id, agentId);
       if (!agent) {
@@ -7356,16 +7425,6 @@ export class OpenClawController {
           "The Agent does not belong to the exact Installation and Namespace.",
         );
       }
-      await this.authorize(principalId, "read", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
-      await this.authorize(principalId, "operate", {
-        kind: "agent",
-        id: agent.id,
-        namespaceId: namespace.id,
-      });
       if (agent.status !== "active") {
         throw new AgentDeletingError();
       }
@@ -7373,7 +7432,7 @@ export class OpenClawController {
         throw new NamespaceNotReadyError();
       }
       if ((await state.revisions.listRevisions(namespace.id, agent.id)).length > 0) {
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "Runtime credentials can be provisioned only before the Agent has historical revisions.",
         );
       }
@@ -7792,6 +7851,12 @@ export class OpenClawController {
     }
   }
 
+  private namespaceIdentity(namespaceId: string): void {
+    if (!isNonEmptyString(namespaceId)) {
+      throw new ScopeViolationError("The exact Namespace identity is missing.");
+    }
+  }
+
   private serviceAccountIdentity(namespaceId: string, serviceAccountId: string): void {
     if (!isNonEmptyString(namespaceId)) {
       throw new ScopeViolationError("The exact Namespace identity is missing.");
@@ -8021,7 +8086,7 @@ export class OpenClawController {
     try {
       compute.validateRepositoryCredentials(harness, sandboxDriverId);
     } catch {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "The selected Compute Driver cannot deliver repository credentials to this Harness topology.",
       );
     }

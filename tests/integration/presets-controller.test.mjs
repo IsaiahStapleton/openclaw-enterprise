@@ -739,6 +739,46 @@ test("standard OpenClaw Preset installs and creates an embedded Agent with nativ
   assert.equal(JSON.stringify(installed.body).includes("synthetic-model-key"), false);
 });
 
+test("default-codex Preset creates a Configuration that references the generated gateway password", async (t) => {
+  const { renderPresetTemplate } = await import("../../packages/contracts/src/index.ts");
+  const fixture = await createFixture(t);
+  const namespace = await fixture.createNamespace("Default Codex", { ready: true });
+  const gatewayPassword = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" };
+  // D381: a dedicated Codex Gateway acknowledges its workspace node through the
+  // in-Pod gateway CLI, which is refused without this password reference. Every
+  // bundled Preset carries it and none chooses the authentication mode, which
+  // stays with the Compute Driver (#314).
+  for (const file of [
+    "default-codex.json",
+    "standard-codex.json",
+    "standard-openclaw.json",
+    "swe-preset.json",
+  ]) {
+    const bundled = JSON.parse(
+      await readFile(new URL(`../../deploy/presets/${file}`, import.meta.url), "utf8"),
+    );
+    assert.deepEqual(
+      bundled.template.configuration.values.gateway.auth,
+      { password: gatewayPassword },
+      file,
+    );
+  }
+  const artifact = JSON.parse(
+    await readFile(new URL("../../deploy/presets/default-codex.json", import.meta.url), "utf8"),
+  );
+  const installed = await fixture.request("POST", collection(namespace.id), { body: artifact });
+  assert.equal(installed.status, 201, JSON.stringify(installed.body));
+  const rendered = renderPresetTemplate(installed.data.template, {});
+  const configuration = await fixture.request(
+    "POST",
+    `/namespaces/${namespace.id}/configurations`,
+    { body: { kind: "agent", ...rendered.configuration } },
+  );
+  assert.equal(configuration.status, 201, JSON.stringify(configuration.body));
+  assert.equal(rendered.agent.executionMode, "dedicated");
+  assert.deepEqual(configuration.data.values.gateway.auth, { password: gatewayPassword });
+});
+
 test("SWE Agent Preset defaults to Astra and reuses an existing service-account Secret", async (t) => {
   const { renderPresetTemplate, validatePresetTemplate } =
     await import("../../packages/contracts/src/index.ts");
@@ -1034,6 +1074,121 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
       .sort(),
     defaultNames,
   );
+});
+
+test("startup seeds default Presets with an administrator who can create them when an Installation-only administrator is returned first", async (t) => {
+  const { loadInstallationConfiguration, initializeInstallationPresets } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { createInstallationDriverConfiguration } =
+    await import("../helpers/installation-driver-configuration.mjs");
+  const { AuthorizationDeniedError, DependencyUnavailableError } =
+    await import("../../packages/occ/src/index.ts");
+  const directory = await mkdtemp(join(tmpdir(), "occ-default-presets-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "installation.yaml");
+  const configuration = createInstallationDriverConfiguration();
+  configuration.presets = { includeDefaults: true };
+  await writeFile(path, JSON.stringify(configuration));
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  const fixture = await createFixture(t, { defaultPresets: runtime.defaultPresets });
+  const iam = fixture.controller.selectDriver("iam", "console-native-iam");
+  const installationId = fixture.controller.installation.id;
+  const principal = fixture.policy.identities.find((identity) => identity.kind === "principal");
+  const adminRoleId = fixture.policy.bindings.find(
+    (binding) => binding.subjectId === principal.id,
+  ).roleId;
+  // The administrator Role bound to the Installation resource only: it administers the
+  // Installation but grants nothing inside a Namespace.
+  const scoped = await fixture.createAccountWithPolicy("installation-only", (identity) => {
+    fixture.policy.bindings.push({
+      id: "installation-only-admin",
+      subjectKind: "identity",
+      subjectId: identity.id,
+      roleId: adminRoleId,
+      resourceKind: "installation",
+      resourceId: installationId,
+    });
+  });
+  const administers = await iam.authorize({
+    principalId: scoped.principal.id,
+    action: "administer",
+    resource: { kind: "installation", id: installationId },
+  });
+  assert.equal(administers.allowed, true);
+  // A Namespace persisted before a default Preset existed, as after an upgrade adds one.
+  const createExisting = (name) =>
+    fixture.controller.transact((state) =>
+      state.namespaces.createNamespace({
+        id: `ns_${crypto.randomUUID()}`,
+        name,
+        status: "ready",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  const existing = await createExisting("Existing before upgrade");
+  await assert.rejects(
+    fixture.controller.initializeDefaultPresets(scoped.principal.id),
+    AuthorizationDeniedError,
+  );
+  assert.deepEqual((await fixture.request("GET", collection(existing.id))).data, []);
+
+  await initializeInstallationPresets(
+    fixture.controller,
+    iam,
+    [scoped.principal, principal],
+    runtime.defaultPresets,
+  );
+  const seeded = await fixture.request("GET", collection(existing.id));
+  assert.deepEqual(
+    seeded.data.map((preset) => preset.name).sort(),
+    runtime.defaultPresets.map((preset) => preset.name).sort(),
+  );
+  const audit = fixture.audit.events.filter(
+    (event) =>
+      event.details?.source === "installation-defaults" && event.namespaceId === existing.id,
+  );
+  assert.equal(audit.length, runtime.defaultPresets.length);
+  assert.ok(audit.every((event) => event.actorId === principal.id));
+
+  // With no administrator able to create them, startup still fails, and says why.
+  const unseeded = await createExisting("Existing without a capable administrator");
+  await assert.rejects(
+    initializeInstallationPresets(
+      fixture.controller,
+      iam,
+      [scoped.principal],
+      runtime.defaultPresets,
+    ),
+    (error) =>
+      /can create Presets in every Namespace/.test(error.message) &&
+      error.cause instanceof AuthorizationDeniedError,
+  );
+  assert.deepEqual((await fixture.request("GET", collection(unseeded.id))).data, []);
+
+  // An authorization outage is not a denial: startup stops with it instead of trying others.
+  const authorize = iam.authorize.bind(iam);
+  iam.authorize = async (request) => {
+    if (request.action === "create" && request.resource.kind === "preset") {
+      throw new Error("IAM outage");
+    }
+    return authorize(request);
+  };
+  t.after(() => {
+    iam.authorize = authorize;
+  });
+  await assert.rejects(
+    initializeInstallationPresets(
+      fixture.controller,
+      iam,
+      [principal, scoped.principal],
+      runtime.defaultPresets,
+    ),
+    DependencyUnavailableError,
+  );
+  assert.deepEqual((await fixture.request("GET", collection(unseeded.id))).data, []);
 });
 
 test("Namespace deletion removes unmodified default Presets and names what still blocks it", async (t) => {
