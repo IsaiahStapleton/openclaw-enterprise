@@ -919,6 +919,7 @@ test("a Gateway that refuses its own CLI as unauthorized reports it at once; oth
       return now;
     }
   };
+  const lines = [];
   let refusal;
   let openClaw;
   const { files, sandbox } = await runOpenClawRuntimeHelper(undefined, [], {
@@ -934,7 +935,7 @@ test("a Gateway that refuses its own CLI as unauthorized reports it at once; oth
       return openClaw;
     },
     setTimeout: () => ({ unref() {} }),
-    console: { error() {} },
+    console: { error: (line) => lines.push(JSON.parse(line)) },
   });
   const configPath = "/home/node/.openclaw/openclaw.json";
   const tick = () => intervals.find(({ ms }) => ms === 1000).callback();
@@ -964,6 +965,16 @@ test("a Gateway that refuses its own CLI as unauthorized reports it at once; oth
     failure: "GATEWAY_UNAUTHORIZED",
   });
   assert.equal(JSON.parse(files.get(configPath)).plugins.entries["file-transfer"], undefined);
+  // The Pod log names OpenClaw's refusal reason, so the operator can see why.
+  assert.deepEqual(
+    lines
+      .filter(({ event }) => event === "runtime.workspace_node")
+      .map(({ code, reason }) => ({ code, reason })),
+    [
+      { code: "GATEWAY_UNAVAILABLE", reason: undefined },
+      { code: "GATEWAY_UNAUTHORIZED", reason: "trusted_proxy_untrusted_source" },
+    ],
+  );
 
   // A refusal after the node was written is reported the same way.
   refusal = undefined;

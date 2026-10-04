@@ -507,7 +507,7 @@ function deploymentErrorMessage(code: string): string {
     case "AGENT_GATEWAY_UNAVAILABLE":
       return "The Agent Gateway was still not reachable through its route at the deployment deadline.";
     case "AGENT_GATEWAY_UNAUTHORIZED":
-      return "The Agent Gateway refused its own CLI as unauthorized. Enable gateway password access (gateway.auth.password) in the Agent's Configuration, then deploy again.";
+      return "The Agent Gateway refused its own CLI as unauthorized. Check that the Agent's Configuration sets gateway.auth.password to OPENCLAW_GATEWAY_PASSWORD (Enable gateway password access), then deploy again.";
     case "KUBERNETES_API_UNAVAILABLE":
       return "The Kubernetes API was still unavailable at the deployment deadline.";
     case "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED":

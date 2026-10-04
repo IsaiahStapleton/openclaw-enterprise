@@ -7651,7 +7651,7 @@ for (const pendingPasses of [0, 1]) {
       assert.deepEqual(status.error, {
         code: "AGENT_GATEWAY_UNAUTHORIZED",
         message:
-          "The Agent Gateway refused its own CLI as unauthorized. Enable gateway password access (gateway.auth.password) in the Agent's Configuration, then deploy again.",
+          "The Agent Gateway refused its own CLI as unauthorized. Check that the Agent's Configuration sets gateway.auth.password to OPENCLAW_GATEWAY_PASSWORD (Enable gateway password access), then deploy again.",
       });
       const last = events
         .filter((event) => event.event === "worker.completed" && event.revisionId === candidate.id)

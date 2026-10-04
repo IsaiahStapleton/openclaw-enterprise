@@ -161,9 +161,10 @@ revision after 500 ms, growing with the deployment's age to 5 s at 200 s.
 
 A dedicated gateway that refuses its own in-Pod CLI as unauthorized can never
 apply its workspace node, so activation fails at once with
-`AGENT_GATEWAY_UNAUTHORIZED`. Enable gateway password access
-(`gateway.auth.password` referencing `OPENCLAW_GATEWAY_PASSWORD`) in the Agent's
-Configuration and deploy again. A rate-limited or pairing refusal still waits.
+`AGENT_GATEWAY_UNAUTHORIZED`. Check that the Agent's Configuration sets
+`gateway.auth.password` to `OPENCLAW_GATEWAY_PASSWORD` (**Enable gateway password
+access**) and deploy again; the gateway log's `runtime.workspace_node` line names
+OpenClaw's refusal `reason`. A rate-limited or pairing refusal still waits.
 
 A dependency that fails while it converges is pending too.
 `AGENT_GATEWAY_UNAVAILABLE` means the worker could not reach the new gateway

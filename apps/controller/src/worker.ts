@@ -2712,6 +2712,8 @@ export class ControllerWorker {
           ) {
             throw error;
           }
+          // As for a lost repository credential authority, this ends a maintenance
+          // claim's chain too: the revision cannot activate without a new one.
           if (error instanceof ActivationFailedError) {
             await this.finalizeRevision(
               claim,
