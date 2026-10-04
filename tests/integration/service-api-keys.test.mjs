@@ -332,6 +332,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       (await request("GET", `/namespaces/${namespaceId}/presets/${preset.data.id}`)).status,
       200,
     );
+    // The grant stays on the key's Role for the rest of this test.
     policy.roles
       .find((candidate) => candidate.id === "tenant-automation")
       .permissions.push({ action: "delete", resourceKind: "preset" });

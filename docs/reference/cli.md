@@ -86,7 +86,8 @@ input is not supported. The server validates document fields against the
 | `occ agent logs ID --source SOURCE`                    | Prints one redacted page of container output, or follows it. See [runtime logs](#runtime-status-and-logs).                                                       |
 
 Use the [HTTP API](api.md) to work with ServiceAccounts and configured
-Backends; the CLI has no commands for these. Neither the CLI nor the HTTP API
+Backends, and to create or update [Presets](presets.md#crud-and-permissions);
+the CLI has no commands for these. Neither the CLI nor the HTTP API
 offers Configuration listing. An accepted deploy returns a revision; `agent get`
 shows desired state, `LIFECYCLE` (`active` or `deleting`), and the selected
 revision, not runtime health. Run `occ agent deployment-status ID` for the
