@@ -169,7 +169,7 @@ if (command === "docker" || command === "podman") {
     state.tag = args[args.indexOf("-t") + 1];
     finish();
   }
-  if (args[0] === "build" && args.includes("-f")) {
+  if ((args[0] === "build" || equals(args.slice(0, 2), ["buildx", "build"])) && args.includes("-f")) {
     assert.ok(args[args.indexOf("-f") + 1].endsWith("/deploy/runtime/Dockerfile"));
     state.runtime = args[args.indexOf("-t") + 1];
     finish();
@@ -774,6 +774,39 @@ test("ordinary k3d preparation forwards an immutable K3s override and retains th
     const cleanup = commands.cleanup();
     assert.equal(cleanup.status, 0, cleanup.stderr);
   }
+});
+
+test("repository platform preparation restores the runtime image cache without exporting it", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "repository-credentials-platform", {
+    GITHUB_ACTIONS: "true",
+    OCC_CI_IMAGE_CACHE: "1",
+    ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+    ACTIONS_RESULTS_URL: "https://cache.example.test/",
+  });
+  const prepared = commands.prepare();
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const calls = (await commands.commands()).filter(({ command }) => command === "docker");
+  const runtime = calls.filter(({ args }) => args[0] === "buildx");
+  assert.equal(runtime.length, 1);
+  const { args } = runtime[0];
+  assert.deepEqual(args.slice(0, 3), ["buildx", "build", "--load"]);
+  assert.equal(
+    args[args.indexOf("--cache-from") + 1],
+    `type=gha,version=2,scope=oce-ci-runtime-${process.platform}-${process.arch}-v1,timeout=60s`,
+  );
+  assert.equal(args.includes("--cache-to"), false);
+  // The fixture derives from the loaded runtime image through the engine's own builder.
+  const fixtureBuilds = calls.filter(({ args }) => args[0] === "build");
+  assert.equal(fixtureBuilds.length, 1);
+  assert.equal(fixtureBuilds[0].args[fixtureBuilds[0].args.indexOf("--builder") + 1], "default");
+  assert.ok(fixtureBuilds[0].args.includes(`RUNTIME_IMAGE=${args[args.indexOf("-t") + 1]}`));
+  const state = await readFile(commands.statePath, "utf8");
+  assert.doesNotMatch(
+    JSON.stringify(calls) + state + prepared.stdout + prepared.stderr,
+    /synthetic-cache-credential/,
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
 test("ordinary k3d preparation rejects mutable K3s overrides before creating state", async (t) => {
