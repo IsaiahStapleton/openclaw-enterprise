@@ -175,7 +175,11 @@ if already streaming, so the process exits once they finish instead of holding e
 socket for the 72-second keep-alive. The API Pod keeps the
 default 30-second termination grace and no `preStop` hook: its single `Recreate`
 replica has no peer to take traffic, so a delay would only lengthen the outage. A
-request still running after 30 seconds is cut off.
+request still running after 30 seconds is cut off. The API logs `shutdown.started`
+with the `signal` when the drain begins and `shutdown.completed` with its
+`durationMs` once every close hook has finished; a failed hook logs
+`shutdown.failed` and exits `1`. A log that ends after `shutdown.started` means
+the drain never finished, for example because the grace period ran out.
 
 When `controlPlane.nodeSelector` is non-empty, the chart places the API and
 worker Pods with that selector. The same selector applies to the initialization
@@ -281,7 +285,8 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   without applying SQL. `MIGRATION_HISTORY_UNSUPPORTED` requires inspection of
   the selected database; initialization does not repair or rewrite its ledger.
 - The API should emit `listening`; the worker should emit `worker.started`
-  followed by `worker.health`.
+  followed by `worker.health`. A stopping API emits `shutdown.started` and then
+  `shutdown.completed`.
 - `compute.preflight-warning` with code `KUBERNETES_VERSION_BELOW_MINIMUM`
   identifies a server below the supported Kubernetes 1.35 baseline; startup
   continues, but operators should upgrade before treating the deployment as
@@ -320,6 +325,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 
 ## Changelog
 
+- 2026-10-04: Log the API's shutdown start and completion.
 - 2026-10-04: Describe API shutdown timing against the Pod termination grace.
 - 2026-10-01 16:32: Trace scoped OpenShift DNS backend grants for Helm-managed production workloads. (authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44 - 4070b6ad5ec6aff03c9c5e49e504a90393ffe091)
 - 2026-09-29: Merge current main into release-scoped shared egress documentation. (PR-187)
