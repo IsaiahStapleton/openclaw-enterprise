@@ -534,7 +534,7 @@ async function assertSocketClosesAfterMutation(socket, mutate) {
       closedAt = Date.now();
       return true;
     }),
-    delay(20_000, false, { ref: false }),
+    delay(10_000, false, { ref: false }),
   ]);
   await mutate();
   const mutatedAt = Date.now();
