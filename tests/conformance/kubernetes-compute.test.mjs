@@ -874,7 +874,8 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
     gatewayWorkspaceNodeId: undefined,
     gatewayWorkspaceNodeFailure: undefined,
     gatewayAppliesBinding: true,
-    // When set, the node host pairs this long after its setup reaches the Harness.
+    // With a fake clock: when set, the node host pairs this long after its setup
+    // reaches the Harness.
     pairAfterSetupMs: undefined,
     // The wait each setup observation was given.
     observeWaits: [],
@@ -1160,9 +1161,8 @@ function dedicatedFirstDeployFixture({ statusProxy = true, clock } = {}) {
       body.metadata.annotations["openclaw.dev/workspace-node-setup"] !== undefined
     ) {
       // The setup file reaches the running Harness; its node host boots and pairs.
-      setTimeout(() => {
-        state.connected = true;
-      }, state.pairAfterSetupMs);
+      assert.notEqual(clock, undefined, "pairAfterSetupMs needs the fake clock");
+      state.pairAtMs = clock.now + state.pairAfterSetupMs;
     }
     const binding = objects.get(
       key("ConfigMap", `${gatewayName}-workspace-node`, kubernetesGatewayNamespaceName(tenant.id)),
@@ -1542,7 +1542,7 @@ test("a first dedicated deploy pins its workload starts through activation", asy
     read,
     prepare,
     markReady,
-  } = dedicatedFirstDeployFixture();
+  } = dedicatedFirstDeployFixture({ clock: { now: 0 } });
   const environment = (template) =>
     new Set(template.spec.containers[0].env.map(({ name }) => name));
   // Workloads become ready as soon as the controller waits on them, so every
