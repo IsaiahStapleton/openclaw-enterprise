@@ -1105,7 +1105,7 @@ func (app *application) agentRevision(
 		if err != nil {
 			return "", nil, err
 		}
-		fmt.Fprintf(notices, "agent %s has no active revision; using latest revision %s\n", agentID, latest)
+		noticef(notices, "agent %s has no active revision; using latest revision %s", agentID, latest)
 		return latest, nil, nil
 	}
 	// A newer revision than the active one is being deployed or has failed; while
@@ -1114,22 +1114,22 @@ func (app *application) agentRevision(
 	probe := newerRevisionWithPods(client, namespace, agentID, active)
 	switch {
 	case probe.hasPods:
-		fmt.Fprintf(
+		noticef(
 			notices,
-			"notice: reading revision %s, newer than the active revision %s and not yet active; pass --revision %s for the active revision\n",
+			"notice: reading revision %s, newer than the active revision %s and not yet active; pass --revision %s for the active revision",
 			probe.latest, active, active,
 		)
 		return probe.latest, probe.description, nil
 	case probe.err != nil:
 		// The runtime probe needs more permission than reading logs, so a log
 		// reader may be refused here yet allowed to read the newer revision.
-		fmt.Fprintf(
+		noticef(
 			notices,
-			"notice: reading the active revision %s; a newer revision %s exists but its runtime could not be read (%v); pass --revision %s to read it\n",
+			"notice: reading the active revision %s; a newer revision %s exists but its runtime could not be read (%v); pass --revision %s to read it",
 			active, probe.latest, probe.err, probe.latest,
 		)
 	default:
-		fmt.Fprintf(notices, "notice: reading the active revision %s\n", active)
+		noticef(notices, "notice: reading the active revision %s", active)
 	}
 	return active, nil, nil
 }
