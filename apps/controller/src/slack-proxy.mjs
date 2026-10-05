@@ -107,6 +107,23 @@ function createSlackProxyServer() {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = parsePort(process.env.OCC_SLACK_PROXY_PORT);
   const server = createSlackProxyServer();
+  const sockets = new Set();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  // The proxy runs as PID 1 in its Pod, where the kernel drops a SIGTERM that has no
+  // handler; the Pod would then wait out its termination grace for SIGKILL. Tunnels are
+  // long-lived Socket Mode connections, so close them now: Slack clients reconnect
+  // through the Service to a ready replacement.
+  const shutdown = () => {
+    server.close();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
   server.listen(port, "0.0.0.0", () => {
     const address = server.address();
     const selectedPort = typeof address === "object" && address !== null ? address.port : port;
