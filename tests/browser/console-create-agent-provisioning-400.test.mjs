@@ -93,7 +93,8 @@ test("Agent name counts characters, as the API does, not UTF-16 code units", asy
   const name = page.getByLabel("Agent name");
   // 200 emoji are 200 characters, the API's limit, but 400 UTF-16 code units.
   const longest = "\u{1F600}".repeat(200);
-  await name.fill(longest);
+  // Typed, not filled: maxlength=200 stopped typing at 100 emoji.
+  await name.pressSequentially(longest);
   assert.equal(await name.inputValue(), longest);
   assert.equal(await name.evaluate((input) => input.validity.valid), true);
 
