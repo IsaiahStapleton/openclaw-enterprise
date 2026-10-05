@@ -1532,6 +1532,171 @@ test("audit rejects obsolete manifest selectors", async (t) => {
   ]);
 });
 
+test("audit rejects invalid file concurrency marks", async (t) => {
+  const root = await fixture(t);
+  for (const name of ["off", "blank", "both"]) {
+    await writeFile(join(root, `tests/integration/${name}.test.mjs`), "import 'node:test';\n");
+  }
+  await writeJson(join(root, "manifest.json"), {
+    version: 1,
+    lanes: {
+      marks: {
+        fileConcurrency: 0,
+        files: [
+          { path: "tests/integration/off.test.mjs", parallel: false },
+          { path: "tests/integration/blank.test.mjs", serial: " " },
+          { path: "tests/integration/both.test.mjs", parallel: true, serial: "shared port" },
+        ],
+      },
+    },
+    groups: { ci: ["marks"] },
+  });
+
+  const result = run(root, ["audit", "--manifest", "manifest.json", "--root", root]);
+  assert.equal(result.status, 1);
+  assert.deepEqual(
+    JSON.parse(result.stdout)
+      .issues.map((entry) => entry.message)
+      .sort(),
+    [
+      "lanes.marks.fileConcurrency must be an integer from 1 to 32",
+      "lanes.marks.files.0.parallel must be true when present",
+      "lanes.marks.files.1.serial must be a non-empty reason",
+      "lanes.marks.files.2 cannot be both parallel and serial",
+    ],
+  );
+});
+
+// Each fixture file holds a marker in `running/` while it runs. A parallel file waits
+// for its partner's marker, so it passes only if both share slots; a file that must
+// run alone fails if any other marker exists. Neither depends on timing.
+function concurrencyProbe(name, partner) {
+  return [
+    'import assert from "node:assert/strict";',
+    'import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";',
+    'import { setTimeout as sleep } from "node:timers/promises";',
+    'import test from "node:test";',
+    "const running = process.env.CI_RUNNER_PROBE_DIR;",
+    `test(${JSON.stringify(`${name} probe`)}, async () => {`,
+    `  writeFileSync(running + "/${name}", "");`,
+    "  try {",
+    partner
+      ? [
+          '    const deadline = Date.now() + Number(process.env.CI_RUNNER_PROBE_WAIT_MS ?? "20000");',
+          `    while (!existsSync(running + "/${partner}")) {`,
+          `      assert.ok(Date.now() < deadline, "${partner} never ran beside ${name}");`,
+          "      await sleep(10);",
+          "    }",
+        ].join("\n")
+      : `    assert.deepEqual(readdirSync(running), ["${name}"]);`,
+    "    await sleep(50);",
+    "  } finally {",
+    `    rmSync(running + "/${name}", { force: true });`,
+    "  }",
+    "});",
+    "",
+  ].join("\n");
+}
+
+test("run shares slots only between audited parallel files and runs the rest alone", async (t) => {
+  const root = await fixture(t);
+  const running = join(root, "running");
+  await mkdir(running);
+  const probes = {
+    unmarked: null,
+    left: "right",
+    serial: null,
+    right: "left",
+  };
+  for (const [name, partner] of Object.entries(probes)) {
+    await writeFile(
+      join(root, `tests/integration/${name}.test.mjs`),
+      concurrencyProbe(name, partner),
+    );
+  }
+  await writeJson(join(root, "manifest.json"), {
+    version: 1,
+    lanes: {
+      shared: {
+        fileConcurrency: 4,
+        files: [
+          { path: "tests/integration/unmarked.test.mjs" },
+          { path: "tests/integration/left.test.mjs", parallel: true },
+          { path: "tests/integration/serial.test.mjs", serial: "writes a fixed path" },
+          { path: "tests/integration/right.test.mjs", parallel: true },
+        ],
+      },
+    },
+    groups: { ci: ["shared"] },
+  });
+  const args = (name) => [
+    "run",
+    "shared",
+    "--manifest",
+    "manifest.json",
+    "--root",
+    root,
+    "--state",
+    `state/${name}.jsonl`,
+    "--results",
+    `results/${name}.json`,
+  ];
+  const env = { CI_RUNNER_PROBE_DIR: running, CI_RUNNER_FILE_CONCURRENCY: "2" };
+
+  const result = run(root, args("shared"), env);
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(await readFile(join(root, "results/shared.json"), "utf8"));
+  assert.equal(summary.fileConcurrency, 2);
+  assert.equal(summary.counts.passed, 4);
+  // Results keep manifest order; serial files ran first, before the shared slots.
+  assert.deepEqual(
+    summary.files.map((file) => [file.path.split("/").at(-1), file.mode]),
+    [
+      ["unmarked.test.mjs", "serial"],
+      ["left.test.mjs", "parallel"],
+      ["serial.test.mjs", "serial"],
+      ["right.test.mjs", "parallel"],
+    ],
+  );
+  const [unmarked, left, serial, right] = summary.files;
+  assert.ok(unmarked.startOffsetMs < serial.startOffsetMs);
+  assert.ok(serial.startOffsetMs + serial.wallDurationMs <= left.startOffsetMs);
+  assert.ok(serial.startOffsetMs + serial.wallDurationMs <= right.startOffsetMs);
+  assert.match(
+    result.stderr,
+    /^run-tests: passed tests\/integration\/left\.test\.mjs \d+\.\ds \(parallel\)$/m,
+  );
+
+  // One slot runs every file alone; the partners then cannot meet, and the
+  // result says so instead of passing.
+  const alone = run(root, args("alone"), {
+    ...env,
+    CI_RUNNER_FILE_CONCURRENCY: "1",
+    CI_RUNNER_PROBE_WAIT_MS: "300",
+  });
+  assert.equal(alone.status, 1);
+  const aloneSummary = JSON.parse(await readFile(join(root, "results/alone.json"), "utf8"));
+  assert.equal(aloneSummary.fileConcurrency, 1);
+  assert.deepEqual(
+    aloneSummary.files.map((file) => [file.mode, file.status]),
+    [
+      ["serial", "passed"],
+      ["serial", "failed"],
+      ["serial", "passed"],
+      ["serial", "failed"],
+    ],
+  );
+
+  const invalid = run(root, args("invalid"), { ...env, CI_RUNNER_FILE_CONCURRENCY: "many" });
+  assert.equal(invalid.status, 1);
+  const invalidSummary = JSON.parse(await readFile(join(root, "results/invalid.json"), "utf8"));
+  assert.deepEqual(invalidSummary.files, []);
+  assert.deepEqual(
+    invalidSummary.issues.map((entry) => entry.code),
+    ["invalid-env"],
+  );
+});
+
 test("audit requires current discovered test files and rejects duplicate ownership", async (t) => {
   const root = await fixture(t);
   await writeFile(join(root, "tests/integration/mapped.test.mjs"), "import 'node:test';\n");

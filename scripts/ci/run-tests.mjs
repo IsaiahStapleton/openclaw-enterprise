@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { constants as osConstants } from "node:os";
+import { availableParallelism, constants as osConstants } from "node:os";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -105,10 +105,38 @@ function normalizeFile(file, laneName, index, issues) {
     }
   }
 
+  // Files run one at a time unless the lane allows file concurrency and the file is
+  // audited `parallel: true`. A `serial` file names why it must run alone; an
+  // unmarked file also runs alone, so a new or unaudited file fails closed.
+  if (Object.hasOwn(file, "parallel") && file.parallel !== true) {
+    issues.push(issue("invalid-manifest", `${path}.parallel must be true when present`));
+  }
+  if (
+    Object.hasOwn(file, "serial") &&
+    (typeof file.serial !== "string" || file.serial.trim() === "")
+  ) {
+    issues.push(issue("invalid-manifest", `${path}.serial must be a non-empty reason`));
+  }
+  if (Object.hasOwn(file, "parallel") && Object.hasOwn(file, "serial")) {
+    issues.push(issue("invalid-manifest", `${path} cannot be both parallel and serial`));
+  }
+
   return {
     path: file.path,
     expectedTests: stringArray(file.expectedTests, `${path}.expectedTests`, issues),
+    parallel: file.parallel === true && !Object.hasOwn(file, "serial"),
   };
+}
+
+function fileConcurrencyLimit(value, path, issues) {
+  if (value === undefined) {
+    return 1;
+  }
+  if (!Number.isInteger(value) || value < 1 || value > 32) {
+    issues.push(issue("invalid-manifest", `${path} must be an integer from 1 to 32`));
+    return 1;
+  }
+  return value;
 }
 
 function normalizeManifest(raw) {
@@ -146,6 +174,11 @@ function normalizeManifest(raw) {
       name: laneName,
       env: envObject(lane.env, `lanes.${laneName}.env`, issues),
       requiredEnv: stringArray(lane.requiredEnv, `lanes.${laneName}.requiredEnv`, issues),
+      fileConcurrency: fileConcurrencyLimit(
+        lane.fileConcurrency,
+        `lanes.${laneName}.fileConcurrency`,
+        issues,
+      ),
       files,
     });
   }
@@ -366,6 +399,25 @@ function testTimeoutMs() {
   return 60 * 60 * 1000;
 }
 
+// The lane's audited files may share up to fileConcurrency slots, capped by the CPUs
+// this runner may use. CI_RUNNER_FILE_CONCURRENCY replaces that limit for lanes that
+// allow concurrency (1 runs every file alone, as lanes without fileConcurrency do).
+function fileConcurrency(lane, issues) {
+  if (lane.fileConcurrency === 1) {
+    return 1;
+  }
+  const override = process.env.CI_RUNNER_FILE_CONCURRENCY;
+  if (override === undefined || override === "") {
+    return Math.max(1, Math.min(lane.fileConcurrency, availableParallelism()));
+  }
+  const value = Number(override);
+  if (!Number.isInteger(value) || value < 1 || value > 32) {
+    issues.push(issue("invalid-env", "CI_RUNNER_FILE_CONCURRENCY must be an integer from 1 to 32"));
+    return 1;
+  }
+  return value;
+}
+
 async function loadPrepare(root) {
   const preparePath = resolve(root, "scripts/ci/prepare.mjs");
   if (!(await exists(preparePath))) {
@@ -428,6 +480,62 @@ function validatePreparedEnv(value) {
     }
   }
   return value;
+}
+
+const maxReporterBytes = 50 * 1024 * 1024;
+
+// spawnSync's contract, without blocking the runner while other files run: stdout
+// is kept up to maxReporterBytes (ENOBUFS past it), stdin is closed at once, and the
+// timeout sends SIGTERM and reports ETIMEDOUT. Child stderr is not retained.
+function runNode(args, { cwd, env, timeout }) {
+  return new Promise((resolvePromise) => {
+    const chunks = [];
+    let bytes = 0;
+    let error;
+    let settled = false;
+    const child = spawn(process.execPath, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    const stop = (code) => {
+      if (error === undefined) {
+        error = Object.assign(new Error(`child ${code}`), { code });
+        child.kill("SIGTERM");
+      }
+    };
+    const timer = setTimeout(() => stop("ETIMEDOUT"), timeout);
+    child.stdin.on("error", () => {});
+    child.stdin.end();
+    child.stderr.resume();
+    child.stdout.on("data", (chunk) => {
+      if (error?.code === "ENOBUFS") {
+        return;
+      }
+      if (bytes + chunk.length > maxReporterBytes) {
+        chunks.push(chunk.subarray(0, maxReporterBytes - bytes));
+        bytes = maxReporterBytes;
+        stop("ENOBUFS");
+        return;
+      }
+      chunks.push(chunk);
+      bytes += chunk.length;
+    });
+    const finish = (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise({
+        status,
+        signal,
+        stdout: Buffer.concat(chunks).toString("utf8"),
+        ...(error ? { error } : {}),
+      });
+    };
+    child.on("error", (spawnError) => {
+      error ??= spawnError;
+      finish(null, null);
+    });
+    child.on("close", finish);
+  });
 }
 
 function parseReporter(stdout) {
@@ -505,7 +613,7 @@ function imageDigests(env) {
   );
 }
 
-async function runFile(root, lane, file, statePath, prepareFile) {
+async function runFile(root, lane, file, statePath, prepareFile, setup = (step) => step()) {
   const issues = [];
   const relativePath = repoRelativePath(root, file.path);
   const absolutePath = resolveRepoPath(root, file.path, issues, relativePath);
@@ -522,11 +630,13 @@ async function runFile(root, lane, file, statePath, prepareFile) {
   if (prepareFile) {
     try {
       const result =
-        (await prepareFile({
-          lane: { name: lane.name, env: lane.env, requiredEnv: lane.requiredEnv },
-          file,
-          statePath,
-        })) ?? {};
+        (await setup(() =>
+          prepareFile({
+            lane: { name: lane.name, env: lane.env, requiredEnv: lane.requiredEnv },
+            file,
+            statePath,
+          }),
+        )) ?? {};
       prepared.env = validatePreparedEnv(result.env);
       prepared.cleanup = result.cleanup ?? null;
       if (prepared.cleanup !== null && typeof prepared.cleanup !== "function") {
@@ -567,17 +677,11 @@ async function runFile(root, lane, file, statePath, prepareFile) {
         lane: lane.name,
         file: relativePath,
       }).catch(() => undefined);
-      nodeResult = spawnSync(
-        process.execPath,
-        ["--test", "--test-reporter", reporterPath, absolutePath],
-        {
-          cwd: root,
-          encoding: "utf8",
-          env,
-          maxBuffer: 50 * 1024 * 1024,
-          timeout: testTimeoutMs(),
-        },
-      );
+      nodeResult = await runNode(["--test", "--test-reporter", reporterPath, absolutePath], {
+        cwd: root,
+        env,
+        timeout: testTimeoutMs(),
+      });
 
       const events = parseReporter(nodeResult.stdout);
       // The job env holds OCC_TEST_* values the child never got; the child env
@@ -630,7 +734,7 @@ async function runFile(root, lane, file, statePath, prepareFile) {
     await agentActivity?.finish();
     if (prepared.cleanup) {
       try {
-        await prepared.cleanup();
+        await setup(prepared.cleanup);
         cleanupResult = { status: "passed" };
       } catch (error) {
         cleanupResult = { status: "failed", error: sanitizeError(error) };
@@ -730,12 +834,45 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
 
   const prepareFile = await loadPrepare(root);
   const startedAt = new Date().toISOString();
+  const laneStarted = performance.now();
+  const concurrency = lane ? fileConcurrency(lane, issues) : 1;
   if (lane && issues.length === 0) {
     await mkdir(dirname(statePath), { recursive: true });
-    for (const file of lane.files) {
+    // prepareFile and cleanup update the lane state file; never interleave them.
+    let setupQueue = Promise.resolve();
+    const setup = (step) => {
+      const next = setupQueue.then(step);
+      setupQueue = next.catch(() => {});
+      return next;
+    };
+    const results = new Array(lane.files.length);
+    const runAt = async (index, mode) => {
       const fileStarted = performance.now();
-      const result = await runFile(root, lane, file, statePath, prepareFile);
+      const result = await runFile(root, lane, lane.files[index], statePath, prepareFile, setup);
+      result.mode = mode;
+      result.startOffsetMs = Math.round(fileStarted - laneStarted);
       result.wallDurationMs = Math.round(performance.now() - fileStarted);
+      results[index] = result;
+      process.stderr.write(
+        `run-tests: ${result.status} ${result.path} ${(result.wallDurationMs / 1000).toFixed(1)}s${mode === "parallel" ? " (parallel)" : ""}\n`,
+      );
+    };
+    const indexes = lane.files.map((_, index) => index);
+    const parallel = concurrency > 1 ? indexes.filter((index) => lane.files[index].parallel) : [];
+    // Serial files run first and alone, in manifest order; then audited files share
+    // `concurrency` slots, also started in manifest order.
+    for (const index of indexes.filter((entry) => !parallel.includes(entry))) {
+      await runAt(index, "serial");
+    }
+    const queue = [...parallel];
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+        while (queue.length > 0) {
+          await runAt(queue.shift(), "parallel");
+        }
+      }),
+    );
+    for (const result of results) {
       files.push(result);
       if (preservedNodeExitCode === 0 && result.nodeExitCode && result.nodeExitCode !== 0) {
         preservedNodeExitCode = result.nodeExitCode;
@@ -753,6 +890,7 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
     lane: laneName,
     status,
     exitCode: preservedNodeExitCode || (status === "passed" ? 0 : 1),
+    fileConcurrency: concurrency,
     startedAt,
     endedAt: new Date().toISOString(),
     counts: files.reduce(
