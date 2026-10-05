@@ -616,8 +616,18 @@ test("service API keys authenticate scoped automation without replacing sessions
   );
 
   await t.test("Namespace boundaries and exact IAM permissions remain authoritative", async () => {
-    assert.equal((await request("GET", `/namespaces/${tenantB.data.id}`, { headers })).status, 403);
-    assert.equal((await request("GET", "/installation", { headers })).status, 403);
+    // The key's fixed Namespace refuses every other route before IAM is asked, and the
+    // refusal is audited against the key's service principal.
+    for (const other of [`/namespaces/${tenantB.data.id}`, "/installation"]) {
+      const eventsBefore = auditSink.events.length;
+      const denied = await request("GET", other, { headers });
+      assert.equal(denied.status, 403);
+      assert.equal(denied.error.message, "The admitted Namespace does not match.");
+      assert.equal(auditSink.events.length, eventsBefore + 1);
+      const audit = auditSink.events.at(-1);
+      assert.equal(audit.kind, "authorization_denial");
+      assert.equal(audit.actorId, principal.id);
+    }
     assert.equal((await request("DELETE", path, { headers })).status, 403);
     // Removing a grant is immediately visible without reissuing the credential.
     const bindingIndex = policy.bindings.findIndex((entry) => entry.id === "service-automation");
@@ -875,6 +885,73 @@ test("service API keys authenticate scoped automation without replacing sessions
       policy.bindings.push(binding);
     },
   );
+
+  await t.test("a key record altered after issuance fails closed", async () => {
+    const altered = await issue();
+    assert.equal(altered.status, 201);
+    const keyHeaders = { "x-api-key": altered.data.key };
+    const read = async () => (await request("GET", path, { headers: keyHeaders })).status;
+    assert.equal(await read(), 200);
+    const authContext = await auth.auth.$context;
+    const where = [{ field: "id", value: altered.data.id }];
+    const record = await authContext.adapter.findOne({ model: "apikey", where });
+    const encoded = typeof record.metadata === "string";
+    const metadata = encoded ? JSON.parse(record.metadata) : record.metadata;
+    assert.equal(metadata.namespaceId, namespaceId);
+    const alter = ({ referenceId = record.referenceId, ...changes }) =>
+      authContext.adapter.update({
+        model: "apikey",
+        where,
+        update: {
+          referenceId,
+          metadata: encoded
+            ? JSON.stringify({ ...metadata, ...changes })
+            : { ...metadata, ...changes },
+        },
+      });
+    // Each altered subject below holds the same Namespace grant as the issued key.
+    const grant = (identity) => {
+      policy.identities.push(identity);
+      policy.bindings.push({
+        id: `altered-${identity.id}`,
+        namespaceId,
+        subjectKind: "identity",
+        subjectId: identity.id,
+        roleId: "tenant-automation",
+      });
+    };
+    const agentPrincipal = {
+      kind: "service_principal",
+      id: `sp_${randomUUID()}`,
+      namespaceId,
+      agentId: `agt_${randomUUID()}`,
+    };
+    const unscopedPrincipal = { kind: "service_principal", id: `sp_${randomUUID()}` };
+    grant(agentPrincipal);
+    grant(unscopedPrincipal);
+    try {
+      // Another Installation's key is not a credential here at all.
+      await alter({ installationId: `ins_${randomUUID()}` });
+      assert.equal(await read(), 401);
+      // An Agent's own service principal never acts through a service key.
+      await alter({ referenceId: agentPrincipal.id });
+      assert.equal(await read(), 403);
+      // A Namespace key cannot name an Installation-scoped service principal.
+      await alter({ referenceId: unscopedPrincipal.id });
+      assert.equal(await read(), 403);
+      await alter({});
+      assert.equal(await read(), 200);
+    } finally {
+      await alter({});
+      for (const identity of [agentPrincipal, unscopedPrincipal]) {
+        policy.identities.splice(policy.identities.indexOf(identity), 1);
+        policy.bindings.splice(
+          policy.bindings.findIndex((binding) => binding.subjectId === identity.id),
+          1,
+        );
+      }
+    }
+  });
 
   await t.test(
     "HTTP revocation rejects the key, preserves sessions, and never exposes the credential",

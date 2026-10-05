@@ -532,6 +532,39 @@ test("bootstrap fails closed when default Namespace creation is denied and later
   await bootstrappedDefaultNamespace(fixture);
 });
 
+test("bootstrap without Installation administer is refused and audited", async () => {
+  const restrictions = [
+    {
+      id: "restriction-no-installation-administer",
+      action: "administer",
+      resourceKind: "installation",
+      effect: "deny",
+    },
+  ];
+  const fixture = await createFixture({ restrictions });
+
+  const eventsBefore = fixture.auditSink.events.length;
+  const denied = await request(fixture.app, "/installation/bootstrap", {
+    body: { name: "Refused Installation" },
+  });
+  assert.equal(denied.response.status, 403);
+  assert.equal(denied.payload.error.code, "FORBIDDEN");
+  assert.equal(fixture.controller, undefined);
+  assert.equal(fixture.auditSink.events.length, eventsBefore + 1);
+  const deniedEvent = fixture.auditSink.events.at(-1);
+  assert.equal(deniedEvent.kind, "authorization_denial");
+  assert.equal(deniedEvent.actorId, fixture.administrator.id);
+  assert.deepEqual(deniedEvent.details.iamEvidence.restrictionIds, [
+    "restriction-no-installation-administer",
+  ]);
+
+  restrictions.length = 0;
+  const bootstrapped = await request(fixture.app, "/installation/bootstrap", {
+    body: { name: "Allowed Installation" },
+  });
+  assert.equal(bootstrapped.response.status, 201);
+});
+
 test("concurrent streaming bootstrap creates one audited Installation", async () => {
   const fixture = await createFixture();
   let releaseBodies;
@@ -973,6 +1006,33 @@ test("a caller without a grant gets the same audited denial whether or not the t
     }
   }
   assert.deepEqual(leaks, []);
+});
+
+test("a denial whose audit cannot be written answers 503, not 403", async () => {
+  const fixture = await createFixture();
+  await bootstrap(fixture);
+  await createNamespace(fixture, "Tenant A");
+  const namespace = await createNamespace(fixture, "Tenant B");
+  const readerApp = fixture.createApp(fixture.tenantAReader);
+  const read = () => request(readerApp, `/namespaces/${namespace.id}`);
+
+  const append = fixture.auditSink.append;
+  fixture.auditSink.append = async (event) => {
+    if (event.kind === "authorization_denial") {
+      throw new Error("audit sink unavailable");
+    }
+    return append.call(fixture.auditSink, event);
+  };
+  try {
+    const unaudited = await read();
+    assert.equal(unaudited.response.status, 503);
+    assert.equal(unaudited.payload.error.code, "DEPENDENCY_UNAVAILABLE");
+  } finally {
+    fixture.auditSink.append = append;
+  }
+  const audited = await read();
+  assert.equal(audited.response.status, 403);
+  assert.equal(fixture.auditSink.events.at(-1).kind, "authorization_denial");
 });
 
 test("Namespace deletion authorizes the exact target and rejects nonempty resources", async () => {
