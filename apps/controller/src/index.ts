@@ -213,6 +213,10 @@ const DEFAULT_BODY_LIMIT = 64 * 1024;
 const AGENT_CREATE_BODY_LIMIT = 448 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT = 48 * 1024;
 const WORKSPACE_FILE_CONTENT_LIMIT = 16 * 1024;
+// Path parameters such as IAM Role and AccessBinding IDs hold up to 200 characters, and a
+// percent-encoded character takes at most 12 bytes (%XX for each of 4 UTF-8 bytes). The
+// router's default of 100 refused contract-valid IDs before any handler ran.
+const MAX_PATH_PARAMETER_LENGTH = 200 * 12;
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const RESOURCE_ID_PREFIX = {
@@ -1013,6 +1017,23 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
     trustProxy: false,
     requestIdHeader: false,
     genReqId: () => `req_${randomUUID()}`,
+    routerOptions: { maxParamLength: MAX_PATH_PARAMETER_LENGTH },
+    // Router failures happen before routing, so no hook or error handler runs; without this
+    // Fastify answers its own body (echoing the path) with no request ID or security headers.
+    frameworkErrors: (error, request, reply) => {
+      canonicalFailure(
+        reply,
+        error.code === "FST_ERR_BAD_URL"
+          ? failure(400, "INVALID_REQUEST", "The request path has a malformed percent-encoding.")
+          : error.code === "FST_ERR_MAX_PARAM_LENGTH"
+            ? failure(
+                400,
+                "INVALID_REQUEST",
+                "The request does not match the operation contract: a path parameter is too long.",
+              )
+            : failure(500, "INTERNAL_ERROR", "The platform request could not be completed."),
+      );
+    },
     ajv: {
       customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false },
       plugins: [formatsPlugin],
