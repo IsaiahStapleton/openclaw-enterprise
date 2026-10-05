@@ -21,9 +21,11 @@ export async function availablePort({ host = "127.0.0.1" } = {}) {
 // stays bound with SO_REUSEPORT, so the real listener binds the same port with
 // `listen({ ..., reusePort })` while no other socket can take it; call release() once the
 // real listener is up. Where the platform has no SO_REUSEPORT for Node (macOS), `reusePort`
-// is false and the port is released at once, as availablePort() does.
+// is false and the port is released at once, as availablePort() does. While both sockets
+// listen the kernel may hand a connection to either, so release right after the bind.
 export async function reservePort({ host = "127.0.0.1" } = {}) {
-  const server = createServer();
+  // A connection that still reaches the reservation is reset rather than left hanging.
+  const server = createServer((socket) => socket.destroy());
   try {
     server.listen({ port: 0, host, reusePort: true });
     await once(server, "listening");
