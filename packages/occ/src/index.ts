@@ -768,8 +768,10 @@ function unsupportedPermissionsMessage(unsupported: readonly string[]): string {
   return render(shown);
 }
 
+// At most 200 characters counted as code points, as the API contract (JSON Schema
+// maxLength) and PostgreSQL char_length count them, not UTF-16 code units.
 function validName(value: unknown): value is string {
-  return isNonEmptyString(value) && value.length <= 200;
+  return isNonEmptyString(value) && Array.from(value).length <= 200;
 }
 
 type PluginDiscoveryCredential = {
