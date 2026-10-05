@@ -761,9 +761,10 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
 }
 
 // Lanes that may restore the hosted BuildKit cache. Only images-packaging
-// exports it, and the main-only warm job (ci-image-cache.yml) builds with that
-// lane's state. The repository platform lane loads its runtime image into the
-// Docker engine so a default-builder fixture build can derive from it.
+// exports it, on main pushes, and the main-only warm job (ci-image-cache.yml)
+// builds with that lane's state. The repository platform lane loads its
+// runtime image into the Docker engine so a default-builder fixture build can
+// derive from it.
 const imageCacheLanes = new Map([
   ["images-packaging", { localStore: false }],
   ["images-model-probes", { localStore: false }],
@@ -791,8 +792,12 @@ function imageBuildArgs(state, role, localStore, cacheWarm = false) {
       `${cache},timeout=60s`,
       // One writer per image avoids competing exports from the parallel image lanes.
       // The main-only warm job exists to export, so each cache transfer may take
-      // longer and a failed export fails the job instead of being ignored.
-      ...(state.lane === "images-packaging"
+      // longer and a failed export fails the job instead of being ignored. Pull
+      // request runs only restore: their export cost Images and Packaging about
+      // 40 s and filled only their own merge ref's scope. Main pushes keep the
+      // lane's export as a backstop to the warm job.
+      ...(state.lane === "images-packaging" &&
+      (cacheWarm || process.env.GITHUB_EVENT_NAME === "push")
         ? [
             "--cache-to",
             cacheWarm
