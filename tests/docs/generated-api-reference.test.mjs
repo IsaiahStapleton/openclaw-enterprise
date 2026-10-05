@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import test from "node:test";
 
+import { occApiRoutes } from "../../packages/contracts/src/api/routes.ts";
 import {
   generateApiReferenceOutputs,
   httpMethods,
@@ -84,6 +85,20 @@ test("generated API reference stays on the approved single page", async () => {
       [];
     assert.equal(matches.length, 1, `${operationId} appears ${matches.length} times`);
   }
+});
+
+test("every resource operation with a request body documents 413 and 415", async () => {
+  // The controller answers an oversized body 413 and a non-JSON media type 415 on every
+  // route that reads a body; updateCredentialSource documented neither. The
+  // /api/auth/* operations are defined with their auth flows and are not covered here.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const resourceOperations = new Set(occApiRoutes.map(({ operationId }) => operationId));
+  const missing = contractOperations(document)
+    .filter((operation) => resourceOperations.has(operation.operationId))
+    .filter((operation) => operation.requestBody !== undefined)
+    .filter((operation) => !("413" in operation.responses && "415" in operation.responses))
+    .map((operation) => operation.operationId);
+  assert.deepEqual(missing, []);
 });
 
 test("AccessBinding creation documents request body target read permissions", async () => {
