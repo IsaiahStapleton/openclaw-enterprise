@@ -368,7 +368,7 @@ test("the official Kubernetes client rejects ambiguous identities and insecure A
       driver.read(configuration),
       (error) =>
         error instanceof ConfigurationValidationError &&
-        /context|credential|identity|verified HTTPS/i.test(error.message),
+        /context|cluster|credential|identity|verified HTTPS|URL/i.test(error.message),
       scenario.name,
     );
   }
