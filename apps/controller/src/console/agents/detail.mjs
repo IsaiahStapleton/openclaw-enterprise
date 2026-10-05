@@ -1118,7 +1118,10 @@ export async function renderAgentDetail(context, { agent: preloadedAgent = null 
           ? element(
               "p",
               { className: "muted" },
-              "No readable versions. Creating an Agent alone does not create a version.",
+              // An Agent with a current version has versions; they are hidden, not missing.
+              currentRevisionId
+                ? "No readable versions. This Agent has versions your access does not include. Ask an Agent administrator for read access to them."
+                : "No readable versions. Creating an Agent alone does not create a version.",
             )
           : null,
       ].filter(Boolean),

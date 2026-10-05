@@ -418,6 +418,28 @@ test("Agent detail says when the current or requested version cannot be read", a
   await page.getByRole("heading", { name: "You cannot read this version" }).waitFor();
 });
 
+test("Agent detail says an Agent's versions are hidden, not missing, when none is readable", async (t) => {
+  const fixture = await createConsoleAppFixture(t);
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Unreadable versions", { ready: true });
+  const agent = await fixture.createAgent(namespace.id, "Hidden history", nativeValues("v1"));
+  const first = await fixture.seedActiveAgentRevision(namespace.id, agent.id);
+  denyRevisionRead(fixture, namespace, first.revision);
+  const { page } = await newPage(t, fixture);
+
+  await login(page, fixture, detailUrl(fixture, namespace.id, agent.id, "draft", "configuration"));
+  await page.getByRole("heading", { name: "Hidden history" }).waitFor();
+  await page
+    .getByText(
+      "No readable versions. This Agent has versions your access does not include. Ask an Agent administrator for read access to them.",
+    )
+    .waitFor();
+  assert.equal(
+    await page.getByText(/Creating an Agent alone does not create a version/).count(),
+    0,
+  );
+});
+
 test("Agent detail reports a failed dedicated replacement as probably not serving", async (t) => {
   const fixture = await createConsoleAppFixture(t);
   await fixture.bootstrap();
