@@ -20,7 +20,8 @@ func TestMain(m *testing.M) {
 }
 
 // occ dev up on the Docker profile runs scripts/dev-up; its exit status is the
-// command's, so callers can tell success, failure and usage errors apart.
+// command's, so callers can tell success, failure and the script's usage
+// errors (exit 2) apart.
 func TestDevUpDockerExitsWithTheStartupScriptStatus(t *testing.T) {
 	for _, code := range []int{0, 3} {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
@@ -38,12 +39,16 @@ func TestDevUpDockerExitsWithTheStartupScriptStatus(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			process := exec.Command(os.Args[0])
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			process := exec.Command(executable)
 			process.Dir = repository
 			process.Env = append(os.Environ(), "OCC_TEST_RUN_MAIN=dev up", "OCC_DEVELOPMENT_COMPUTE_DRIVER=docker")
 			var stderr strings.Builder
 			process.Stderr = &stderr
-			err := process.Run()
+			err = process.Run()
 			status := 0
 			var exited *exec.ExitError
 			if errors.As(err, &exited) {
