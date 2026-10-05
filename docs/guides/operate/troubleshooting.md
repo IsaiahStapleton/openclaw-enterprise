@@ -64,7 +64,7 @@ command exits before starting again.
 
 ## Local Codex sandbox check fails
 
-Kubernetes-only startup with `OCC_DEVELOPMENT_SANDBOX_DRIVER=none` verifies the
+Kubernetes Compute startup with `OCC_DEVELOPMENT_SANDBOX_DRIVER=none` verifies the
 dedicated Codex sandbox before bootstrap. On Ubuntu 24.04,
 `kernel.apparmor_restrict_unprivileged_userns=1` denies the user namespace
 Codex bubblewrap needs. Startup reports `kubectl failed` while verifying that
