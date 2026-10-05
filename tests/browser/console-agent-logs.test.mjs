@@ -146,6 +146,8 @@ test("invisible and bidirectional characters in log text show as visible escapes
       '{"event":"runtime.startup_phase","container":"gateway","phase":"conf\u202eig","outcome":"ok","ms":12,"sinceStartMs":40}',
     ),
     line(3, "plain text, emoji \u{1f600} and \u6f22\u5b57 stay as they are"),
+    // A tag character hides ASCII outside the Basic Multilingual Plane.
+    line(4, "tagged\u{e0041} line"),
   ];
 
   const { page } = await newPage(t, fixture);
@@ -172,6 +174,13 @@ test("invisible and bidirectional characters in log text show as visible escapes
     await pane.locator(".log-message", { hasText: "plain text" }).textContent(),
     "plain text, emoji \u{1f600} and \u6f22\u5b57 stay as they are",
   );
+  assert.equal(
+    await pane.locator(".log-message", { hasText: "tagged" }).textContent(),
+    "tagged\\U000e0041 line",
+  );
+  // Pasting the original text into the filter still finds the escaped row.
+  await page.getByLabel("Filter", { exact: true }).fill("for \u202efdp");
+  await pane.locator(".log-row", { hasText: "invoice for" }).waitFor({ state: "visible" });
   await page
     .locator(".runtime-pod")
     .getByText("gateway · BackOff: pulling report\\u202egnp.exe")

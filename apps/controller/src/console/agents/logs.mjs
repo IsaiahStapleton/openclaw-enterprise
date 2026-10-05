@@ -34,7 +34,7 @@ const WITHHELD_LABELS = {
 
 // Agent output is attacker-influenced. A bidirectional override (U+202E) would display the
 // rest of a line reversed, and zero-width or other invisible characters hide text, so every
-// character that is not graphic shows as a visible escape, as `occ agent logs` prints it.
+// character that is not graphic (the characters `occ agent logs` escapes) shows as an escape.
 const HIDDEN_CHARACTER = /[^\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}]/gu;
 
 function visibleText(value) {
@@ -237,7 +237,7 @@ function recordRow(record) {
   const provenance = record.kind === "sandbox" ? policyProvenance(record.fields) : null;
   if (provenance !== null) {
     summary.append(
-      element("span", { className: "log-provenance" }, provenance),
+      element("span", { className: "log-provenance" }, visibleText(provenance)),
       element("span", { className: "log-join", title: INFERRED_JOIN_TITLE }, INFERRED_JOIN_LABEL),
     );
   }
@@ -575,7 +575,8 @@ export function renderAgentLogs(context, { agent, revisionId }) {
     if (row.dataset.level === undefined) {
       return true;
     }
-    const text = filterInput.value.trim().toLowerCase();
+    // Rows hold escaped text, so a pasted line with an invisible character still matches.
+    const text = visibleText(filterInput.value.trim()).toLowerCase();
     return (
       !hiddenLevels.has(row.dataset.level) && (text === "" || row.dataset.search.includes(text))
     );
