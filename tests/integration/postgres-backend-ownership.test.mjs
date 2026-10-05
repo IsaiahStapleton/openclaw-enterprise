@@ -82,12 +82,10 @@ async function assertNoAgentNamed(pool, namespaceId, name, label) {
   assert.equal(result.rows[0].count, 0, label);
 }
 
-async function expectBackendConflict(operation, pattern) {
+async function expectBackendConflict(operation, pattern, name = "ResourceConflictError") {
   await assert.rejects(
     operation,
-    (error) =>
-      error?.name === "ResourceConflictError" &&
-      (pattern === undefined || pattern.test(error.message)),
+    (error) => error?.name === name && (pattern === undefined || pattern.test(error.message)),
   );
 }
 
@@ -331,6 +329,7 @@ test(
           resolveApprovedHarness,
         ),
       /configured model and topology/,
+      "ResourceStateConflictError",
     );
     await assertNoRevision(
       fixture.pool,
