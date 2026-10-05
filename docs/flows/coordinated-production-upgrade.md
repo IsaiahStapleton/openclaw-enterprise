@@ -90,7 +90,9 @@ mounts, service account) into a one-shot Pod whose Installation volume reads a
 temporary Secret holding the candidate. The Pod runs `loadStartupConfigurationSnapshot`
 and `loadInstallationConfiguration`, which resolve Drivers and Preset files
 without the database. A failure, a stuck image pull, or the timeout stops
-preparation before any writer stops; the exit trap deletes the Pods and Secret.
+preparation before any writer stops. The script first reads both Pods and saves
+each status and log, so every failing component is reported; then the exit trap
+deletes the Pods and Secret.
 It saves
 candidate inputs, inventory, target identity, and parameter hashes in the
 private evidence directory before marking preparation complete. A per-directory
@@ -192,7 +194,7 @@ access, and required restore behavior.
 ## Debugging and Verification
 
 - Inspect `server-dry-run.txt` for chart or admission failures before mutation,
-  and `preflight-api.log` and `preflight-worker.log` for a rejected candidate.
+  and `preflight-<api|worker>.log` and `-status.json` for a rejected candidate.
 - For OCC rollout failures, inspect `helm-upgrade.txt`, initialization Job logs,
   and API and worker rollout status.
 - For runtime failures, inspect `dispatch/*.error`, revision history, and
@@ -221,6 +223,8 @@ access, and required restore behavior.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 06:00: Save and report every preflight Pod's result before cleanup, not only the first failure.
 
 - 2026-10-05 04:00: Load the candidate Installation with the selected controller image in one-shot Pods before quiescence.
 

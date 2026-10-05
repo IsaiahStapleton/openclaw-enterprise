@@ -76,14 +76,15 @@ The loader validates the opt-in boolean and file list. It loads bundled JSON
 when enabled, resolves explicit JSON paths beside the startup YAML, validates
 each name/template definition, and rejects missing, malformed, invalid, or
 duplicate-name files before composition; a file named like a bundled default
-replaces it, and composition warns `presets.bundled-default-shadowed`. API and worker share the startup
-snapshot and its source path; files are not watched. [Production composition](../../apps/controller/src/composition/production.ts)
+replaces it, and API composition warns `presets.bundled-default-shadowed`. API and worker share the startup
+snapshot and source path (files are not watched), but only the API applies
+defaults and logs Preset warnings. [Production composition](../../apps/controller/src/composition/production.ts)
 and [development composition](../../apps/controller/src/composition/development-postgres.ts)
 pass generic definitions into `ControllerOptions.defaultPresets` and initialize
 defaults after selecting Configuration and IAM Drivers. They try each persisted
-Installation administrator in turn; one whose grant stops at the Installation
-cannot create Presets in a Namespace, so a Preset create denial moves on to the
-next, and startup fails only when none can seed. Native template contents
+Installation administrator in turn, moving on when one cannot create a
+Namespace's Presets (say, its grant stops at the Installation); startup fails
+only when none can seed. Native template contents
 remain in the application bundle; OCC owns generic Preset lifecycle. Seeding and
 rendering copy the native policy of the [standard Codex artifact](../../deploy/presets/standard-codex.json)
 ([build hosts](../guides/topics/standard-codex-preset.md#build-network-allowlist));
@@ -293,6 +294,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-05 05:30: Only the API logs Preset warnings.
 - 2026-10-05 03:30: A file named like a bundled default replaces it and warns.
 - 2026-10-05 02:30: Skip and warn on a default creation a deny Restriction refuses.
 - 2026-10-04 23:40: The bundled Collector exports the skipped-refresh warning with only its Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)

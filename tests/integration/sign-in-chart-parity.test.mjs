@@ -665,6 +665,42 @@ const invalid = [
     },
     parser: /list at most 10 entries together/,
   },
+  // An allowlist without its provider is refused, never dropped: an operator who sets one
+  // expects it to limit sign-in. Entries are checked first, as the API does.
+  ...[
+    ["organization", "auth.github.allowedOrgs[0]", "OCC_AUTH_GITHUB_ALLOWED_ORGS", "acme"],
+    ["team", "auth.github.allowedTeams[0]", "OCC_AUTH_GITHUB_ALLOWED_TEAMS", "acme/platform"],
+  ].map(([kind, key, variable, value]) => ({
+    name: `an allowed GitHub ${kind} without GitHub sign-in`,
+    values: { [key]: value },
+    chart:
+      /auth\.github\.allowedOrgs and auth\.github\.allowedTeams require auth\.github\.enabled: true/,
+    env: { [variable]: value },
+    parser: /requires client ID, client secret and recovery user ID/,
+  })),
+  {
+    name: "an allowed GitHub organization that is not a login, without GitHub sign-in",
+    values: { "auth.github.allowedOrgs[0]": "acme/platform" },
+    chart: /auth\.github\.allowedOrgs requires GitHub organization logins/,
+    env: { OCC_AUTH_GITHUB_ALLOWED_ORGS: "acme/platform" },
+    parser:
+      /OCC_AUTH_GITHUB_ALLOWED_ORGS must be a comma-separated list of GitHub organization logins/,
+  },
+  {
+    name: "an allowed GitHub team without its organization, without GitHub sign-in",
+    values: { "auth.github.allowedTeams[0]": "platform" },
+    chart: /auth\.github\.allowedTeams requires org\/team-slug entries/,
+    env: { OCC_AUTH_GITHUB_ALLOWED_TEAMS: "platform" },
+    parser:
+      /OCC_AUTH_GITHUB_ALLOWED_TEAMS must be a comma-separated list of org\/team-slug entries/,
+  },
+  {
+    name: "an allowed Google domain without Google sign-in",
+    values: { "auth.google.allowedDomains[0]": "example.com" },
+    chart: /auth\.google\.allowedDomains requires auth\.google\.enabled: true/,
+    env: { OCC_AUTH_GOOGLE_ALLOWED_DOMAINS: "example.com" },
+    parser: /Google sign-in requires both client ID and client secret/,
+  },
   {
     name: "Google without a recovery user",
     values: { "auth.google.enabled": "true", "agentNativeAdmin.enabled": "false" },
