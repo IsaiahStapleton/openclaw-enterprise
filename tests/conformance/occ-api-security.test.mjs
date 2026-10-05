@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import {
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
@@ -392,6 +393,35 @@ test("development admission fails closed outside explicit loopback-only developm
     });
     assert.equal(response.response.status, 403);
     assert.equal(fixture.controller, undefined);
+  }
+});
+
+test("a trusted development CIDR admits its own range and nothing else", async (t) => {
+  const development = { trustedCidrs: ["10.89.0.0/16"] };
+  const fixture = await createFixture({ development });
+  await bootstrap(fixture);
+  // app.fetch always injects from 127.0.0.1; Fastify inject can name the peer address.
+  const app = fixture.createApp(fixture.administrator, { development }, createFastifyApp);
+  t.after(() => app.close());
+  const list = (remoteAddress) =>
+    app.inject({
+      url: "/namespaces",
+      remoteAddress,
+      headers: authenticatedHeaders(fixture.app.defaultSession),
+    });
+  for (const admitted of ["127.0.0.1", "10.89.0.1", "10.89.255.254", "::ffff:10.89.3.4"]) {
+    assert.equal((await list(admitted)).statusCode, 200, admitted);
+  }
+  for (const refused of [
+    "10.90.0.1",
+    "10.88.255.255",
+    "192.0.2.10",
+    "fd00::1",
+    "::ffff:10.90.0.1",
+  ]) {
+    const response = await list(refused);
+    assert.equal(response.statusCode, 403, refused);
+    assert.match(response.json().error.message, /restricted to direct loopback requests/, refused);
   }
 });
 
