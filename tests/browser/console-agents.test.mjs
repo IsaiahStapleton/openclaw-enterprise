@@ -2040,7 +2040,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
         body: JSON.stringify({
           error: {
             code: "INVALID_REQUEST",
-            message: "The request does not match the operation contract: /name is too long.",
+            message: "The request does not match the operation contract.",
           },
           meta: { requestId: "req_00000000-0000-4000-8000-000000000400" },
         }),
@@ -2173,8 +2173,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await createModelCredentialSecret(page, "model-secret-value");
   await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
   const retry = page.getByRole("button", { name: "Retry provisioning request" });
-  // Longer than the API's 200-character limit, so a resend that reaches validation fails.
-  await page.getByLabel("Agent name").fill("n".repeat(201));
+  // The stub refuses the resend at admission.
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
     .getByText(/^Outcome unknown\. Retry resubmits the same request ID and saved references\./)
@@ -2182,9 +2181,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   assert.equal(await page.getByLabel("Agent name").isDisabled(), true);
   // A 400 to the resend shows the request was never admitted, so the form unlocks.
   await retry.click();
-  await page
-    .getByText(/^The request does not match the operation contract: \/name is too long\./)
-    .waitFor();
+  await page.getByText(/^The request does not match the operation contract\./).waitFor();
   assert.equal(await retry.isVisible(), false);
   assert.equal(await page.getByLabel("Agent name").isDisabled(), false);
   await page.getByLabel("Agent name").fill("Taken name");

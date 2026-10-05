@@ -18,6 +18,8 @@ const AGENT_NAME_CONFLICT =
   "An Agent with this name already exists in this Namespace. Choose a different name.";
 // The API's text for a conflict whose reason it does not name.
 const GENERIC_CONFLICT = "The requested platform resource already exists.";
+// The API's Agent name limit, in characters (code points).
+const AGENT_NAME_MAX_CHARACTERS = 200;
 
 // TODO: This starter list is intentionally hardcoded for the initial Console release.
 // Revisit catalog refresh and credential-aware discovery after the basic creation flow ships.
@@ -333,13 +335,20 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   }
 
   const formId = "create-agent-form";
+  // No maxlength: it counts UTF-16 code units, so an emoji would count twice. The API
+  // counts characters (code points), and so does this check.
   const name = element("input", {
     id: "agent-name",
     name: "name",
     required: "",
-    maxlength: "200",
     autocomplete: "off",
   });
+  const checkNameLength = () =>
+    name.setCustomValidity(
+      Array.from(name.value.trim()).length > AGENT_NAME_MAX_CHARACTERS
+        ? `Use at most ${AGENT_NAME_MAX_CHARACTERS} characters.`
+        : "",
+    );
   const mode = element(
     "select",
     { id: "execution-mode" },
@@ -1075,6 +1084,9 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   form.addEventListener("input", (event) => {
     edited = true;
     event.target.setCustomValidity?.("");
+    if (event.target === name) {
+      checkNameLength();
+    }
   });
   form.addEventListener("change", () => {
     edited = true;
@@ -1584,6 +1596,8 @@ function renderAgentForm(context, rendered, presetOptions = {}, draft = {}) {
   }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    // A restored draft sets the name without an input event.
+    checkNameLength();
     if (
       pending ||
       outcomeUnknown ||

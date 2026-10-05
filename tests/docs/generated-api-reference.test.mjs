@@ -223,3 +223,14 @@ test("OpenAPI check rejects unexpected generated API child pages in an isolated 
     /Unexpected generated API reference file: docs\/reference\/api\/unexpected-ci-check\.md/,
   );
 });
+
+test("operations without a request body do not list 413 or 415", async () => {
+  // The reference introduction says when any request answers 413 or 415; an operation
+  // lists them only when it takes a body. Three bodiless operations listed them.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const listed = contractOperations(document)
+    .filter((operation) => operation.requestBody === undefined)
+    .filter((operation) => "413" in operation.responses || "415" in operation.responses)
+    .map((operation) => operation.operationId);
+  assert.deepEqual(listed, []);
+});
