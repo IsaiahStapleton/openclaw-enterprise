@@ -25,11 +25,11 @@ presets:
 Omitting or disabling it stops bundled seeding; explicit `files`
 still load. Each JSON file contains one `{ "name": "...", "template": { ... } }`
 object. Relative paths resolve beside the Installation YAML. The Helm chart mounts
-only that YAML, so Helm installs name files shipped in the controller image by
+only that YAML, so on Helm list only files shipped in the controller image, by
 absolute path. Missing, malformed, invalid, or duplicate-name files prevent
 startup (`PRESET_FILE_INVALID`); a file named like a bundled default, such
 as `default-codex`, replaces it and logs `presets.bundled-default-shadowed`.
-Files are read at startup, not watched. API startup adds missing defaults to ready
+API startup adds missing defaults to ready
 or provisioning Namespaces, including the bootstrap Namespace; new Namespaces
 receive them atomically.
 

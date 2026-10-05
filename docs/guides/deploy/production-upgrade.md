@@ -184,8 +184,8 @@ cp /secure/occ/installation.yaml /secure/occ/installation.yaml.before
 yq -r '.presets.files[]?' /secure/occ/installation.yaml | while read -r preset_file; do
   kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
     --namespace openclaw-system exec deploy/openclaw-enterprise-api --container api -- \
-    sh -c 'cd "$(dirname "$OCC_CONFIG_PATH")" && test -r "$1"' sh "$preset_file" </dev/null ||
-    { echo "The API cannot read Preset file $preset_file." >&2; exit 1; }
+    sh -c 'cd "$(dirname "$OCC_CONFIG_PATH")" && test -f "$1" && test -r "$1"' sh "$preset_file" ||
+    { echo "Could not verify Preset file $preset_file in the API container." >&2; exit 1; }
 done
 export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
 export OCC_INSTALLATION_KEY="$(yq -er '.installation.key // "installation.yaml"' /secure/occ/values.yaml)"

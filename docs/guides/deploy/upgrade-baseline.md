@@ -149,7 +149,7 @@ Agent's NetworkPolicies and, for a dedicated Agent, its Harness Service select
 the active revision, so a runtime release changes the revision in those
 selectors. A dedicated Agent's gateway Deployment, Service and HTTPRoute can
 also be recreated; the Service gets a new cluster IP and the HTTPRoute new
-revision labels. Agents add and delete
+revision annotations. Agents add and delete
 their own workspace files, so the file count can change slightly. Investigate
 any other change, in particular a changed PVC UID, a missing or altered earlier
 receipt, any other NetworkPolicy, Service or RoleBinding change, a different
