@@ -65,6 +65,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmdirSync,
   writeFileSync,
 } from "node:fs";
@@ -108,7 +109,11 @@ function commitState() {
       const nested = (entry) => entry && typeof entry === "object" && !Array.isArray(entry);
       latest[key] = nested(value) && nested(latest[key]) ? { ...latest[key], ...value } : value;
     }
-    writeFileSync(statePath, JSON.stringify(latest));
+    // Commands read the state unlocked at startup. Replace the file atomically
+    // so a concurrent reader sees the old or the new state, never an empty file.
+    const temp = statePath + "." + process.pid + ".tmp";
+    writeFileSync(temp, JSON.stringify(latest));
+    renameSync(temp, statePath);
   } finally {
     rmdirSync(lock);
   }
