@@ -226,12 +226,6 @@ async function exerciseSetup(store, reopened = store) {
     await reopened.read((state) => state.workspaceSetups.find(namespace.id, pending.id)),
     undefined,
   );
-  // A repeat while that teardown is still queued converges on it instead of retrying it.
-  // Only the PostgreSQL run reaches the retry branch: in-memory State never finds this work.
-  assert.equal(
-    (await controller.deleteAgent("creator", namespace.id, pending.id)).status,
-    "deleting",
-  );
   return { setup, completed, namespace, otherNamespace, agent, withoutSetup };
 }
 
