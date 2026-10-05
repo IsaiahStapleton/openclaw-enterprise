@@ -43,6 +43,8 @@ Prepare:
   database state;
 - the production kubeconfig, Helm values, Installation YAML, OCC service key,
   and optional CA bundle in protected files;
+- Node.js, which builds the startup preflight Pods; its Kubernetes identity must
+  create and delete Pods and Secrets and read Pod logs in the release namespace;
 - a PostgreSQL backup before a controller release whose migrations may require
   data restoration; and
 - Agent-volume backups before a runtime release whose recovery may require
@@ -249,7 +251,18 @@ the protected values equal to live values; the helper preserves
 the running broker's exact hostname in the candidate. It qualifies the pair
 before cluster mutation and verifies the deployed pair and broker capability.
 
-The command applies reviewed settings, scales the API and worker to zero, and
+Before it stops anything, the command runs a startup preflight: one-shot API and
+worker Pods on the selected controller image, built from the rendered chart (same
+environment, mounts and service account), with the candidate Installation in a
+temporary Secret. Each loads the Installation, Drivers and `presets.files` as
+startup does, without opening the database. If either fails, as when a listed
+Preset file is missing from the image, the command prints the error, deletes the
+Pods and Secret, and stops; the old release keeps serving. Logs are saved as
+`preflight-*.log`. Runtime upgrades run it on the current controller image. If
+the helper is killed first, delete what it left with
+`kubectl delete pod,secret -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=upgrade-preflight`.
+
+The command then applies reviewed settings, scales the API and worker to zero, and
 waits for their Pods to terminate. Helm restores the candidate Deployments after
 its initialization hooks succeed. The helper verifies rollout and OCC access.
 
