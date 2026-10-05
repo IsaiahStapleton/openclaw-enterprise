@@ -1,8 +1,7 @@
 {
-  "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE", "OCC_TEST_CODEX_SECCOMP_PROFILE"],
+  "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE"],
   "prepare": {
-    "requiresPreparedStateForFile": true,
-    "codexSeccomp": true
+    "requiresPreparedStateForFile": true
   },
   "files": [
     {
@@ -16,6 +15,13 @@
         "runtime image Codex Harness exits promptly on SIGTERM in every startup phase",
         "runtime image embedded Gateway exits promptly on SIGTERM in every startup phase",
         "runtime image dedicated Gateway exits promptly on SIGTERM while it waits for its Harness"
+      ]
+    },
+    {
+      "path": "tests/integration/runtime-image-model-probe-outcomes.test.mjs",
+      "expectedTests": [
+        "runtime image embedded Gateway passes its model probe at a 500m CPU limit",
+        "runtime image embedded Gateway reports a hung provider as a model probe timeout"
       ]
     }
   ]

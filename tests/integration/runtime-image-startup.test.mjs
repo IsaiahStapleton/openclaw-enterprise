@@ -14,7 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
 import { GATEWAY_RUNTIME_ENTRYPOINT as DOCKER_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/docker/index.ts";
@@ -50,12 +50,10 @@ import {
   createAdmittedRuntimeImageConfiguration,
   jsonLogEntries,
   runGatewaySmoke,
+  reviewedCodexSeccompSecurityOptions,
 } from "../helpers/runtime-image-startup.mjs";
 
 const syntheticCodexApiKey = "sk-openclaw-runtime-image-smoke-synthetic";
-const manualReviewedCodexSeccompProfileSha256 =
-  "71a2871a066a696a171049a15db3f065122c153cd11ef451cee3341ddbd9697f";
-const reviewedCodexSeccompProfileFilePattern = /^codex-0\.158\.0-([a-f0-9]{64})\.json$/;
 
 test("Codex OAuth bootstrap preserves rotated credentials and requires a new source after disk loss", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "oce-oauth-bootstrap-"));
@@ -138,7 +136,7 @@ test("runtime image seccomp option requires the CI-prepared profile record", asy
   t.after(() => rm(directory, { recursive: true, force: true }));
   const contents = Buffer.from(`${JSON.stringify({ defaultAction: "SCMP_ACT_ERRNO" })}\n`);
   const digest = createHash("sha256").update(contents).digest("hex");
-  const profile = join(directory, `codex-0.158.0-${digest}.json`);
+  const profile = join(directory, `codex-0.160.0-${digest}.json`);
   const statePath = join(directory, "state.json");
   await writeFile(profile, contents);
   await writeFile(
@@ -164,6 +162,23 @@ test("runtime image seccomp option requires the CI-prepared profile record", asy
     reviewedCodexSeccompSecurityOptions({ profile, ciStatePath: "" }),
     /must be prepared by image CI state/,
   );
+
+  // Without a profile, only a local run (no CI, no CI state) may fall back to
+  // Docker's default seccomp; CI fails instead of running the case unconfined.
+  assert.deepEqual(
+    await reviewedCodexSeccompSecurityOptions({ profile: "", ciStatePath: "", ci: "" }),
+    ["--security-opt", "no-new-privileges"],
+  );
+  for (const environment of [
+    { ciStatePath: "", ci: "true" },
+    { ciStatePath: "", ci: "1" },
+    { ciStatePath: statePath, ci: "" },
+  ]) {
+    await assert.rejects(
+      reviewedCodexSeccompSecurityOptions({ profile: "", ...environment }),
+      /OCC_TEST_CODEX_SECCOMP_PROFILE is required in CI/,
+    );
+  }
 
   await writeFile(
     statePath,
@@ -673,95 +688,6 @@ async function createRuntimeRepositoryMaterial(t, fixture) {
   }));
   await writeFile(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
   return material.root;
-}
-
-async function ciPreparedCodexSeccompProfile(ciStatePath) {
-  if (ciStatePath === undefined || ciStatePath.length === 0) {
-    return undefined;
-  }
-  let state;
-  try {
-    state = JSON.parse(await readFile(ciStatePath, "utf8"));
-  } catch (error) {
-    throw new Error(
-      `OPENCLAW_ENTERPRISE_CI_STATE must name readable CI preparation state for OCC_TEST_CODEX_SECCOMP_PROFILE: ${error.message}`,
-      { cause: error },
-    );
-  }
-  const cluster = state.resources?.find(
-    (resource) => resource?.kind === "k3d-cluster" && resource.codexDockerSeccompProfile,
-  );
-  const prepared = cluster?.codexDockerSeccompProfile;
-  assert.equal(
-    typeof prepared?.path,
-    "string",
-    "OPENCLAW_ENTERPRISE_CI_STATE must record cluster.codexDockerSeccompProfile.path.",
-  );
-  assert.match(
-    prepared.sha256 ?? "",
-    /^[a-f0-9]{64}$/,
-    "OPENCLAW_ENTERPRISE_CI_STATE must record cluster.codexDockerSeccompProfile.sha256.",
-  );
-  return prepared;
-}
-
-async function reviewedCodexSeccompSecurityOptions({
-  profile = process.env.OCC_TEST_CODEX_SECCOMP_PROFILE,
-  ciStatePath = process.env.OPENCLAW_ENTERPRISE_CI_STATE,
-} = {}) {
-  const securityOptions = ["--security-opt", "no-new-privileges"];
-  if (profile === undefined || profile.length === 0) {
-    return securityOptions;
-  }
-
-  assert.equal(
-    profile.toLowerCase().includes("unconfined"),
-    false,
-    "OCC_TEST_CODEX_SECCOMP_PROFILE must not select an unconfined seccomp profile.",
-  );
-  const expected = basename(profile).match(reviewedCodexSeccompProfileFilePattern)?.[1];
-  assert.ok(
-    expected,
-    "OCC_TEST_CODEX_SECCOMP_PROFILE must point to codex-0.158.0-<profile-sha256>.json.",
-  );
-
-  let contents;
-  try {
-    contents = await readFile(profile);
-  } catch (error) {
-    throw new Error(
-      `OCC_TEST_CODEX_SECCOMP_PROFILE must name a readable Codex seccomp profile: ${error.message}`,
-      { cause: error },
-    );
-  }
-
-  const actual = createHash("sha256").update(contents).digest("hex");
-  assert.equal(
-    actual,
-    expected,
-    `OCC_TEST_CODEX_SECCOMP_PROFILE digest ${actual} did not match the Codex 0.158.0 profile filename digest ${expected}.`,
-  );
-
-  const prepared = await ciPreparedCodexSeccompProfile(ciStatePath);
-  if (prepared === undefined) {
-    assert.equal(
-      expected,
-      manualReviewedCodexSeccompProfileSha256,
-      "OCC_TEST_CODEX_SECCOMP_PROFILE must be prepared by image CI state or use the pinned manual reviewed Codex profile.",
-    );
-  } else {
-    assert.equal(
-      profile,
-      prepared.path,
-      "OCC_TEST_CODEX_SECCOMP_PROFILE must match the CI-prepared Codex seccomp profile path.",
-    );
-    assert.equal(
-      actual,
-      prepared.sha256,
-      "OCC_TEST_CODEX_SECCOMP_PROFILE must match the CI-prepared Codex seccomp profile digest.",
-    );
-  }
-  return [...securityOptions, "--security-opt", `seccomp=${profile}`];
 }
 
 function sanitizeSyntheticCredential(output) {
@@ -2461,7 +2387,7 @@ const timeout = setTimeout(() => {
 );
 
 test(
-  "runtime image shares Codex 0.158.0 between the plugin and Dedicated command",
+  "runtime image shares Codex 0.160.0 between the plugin and Dedicated command",
   imageTestOptions,
   async () => {
     const script = String.raw`
@@ -2473,18 +2399,18 @@ const { realpathSync, readFileSync } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const plugin = createRequire("/app/dist/extensions/codex/package.json");
 const installed = plugin.resolve("@openai/codex/package.json");
-assert.equal(JSON.parse(readFileSync(installed, "utf8")).version, "0.158.0");
+assert.equal(JSON.parse(readFileSync(installed, "utf8")).version, "0.160.0");
 const bundledCommand = plugin.resolve("@openai/codex/bin/codex.js");
 assert.equal(realpathSync("/app/node_modules/.bin/codex"), realpathSync(bundledCommand));
-assert.equal(execFileSync("codex", ["--version"], {encoding: "utf8"}).trim(), "codex-cli 0.158.0");
-assert.equal(execFileSync(process.execPath, [bundledCommand, "--version"], {encoding: "utf8"}).trim(), "codex-cli 0.158.0");
+assert.equal(execFileSync("codex", ["--version"], {encoding: "utf8"}).trim(), "codex-cli 0.160.0");
+assert.equal(execFileSync(process.execPath, [bundledCommand, "--version"], {encoding: "utf8"}).trim(), "codex-cli 0.160.0");
 const provenance = JSON.parse(readFileSync("/opt/oce/runtime/provenance.json", "utf8"));
 assert.equal(provenance.source, "https://github.com/openclaw/openclaw");
-assert.equal(provenance.commit, "6f91eda9c72d6b4c2640cb76b5a753e64089f6f2");
-assert.equal(provenance.sourceArchiveSha256, "8e0f0332bbdb798834148895d57c19e6b622dbb3b5eac39801c14c316ad93d0c");
+assert.equal(provenance.commit, "11d3d04a1279781a770f6a6aa09e6322b064b80a");
+assert.equal(provenance.sourceArchiveSha256, "b48a59055b2eeb39db06a7b900ade5208fa8f23c3f4f481fd5b5c455ea9436ab");
 assert.equal(provenance.openclawBridgePatchSha256, "1d8b670e7029872262375a21da7222768c2fe2390ff7a159ed1616ee9c9de1ca");
 assert.equal(provenance.openclawConnectPatchSha256, "c57722da9a88ec4295577ab9a9ba6e2ca37fceda11ce8b51b08ee1425e00851f");
-assert.equal(provenance.codex.version, "0.158.0");
+assert.equal(provenance.codex.version, "0.160.0");
 assert.equal(Object.hasOwn(provenance, "codexPatchSha256"), false);
 assert.equal(Object.hasOwn(provenance, "codexVersion"), false);
 const contents = readFileSync("/opt/oce/runtime/contents.json");
@@ -2547,7 +2473,7 @@ assert.equal(platformInventoryEntry.sha256, platformBinarySha256);
 // --unshare-user --unshare-net at start, which the reviewed seccomp profile
 // denies, and log a false user-namespace error.
 assert.throws(() => execFileSync("sh", ["-c", "command -v bwrap"], {stdio: "pipe"}));
-process.stdout.write("shared-codex-0.158.0-ready\n");
+process.stdout.write("shared-codex-0.160.0-ready\n");
 `;
     const { stdout } = await runDocker([
       "run",
@@ -2560,6 +2486,6 @@ process.stdout.write("shared-codex-0.158.0-ready\n");
       "-e",
       script,
     ]);
-    assert.match(stdout, /shared-codex-0.158.0-ready/);
+    assert.match(stdout, /shared-codex-0.160.0-ready/);
   },
 );

@@ -18,18 +18,21 @@ The trusted Installation YAML can include bundled Presets and JSON files:
 presets:
   includeDefaults: true
   files:
-    - presets/swe-preset.json
+    - /app/deploy/presets/swe-preset.json
 ```
 
 `includeDefaults: true` seeds `default-codex`, **Standard Codex**, and **Standard OpenClaw**.
-Omitting it or setting it to `false` disables bundled seeding; explicit `files`
+Omitting or disabling it stops bundled seeding; explicit `files`
 still load. Each JSON file contains one `{ "name": "...", "template": { ... } }`
-object. Relative paths resolve beside the Installation YAML; absolute paths are
-also supported. Mount files readably for the API and worker. Missing, malformed,
-invalid, or duplicate-name definitions prevent startup. Files are read at startup,
-not watched. API startup adds missing defaults to ready or provisioning Namespaces,
-including the bootstrap Namespace; new Namespaces receive them atomically. Startup
-skips failed or deleting Namespaces.
+object. Relative paths resolve beside the Installation YAML. The Helm chart mounts
+only that YAML, so on Helm list only files shipped in the controller image, by
+absolute path. Missing, malformed, invalid, or duplicate-name files prevent
+startup (`PRESET_FILE_INVALID`); a file named like a bundled default, such
+as `default-codex`, replaces it; the API (not the worker, which never applies
+defaults) logs `presets.bundled-default-shadowed`.
+API startup adds missing defaults to ready
+or provisioning Namespaces, including the bootstrap Namespace; new Namespaces
+receive them atomically.
 
 Each copy is an ordinary Namespace-owned Preset with its own ID and normal
 read/update/delete permissions. Startup can restore a deleted or renamed
@@ -46,8 +49,8 @@ current template, keeping its ID and AccessBindings, and audits
 `openclaw.presets.update` with `source: installation-defaults-refresh`. Copies
 matching no shipped version are operator edits and stay; so do `presets.files`
 copies and retired names such as `standard-codex`. To keep an earlier version,
-rename the copy or change any field. Existing Agents and Configurations keep
-their settings.
+rename the copy or change any field. A refused refresh (say, a deny Restriction
+on `preset:update`) keeps the copy and logs `presets.default-refresh-skipped`.
 
 Namespace deletion removes copies that equal, by name and template, a configured
 default or any shipped bundled version, even with `includeDefaults` disabled.
@@ -55,11 +58,12 @@ Other Presets block it with `409 NAMESPACE_NOT_EMPTY`.
 
 Startup selects a persisted Principal authorized to administer the Installation
 and requires `preset:create` wherever defaults are missing and `preset:update`
-on each copy it refreshes. Namespace
-creators likewise need `preset:create` when this option is enabled. Authorization
-or template validation failure rolls back initialization and prevents startup
-or Namespace creation. The selected Configuration Driver validates native
-values; seeding does not create workloads or credentials.
+on each copy it refreshes; a deny Restriction on `preset:create` skips that
+default and logs `presets.default-create-skipped`. Namespace creation with
+defaults also needs `preset:create`. Other authorization or template
+validation failures roll back initialization and prevent startup or Namespace
+creation. The Configuration Driver validates native values; seeding creates no
+workloads or credentials.
 
 ## Configuration inventory
 
@@ -88,8 +92,7 @@ through `includeDefaults`, `presets.files`, or Preset POST to enable it.
 console's shared configuration base and ordinary creation permissions.
 
 The shipped default file also supplies the console's shared configuration base
-for empty templates, **Reset template**, and provider/Harness switches. It replaces
-the former inline starter. The installed copy supplies initial draft settings;
+for empty templates, **Reset template**, and provider/Harness switches. The installed copy supplies initial draft settings;
 normal field edits preserve unrelated settings, while **Reset template** explicitly
 returns to the shipped base with the selected model. No installed credential or
 private template is exposed by the public shared-default asset.
@@ -131,9 +134,7 @@ model reference is `codex/gpt-6-astra`. The preset exposes only `name` and `mode
 variables. After **Use Preset**, choose an existing service account Secret or
 **Create new Secret...** before creating the Agent.
 
-Load a copy beside your YAML as in the example above, or reference the shipped
-container file at `/app/deploy/presets/swe-preset.json`. It is opt-in and is not
-added by `includeDefaults` alone.
+List the shipped container file as above; `includeDefaults` alone does not add it.
 
 In the Console, choose **SWE Agent**, fill its variables, then use **Edit Slack**
 to configure channels, allowed senders, and Slack app/bot Secrets. No channels or

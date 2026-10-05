@@ -94,7 +94,16 @@ A static token cannot be narrowed per session, so the gateway enforces scope:
 - **Pushes** are checked at the gateway. Before any byte goes upstream, the
   gateway reads the receive-pack commands and refuses the whole push with 400 if
   any ref fails the allowlist. Bypassing or replacing the client hook does not
-  change the result. Signed pushes (`push-cert`) are refused.
+  change the result. Signed pushes (`push-cert`) are refused. UTF-8 branch names
+  Git accepts are matched byte for byte, as described in the
+  [guardrail](push-ref-guardrail.md#matching-and-delivery). Names with invisible
+  or direction-changing characters are refused.
+- **At most 256 refs per push.** A push that updates, creates or deletes more
+  refs is refused before the token is used, even when every ref is allowed. The
+  gateway answers `413` with the error code `push-ref-limit-exceeded` and the
+  message "A push may update at most 256 refs. Push the refs in smaller
+  batches." Git shows only `error: RPC failed; HTTP 413`, as for an oversized
+  push. Push the refs in batches of 256 or fewer.
 - `git-read` never reaches receive-pack.
 
 Upstream sees every action as the token owner. A leaked session bearer reaches

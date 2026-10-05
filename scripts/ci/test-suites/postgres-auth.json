@@ -3,6 +3,32 @@
     "postgres": true,
     "requiresPreparedStateForFile": true
   },
+  "fileConcurrency": 2,
+  "parallelFiles": [
+    "tests/integration/postgres-github-outage.test.mjs",
+    "tests/integration/postgres-github-sign-in.test.mjs",
+    "tests/integration/native-admin-session-postgres.test.mjs",
+    "tests/integration/postgres-google-sign-in.test.mjs",
+    "tests/integration/postgres-external-session-provider.test.mjs",
+    "tests/integration/postgres-human-authentication.test.mjs",
+    "tests/integration/postgres-break-glass-auth-maintain.test.mjs",
+    "tests/integration/postgres-trusted-proxy.test.mjs",
+    "tests/integration/postgres-auth-accounts.test.mjs",
+    "tests/integration/postgres-password-recovery-only.test.mjs",
+    "tests/integration/postgres-oidc-sign-in.test.mjs",
+    "tests/integration/postgres-github-tab-binding.test.mjs",
+    "tests/integration/postgres-oidc-tab-binding.test.mjs",
+    "tests/integration/postgres-github-admin-attach.test.mjs",
+    "tests/integration/postgres-password-default-activation.test.mjs",
+    "tests/integration/postgres-password-default.test.mjs",
+    "tests/integration/postgres-github-admin-scope.test.mjs",
+    "tests/integration/postgres-github-org-allowlist.test.mjs",
+    "tests/integration/postgres-github-cookie-commit.test.mjs",
+    "tests/integration/postgres-sign-in-unmatched-callbacks.test.mjs",
+    "tests/integration/postgres-github-session-cookie.test.mjs",
+    "tests/integration/postgres-service-api-keys.test.mjs",
+    "tests/integration/postgres-auth-binding.test.mjs"
+  ],
   "files": [
     {
       "path": "tests/integration/native-admin-session-postgres.test.mjs",
@@ -64,12 +90,6 @@
       ]
     },
     {
-      "path": "tests/integration/postgres-password-sign-in-limit.test.mjs",
-      "expectedTests": [
-        "password-only sign-in limits failures per client and email with a reserved administrator lane"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-password-recovery-only.test.mjs",
       "expectedTests": [
         "recovery-only password sign-in admits only the recovery account's password"
@@ -93,13 +113,6 @@
       "path": "tests/integration/postgres-human-authentication.test.mjs",
       "expectedTests": [
         "PostgreSQL human authentication preserves exact identity and transactional currentness"
-      ]
-    },
-    {
-      "path": "tests/integration/auth-maintain.test.mjs",
-      "expectedTests": [
-        "auth:maintain requires an explicit writers-stopped claim for every change",
-        "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
       ]
     },
     {
@@ -140,12 +153,6 @@
       "path": "tests/integration/postgres-external-session-provider.test.mjs",
       "expectedTests": [
         "PostgreSQL sessions end when their external provider instance is no longer configured"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
-      "expectedTests": [
-        "online recovery replacement moves the reserved lane and survives a restart with the original seed"
       ]
     },
     {

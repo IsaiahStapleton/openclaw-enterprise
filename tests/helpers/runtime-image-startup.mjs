@@ -1,11 +1,12 @@
 // Shared by the runtime image startup smoke tests, which CI runs in two lanes
 // (runtime-image-startup.test.mjs and runtime-image-startup-probe.test.mjs).
 import { defaultAgentModel } from "../../apps/controller/src/console/agents/starter-model.mjs";
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { imageSmokeTimeoutMultiplier } from "./image-smoke-timeout.mjs";
 import { GATEWAY_RUNTIME_ENTRYPOINT as DOCKER_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/docker/index.ts";
@@ -250,4 +251,111 @@ export async function runGatewaySmoke(t, harnessId, options = {}) {
     const logs = await runDocker(["logs", containerName]).catch((logsError) => logsError);
     throw new Error(`${error.message}\n${commandOutput(logs)}`, { cause: error });
   }
+}
+
+const manualReviewedCodexSeccompProfileSha256 =
+  "71a2871a066a696a171049a15db3f065122c153cd11ef451cee3341ddbd9697f";
+const reviewedCodexSeccompProfileFilePattern = /^codex-0\.160\.0-([a-f0-9]{64})\.json$/;
+
+async function ciPreparedCodexSeccompProfile(ciStatePath) {
+  if (ciStatePath === undefined || ciStatePath.length === 0) {
+    return undefined;
+  }
+  let state;
+  try {
+    state = JSON.parse(await readFile(ciStatePath, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `OPENCLAW_ENTERPRISE_CI_STATE must name readable CI preparation state for OCC_TEST_CODEX_SECCOMP_PROFILE: ${error.message}`,
+      { cause: error },
+    );
+  }
+  const cluster = state.resources?.find(
+    (resource) => resource?.kind === "k3d-cluster" && resource.codexDockerSeccompProfile,
+  );
+  const prepared = cluster?.codexDockerSeccompProfile;
+  assert.equal(
+    typeof prepared?.path,
+    "string",
+    "OPENCLAW_ENTERPRISE_CI_STATE must record cluster.codexDockerSeccompProfile.path.",
+  );
+  assert.match(
+    prepared.sha256 ?? "",
+    /^[a-f0-9]{64}$/,
+    "OPENCLAW_ENTERPRISE_CI_STATE must record cluster.codexDockerSeccompProfile.sha256.",
+  );
+  return prepared;
+}
+
+// Docker security options for a case that runs the stock Codex sandbox. Only
+// the CI lanes whose manifest lists OCC_TEST_CODEX_SECCOMP_PROFILE in
+// requiredEnv prepare the reviewed profile (prepare.codexSeccomp). In CI, or
+// whenever CI preparation state is present, a missing profile is an error: a
+// case that calls this from a lane without the profile fails instead of
+// running unconfined or skipping. Local runs without CI keep Docker's default
+// seccomp profile.
+export async function reviewedCodexSeccompSecurityOptions({
+  profile = process.env.OCC_TEST_CODEX_SECCOMP_PROFILE,
+  ciStatePath = process.env.OPENCLAW_ENTERPRISE_CI_STATE,
+  ci = process.env.CI,
+} = {}) {
+  const securityOptions = ["--security-opt", "no-new-privileges"];
+  if (profile === undefined || profile.length === 0) {
+    const inCi = ci !== undefined && ci !== "" && ci !== "false" && ci !== "0";
+    if (inCi || (ciStatePath !== undefined && ciStatePath.length > 0)) {
+      throw new Error(
+        "OCC_TEST_CODEX_SECCOMP_PROFILE is required in CI: this case runs the Codex sandbox, so its lane must prepare the reviewed profile (prepare.codexSeccomp and requiredEnv in scripts/ci/test-suites).",
+      );
+    }
+    return securityOptions;
+  }
+
+  assert.equal(
+    profile.toLowerCase().includes("unconfined"),
+    false,
+    "OCC_TEST_CODEX_SECCOMP_PROFILE must not select an unconfined seccomp profile.",
+  );
+  const expected = basename(profile).match(reviewedCodexSeccompProfileFilePattern)?.[1];
+  assert.ok(
+    expected,
+    "OCC_TEST_CODEX_SECCOMP_PROFILE must point to codex-0.160.0-<profile-sha256>.json.",
+  );
+
+  let contents;
+  try {
+    contents = await readFile(profile);
+  } catch (error) {
+    throw new Error(
+      `OCC_TEST_CODEX_SECCOMP_PROFILE must name a readable Codex seccomp profile: ${error.message}`,
+      { cause: error },
+    );
+  }
+
+  const actual = createHash("sha256").update(contents).digest("hex");
+  assert.equal(
+    actual,
+    expected,
+    `OCC_TEST_CODEX_SECCOMP_PROFILE digest ${actual} did not match the Codex 0.160.0 profile filename digest ${expected}.`,
+  );
+
+  const prepared = await ciPreparedCodexSeccompProfile(ciStatePath);
+  if (prepared === undefined) {
+    assert.equal(
+      expected,
+      manualReviewedCodexSeccompProfileSha256,
+      "OCC_TEST_CODEX_SECCOMP_PROFILE must be prepared by image CI state or use the pinned manual reviewed Codex profile.",
+    );
+  } else {
+    assert.equal(
+      profile,
+      prepared.path,
+      "OCC_TEST_CODEX_SECCOMP_PROFILE must match the CI-prepared Codex seccomp profile path.",
+    );
+    assert.equal(
+      actual,
+      prepared.sha256,
+      "OCC_TEST_CODEX_SECCOMP_PROFILE must match the CI-prepared Codex seccomp profile digest.",
+    );
+  }
+  return [...securityOptions, "--security-opt", `seccomp=${profile}`];
 }

@@ -405,12 +405,6 @@ export function revisionName(candidate) {
 }
 
 export async function assertReadyGateway(namespaceName, agentId, namespaceId, snapshot) {
-  if (snapshot?.harness?.mode !== "embedded") {
-    const target = kubernetesGatewayNamespaceName(namespaceId);
-    assert.notEqual(target, namespaceName, "dedicated Gateway must leave the Harness namespace");
-    assert.equal(await missing("deployment", gatewayName(agentId), namespaceName), true);
-    namespaceName = target;
-  }
   const name = gatewayName(agentId);
   const deployment = await resource("deployment", name, namespaceName);
   assert.equal(deployment.spec.replicas, 1, "each Agent gateway must have exactly one replica");
@@ -770,6 +764,9 @@ export async function createDnsTrafficFixture(context, peer) {
       },
       spec: {
         automountServiceAccountToken: false,
+        // The control container runs `node` as PID 1, which ignores SIGTERM, so cleanup
+        // would otherwise wait out the default 30 s grace period.
+        terminationGracePeriodSeconds: 1,
         securityContext: {
           runAsNonRoot: true,
           runAsUser: 1000,

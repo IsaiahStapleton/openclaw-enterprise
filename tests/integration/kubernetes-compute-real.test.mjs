@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { WORKSPACE_DEFAULTS_ID } from "../../packages/contracts/src/index.ts";
@@ -19,7 +19,6 @@ import {
   databaseUrl,
   requiresKubernetes,
   requiresKubernetesAndPostgres,
-  kubernetesGatewayNamespaceName,
   driverPath,
   probeSource,
   hash,
@@ -51,6 +50,42 @@ import {
   createScopedController,
 } from "../helpers/kubernetes-compute-real.mjs";
 
+// After hooks in this file delete their randomly named namespaces without waiting: no later
+// step reads them, and each deletion waits out namespace-controller passes (5 s each, longer
+// while Pods terminate). local-path removes a deleted claim's host directory with a helper
+// Pod, which lane cleanup cannot do itself, so the file waits once, at its end, for those
+// volumes to be deleted.
+const deletedNamespaces = new Set();
+function deleteNamespaces(...names) {
+  for (const name of names) {
+    deletedNamespaces.add(name);
+  }
+  return kubectl("delete", "namespace", ...names, "--ignore-not-found=true", "--wait=false");
+}
+after(async () => {
+  if (deletedNamespaces.size === 0) {
+    return;
+  }
+  let remaining = [];
+  try {
+    await waitFor(
+      "local-path volumes of deleted namespaces to be removed",
+      async () => {
+        const volumes = JSON.parse(await kubectlRead("get", "persistentvolumes", "-o", "json"));
+        remaining = volumes.items
+          .filter(({ spec }) => deletedNamespaces.has(spec.claimRef?.namespace))
+          .map(({ metadata, status }) => `${metadata.name} (${status?.phase ?? "unknown"})`);
+        return remaining.length === 0;
+      },
+      180_000,
+    );
+  } catch (error) {
+    // Bound means a namespace is stuck; Released or Failed means local-path's helper failed.
+    error.message = `${error.message} Remaining: ${remaining.join(", ")}`;
+    throw error;
+  }
+});
+
 test(
   "real Kubernetes Drivers safely use and preserve an externally managed tenant namespace",
   { ...requiresKubernetes, timeout: 300_000 },
@@ -78,18 +113,12 @@ test(
 
     await kubectl("create", "namespace", platformNamespace);
     context.after(async () => {
-      await Promise.all(
-        [
-          platformNamespace,
-          existingName,
-          cleanupName,
-          duplicateName,
-          unclaimedName,
-          kubernetesGatewayNamespaceName(owner.id),
-          kubernetesGatewayNamespaceName(cleanupOwner.id),
-        ].map((name) =>
-          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=true"),
-        ),
+      await deleteNamespaces(
+        platformNamespace,
+        existingName,
+        cleanupName,
+        duplicateName,
+        unclaimedName,
       );
       await rm(directory, { force: true, recursive: true });
     });
@@ -176,6 +205,7 @@ test(
     // Existing foreign identity, missing external consent, and unsafe Pod Security fail closed.
     for (const [operation, key, rejectedValue, restoredValue] of [
       ["label", "openclaw.dev/namespace", randomUUID(), undefined],
+      ["label", "openclaw.dev/gateway-namespace", randomUUID(), undefined],
       ["annotate", "openclaw.dev/namespace-id", `ns_${randomUUID()}`, undefined],
       ["annotate", "openclaw.dev/namespace-lifecycle", undefined, "external"],
       ["label", "pod-security.kubernetes.io/enforce", "baseline", "restricted"],
@@ -259,7 +289,6 @@ test(
     );
 
     await driver.ensureNamespace(owner);
-    await grantTenantAccess(kubernetesGatewayNamespaceName(owner.id));
     await waitFor("explicitly selected existing tenant namespace to become ready", async () => {
       const observation = await driver.ensureNamespace(owner);
       assert.notEqual(observation.failure, "permanent");
@@ -270,6 +299,7 @@ test(
     assert.deepEqual(preparedNamespace.metadata.labels, {
       ...originalNamespace.metadata.labels,
       "openclaw.dev/namespace": owner.id,
+      "openclaw.dev/gateway-namespace": owner.id,
     });
     assert.deepEqual(preparedNamespace.metadata.annotations, {
       ...originalNamespace.metadata.annotations,
@@ -292,7 +322,7 @@ test(
     const readyOwner = { ...owner, status: "ready" };
     await provisionFixtureAuth(readyOwner);
 
-    // Canonical Configuration stays in the control plane even for an adopted data namespace.
+    // Canonical Configuration uses the exact adopted namespace alongside runtime resources.
     const configuration = {
       id: `cfg_${randomUUID()}`,
       namespaceId: owner.id,
@@ -305,9 +335,8 @@ test(
     const configurationName = kubernetesConfigurationName(configuration.id);
     assert.deepEqual(await configurationDriver.create(configuration), configuration);
     assert.equal(
-      (await resource("configmap", configurationName, kubernetesGatewayNamespaceName(owner.id)))
-        .metadata.namespace,
-      kubernetesGatewayNamespaceName(owner.id),
+      (await resource("configmap", configurationName, existingName)).metadata.namespace,
+      existingName,
     );
     assert.deepEqual(await configurationDriver.read(reference), configuration);
     const updatedConfiguration = {
@@ -318,10 +347,7 @@ test(
     assert.deepEqual(await configurationDriver.update(updatedConfiguration), updatedConfiguration);
     assert.deepEqual(await configurationDriver.read(reference), updatedConfiguration);
     await configurationDriver.delete(reference);
-    assert.equal(
-      await missing("configmap", configurationName, kubernetesGatewayNamespaceName(owner.id)),
-      true,
-    );
+    assert.equal(await missing("configmap", configurationName, existingName), true);
 
     // Dedicated workloads and the Harness workspace must remain inside the exact tenant.
     const agentId = `agt_${randomUUID()}`;
@@ -351,10 +377,7 @@ test(
     );
     await driver.stopRevision(candidate);
     assert.equal(await missing("deployment", revisionName(candidate), existingName), true);
-    assert.equal(
-      await missing("deployment", gatewayName(agentId), kubernetesGatewayNamespaceName(owner.id)),
-      true,
-    );
+    assert.equal(await missing("deployment", gatewayName(agentId), existingName), true);
     assert.deepEqual(
       (await resources("pods", existingName)).filter(
         ({ metadata }) =>
@@ -375,7 +398,6 @@ test(
     await createExistingNamespace(cleanupName);
     await grantTenantAccess(cleanupName);
     await driver.ensureNamespace(cleanupOwner);
-    await grantTenantAccess(kubernetesGatewayNamespaceName(cleanupOwner.id));
     await waitFor("empty external tenant namespace to become ready", async () => {
       const observation = await driver.ensureNamespace(cleanupOwner);
       assert.notEqual(observation.failure, "permanent");
@@ -444,15 +466,7 @@ test(
     const installationId = `ins_${randomUUID()}`;
     const platformNamespace = `oce-provisioning-${hash(installationId)}`;
     await kubectl("create", "namespace", platformNamespace);
-    context.after(async () => {
-      await kubectl(
-        "delete",
-        "namespace",
-        platformNamespace,
-        "--ignore-not-found=true",
-        "--wait=true",
-      );
-    });
+    context.after(() => deleteNamespaces(platformNamespace));
     const controller = await createScopedController(context, installationId, platformNamespace);
     await kubectl(
       "patch",
@@ -513,14 +527,7 @@ test(
     context.after(async () => {
       await Promise.all(
         fixture.bootstrapNamespaceIds.map((namespaceId) =>
-          kubectl(
-            "delete",
-            "namespace",
-            kubernetesNamespaceName(namespaceId),
-            kubernetesGatewayNamespaceName(namespaceId),
-            "--ignore-not-found=true",
-            "--wait=true",
-          ),
+          deleteNamespaces(kubernetesNamespaceName(namespaceId)),
         ),
       );
     });
@@ -530,20 +537,11 @@ test(
     assert.equal(namespaceResponse.status, 201, JSON.stringify(namespaceResponse.body));
     const namespaceOwner = namespaceResponse.data;
     const placement = kubernetesNamespaceName(namespaceOwner.id);
-    const gatewayPlacement = kubernetesGatewayNamespaceName(namespaceOwner.id);
-    context.after(async () => {
-      await kubectl(
-        "delete",
-        "namespace",
-        placement,
-        gatewayPlacement,
-        "--ignore-not-found=true",
-        "--wait=true",
-      );
-    });
+    const gatewayPlacement = placement;
+    context.after(() => deleteNamespaces(placement));
 
     await fixture.startWorker();
-    for (const target of [placement, gatewayPlacement]) {
+    for (const target of [placement]) {
       await waitFor(`worker to create provisioning namespace ${target}`, async () =>
         (await missing("namespace", target)) ? undefined : true,
       );
@@ -737,23 +735,20 @@ test(
     assert.deepEqual(
       Object.keys(transport.data),
       ["app-server-token"],
-      "the canonical app-server credential must be generated in CP before provisioning handoff",
+      "the canonical app-server credential must be generated before provisioning handoff",
     );
     assert.deepEqual(
       Object.keys(password.data),
       ["gateway-password"],
-      "the Gateway password must be a separate CP credential",
+      "the Gateway password must be a separate canonical credential",
     );
-    for (const name of [
+    const canonicalNames = [
       transportName,
       passwordName,
       ...provisionedSecrets.map(({ metadata }) => metadata.name),
-    ]) {
-      assert.equal(
-        await missing("secret", name, placement),
-        true,
-        "canonical credentials must not be stored in the Harness namespace",
-      );
+    ];
+    for (const name of canonicalNames) {
+      await resource("secret", name, placement);
     }
 
     // Seed an owned pre-upgrade RWX workspace without altering any supported Agent.
@@ -902,7 +897,7 @@ test(
     assert.equal(rejectedWorkspace.metadata.uid, originalWorkspace.metadata.uid);
     assert.deepEqual(rejectedWorkspace.spec, originalWorkspace.spec);
     assert.equal(rejectedWorkspace.metadata.deletionTimestamp, undefined);
-    // Final deletion is not atomic: CP state is removed before Harness validation.
+    // Final deletion removes Gateway state before Harness workspace validation.
     // This is why the legacy Agent must be discarded with a compatible release.
     assert.equal(
       await missing("persistentvolumeclaim", gatewayStateName, gatewayPlacement),
@@ -1068,16 +1063,12 @@ test(
         await app.close();
       }
       await observerPool.end();
-      await Promise.all(
-        [
-          ...new Set([
-            existingName,
-            ...placements.values(),
-            ...namespaceIds.map(kubernetesGatewayNamespaceName),
-          ]),
-        ].map((name) =>
-          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=true"),
-        ),
+      await deleteNamespaces(
+        ...new Set([
+          existingName,
+          ...placements.values(),
+          ...namespaceIds.map(kubernetesNamespaceName),
+        ]),
       );
     });
 
@@ -1094,16 +1085,55 @@ test(
       });
     }
 
-    app = await composePostgresDevelopment(
-      {
-        mode: "development",
-        host: "127.0.0.1",
-        databaseUrl,
-        authSecret,
-        authBaseURL,
-      },
-      drivers,
-    );
+    const developmentConfig = {
+      mode: "development",
+      host: "127.0.0.1",
+      databaseUrl,
+      authSecret,
+      authBaseURL,
+    };
+    // Both supported startup callers must reject old storage before admitting
+    // API writes or claiming work, even when running the development profile.
+    const legacyOwner = namespace("dev-upgrade");
+    const legacyName = `oce-gateways-${hash(legacyOwner.id, 24)}`;
+    await kubectl("create", "namespace", legacyName);
+    try {
+      await kubectl(
+        "label",
+        "namespace",
+        legacyName,
+        "app.kubernetes.io/managed-by=openclaw-enterprise",
+        `openclaw.dev/gateway-namespace=${legacyOwner.id}`,
+      );
+      await kubectl(
+        "annotate",
+        "namespace",
+        legacyName,
+        `openclaw.dev/namespace-id=${legacyOwner.id}`,
+      );
+      const before = await resource("namespace", legacyName);
+      await assert.rejects(async () => {
+        const unexpected = await composePostgresDevelopment(developmentConfig, drivers);
+        await unexpected.close();
+      }, /Existing split-layout Gateway storage/);
+      const rejectedWorker = createControllerWorker({
+        pool: new pg.Pool({ connectionString: databaseUrl, max: 2 }),
+        drivers,
+        emit: () => {},
+      });
+      try {
+        await assert.rejects(rejectedWorker.start(), /Existing split-layout Gateway storage/);
+      } finally {
+        await rejectedWorker.stop();
+      }
+      const after = await resource("namespace", legacyName);
+      assert.equal(after.metadata.uid, before.metadata.uid);
+      assert.deepEqual(after.metadata.labels, before.metadata.labels);
+      assert.equal(await missing("namespace", kubernetesNamespaceName(legacyOwner.id)), true);
+    } finally {
+      await kubectl("delete", "namespace", legacyName, "--wait=true");
+    }
+    app = await composePostgresDevelopment(developmentConfig, drivers);
     const session = await signInToControllerApp(app, adminCredentials);
 
     async function request(method, url, payload, options = {}) {
@@ -1500,7 +1530,7 @@ test(
         ? []
         : ["transport"].map((prefix) => `${prefix}-${hash(embeddedDelete.id)}`);
     for (const name of adoptedCredentialSecrets) {
-      await resource("secret", name, kubernetesGatewayNamespaceName(adopted.data.id));
+      await resource("secret", name, existingName);
     }
     for (const name of embeddedCredentialSecrets) {
       await resource("secret", name, placements.get(namespaceIds[1]));
@@ -1523,7 +1553,7 @@ test(
       await resource(
         "secret",
         `transport-${hash(first.id)}`,
-        kubernetesGatewayNamespaceName(namespaceIds[0]),
+        kubernetesNamespaceName(namespaceIds[0]),
       );
     }
 
@@ -1543,14 +1573,7 @@ test(
         const byContainer = (a, b) =>
           `${a.workload}/${a.container}`.localeCompare(`${b.workload}/${b.container}`);
         const podImages = async () =>
-          (
-            await Promise.all(
-              [...new Set([placement, kubernetesGatewayNamespaceName(namespaceId)])].map(
-                (namespace) => resources("pods", namespace),
-              ),
-            )
-          )
-            .flat()
+          (await resources("pods", placement))
             .filter(
               (pod) =>
                 pod.metadata.labels?.["openclaw.dev/agent"] === agent.id &&
@@ -1637,7 +1660,7 @@ test(
             const gatewayDeployment = await resource(
               "deployment",
               gatewayName(agent.id),
-              kubernetesGatewayNamespaceName(namespaceId),
+              placements.get(namespaceId),
             );
             const gatewayContainer = gatewayDeployment.spec.template.spec.containers[0];
             const projection = gatewayContainer.env.find(
@@ -1649,7 +1672,7 @@ test(
               "Configuration Secret bindings must render a concrete Kubernetes Secret name",
             );
             const pod = await waitFor(`bound Secret gateway ${agent.id} Pod`, async () =>
-              (await resources("pods", kubernetesGatewayNamespaceName(namespaceId))).find(
+              (await resources("pods", placements.get(namespaceId))).find(
                 ({ metadata, status }) =>
                   metadata.labels?.["openclaw.dev/workload-role"] === "gateway" &&
                   metadata.labels?.["app.kubernetes.io/name"] === gatewayName(agent.id) &&
@@ -1664,7 +1687,7 @@ test(
               "exec",
               pod.metadata.name,
               "--namespace",
-              kubernetesGatewayNamespaceName(namespaceId),
+              placements.get(namespaceId),
               "--",
               "node",
               "-e",
@@ -1716,7 +1739,7 @@ test(
         `app.kubernetes.io/name=${revisionName(admitted[0])}`,
       ),
       workloadPod(
-        kubernetesGatewayNamespaceName(namespaceIds[0]),
+        kubernetesNamespaceName(namespaceIds[0]),
         `app.kubernetes.io/name=${gatewayName(first.id)}`,
       ),
       workloadPod(
@@ -1737,31 +1760,36 @@ test(
         );
       }
     }
+    // A denied UDP query waits out the probe's 2.5 s timeout, so the three source Pods
+    // are probed concurrently. Each Pod still runs one probe at a time, in the same order:
+    // the allowed control, both denied queries, then the control again.
     for (const protocol of ["udp", "tcp"]) {
-      for (const source of dnsSources) {
-        assert.equal(
-          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
-          "192.0.2.53",
-          `${source.metadata.name} must resolve over ${protocol} port 5353`,
-        );
-        for (const [target, port] of [
-          [dns.selected, 5354],
-          [dns.unselected, 5353],
-        ]) {
-          await dns.assertQueryDenied(
-            `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
-            source,
-            target,
-            protocol,
-            port,
+      await Promise.all(
+        dnsSources.map(async (source) => {
+          assert.equal(
+            JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+            "192.0.2.53",
+            `${source.metadata.name} must resolve over ${protocol} port 5353`,
           );
-        }
-        assert.equal(
-          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
-          "192.0.2.53",
-          "the allowed DNS control must still work after denied queries",
-        );
-      }
+          for (const [target, port] of [
+            [dns.selected, 5354],
+            [dns.unselected, 5353],
+          ]) {
+            await dns.assertQueryDenied(
+              `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
+              source,
+              target,
+              protocol,
+              port,
+            );
+          }
+          assert.equal(
+            JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+            "192.0.2.53",
+            "the allowed DNS control must still work after denied queries",
+          );
+        }),
+      );
     }
 
     const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;
@@ -1887,7 +1915,7 @@ test(
     assert.equal((await request("GET", runtimePath, undefined, { session: false })).status, 401);
 
     if (runtimeImage !== undefined) {
-      const gatewayTarget = kubernetesGatewayNamespaceName(namespaceIds[0]);
+      const gatewayTarget = kubernetesNamespaceName(namespaceIds[0]);
       const dataTarget = placements.get(namespaceIds[0]);
       const firstGateway = await resource("deployment", gatewayName(first.id), gatewayTarget);
       assert.equal(firstGateway.spec.template.spec.automountServiceAccountToken, false);
@@ -1918,7 +1946,7 @@ test(
       }
     }
 
-    async function ownedComputeResources(namespaceName, agentId, namespaceId, dedicated = false) {
+    async function ownedComputeResources(namespaceName, agentId, namespaceId, _dedicated = false) {
       const kinds = [
         ["deployment", "deployments"],
         ["service", "services"],
@@ -1929,9 +1957,7 @@ test(
         ["secret", "secrets"],
       ];
       const owned = [];
-      for (const target of dedicated
-        ? [namespaceName, kubernetesGatewayNamespaceName(namespaceId)]
-        : [namespaceName]) {
+      for (const target of [namespaceName]) {
         for (const [kind, plural] of kinds) {
           for (const object of await resources(plural, target)) {
             if (object.metadata.labels?.["openclaw.dev/agent"] === agentId) {
@@ -2005,7 +2031,7 @@ test(
     await resource(
       "configmap",
       kubernetesConfigurationName(adoptedTenant.configurationId),
-      kubernetesGatewayNamespaceName(adopted.data.id),
+      existingName,
     );
 
     const retainedFile = `stop-state-${randomUUID()}.txt`;
@@ -2069,21 +2095,11 @@ test(
       if (!(await missing("deployment", revisionName(admitted[4]), existingName))) {
         return undefined;
       }
-      if (
-        !(await missing(
-          "deployment",
-          gatewayName(adoptedTenant.id),
-          kubernetesGatewayNamespaceName(adopted.data.id),
-        ))
-      ) {
+      if (!(await missing("deployment", gatewayName(adoptedTenant.id), existingName))) {
         return undefined;
       }
       const ownedPods = (
-        await Promise.all(
-          [existingName, kubernetesGatewayNamespaceName(adopted.data.id)].map((target) =>
-            resources("pods", target),
-          ),
-        )
+        await Promise.all([existingName].map((target) => resources("pods", target)))
       )
         .flat()
         .filter(({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === adoptedTenant.id);
@@ -2156,7 +2172,7 @@ test(
     const readyNamespace = await request("GET", `/namespaces/${namespaceIds[0]}`);
     assert.equal(readyNamespace.data.status, "ready");
     const legacyDnsPolicies = [];
-    for (const target of [replacementPlacement, kubernetesGatewayNamespaceName(namespaceIds[0])]) {
+    for (const target of [replacementPlacement]) {
       await kubectl(
         "patch",
         "networkpolicy",
@@ -2258,7 +2274,7 @@ test(
     await assertReadyGateway(placement, second.id, namespaceIds[0]);
     await assertReadyGateway(placement, boundSecretAgent.id, namespaceIds[0]);
     assert.equal(
-      (await resources("deployments", kubernetesGatewayNamespaceName(namespaceIds[0]))).filter(
+      (await resources("deployments", kubernetesNamespaceName(namespaceIds[0]))).filter(
         ({ spec }) => spec.template.metadata.labels?.["openclaw.dev/workload-role"] === "gateway",
       ).length,
       3,
@@ -2391,11 +2407,7 @@ test(
           `/namespaces/${adopted.data.id}/agents/${adoptedTenant.id}`,
         );
         const ownedPods = (
-          await Promise.all(
-            [existingName, kubernetesGatewayNamespaceName(adopted.data.id)].map((target) =>
-              resources("pods", target),
-            ),
-          )
+          await Promise.all([existingName].map((target) => resources("pods", target)))
         )
           .flat()
           .filter(({ metadata }) => metadata.labels?.["openclaw.dev/agent"] === adoptedTenant.id);
@@ -2403,43 +2415,17 @@ test(
       },
     );
     for (const name of adoptedCredentialSecrets) {
-      assert.equal(
-        await missing("secret", name, kubernetesGatewayNamespaceName(adopted.data.id)),
-        true,
-      );
+      assert.equal(await missing("secret", name, existingName), true);
     }
     const deletedClaims = [adoptedWorkspace.metadata.name];
     if (runtimeImage !== undefined) {
       deletedClaims.push(`gateway-state-${hash(adoptedTenant.id)}`);
     }
     for (const name of deletedClaims) {
-      assert.equal(
-        await missing(
-          "persistentvolumeclaim",
-          name,
-          name.startsWith("gateway-state-")
-            ? kubernetesGatewayNamespaceName(adopted.data.id)
-            : existingName,
-        ),
-        true,
-      );
+      assert.equal(await missing("persistentvolumeclaim", name, existingName), true);
     }
-    assert.equal(
-      await missing(
-        "deployment",
-        gatewayName(adoptedTenant.id),
-        kubernetesGatewayNamespaceName(adopted.data.id),
-      ),
-      true,
-    );
-    assert.equal(
-      await missing(
-        "service",
-        gatewayName(adoptedTenant.id),
-        kubernetesGatewayNamespaceName(adopted.data.id),
-      ),
-      true,
-    );
+    assert.equal(await missing("deployment", gatewayName(adoptedTenant.id), existingName), true);
+    assert.equal(await missing("service", gatewayName(adoptedTenant.id), existingName), true);
     assert.equal(await missing("service", agentName(adoptedTenant.id), existingName), true);
     assert.equal(await missing("serviceaccount", agentName(adoptedTenant.id), existingName), true);
     for (const { kind, name, namespace: target } of adoptedOwned) {
@@ -2454,7 +2440,7 @@ test(
     await resource(
       "configmap",
       kubernetesConfigurationName(adoptedTenant.configurationId),
-      kubernetesGatewayNamespaceName(adopted.data.id),
+      existingName,
     );
     await resource("namespace", existingName);
     await assertReadyGateway(placement, second.id, namespaceIds[0]);

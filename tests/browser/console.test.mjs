@@ -335,8 +335,18 @@ test("console shows the external observability link only to Installation adminis
 
   await openShellMenu(page);
   await page.getByRole("menuitem", { name: "Logout" }).click();
+  // Navigating away before the sign-out request is answered aborts it, and the old session
+  // then opens the Console again instead of the login form.
+  await page.waitForURL(/\/console\/login$/);
+  // The shell renders before the probe is answered, so wait for the denial itself.
+  const limitedProbe = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/observability",
+  );
   await login(page, fixture, "/console/", limited.credentials);
-  await page.getByRole("heading", { name: "Agents" }).waitFor();
+  assert.equal((await limitedProbe).status(), 403);
+  // The limited user reads no Agents. The empty list renders only after the page applied the
+  // denied probe, so the link checks below see the settled shell, not the loading one.
+  await page.getByRole("heading", { name: "No Agents yet", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   // A denied read is audited, so navigation must not repeat it.
   await page.getByRole("link", { name: "Namespaces" }).click();
@@ -346,14 +356,57 @@ test("console shows the external observability link only to Installation adminis
   );
   await page.getByRole("link", { name: "Agents" }).click();
   await namespacesRead;
-  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "No Agents yet", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   assert.equal(probes, 2);
   // A reload in the same tab reuses the settled answer for this session owner.
   await page.reload();
-  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "No Agents yet", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   assert.equal(probes, 2);
+});
+
+test("a navigation while the Installation-access probe is answered does not ask again", async (t) => {
+  // The API audits every denied probe, so the Console must not repeat one it already sent.
+  let answered = 0;
+  const fixture = await createConsoleAppFixture(t, {
+    observabilityUrl: "https://metrics.example.test/d/operations",
+    async onSend(request, _reply, payload) {
+      if (request.url === "/observability") {
+        answered += 1;
+      }
+      return payload;
+    },
+  });
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Probe access", { ready: true });
+  const limited = await fixture.createAccountWithPolicy("probe-limited", (principal) => {
+    fixture.policy.roles.push({
+      id: "role-browser-probe-reader",
+      namespaceId: namespace.id,
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    fixture.policy.bindings.push({
+      id: "binding-browser-probe-reader",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: "role-browser-probe-reader",
+    });
+  });
+  const { page } = await newPage(t, fixture);
+  // The API has answered (and audited) the probe; its response reaches the page only later.
+  const probe = await holdRoute(t, page, "**/observability", (route, response) =>
+    route.fulfill({ response }),
+  );
+  await login(page, fixture, "/console/agents", limited.credentials);
+  await probe.waitForRelease();
+  await page.getByRole("link", { name: "Namespaces" }).click();
+  await page.waitForURL(/\/console\/namespaces/);
+  probe.release();
+  await page.getByRole("list", { name: "Namespaces" }).getByText("Probe access").waitFor();
+  assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
+  assert.equal(answered, 1);
 });
 
 test("console ignores stale collection successes and errors while switching Namespaces", async (t) => {
