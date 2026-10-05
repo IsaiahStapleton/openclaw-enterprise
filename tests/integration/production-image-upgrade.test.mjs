@@ -231,11 +231,15 @@ fi
   const readinessCounter = join(directory, "readiness-counter");
   const runtimeCountCounter = join(directory, "runtime-count-counter");
   const commandLog = join(directory, "commands.log");
+  // The startup preflight reads each controller container's image and Installation
+  // mount from the rendered chart; this stand-in renders only those fields.
   await writeFile(
     helm,
     `#!/usr/bin/env bash
 if [[ "$*" == *'get values'* ]]; then
   cat "$LIVE_VALUES_FILE"
+elif [[ "$1" == template ]]; then
+  printf '%s\\n' '{"kind":"Deployment","metadata":{"name":"openclaw-enterprise-api"},"spec":{"template":{"spec":{"volumes":[{"name":"installation-startup","secret":{"secretName":"occ-installation-startup","items":[{"key":"installation.yaml","path":"installation.yaml"}]}}],"containers":[{"name":"api","image":"'"$OBSERVED_CONTROLLER_IMAGE"'","volumeMounts":[{"name":"installation-startup","mountPath":"/etc/openclaw/installation"}]}]}}}}' '{"kind":"Deployment","metadata":{"name":"openclaw-enterprise-worker"},"spec":{"template":{"spec":{"volumes":[{"name":"installation-startup","secret":{"secretName":"occ-installation-startup","items":[{"key":"installation.yaml","path":"installation.yaml"}]}}],"containers":[{"name":"worker","image":"'"$OBSERVED_CONTROLLER_IMAGE"'","volumeMounts":[{"name":"installation-startup","mountPath":"/etc/openclaw/installation"}]}]}}}}'
 fi
 `,
   );
@@ -301,6 +305,10 @@ case "$*" in
     ;;
   *'jsonpath='*) printf '%s\\n' "$OBSERVED_CONTROLLER_IMAGE" ;;
   *'get pods'*) printf '%s\\n' '{"items":[]}' ;;
+  *' create --filename -'*) cat >/dev/null ;;
+  *' create --filename'*) ;;
+  *' get pod/'*) printf '%s\\n' '{"status":{"phase":"Succeeded"}}' ;;
+  *' logs pod/'*) printf 'installation-startup-ready\\n' ;;
 esac
 `,
   );
