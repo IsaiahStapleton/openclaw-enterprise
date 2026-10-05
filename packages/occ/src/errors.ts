@@ -195,9 +195,22 @@ export class ConfigurationHarnessError extends ScopeViolationError {
  * later and stays a scope miss.
  */
 export class SecretBindingValidationError extends ScopeViolationError {
-  constructor(message: string) {
+  /**
+   * The submitted destination key that broke a destination rule, and the JSON Pointer of
+   * the binding map that holds it. Never a Secret value or ID.
+   */
+  readonly destination?: {
+    readonly bindingsPath: string;
+    readonly key: string;
+    readonly code: "INVALID_FORMAT" | "INVALID_VALUE";
+  };
+
+  constructor(message: string, destination?: SecretBindingValidationError["destination"]) {
     super(message);
     this.name = "SecretBindingValidationError";
+    if (destination !== undefined) {
+      this.destination = Object.freeze({ ...destination });
+    }
   }
 }
 
@@ -591,6 +604,9 @@ export class RuntimeLogsError extends Error {
 }
 
 export class PluginPolicyValidationError extends Error {
+  /** The rejected plugin selection key, so HTTP can point at `/plugins/<id>`. */
+  readonly pluginId?: string;
+
   constructor(
     field?:
       | "toolDefaults.reviewer"
@@ -599,11 +615,16 @@ export class PluginPolicyValidationError extends Error {
       | "aliasedPlugin"
       | "unknownPlugin",
     driverId?: string,
+    pluginId?: string,
   ) {
     let message = "The supplied plugin policies are invalid.";
     if (field === "unknownPlugin") {
       // driverId comes from trusted Installation configuration, never from the request.
-      message = `A plugin selection names a plugin that the selected Plugin Driver${
+      // pluginId is the caller's own selection key; the API contract limits it to
+      // [A-Za-z0-9._~:@-], and HTTP caps the message.
+      message = `The plugin selection ${
+        pluginId === undefined ? "" : `${pluginId} `
+      }names a plugin that the selected Plugin Driver${
         driverId === undefined ? "" : ` (${driverId})`
       } does not offer. Check each plugin ID and its Driver prefix against that Driver's catalog; an Installation selects one Plugin Driver.`;
     } else if (field === "aliasedPlugin") {
@@ -621,6 +642,9 @@ export class PluginPolicyValidationError extends Error {
     }
     super(message);
     this.name = "PluginPolicyValidationError";
+    if (field === "unknownPlugin" && pluginId !== undefined) {
+      this.pluginId = pluginId;
+    }
   }
 }
 

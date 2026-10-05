@@ -224,6 +224,34 @@ const cases = [
     { status: 400, code: "INVALID_REQUEST", message: new NativeWorkerSupportError().message },
   ],
   [
+    "a plugin selection the selected Plugin Driver does not offer",
+    new PluginPolicyValidationError("unknownPlugin", "occ-plugin", "codex-plugin:a~b/c"),
+    {
+      status: 400,
+      code: "INVALID_REQUEST",
+      message: new PluginPolicyValidationError("unknownPlugin", "occ-plugin", "codex-plugin:a~b/c")
+        .message,
+      details: [{ path: "/plugins/codex-plugin:a~0b~1c", code: "INVALID_VALUE" }],
+    },
+  ],
+  [
+    "a reserved Secret binding destination",
+    new SecretBindingValidationError(
+      "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.",
+      {
+        bindingsPath: "/configuration/secretBindings",
+        key: "OPENCLAW_TOKEN",
+        code: "INVALID_VALUE",
+      },
+    ),
+    {
+      status: 400,
+      code: "INVALID_REQUEST",
+      message: "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.",
+      details: [{ path: "/configuration/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" }],
+    },
+  ],
+  [
     "plugin selections that alias the same plugin",
     new PluginPolicyValidationError("aliasedPlugin"),
     {

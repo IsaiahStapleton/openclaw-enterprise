@@ -126,8 +126,9 @@ preserves them in `values`. OCC separately authorizes `operate` on each Secret
 selected by `secretBindings`, including retained bindings when PATCH omits the
 field. Omission preserves bindings; `{}` clears them. A submitted binding with a
 reserved or invalid destination, or a Secret reference to another Namespace, fails
-with `400 INVALID_REQUEST` and a message naming the rule; a Secret the Namespace
-does not hold stays `404`. The
+with `400 INVALID_REQUEST` and a message naming the rule. A destination failure
+also names the destination key, with a `/secretBindings/<key>` detail; a Secret
+the Namespace does not hold stays `404`. The
 [Configuration reference](../reference/configuration/secrets.md#secret-bindings) owns
 the binding contract, and the [Secret flow](secret-storage-and-delivery.md)
 traces storage and delivery. Secret Broker substitution remains unimplemented.
@@ -182,6 +183,8 @@ its optional integration is skipped.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 23:30: A reserved or invalid binding destination names its key and the broken rule (reserved prefix, reserved name or invalid format), with a `/secretBindings/<key>` detail. (findings-sweep-1-api)
 
 - 2026-10-03 16:30: Configuration writes reject reserved binding destinations and cross-Namespace Secret references as invalid requests instead of not-found, as provisioning does. (binding-400)
 

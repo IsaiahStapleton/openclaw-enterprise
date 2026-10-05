@@ -69,7 +69,7 @@ On ordinary draft creation paths, Console creates the Configuration and Agent, t
 
 `apps/controller/src/http/agents.ts:createAgentHandlers` receives schema-validated inputs after shared admission. It supplies the Namespace from the route and creates the audit event inside the controller transaction.
 
-OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. A Secret binding with a reserved or invalid destination, a Secret reference to another Namespace, or credential-source Harness authentication is rejected with `400 INVALID_REQUEST` and a message naming the rule; a reference to a Secret the Namespace does not hold stays `404`. Before a new API request enters the write transaction, the selected ChannelDriver checks configured credentials through authorized Secret callbacks. The Slack Driver checks token roles and bot authentication; this does not pin Secret versions or add worker revalidation. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
+OCC validates the accepted Configuration, references, workspace inputs, supported execution mode and current authority. A Secret binding with a reserved or invalid destination, a Secret reference to another Namespace, or credential-source Harness authentication is rejected with `400 INVALID_REQUEST` and a message naming the rule (a destination failure also names its key, with a `/configuration/secretBindings/<key>` detail); a reference to a Secret the Namespace does not hold stays `404`. Before a new API request enters the write transaction, the selected ChannelDriver checks configured credentials through authorized Secret callbacks. The Slack Driver checks token roles and bot authentication; this does not pin Secret versions or add worker revalidation. The repository Driver validates current Namespace selections before job admission and again when the worker creates the Agent; deployment checks the exact Harness topology through the Compute Driver. It stores the accepted request and its deduplication fingerprint in `agent_provisioning_work`, then enqueues `controller_work` with `work_kind = 'provisioning'`. Agent and Configuration creation happen later. Identical actor/Namespace/request IDs return the same work; changed input conflicts.
 
 The `202` response contains `data.provisioning`, with the work ID and status URL. Public progress exposes result IDs and safe errors without input values or backend credentials.
 
@@ -130,6 +130,8 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 23:30: A reserved or invalid binding destination names its key and the broken rule, with a `/configuration/secretBindings/<key>` detail. (findings-sweep-1-api)
 
 - 2026-10-03 15:30: Provisioning rejects reserved binding destinations and cross-Namespace Secret references as invalid requests instead of not-found. (f239/provisioning-binding-validation)
 
