@@ -506,17 +506,31 @@ export interface BundledPresetVersion {
 /**
  * Which refusals of a default Preset refresh startup skips instead of failing on.
  * `restricted`: a deny Restriction, which binds every principal alike. `denied`: any refusal.
+ * Either also skips creating a missing default that a deny Restriction refuses; a creation
+ * refused for any other reason still fails.
  */
 export type DefaultPresetRefreshSkip = "none" | "restricted" | "denied";
 
 /** A superseded default Preset copy left in place because the policy refused its refresh. */
 export interface SkippedDefaultPresetRefresh {
+  readonly operation: "update";
   readonly namespaceId: string;
   readonly presetId: string;
   readonly presetName: string;
   readonly reason: string;
   readonly restrictionIds: readonly string[];
 }
+
+/** A missing default Preset left uncreated because a deny Restriction refused its creation. */
+export interface SkippedDefaultPresetCreation {
+  readonly operation: "create";
+  readonly namespaceId: string;
+  readonly presetName: string;
+  readonly reason: string;
+  readonly restrictionIds: readonly string[];
+}
+
+export type SkippedDefaultPreset = SkippedDefaultPresetRefresh | SkippedDefaultPresetCreation;
 
 export interface CreateNamespaceInput {
   readonly name: string;
@@ -3011,8 +3025,8 @@ export class OpenClawController {
   async initializeDefaultPresets(
     principalId: string,
     options: { readonly skipRefusedRefresh?: DefaultPresetRefreshSkip } = {},
-  ): Promise<readonly SkippedDefaultPresetRefresh[]> {
-    const skipped: SkippedDefaultPresetRefresh[] = [];
+  ): Promise<readonly SkippedDefaultPreset[]> {
+    const skipped: SkippedDefaultPreset[] = [];
     if (this.defaultPresets.length === 0) {
       return skipped;
     }
@@ -3044,7 +3058,7 @@ export class OpenClawController {
     namespace: Readonly<Namespace>,
     refresh: {
       readonly skip: DefaultPresetRefreshSkip;
-      readonly skipped: SkippedDefaultPresetRefresh[];
+      readonly skipped: SkippedDefaultPreset[];
     } = { skip: "none", skipped: [] },
   ): Promise<void> {
     if (this.defaultPresets.length === 0) {
@@ -3066,11 +3080,38 @@ export class OpenClawController {
         );
         continue;
       }
-      await this.authorize(principalId, "create", {
-        kind: "preset",
-        id: namespace.id,
-        namespaceId: namespace.id,
-      });
+      try {
+        await this.authorize(principalId, "create", {
+          kind: "preset",
+          id: namespace.id,
+          namespaceId: namespace.id,
+        });
+      } catch (error) {
+        // A deny Restriction binds every administrator alike, for example one set to freeze
+        // a Namespace's Presets after an operator removed a default, so startup leaves the
+        // default missing instead of failing. A missing grant still fails, so another
+        // administrator can create it. Outages still fail.
+        if (
+          !(error instanceof AuthorizationDeniedError) ||
+          error instanceof DependencyUnavailableError
+        ) {
+          throw error;
+        }
+        const restrictionIds = error.evidence?.restrictionIds ?? [];
+        if (refresh.skip === "none" || restrictionIds.length === 0) {
+          throw error;
+        }
+        refresh.skipped.push(
+          Object.freeze({
+            operation: "create",
+            namespaceId: namespace.id,
+            presetName: preset.name,
+            reason: error.message,
+            restrictionIds: Object.freeze([...restrictionIds]),
+          }),
+        );
+        continue;
+      }
       const template = await this.admitPresetTemplate(preset.template, namespace.id);
       const created = await state.presets.createPreset({
         id: this.nextIdentifier("preset"),
@@ -3107,7 +3148,7 @@ export class OpenClawController {
     copy: Readonly<Preset>,
     refresh: {
       readonly skip: DefaultPresetRefreshSkip;
-      readonly skipped: SkippedDefaultPresetRefresh[];
+      readonly skipped: SkippedDefaultPreset[];
     },
   ): Promise<void> {
     // Only bundled defaults have a history; `presets.files` entries are never refreshed,
@@ -3159,6 +3200,7 @@ export class OpenClawController {
       }
       refresh.skipped.push(
         Object.freeze({
+          operation: "update",
           namespaceId: namespace.id,
           presetId: copy.id,
           presetName: copy.name,

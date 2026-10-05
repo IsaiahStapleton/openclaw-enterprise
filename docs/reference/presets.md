@@ -55,9 +55,10 @@ default or any shipped bundled version, even with `includeDefaults` disabled.
 Other Presets block it with `409 NAMESPACE_NOT_EMPTY`.
 
 Startup selects a persisted Principal authorized to administer the Installation
-and requires `preset:create` wherever defaults are missing and `preset:update`
-on each copy it refreshes. Namespace
-creators likewise need `preset:create` when this option is enabled. Authorization
+and requires `preset:create` wherever defaults are missing (a deny Restriction
+skips one and logs `presets.default-create-skipped`) and `preset:update` on each
+copy it refreshes. Namespace
+creators also need `preset:create` with this option. Authorization
 or template validation failure rolls back initialization and prevents startup
 or Namespace creation. The selected Configuration Driver validates native
 values; seeding does not create workloads or credentials.
