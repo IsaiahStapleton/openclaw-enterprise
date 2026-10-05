@@ -731,6 +731,22 @@ test("NUL characters and unpaired surrogates are refused in bodies and path para
   );
 });
 
+test("names are measured in characters, not UTF-16 code units", async () => {
+  // 200 emoji fit the 200-character contract (and PostgreSQL char_length), but each is two
+  // UTF-16 code units; the controller answered 404 NOT_FOUND for such a Namespace or Agent.
+  const fixture = await createFixture();
+  await bootstrap(fixture);
+  const name = "\u{1F600}".repeat(200);
+  const namespace = await createNamespace(fixture, name);
+  assert.equal(namespace.name, name);
+  const agent = await createAgent(fixture, namespace, name);
+  assert.equal(agent.name, name);
+
+  const tooLong = await request(fixture.app, "/namespaces", { body: { name: `${name}x` } });
+  assert.equal(tooLong.response.status, 400);
+  assert.deepEqual(tooLong.payload.error.details, [{ path: "/name", code: "TOO_LONG" }]);
+});
+
 test("exact Namespace ownership prevents cross-tenant access and resource traversal", async () => {
   const fixture = await createFixture();
   await bootstrap(fixture);
