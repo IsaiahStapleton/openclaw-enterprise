@@ -376,6 +376,7 @@ export async function startFakeGitHub(t) {
         ),
       );
     } else if (request.url === "/user") {
+      // Strict on purpose: suites rely on this 401 to catch a wrong Authorization header.
       const subject = /^Bearer ghu_fixture_([0-9]+)$/.exec(request.headers.authorization ?? "");
       if (subject === null) {
         response.writeHead(401);
