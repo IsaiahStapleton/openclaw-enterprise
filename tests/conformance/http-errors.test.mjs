@@ -578,7 +578,8 @@ const cases = [
     {
       status: 401,
       code: "UNAUTHENTICATED",
-      message: "The caller did not provide valid admission evidence.",
+      message:
+        "This request needs a valid session or service API key: the one sent is missing, invalid, expired or revoked, or this operation does not accept it.",
     },
   ],
   [
