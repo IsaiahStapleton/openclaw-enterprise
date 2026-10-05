@@ -35,6 +35,7 @@ import {
   waitForCondition,
   waitForIdleFetches,
   waitForInputValue,
+  waitForSettledFetches,
 } from "./console-agents-browser-helpers.mjs";
 import { createRuntimeAuthFixture } from "./console-agents-runtime-auth-fixture.mjs";
 import {
@@ -3674,6 +3675,7 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
       .filter((event) => event.kind === "authorization_denial" && event.action === action).length;
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
+  await trackSettledFetches(page);
   const detail = detailUrl(fixture, namespace.id, agent.id, "draft", "configuration");
   await login(page, fixture, detail, viewer.credentials);
   const unavailable = page.getByRole("heading", { name: "Configuration unavailable" });
@@ -3681,7 +3683,9 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
   const configurationPath = `/namespaces/${namespace.id}/configurations/${agent.configurationId}`;
   const nativeAdminPath = `/namespaces/${namespace.id}/agents/${agent.id}/native-admin`;
   const reads = (path) => requests.filter((request) => request.path === path).length;
-  await waitForCondition(() => reads(nativeAdminPath) === 1, "native admin status read");
+  // The tab remembers a denial only once the page has read it; a reload drops a pending read.
+  await waitForSettledFetches(page, nativeAdminPath, 1);
+  assert.equal(reads(nativeAdminPath), 1);
   assert.equal(reads(configurationPath), 1);
 
   // Each denied read is an audited authorization denial; reloading the view does not repeat it.
