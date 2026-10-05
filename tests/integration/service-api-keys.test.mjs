@@ -153,8 +153,21 @@ test("service API keys authenticate scoped automation without replacing sessions
       status,
     );
   }
+  // A key's expiry is computed from the controller's clock at issuance; allow one second
+  // of rounding on either side of the request.
+  function assertIssuedLifetime(response, before, seconds) {
+    const expiresAt = Date.parse(response.data.expiresAt);
+    assert.ok(
+      expiresAt >= before + seconds * 1000 - 1000 &&
+        expiresAt <= Date.now() + seconds * 1000 + 1000,
+      `expiresAt ${response.data.expiresAt} is not ${seconds} s after issuance`,
+    );
+  }
+  const issuedBefore = Date.now();
   const issued = await issue();
   assert.equal(issued.status, 201);
+  // Without expiresIn a key lives the documented 30 days.
+  assertIssuedLifetime(issued, issuedBefore, 30 * 24 * 60 * 60);
   assert.equal(issued.data.servicePrincipalId, principal.id);
   assert.equal(issued.data.namespaceId, namespaceId);
   assert.match(issued.data.key, /^occ_/);
@@ -861,6 +874,23 @@ test("service API keys authenticate scoped automation without replacing sessions
     },
   );
 
+  await t.test("a requested lifetime sets the key's expiry", async () => {
+    const before = Date.now();
+    const shortLived = await request("POST", "/api/auth/service-keys", {
+      body: { ...body, expiresIn: 86400 },
+    });
+    assert.equal(shortLived.status, 201);
+    assertIssuedLifetime(shortLived, before, 86400);
+    assert.equal(
+      (await request("GET", path, { headers: { "x-api-key": shortLived.data.key } })).status,
+      200,
+    );
+    assert.equal(
+      (await request("DELETE", `/api/auth/service-keys/${shortLived.data.id}`)).status,
+      200,
+    );
+  });
+
   await t.test(
     "expired credentials and a removed IAM identity cannot authenticate an authorized request",
     async () => {
@@ -895,6 +925,7 @@ test("service API keys authenticate scoped automation without replacing sessions
     const authContext = await auth.auth.$context;
     const where = [{ field: "id", value: altered.data.id }];
     const record = await authContext.adapter.findOne({ model: "apikey", where });
+    const { expiresAt, configId } = record;
     const encoded = typeof record.metadata === "string";
     const metadata = encoded ? JSON.parse(record.metadata) : record.metadata;
     assert.equal(metadata.namespaceId, namespaceId);
@@ -939,9 +970,26 @@ test("service API keys authenticate scoped automation without replacing sessions
       // A Namespace key cannot name an Installation-scoped service principal.
       await alter({ referenceId: unscopedPrincipal.id });
       assert.equal(await read(), 403);
+      // A record without a service principal or without an expiry is not a credential: the
+      // caller is unauthenticated (401), not facing a dependency outage (503).
+      await alter({ referenceId: "" });
+      assert.equal(await read(), 401);
       await alter({});
+      await authContext.adapter.update({ model: "apikey", where, update: { expiresAt: null } });
+      assert.equal(await read(), 401);
+      await authContext.adapter.update({ model: "apikey", where, update: { expiresAt } });
+      assert.equal(await read(), 200);
+      // Another key configuration's record is neither a credential nor revocable here.
+      await authContext.adapter.update({ model: "apikey", where, update: { configId: "default" } });
+      assert.equal(await read(), 401);
+      assert.equal(
+        (await request("DELETE", `/api/auth/service-keys/${altered.data.id}`)).status,
+        404,
+      );
+      await authContext.adapter.update({ model: "apikey", where, update: { configId } });
       assert.equal(await read(), 200);
     } finally {
+      await authContext.adapter.update({ model: "apikey", where, update: { expiresAt, configId } });
       await alter({});
       for (const identity of [agentPrincipal, unscopedPrincipal]) {
         policy.identities.splice(policy.identities.indexOf(identity), 1);
