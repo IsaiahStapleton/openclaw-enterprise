@@ -234,6 +234,11 @@ test("console auth routes reject untrusted browser origins and issue production 
   });
   assert.equal(rejected.response.status, 403);
   assert.equal(rejected.response.headers.get("set-cookie"), null);
+  // A correct password with a foreign Origin is refused for the Origin, not the credentials.
+  assert.match(
+    JSON.parse(rejected.text).error.message,
+    /A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header\./,
+  );
 
   const cliAccepted = await fixture.rawRequest("POST", "/api/auth/sign-in/email", {
     body: signInBody,
@@ -261,6 +266,10 @@ test("console auth routes reject untrusted browser origins and issue production 
     },
   });
   assert.equal(rejectedSignOut.response.status, 403);
+  assert.match(
+    JSON.parse(rejectedSignOut.text).error.message,
+    /A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header\./,
+  );
 
   const retainedSession = await fixture.rawRequest("GET", "/api/auth/session", {
     headers: { cookie: requestCookie },
@@ -275,6 +284,10 @@ test("console auth routes reject untrusted browser origins and issue production 
     },
   });
   assert.equal(crossSiteNoOrigin.response.status, 403);
+  assert.match(
+    JSON.parse(crossSiteNoOrigin.text).error.message,
+    /A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header\./,
+  );
 
   // Without the GitHub profile the session key still only narrows the cookie session.
   const providers = await fixture.rawRequest("GET", "/api/auth/providers");
@@ -307,6 +320,10 @@ test("console auth routes reject untrusted browser origins and issue production 
     headers: { cookie: requestCookie, "x-occ-session-key": foreignKey },
   });
   assert.equal(originlessSignOut.response.status, 403);
+  assert.match(
+    JSON.parse(originlessSignOut.text).error.message,
+    /A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header\./,
+  );
 
   const cliSignOut = await fixture.rawRequest("POST", "/api/auth/sign-out", {
     headers: { cookie: requestCookie, origin: fixture.origin, "x-occ-session-key": sessionKey },
