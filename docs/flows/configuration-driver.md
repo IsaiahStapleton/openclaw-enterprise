@@ -184,8 +184,6 @@ its optional integration is skipped.
 
 ## Changelog
 
-- 2026-10-05 23:30: A reserved or invalid binding destination names its key and the broken rule (reserved prefix, reserved name or invalid format), with a `/secretBindings/<key>` detail. (findings-sweep-1-api)
-
 - 2026-10-03 16:30: Configuration writes reject reserved binding destinations and cross-Namespace Secret references as invalid requests instead of not-found, as provisioning does. (binding-400)
 
 - 2026-09-23 13:13: Align provisioning Configuration creation and recovery with canonical CP storage. (codex/01a0cf72-6985-7712-ba92-d8cc32470f24 - df4ca4474d90de2d4ab0dd6f6d03a64ebb92526a)
