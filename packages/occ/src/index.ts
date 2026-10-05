@@ -752,16 +752,24 @@ function credentialSourceFieldsMatch(
  * Role of 64 Permissions can hold far more than fit.
  */
 function unsupportedPermissionsMessage(unsupported: readonly string[]): string {
+  return fittedList(
+    "No operation checks these Permissions, so they would grant nothing: ",
+    unsupported,
+    ". See the per-kind actions in the permissions reference.",
+  );
+}
+
+/**
+ * Renders `prefix`, as many `items` as fit and `suffix` within the 256-character
+ * ErrorResponse.message cap, so the guidance after a long list is never cut off.
+ * At least one item is always shown.
+ */
+function fittedList(prefix: string, items: readonly string[], suffix: string): string {
   const render = (shown: number): string => {
-    const more = unsupported.length - shown;
-    return (
-      `No operation checks these Permissions, so they would grant nothing: ${unsupported
-        .slice(0, shown)
-        .join(", ")}${more === 0 ? "" : ` and ${more} more`}. ` +
-      "See the per-kind actions in the permissions reference."
-    );
+    const more = items.length - shown;
+    return `${prefix}${items.slice(0, shown).join(", ")}${more === 0 ? "" : ` and ${more} more`}${suffix}`;
   };
-  let shown = unsupported.length;
+  let shown = items.length;
   while (shown > 1 && render(shown).length > 256) {
     shown -= 1;
   }
@@ -949,14 +957,20 @@ function assertAccessBindingRoleApplies(role: Readonly<Role>, resourceKind: Reso
   const creates = role.permissions.filter((permission) => permission.action === "create");
   if (creates.length > 0) {
     throw new IAMAccessBindingRoleError(
-      `Role ${role.id} has Permissions that no AccessBinding can grant: ${creates.map(label).join(", ")}. ` +
-        "No AccessBinding grants create: only Installation administrators can create Agents, Configurations, Secrets and other resources. Remove these Permissions from the Role.",
+      fittedList(
+        `Role ${role.id} has Permissions that no AccessBinding can grant: `,
+        creates.map(label),
+        ". No AccessBinding grants create: only Installation administrators create resources; remove them from the Role.",
+      ),
     );
   }
   if (!role.permissions.some((permission) => permission.resourceKind === resourceKind)) {
     throw new IAMAccessBindingRoleError(
-      `Role ${role.id} grants nothing on the ${resourceKind} target: its Permissions (${role.permissions.map(label).join(", ")}) ` +
-        `apply only to other resource kinds. Bind it to a resource of one of those kinds, or add ${resourceKind} Permissions.`,
+      fittedList(
+        `Role ${role.id} grants nothing on the ${resourceKind} target: its Permissions (`,
+        role.permissions.map(label),
+        `) apply only to other kinds; bind it to one of those or add ${resourceKind} Permissions.`,
+      ),
     );
   }
 }

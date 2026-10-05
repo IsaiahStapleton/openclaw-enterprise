@@ -1166,6 +1166,17 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     );
   }
 
+  // A long list of create Permissions is shortened so the guidance still fits the cap.
+  const manyCreates = await createRole(
+    ["agent", "configuration", "credential_source", "preset", "secret", "service_account"].map(
+      (resourceKind) => ({ action: "create", resourceKind }),
+    ),
+  );
+  const long = await bind(manyCreates, "namespace", namespace.id);
+  assert.equal(long.status, 400, JSON.stringify(long.body));
+  assert.ok(Array.from(long.body.error.message).length <= 256, long.body.error.message);
+  assert.match(long.body.error.message, / and \d+ more\. .*remove them from the Role\.$/);
+
   // A Role with no Permission for the target's kind would grant nothing there.
   const agentReader = await createRole([{ action: "read", resourceKind: "agent" }]);
   const nothing = await bind(agentReader, "namespace", namespace.id);
