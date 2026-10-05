@@ -3151,8 +3151,9 @@ export class OpenClawController {
       readonly skipped: SkippedDefaultPreset[];
     },
   ): Promise<void> {
-    // Only bundled defaults have a history; `presets.files` entries are never refreshed,
-    // including a file that repeats a bundled default while `includeDefaults` is off.
+    // Only bundled defaults have a history. A `presets.files` entry is refreshed only while
+    // `includeDefaults` is on and the file equals the current bundled version of its name;
+    // a file that repeats a bundled default with `includeDefaults` off never is.
     if (!this.refreshBundledDefaultPresets) {
       return;
     }

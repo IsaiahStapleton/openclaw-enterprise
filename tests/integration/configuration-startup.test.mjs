@@ -1060,7 +1060,7 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     [
       "duplicate.json",
       JSON.stringify({ name: "Standard Codex", template: {} }),
-      /Default Preset Standard Codex is configured more than once/,
+      /Default Preset Standard Codex is configured more than once: .*duplicate\.json and .*duplicate-b\.json/,
     ],
   ]) {
     const configuration = installation();
@@ -1069,7 +1069,7 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
       includeDefaults: filename === "duplicate.json",
       files:
         filename === "duplicate.json"
-          ? [`cases/${filename}`, `cases/${filename}`]
+          ? [`cases/${filename}`, "cases/duplicate-b.json"]
           : [`cases/${filename}`],
     };
     const path = await fixture(t, configuration);
@@ -1077,6 +1077,9 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     await mkdir(join(directory, "cases"), { recursive: true });
     if (contents !== undefined) {
       await writeFile(join(directory, "cases", filename), contents);
+    }
+    if (filename === "duplicate.json") {
+      await writeFile(join(directory, "cases", "duplicate-b.json"), contents);
     }
     await assert.rejects(
       loadInstallationConfiguration({

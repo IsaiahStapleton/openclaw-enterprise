@@ -649,7 +649,7 @@ export async function loadInstallationConfiguration(options: {
     readonly path: string;
     readonly preset: Pick<Preset, "name" | "template">;
   }[] = [];
-  const filePresetNames = new Set<string>();
+  const filePresetPaths = new Map<string, string>();
   for (const entry of (presets.files ?? []) as readonly string[]) {
     const trimmed = entry.trim();
     if (trimmed.length === 0) {
@@ -660,10 +660,13 @@ export async function loadInstallationConfiguration(options: {
     }
     const path = isAbsolute(trimmed) ? trimmed : resolve(dirname(configurationPath!), trimmed);
     const preset = await loadPresetDefinition(path);
-    if (filePresetNames.has(preset.name)) {
-      throw new Error(`Default Preset ${preset.name} is configured more than once.`);
+    const earlier = filePresetPaths.get(preset.name);
+    if (earlier !== undefined) {
+      throw new Error(
+        `Default Preset ${preset.name} is configured more than once: ${earlier} and ${path}.`,
+      );
     }
-    filePresetNames.add(preset.name);
+    filePresetPaths.set(preset.name, path);
     filePresets.push({ path, preset });
   }
   // An operator file named like a bundled default replaces that default: a later release can

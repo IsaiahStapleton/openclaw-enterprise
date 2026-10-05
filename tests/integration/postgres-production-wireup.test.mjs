@@ -667,8 +667,13 @@ test(
         operatorCodexPath,
         JSON.stringify({ name: "default-codex", template: operatorCodexTemplate }),
       );
+      const bundledCodexCopy = async () =>
+        (await request("GET", presetPath)).data.find((preset) => preset.name === "default-codex");
+      const seededCodex = await bundledCodexCopy();
       const shadowLog = memoryLog();
       await restart({ includeDefaults: true, files: [operatorCodexPath] }, shadowLog.logger);
+      // The copy seeded earlier from the bundled template stays as it was.
+      assert.deepEqual(await bundledCodexCopy(), seededCodex);
       assert.deepEqual(
         shadowLog.lines
           .filter(({ event }) => event === "presets.bundled-default-shadowed")
