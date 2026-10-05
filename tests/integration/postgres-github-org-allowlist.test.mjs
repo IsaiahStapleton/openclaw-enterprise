@@ -3,14 +3,14 @@ import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import {
-  bootstrapProductionInstallation,
+  attachProvider,
+  authRowCounts,
   composeProductionSignIn,
   consoleOrigin as origin,
   currentSession,
-  defaultInstallSettings,
   githubSignIn,
   githubUpgradeSettings,
-  installationRoles,
+  onboardPasswordAccounts,
   passwordSignIn,
   signedInHeaders,
   startFakeGitHub,
@@ -51,53 +51,37 @@ test(
     github.membership = (path, subject) =>
       Object.entries(memberships).find(([listed]) => listed === path)?.[1](subject) ?? 404;
 
-    const adminPassword = await bootstrapProductionInstallation(t, {
+    const { admin, accounts } = await onboardPasswordAccounts(t, {
       databaseUrl,
+      state,
+      pool,
       email: adminEmail,
       authSecret,
-    });
-    const admin = { email: adminEmail, password: adminPassword };
-    const { reader } = await installationRoles(state, pool);
-    app = await composeProductionSignIn(t, {
-      databaseUrl,
-      settings: defaultInstallSettings,
       secrets,
+      password,
+      accounts: { member: { email: "allowlist-member@example.test" } },
     });
-    let adminHeaders = await signedInHeaders(app, origin, admin);
-    const adminId = (await currentSession(app, adminHeaders.cookie)).user.id;
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/auth/accounts",
-      headers: adminHeaders,
-      payload: { email: "allowlist-member@example.test", password, roleId: reader.id },
-    });
-    assert.equal(created.statusCode, 201, created.body);
-    const member = { id: created.json().data.id, email: "allowlist-member@example.test", password };
-    await app.close();
+    const { member } = accounts;
     app = await composeProductionSignIn(t, {
       databaseUrl,
       settings: {
-        ...githubUpgradeSettings(adminId),
+        ...githubUpgradeSettings(admin.id),
         OCC_AUTH_GITHUB_ALLOWED_ORGS: "Acme",
         OCC_AUTH_GITHUB_ALLOWED_TEAMS: "other/platform",
       },
       secrets,
     });
-    adminHeaders = await signedInHeaders(app, origin, admin);
-    const account = await app.inject({
-      url: `/api/auth/accounts/${member.id}`,
-      headers: adminHeaders,
-    });
-    const attached = await app.inject({
-      method: "POST",
-      url: `/api/auth/accounts/${member.id}/providers/github`,
-      headers: adminHeaders,
-      payload: { subject: String(memberSubject), expectedVersion: account.json().data.version },
-    });
+    const adminHeaders = await signedInHeaders(app, origin, admin);
+    const attached = await attachProvider(
+      app,
+      adminHeaders,
+      member.id,
+      "github",
+      String(memberSubject),
+    );
     assert.equal(attached.statusCode, 200, attached.body);
 
-    const sessionCount = async () =>
-      (await pool.query("SELECT count(*)::int AS count FROM occ.session")).rows[0].count;
+    const sessionCount = async () => (await authRowCounts(pool)).sessions;
     const loginDenials = async () =>
       (await state.transact((unit) => unit.audit.list()))
         .filter(

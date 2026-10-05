@@ -3,19 +3,18 @@ import test from "node:test";
 import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import {
-  bootstrapProductionInstallation,
+  attachProvider,
   clientAddresses,
   composeProductionSignIn,
   consoleOrigin as origin,
   currentSession,
-  defaultInstallSettings,
   fakeGoogle,
   githubSignIn,
   githubUpgradeSettings,
   googleSignIn,
   googleUpgradeSettings,
-  installationRoles,
   memoryLogger,
+  onboardPasswordAccounts,
   passwordSignIn,
   readAccount,
   signedInHeaders,
@@ -63,46 +62,34 @@ test(
     await startFakeGitHub(t);
     const google = fakeGoogle(t, { clientId: googleClientId, clientSecret: googleClientSecret });
     const address = clientAddresses("198.20");
-    const adminPassword = await bootstrapProductionInstallation(t, {
+    // Password onboarding on the default install.
+    const { admin, accounts } = await onboardPasswordAccounts(t, {
       databaseUrl,
+      state,
+      pool,
       email: adminEmail,
       authSecret,
-    });
-    const admin = { email: adminEmail, password: adminPassword };
-    const { reader } = await installationRoles(state, pool);
-
-    // Password onboarding on the default install.
-    app = await composeProductionSignIn(t, {
-      databaseUrl,
-      settings: defaultInstallSettings,
       secrets,
+      password,
+      remoteAddress: address(),
+      accounts: Object.fromEntries(
+        ["member", "stranded", "disabled"].map((name) => [
+          name,
+          { email: `recovery-only-${name}@example.test` },
+        ]),
+      ),
     });
-    let adminHeaders = await signedInHeaders(app, origin, admin, address());
-    admin.id = (await currentSession(app, adminHeaders.cookie)).user.id;
-    const accounts = {};
-    for (const name of ["member", "stranded", "disabled"]) {
-      const email = `recovery-only-${name}@example.test`;
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/auth/accounts",
-        headers: adminHeaders,
-        payload: { email, password, roleId: reader.id },
-      });
-      assert.equal(created.statusCode, 201, created.body);
-      accounts[name] = { id: created.json().data.id, email, password };
-    }
     const { member, stranded, disabled } = accounts;
-    await app.close();
-    app = undefined;
+    let adminHeaders;
 
     async function attach(provider, account, subject) {
-      const current = await readAccount(app, adminHeaders, account.id);
-      const attached = await app.inject({
-        method: "POST",
-        url: `/api/auth/accounts/${account.id}/providers/${provider}`,
-        headers: adminHeaders,
-        payload: { subject: String(subject), expectedVersion: current.version },
-      });
+      const attached = await attachProvider(
+        app,
+        adminHeaders,
+        account.id,
+        provider,
+        String(subject),
+      );
       assert.equal(attached.statusCode, 200, attached.body);
     }
 
