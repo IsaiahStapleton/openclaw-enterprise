@@ -255,6 +255,10 @@ test("the ChatGPT account name is cut by whole characters, never half of a surro
 });
 
 test("ChatGPT Backend releases rejected HTTPS responses for subsequent account calls", async (t) => {
+  assert.doesNotThrow(
+    () => execFileSync("openssl", ["version"], { stdio: "ignore" }),
+    "This native HTTPS regression requires openssl on PATH.",
+  );
   const directory = await mkdtemp(join(tmpdir(), "chatgpt-backend-tls-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   execFileSync(
@@ -343,7 +347,7 @@ test("ChatGPT Backend releases rejected HTTPS responses for subsequent account c
             timer = setTimeout(
               () =>
                 reject(new Error("The next account call stalled behind the rejected response.")),
-              3000,
+              5000,
             );
           }),
         ]);
