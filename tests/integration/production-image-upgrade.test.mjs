@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -177,7 +177,8 @@ fi
     LIVE_VALUES_FILE: liveValues,
     OCC_SERVICE_KEY_FILE: protectedFiles["service-key"],
     OCC_URL: "https://occ.example.invalid",
-    PATH: `${bin}:/bin:/usr/bin`,
+    // The helper runs node for its startup preflight; CI installs node outside /usr/bin.
+    PATH: `${bin}:${dirname(process.execPath)}:/bin:/usr/bin`,
   };
 
   await assert.rejects(
