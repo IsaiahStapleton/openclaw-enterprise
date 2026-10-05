@@ -232,12 +232,13 @@ test("concurrent guesses beyond a budget never reach the password check", async 
   const flood = (count, attempt) =>
     Array.from({ length: count }, (_, index) => status(limiter, attempt(index), guess));
   // Email budget 3: six guesses at one email from distinct addresses.
-  const email = flood(6, (index) => ({ clientAddress: `203.0.113.${index}`, email: "a@x.test" }));
+  const byEmail = flood(6, (index) => ({ clientAddress: `203.0.113.${index}`, email: "a@x.test" }));
   // Address budget 4: six guesses from one address at distinct emails.
-  const address = flood(6, (index) => ({
+  const byAddress = flood(6, (index) => ({
     clientAddress: "198.51.100.1",
     email: `b-${index}@x.test`,
   }));
+  // One turn lets any over-budget guess the slow lane wrongly admits reach the check too.
   await turn();
   assert.equal(checks, 3 + 4);
   release();
@@ -245,9 +246,11 @@ test("concurrent guesses beyond a budget never reach the password check", async 
     codes.filter((c) => c === 401).length,
     codes.filter((c) => c === 429).length,
   ];
-  assert.deepEqual(counts(await Promise.all(email)), [3, 3]);
-  assert.deepEqual(counts(await Promise.all(address)), [4, 2]);
+  assert.deepEqual(counts(await Promise.all(byEmail)), [3, 3]);
+  assert.deepEqual(counts(await Promise.all(byAddress)), [4, 2]);
+  // Released guesses recorded their failures: both budgets are spent.
   assert.equal(await status(limiter, { email: "a@x.test" }, right), 429);
+  assert.equal(await status(limiter, { clientAddress: "198.51.100.1", email: "c@x.test" }), 429);
 });
 
 test("a success resets the email's failures but not the address's", async () => {
