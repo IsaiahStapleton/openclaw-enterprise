@@ -2375,7 +2375,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           throw failure(
             400,
             "INVALID_REQUEST",
-            "The request does not match the operation contract.",
+            "The request does not match the operation contract: querystring /download cannot be combined with /cursor; a download always reads a fresh page.",
           );
         }
         const page = await controller!.readAgentRuntimeLogs(

@@ -1915,6 +1915,7 @@ test("runtime log downloads use the log tier and are audited once per download",
   );
   assert.equal(withCursor.status, 400);
   assert.equal(withCursor.body.error.code, "INVALID_REQUEST");
+  assert.match(withCursor.body.error.message, /\/download cannot be combined with \/cursor/);
   assert.equal(driverReads(fixture).length, readsBefore);
   assert.equal(granted().length, 2);
 
