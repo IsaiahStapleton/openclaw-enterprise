@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createRequire } from "node:module";
 import {
   ConfigurationConflictError,
   ConfigurationValidationError,
   KubernetesConfigurationDriver,
   kubernetesConfigurationName,
 } from "../../apps/controller/src/drivers/configuration/kubernetes/index.ts";
+import { withComputeAbortSignal } from "../../apps/controller/src/drivers/compute/operation-context.ts";
 import { writeUnsafeKubeconfigs } from "../helpers/unsafe-kubeconfigs.mjs";
 
 const namespaceId = "ns_00000000-0000-4000-8000-000000000001";
@@ -430,4 +435,76 @@ test("Kubernetes Configuration rejects literal model credentials before writes a
     await driver.checkedConfiguration(stored, referenceOnly, "existing-tenant"),
     referenceOnly,
   );
+});
+
+test("Kubernetes Configuration cancels an in-flight request when its provisioning claim is lost", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "oce-configuration-cancellation-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "kubeconfig.json");
+  await writeFile(
+    path,
+    JSON.stringify({
+      apiVersion: "v1",
+      kind: "Config",
+      clusters: [{ name: "configuration", cluster: { server: "https://127.0.0.1:1" } }],
+      users: [{ name: "configuration", user: { token: "test-only-fixture-token" } }],
+      contexts: [
+        { name: "configuration", context: { cluster: "configuration", user: "configuration" } },
+      ],
+      "current-context": "configuration",
+    }),
+  );
+  const driver = createDriver({
+    mode: "kubeconfig",
+    kubeconfigPath: path,
+    context: "configuration",
+  });
+  const sdk = createRequire(new URL("../../apps/controller/package.json", import.meta.url))(
+    "@kubernetes/client-node",
+  );
+  const client = await driver.core();
+  let dispatched;
+  const started = new Promise((resolve) => {
+    dispatched = resolve;
+  });
+  let finishTransport;
+  // Retain the real SDK request construction, authentication and middleware.
+  // Only transport is stalled, like an API that accepts a request but never responds.
+  t.mock.method(
+    client.api.configuration.httpApi,
+    "send",
+    (request) =>
+      new sdk.Observable(
+        new Promise((resolve, reject) => {
+          finishTransport = reject;
+          const signal = request.getSignal();
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          dispatched();
+        }),
+      ),
+  );
+  const owner = new AbortController();
+  const lost = new Error("Configuration provisioning claim lost");
+  const pending = withComputeAbortSignal(owner.signal, () => driver.read(configuration));
+  await started;
+  owner.abort(lost);
+  let timer;
+  try {
+    await assert.rejects(
+      Promise.race([
+        pending,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Configuration request ignored claim loss")),
+            1000,
+          );
+        }),
+      ]),
+      (error) => error === lost,
+    );
+  } finally {
+    clearTimeout(timer);
+    finishTransport(lost);
+    await pending.catch(() => {});
+  }
 });
