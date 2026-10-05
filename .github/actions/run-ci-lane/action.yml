@@ -13,6 +13,13 @@ inputs:
   artifact-prefix:
     description: Prefix for the uploaded result artifact.
     required: true
+  static-checks:
+    description: >-
+      Whether checks-baseline-1 runs the workspace boundary, lint, format, OpenAPI
+      and docs checks before its tests ("false" when the workflow runs them in a
+      separate job).
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -69,28 +76,29 @@ runs:
         go-version-file: go.mod
         cache: true
     - name: Run workspace boundary check
-      if: inputs.lane == 'checks-baseline-1'
+      if: inputs.lane == 'checks-baseline-1' && inputs.static-checks != 'false'
       shell: bash
       run: pnpm check:workspace
     - name: Run lint check
-      if: inputs.lane == 'checks-baseline-1'
+      if: inputs.lane == 'checks-baseline-1' && inputs.static-checks != 'false'
       shell: bash
       run: pnpm lint
     - name: Run format check
-      if: inputs.lane == 'checks-baseline-1'
+      if: inputs.lane == 'checks-baseline-1' && inputs.static-checks != 'false'
       shell: bash
       run: pnpm format:check
     - name: Run OpenAPI check
-      if: inputs.lane == 'checks-baseline-1'
+      if: inputs.lane == 'checks-baseline-1' && inputs.static-checks != 'false'
       shell: bash
       run: pnpm openapi:check
     - name: Run docs check
-      if: inputs.lane == 'checks-baseline-1'
+      if: inputs.lane == 'checks-baseline-1' && inputs.static-checks != 'false'
       shell: bash
       run: pnpm docs:install && pnpm docs:check && pnpm docs:build
     - name: Install documentation browser dependencies
-      # Only part 1 runs docs-compute-matrix.
-      if: inputs.lane == 'checks-browser'
+      # Only browser part 1 runs docs-compute-matrix. Baseline part 1's docs-site
+      # test needs Pagefind; the docs check above installs it otherwise.
+      if: inputs.lane == 'checks-browser' || (inputs.lane == 'checks-baseline-1' && inputs.static-checks == 'false')
       shell: bash
       run: pnpm docs:install
     - name: Run typecheck
