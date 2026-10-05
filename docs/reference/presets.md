@@ -322,7 +322,8 @@ cannot edit an Installation Role or grant collection-wide `create`.
 Preset access grants no permission to create Agents or use referenced Secrets.
 After rendering, Configuration and Agent creation enforce their existing schemas,
 credential rules, and authorization before saving. Deployment rechecks admission.
-Audit records omit templates and variable values.
+Console checks do not replace server validation. Audit records omit templates and
+variable values.
 
 Invalid inputs return `400`; denied access returns `403`; a missing exact target
 returns `404`; duplicate names or lifecycle conflicts return `409`; unavailable
