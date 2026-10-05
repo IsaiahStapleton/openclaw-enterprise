@@ -1882,7 +1882,13 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
         };
       }
       if (args.includes("exec")) {
-        throw failure(command, args);
+        const nonce = args.at(-1).match(/OCE_SANDBOX_PROBE_V1:([a-f0-9]{32}):START/)?.[1];
+        assert.match(nonce, /^[a-f0-9]{32}$/);
+        const error = failure(command, args);
+        const stage = error.exitCode === 64 ? "VERSION" : "SANDBOX";
+        error.stderr = `OCE_SANDBOX_PROBE_V1:${nonce}:START\n${error.stderr}\nOCE_SANDBOX_PROBE_V1:${nonce}:END:${stage}:${error.exitCode}\n`;
+        error.signal = null;
+        throw error;
       }
     }
     if (command === "docker") {
@@ -1912,7 +1918,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
           return error;
         }),
       }),
-    /RuntimeDefault Codex sandbox denial must mention/,
+    /unrelated setup failure/,
   );
   await assert.rejects(
     () =>
@@ -1923,6 +1929,7 @@ test("codex seccomp preparation requires a namespace/seccomp RuntimeDefault deni
           const error = new Error(`${command} ${args.join(" ")} timed out after 195000ms`);
           error.stderr = "operation not permitted";
           error.stdout = "";
+          error.exitCode = 1;
           error.timedOut = true;
           return error;
         }),
@@ -2032,15 +2039,24 @@ test("codex seccomp preparation publishes a reviewed Docker profile for native s
       if (args.includes("exec")) {
         const podName = args[args.indexOf("exec") + 1];
         const manifest = applied.get(podName);
+        const nonce = args.at(-1).match(/OCE_SANDBOX_PROBE_V1:([a-f0-9]{32}):START/)?.[1];
+        assert.match(nonce, /^[a-f0-9]{32}$/);
         if (!manifest?.spec?.containers?.[0]?.securityContext?.seccompProfile?.localhostProfile) {
           const error = new Error("RuntimeDefault denied bwrap namespace creation");
-          error.stderr = "operation not permitted: bwrap clone namespace denied by seccomp";
+          error.stderr = `OCE_SANDBOX_PROBE_V1:${nonce}:START\noperation not permitted: bwrap clone namespace denied by seccomp\nOCE_SANDBOX_PROBE_V1:${nonce}:END:SANDBOX:1\n`;
           error.stdout = "";
           error.exitCode = 1;
+          error.signal = null;
           error.timedOut = false;
           throw error;
         }
-        return { stdout: "", stderr: "" };
+        return {
+          stdout: "",
+          stderr: `OCE_SANDBOX_PROBE_V1:${nonce}:START\nOCE_SANDBOX_PROBE_V1:${nonce}:ENTERED\nOCE_SANDBOX_PROBE_V1:${nonce}:END:DONE:0\n`,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+        };
       }
     }
     if (command === "docker") {
