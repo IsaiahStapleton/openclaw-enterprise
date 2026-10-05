@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyReply } from "fastify";
 import { PresetValidationError } from "@openclaw-enterprise/contracts";
+import { UNTRUSTED_ORIGIN_MESSAGE } from "../admission/admission-verifier.ts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
@@ -775,7 +776,7 @@ export function requestFailure(error: unknown): RequestFailure {
         status === 403 ? "FORBIDDEN" : "UNAUTHENTICATED",
         status === 403
           ? reason === "untrusted_origin"
-            ? "A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header."
+            ? UNTRUSTED_ORIGIN_MESSAGE
             : "The request did not satisfy the configured admission boundary."
           : "A valid session cookie or service API key is required: the credential sent is missing, invalid, expired, or revoked. Send service API keys in the x-api-key header; Authorization bearer tokens are not accepted.",
       );
