@@ -29,7 +29,7 @@ const GAP_LABELS = {
 const WITHHELD_LABELS = {
   unrecognised_structured: "structured output",
   oversized: "oversized",
-  malformed: "multi-line or unparseable JSON",
+  malformed: "multi-line, unparseable or deeply nested JSON",
 };
 
 function withheldText({ count, reason }) {

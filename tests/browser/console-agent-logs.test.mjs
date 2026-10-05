@@ -91,7 +91,9 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   await pane.getByText("pushing with [redacted:token]").waitFor();
   // The reason code in parentheses is the one `occ agent logs` prints for the same rows.
   await pane.getByText("1 structured output line withheld (unrecognised_structured)").waitFor();
-  await pane.getByText("4 multi-line or unparseable JSON lines withheld (malformed)").waitFor();
+  await pane
+    .getByText("4 multi-line, unparseable or deeply nested JSON lines withheld (malformed)")
+    .waitFor();
   assert.equal(await pane.getByText(/malformed structured/).count(), 0);
   // A failure code shows on the collapsed row, not only after expanding it.
   const probe = pane.locator(".log-row", { hasText: "codex.model_probe" });

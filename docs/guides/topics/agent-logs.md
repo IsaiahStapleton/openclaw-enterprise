@@ -133,7 +133,7 @@ lines and malformed lines that start like a JSON object or array, is
 (multi-line) JSON value becomes one withheld row. Each row names its reason
 code, as `occ agent logs` does: `unrecognised_structured` (structured output
 OCC does not keep), `malformed` (JSON split across lines, as Codex prints
-it, or JSON that does not parse) or `oversized`.
+it, JSON that does not parse, or JSON nested too deeply) or `oversized`.
 
 Every retained string is then redacted. OCC replaces PEM blocks, `Authorization`
 and cookie header values, `Bearer` tokens, `Basic` user:password values, JWTs,
