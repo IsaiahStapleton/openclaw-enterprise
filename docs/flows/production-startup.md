@@ -122,16 +122,11 @@ and the later dependency, collector, Slack proxy, and Envoy policies allow
 UDP/TCP ports `53` and `5353` to the configured DNS peer; see the
 [Helm DNS contract](../reference/settings/production.md#required-production-controller-environment).
 
-`helm upgrade --install --wait --timeout 5m` renders the chart with native
-values. The chart bounds the initialization Job name to 63 characters while
-preserving the complete Helm release name. Short release names keep the existing
-`<release>-initialization` name; longer names shorten only the suffix so
-Kubernetes can admit the hook and generate its Job labels. Release labels remain
-unchanged for recovery inspection. If `database.caSecretName` is set, the Pod mounts that CA Secret
-read-only into both containers before they connect. The initialization hook first
-runs migrations with the dedicated migrator credential, then runs bootstrap with
-the lower-privilege application credential, Better Auth settings, first
-administrator email, Installation name, and protected output paths.
+The Helm initialization hook preserves the full release name and shortens its
+suffix to Kubernetes' 63-character limit. Both containers mount
+`database.caSecretName` read-only when configured. Migration uses the migrator
+credential; bootstrap uses the lower-privilege application credential, Better Auth
+settings, administrator email, Installation name, and protected output paths.
 
 `scripts/migrate-production.mjs:1`, `scripts/migration-history.mjs:migrateWithHistory`
 
