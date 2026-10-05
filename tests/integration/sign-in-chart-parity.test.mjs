@@ -933,6 +933,11 @@ test(
         /auth\.google\.egressCidrs must be a list of IPv4 CIDRs/,
       ],
       [
+        "an empty-string domain allowlist",
+        { ...google, "auth.google.allowedDomains": "" },
+        /auth\.google\.allowedDomains must be a list of DNS domain names/,
+      ],
+      [
         "an HTTP base URL",
         { ...google, "auth.baseUrl": "http://oce.example.internal" },
         /auth\.google requires an HTTPS auth\.baseUrl/,
