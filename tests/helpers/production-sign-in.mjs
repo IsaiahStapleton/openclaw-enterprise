@@ -788,7 +788,8 @@ export async function onboardPasswordAccounts(
     admin.id = (await currentSession(app, headers.cookie)).user.id;
     const created = {};
     for (const [name, account] of Object.entries(accounts)) {
-      const role = roles[account.role ?? "reader"];
+      const roleName = account.role ?? "reader";
+      const role = Object.hasOwn(roles, roleName) ? roles[roleName] : undefined;
       if (role === undefined) {
         throw new Error(`Unknown Installation Role ${account.role} for ${name}.`);
       }
