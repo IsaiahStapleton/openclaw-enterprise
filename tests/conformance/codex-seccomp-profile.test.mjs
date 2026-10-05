@@ -628,6 +628,10 @@ for (const [label, alter, extra] of [
 // or provider is run. Successful payload execution uses an ordinary read-only file
 // to model the tested outside-workspace refusal; this is not isolation evidence.
 async function runGeneratedProbe(args, root, mode) {
+  const expectedVersion = args
+    .at(-1)
+    .match(/if \[ "\$version" != "([0-9]+\.[0-9]+\.[0-9]+)" \]/)?.[1];
+  assert.ok(expectedVersion, "generated probe declares its selected Codex version");
   const tools = join(root, "tools");
   await mkdir(tools, { recursive: true });
   const codex = join(tools, "codex");
@@ -635,7 +639,7 @@ async function runGeneratedProbe(args, root, mode) {
     codex,
     `#!/bin/sh
 if [ "$1" = --version ]; then
-  if [ "$PROBE_MODE" = version ]; then echo 'codex 0.0.0'; else echo 'codex 0.158.0'; fi
+  if [ "$PROBE_MODE" = version ]; then echo 'codex 0.0.0'; else echo 'codex ${expectedVersion}'; fi
   exit 0
 fi
 case "$PROBE_MODE" in
