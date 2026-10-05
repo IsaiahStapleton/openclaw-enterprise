@@ -6,7 +6,8 @@ import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs
 // Kubeconfigs that the official Kubernetes client parses but whose identity or transport a
 // Driver must refuse before contacting the API server: each differs from a safe kubeconfig
 // (one token user, one verified-HTTPS cluster at the API root, one explicit context) in one
-// way. Every API server is an unreachable loopback port, so an unrefused fixture fails late.
+// way. Every parseable API server is an unreachable loopback port, so an unrefused fixture
+// fails late.
 const context = "unsafe-fixture-context";
 const cluster = { name: "unsafe-fixture-cluster", cluster: { server: "https://127.0.0.1:1" } };
 const contextEntry = {
