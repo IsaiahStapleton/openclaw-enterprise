@@ -1459,7 +1459,8 @@ async function verifyDuplicateNameContract(store) {
 
 // Names hold up to 200 characters counted as code points, as the API contract and
 // PostgreSQL char_length count them: a name of astral characters (two UTF-16 code units
-// each) is accepted at 200 and refused at 201 by both adapters.
+// each) is accepted at 200 by both adapters, and a Secret, ServiceAccount or credential
+// source name is refused at 201 (the memory adapter has no Preset name length check).
 async function verifyNameLengthContract(store) {
   const createdAt = new Date().toISOString();
   // 190 emoji and a 10-character unique suffix: 200 code points, 390 UTF-16 code units.
@@ -1512,6 +1513,15 @@ async function verifyNameLengthContract(store) {
         ?.name,
       accepted.account.name,
     );
+    assert.equal(
+      (await transaction.credentialSources.findCredentialSource(namespace.id, accepted.source.id))
+        ?.name,
+      accepted.source.name,
+    );
+    assert.equal(
+      (await transaction.presets.findPreset(namespace.id, accepted.preset.id))?.name,
+      accepted.preset.name,
+    );
   });
 
   for (const write of [
@@ -1519,7 +1529,7 @@ async function verifyNameLengthContract(store) {
     (transaction) => transaction.serviceAccounts.createServiceAccount(account(nameOf(191))),
     (transaction) => transaction.credentialSources.createCredentialSource(source(nameOf(191))),
   ]) {
-    await assert.rejects(store.transact(write));
+    await assert.rejects(store.transact(write), { name: "ScopeViolationError" });
   }
 }
 
