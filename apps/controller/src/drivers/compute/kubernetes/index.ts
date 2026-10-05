@@ -5363,24 +5363,6 @@ export class KubernetesComputeDriver implements ComputeDriver {
     );
   }
 
-  private async gatewayRouteForRevision(
-    name: string,
-    ownership: Ownership,
-    namespace: KubernetesNamespaceAddress,
-    revisionId: string,
-  ): Promise<ManagedKubernetesObject<"HTTPRoute"> | undefined> {
-    if (this.options.gatewayRouting === undefined) {
-      return undefined;
-    }
-    const existing = await this.getOwned("HTTPRoute", name, namespace, ownership);
-    if (existing === undefined) {
-      return undefined;
-    }
-    return existing.metadata.annotations?.[AGENT_REVISION_ID_ANNOTATION] === revisionId
-      ? existing
-      : undefined;
-  }
-
   private async deleteNamedRuntimeResources(
     name: string,
     ownership: Ownership,

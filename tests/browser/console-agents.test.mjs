@@ -2929,7 +2929,13 @@ test("Agent creation reuses its saved Secret and Configuration after an Agent cr
       .isDisabled(),
     true,
   );
-  assert.deepEqual(nonAuthWriteRequests(requests), []);
+  // Plugin catalog discovery is a read sent as POST. The codex_pat Secret above arms its
+  // prefetch with a 300 ms debounce, so it may or may not have been sent before the switch.
+  const pluginCatalogPath = `/namespaces/${namespace.id}/agents/plugins`;
+  assert.deepEqual(
+    nonAuthWriteRequests(requests).filter((request) => request.path !== pluginCatalogPath),
+    [],
+  );
   assert.deepEqual(pathRequests(requests, "POST", `/namespaces/${namespace.id}/agents/models`), []);
   await page.getByLabel("Harness", { exact: true }).selectOption("codex");
   await page.getByLabel("Authentication method", { exact: true }).selectOption("codex_pat");
