@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createApiClient } from "../../apps/controller/src/console/api-client.mjs";
+import { createViewLifetime } from "../../apps/controller/src/console/view-lifetime.mjs";
 
 test("empty 204 responses honor an explicit expected status", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 204 }));
@@ -79,12 +80,11 @@ test("only a read that outlives the view survives the view's reset", async (t) =
     signals.push(init.signal);
     return new Response(JSON.stringify({ data: {} }), { status: 200 });
   });
-  const reads = new AbortController();
-  const lifetime = { signal: reads.signal, capture: () => 1, isCurrent: () => true };
+  const lifetime = createViewLifetime();
   const request = createApiClient({ lifetime, hasSession: () => true, onExpired() {} });
   await request("/view");
   await request("/session", { outlivesView: true });
-  reads.abort();
+  lifetime.reset();
   assert.deepEqual(
     signals.map((signal) => signal.aborted),
     [true, false],
