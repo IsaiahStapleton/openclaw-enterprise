@@ -425,12 +425,15 @@ jobs:
     if: always()
     steps:
       # A push that supersedes this run waits until this run has finished
-      # cancelling; fail at once instead of checking out and verifying jobs that
-      # never finished. Every later step is skipped on cancellation.
-      - name: Fail a cancelled run
-        if: cancelled()
+      # cancelling. cancelled() is false in a job that starts after the
+      # cancellation, so test the dependencies: fail at once instead of checking
+      # out and verifying jobs that never finished. Later steps then skip.
+      - name: Fail when a required job was cancelled
+        if: contains(needs.*.result, 'cancelled')
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
         run: |
-          echo "::error::CI was cancelled; a superseding run reports CI Required."
+          jq -r 'to_entries[] | select(.value.result == "cancelled") | "::error::\(.key) was cancelled."' <<<"$NEEDS_JSON"
           exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -501,7 +504,7 @@ jobs:
             printf 'CI impact: full (trusted base policy unavailable)\n'
           fi
       - name: Validate selected job state
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !contains(needs.*.result, 'cancelled') }}
         env:
           NEEDS_JSON: ${{ toJson(needs) }}
           EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
@@ -514,13 +517,13 @@ jobs:
             node scripts/ci/impact-gate.mjs --needs "$RUNNER_TEMP/raw-needs.json" --mode "$EXPECTED_MODE" --output "$RUNNER_TEMP/needs.json"
           fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: ${{ !cancelled() && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
+        if: ${{ !cancelled() && !contains(needs.*.result, 'cancelled') && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
         with:
           pattern: ci-results-*
           path: ${{ runner.temp }}/results
           merge-multiple: true
       - name: Aggregate CI results
-        if: ${{ !cancelled() && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
+        if: ${{ !cancelled() && !contains(needs.*.result, 'cancelled') && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
         env:
           EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
           EXPECTED_LANES: ${{ needs.impact.outputs.lanes }}
