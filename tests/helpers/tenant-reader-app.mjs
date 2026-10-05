@@ -167,10 +167,11 @@ export async function createTenantReaderFixture({
 
 /**
  * Sends one request to a fixture app (`app.fetch`) as `options.session`, default the app's
- * own session; `identity: false` sends none. A `body` (JSON-encoded unless a string) makes
- * the default method POST; a `headers` entry set to null removes that header. Every answer
- * must be the documented JSON envelope: a request ID (also sent as `x-request-id`), then
- * `data` or a string error code and message. Returns `{ response, payload }`.
+ * own session; `identity: false` sends none. The URL is `pathname` on `options.origin`,
+ * default `http://127.0.0.1`. A `body` (JSON-encoded unless a string) makes the default
+ * method POST; a `headers` entry set to null removes that header. Every answer must be the
+ * documented JSON envelope: a request ID (also sent as `x-request-id`), then `data` or a
+ * string error code and message. Returns `{ response, payload }`.
  */
 export async function tenantRequest(app, pathname, options = {}) {
   const headers = new Headers(
