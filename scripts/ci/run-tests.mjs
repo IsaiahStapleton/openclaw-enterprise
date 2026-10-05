@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { availableParallelism, constants as osConstants } from "node:os";
+import { availableParallelism, cpus, constants as osConstants } from "node:os";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -866,6 +866,11 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
   const startedAt = new Date().toISOString();
   const laneStarted = performance.now();
   const concurrency = lane ? fileConcurrency(lane, issues) : 1;
+  if (lane && lane.fileConcurrency > 1) {
+    process.stderr.write(
+      `run-tests: ${lane.name} runs up to ${concurrency} files at a time (fileConcurrency ${lane.fileConcurrency}, available parallelism ${availableParallelism()}, CPUs ${cpus().length})\n`,
+    );
+  }
   if (lane && issues.length === 0) {
     await mkdir(dirname(statePath), { recursive: true });
     // prepareFile and cleanup update the lane state file; never interleave them.
