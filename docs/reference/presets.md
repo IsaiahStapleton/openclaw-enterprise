@@ -28,7 +28,10 @@ object. Relative paths resolve beside the Installation YAML. The Helm chart moun
 only that YAML, so on Helm list only files shipped in the controller image, by
 absolute path. Missing, malformed, invalid, or duplicate-name files prevent
 startup (`PRESET_FILE_INVALID`); a file named like a bundled default, such
-as `default-codex`, replaces it and logs `presets.bundled-default-shadowed`.
+as `default-codex`, replaces it, and API startup logs
+`presets.bundled-default-shadowed`. The worker validates the same files but
+never seeds or refreshes Presets, so this and the other Preset startup warnings
+appear only in the API log.
 API startup adds missing defaults to ready
 or provisioning Namespaces, including the bootstrap Namespace; new Namespaces
 receive them atomically.

@@ -76,8 +76,12 @@ The loader validates the opt-in boolean and file list. It loads bundled JSON
 when enabled, resolves explicit JSON paths beside the startup YAML, validates
 each name/template definition, and rejects missing, malformed, invalid, or
 duplicate-name files before composition; a file named like a bundled default
-replaces it, and composition warns `presets.bundled-default-shadowed`. API and worker share the startup
-snapshot and its source path; files are not watched. [Production composition](../../apps/controller/src/composition/production.ts)
+replaces it, and API composition warns `presets.bundled-default-shadowed`. API and worker share the startup
+snapshot and its source path; files are not watched. The worker loads and
+validates the same files, so a bad file stops it too, but it builds its
+controller without `defaultPresets` and never seeds, refreshes or removes
+default Presets. It therefore logs none of the Preset startup warnings; read
+them in the API log. [Production composition](../../apps/controller/src/composition/production.ts)
 and [development composition](../../apps/controller/src/composition/development-postgres.ts)
 pass generic definitions into `ControllerOptions.defaultPresets` and initialize
 defaults after selecting Configuration and IAM Drivers. They try each persisted
@@ -293,6 +297,7 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-05 05:30: State that only the API logs the Preset startup warnings; the worker validates the files but never applies defaults.
 - 2026-10-05 03:30: A file named like a bundled default replaces it and warns.
 - 2026-10-05 02:30: Skip and warn on a default creation a deny Restriction refuses.
 - 2026-10-04 23:40: The bundled Collector exports the skipped-refresh warning with only its Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)
