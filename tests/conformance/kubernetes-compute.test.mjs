@@ -7505,7 +7505,7 @@ function providerReadinessFixture({
           kind: "Secret",
           metadata: {
             name,
-            namespace: kubernetesGatewayNamespaceName(tenant.id),
+            namespace: kubernetesNamespaceName(tenant.id),
             uid: "model-secret-uid",
           },
           type: "Opaque",
@@ -7519,7 +7519,7 @@ function providerReadinessFixture({
           "Secret",
           name,
           { namespaceId: tenant.id, agentId: revision.agentId },
-          { name: kubernetesGatewayNamespaceName(tenant.id), plane: "control" },
+          { name: kubernetesNamespaceName(tenant.id), plane: "control" },
         );
         secret.metadata.uid = "transport-secret-uid";
         return {
@@ -7869,6 +7869,7 @@ test("provider Harness endpoint owns Gateway transport through preparation and a
   });
   const { driver, revision, namespace, core } = fixture;
   const gatewayName = `gateway-${digest(revision.agentId)}`;
+  const gatewayNamespace = kubernetesNamespaceName(tenant.id);
   const gatewayOwnership = { namespaceId: tenant.id, agentId: revision.agentId };
   const objects = new Map();
   const key = (kind, name, target = namespace) =>
@@ -8056,9 +8057,7 @@ test("provider Harness endpoint owns Gateway transport through preparation and a
   });
   assert.equal(provisions.length, 0);
   assert.equal(endpoints.length, 0);
-  const bootstrapGateway = objects.get(
-    key("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id)),
-  );
+  const bootstrapGateway = objects.get(key("Deployment", gatewayName, gatewayNamespace));
   assert.ok(bootstrapGateway);
   assert.notEqual(
     bootstrapGateway.spec.template.spec.containers[0].env.find(
@@ -8085,7 +8084,7 @@ test("provider Harness endpoint owns Gateway transport through preparation and a
   assert.deepEqual(setupRequests, [
     {
       url: driver.getGatewayEndpoint(revision),
-      nodeUrl: `ws://${gatewayName}.${kubernetesGatewayNamespaceName(tenant.id)}.svc.cluster.local:8080/node`,
+      nodeUrl: `ws://${gatewayName}.${gatewayNamespace}.svc.cluster.local:8080/node`,
     },
   ]);
   workspaceNodeSetupAvailable = true;
@@ -8145,7 +8144,7 @@ test("provider Harness endpoint owns Gateway transport through preparation and a
     key(
       "NetworkPolicy",
       `allow-gateway-workspace-node-${digest(revision.agentId)}`,
-      kubernetesGatewayNamespaceName(tenant.id),
+      gatewayNamespace,
     ),
   );
   assert.deepEqual(gatewayNodePolicy.spec.ingress[0].from, [
@@ -8158,9 +8157,8 @@ test("provider Harness endpoint owns Gateway transport through preparation and a
       },
     },
   ]);
-  const gatewayContainer = objects.get(
-    key("Deployment", gatewayName, kubernetesGatewayNamespaceName(tenant.id)),
-  ).spec.template.spec.containers[0];
+  const gatewayContainer = objects.get(key("Deployment", gatewayName, gatewayNamespace)).spec
+    .template.spec.containers[0];
   assert.equal(
     gatewayContainer.env.find(({ name }) => name === "APP_SERVER_URL").value,
     providerUrl,
@@ -8219,11 +8217,7 @@ test("provider Harness endpoint owns Gateway transport through preparation and a
     `${agentServiceName}-inactive`,
   );
   const gatewayPolicy = objects.get(
-    key(
-      "NetworkPolicy",
-      `allow-gateway-agent-${digest(revision.agentId)}`,
-      kubernetesGatewayNamespaceName(tenant.id),
-    ),
+    key("NetworkPolicy", `allow-gateway-agent-${digest(revision.agentId)}`, gatewayNamespace),
   );
   assert.deepEqual(gatewayPolicy.spec.egress, [
     {

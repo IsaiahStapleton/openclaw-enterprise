@@ -11447,19 +11447,18 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       throw new DependencyUnavailableError("The Agent runtime credentials are not configured.");
     }
     const name = `${runtime.transportSecretPrefix}-${sha256Hex(revision.agentId, 12)}`;
-    const source = await this.getOwned(
-      "Secret",
-      name,
-      this.controlNamespace(revision.namespaceId),
-      { namespaceId: revision.namespaceId, agentId: revision.agentId },
-    );
+    const sourceNamespace = await this.controlNamespace(revision.namespaceId);
+    const source = await this.getOwned("Secret", name, sourceNamespace, {
+      namespaceId: revision.namespaceId,
+      agentId: revision.agentId,
+    });
     if (source === undefined) {
       throw new DependencyUnavailableError("Harness transport credential is unavailable.");
     }
-    this.requireCompleteRuntimeCredentialSecret(source, {
-      name,
-      keys: [AGENT_TRANSPORT_TOKEN_KEY],
-    });
+    this.requireCompleteRuntimeCredentialSecret(
+      source,
+      this.runtimeTransportSecretSpec(name, source),
+    );
     const encoded = required(
       source.data?.[AGENT_TRANSPORT_TOKEN_KEY],
       "Transport credential value",
