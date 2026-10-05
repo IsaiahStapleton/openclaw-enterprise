@@ -2173,8 +2173,7 @@ test("Dedicated Agent creation offers Retry only for a transient provisioning fa
   await createModelCredentialSecret(page, "model-secret-value");
   await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
   const retry = page.getByRole("button", { name: "Retry provisioning request" });
-  // The stub refuses the resend at admission (a name over the API's limit no longer
-  // leaves the form: the console counts it first).
+  // The stub refuses the resend at admission.
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page
     .getByText(/^Outcome unknown\. Retry resubmits the same request ID and saved references\./)

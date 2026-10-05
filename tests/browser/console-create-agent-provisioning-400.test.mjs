@@ -90,29 +90,48 @@ test("Agent name counts characters, as the API does, not UTF-16 code units", asy
   const requests = apiRequests(page, fixture.origin);
   await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
   await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Authentication method").selectOption("codex_pat");
+  await createModelCredentialSecret(page, `model-secret-${randomUUID()}`);
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
   const name = page.getByLabel("Agent name");
+  const agentPosts = () =>
+    requests.filter(
+      (request) =>
+        request.method === "POST" && request.path.startsWith(`/namespaces/${namespace.id}/agents`),
+    );
   // 200 emoji are 200 characters, the API's limit, but 400 UTF-16 code units.
   const longest = "\u{1F600}".repeat(200);
+  const tooLong = `${longest}\u{1F600}`;
   // Typed, not filled: maxlength=200 stopped typing at 100 emoji.
   await name.pressSequentially(longest);
   assert.equal(await name.inputValue(), longest);
   assert.equal(await name.evaluate((input) => input.validity.valid), true);
 
-  await name.fill(`${longest}\u{1F600}`);
+  await name.fill(tooLong);
   assert.equal(
     await name.evaluate((input) => input.validationMessage),
     "Use at most 200 characters.",
   );
+  // A restored draft sets the name without an input event; submit checks it too.
+  await name.evaluate((input, value) => {
+    input.setCustomValidity("");
+    input.value = value;
+  }, tooLong);
   // Create Agent stays disabled until capabilities are read; the click then submits.
   await page.getByRole("button", { name: "Create Agent" }).click();
-  // An edit clears the refusal; 200 characters pass it again.
-  await name.fill(longest);
-  assert.equal(await name.evaluate((input) => input.validity.valid), true);
   assert.equal(
-    requests.filter(
-      (request) =>
-        request.method === "POST" && request.path.startsWith(`/namespaces/${namespace.id}/agents`),
-    ).length,
-    0,
+    await name.evaluate((input) => input.validationMessage),
+    "Use at most 200 characters.",
   );
+  assert.equal(agentPosts().length, 0);
+
+  // An edit clears the refusal, and 200 characters are sent as typed.
+  await name.fill(longest);
+  const sent = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      request.url() === `${fixture.origin}/namespaces/${namespace.id}/agents/provision`,
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await sent).postDataJSON().name, longest);
 });

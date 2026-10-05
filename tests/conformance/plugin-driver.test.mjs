@@ -568,7 +568,6 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     id: message.id,
     error: { code: -32603, message: ${JSON.stringify(`failed to read ${leaked}: permission denied`)} },
   }));
-  process.exit(0);
 });
 `,
   );
