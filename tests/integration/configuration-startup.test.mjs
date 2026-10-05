@@ -1090,3 +1090,62 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     );
   }
 });
+
+test("API and worker name a Preset file failure in their startup error code", async (t) => {
+  // An operator who lists a file the image lacks, or a broken one, needs a cause rather
+  // than STARTUP_FAILED. The file path and the loader message stay out of the log.
+  const duplicate = JSON.stringify({ name: "twice", template: {} });
+  for (const [filename, contents, files] of [
+    ["missing.json", undefined],
+    [
+      "invalid-template.json",
+      JSON.stringify({ name: "invalid", template: { agent: { unsupported: true } } }),
+    ],
+    ["duplicate.json", duplicate, ["cases/duplicate.json", "cases/duplicate-b.json"]],
+    ["not-a-list.json", undefined, "cases/not-a-list.json"],
+  ]) {
+    const configuration = installation();
+    configuration.presets = { includeDefaults: false, files: files ?? [`cases/${filename}`] };
+    const path = await fixture(t, configuration);
+    await mkdir(join(dirname(path), "cases"), { recursive: true });
+    if (contents !== undefined) {
+      await writeFile(join(dirname(path), "cases", filename), contents);
+      await writeFile(join(dirname(path), "cases", "duplicate-b.json"), duplicate);
+    }
+    const shared = {
+      PATH: process.env.PATH,
+      NODE_ENV: "production",
+      OCC_CONFIG_PATH: path,
+      OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
+    };
+    const server = spawnSync(process.execPath, ["apps/controller/src/server.mjs"], {
+      cwd: process.cwd(),
+      env: {
+        ...shared,
+        OCC_HOST: "192.0.2.10",
+        OCC_PORT: "8080",
+        OCC_AUTH_SECRET: "production-auth-secret-with-at-least-32-characters",
+        OCC_AUTH_BASE_URL: "http://192.0.2.10:8080",
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.equal(server.status, 1, filename);
+    const apiDiagnostic = startupDiagnostic(server.stderr, "startup-error");
+    assert.equal(apiDiagnostic.code, "PRESET_FILE_INVALID", filename);
+    assert.equal(apiDiagnostic.message, undefined);
+    assert.ok(!server.stderr.includes(dirname(path)), server.stderr);
+
+    const worker = spawnSync(process.execPath, ["apps/controller/src/worker.mjs"], {
+      cwd: process.cwd(),
+      env: shared,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.equal(worker.status, 1, filename);
+    const workerDiagnostic = startupDiagnostic(worker.stderr, "worker.startup-error");
+    assert.equal(workerDiagnostic.code, "PRESET_FILE_INVALID", filename);
+    assert.equal(workerDiagnostic.message, undefined);
+    assert.ok(!worker.stderr.includes(dirname(path)), worker.stderr);
+  }
+});
