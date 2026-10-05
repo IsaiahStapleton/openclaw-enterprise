@@ -129,25 +129,18 @@ Do not add a policy for the model endpoint. The credential source's provider
 profile allows `api.openai.com` with TLS inspection, and an uninspected rule for
 the same host conflicts with it.
 
-Each v0.1.3-pre.2 network policy requires at least one binary identity with a nonempty
-executable path; OpenShell applies the endpoints only to those binaries. The
-optional endpoint fields use OpenShell's spellings: `tls` accepts `skip` or
-`terminate`; `enforcement` accepts `enforce` or `audit`; and `access` accepts
-`read_only`, `read_write`, or `full`. v0.1.3-pre.2 treats `terminate` as a
-deprecated alias for automatic TLS detection and termination and maps the old
-`passthrough` spelling to that behavior, so the Driver rejects `passthrough` at
-startup. Use `tls: skip` to retain uninspected TLS relay.
+Each v0.1.3-pre.2 network policy needs a nonempty executable path. Optional
+values are `tls: skip|terminate`, `enforcement: enforce|audit`, and
+`access: read_only|read_write|full`. The Driver rejects the old `passthrough`
+spelling; use `skip` for uninspected TLS relay.
 `gatewayConfigured` is the only ServiceAccount mode for `v0.1.3-pre.2`; the
 gateway's configured sandbox ServiceAccount applies to every Sandbox it creates
 and does not satisfy the per-Agent production requirement below.
 
-When readiness is configured, it observes a Service and Pods in the OCC
-namespace; a deployment-paired Gateway normally uses an explicit Backend
-`endpoint` instead. Its timeout and polling interval must be positive safe
-integers, and cancellation stops the wait.
-`startupDelayMs` is a bounded compatibility wait after new Sandbox creation.
-Development uses 30 seconds because `v0.1.3-pre.2` exposes a service before its
-canonical process listens; remove it when OpenShell reports service readiness.
+Optional readiness observes a Service and Pods in the OCC namespace; a paired
+Gateway normally uses an explicit Backend `endpoint`. Timeouts and polling
+intervals must be positive safe integers. Development sets `startupDelayMs` to
+30 seconds because v0.1.3-pre.2 exposes its service before the process listens.
 
 Install the OpenShell gateway separately. Required `gateway.workspaceMode`
 accepts `operator` or `managed`; deferred managed mode fails before Kubernetes
@@ -233,31 +226,19 @@ Compute requires every attachment to report `ready` before activation.
 
 ## Dedicated Codex runtime provider
 
-Kubernetes Compute emits bounded, nonsecret `runtime.json` and `config.toml`
-files. The Driver imports a shared profile and creates a revision provider with
-their contents. OpenShell exposes them read-only beneath the provider's
-`/run/openshell/providers/` directory and reports their paths through
-`OPENCLAW_PLUGIN_RUNTIME_MANIFEST` and
-`OPENCLAW_PLUGIN_CODEX_CONFIG_TOML`.
+Compute emits bounded, nonsecret `runtime.json` and `config.toml`; a
+revision-owned provider exposes them read-only and supplies their paths through
+`OPENCLAW_PLUGIN_RUNTIME_MANIFEST` and `OPENCLAW_PLUGIN_CODEX_CONFIG_TOML`.
+Provisioning waits for the first fail-closed Gateway to issue its workspace-node
+setup Secret, so the provider starts with final setup.
 
-Compute starts a first dedicated Gateway with fail-closed transport and an
-inactive Agent Service. It calls `provisionHarness` only after the Gateway issues
-the workspace-node setup Secret, so the first provider contains final setup.
-
-The development Driver puts the setup envelope, including the short-lived
-`bootstrapToken`, in a read-only provider file. The Harness rebuilds the
-base64url code without changing the signed token. Sandbox policy limits node
-egress to the Gateway destination and executable, but the token remains visible
-inside the Sandbox. This diagnostic is not a production credential guarantee.
-For same-cluster OpenShell, OCC controls setup through private WSS but gives the
-Sandbox node the Agent Gateway Service URL. Compute waits for the provider-route
-rollout before observing enrollment; other Sandbox Drivers retain private WSS.
-The Harness retains the first valid setup and relaunches a failed workspace node
-after one second without an attempt limit. Revision shutdown stops relaunches.
-
-This proxy-mediated enrollment is implemented but still requires the protected
-k3d proof below. The raw app-server token stays outside the provider. Selected
-plugins and repository broker configuration fail before creation.
+Development also places the expiring setup envelope in that provider. The token
+is visible inside the Sandbox, so this is not a production credential guarantee.
+Policy limits node egress to the Gateway destination and executable. Compute
+waits for the provider route before enrollment; the Harness retains its first
+valid setup and relaunches a failed node after one second until shutdown. The raw
+app-server token stays outside the provider. Plugins and repository broker
+configuration fail before creation.
 
 Revision cleanup deletes the Sandbox before its runtime provider. Namespace
 cleanup then removes the shared profile. Replays adopt only exact
@@ -268,32 +249,22 @@ revision cleanup path owns both resources.
 
 ## Create-time app-server exposure
 
-For a dedicated Codex request that reaches OpenShell, the Driver reads the literal
-`APP_SERVER_PORT` prepared by Compute and includes one unnamed service exposure
-in `CreateSandbox`. It uses the Agent revision UUID as OpenShell's `request_id`,
-then advances through a bounded set of derived IDs when OpenShell refuses an
-unresolved request and no Sandbox exists (see
-[request ID retries](../../flows/openshell-sandbox-provisioning.md#4-call-the-versioned-gateway-contract)).
-Reconciliation first reads the derived Sandbox name and adopts only an exact
-existing Sandbox, then reads and verifies the unnamed service. The Driver
-accepts only an HTTP or HTTPS origin. Its client retains a normalized URL for
-control-endpoint clients and the original advertised URL for workload traffic.
-The Driver exposes the latter through its optional Harness endpoint capability,
-after converting it to a WebSocket origin.
+For dedicated Codex, `CreateSandbox` includes one unnamed exposure for Compute's
+literal `APP_SERVER_PORT`. The revision UUID is the first `request_id`; bounded
+[request ID retries](../../flows/openshell-sandbox-provisioning.md#4-call-the-versioned-gateway-contract)
+handle unresolved refusals when no Sandbox exists. Reconciliation adopts only an
+exact Sandbox and exposure. The client retains a normalized control URL and the
+original advertised workload URL, which the optional Harness endpoint capability
+returns as a WebSocket origin.
 
-For dedicated Codex, Compute supplies only the lowercase SHA-256 verifier as
-`APP_TOKEN_SHA`; the raw token remains in the Agent Gateway. The Driver selects
-`SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH`, so OpenShell forwards the
-Gateway's bearer header and Codex authenticates it. Missing or incorrect bearer
-credentials remain rejected. Other service exposures retain OpenShell's
-authorization-stripping default. A Sandbox without a replayable Create receipt must be removed;
-the Driver does not mutate it with a later `ExposeService` call.
+Compute supplies only `APP_TOKEN_SHA`; the raw token remains in the Agent
+Gateway. Bearer passthrough lets Codex authenticate the forwarded header. Other
+exposures keep OpenShell's authorization-stripping default. A Sandbox without a
+replayable Create receipt must be removed, not mutated by `ExposeService`.
 
-When that endpoint capability is present, Kubernetes Compute replaces the
-first fail-closed Gateway template with the advertised origin and does not
-activate the direct Agent Service or a Compute-owned Harness route. This rule
-applies by capability, not by a concrete Driver name; Sandbox Drivers without
-it retain their existing Compute transport behavior.
+With that capability, Compute replaces the fail-closed Gateway target and omits
+the direct Agent Service and Compute-owned Harness route. Drivers without it
+retain the Kubernetes transport.
 
 Native OpenClaw does not accept inbound Harness traffic. Its enrolled node host
 opens the connection to the Agent Gateway, so the Driver sends an empty service
@@ -306,20 +277,14 @@ exemption for its trusted privileged components. Because Pod Security Admission
 exempts the whole Pod, a fail-closed policy must restrict it to digest-pinned
 OpenShell images, expected ServiceAccounts, Namespaces, labels, and capabilities.
 
-Do not grant wildcard tenant permissions to the SandboxDriver. It is wired to
-use the same authenticated Kubernetes client as the Kubernetes Compute Driver;
-there is no provider-specific Kubernetes access adapter. The
-controller and worker need only Compute access plus namespace-scoped policy
-apply and Gateway readiness. OpenShell owns Sandbox resources through its
-Gateway; the Enterprise worker needs no Sandbox custom-resource permission.
+Do not grant wildcard tenant permissions. The Driver uses the Kubernetes Compute
+client; there is no provider-specific adapter. The controller and worker need
+Compute access, namespace-scoped policy apply, and Gateway readiness, but no
+Sandbox custom-resource permission.
 
-Kubernetes NetworkPolicies are additive. The Kubernetes Compute Driver still
-installs default-deny policies. For provider-owned inbound transport, it grants
-the dedicated Agent Gateway egress only to the configured OpenShell Gateway Pod
-peer and service port and omits direct Harness transport ingress. OpenShell
-bootstrap policies must allow only gateway, control-plane, callback, and
-approved provider connectivity needed for OpenShell to function. Broad
-namespace egress or ingress allows can bypass the intended boundary.
+Kubernetes Compute retains default-deny policies. Provider transport grants the
+Agent Gateway egress only to the configured OpenShell Gateway peer and port and
+omits direct Harness ingress. Broad namespace allows can bypass this boundary.
 
 Compute passes the provider-fenced network profile (`provider-fenced-v1`) to the
 provider Harness template; the provider must retain it on the resulting Pod.
@@ -341,23 +306,15 @@ satisfies the local contract changes below; protected cluster proof remains.
 
 ### Workload identity
 
-The Harness workload credential is optional. Until OCC implements token
-verification and exchange and the Agent runtime consumes the result, production
-configuration must allow disabling it. The local OpenShell profile does so.
+The local profile disables the optional Harness workload credential. OpenShell
+may then use its gateway-configured infrastructure ServiceAccount, but the
+supervisor credential must remain inaccessible to the Agent. If a deployment
+requests an Agent ServiceAccount and projected token, the Driver must preserve
+both exactly or reject the revision.
 
-When the workload credential is disabled, OpenShell may run the Agent container
-with its gateway-configured infrastructure ServiceAccount. It does not need the
-otherwise-unused per-Agent ServiceAccount. OpenShell's supervisor credential
-must remain supervisor-only and inaccessible to the Agent container. If a
-deployment explicitly requests an Agent ServiceAccount and projected token,
-the Sandbox Driver must preserve both exactly or reject the revision; it must
-not silently discard either half of that identity input.
-
-A Kubernetes ServiceAccount token belongs to its issuing cluster trust domain;
-it cannot identify one OCE Agent across separate Gateway and Harness clusters.
-Future authentication may exchange Kubernetes, SPIFFE, or cloud evidence for a
-short-lived credential scoped to the existing Agent ServicePrincipal and
-revision. Gateway and Harness authenticate separately. See
+A Kubernetes ServiceAccount token cannot identify one OCE Agent across cluster
+trust domains. Future exchange must scope evidence to the Agent ServicePrincipal
+and revision; Gateway and Harness authenticate separately. See
 [authorization](../authorization.md#principals).
 
 ### Writable runtime state
@@ -410,16 +367,11 @@ Common errors include:
 - `OpenShell gateway Pod is not ready.`
 - `OpenShell SandboxDriver supports only dedicated Codex or OpenClaw Harness revisions.`
   Deployment status reports `SANDBOX_HARNESS_UNSUPPORTED`.
-- `OpenShell refused <method>: the controller's gateway identity holds OpenShell's limit of 1000 durable request admissions ...`
-  Deployment progress reports `SANDBOX_ADMISSION_LIMIT_REACHED` while the worker
-  waits without spending attempts; if the limit persists at the convergence
-  deadline, the deployment fails with that code. OpenShell keeps an admission
-  record for each `request_id`. Completed records free up 24 hours after
-  completion, but records of requests that did not complete successfully stay
-  unresolved forever, and OpenShell has no reset API. If the limit persists,
-  investigate the controller identity's unresolved admissions in the OpenShell
-  gateway database, then redeploy. Other `RESOURCE_EXHAUSTED` refusals, such as
-  rate limits, are retried as ordinary dependency failures.
+- `OpenShell refused <method>: ... limit of 1000 durable request admissions ...`
+  reports `SANDBOX_ADMISSION_LIMIT_REACHED`. Completed records expire after 24
+  hours; unsuccessful records remain unresolved and have no reset API. Inspect
+  the Gateway database before redeploying. Other `RESOURCE_EXHAUSTED` errors use
+  ordinary dependency retries.
 - `OpenShell dedicated Codex requires one literal APP_TOKEN_SHA verifier.`
   The deployment is malformed or attempted to pass the raw app-server token.
 - `OpenShell dedicated Codex does not yet support selected plugins or repository credentials.`

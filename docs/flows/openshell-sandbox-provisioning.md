@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
-updated: 2026-10-02
-last_updated_session: authoring-run/3bf937d5-c422-419e-af2d-754abe024ca4
+updated: 2026-10-05
+last_updated_session: authoring-run/fd7f6cdb-1d1d-40d5-8d4a-d6d80cd946e7
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -113,21 +113,13 @@ provider profile, not the Sandbox policy.
 
 `scripts/dev-up` validates Kubernetes Compute with OpenShell and delegates to
 `occ dev up`. Compose is the default control plane;
-`OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` selects Kubernetes-only.
-Both verify the `v0.1.3-pre.2` source archive, package its Gateway and Workspace
-charts, and import digest-pinned Gateway, Sandbox, and supervisor images using
-separate registry, repository, and digest values. The removed NetworkPolicy
-acknowledgement is omitted.
-Before tool discovery or state creation, Kubernetes-only `upK3d` rejects equal
-development and Kubernetes API host ports, with or without OpenShell. Without a
-Sandbox Driver, it also rejects browser-port collisions.
-The CLI records the exact engine endpoint, cluster,
-platform Namespace, API port, and key destination before creating resources.
-The Kubernetes-only mode creates k3d without a Compose network, imports the OCE controller, Agent
-runtime, PostgreSQL, and three OpenShell images, and resolves their in-cluster
-digests. Unless the developer selects existing images explicitly, startup
-rebuilds the controller and Agent runtime from the current checkout before
-importing them.
+`OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` selects Kubernetes-only. Before
+creating state, Kubernetes-only startup rejects API-port collisions and records
+the engine, cluster, platform Namespace, API port, and key destination. Both
+profiles verify the pinned source archive, package its charts, and import
+digest-pinned Gateway, Sandbox, and supervisor images. Kubernetes-only startup
+also builds or selects the OCE controller and Agent runtime, then imports them
+with PostgreSQL and resolves every in-cluster digest.
 
 After Helm installs OpenShell, the development launcher reads the exact Gateway
 Service ClusterIP. It writes `network.providerHarness` with that address, the
@@ -136,14 +128,11 @@ as a host alias for the exact hostname in the provider-advertised origin; its
 HTTP Host remains the OpenShell routing key. The corresponding NetworkPolicy
 allows that Gateway only to the selected OpenShell Gateway Pods and port.
 
-`scripts/dev-up` validates the Kubernetes Compute/OpenShell selection, verifies
-the pinned source archive, imports the digest-pinned OpenShell images, and
-records the resources it owns. The default Compose profile runs PostgreSQL and
-OCC in Compose while the worker targets k3d. The Kubernetes-only profile runs
-those components in `oce-system` and uses in-cluster authentication. Both
-profiles install private Envoy routing and the operator Workspace resources, and
-admit only the API, worker, supervisor callbacks, and dedicated Agent Gateways
-to the OpenShell Gateway. See
+The default Compose profile runs PostgreSQL and OCC in Compose while its worker
+targets k3d. Kubernetes-only runs those components in `oce-system` with
+in-cluster authentication. Both install private Envoy routing and operator
+Workspace resources, and restrict OpenShell Gateway access to the API, worker,
+supervisor callbacks, and dedicated Agent Gateways. See
 the [local deployment guides](../guides/deploy/local-kubernetes-development.md)
 for startup, RBAC, image, and cleanup details.
 
@@ -202,16 +191,12 @@ requirements and removes their ConfigMap paths from the remaining environment.
 
 `apps/controller/src/drivers/sandbox/openshell.ts:provisionHarness`
 
-OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
-It builds filesystem, process, and network policy plus Kubernetes driver config.
-It always sends `hard_requirement` Landlock compatibility; Installation startup
-rejects any other `policy.landlockCompatibility` value. On a node that cannot
-enforce Landlock, the OpenShell supervisor refuses to launch the workload.
-Network TLS, enforcement, and access spellings must be own keys in the Driver's
-allowlists before they are converted to the exact `v0.1.3-pre.2` protobuf enums.
-It rejects inherited object names and the old `passthrough` TLS spelling,
-which v0.1.3-pre.2 defines as an automatic inspection alias; use `skip` instead. Each network policy also requires at
-least one executable path and sends those binary identities with its endpoints.
+OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the
+selected Driver. It serializes Kubernetes, filesystem, process, and
+binary-scoped network policy against the exact `v0.1.3-pre.2` wire contract.
+Landlock is a hard requirement; unsupported enum spellings, inherited object
+keys, the old `passthrough` TLS spelling, or policies without executable paths
+fail before launch.
 
 Kubernetes Compute invokes `provisionHarness` only after the workspace-node
 setup Secret exists. The Driver therefore creates or adopts the runtime provider
@@ -283,14 +268,10 @@ For Codex, `GetService` must also return the unnamed bearer-passthrough endpoint
 on the admitted port. Workspace `sandbox:write` is the trust boundary here: a
 holder could already delete and replace the Sandbox.
 
-For each unary Gateway call, the client checks cancellation after client setup
-and credential-metadata preparation and before dispatch. An abort during setup
-is observed when the pending setup step settles; it does not bound a stalled
-initialization or file read. The Backend shares one client per gateway endpoint;
-a failed setup is not cached, so the next call retries it. Once dispatched, an abort requests cancellation
-of the local gRPC call and rejects the caller. That request does not prove a
-remote mutation stopped; the calling lifecycle must handle any uncertain
-effect through its existing recovery and cleanup path.
+The Backend shares one client per endpoint but does not cache failed setup.
+Cancellation is checked after setup and before dispatch; after dispatch it
+cancels the local gRPC call without proving the remote mutation stopped. The
+lifecycle therefore recovers uncertain effects through adoption and cleanup.
 
 `GetService` retains two forms of the URL. The normalized form preserves the
 existing control-endpoint behavior used by local clients. The advertised form
@@ -300,22 +281,17 @@ bearer passthrough and returns its WebSocket origin plus the provider-local
 `/sandbox/enterprise` workspace root through `harnessEndpoint`. Missing,
 malformed, or changed exposure state fails closed.
 
-After dispatch, abort cancels the local gRPC call but cannot prove that a remote
-mutation stopped. The revision provider therefore survives an uncertain create;
-revision cleanup deletes the Sandbox first.
+The revision provider survives an uncertain create; revision cleanup deletes
+the Sandbox first.
 
 The runtime opens provider files through their reported absolute paths. Any
 Gateway failure prevents readiness.
 
-OpenShell's policy proxy opens the node connection from its supervisor Pod.
-When the route hostname is an in-cluster Service name, as in the Kubernetes-only
-profile's fully qualified one, the node uses that WSS route: Envoy attributes the
-client, and the Sandbox policy binds the node executable to the route's host and
-port without TLS inspection. Otherwise, as in Compose, the setup embeds the Agent
-Gateway's cluster-local Service URL, and paired policies admit only that tenant's
-supervisor-to-Gateway traffic. The supervisor relaunches an exited node until it
-connects; OpenShell reports `EPERM` for the node's process group, so the
-supervisor then signals the node directly.
+OpenShell's supervisor opens the node connection. Kubernetes-only uses the
+in-cluster WSS route; Compose uses the Agent Gateway Service URL. In both cases,
+policy binds the node executable and supervisor to the exact destination. The
+supervisor relaunches an exited node and falls back to direct signaling when
+process-group signaling returns `EPERM`.
 
 ### 5. Observe readiness or clean up
 
@@ -387,41 +363,8 @@ networking. Native OpenClaw remains a separate verification-only path.
 
 ## Changelog
 
+- 2026-10-05 12:50: Removed repeated setup and wire-contract detail while preserving the current OpenShell provisioning sequence and moved older entries to the history page. (authoring-run/fd7f6cdb-1d1d-40d5-8d4a-d6d80cd946e7 - 4b5afe0cb653f7dd99fccdb2e3432cbf60e6a03e)
+
 - 2026-10-02 16:26: Passed OpenShell's provider-local workspace root to the dedicated Gateway while preserving the canonical Kubernetes Harness root. (authoring-run/3bf937d5-c422-419e-af2d-754abe024ca4 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 15:28: Put the short-lived workspace-node bootstrap token in the
-  development provider file and removed WebSocket credential rewriting so the
-  signed device proof covers the token received by the Gateway.
-  (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-09-30 23:45: Required hard Landlock compatibility in the OpenShell Sandbox request and rejected weaker Installation settings. (authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a - 129723ab)
-
-- 2026-09-30 21:14: Updated the OpenShell source, images, charts, and wire fixture to v0.1.3-pre.1 while preserving the default service authorization and fail-closed projection boundaries. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
-
-- 2026-10-02 13:23: Made workspace-node retries unbounded by retaining split
-  setup after OpenShell removes its startup projection and scheduling each next
-  launch when the child exits.
-  (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 13:35: Routed same-cluster OpenShell workspace-node enrollment to
-  the Agent Gateway Service and applied the exact route to the supervisor Pod
-  that originates proxy traffic; enrollment waits for the provider-endpoint
-  Gateway rollout, and other Sandbox Drivers retain private WSS.
-  (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 12:56: Added exact provider-fenced workspace-node egress and the
-  bounded OpenShell service startup delay proven by the live k3d flow.
-  (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 12:43: Refined workspace-node state to a process-owned `state`
-  child of the direct mount after live OpenShell proof showed the root-owned
-  mount root rejects OpenClaw's directory mode hardening.
-  (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 12:33: Pointed workspace-node state directly at its isolated PVC mount because OpenClaw rejects atomic replacement through a symlink. (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 12:22: Started the first fail-closed Agent Gateway before external provider mutation and blocked provider/Sandbox creation until its workspace-node setup material exists. (authoring-run/a0516064-6f8a-4e9f-8237-df9bedcec479 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
-
-- 2026-10-02 11:10: Routed OpenShell-owned dedicated Codex traffic through the provider's bearer-passthrough exposure, with a scoped k3d address bridge and unchanged behavior for Sandbox Drivers without the endpoint capability. (authoring-run/ab38d00b-2481-43e9-b6b1-f43878f5d7f3 - 987c8c2b4ace1e152262ef6920b6d0f9ff26a086)
 
 [OpenShell Sandbox provisioning documentation history](openshell-sandbox-provisioning/history.md) preserves the older dated entries.
