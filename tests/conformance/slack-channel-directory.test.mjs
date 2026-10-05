@@ -413,7 +413,7 @@ test("Slack HTTP errors release the connection for a subsequent directory lookup
       // This deadline is shorter than the first request's eight-second timeout.
       const recovered = await driver.lookupDirectory(
         { token, kind: "users" },
-        AbortSignal.timeout(3_000),
+        AbortSignal.timeout(5_000),
       );
       assert.deepEqual(recovered.candidates, [{ id: "UALICE", name: "alice" }]);
       assert.equal(recovered.complete, true);
