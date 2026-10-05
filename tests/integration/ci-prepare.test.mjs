@@ -232,6 +232,15 @@ if (command === "docker" || command === "podman") {
     finish();
   }
   if (equals(args, ["image", "inspect", state.tag])) finish("[]\n");
+  // Images and Packaging pulls its pinned Node base image after the builds.
+  if (equals(args.slice(0, 4), ["image", "inspect", "--format", "{{json .RepoDigests}}"]) &&
+      args[4]?.startsWith("docker.io/library/node:")) {
+    finish(JSON.stringify([args[4].replace(/:[^/@]+@/, "@")]) + "\n");
+  }
+  if (equals(args.slice(0, 4), ["image", "inspect", "--format", "{{.Id}}"]) &&
+      args[4]?.startsWith("docker.io/library/node:")) {
+    finish(configId + "\n");
+  }
   if (equals(args, ["image", "inspect", "--format", "{{.Id}}", state.tag])) {
     finish((command === "podman" ? configId.slice("sha256:".length) : configId) + "\n");
   }
@@ -318,6 +327,7 @@ if (command === "docker" || command === "podman") {
   }
 }
 if (command === "helm" && equals(args, ["version", "--short"])) finish("v3.19.0\n");
+if (command === "yq" && equals(args, ["--version"])) finish("yq (https://github.com/mikefarah/yq/) version v4.45.1\n");
 if (command === "corepack" && equals(args, ["pnpm", "db:migrate"])) {
   assert.match(process.env.OCC_MIGRATION_DATABASE_URL, /^postgresql:\/\/occ_migrator:.*\/openclaw_k8s_/);
   finish();
@@ -473,7 +483,15 @@ if (command === "kubectl") {
 }
 throw new Error("Unexpected external command: " + command + " " + JSON.stringify(args));
 `}`;
-  for (const command of ["docker.mjs", "k3d.mjs", "kubectl.mjs", "podman", "corepack", "helm"]) {
+  for (const command of [
+    "docker.mjs",
+    "k3d.mjs",
+    "kubectl.mjs",
+    "podman",
+    "corepack",
+    "helm",
+    "yq",
+  ]) {
     await writeFile(join(bin, command), commandSource, { mode: 0o700 });
   }
   const statePath = join(root, "state.json");
@@ -942,6 +960,39 @@ test("image cache preparation refuses missing credentials and unmapped lanes bef
     assert.doesNotMatch(prepared.stdout + prepared.stderr, /synthetic-cache-credential/, lane);
     // Cleanup is not run: the refused build's planned tag stays owned, and this
     // shim cannot remove images. The fixture directory is removed with the test.
+  }
+});
+
+test("Images and Packaging exports the image caches only on main pushes", async (t) => {
+  for (const [event, exported] of [
+    ["pull_request", false],
+    ["merge_group", false],
+    ["workflow_dispatch", false],
+    ["push", true],
+  ]) {
+    const commands = await fixtureImageCommands(t, "success", "images-packaging", {
+      GITHUB_ACTIONS: "true",
+      GITHUB_EVENT_NAME: event,
+      OCC_CI_IMAGE_CACHE: "1",
+      ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+      ACTIONS_RESULTS_URL: "https://cache.example.test/",
+    });
+    const prepared = commands.prepare();
+    assert.equal(prepared.status, 0, `${event}: ${prepared.stderr}`);
+    const builds = (await commands.commands()).filter(({ args }) => args[0] === "buildx");
+    assert.equal(builds.length, 2, event);
+    for (const { args } of builds) {
+      const role = args.includes("--target") ? "controller" : "runtime";
+      const cache = `type=gha,version=2,scope=oce-ci-${role}-${process.platform}-${process.arch}-v1`;
+      assert.equal(args[args.indexOf("--cache-from") + 1], `${cache},timeout=60s`, event);
+      assert.equal(
+        args.includes("--cache-to") && args[args.indexOf("--cache-to") + 1],
+        exported && `${cache},mode=max,ignore-error=true,timeout=60s`,
+        event,
+      );
+    }
+    const cleaned = commands.cleanup();
+    assert.equal(cleaned.status, 0, `${event}: ${cleaned.stderr}`);
   }
 });
 
