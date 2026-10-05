@@ -747,6 +747,27 @@ function credentialSourceFieldsMatch(
   }
 }
 
+/**
+ * Names as many unsupported Permissions as fit the 256-character error message contract; a
+ * Role of 64 Permissions can hold far more than fit.
+ */
+function unsupportedPermissionsMessage(unsupported: readonly string[]): string {
+  const render = (shown: number): string => {
+    const more = unsupported.length - shown;
+    return (
+      `No operation checks these Permissions, so they would grant nothing: ${unsupported
+        .slice(0, shown)
+        .join(", ")}${more === 0 ? "" : ` and ${more} more`}. ` +
+      "See the per-kind actions in the permissions reference."
+    );
+  };
+  let shown = unsupported.length;
+  while (shown > 1 && render(shown).length > 256) {
+    shown -= 1;
+  }
+  return render(shown);
+}
+
 function validName(value: unknown): value is string {
   return isNonEmptyString(value) && value.length <= 200;
 }
@@ -8019,8 +8040,7 @@ export class OpenClawController {
     if (unsupported.length > 0) {
       throw new IAMPolicyValidationError(
         "/permissions",
-        `No operation checks these Permissions, so they would grant nothing: ${unsupported.join(", ")}. ` +
-          "See the per-kind actions in the permissions reference.",
+        unsupportedPermissionsMessage(unsupported),
       );
     }
     return Object.freeze(checked);

@@ -95,7 +95,8 @@ export function canonicalFailure(reply: FastifyReply, error: RequestFailure): vo
   reply.status(error.status).send({
     error: {
       code: error.code,
-      message: error.message,
+      // Some messages come from Drivers or name submitted values; none may break the cap.
+      message: capped(error.message),
       ...(error.details === undefined ? {} : { details: error.details }),
     },
     meta: { requestId: reply.request.id },

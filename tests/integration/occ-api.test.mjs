@@ -1571,6 +1571,20 @@ test("Namespace IAM reports invalid policy input as 400 with the field and refus
       new RegExp(`grant nothing: ${resourceKind}:${action}\\.`),
     );
   }
+  // A Role naming many of them gets a message within the 256-character error contract.
+  const kinds = ["agent_revision", "configuration", "credential_source", "preset", "secret"];
+  const actions = ["administer", "create", "delete", "deploy", "operate", "read_logs", "update"];
+  const many = await createRole(
+    namespace.id,
+    kinds.flatMap((resourceKind) => actions.map((action) => ({ action, resourceKind }))),
+  );
+  assert.equal(many.status, 400, JSON.stringify(many.body));
+  assert.deepEqual(many.body.error.details, [{ path: "/permissions", code: "INVALID_VALUE" }]);
+  assert.ok(Array.from(many.body.error.message).length <= 256, many.body.error.message);
+  assert.match(
+    many.body.error.message,
+    /^No operation checks these Permissions, so they would grant nothing: agent_revision:administer, .* and \d+ more\. See the per-kind actions in the permissions reference\.$/,
+  );
   const duplicate = await createRole(namespace.id, [
     { action: "read", resourceKind: "agent" },
     { action: "read", resourceKind: "agent" },
