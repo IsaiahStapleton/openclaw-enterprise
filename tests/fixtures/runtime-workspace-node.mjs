@@ -92,8 +92,8 @@ async function waitForDisconnect(nodeId) {
   }
   throw new Error("Stopped workspace node remained connected.");
 }
-// The Gateway lists the node before it confirms the setup handoff (delivery-uncertain,
-// then hello-ok, then confirmed), so wait for the confirmation.
+// The Gateway lists the node before it finishes the setup handoff (registered, then
+// delivery-uncertain, hello-ok, confirmed), so wait for the confirmation.
 async function waitForConfirmedSetup(nodeId) {
   let status;
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -102,7 +102,9 @@ async function waitForConfirmedSetup(nodeId) {
       assert.equal(status.completion.deviceId, nodeId);
       return status.completion;
     }
-    assert.equal(status.deliveryUncertain?.deviceId, nodeId);
+    if (status.deliveryUncertain) {
+      assert.equal(status.deliveryUncertain.deviceId, nodeId);
+    }
     await setTimeout(500);
   }
   throw new Error(`Setup completion was never confirmed: ${JSON.stringify(status)}`);

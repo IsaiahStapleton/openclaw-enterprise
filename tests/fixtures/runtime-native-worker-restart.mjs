@@ -150,9 +150,10 @@ async function waitForNode(expectedId) {
   }
   throw new Error(`Native worker did not connect: ${childLog}`);
 }
-// The Gateway lists the node before it confirms the setup handoff: it records the
-// completion as delivery-uncertain, sends hello-ok, then marks it confirmed. Wait
-// for that confirmation instead of reading the status the moment the node appears.
+// The Gateway lists the node before it finishes the setup handoff: it registers the
+// node, records the completion as delivery-uncertain, sends hello-ok, then marks it
+// confirmed. Wait for that confirmation instead of reading the status the moment the
+// node appears; until then the status is empty or delivery-uncertain.
 async function waitForConfirmedSetup(setupId, nodeId) {
   const deadline = Date.now() + 20_000;
   let status;
@@ -162,7 +163,9 @@ async function waitForConfirmedSetup(setupId, nodeId) {
       assert.equal(status.completion.deviceId, nodeId);
       return status.completion;
     }
-    assert.equal(status.deliveryUncertain?.deviceId, nodeId);
+    if (status.deliveryUncertain) {
+      assert.equal(status.deliveryUncertain.deviceId, nodeId);
+    }
     await setTimeout(250);
   }
   throw new Error(`Setup completion was never confirmed: ${JSON.stringify(status)}`);
