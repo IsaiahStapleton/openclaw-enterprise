@@ -45,7 +45,8 @@ Before replacing the controller images, inspect the existing storage targets:
 kubectl get namespaces -l openclaw.dev/gateway-namespace -L openclaw.dev/namespace
 ```
 
-A row with an empty `NAMESPACE` column is a split-layout target.
+In a single cluster, a row with an empty `NAMESPACE` column is a split-layout
+tenant. The two-cluster profile's control-cluster rows are expected.
 
 If an Installation has split-layout tenants, keep its existing controller release
 and both namespaces. Preserve their Secrets, ConfigMaps, PVCs and database
