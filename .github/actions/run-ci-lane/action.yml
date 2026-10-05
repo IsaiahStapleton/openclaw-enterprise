@@ -20,7 +20,7 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
     - id: pnpm-store
-      uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+      uses: ./.github/actions/setup-pnpm-store-cache
       with:
         node-version: ${{ inputs.node-version }}
         cache-mode: read-write

@@ -249,7 +249,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+      - uses: ./.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache-mode: read-write
@@ -275,7 +275,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: openclaw/openclaw/.github/actions/setup-pnpm-store-cache@ee0cf16623068ff535cc20f4a1ce175c8c5b8d25
+      - uses: ./.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache-mode: "off"
