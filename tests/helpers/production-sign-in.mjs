@@ -732,6 +732,100 @@ export async function oidcSignIn(app, origin, idp, authorization, remoteAddress 
   return { start, callback, attemptId, url, state, bindingCookie };
 }
 
+/**
+ * Creates a password account through the administrator route, bound to `roleId` when given.
+ * Returns `{ id, email, password }`, which signs in with passwordSignIn.
+ */
+export async function createAccount(app, headers, { email, password, roleId }) {
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/auth/accounts",
+    headers,
+    payload: { email, password, ...(roleId === undefined ? {} : { roleId }) },
+  });
+  if (response.statusCode !== 201) {
+    throw new Error(`Account creation failed with ${response.statusCode}: ${response.body}`);
+  }
+  return { id: response.json().data.id, email, password };
+}
+
+/**
+ * The password onboarding each external sign-in proof starts from. Bootstraps a production
+ * Installation, composes its default password install, signs the recovery administrator in
+ * (from `remoteAddress` when given) and creates one password account per `accounts` entry,
+ * then closes that app. `accounts` maps a name to its email and its Installation Role from
+ * installationRoles: "reader" (the default) or "admin". Every account uses `password`.
+ * Returns `{ admin: { email, password, id }, roles, accounts: { [name]: { id, email, password } } }`.
+ */
+export async function onboardPasswordAccounts(
+  context,
+  {
+    databaseUrl,
+    state,
+    pool,
+    email,
+    authSecret,
+    secrets,
+    password,
+    accounts = {},
+    remoteAddress,
+    passwordSlowLaneFloors,
+  },
+) {
+  const admin = {
+    email,
+    password: await bootstrapProductionInstallation(context, { databaseUrl, email, authSecret }),
+  };
+  const roles = await installationRoles(state, pool);
+  const app = await composeProductionSignIn(context, {
+    databaseUrl,
+    settings: defaultInstallSettings,
+    secrets,
+    passwordSlowLaneFloors,
+  });
+  try {
+    const headers = await signedInHeaders(app, consoleOrigin, admin, remoteAddress);
+    admin.id = (await currentSession(app, headers.cookie)).user.id;
+    const created = {};
+    for (const [name, account] of Object.entries(accounts)) {
+      const role = roles[account.role ?? "reader"];
+      if (role === undefined) {
+        throw new Error(`Unknown Installation Role ${account.role} for ${name}.`);
+      }
+      created[name] = await createAccount(app, headers, {
+        email: account.email,
+        password,
+        roleId: role.id,
+      });
+    }
+    return { admin, roles, accounts: created };
+  } finally {
+    await app.close();
+  }
+}
+
+/** Attaches a provider subject to an account at its current version; returns the response. */
+export async function attachProvider(app, headers, userId, provider, subject) {
+  const { version } = await readAccount(app, headers, userId);
+  return app.inject({
+    method: "POST",
+    url: `/api/auth/accounts/${userId}/providers/${provider}`,
+    headers,
+    payload: { subject, expectedVersion: version },
+  });
+}
+
+/** Rows that sign-in creates: users, their sign-in methods (occ.account) and sessions. */
+export async function authRowCounts(pool) {
+  return (
+    await pool.query(
+      `SELECT (SELECT count(*)::int FROM occ."user") AS users,
+              (SELECT count(*)::int FROM occ.account) AS methods,
+              (SELECT count(*)::int FROM occ.session) AS sessions`,
+    )
+  ).rows[0];
+}
+
 /** The guarded account read an administrator uses for expectedVersion. */
 export async function readAccount(app, headers, userId) {
   const response = await app.inject({ url: `/api/auth/accounts/${userId}`, headers });

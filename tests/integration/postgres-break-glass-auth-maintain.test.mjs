@@ -8,7 +8,7 @@ import pg from "pg";
 import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { privateBootstrapDirectory } from "../helpers/bootstrap-installation.mjs";
 import {
-  bootstrapProductionInstallation,
+  attachProvider,
   clientAddresses,
   composeProductionSignIn,
   consoleOrigin as origin,
@@ -16,9 +16,8 @@ import {
   defaultInstallSettings,
   githubSignIn,
   githubUpgradeSettings,
-  installationRoles,
+  onboardPasswordAccounts,
   passwordSignIn,
-  readAccount,
   signedInHeaders,
   startFakeGitHub,
 } from "../helpers/production-sign-in.mjs";
@@ -94,48 +93,29 @@ test(
     const github = await startFakeGitHub(t);
     const address = clientAddresses();
     const directory = await privateBootstrapDirectory(t, "openclaw-break-glass-");
-    const adminPassword = await bootstrapProductionInstallation(t, {
-      databaseUrl,
-      email: adminEmail,
-      authSecret,
-    });
-    const admin = { email: adminEmail, password: adminPassword };
-    const roles = await withPool((pool, state) => installationRoles(state, pool));
-    app = await composeProductionSignIn(t, {
-      databaseUrl,
-      settings: defaultInstallSettings,
-      secrets,
-    });
-    let adminHeaders = await signedInHeaders(app, origin, admin, address());
-    admin.id = (await currentSession(app, adminHeaders.cookie)).user.id;
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/auth/accounts",
-      headers: adminHeaders,
-      payload: { email: "break-glass-member@example.test", password, roleId: roles.reader.id },
-    });
-    assert.equal(created.statusCode, 201, created.body);
-    const member = {
-      id: created.json().data.id,
-      email: "break-glass-member@example.test",
-      password,
-    };
-    await app.close();
+    const {
+      admin,
+      accounts: { member },
+    } = await withPool((pool, state) =>
+      onboardPasswordAccounts(t, {
+        databaseUrl,
+        state,
+        pool,
+        email: adminEmail,
+        authSecret,
+        secrets,
+        password,
+        remoteAddress: address(),
+        accounts: { member: { email: "break-glass-member@example.test" } },
+      }),
+    );
     app = await composeProductionSignIn(t, {
       databaseUrl,
       settings: githubUpgradeSettings(admin.id),
       secrets,
     });
-    adminHeaders = await signedInHeaders(app, origin, admin, address());
-    const attached = await app.inject({
-      method: "POST",
-      url: `/api/auth/accounts/${member.id}/providers/github`,
-      headers: adminHeaders,
-      payload: {
-        subject: memberSubject,
-        expectedVersion: (await readAccount(app, adminHeaders, member.id)).version,
-      },
-    });
+    const adminHeaders = await signedInHeaders(app, origin, admin, address());
+    const attached = await attachProvider(app, adminHeaders, member.id, "github", memberSubject);
     assert.equal(attached.statusCode, 200, attached.body);
     assert.equal(
       (await githubSignIn(app, origin, memberSubject, address())).callback.headers.location,

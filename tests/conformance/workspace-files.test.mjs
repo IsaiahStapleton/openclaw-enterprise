@@ -325,6 +325,15 @@ test("Agent workspace file routes reject invalid names, bodies, and cross-site w
   });
   assert.equal(crossSite.response.status, 403);
   assert.equal(crossSite.payload.error.code, "FORBIDDEN");
+  // Session admission refuses cross-site writes too; for reads the route's own check is the
+  // only one, so a cross-site page cannot read Agent files with the browser's credentials.
+  for (const site of ["cross-site", "Cross-Site"]) {
+    const crossSiteRead = await request(fixture.app, `${path}/USER.md`, {
+      headers: { "sec-fetch-site": site },
+    });
+    assert.equal(crossSiteRead.response.status, 403, site);
+    assert.equal(crossSiteRead.payload.error.code, "FORBIDDEN", site);
+  }
 
   const missingContent = await request(fixture.app, `${path}/USER.md`, {
     method: "PUT",
