@@ -181,6 +181,12 @@ set -euo pipefail
 cd /secure/src/openclaw-enterprise-installed # checkout of the deployed source revision
 cp /secure/occ/installation.yaml /secure/occ/installation.yaml.before
 # Edit /secure/occ/installation.yaml and review the diff, then:
+yq -r '.presets.files[]?' /secure/occ/installation.yaml | while read -r preset_file; do
+  kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
+    --namespace openclaw-system exec deploy/openclaw-enterprise-api --container api -- \
+    sh -c 'cd "$(dirname "$OCC_CONFIG_PATH")" && test -f "$1" && test -r "$1"' sh "$preset_file" ||
+    { echo "Could not verify Preset file $preset_file in the API container." >&2; exit 1; }
+done
 export OCC_INSTALLATION_SECRET="$(yq -er '.installation.secretName // "occ-installation-startup"' /secure/occ/values.yaml)"
 export OCC_INSTALLATION_KEY="$(yq -er '.installation.key // "installation.yaml"' /secure/occ/values.yaml)"
 jq -n --arg key "$OCC_INSTALLATION_KEY" --rawfile document /secure/occ/installation.yaml \
@@ -196,6 +202,10 @@ helm upgrade oce deploy/helm/openclaw-enterprise \
 ```
 
 The new checksum restarts the API and worker so they read the new Installation.
+This path has no startup preflight, and the API stops before its replacement
+starts: an Installation the controller rejects keeps the API down, with a
+`startup-error` code such as `PRESET_FILE_INVALID`, until you undo the change.
+The loop above stops on a `presets.files` entry the running image cannot read.
 The patch replaces only the Installation key and keeps the Secret's
 `openclaw.dev/installation-id` annotation. Do not re-create the Secret with
 `kubectl apply`: if its last applied configuration carries that annotation,
