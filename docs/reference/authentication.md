@@ -109,18 +109,14 @@ foreign, malformed, or duplicated key returns `401`, and such a sign-out neither
 revokes nor clears the cookie. Without the header, requests are unchanged. Console
 pins each tab's key this way.
 
-In the password-only profile a session expires seven days after sign-in; using
-it does not extend it. With GitHub, Google or OIDC sign-in enabled, every session,
-password sessions included, expires eight hours after sign-in
-([session controls](authentication/external-sign-in.md#session-and-recovery-controls)).
-The password-only profile has no online way to end another account's sessions.
-Removing the person's IAM bindings and Group memberships refuses every request
-that needs a permission from their next request (an open native admin WebSocket
-at its next recheck, within about 25 seconds), but the session itself stays
-valid until it expires. To end it, run `purge-sessions --user <userId>
---writers-stopped` with
-[stopped maintenance](../guides/deploy/auth-maintenance.md#choose-the-operation),
-which works in either profile.
+Password-only sessions expire seven days after sign-in; use does not extend
+them. With GitHub, Google or OIDC sign-in enabled, every session expires after
+eight hours ([session controls](authentication/external-sign-in.md#session-and-recovery-controls)).
+Password-only has no online way to end another account's session: removing its
+IAM bindings and Group memberships refuses permissioned requests from the next
+one (native admin WebSockets within about 25 s), and `purge-sessions --user
+<userId> --writers-stopped` ([stopped maintenance](../guides/deploy/auth-maintenance.md#choose-the-operation))
+ends it.
 
 Sign-in takes `{"email": "...", "password": "..."}`. The session arrives only
 through `Set-Cookie`.
