@@ -880,11 +880,12 @@ test("control refuses loose requests before acting on them", { timeout: 15000 },
     await control(socket, "POST", "/v1/sessions", body, { ...plainText, "x-admission-id": id }),
     refused,
   );
-  // The refused request consumed nothing: the same admission still opens once.
+  // The refused request reserved nothing: the same admission id still creates the session.
   const created = await send(input, id);
   assert.equal(created.status, 201);
   const sessionId = created.body.session.sessionId;
 
+  // An empty list starts no background lookup; it is the well-formed baseline.
   const lookup = { namespaceId, repositoryRefs: [] };
   const describe = (value, headers) =>
     control(socket, "POST", "/v1/repository-descriptions", value, headers);
@@ -895,7 +896,8 @@ test("control refuses loose requests before acting on them", { timeout: 15000 },
     assert.deepEqual(await describe({ ...lookup, namespaceId: value }), refused);
   }
 
-  // Reads and close carry no body; one with a body is refused and changes nothing.
+  // Reads and close carry no body. The request head refuses a GET body and the handler a
+  // close body; neither changes the session.
   for (const [method, path] of [
     ["GET", "/healthz"],
     ["GET", "/v1/capabilities"],
