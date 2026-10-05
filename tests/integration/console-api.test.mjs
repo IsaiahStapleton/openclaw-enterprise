@@ -239,6 +239,14 @@ test("console auth routes reject untrusted browser origins and issue production 
   assert.equal(rejected.response.headers.get("set-cookie"), null);
   // A correct password with a foreign Origin is refused for the Origin, not the credentials.
   assert.equal(JSON.parse(rejected.text).error.message, UNTRUSTED_ORIGIN_MESSAGE);
+  // A browser that omits Origin still names a cross-site request in Sec-Fetch-Site.
+  const crossSiteSignIn = await fixture.rawRequest("POST", "/api/auth/sign-in/email", {
+    headers: { "sec-fetch-site": "cross-site" },
+    body: signInBody,
+  });
+  assert.equal(crossSiteSignIn.response.status, 403);
+  assert.equal(crossSiteSignIn.response.headers.get("set-cookie"), null);
+  assert.equal(JSON.parse(crossSiteSignIn.text).error.message, UNTRUSTED_ORIGIN_MESSAGE);
 
   const cliAccepted = await fixture.rawRequest("POST", "/api/auth/sign-in/email", {
     body: signInBody,
