@@ -780,12 +780,21 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
   }
   // Periodic maintenance and repository cleanup retries run every 30 s (the
   // repository Driver's fixed interval). A test waiting on such a pass pulls the
-  // revision's queued Work forward instead of waiting the interval out. Only Work
-  // scheduled more than 5 s ahead moves, so readiness rechecks keep their cadence.
+  // revision's queued maintenance or cleanup Work forward instead of waiting the
+  // interval out. Only Work scheduled more than 5 s ahead moves, so readiness
+  // rechecks keep their cadence. Each early maintenance pass queues its successor
+  // one bucket later, so nudge only until the awaited change appears.
   async function expediteWork(revision) {
     await pool.query(
-      "UPDATE occ.controller_work SET available_at=clock_timestamp() WHERE revision_id=$1 AND state='queued' AND available_at > clock_timestamp() + interval '5 seconds'",
-      [revision.id],
+      `UPDATE occ.controller_work SET available_at = clock_timestamp()
+       WHERE revision_id = $1 AND state = 'queued'
+         AND available_at > clock_timestamp() + interval '5 seconds'
+         AND (idempotency_key LIKE $2 OR idempotency_key LIKE $3)`,
+      [
+        revision.id,
+        `agent_revision:${revision.id}:maintenance:%`,
+        `agent_revision:${revision.id}:repository_cleanup:%`,
+      ],
     );
   }
   async function readyPod(agent, revision, previousUid, { expedite = false } = {}) {
@@ -816,7 +825,8 @@ async function setupRepositoryPlatformFixture(context, diagnostic) {
           ),
       );
       assert.ok(matches.length <= 1, "exact revision has multiple Ready gateway Pods");
-      if (matches.length === 0 && expedite) {
+      // Nudge only until a replacement Pod exists; its rollout needs no more passes.
+      if (expedite && pods.every((pod) => pod.metadata.uid === previousUid)) {
         await expediteWork(revision);
       }
       return matches[0];
