@@ -82,7 +82,8 @@ Use a human session for recovery, human-issued keys, and account-only APIs. For
 production, obtain the first administrator’s password through the protected
 bootstrap storage procedure. The following sends it from a file and keeps the
 session cookie in a private directory. Set `OCC_URL` to the approved HTTPS
-endpoint.
+endpoint and `OCC_ORIGIN` as in [Requirements](#requirements); without it,
+sign-out returns `403` and the session stays live.
 
 When local startup printed an HTTPS browser console URL, set `OCC_URL` to its
 origin (`https://console.<cluster>.oce.localhost:<port>`, without `/console/`)
@@ -95,6 +96,7 @@ sends it to `http://127.0.0.1` and the next request returns `401`.
 set -o pipefail
 umask 077
 : "${OCC_URL:?Set OCC_URL to the approved HTTPS endpoint or local console origin}"
+: "${OCC_ORIGIN:?Set OCC_ORIGIN to the origin of OCC_AUTH_BASE_URL; see Requirements}"
 export OCC_ADMIN_EMAIL='<first-admin@example.com>'
 export OCC_ADMIN_PASSWORD_FILE='/secure/occ/initial-admin-password'
 OCC_SESSION_DIRECTORY="$(mktemp -d)"

@@ -138,14 +138,20 @@ identifier. Email addresses can change owners and are never identity keys.
 
 ## Attach and detach
 
-As a human Installation administrator, read the account's current version with
-`GET /api/auth/accounts/:userId`, then attach the subject:
+As a human Installation administrator, [sign in as a human administrator](../../reference/authentication/service-api-keys.md#sign-in-as-a-human-administrator)
+so `OCC_URL`, `OCC_ORIGIN` and `OCC_SESSION_COOKIE_JAR` are set, and set `USER_ID` to the
+account's `id`. Read the account's current version, then attach the subject:
 
 ```bash
-curl -sS -X POST "$OCC_AUTH_BASE_URL/api/auth/accounts/$USER_ID/providers/google" \
-  -H "Origin: $OCC_AUTH_BASE_URL" -H 'Content-Type: application/json' \
-  -b "$COOKIE_JAR" \
-  --data '{"subject":"<google sub>","expectedVersion":1}'
+VERSION="$(curl --fail-with-body --silent --show-error \
+  --cookie "$OCC_SESSION_COOKIE_JAR" -H "Origin: $OCC_ORIGIN" \
+  "$OCC_URL/api/auth/accounts/$USER_ID" | jq -er .data.version)"
+jq -n --arg subject '<google sub>' --argjson version "$VERSION" \
+  '{subject: $subject, expectedVersion: $version}' |
+  curl --fail-with-body --silent --show-error \
+    --cookie "$OCC_SESSION_COOKIE_JAR" -H "Origin: $OCC_ORIGIN" \
+    -H 'Content-Type: application/json' --data-binary @- \
+    "$OCC_URL/api/auth/accounts/$USER_ID/providers/google"
 ```
 
 The subject is 1–255 printable ASCII characters without spaces. The call returns `409`
