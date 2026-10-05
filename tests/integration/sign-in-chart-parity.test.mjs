@@ -928,6 +928,11 @@ test(
         /auth\.google\.egressCidrs requires explicit IPv4 CIDRs/,
       ],
       [
+        "an empty-string egress list",
+        { ...google, "auth.google.egressCidrs": "" },
+        /auth\.google\.egressCidrs must be a list of IPv4 CIDRs/,
+      ],
+      [
         "an HTTP base URL",
         { ...google, "auth.baseUrl": "http://oce.example.internal" },
         /auth\.google requires an HTTPS auth\.baseUrl/,
@@ -973,6 +978,11 @@ test(
         "a /0 egress entry",
         { ...oidc, "auth.oidc.egressCidrs[0]": "0.0.0.0/0" },
         /auth\.oidc\.egressCidrs requires explicit IPv4 CIDRs/,
+      ],
+      [
+        "an empty-string egress list",
+        { ...oidc, "auth.oidc.egressCidrs": "" },
+        /auth\.oidc\.egressCidrs must be a list of IPv4 CIDRs/,
       ],
       [
         "an HTTP base URL",
