@@ -790,12 +790,12 @@ function imageBuildArgs(state, role, localStore, cacheWarm = false) {
       "--load",
       "--cache-from",
       `${cache},timeout=60s`,
-      // One writer per image avoids competing exports from the parallel image lanes.
-      // The main-only warm job exists to export, so each cache transfer may take
-      // longer and a failed export fails the job instead of being ignored. Pull
-      // request runs only restore: their export cost Images and Packaging about
-      // 40 s and filled only their own merge ref's scope. Main pushes keep the
-      // lane's export as a backstop to the warm job.
+      // One writer per image among the parallel image lanes; on main the warm job
+      // writes the same scope too (the last index wins). The warm job exists to
+      // export, so each cache transfer may take longer and a failed export fails
+      // the job instead of being ignored. Pull request runs only restore: their
+      // export cost Images and Packaging about 40 s and filled only their own
+      // merge ref's scope. Main pushes keep the lane's export as a backstop.
       ...(state.lane === "images-packaging" &&
       (cacheWarm || process.env.GITHUB_EVENT_NAME === "push")
         ? [
