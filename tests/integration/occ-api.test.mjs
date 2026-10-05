@@ -1246,7 +1246,8 @@ test("Secret values with an unpaired surrogate are refused as an invalid value",
   });
   assert.equal(secret.status, 201, JSON.stringify(secret.body));
 
-  // The request schema admits these strings; OCC refuses them because they are not UTF-8.
+  // The request schema admits these strings; every API route refuses them before validation
+  // because they are not UTF-8 (OCC's own Secret value check would refuse them too).
   for (const value of ["\ud800", "prefix-\udfff-suffix"]) {
     for (const [method, path, body] of [
       ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Unpaired surrogate", value }],
@@ -1255,7 +1256,10 @@ test("Secret values with an unpaired surrogate are refused as an invalid value",
       const rejected = await controller.request(method, path, { body });
       assert.equal(rejected.status, 400, `${method} ${JSON.stringify(rejected.body)}`);
       assert.equal(rejected.body.error.code, "INVALID_REQUEST");
-      assert.match(rejected.body.error.message, /Secret value must be nonempty UTF-8/);
+      assert.equal(
+        rejected.body.error.message,
+        "The request does not match the operation contract: body /value contains an unpaired UTF-16 surrogate.",
+      );
       assert.deepEqual(rejected.body.error.details, [{ path: "/value", code: "INVALID_VALUE" }]);
     }
   }

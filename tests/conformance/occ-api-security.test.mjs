@@ -676,6 +676,15 @@ test("NUL characters and unpaired surrogates are refused in bodies and path para
     [configurations, '{"kind":"agent","values":{"x":"a\\u0000b"}}', "/values/x", nul],
     [configurations, '{"kind":"agent","values":{"a\\u0000~/":"x"}}', "/values/a?~0~1", nul],
     [configurations, '{"kind":"agent","values":{"\\udbff":"x"}}', "/values/?", surrogate],
+    // The first offender in document order is named.
+    [
+      configurations,
+      '{"kind":"agent","values":{"first":["ok","\\ud800"],"second":"\\u0000"}}',
+      "/values/first/1",
+      surrogate,
+    ],
+    // A first segment too long for the 512-character detail path is cut, not dropped.
+    [configurations, `{"${"k".repeat(600)}\\u0000":1}`, `/${"k".repeat(511)}`, nul],
     [
       configurations,
       `{"kind":"agent","values":{"x":${"[".repeat(deep)}"\\u0000"${"]".repeat(deep)}}}`,

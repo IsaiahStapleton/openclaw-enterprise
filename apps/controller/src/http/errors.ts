@@ -299,8 +299,14 @@ function capped(message: string): string {
 }
 
 // In Unicode mode, `\p{Cs}` matches only a surrogate that is not part of a pair.
+const UNPAIRED_SURROGATE = /\p{Cs}/u;
+
 function unstorableText(value: string): "nul" | "surrogate" | undefined {
-  return value.includes("\u0000") ? "nul" : /\p{Cs}/u.test(value) ? "surrogate" : undefined;
+  return value.includes("\u0000")
+    ? "nul"
+    : UNPAIRED_SURROGATE.test(value)
+      ? "surrogate"
+      : undefined;
 }
 
 /**
@@ -308,9 +314,10 @@ function unstorableText(value: string): "nul" | "surrogate" | undefined {
  * UTF-16 surrogate: text stores U+FFFD in its place and jsonb rejects it. Refuses either one
  * in any string or object key of `value` (path parameters or a parsed JSON body), so the
  * caller gets a 400 instead of a 500 or 503 from the database, or a name stored differently
- * from the one it was shown. Detail codes follow the workspace file content rule: a NUL is
- * INVALID_FORMAT (as a `^[^\u0000]*$` pattern reports it), a surrogate INVALID_VALUE. The
- * walk is iterative because a body can nest deeply.
+ * from the one it was shown. It names the first offender in document order. Detail codes
+ * follow the workspace file content rule: a NUL is INVALID_FORMAT (as a `^[^\u0000]*$`
+ * pattern reports it), a surrogate INVALID_VALUE. The walk is iterative because a body can
+ * nest deeply.
  */
 export function unstorableTextFailure(
   context: "params" | "body",
@@ -332,14 +339,18 @@ export function unstorableTextFailure(
       const entries = Array.isArray(node.value)
         ? node.value.map((entry, index) => [String(index), entry] as const)
         : Object.entries(node.value);
-      for (const [key, entry] of entries) {
-        const child = { value: entry, parent: node, key };
-        const problem = unstorableText(key);
+      const children = entries.map(([key, entry]) => ({ value: entry, parent: node, key }));
+      for (const child of children) {
+        const problem = unstorableText(child.key);
         if (problem !== undefined) {
           found = { node: child, problem };
           break;
         }
-        pending.push(child);
+      }
+      // Reversed onto the stack, so the walk reports the first offender in document order.
+      // (A loop, not push(...children): a large array would exceed the argument limit.)
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        pending.push(children[index]!);
       }
     }
   }
@@ -351,13 +362,24 @@ export function unstorableTextFailure(
     segments.push(jsonPointer(node.key.replaceAll("\u0000", "?").replace(/\p{Cs}/gu, "?")));
   }
   segments.reverse();
-  // ErrorDetail paths are at most 512 characters; keep whole leading segments.
+  // ErrorDetail paths are at most 512 characters; keep whole leading segments, or as much of
+  // the first one as fits (cut between escapes and whole characters).
   let path = "";
   for (const segment of segments) {
-    if (path.length + segment.length + 1 > 512) {
-      break;
+    if (path.length + segment.length + 1 <= 512) {
+      path += `/${segment}`;
+      continue;
     }
-    path += `/${segment}`;
+    if (path === "") {
+      path = "/";
+      for (const piece of segment.match(/~[01]|[^]/gu) ?? []) {
+        if (path.length + piece.length > 512) {
+          break;
+        }
+        path += piece;
+      }
+    }
+    break;
   }
   const nul = found.problem === "nul";
   return failure(
