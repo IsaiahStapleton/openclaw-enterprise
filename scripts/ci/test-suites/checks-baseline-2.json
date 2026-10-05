@@ -25,9 +25,6 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
-      "path": "tests/integration/ci-impact.test.mjs"
-    },
-    {
       "path": "tests/integration/ci-impact-gate.test.mjs"
     },
     {
@@ -188,9 +185,6 @@
       "path": "tests/integration/repository-credentials-config.test.mjs"
     },
     {
-      "path": "tests/integration/repository-credentials-github-token.test.mjs"
-    },
-    {
       "path": "tests/integration/repository-credentials-http.test.mjs"
     },
     {
@@ -210,9 +204,6 @@
     },
     {
       "path": "tests/integration/repository-credentials-shutdown.test.mjs"
-    },
-    {
-      "path": "tests/integration/repository-credentials-client-config.test.mjs"
     },
     {
       "path": "tests/integration/repository-credentials-router.test.mjs"
