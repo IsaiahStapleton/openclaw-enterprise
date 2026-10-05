@@ -25,9 +25,6 @@
       "path": "tests/integration/ci-runner.test.mjs"
     },
     {
-      "path": "tests/integration/ci-impact.test.mjs"
-    },
-    {
       "path": "tests/integration/ci-impact-gate.test.mjs"
     },
     {
@@ -51,9 +48,6 @@
     },
     {
       "path": "tests/integration/ci-image-reconciliation.test.mjs"
-    },
-    {
-      "path": "tests/integration/ci-prepare.test.mjs"
     },
     {
       "path": "tests/integration/ci-image-pull.test.mjs"

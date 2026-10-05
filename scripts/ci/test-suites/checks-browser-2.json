@@ -29,6 +29,9 @@
     },
     {
       "path": "tests/browser/console-runtime-credentials.test.mjs"
+    },
+    {
+      "path": "tests/integration/ci-impact.test.mjs"
     }
   ]
 }

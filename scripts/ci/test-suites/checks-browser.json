@@ -20,6 +20,9 @@
     },
     {
       "path": "tests/browser/docs-compute-matrix.test.mjs"
+    },
+    {
+      "path": "tests/integration/ci-prepare.test.mjs"
     }
   ]
 }
