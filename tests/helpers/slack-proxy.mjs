@@ -13,7 +13,8 @@ import { availablePort } from "./available-port.mjs";
  * that port (another process can take a picked port first, so EADDRINUSE picks again). The
  * test's cleanup sends the proxy SIGTERM. With `upstreamPort`, the child resolves each of
  * `upstreamHosts` (default slack.com) to 127.0.0.1 and its connections to those hosts on port
- * 443 reach that loopback port instead. Returns the child, the listening port and `stderr()`,
+ * 443 reach that loopback port instead; a connection to any other host throws in the child, so
+ * a test can never reach the network. Returns the child, the listening port and `stderr()`,
  * what the proxy has written so far.
  */
 export async function startSlackProxy(
@@ -95,6 +96,9 @@ const originalConnect = net.connect;
 net.connect = (...args) => {
   if (upstreamHosts.has(args[0]?.host) && args[0]?.port === 443) {
     return originalConnect({ ...args[0], host: "127.0.0.1", port: ${upstreamPort} }, ...args.slice(1));
+  }
+  if (typeof args[0]?.host === "string") {
+    throw new Error(\`test fixture refuses a connection to \${args[0].host}:\${args[0].port}\`);
   }
   return originalConnect(...args);
 };

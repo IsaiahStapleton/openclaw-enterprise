@@ -94,42 +94,40 @@ async function openTunnel(t, proxyPort, target, early = Buffer.alloc(0)) {
 
 const established = /^HTTP\/1\.1 200 Connection Established\r\n/;
 
-test(
-  "a CONNECT tunnel relays bytes both ways and passes each side's EOF on",
-  testOptions,
-  async (t) => {
-    // An echo upstream that keeps its write side open after the client's EOF, so the reply can
-    // only finish if the proxy relays that EOF upstream and the upstream's EOF back.
-    const upstreamSeen = [];
-    const upstream = await listen(
-      t,
-      (socket) => {
-        socket.on("error", () => {});
-        const seen = record(socket);
-        upstreamSeen.push(seen);
-        socket.pipe(socket);
-      },
-      { allowHalfOpen: true },
-    );
-    const { port: proxyPort } = await startSlackProxy(t, { upstreamPort: upstream.address().port });
+test("a CONNECT tunnel relays bytes both ways and both ends see EOF", testOptions, async (t) => {
+  // An echo upstream that keeps its write side open after the client's EOF, so the reply can
+  // only finish if the proxy relays that EOF upstream. The proxy closes the client once the
+  // upstream finishes, both by ending the pipe and on the upstream's close; the client sees
+  // the same EOF either way, so this test does not tell those two paths apart.
+  const upstreamSeen = [];
+  const upstream = await listen(
+    t,
+    (socket) => {
+      socket.on("error", () => {});
+      const seen = record(socket);
+      upstreamSeen.push(seen);
+      socket.pipe(socket);
+    },
+    { allowHalfOpen: true },
+  );
+  const { port: proxyPort } = await startSlackProxy(t, { upstreamPort: upstream.address().port });
 
-    // Bytes sent with the CONNECT request itself, then a payload far larger than one TCP read.
-    const early = randomBytes(1_024);
-    const payload = randomBytes(4 * 1024 * 1024);
-    const sent = Buffer.concat([early, payload]);
-    const tunnel = await openTunnel(t, proxyPort, "slack.com:443", early);
-    assert.match(tunnel.head, established);
-    tunnel.socket.end(payload);
+  // Bytes sent with the CONNECT request itself, then a payload far larger than one TCP read.
+  const early = randomBytes(1_024);
+  const payload = randomBytes(4 * 1024 * 1024);
+  const sent = Buffer.concat([early, payload]);
+  const tunnel = await openTunnel(t, proxyPort, "slack.com:443", early);
+  assert.match(tunnel.head, established);
+  tunnel.socket.end(payload);
 
-    await bound(tunnel.ended, "client EOF");
-    assert.equal(upstreamSeen.length, 1);
-    await bound(upstreamSeen[0].ended, "upstream EOF");
-    assert.ok(upstreamSeen[0].bytes().equals(sent), "the upstream received every byte in order");
-    assert.ok(tunnel.body().equals(sent), "the client received every echoed byte in order");
-    await bound(tunnel.closed, "client close");
-    await bound(upstreamSeen[0].closed, "upstream close");
-  },
-);
+  await bound(tunnel.ended, "client EOF");
+  assert.equal(upstreamSeen.length, 1);
+  await bound(upstreamSeen[0].ended, "upstream EOF");
+  assert.ok(upstreamSeen[0].bytes().equals(sent), "the upstream received every byte in order");
+  assert.ok(tunnel.body().equals(sent), "the client received every echoed byte in order");
+  await bound(tunnel.closed, "client close");
+  await bound(upstreamSeen[0].closed, "upstream close");
+});
 
 test(
   "a CONNECT tunnel delivers a large upstream reply in full to a slow client",
@@ -144,8 +142,8 @@ test(
 
     const tunnel = await openTunnel(t, proxyPort, "slack.com:443");
     assert.match(tunnel.head, established);
-    // Read nothing while the upstream writes its reply and closes, so the end of the reply is
-    // still queued in the proxy when the upstream goes away.
+    // Read nothing for a moment while the upstream writes its reply and closes. The proxy must
+    // respect the slow client's backpressure and still deliver the whole reply before EOF.
     tunnel.socket.pause();
     await new Promise((resolve) => setTimeout(resolve, 500));
     tunnel.socket.resume();
@@ -231,13 +229,22 @@ test("the CONNECT allowlist matches whole Slack host names on port 443", testOpt
   });
   const { port: proxyPort } = await startSlackProxy(t, {
     upstreamPort: upstream.address().port,
-    upstreamHosts: ["slack.com", "wss-primary.slack.com", "a.slack-edge.com", "b.slack-msgs.com"],
+    upstreamHosts: [
+      "slack.com",
+      "slack-edge.com",
+      "slack-msgs.com",
+      "wss-primary.slack.com",
+      "a.slack-edge.com",
+      "b.slack-msgs.com",
+    ],
   });
 
   // Allowed: the Slack apex, Slack subdomains, and any letter case (DNS names are not
   // case-sensitive). The redirect sends each to the local upstream.
   for (const target of [
     "slack.com:443",
+    "slack-edge.com:443",
+    "slack-msgs.com:443",
     "wss-primary.slack.com:443",
     "a.slack-edge.com:443",
     "b.slack-msgs.com:443",
@@ -256,6 +263,7 @@ test("the CONNECT allowlist matches whole Slack host names on port 443", testOpt
     "example.com:443",
     "evilslack.com:443",
     "slack.com.evil.example:443",
+    "a.slack.com.evil.example:443",
     "slack.com:80",
     "slack.com:8443",
     "x@slack.com:443",
