@@ -34,7 +34,7 @@ umask 077
 export OCC_SERVICE_KEY_DIRECTORY='/secure/occ/service-keys'
 install -d -m 700 "$OCC_SERVICE_KEY_DIRECTORY"
 export OCC_SERVICE_KEY_FILE="$(mktemp "$OCC_SERVICE_KEY_DIRECTORY/key.XXXXXX")"
-curl --fail --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
+curl --fail-with-body --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
   "$OCC_URL/api/auth/service-keys" -H "Origin: $OCC_ORIGIN" -H 'Content-Type: application/json' \
   --data '{"servicePrincipalId":"<service-principal-id>","namespaceId":"<namespace-id>","name":"nightly-reader","expiresIn":2592000}' \
   --output "$OCC_SERVICE_KEY_FILE"
@@ -43,7 +43,8 @@ curl --fail --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
 Success returns HTTP `201`. The response contains the credential exactly once in
 `data.key` and a non-secret `data.id` needed to revoke it. Record the key and
 principal IDs separately for recovery; there is no plaintext retrieval endpoint.
-If the request fails, do not give its output file to an automation client.
+If the request fails, the file holds the error response instead: read its
+message, then delete the file; never give it to an automation client.
 
 ## Use a service key
 
@@ -66,7 +67,7 @@ To revoke the key in `OCC_SERVICE_KEY_FILE` with the administrator session:
 
 ```bash
 OCC_SERVICE_KEY_ID="$(python3 -c 'import json, os, pathlib; print(json.loads(pathlib.Path(os.environ["OCC_SERVICE_KEY_FILE"]).read_text())["data"]["id"])')"
-curl --fail --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
+curl --fail-with-body --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
   -H "Origin: $OCC_ORIGIN" \
   --request DELETE "$OCC_URL/api/auth/service-keys/$OCC_SERVICE_KEY_ID"
 ```
@@ -130,7 +131,7 @@ it does not appear in process arguments:
 ```bash
 set -o pipefail
 python3 -c 'import json, os, pathlib, sys; key=json.loads(pathlib.Path(os.environ["OCC_ADMIN_SERVICE_KEY_FILE"]).read_text())["data"]["key"]; sys.stdout.write("x-api-key: " + key + "\n")' |
-  curl --fail --silent --show-error --header @- "$OCC_URL/api/auth/service-keys" \
+  curl --fail-with-body --silent --show-error --header @- "$OCC_URL/api/auth/service-keys" \
   -H 'Content-Type: application/json' \
   --data '{"servicePrincipalId":"<service-principal-id>","namespaceId":"<namespace-id>","name":"nightly-reader","expiresIn":2592000}' \
   --output "$OCC_SERVICE_KEY_FILE"
