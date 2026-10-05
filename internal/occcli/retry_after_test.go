@@ -16,7 +16,7 @@ func TestRateLimitedErrorNamesTheRetryAfterDelay(t *testing.T) {
 	}{
 		{"7", `{"error":{"code":"RUNTIME_LOGS_RATE_LIMITED","message":"Too many runtime log requests. Wait for Retry-After and try again."}}`,
 			"OCC operation failed (HTTP 429): RUNTIME_LOGS_RATE_LIMITED: Too many runtime log requests. Wait for Retry-After and try again. Retry after 7s."},
-		{"120", `not json`, "OCC operation failed (HTTP 429). Retry after 2m0s."},
+		{"120", `not json`, "OCC operation failed (HTTP 429). Retry after 120s."},
 		{"", `{"error":{"code":"RATE_LIMITED","message":"Slow down."}}`, "OCC operation failed (HTTP 429): RATE_LIMITED: Slow down."},
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

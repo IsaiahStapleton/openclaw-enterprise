@@ -79,7 +79,7 @@ func (err *APIError) Error() string {
 	}
 	if err.RetryAfter > 0 {
 		// OCC's rate-limit messages say to wait for Retry-After; name the delay.
-		message = fmt.Sprintf("%s. Retry after %s.", strings.TrimSuffix(message, "."), err.RetryAfter)
+		message = fmt.Sprintf("%s. Retry after %ds.", strings.TrimSuffix(message, "."), int(err.RetryAfter/time.Second))
 	}
 	return message
 }
