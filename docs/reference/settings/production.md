@@ -144,8 +144,10 @@ together. Activation still requires closed ingress and stopped identity writers.
 
 With `auth.github.enabled`, the chart adds an API-only egress policy on TCP 443
 for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
-`0.0.0.0/0`. To narrow it, list the `web` and `api` IPv4 ranges from
-`https://api.github.com/meta`, and update them when GitHub changes them.
+any address except link-local `169.254.0.0/16`. To narrow it, list the `web` and `api`
+IPv4 ranges from `https://api.github.com/meta`, and update them when GitHub changes them.
+A non-empty list replaces the default, so an egress proxy on a link-local address is
+reached by listing its CIDR; the same holds for Google and OIDC.
 
 `api.trustedProxy` is off by default: the API rejects `Forwarded`,
 `X-Forwarded-*`, and `X-Real-IP` with `403`. Failed password sign-ins are then
@@ -184,8 +186,8 @@ guarded profile and `OCC_AUTH_GITHUB_RECOVERY_USER_ID` recovery user as GitHub; 
 With `auth.google.enabled`, the chart adds the API-only egress policy
 `openclaw-enterprise-api-google-login-egress` on TCP 443 for
 `oauth2.googleapis.com` and `www.googleapis.com`. Empty `auth.google.egressCidrs`
-allows `0.0.0.0/0`; narrow it with an egress proxy. Rendering fails on incomplete
-Google values, a Secret shared with GitHub or any other chart Secret,
+allows any address except `169.254.0.0/16`; narrow it with an egress proxy. Rendering
+fails on incomplete Google values, a Secret shared with GitHub or any other chart Secret,
 `agentNativeAdmin.enabled` with Google, an HTTP base URL, or an allowed domain that
 is not a DNS name.
 
