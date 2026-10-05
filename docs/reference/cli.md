@@ -159,7 +159,8 @@ without the HTTP envelope. Deleting a Configuration prints
 `deleted`, `kind`, and `id`.
 
 Failures go to stderr and the CLI exits nonzero. For HTTP errors, the CLI prints
-the status and, when present, the API error code and message. It does not print
+the status and, when present, the API error code and message, and the
+`Retry-After` delay in seconds. It does not print
 the server's request ID. To capture that ID for a failed request, use the
 [HTTP API directly](../guides/http-api.md#troubleshoot).
 
