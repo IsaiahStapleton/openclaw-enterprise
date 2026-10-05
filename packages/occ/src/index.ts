@@ -111,7 +111,12 @@ import {
   normalizeHarnessAuthBinding,
   freezeAgentRevision,
 } from "@openclaw-enterprise/contracts";
-import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
+import {
+  asRecord,
+  hasControlCharacter,
+  immutableCopy,
+  isNonEmptyString,
+} from "@openclaw-enterprise/utils";
 import { resolveConfiguredHarnessId } from "./configured-harness.ts";
 import {
   capability,
@@ -830,23 +835,13 @@ function sameSecretBackend(left: Secret, right: Secret): boolean {
   );
 }
 
-function hasControlCharacters(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function validChannelDirectoryResult(value: unknown): value is ChannelDirectoryResult {
   const result = asRecord(value);
   const bounded = (candidate: unknown, maxLength: number): candidate is string =>
     typeof candidate === "string" &&
     candidate.length > 0 &&
     candidate.length <= maxLength &&
-    !hasControlCharacters(candidate);
+    !hasControlCharacter(candidate);
   if (
     result === undefined ||
     !bounded(result.workspaceId, 200) ||
@@ -4609,7 +4604,7 @@ export class OpenClawController {
               typeof id !== "string" ||
               id.length === 0 ||
               id.length > 200 ||
-              hasControlCharacters(id),
+              hasControlCharacter(id),
           ) ||
           new Set(ids).size !== ids.length ||
           input.query !== undefined ||
