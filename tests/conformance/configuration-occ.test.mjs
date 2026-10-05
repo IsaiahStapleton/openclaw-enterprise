@@ -172,6 +172,7 @@ async function fixture(options = {}) {
     configurationDriver,
     controller,
     iam,
+    iamState,
     namespace,
     state,
   };
@@ -1029,6 +1030,50 @@ test("Agent deployment separately authorizes its exact Configuration", async () 
     },
   );
   assert.deepEqual(await controller.listRevisions(administrator, namespace.id, agent.id), []);
+});
+
+test("Agent creation and update separately authorize their exact Configuration", async () => {
+  const { agent, configuration, controller, iamState, namespace } = await fixture();
+  const deniedRead = (error) => {
+    assert.ok(error instanceof AuthorizationDeniedError);
+    assert.deepEqual(error.authorization, {
+      action: "read",
+      resource: { kind: "configuration", id: configuration.id, namespaceId: namespace.id },
+    });
+    return true;
+  };
+  const create = () =>
+    controller.createAgent(administrator, {
+      namespaceId: namespace.id,
+      name: "Configuration read probe",
+      configurationId: configuration.id,
+    });
+  const update = () =>
+    controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: configuration.id,
+    });
+
+  // Agent create and update grants do not imply reading the Configuration they select.
+  iamState.restrictions.push({
+    id: "deny-configuration-read",
+    namespaceId: namespace.id,
+    action: "read",
+    resourceKind: "configuration",
+    resourceId: configuration.id,
+    effect: "deny",
+  });
+  await assert.rejects(create(), deniedRead);
+  await assert.rejects(update(), deniedRead);
+  assert.deepEqual(
+    (await controller.listAgents(administrator, namespace.id)).map(({ id }) => id),
+    [agent.id],
+  );
+
+  iamState.restrictions.pop();
+  assert.equal((await create()).configurationId, configuration.id);
+  assert.equal((await update()).configurationId, configuration.id);
 });
 
 test("Namespace deletion refuses an otherwise agent-free Namespace with Configuration", async () => {
