@@ -383,7 +383,11 @@ async function missingProfileFixture(t, observations, options = {}) {
           });
         }
         if (!applied.get(name).spec.containers[0].securityContext.seccompProfile) {
-          const error = new Error("RuntimeDefault denied namespace creation");
+          const error = Object.assign(new Error("RuntimeDefault denied namespace creation"), {
+            exitCode: 1,
+            signal: null,
+            timedOut: false,
+          });
           error.stderr =
             options.baselineStderr ??
             probeEvidence(args, "SANDBOX", 1, false, "bwrap namespace denied by seccomp");
@@ -590,6 +594,12 @@ for (const [label, alter, extra] of [
     (text) => text.replace("START\n", "START\n" + text.split("START")[0] + "ENTERED\n"),
   ],
   ["version failure", (text) => text.replace("END:SANDBOX:1", "END:VERSION:64")],
+  ["contradictory exit", (text) => text, { exitCode: 2 }],
+  ["missing exit", (text) => text, { exitCode: undefined }],
+  ["missing signal", (text) => text, { signal: undefined }],
+  ["contradictory code fields", (text) => text, { code: 2 }],
+  ["non-numeric status", (text) => text, { exitCode: "1" }],
+  ["killed process", (text) => text, { killed: true }],
   ["timeout", (text) => text, { timedOut: true }],
   ["signal", (text) => text, { signal: "SIGTERM" }],
   ["success-shaped failure", (text) => text.replace("END:SANDBOX:1", "END:DONE:0")],
@@ -597,7 +607,11 @@ for (const [label, alter, extra] of [
   test(`baseline origin refuses ${label} and preserves cleanup`, async (t) => {
     const control = await missingProfileFixture(t, [missingProfileWaiting], {
       probeExec(args) {
-        const error = new Error("probe rejected");
+        const error = Object.assign(new Error("probe rejected"), {
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+        });
         error.stderr = alter(probeEvidence(args, "SANDBOX", 1, false, "bwrap namespace denied"));
         Object.assign(error, extra);
         throw error;
@@ -654,7 +668,13 @@ exit "$result"
   assert.equal(result.signal, null);
   if (result.status !== 0) {
     const error = new Error("generated probe failed");
-    Object.assign(error, { stdout: result.stdout, stderr: result.stderr });
+    Object.assign(error, {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.status,
+      signal: result.signal,
+      timedOut: false,
+    });
     throw error;
   }
   return { stdout: result.stdout, stderr: result.stderr };
@@ -699,3 +719,87 @@ test("a client success without completed probe evidence does not qualify a posit
   assert.equal(control.installations(), 0);
   await control.assertCleanup();
 });
+
+for (const mode of ["exit1", "exit2", "signal", "done_error", "success"]) {
+  test(`actual preparation adapter binds probe evidence to ${mode}`, async (t) => {
+    const root = await fixture(t);
+    const state = join(root, "state");
+    const tools = join(root, "tools");
+    const reached = join(root, "profile-derivation");
+    await mkdir(state, { mode: 0o700 });
+    await mkdir(tools, { mode: 0o700 });
+    const dockerHost = "unix:///tmp/inert-probe-fixture.sock";
+    await writeFile(join(state, ".openclaw-development"), "openclaw-enterprise-development-v3\n", {
+      mode: 0o600,
+    });
+    await writeJson(join(state, "state.json"), {
+      version: 3,
+      repository: repositoryRoot,
+      computeDriver: "kubernetes",
+      deploymentMode: "k3d",
+      sandboxDriver: "none",
+      containerEngine: "docker",
+      cluster: "occ-dev-origin-fixture",
+      dockerHost,
+    });
+    await writeFile(join(state, "kubeconfig"), "{}\n", { mode: 0o600 });
+    // These are inert external commands. The actual preparation entrypoint owns
+    // the execFile callback and error propagation; no Kubernetes or Docker runs.
+    await writeFile(
+      join(tools, "kubectl"),
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+const a = args.slice(args.indexOf('--request-timeout') + 2);
+if (a[0] === 'get' && a[1] === 'nodes') {
+  process.stdout.write(JSON.stringify({items:[{metadata:{name:'k3d-occ-dev-origin-fixture-server-0'}}]}));
+} else if (a[0] === 'get' && a[1] === 'pod') {
+  process.stdout.write(JSON.stringify({status:{containerStatuses:[{name:'probe',ready:true,containerID:'containerd://fixture'}]}}));
+} else if (a[0] === 'exec') {
+  const nonce = a.at(-1).match(/OCE_SANDBOX_PROBE_V1:([a-f0-9]{32}):START/)[1];
+  const prefix = 'OCE_SANDBOX_PROBE_V1:' + nonce + ':';
+  process.stderr.write(prefix + 'START\\n');
+  if (['done_error','success'].includes(process.env.PROBE_MODE)) {
+    process.stderr.write(prefix + 'ENTERED\\n' + prefix + 'END:DONE:0\\n');
+  } else {
+    process.stderr.write('bwrap: namespace: Operation not permitted\\n' + prefix + 'END:SANDBOX:1\\n');
+  }
+  if (process.env.PROBE_MODE === 'signal') process.kill(process.pid, 'SIGTERM');
+  else process.exit(process.env.PROBE_MODE === 'success' ? 0 : process.env.PROBE_MODE === 'exit2' ? 2 : 1);
+}
+`,
+      { mode: 0o700 },
+    );
+    await writeFile(
+      join(tools, "docker"),
+      `#!${process.execPath}
+require('node:fs').writeFileSync(process.env.PROBE_REACHED, 'reached');
+process.exit(71);
+`,
+      { mode: 0o700 },
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(repositoryRoot, "scripts/prepare-development-codex-seccomp.mjs"),
+        state,
+        `registry.invalid/runtime@sha256:${"a".repeat(64)}`,
+        "5",
+      ],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        timeout: 15_000,
+        maxBuffer: 8192,
+        env: { PATH: tools, DOCKER_HOST: dockerHost, PROBE_MODE: mode, PROBE_REACHED: reached },
+      },
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    if (mode === "exit1") {
+      assert.equal(await readFile(reached, "utf8"), "reached");
+    } else {
+      await assert.rejects(() => readFile(reached, "utf8"), { code: "ENOENT" });
+    }
+    assert.equal(result.status, mode === "success" ? 0 : 1);
+  });
+}

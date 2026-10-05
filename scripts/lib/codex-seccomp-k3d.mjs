@@ -309,10 +309,27 @@ async function execCodexSandboxProbe(selection, namespace, podName, options) {
       { timeoutMs: options.commandTimeoutMs },
     );
   } catch (error) {
-    error.codexSandboxProbe = receiveSandboxProbe(error, nonce);
+    const status = error.exitCode ?? error.code;
+    const definite =
+      Number.isInteger(status) &&
+      status > 0 &&
+      status <= 255 &&
+      error.signal === null &&
+      error.timedOut === false &&
+      (error.killed === undefined || error.killed === false) &&
+      (error.exitCode === undefined || error.code === undefined || error.exitCode === error.code);
+    const probe = definite ? receiveSandboxProbe(error, nonce) : null;
+    error.codexSandboxProbe = probe?.exit === status ? probe : null;
     throw error;
   }
-  const receipt = receiveSandboxProbe(result, nonce);
+  // execFile fulfills only after a zero exit; reject any contradictory explicit status.
+  const successful =
+    (result.exitCode === undefined || result.exitCode === 0) &&
+    (result.code === undefined || result.code === 0) &&
+    (result.signal === undefined || result.signal === null) &&
+    (result.killed === undefined || result.killed === false) &&
+    (result.timedOut === undefined || result.timedOut === false);
+  const receipt = successful ? receiveSandboxProbe(result, nonce) : null;
   assert.ok(
     receipt?.stage === "DONE" && receipt.exit === 0 && receipt.entered,
     "Codex sandbox probe did not return complete invocation-bound success evidence.",
