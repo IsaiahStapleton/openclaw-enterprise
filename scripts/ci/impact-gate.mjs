@@ -4,6 +4,7 @@ const matrixLanes = [
   "checks-baseline-1",
   "checks-baseline-2",
   "checks-browser",
+  "checks-browser-2",
   "postgres",
   "postgres-application",
   "postgres-auth",

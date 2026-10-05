@@ -1819,20 +1819,56 @@ process.exit(2);
   }
 });
 
-test("runtime startup lanes prepare Codex seccomp before native runtime smoke tests", () => {
+test("every lane whose tests run the Codex sandbox prepares the reviewed Docker seccomp profile", async () => {
+  // A test file that calls reviewedCodexSeccompSecurityOptions runs the stock
+  // Codex sandbox under Docker. Its lane must prepare the reviewed profile, or
+  // the helper throws in CI. This is derived from the files, not a lane list,
+  // so moving such a case into another lane fails here first.
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
-  for (const [name, file] of [
-    ["images-runtime-startup", "tests/integration/runtime-image-startup.test.mjs"],
-    ["images-runtime-startup-2", "tests/integration/runtime-image-startup-probe.test.mjs"],
-  ]) {
-    const lane = manifest.lanes[name];
-    assert.equal(lane.prepare?.codexSeccomp, true, name);
-    assert.ok(lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"), name);
-    assert.ok(
-      lane.files.some(({ path }) => path === file),
-      name,
-    );
+  const callers = [];
+  for (const [name, lane] of Object.entries(manifest.lanes)) {
+    for (const { path } of lane.files) {
+      const source = await readFile(join(repositoryRoot, path), "utf8");
+      if (!/\breviewedCodexSeccompSecurityOptions\(/.test(source)) {
+        continue;
+      }
+      callers.push(`${name}:${path}`);
+      assert.equal(lane.prepare?.codexSeccomp, true, `${name} must set prepare.codexSeccomp`);
+      assert.ok(
+        lane.requiredEnv.includes("OCC_TEST_CODEX_SECCOMP_PROFILE"),
+        `${name} must require OCC_TEST_CODEX_SECCOMP_PROFILE`,
+      );
+    }
   }
+  // The Git broker case is a known caller; this keeps the scan from passing
+  // vacuously if the helper is renamed.
+  assert.ok(
+    callers.includes("images-runtime-startup:tests/integration/runtime-image-startup.test.mjs"),
+    callers.join(", "),
+  );
+  // Preparing the profile needs k3d, which only the full and k3d tool profiles install.
+  const ciWorkflow = await readFile(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const laneTable = /^ {10}LANE_TABLE: \|\n((?: {12}.*\n)+)/m.exec(ciWorkflow);
+  assert.ok(laneTable, "ci.yml declares the CI Impact lane table");
+  const fullIntegration = await readFile(
+    join(repositoryRoot, ".github/workflows/full-integration.yml"),
+    "utf8",
+  );
+  const toolProfiles = [
+    ...JSON.parse(laneTable[1]).map(({ lane, profile }) => [`ci.yml ${lane}`, lane, profile]),
+    ...[
+      ...fullIntegration.matchAll(/- lane: ([a-z0-9-]+)\n\s+title: .*\n\s+profile: ([a-z]+)/g),
+    ].map(([, lane, profile]) => [`full-integration.yml ${lane}`, lane, profile]),
+  ];
+  for (const [where, lane, profile] of toolProfiles) {
+    if (manifest.lanes[lane]?.prepare?.codexSeccomp) {
+      assert.ok(["full", "k3d"].includes(profile), `${where} needs the full or k3d tool profile`);
+    }
+  }
+  assert.ok(
+    toolProfiles.some(([where]) => where === "ci.yml images-runtime-startup"),
+    "the tool profile scan finds runtime startup lane 1",
+  );
 });
 
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {

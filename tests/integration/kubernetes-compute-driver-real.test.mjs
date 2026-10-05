@@ -44,12 +44,14 @@ test(
     const platformNamespace = `oce-platform-${hash(installationId)}`;
     await kubectl("create", "namespace", platformNamespace);
     context.after(async () => {
+      // Start deletion without waiting: the owned namespaces' cleanup below waits
+      // for its own deletions, and nothing reads the platform namespace again.
       await kubectl(
         "delete",
         "namespace",
         platformNamespace,
         "--ignore-not-found=true",
-        "--wait=true",
+        "--wait=false",
       );
     });
     const controller = await createScopedController(context, installationId, platformNamespace);
