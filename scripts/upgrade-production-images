@@ -354,8 +354,11 @@ preflight_startup() {
             "$evidence_dir/preflight-$component.log" | cut -c 1-600 || true)
           if [[ -n "$refusal" ]]; then
             message="the $component startup preflight stopped: $refusal No OCC writer was stopped; the old release keeps serving."
-            [[ "$refusal" != *split-layout* ]] ||
+            if [[ "$refusal" == *split-layout* ]]; then
               message+=" See docs/reference/drivers/kubernetes-compute.md#existing-split-layout-installations."
+            else
+              message+=" The Pod has only the chart's dependency egress (preflight-networkpolicy.json)."
+            fi
           else
             message=$(tail -n 3 "$evidence_dir/preflight-$component.log" | tr '\n' ' ' | cut -c 1-600)
             [[ -n "${message// /}" ]] || message="no output (see preflight-$component-status.json). "
