@@ -23,6 +23,13 @@ own topology.
 - [ ] Diff the deployed and candidate source for database migrations, Helm
       templates, Installation schema, bundled Presets, Driver settings, runtime
       dependencies, and required Kubernetes assets.
+- [ ] Confirm the candidate image still ships every `/app/deploy/presets/` file
+      that `presets.files` names; a missing file stops API and worker startup.
+      Images built after #779 (2026-09-30) drop the four `devday*.json` files.
+      The image helper refuses Installation changes other than the Plugin
+      Driver, so remove those entries and restart first; saved Presets stay.
+      After the upgrade, you can add `/app/deploy/presets/swe-preset.json`
+      (the former `devday.json`).
 - [ ] Confirm the recorded image source includes the changes required for this
       release; a published tag alone does not establish their inclusion.
 - [ ] Decide whether this is a controller-only, runtime-only, or coordinated

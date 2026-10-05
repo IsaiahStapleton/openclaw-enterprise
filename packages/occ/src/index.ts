@@ -111,7 +111,12 @@ import {
   normalizeHarnessAuthBinding,
   freezeAgentRevision,
 } from "@openclaw-enterprise/contracts";
-import { asRecord, immutableCopy, isNonEmptyString } from "@openclaw-enterprise/utils";
+import {
+  asRecord,
+  hasControlCharacter,
+  immutableCopy,
+  isNonEmptyString,
+} from "@openclaw-enterprise/utils";
 import { resolveConfiguredHarnessId } from "./configured-harness.ts";
 import {
   capability,
@@ -498,6 +503,35 @@ export interface BundledPresetVersion {
   readonly current: boolean;
 }
 
+/**
+ * Which refusals of a default Preset refresh startup skips instead of failing on.
+ * `restricted`: a deny Restriction, which binds every principal alike. `denied`: any refusal.
+ * Either also skips creating a missing default that a deny Restriction refuses; a creation
+ * refused for any other reason still fails.
+ */
+export type DefaultPresetRefreshSkip = "none" | "restricted" | "denied";
+
+/** A superseded default Preset copy left in place because the policy refused its refresh. */
+export interface SkippedDefaultPresetRefresh {
+  readonly operation: "update";
+  readonly namespaceId: string;
+  readonly presetId: string;
+  readonly presetName: string;
+  readonly reason: string;
+  readonly restrictionIds: readonly string[];
+}
+
+/** A missing default Preset left uncreated because a deny Restriction refused its creation. */
+export interface SkippedDefaultPresetCreation {
+  readonly operation: "create";
+  readonly namespaceId: string;
+  readonly presetName: string;
+  readonly reason: string;
+  readonly restrictionIds: readonly string[];
+}
+
+export type SkippedDefaultPreset = SkippedDefaultPresetRefresh | SkippedDefaultPresetCreation;
+
 export interface CreateNamespaceInput {
   readonly name: string;
   readonly existingNamespace?: string;
@@ -815,23 +849,13 @@ function sameSecretBackend(left: Secret, right: Secret): boolean {
   );
 }
 
-function hasControlCharacters(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function validChannelDirectoryResult(value: unknown): value is ChannelDirectoryResult {
   const result = asRecord(value);
   const bounded = (candidate: unknown, maxLength: number): candidate is string =>
     typeof candidate === "string" &&
     candidate.length > 0 &&
     candidate.length <= maxLength &&
-    !hasControlCharacters(candidate);
+    !hasControlCharacter(candidate);
   if (
     result === undefined ||
     !bounded(result.workspaceId, 200) ||
@@ -2998,10 +3022,15 @@ export class OpenClawController {
    * Apply trusted Installation defaults: create missing names and refresh copies still equal
    * to a superseded bundled version. Edited copies are never replaced.
    */
-  async initializeDefaultPresets(principalId: string): Promise<void> {
+  async initializeDefaultPresets(
+    principalId: string,
+    options: { readonly skipRefusedRefresh?: DefaultPresetRefreshSkip } = {},
+  ): Promise<readonly SkippedDefaultPreset[]> {
+    const skipped: SkippedDefaultPreset[] = [];
     if (this.defaultPresets.length === 0) {
-      return;
+      return skipped;
     }
+    const skip = options.skipRefusedRefresh ?? "none";
     await this.mutate(async (state) => {
       await this.authorize(principalId, "administer", {
         kind: "installation",
@@ -3013,16 +3042,24 @@ export class OpenClawController {
       for (const namespace of namespaces) {
         const current = await state.namespaces.lockNamespace(namespace.id);
         if (current && ["provisioning", "ready"].includes(current.status)) {
-          await this.ensureNamespaceDefaultPresets(state, principalId, current);
+          await this.ensureNamespaceDefaultPresets(state, principalId, current, {
+            skip,
+            skipped,
+          });
         }
       }
     });
+    return Object.freeze(skipped);
   }
 
   private async ensureNamespaceDefaultPresets(
     state: PlatformUnitOfWork,
     principalId: string,
     namespace: Readonly<Namespace>,
+    refresh: {
+      readonly skip: DefaultPresetRefreshSkip;
+      readonly skipped: SkippedDefaultPreset[];
+    } = { skip: "none", skipped: [] },
   ): Promise<void> {
     if (this.defaultPresets.length === 0) {
       return;
@@ -3033,14 +3070,48 @@ export class OpenClawController {
     for (const preset of this.defaultPresets) {
       const copy = existing.get(preset.name);
       if (copy !== undefined) {
-        await this.refreshSupersededDefaultPreset(state, principalId, namespace, preset, copy);
+        await this.refreshSupersededDefaultPreset(
+          state,
+          principalId,
+          namespace,
+          preset,
+          copy,
+          refresh,
+        );
         continue;
       }
-      await this.authorize(principalId, "create", {
-        kind: "preset",
-        id: namespace.id,
-        namespaceId: namespace.id,
-      });
+      try {
+        await this.authorize(principalId, "create", {
+          kind: "preset",
+          id: namespace.id,
+          namespaceId: namespace.id,
+        });
+      } catch (error) {
+        // A deny Restriction binds every administrator alike, for example one set to freeze
+        // a Namespace's Presets after an operator removed a default, so startup leaves the
+        // default missing instead of failing. A missing grant still fails, so another
+        // administrator can create it. Outages still fail.
+        if (
+          !(error instanceof AuthorizationDeniedError) ||
+          error instanceof DependencyUnavailableError
+        ) {
+          throw error;
+        }
+        const restrictionIds = error.evidence?.restrictionIds ?? [];
+        if (refresh.skip === "none" || restrictionIds.length === 0) {
+          throw error;
+        }
+        refresh.skipped.push(
+          Object.freeze({
+            operation: "create",
+            namespaceId: namespace.id,
+            presetName: preset.name,
+            reason: error.message,
+            restrictionIds: Object.freeze([...restrictionIds]),
+          }),
+        );
+        continue;
+      }
       const template = await this.admitPresetTemplate(preset.template, namespace.id);
       const created = await state.presets.createPreset({
         id: this.nextIdentifier("preset"),
@@ -3075,6 +3146,10 @@ export class OpenClawController {
     namespace: Readonly<Namespace>,
     seeded: Pick<Preset, "name" | "template">,
     copy: Readonly<Preset>,
+    refresh: {
+      readonly skip: DefaultPresetRefreshSkip;
+      readonly skipped: SkippedDefaultPreset[];
+    },
   ): Promise<void> {
     // Only bundled defaults have a history; `presets.files` entries are never refreshed,
     // including a file that repeats a bundled default while `includeDefaults` is off.
@@ -3101,11 +3176,40 @@ export class OpenClawController {
     if (superseded === undefined) {
       return;
     }
-    await this.authorize(principalId, "update", {
-      kind: "preset",
-      id: copy.id,
-      namespaceId: namespace.id,
-    });
+    try {
+      await this.authorize(principalId, "update", {
+        kind: "preset",
+        id: copy.id,
+        namespaceId: namespace.id,
+      });
+    } catch (error) {
+      // A refusal is the policy's answer, for example a Restriction an administrator set to
+      // freeze Presets, so startup keeps the copy instead of failing. Outages still fail.
+      if (
+        !(error instanceof AuthorizationDeniedError) ||
+        error instanceof DependencyUnavailableError
+      ) {
+        throw error;
+      }
+      const restrictionIds = error.evidence?.restrictionIds ?? [];
+      if (
+        refresh.skip === "none" ||
+        (refresh.skip === "restricted" && restrictionIds.length === 0)
+      ) {
+        throw error;
+      }
+      refresh.skipped.push(
+        Object.freeze({
+          operation: "update",
+          namespaceId: namespace.id,
+          presetId: copy.id,
+          presetName: copy.name,
+          reason: error.message,
+          restrictionIds: Object.freeze([...restrictionIds]),
+        }),
+      );
+      return;
+    }
     const template = await this.admitPresetTemplate(seeded.template, namespace.id);
     const updated = await state.presets.updatePreset(namespace.id, copy.id, { template });
     if (!updated) {
@@ -4542,7 +4646,7 @@ export class OpenClawController {
               typeof id !== "string" ||
               id.length === 0 ||
               id.length > 200 ||
-              hasControlCharacters(id),
+              hasControlCharacter(id),
           ) ||
           new Set(ids).size !== ids.length ||
           input.query !== undefined ||

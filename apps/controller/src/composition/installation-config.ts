@@ -30,6 +30,7 @@ import {
   type NativeWorkerSupport,
   type OpenClawController,
   type PostgresPlatformState,
+  type SkippedDefaultPreset,
 } from "@openclaw-enterprise/occ";
 import { Check, Errors } from "typebox/value";
 import { validatePresetTemplate } from "@openclaw-enterprise/contracts";
@@ -122,17 +123,28 @@ export interface InstallationRuntimeDrivers {
   readonly createIAMDriver: (state: NativeIAMStateStore) => IAMDriver;
 }
 
-/** Resolve an authorized startup actor without depending on persisted identity order. */
+/**
+ * Resolve an authorized startup actor without depending on persisted identity order.
+ *
+ * A refresh the policy refuses never stops startup: the copy stays and `onWarning` receives
+ * one `presets.default-refresh-skipped` event naming it. The first pass skips only refusals
+ * from a deny Restriction, which binds every administrator alike, so an administrator without
+ * a Namespace grant never stands in for one who could refresh. If none can, the second pass
+ * skips every refusal. Missing defaults still need an administrator who can create them,
+ * unless a deny Restriction refuses the creation: then the default stays missing and
+ * `onWarning` receives one `presets.default-create-skipped` event naming it.
+ */
 export async function initializeInstallationPresets(
   controller: OpenClawController,
   iam: IAMDriver,
   identities: readonly Identity[],
   defaults: readonly Pick<Preset, "name" | "template">[],
+  onWarning?: (event: Readonly<Record<string, unknown>>) => void,
 ): Promise<void> {
   if (defaults.length === 0) {
     return;
   }
-  let denied: AuthorizationDeniedError | undefined;
+  const administrators: string[] = [];
   for (const identity of identities) {
     if (identity.kind !== "principal") {
       continue;
@@ -142,28 +154,48 @@ export async function initializeInstallationPresets(
       action: "administer",
       resource: { kind: "installation", id: controller.installation.id },
     });
-    if (!decision.allowed) {
-      continue;
+    if (decision.allowed) {
+      administrators.push(identity.id);
     }
-    try {
-      await controller.initializeDefaultPresets(identity.id);
-      return;
-    } catch (error) {
-      // An administrator whose grant stops at the Installation (for example the admin Role
-      // bound to the installation resource only) cannot create Presets in a Namespace. Each
-      // attempt is one rolled-back transaction, so the next administrator starts clean.
-      // Outages are not denials: they stop startup with their own error.
-      if (
-        !(error instanceof AuthorizationDeniedError) ||
-        error instanceof DependencyUnavailableError
-      ) {
-        throw error;
+  }
+  let denied: AuthorizationDeniedError | undefined;
+  for (const skipRefusedRefresh of ["restricted", "denied"] as const) {
+    for (const principalId of administrators) {
+      let skipped: readonly SkippedDefaultPreset[];
+      try {
+        skipped = await controller.initializeDefaultPresets(principalId, { skipRefusedRefresh });
+      } catch (error) {
+        // An administrator whose grant stops at the Installation (for example the admin Role
+        // bound to the installation resource only) cannot create Presets in a Namespace. Each
+        // attempt is one rolled-back transaction, so the next administrator starts clean.
+        // Outages are not denials: they stop startup with their own error.
+        if (
+          !(error instanceof AuthorizationDeniedError) ||
+          error instanceof DependencyUnavailableError
+        ) {
+          throw error;
+        }
+        denied = error;
+        continue;
       }
-      denied = error;
+      for (const preset of skipped) {
+        onWarning?.({
+          event:
+            preset.operation === "create"
+              ? "presets.default-create-skipped"
+              : "presets.default-refresh-skipped",
+          namespaceId: preset.namespaceId,
+          ...(preset.operation === "update" ? { presetId: preset.presetId } : {}),
+          presetName: preset.presetName,
+          reason: preset.reason,
+          restrictionIds: preset.restrictionIds,
+        });
+      }
+      return;
     }
   }
   throw new Error(
-    "Default Preset initialization requires an Installation administrator who can create and update Presets in every Namespace.",
+    "Default Preset initialization requires an Installation administrator who can create Presets in every Namespace.",
     denied === undefined ? undefined : { cause: denied },
   );
 }

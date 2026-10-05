@@ -3,7 +3,14 @@ import test from "node:test";
 
 import { DEPLOYMENT_POLL_MS } from "../../apps/controller/src/console/agents/detail.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
-import { detailUrl, login, nativeValues, newPage } from "./console-agents-browser-helpers.mjs";
+import {
+  detailUrl,
+  login,
+  nativeValues,
+  newPage,
+  trackSettledFetches,
+  waitForIdleFetches,
+} from "./console-agents-browser-helpers.mjs";
 
 function deploymentBody(namespaceId, agentId, deploymentId, status, error = null) {
   return JSON.stringify({
@@ -135,12 +142,15 @@ test("Deployment activity keeps following after Back restores the cached Agent v
     },
   );
   await page.clock.install({ time: new Date("2026-09-30T12:00:00Z") });
+  await trackSettledFetches(page);
   const url = detailUrl(fixture, namespace.id, agent.id, revision.id, "configuration");
   await login(page, fixture, url.pathname + url.search);
   await page.getByRole("heading", { name: "Version v1" }).waitFor();
   const activity = page.locator(".deployment-status");
   await activity.getByText("Recorded status: running").waitFor();
   const panel = await activity.elementHandle();
+  // The Console caches the Agent view for Back only if its reads finished before it was left.
+  await waitForIdleFetches(page);
 
   // While the Agent view is cached, its poll timer fires without a current view.
   await page.getByRole("link", { name: "Namespaces", exact: true }).click();

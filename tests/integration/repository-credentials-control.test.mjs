@@ -1,7 +1,6 @@
 import { startReceiptState } from "../fixtures/repository-credentials/receipt-state.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { request } from "node:http";
 import { createServer as createNetServer, connect } from "node:net";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
@@ -34,6 +33,7 @@ import {
   appModule,
   appRoot,
   appExtension,
+  controlRequest,
   createServiceConfiguration,
   eventually,
 } from "../fixtures/repository-credentials/service.mjs";
@@ -42,39 +42,12 @@ import {
   startServiceListeners,
 } from "../fixtures/repository-credentials/service-resources.mjs";
 
-function control(socketPath, method, path, value, extra = {}) {
-  const body = value === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(value));
-  return new Promise((resolve, reject) => {
-    const outgoing = request(
-      {
-        socketPath,
-        method,
-        path,
-        headers: {
-          host: "localhost",
-          ...(path === "/v1/sessions" ? { "x-admission-id": `${Date.now()}-${randomUUID()}` } : {}),
-          "content-type": "application/json",
-          "content-length": body.length,
-          ...extra,
-        },
-        agent: false,
-      },
-      (incoming) => {
-        const chunks = [];
-        incoming.on("data", (chunk) => chunks.push(chunk));
-        incoming.once("error", reject);
-        incoming.once("end", () =>
-          resolve({
-            status: incoming.statusCode,
-            body: JSON.parse(Buffer.concat(chunks).toString()),
-          }),
-        );
-      },
-    );
-    outgoing.once("error", reject);
-    outgoing.end(body);
+// Session opens need an admission id; a fresh one per call unless the test names it.
+const control = (socketPath, method, path, value, extra = {}) =>
+  controlRequest(socketPath, method, path, value, {
+    ...(path === "/v1/sessions" ? { "x-admission-id": `${Date.now()}-${randomUUID()}` } : {}),
+    ...extra,
   });
-}
 
 // The relay consumes the real listener's response but disconnects its caller,
 // reproducing ambiguous loss after admission without replacing control behavior.

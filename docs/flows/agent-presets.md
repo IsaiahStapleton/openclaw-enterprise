@@ -99,11 +99,21 @@ its previous version archived there.
 Initialization authorizes Installation administration, locks Namespaces in ID
 order in one transaction, and skips failed/deleting Namespaces. Missing names
 require Preset create permission and ordinary template/Driver validation before
-storage and mutation audit. While `includeDefaults` is enabled, an existing copy
-of a bundled default that still equals a superseded shipped version requires
+storage and mutation audit. A deny Restriction on a creation leaves the name
+missing with one `presets.default-create-skipped` warning; a missing grant
+still needs another administrator. While `includeDefaults` is enabled, an
+existing copy of a bundled default that still equals a superseded shipped version requires
 Preset update permission; its
 template is replaced in place and audited with `source: installation-defaults-refresh`.
-Other existing copies are untouched. Any failure rolls back
+A refresh the policy refuses keeps the copy and logs one
+`presets.default-refresh-skipped` warning naming it and the reason (the bundled
+Collector exports only its Namespace and Preset IDs). Startup
+first skips only refusals from a deny Restriction, which binds every
+administrator; only when no single administrator can then complete
+initialization does it skip every refused refresh. Removing the Restriction, or
+granting `preset:update` to an Installation administrator, lets the next startup
+refresh the copy.
+Other existing copies are untouched. Any other failure rolls back
 the transaction and prevents API startup. Namespace creation uses the same
 helper before queuing provisioning, so denied or invalid defaults also roll back
 the new Namespace. Disabling defaults leaves persisted copies alone.
@@ -285,6 +295,9 @@ or an immutable admitted revision.
 
 ## Changelog
 
+- 2026-10-05 02:30: Skip and warn on a default creation a deny Restriction refuses.
+- 2026-10-04 23:40: The bundled Collector exports the skipped-refresh warning with only its Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)
+- 2026-10-04 23:30: A refused default refresh, such as one a Namespace deny Restriction on Preset update forbids, keeps the copy and logs a warning instead of stopping API startup.
 - 2026-10-04 22:00: Refresh superseded copies only when `includeDefaults` seeded them; a `presets.files` copy of a bundled file stays.
 - 2026-10-04 14:00: Refresh untouched copies of superseded bundled defaults at startup, and let any shipped version pass the Namespace deletion check.
 - 2026-10-03 20:30: Seed default Presets with the next Installation administrator when one cannot create them, so an upgrade that adds a default no longer stops API startup.
