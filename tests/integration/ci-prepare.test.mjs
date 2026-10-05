@@ -1757,6 +1757,29 @@ test("every lane whose tests run the Codex sandbox prepares the reviewed Docker 
     callers.includes("images-runtime-startup:tests/integration/runtime-image-startup.test.mjs"),
     callers.join(", "),
   );
+  // Preparing the profile needs k3d, which only the full and k3d tool profiles install.
+  const ciWorkflow = await readFile(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  const laneTable = /^ {10}LANE_TABLE: \|\n((?: {12}.*\n)+)/m.exec(ciWorkflow);
+  assert.ok(laneTable, "ci.yml declares the CI Impact lane table");
+  const fullIntegration = await readFile(
+    join(repositoryRoot, ".github/workflows/full-integration.yml"),
+    "utf8",
+  );
+  const toolProfiles = [
+    ...JSON.parse(laneTable[1]).map(({ lane, profile }) => [`ci.yml ${lane}`, lane, profile]),
+    ...[
+      ...fullIntegration.matchAll(/- lane: ([a-z0-9-]+)\n\s+title: .*\n\s+profile: ([a-z]+)/g),
+    ].map(([, lane, profile]) => [`full-integration.yml ${lane}`, lane, profile]),
+  ];
+  for (const [where, lane, profile] of toolProfiles) {
+    if (manifest.lanes[lane]?.prepare?.codexSeccomp) {
+      assert.ok(["full", "k3d"].includes(profile), `${where} needs the full or k3d tool profile`);
+    }
+  }
+  assert.ok(
+    toolProfiles.some(([where]) => where === "ci.yml images-runtime-startup"),
+    "the tool profile scan finds runtime startup lane 1",
+  );
 });
 
 test("prepareFile applies the images packaging Node base default without hiding invalid overrides", async (t) => {

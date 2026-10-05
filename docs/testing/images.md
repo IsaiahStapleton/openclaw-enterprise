@@ -232,11 +232,11 @@ Driver gateway entrypoint, UID `1000:1000`, a read-only root filesystem, and
 tmpfs-backed `/home/node` and `/tmp`. Host Node.js 24+ is required to run the
 tests.
 
-| Variable                         | Requirement or default                                                                                                                  |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `OCC_TEST_RUNTIME_IMAGE`         | Local runtime image tag or digest reference; unset skips.                                                                               |
-| `OCC_TEST_CODEX_SECCOMP_PROFILE` | Reviewed Codex Localhost seccomp profile path; required in CI and on Docker engines whose default seccomp blocks Codex sandbox startup. |
-| `OCC_DOCKER_BIN`                 | Optional Docker executable path; defaults to `docker`.                                                                                  |
+| Variable                         | Requirement or default                                                                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OCC_TEST_RUNTIME_IMAGE`         | Local runtime image tag or digest reference; unset skips.                                                                                    |
+| `OCC_TEST_CODEX_SECCOMP_PROFILE` | Reviewed Codex Localhost seccomp profile path; required for Codex sandbox cases in CI and on Docker engines whose default seccomp blocks it. |
+| `OCC_DOCKER_BIN`                 | Optional Docker executable path; defaults to `docker`.                                                                                       |
 
 This check proves an embedded OpenClaw gateway reaches `/readyz` from a fresh
 runtime home, the bundled Codex plugin can be discovered without missing
