@@ -216,6 +216,40 @@ test("a failing administrator lookup surfaces as a dependency error", async () =
   assert.equal(error, outage);
 });
 
+test("concurrent guesses beyond a budget never reach the password check", async () => {
+  const limiter = admission();
+  let checks = 0;
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  // Every check waits until all guesses are in, so none has failed yet when the next arrives.
+  const guess = async () => {
+    checks += 1;
+    await held;
+    throw new WrongPassword("wrong");
+  };
+  const flood = (count, attempt) =>
+    Array.from({ length: count }, (_, index) => status(limiter, attempt(index), guess));
+  // Email budget 3: six guesses at one email from distinct addresses.
+  const email = flood(6, (index) => ({ clientAddress: `203.0.113.${index}`, email: "a@x.test" }));
+  // Address budget 4: six guesses from one address at distinct emails.
+  const address = flood(6, (index) => ({
+    clientAddress: "198.51.100.1",
+    email: `b-${index}@x.test`,
+  }));
+  await turn();
+  assert.equal(checks, 3 + 4);
+  release();
+  const counts = (codes) => [
+    codes.filter((c) => c === 401).length,
+    codes.filter((c) => c === 429).length,
+  ];
+  assert.deepEqual(counts(await Promise.all(email)), [3, 3]);
+  assert.deepEqual(counts(await Promise.all(address)), [4, 2]);
+  assert.equal(await status(limiter, { email: "a@x.test" }, right), 429);
+});
+
 test("a success resets the email's failures but not the address's", async () => {
   const limiter = admission();
   const email = "typo@example.test";
