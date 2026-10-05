@@ -102,8 +102,17 @@ export type ServiceAccountDriverFactory = (
   state: PostgresPlatformState,
 ) => void;
 
+/** A bundled default skipped because a `presets.files` entry uses its name. */
+export interface ShadowedDefaultPreset {
+  readonly presetName: string;
+  /** Resolved path of the operator's file. */
+  readonly presetFile: string;
+}
+
 export interface InstallationRuntimeDrivers {
   readonly defaultPresets?: readonly Pick<Preset, "name" | "template">[];
+  /** Bundled defaults replaced by a same-named `presets.files` entry; startup warns once each. */
+  readonly shadowedDefaultPresets?: readonly ShadowedDefaultPreset[];
   /** Shipped versions of the bundled defaults, loaded even when they are not seeded. */
   readonly bundledPresetVersions?: readonly BundledPresetVersion[];
   readonly installation: InstallationStartupConfiguration;
@@ -448,6 +457,15 @@ function presetDefinition(value: unknown, path: string): Pick<Preset, "name" | "
   });
 }
 
+/**
+ * A `presets.files` list or entry that cannot become a default Preset: not a list of
+ * paths, or a file that is missing, unreadable, malformed, invalid, or a duplicate name. API and worker startup report it as
+ * `PRESET_FILE_INVALID` without the path or message, which stay in the thrown error.
+ */
+export class PresetFileError extends Error {
+  override readonly name = "PresetFileError";
+}
+
 async function loadPresetDefinition(
   path: string | URL,
 ): Promise<Pick<Preset, "name" | "template">> {
@@ -504,18 +522,6 @@ async function loadBundledPresetVersions(): Promise<readonly BundledPresetVersio
     }
   }
   return Object.freeze(versions);
-}
-
-function appendDefaultPreset(
-  presets: Pick<Preset, "name" | "template">[],
-  names: Set<string>,
-  preset: Pick<Preset, "name" | "template">,
-): void {
-  if (names.has(preset.name)) {
-    throw new Error(`Default Preset ${preset.name} is configured more than once.`);
-  }
-  names.add(preset.name);
-  presets.push(preset);
 }
 
 export function backendSummariesFromDefinitions(
@@ -644,39 +650,63 @@ export async function loadInstallationConfiguration(options: {
     presets.files !== undefined &&
     (!Array.isArray(presets.files) || presets.files.some((entry) => typeof entry !== "string"))
   ) {
-    throw new Error("presets.files must be an array of Preset JSON file paths.");
+    throw new PresetFileError("presets.files must be an array of Preset JSON file paths.");
   }
   const includeDefaults = presets.includeDefaults === true;
-  const defaultPresets: Pick<Preset, "name" | "template">[] = [];
-  const defaultPresetNames = new Set<string>();
   const bundledPresetVersions = await loadBundledPresetVersions();
-  if (includeDefaults) {
-    for (const version of bundledPresetVersions) {
-      if (version.current) {
-        appendDefaultPreset(defaultPresets, defaultPresetNames, {
-          name: version.name,
-          template: version.template,
-        });
-      }
-    }
-  }
-  const presetFiles = (presets.files ?? []) as readonly string[];
-  for (const entry of presetFiles) {
+  const filePresets: {
+    readonly path: string;
+    readonly preset: Pick<Preset, "name" | "template">;
+  }[] = [];
+  const filePresetPaths = new Map<string, string>();
+  for (const entry of (presets.files ?? []) as readonly string[]) {
     const trimmed = entry.trim();
     if (trimmed.length === 0) {
-      throw new Error("presets.files entries must be nonempty file paths.");
+      throw new PresetFileError("presets.files entries must be nonempty file paths.");
     }
     if (!isAbsolute(trimmed) && configurationPath === undefined) {
-      throw new Error("Relative presets.files entries require an Installation startup YAML path.");
+      throw new PresetFileError(
+        "Relative presets.files entries require an Installation startup YAML path.",
+      );
     }
-    appendDefaultPreset(
-      defaultPresets,
-      defaultPresetNames,
-      await loadPresetDefinition(
-        isAbsolute(trimmed) ? trimmed : resolve(dirname(configurationPath!), trimmed),
-      ),
-    );
+    const path = isAbsolute(trimmed) ? trimmed : resolve(dirname(configurationPath!), trimmed);
+    let preset: Pick<Preset, "name" | "template">;
+    try {
+      preset = await loadPresetDefinition(path);
+    } catch (error) {
+      throw new PresetFileError(error instanceof Error ? error.message : String(error), {
+        cause: error,
+      });
+    }
+    const earlier = filePresetPaths.get(preset.name);
+    if (earlier !== undefined) {
+      throw new PresetFileError(
+        `Default Preset ${preset.name} is configured more than once: ${earlier} and ${path}.`,
+      );
+    }
+    filePresetPaths.set(preset.name, path);
+    filePresets.push({ path, preset });
   }
+  // An operator file named like a bundled default replaces that default: a later release can
+  // bundle a name an operator already uses (default-codex), and startup must not stop for it.
+  const defaultPresets: Pick<Preset, "name" | "template">[] = [];
+  const shadowedDefaultPresets: ShadowedDefaultPreset[] = [];
+  if (includeDefaults) {
+    for (const version of bundledPresetVersions) {
+      if (!version.current) {
+        continue;
+      }
+      const shadow = filePresets.find(({ preset }) => preset.name === version.name);
+      if (shadow !== undefined) {
+        shadowedDefaultPresets.push(
+          Object.freeze({ presetName: version.name, presetFile: shadow.path }),
+        );
+        continue;
+      }
+      defaultPresets.push(Object.freeze({ name: version.name, template: version.template }));
+    }
+  }
+  defaultPresets.push(...filePresets.map(({ preset }) => preset));
   const occ = object(configuration.occ, "occ");
   closed(occ, ["cluster"], "occ");
   const cluster = nonempty(occ.cluster, "occ.cluster");
@@ -1046,6 +1076,7 @@ export async function loadInstallationConfiguration(options: {
   }
   return Object.freeze({
     defaultPresets: Object.freeze(defaultPresets),
+    shadowedDefaultPresets: Object.freeze(shadowedDefaultPresets),
     bundledPresetVersions,
     installation,
     computeDriver,

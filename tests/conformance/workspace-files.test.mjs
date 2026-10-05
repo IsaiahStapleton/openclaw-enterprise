@@ -5,7 +5,10 @@ import { createFastifyApp } from "../../apps/controller/src/index.ts";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
-import { createTenantReaderFixture } from "../helpers/tenant-reader-app.mjs";
+import {
+  createTenantReaderFixture,
+  tenantRequest as request,
+} from "../helpers/tenant-reader-app.mjs";
 
 const installationId = "ins_4033697e-6397-4cc6-9b04-8ec17af78cf1";
 const publicOrigin = "http://127.0.0.1";
@@ -53,38 +56,6 @@ function createFixture(options = {}) {
     }),
     options,
   });
-}
-
-async function request(app, pathname, options = {}) {
-  const headers = new Headers(
-    options.identity === false ? {} : authenticatedHeaders(options.session ?? app.defaultSession),
-  );
-  for (const [name, value] of Object.entries(options.headers ?? {})) {
-    if (value === null) {
-      headers.delete(name);
-    } else {
-      headers.set(name, value);
-    }
-  }
-
-  const hasBody = Object.hasOwn(options, "body");
-  if (hasBody && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  const body = hasBody
-    ? typeof options.body === "string"
-      ? options.body
-      : JSON.stringify(options.body)
-    : undefined;
-  const response = await app.fetch(
-    new Request(new URL(pathname, options.origin ?? publicOrigin), {
-      method: options.method ?? (hasBody ? "POST" : "GET"),
-      headers,
-      ...(body === undefined ? {} : { body }),
-    }),
-  );
-  const payload = await response.json();
-  return { response, payload };
 }
 
 async function bootstrap(fixture) {

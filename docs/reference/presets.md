@@ -18,18 +18,21 @@ The trusted Installation YAML can include bundled Presets and JSON files:
 presets:
   includeDefaults: true
   files:
-    - presets/swe-preset.json
+    - /app/deploy/presets/swe-preset.json
 ```
 
 `includeDefaults: true` seeds `default-codex`, **Standard Codex**, and **Standard OpenClaw**.
 Omitting or disabling it stops bundled seeding; explicit `files`
 still load. Each JSON file contains one `{ "name": "...", "template": { ... } }`
-object. Relative paths resolve beside the Installation YAML; absolute paths also
-work. Mount files readably for the API and worker. Missing, malformed,
-invalid, or duplicate-name definitions prevent startup. Files are read at startup,
-not watched. API startup adds missing defaults to ready or provisioning (not failed
-or deleting) Namespaces, including the bootstrap Namespace; new Namespaces receive
-them atomically.
+object. Relative paths resolve beside the Installation YAML. The Helm chart mounts
+only that YAML, so on Helm list only files shipped in the controller image, by
+absolute path. Missing, malformed, invalid, or duplicate-name files prevent
+startup (`PRESET_FILE_INVALID`); a file named like a bundled default, such
+as `default-codex`, replaces it; the API (not the worker, which never applies
+defaults) logs `presets.bundled-default-shadowed`.
+API startup adds missing defaults to ready
+or provisioning Namespaces, including the bootstrap Namespace; new Namespaces
+receive them atomically.
 
 Each copy is an ordinary Namespace-owned Preset with its own ID and normal
 read/update/delete permissions. Startup can restore a deleted or renamed
@@ -131,9 +134,7 @@ model reference is `codex/gpt-6-astra`. The preset exposes only `name` and `mode
 variables. After **Use Preset**, choose an existing service account Secret or
 **Create new Secret...** before creating the Agent.
 
-Load a copy beside your YAML as in the example above, or reference the shipped
-container file at `/app/deploy/presets/swe-preset.json`. It is opt-in and is not
-added by `includeDefaults` alone.
+List the shipped container file as above; `includeDefaults` alone does not add it.
 
 In the Console, choose **SWE Agent**, fill its variables, then use **Edit Slack**
 to configure channels, allowed senders, and Slack app/bot Secrets. No channels or

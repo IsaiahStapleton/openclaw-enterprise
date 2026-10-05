@@ -125,8 +125,8 @@ logins, and `OCC_AUTH_GITHUB_ALLOWED_TEAMS` (`auth.github.allowedTeams`) lists `
 entries, whose active members may use GitHub sign-in. Both are empty by default,
 which admits any attached identity as above. Entries are lowercased, at most 10 in total;
 other values, or either list without the GitHub client, fail startup. Helm refuses invalid
-entries and renders the lists only with `auth.github.enabled`; the installation profile wants
-them lowercase.
+entries, and either list without `auth.github.enabled`, at render time; the installation
+profile wants them lowercase.
 
 With a list, the callback reads membership with the user token after `GET /user` and before
 the account lookup, so a refusal reveals nothing about OCE accounts. It reads

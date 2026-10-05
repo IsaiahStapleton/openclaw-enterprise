@@ -107,6 +107,9 @@
       "path": "tests/conformance/slack-proxy-reset.test.mjs"
     },
     {
+      "path": "tests/conformance/slack-proxy-tunnel.test.mjs"
+    },
+    {
       "path": "tests/conformance/hosted-plugin-discovery.test.mjs"
     },
     {
