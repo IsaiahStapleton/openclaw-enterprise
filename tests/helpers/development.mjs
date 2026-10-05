@@ -38,3 +38,11 @@ export function createDevelopmentComputeDriver() {
     }),
   );
 }
+
+/** Registers each Driver on an in-memory controller and selects it for its capability. */
+export function selectDrivers(controller, drivers) {
+  for (const driver of drivers) {
+    controller.registerDriver(driver);
+    controller.selectDriver(driver.capability, driver.id);
+  }
+}

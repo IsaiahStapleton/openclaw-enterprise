@@ -13,7 +13,8 @@ import {
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
-import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
+import { createDevelopmentComputeDriver, selectDrivers } from "../helpers/development.mjs";
+import { bindRole, grantRole, principalIAMState } from "../helpers/iam-grants.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 
 const administrator = "principal-secret-administrator";
@@ -47,102 +48,54 @@ function adminPermissions() {
 }
 
 async function fixture(options = {}) {
-  const iamState = {
-    identities: [
-      administrator,
+  const iamState = principalIAMState(
+    [administrator, deployer, noSecretOperator, secretConsumer, metadataReader, zeroGrant],
+    "secret-occ-conformance",
+  );
+  for (const [subjectId, role, binding, permissions] of [
+    [administrator, "administrator", "administrator", adminPermissions()],
+    [
       deployer,
+      "deployer",
+      "deployer",
+      {
+        namespace: ["read"],
+        configuration: ["read"],
+        agent: ["read", "deploy"],
+        secret: ["operate"],
+        agent_revision: ["read"],
+      },
+    ],
+    [
       noSecretOperator,
-      secretConsumer,
+      "no-secret",
+      "no-secret",
+      {
+        namespace: ["read"],
+        configuration: ["read"],
+        agent: ["read", "deploy"],
+        agent_revision: ["read"],
+      },
+    ],
+    [secretConsumer, "agent-secret", "secret-consumer", { secret: ["operate"] }],
+    [
       metadataReader,
-      zeroGrant,
-    ].map((id) => ({
-      kind: "principal",
-      id,
-      issuer: "secret-occ-conformance",
-      subject: id,
-    })),
-    groups: [],
-    memberships: [],
-    roles: [
+      "metadata-reader",
+      "metadata-reader",
       {
-        id: "secret-occ-administrator-role",
-        permissions: Object.entries(adminPermissions()).flatMap(([resourceKind, actions]) =>
-          actions.map((action) => ({ action, resourceKind })),
-        ),
-      },
-      {
-        id: "secret-occ-deployer-role",
-        permissions: [
-          { action: "read", resourceKind: "namespace" },
-          { action: "read", resourceKind: "configuration" },
-          { action: "read", resourceKind: "agent" },
-          { action: "deploy", resourceKind: "agent" },
-          { action: "operate", resourceKind: "secret" },
-          { action: "read", resourceKind: "agent_revision" },
-        ],
-      },
-      {
-        id: "secret-occ-no-secret-role",
-        permissions: [
-          { action: "read", resourceKind: "namespace" },
-          { action: "read", resourceKind: "configuration" },
-          { action: "read", resourceKind: "agent" },
-          { action: "deploy", resourceKind: "agent" },
-          { action: "read", resourceKind: "agent_revision" },
-        ],
-      },
-      {
-        id: "secret-occ-agent-secret-role",
-        permissions: [{ action: "operate", resourceKind: "secret" }],
-      },
-      {
-        id: "secret-occ-metadata-reader-role",
-        permissions: [
-          { action: "read", resourceKind: "namespace" },
-          { action: "create", resourceKind: "configuration" },
-          { action: "read", resourceKind: "configuration" },
-          { action: "update", resourceKind: "configuration" },
-          { action: "create", resourceKind: "agent" },
-          { action: "read", resourceKind: "agent" },
-          { action: "update", resourceKind: "agent" },
-          { action: "read", resourceKind: "secret" },
-        ],
+        namespace: ["read"],
+        configuration: ["create", "read", "update"],
+        agent: ["create", "read", "update"],
+        secret: ["read"],
       },
     ],
-    bindings: [
-      {
-        id: "secret-occ-administrator-binding",
-        subjectKind: "identity",
-        subjectId: administrator,
-        roleId: "secret-occ-administrator-role",
-      },
-      {
-        id: "secret-occ-deployer-binding",
-        subjectKind: "identity",
-        subjectId: deployer,
-        roleId: "secret-occ-deployer-role",
-      },
-      {
-        id: "secret-occ-no-secret-binding",
-        subjectKind: "identity",
-        subjectId: noSecretOperator,
-        roleId: "secret-occ-no-secret-role",
-      },
-      {
-        id: "secret-occ-secret-consumer-binding",
-        subjectKind: "identity",
-        subjectId: secretConsumer,
-        roleId: "secret-occ-agent-secret-role",
-      },
-      {
-        id: "secret-occ-metadata-reader-binding",
-        subjectKind: "identity",
-        subjectId: metadataReader,
-        roleId: "secret-occ-metadata-reader-role",
-      },
-    ],
-    restrictions: [],
-  };
+  ]) {
+    grantRole(iamState, subjectId, {
+      id: `secret-occ-${role}-role`,
+      bindingId: `secret-occ-${binding}-binding`,
+      permissions,
+    });
+  }
   const iam = new NativeIAMDriver(
     { loadNativeIAMState: async () => iamState },
     { id: "secret-occ-iam" },
@@ -153,10 +106,7 @@ async function fixture(options = {}) {
   const configurationDriver = createTestConfigurationDriver({ id: "secret-occ-configuration" });
   const secretDriver = options.secretDriver ?? createTestSecretDriver();
 
-  for (const driver of [iam, compute, configurationDriver, secretDriver]) {
-    controller.registerDriver(driver);
-    controller.selectDriver(driver.capability, driver.id);
-  }
+  selectDrivers(controller, [iam, compute, configurationDriver, secretDriver]);
 
   const namespace = await controller.createNamespace(administrator, {
     name: options.namespaceName ?? "Secret OCC tenant",
@@ -188,14 +138,11 @@ async function fixture(options = {}) {
         value: "synthetic-harness-key",
       });
       grantAgentSecretOperate(agent, modelSecret);
-      iamState.bindings.push({
+      bindRole(iamState, noSecretOperator, {
         id: "fixture-harness-consumer",
-        subjectKind: "identity",
-        subjectId: noSecretOperator,
         roleId: "secret-occ-agent-secret-role",
         namespaceId: namespace.id,
-        resourceKind: "secret",
-        resourceId: modelSecret.id,
+        resource: { kind: "secret", id: modelSecret.id },
       });
       await controller.updateAgent(administrator, {
         namespaceId: namespace.id,
@@ -215,14 +162,11 @@ async function fixture(options = {}) {
         agentId: targetAgent.id,
       });
     }
-    iamState.bindings.push({
+    bindRole(iamState, targetAgent.servicePrincipalId, {
       id: `secret-occ-agent-binding-${targetAgent.id}-${secret.id}`,
-      namespaceId: targetAgent.namespaceId,
-      subjectKind: "identity",
-      subjectId: targetAgent.servicePrincipalId,
       roleId: "secret-occ-agent-secret-role",
-      resourceKind: "secret",
-      resourceId: secret.id,
+      namespaceId: targetAgent.namespaceId,
+      resource: { kind: "secret", id: secret.id },
     });
   }
 

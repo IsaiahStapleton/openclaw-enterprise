@@ -46,3 +46,18 @@ export function grantRole(
   const binding = bindRole(policy, subjectId, { id: bindingId, roleId: id, namespaceId, resource });
   return { role, binding };
 }
+
+/**
+ * An empty, mutable Native IAM state holding one `principal` identity per id (its subject is the
+ * id), for fixtures that hand `{ loadNativeIAMState: async () => state }` to a NativeIAMDriver.
+ */
+export function principalIAMState(principalIds, issuer) {
+  return {
+    identities: principalIds.map((id) => ({ kind: "principal", id, issuer, subject: id })),
+    groups: [],
+    memberships: [],
+    roles: [],
+    bindings: [],
+    restrictions: [],
+  };
+}
