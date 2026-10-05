@@ -81,3 +81,37 @@ test("Dedicated Agent provisioning shows the API's 400 message for an inline mod
   // A 400 means the request was never admitted, so the form unlocks for a fix.
   assert.equal(await configuration.isDisabled(), false);
 });
+
+test("Agent name counts characters, as the API does, not UTF-16 code units", async (t) => {
+  const fixture = await createConsoleAppFixture(t, provisioningDrivers());
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Agent name length", { ready: true });
+  const { page } = await newPage(t, fixture);
+  const requests = apiRequests(page, fixture.origin);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  const name = page.getByLabel("Agent name");
+  // 200 emoji are 200 characters, the API's limit, but 400 UTF-16 code units.
+  const longest = "\u{1F600}".repeat(200);
+  await name.fill(longest);
+  assert.equal(await name.inputValue(), longest);
+  assert.equal(await name.evaluate((input) => input.validity.valid), true);
+
+  await name.fill(`${longest}\u{1F600}`);
+  assert.equal(
+    await name.evaluate((input) => input.validationMessage),
+    "Use at most 200 characters.",
+  );
+  // Create Agent stays disabled until capabilities are read; the click then submits.
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  // An edit clears the refusal; 200 characters pass it again.
+  await name.fill(longest);
+  assert.equal(await name.evaluate((input) => input.validity.valid), true);
+  assert.equal(
+    requests.filter(
+      (request) =>
+        request.method === "POST" && request.path.startsWith(`/namespaces/${namespace.id}/agents`),
+    ).length,
+    0,
+  );
+});
