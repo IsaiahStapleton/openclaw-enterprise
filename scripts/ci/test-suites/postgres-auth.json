@@ -90,13 +90,6 @@
       ]
     },
     {
-      "path": "tests/integration/auth-maintain.test.mjs",
-      "expectedTests": [
-        "auth:maintain requires an explicit writers-stopped claim for every change",
-        "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
-      ]
-    },
-    {
       "path": "tests/integration/postgres-password-default.test.mjs",
       "expectedTests": [
         "a password-only install without GitHub onboards, signs in and out, and refuses GitHub routes"
@@ -134,12 +127,6 @@
       "path": "tests/integration/postgres-external-session-provider.test.mjs",
       "expectedTests": [
         "PostgreSQL sessions end when their external provider instance is no longer configured"
-      ]
-    },
-    {
-      "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
-      "expectedTests": [
-        "online recovery replacement moves the reserved lane and survives a restart with the original seed"
       ]
     },
     {

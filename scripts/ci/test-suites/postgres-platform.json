@@ -181,6 +181,12 @@
       "expectedTests": [
         "password-only sign-in limits failures per client and email with a reserved administrator lane"
       ]
+    },
+    {
+      "path": "tests/integration/postgres-github-recovery-replacement.test.mjs",
+      "expectedTests": [
+        "online recovery replacement moves the reserved lane and survives a restart with the original seed"
+      ]
     }
   ]
 }
