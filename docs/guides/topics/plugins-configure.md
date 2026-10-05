@@ -11,9 +11,9 @@ Codex Agents use a different catalog and approval policy; see
 Open **Agents**, select the Agent, then open **Create new version** → **Plugins**.
 Use **Configure plugins** to edit saved selections and tool policy. Only
 dedicated Codex Agents that do not authenticate with an API key can browse a
-catalog. For embedded OpenClaw and API-key Agents, **Configure plugins** says
-browsing is unavailable; add a known plugin ID with **Add exact ID** or edit
-**Plugin selections JSON** instead. The CLI example below shows the Diffs ID.
+catalog. For other Agents, **Configure plugins** reports that browsing is
+unavailable; add a known plugin ID in **Plugin selections JSON** instead. The
+CLI example below shows the Diffs ID.
 For dedicated Codex browsing, the curated catalog needs no Secret. Hosted
 discovery requires a bound Service Accounts token Secret under **Credentials**
 and uses it server-side; other authentication methods cannot browse the hosted
@@ -55,18 +55,20 @@ and [runtime proof limits](../../reference/drivers/plugin-bundled.md#native-mapp
 - You need permission to read, update, and deploy the Agent, read its
   Configuration, and read the new Agent revision. Every Agent update, including
   a plugin-only change, also needs `operate` on the Agent's Harness
-  authentication Secret or credential source; without it the update returns
-  `403`. Revision `read` is
-  [bound per AgentRevision](../../reference/authorization.md), so a member with
+  authentication Secret or credential source and on each Secret its
+  Configuration binds; without them the update returns `403`. Revision `read` is
+  [bound per AgentRevision](../../reference/authorization.md#manage-namespace-policy), so a member with
   only exact grants cannot read the status of a revision that did not exist
-  when the grants were made; an administrator can check it. Existing
+  when the grants were made; an administrator can check it or grant `read` on
+  that revision. Existing
   [model credential requirements](../../reference/agents.md#harness-authentication)
   still apply when deploying.
 - Check the Agent Configuration's tool policy. Selecting Diffs adds it to the
-  tool allowlist. If the Configuration denies it, for example with
-  `tools.deny: ["*"]`, no callable tool remains: the deployment still succeeds
-  without a warning, but every turn fails with `No callable tools remain`.
-  Remove that denial before selecting Diffs.
+  [tool allowlist](../../reference/drivers/plugin-bundled.md#native-mappings-and-limits).
+  If the Configuration denies every tool, for example with `tools.deny: ["*"]`,
+  no callable tool remains: the deployment still succeeds without a warning,
+  but every turn fails with `No callable tools remain`. Remove that denial
+  before selecting Diffs.
 
 Set the Namespace and Agent IDs from your Installation:
 

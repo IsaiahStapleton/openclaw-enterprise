@@ -161,8 +161,8 @@ Agent. Existing RWO-backed Agents need no recreation.
 
 ## Verify the retained installation
 
-- [ ] The Console [debug](../../reference/console/debug-fields.md) **OCE commit**
-      matches the candidate (`OCC_BUILD_REVISION`). API and worker run the
+- [ ] The [debug](../../reference/console/debug-fields.md) Console **OCE commit**
+      matches the candidate's `OCC_BUILD_REVISION`. API and worker run the
       expected controller digest; migration history is canonical.
 - [ ] The authenticated Installation and protected startup configuration agree.
       API and worker selected the same Driver identities.
