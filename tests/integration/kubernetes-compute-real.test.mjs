@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { WORKSPACE_DEFAULTS_ID } from "../../packages/contracts/src/index.ts";
@@ -51,6 +51,42 @@ import {
   createScopedController,
 } from "../helpers/kubernetes-compute-real.mjs";
 
+// After hooks in this file delete their randomly named namespaces without waiting: no later
+// step reads them, and each deletion waits out namespace-controller passes (5 s each, longer
+// while Pods terminate). local-path removes a deleted claim's host directory with a helper
+// Pod, which lane cleanup cannot do itself, so the file waits once, at its end, for those
+// volumes to be deleted.
+const deletedNamespaces = new Set();
+function deleteNamespaces(...names) {
+  for (const name of names) {
+    deletedNamespaces.add(name);
+  }
+  return kubectl("delete", "namespace", ...names, "--ignore-not-found=true", "--wait=false");
+}
+after(async () => {
+  if (deletedNamespaces.size === 0) {
+    return;
+  }
+  let remaining = [];
+  try {
+    await waitFor(
+      "local-path volumes of deleted namespaces to be removed",
+      async () => {
+        const volumes = JSON.parse(await kubectlRead("get", "persistentvolumes", "-o", "json"));
+        remaining = volumes.items
+          .filter(({ spec }) => deletedNamespaces.has(spec.claimRef?.namespace))
+          .map(({ metadata, status }) => `${metadata.name} (${status?.phase ?? "unknown"})`);
+        return remaining.length === 0;
+      },
+      180_000,
+    );
+  } catch (error) {
+    // Bound means a namespace is stuck; Released or Failed means local-path's helper failed.
+    error.message = `${error.message} Remaining: ${remaining.join(", ")}`;
+    throw error;
+  }
+});
+
 test(
   "real Kubernetes Drivers safely use and preserve an externally managed tenant namespace",
   { ...requiresKubernetes, timeout: 300_000 },
@@ -78,18 +114,14 @@ test(
 
     await kubectl("create", "namespace", platformNamespace);
     context.after(async () => {
-      await Promise.all(
-        [
-          platformNamespace,
-          existingName,
-          cleanupName,
-          duplicateName,
-          unclaimedName,
-          kubernetesGatewayNamespaceName(owner.id),
-          kubernetesGatewayNamespaceName(cleanupOwner.id),
-        ].map((name) =>
-          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=true"),
-        ),
+      await deleteNamespaces(
+        platformNamespace,
+        existingName,
+        cleanupName,
+        duplicateName,
+        unclaimedName,
+        kubernetesGatewayNamespaceName(owner.id),
+        kubernetesGatewayNamespaceName(cleanupOwner.id),
       );
       await rm(directory, { force: true, recursive: true });
     });
@@ -444,15 +476,7 @@ test(
     const installationId = `ins_${randomUUID()}`;
     const platformNamespace = `oce-provisioning-${hash(installationId)}`;
     await kubectl("create", "namespace", platformNamespace);
-    context.after(async () => {
-      await kubectl(
-        "delete",
-        "namespace",
-        platformNamespace,
-        "--ignore-not-found=true",
-        "--wait=true",
-      );
-    });
+    context.after(() => deleteNamespaces(platformNamespace));
     const controller = await createScopedController(context, installationId, platformNamespace);
     await kubectl(
       "patch",
@@ -513,13 +537,9 @@ test(
     context.after(async () => {
       await Promise.all(
         fixture.bootstrapNamespaceIds.map((namespaceId) =>
-          kubectl(
-            "delete",
-            "namespace",
+          deleteNamespaces(
             kubernetesNamespaceName(namespaceId),
             kubernetesGatewayNamespaceName(namespaceId),
-            "--ignore-not-found=true",
-            "--wait=true",
           ),
         ),
       );
@@ -531,16 +551,7 @@ test(
     const namespaceOwner = namespaceResponse.data;
     const placement = kubernetesNamespaceName(namespaceOwner.id);
     const gatewayPlacement = kubernetesGatewayNamespaceName(namespaceOwner.id);
-    context.after(async () => {
-      await kubectl(
-        "delete",
-        "namespace",
-        placement,
-        gatewayPlacement,
-        "--ignore-not-found=true",
-        "--wait=true",
-      );
-    });
+    context.after(() => deleteNamespaces(placement, gatewayPlacement));
 
     await fixture.startWorker();
     for (const target of [placement, gatewayPlacement]) {
@@ -1068,16 +1079,12 @@ test(
         await app.close();
       }
       await observerPool.end();
-      await Promise.all(
-        [
-          ...new Set([
-            existingName,
-            ...placements.values(),
-            ...namespaceIds.map(kubernetesGatewayNamespaceName),
-          ]),
-        ].map((name) =>
-          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=true"),
-        ),
+      await deleteNamespaces(
+        ...new Set([
+          existingName,
+          ...placements.values(),
+          ...namespaceIds.map(kubernetesGatewayNamespaceName),
+        ]),
       );
     });
 
@@ -1737,31 +1744,36 @@ test(
         );
       }
     }
+    // A denied UDP query waits out the probe's 2.5 s timeout, so the three source Pods
+    // are probed concurrently. Each Pod still runs one probe at a time, in the same order:
+    // the allowed control, both denied queries, then the control again.
     for (const protocol of ["udp", "tcp"]) {
-      for (const source of dnsSources) {
-        assert.equal(
-          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
-          "192.0.2.53",
-          `${source.metadata.name} must resolve over ${protocol} port 5353`,
-        );
-        for (const [target, port] of [
-          [dns.selected, 5354],
-          [dns.unselected, 5353],
-        ]) {
-          await dns.assertQueryDenied(
-            `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
-            source,
-            target,
-            protocol,
-            port,
+      await Promise.all(
+        dnsSources.map(async (source) => {
+          assert.equal(
+            JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+            "192.0.2.53",
+            `${source.metadata.name} must resolve over ${protocol} port 5353`,
           );
-        }
-        assert.equal(
-          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
-          "192.0.2.53",
-          "the allowed DNS control must still work after denied queries",
-        );
-      }
+          for (const [target, port] of [
+            [dns.selected, 5354],
+            [dns.unselected, 5353],
+          ]) {
+            await dns.assertQueryDenied(
+              `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
+              source,
+              target,
+              protocol,
+              port,
+            );
+          }
+          assert.equal(
+            JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+            "192.0.2.53",
+            "the allowed DNS control must still work after denied queries",
+          );
+        }),
+      );
     }
 
     const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;

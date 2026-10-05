@@ -770,6 +770,9 @@ export async function createDnsTrafficFixture(context, peer) {
       },
       spec: {
         automountServiceAccountToken: false,
+        // The control container runs `node` as PID 1, which ignores SIGTERM, so cleanup
+        // would otherwise wait out the default 30 s grace period.
+        terminationGracePeriodSeconds: 1,
         securityContext: {
           runAsNonRoot: true,
           runAsUser: 1000,
