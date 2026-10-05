@@ -60,10 +60,15 @@ Agent IDs, `DISPATCH_PREFIX` to the matching evidence path without `.intent` or
 `.json`, and `REVISION_ID` to the independently confirmed revision. Verify the exact Agent and deployment before recording it:
 
 ```bash
-if occ --output json --namespace "$OCC_NAMESPACE" agent deployment-status "$OCC_AGENT" "$REVISION_ID" > "$DISPATCH_PREFIX.confirmed-status.json" &&
+if test -e "$DISPATCH_PREFIX.json"; then
+  if jq -e --arg id "$REVISION_ID" '.id == $id' "$DISPATCH_PREFIX.json" > /dev/null; then
+    printf '%s\n' "Deployment $REVISION_ID is already recorded in $DISPATCH_PREFIX.json."
+  else
+    printf '%s\n' "$DISPATCH_PREFIX.json records another deployment; inspect it and do not resume." >&2
+  fi
+elif occ --output json --namespace "$OCC_NAMESPACE" agent deployment-status "$OCC_AGENT" "$REVISION_ID" > "$DISPATCH_PREFIX.confirmed-status.json" &&
   jq -e --arg namespace "$OCC_NAMESPACE" --arg agent "$OCC_AGENT" --arg revision "$REVISION_ID" \
     '.namespaceId == $namespace and .agentId == $agent and .deploymentId == $revision' "$DISPATCH_PREFIX.confirmed-status.json" &&
-  test ! -e "$DISPATCH_PREFIX.json" &&
   jq -n --arg id "$REVISION_ID" '{id: $id}' > "$DISPATCH_PREFIX.json.tmp"; then
   mv "$DISPATCH_PREFIX.json.tmp" "$DISPATCH_PREFIX.json"
 else
@@ -72,8 +77,10 @@ fi
 ```
 
 Keep the shell's `umask 077`. If the status read is denied or does not identify
-the confirmed deployment, do not create the response file. The helper rechecks
-its status on resume; it does not verify how you identified an accepted request.
+the confirmed deployment, do not create the response file. A rerun after the
+file exists reports the recorded ID and does not overwrite it. The helper
+rechecks its status on resume; it does not verify how you identified an
+accepted request.
 
 If the candidate API and worker refuse to start because of
 [split-layout Gateway storage](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations),
