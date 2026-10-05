@@ -58,7 +58,7 @@ Missing selected prerequisites fail. A PR aggregate is not full credentialed cov
 targeted protected runs report only their selected lanes.
 
 The `postgres` lane owns migration compatibility; `postgres-application` owns the
-revision-worker, native IAM barrier and metrics tests; `postgres-auth` owns sign-in,
+revision-worker, IAM barrier, metrics and auth-maintain tests; `postgres-auth` owns sign-in,
 session and account authentication; `postgres-platform` owns the connection,
 bootstrap, wire-up, platform-state, restart and password sign-in limit tests and the
 remaining PostgreSQL files. Each has a disposable PostgreSQL server. The split
