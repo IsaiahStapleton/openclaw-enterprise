@@ -258,7 +258,9 @@ temporary Secret. Each loads the Installation, Drivers and `presets.files` as
 startup does, without opening the database. If either fails, as when a listed
 Preset file is missing from the image, the command prints the error, deletes the
 Pods and Secret, and stops; the old release keeps serving. Logs are saved as
-`preflight-*.log`. Runtime upgrades run it on the current controller image.
+`preflight-*.log`. Runtime upgrades run it on the current controller image. If
+the helper is killed first, delete what it left with
+`kubectl delete pod,secret -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=upgrade-preflight`.
 
 The command then applies reviewed settings, scales the API and worker to zero, and
 waits for their Pods to terminate. Helm restores the candidate Deployments after

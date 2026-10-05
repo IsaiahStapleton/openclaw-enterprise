@@ -1001,6 +1001,10 @@ test("a current or explicitly reviewed Collector config Secret lets the upgrade 
 // images no longer ship those files (finding 436). The selected controller image must
 // reject that Installation before quiescence, so the old release keeps serving.
 test("an Installation the selected controller image cannot load stops before any writer stops", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
   const f = await fixture(t, {
     controllerOnly: true,
     chart: {
@@ -1031,6 +1035,10 @@ test("an Installation the selected controller image cannot load stops before any
 });
 
 test("an Installation the selected controller image loads passes the preflight and upgrades", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
   const f = await fixture(t, {
     controllerOnly: true,
     chart: { installation: (installation) => installation },

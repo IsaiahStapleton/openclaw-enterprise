@@ -269,10 +269,11 @@ trap 'cleanup_preflight; rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true
 # Configuration the image rejects, such as a presets.files entry naming a file
 # the image no longer ships, would otherwise crash-loop both after the migration.
 preflight_startup() {
-  local suffix secret component pod phase deadline remaining_seconds message
+  local suffix secret component pod phase waiting deadline remaining_seconds message
   suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
   secret="$release-upgrade-preflight-$suffix"
-  yq -p=yaml -o=json -I=0 '.' "$rendered" >"$evidence_dir/preflight-rendered.jsonl"
+  yq -p=yaml -o=json -I=0 '.' "$rendered" >"$evidence_dir/preflight-rendered.jsonl" ||
+    die "cannot read the rendered chart for the startup preflight; no OCC writer was stopped."
   preflight_resources+=("secret/$secret")
   node scripts/upgrade-startup-preflight.mjs secret "$candidate_installation" \
     "$installation_key" "$secret" "$namespace" "$release" |
@@ -282,7 +283,8 @@ preflight_startup() {
     pod="$release-upgrade-preflight-$component-$suffix"
     node scripts/upgrade-startup-preflight.mjs pod "$evidence_dir/preflight-rendered.jsonl" \
       "$component" "$pod" "$namespace" "$release" "$installation_secret" "$secret" \
-      "$selected_controller" "$timeout_seconds" >"$evidence_dir/preflight-$component-pod.json"
+      "$selected_controller" "$timeout_seconds" >"$evidence_dir/preflight-$component-pod.json" ||
+      die "cannot build the $component startup preflight Pod from the rendered chart; no OCC writer was stopped."
     preflight_resources+=("pod/$pod")
     "${kube[@]}" --request-timeout=30s --namespace "$namespace" create \
       --filename "$evidence_dir/preflight-$component-pod.json" >/dev/null ||
@@ -291,19 +293,25 @@ preflight_startup() {
   deadline=$((SECONDS + timeout_seconds))
   for component in api worker; do
     pod="$release-upgrade-preflight-$component-$suffix"
+    waiting=
     while true; do
       remaining_seconds=$((deadline - SECONDS))
       ((remaining_seconds > 0)) ||
-        die "the $component startup preflight did not finish before the timeout; no OCC writer was stopped."
+        die "the $component startup preflight did not finish before the timeout${waiting:+ ($waiting)}; see preflight-$component-status.json. No OCC writer was stopped."
       "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" get "pod/$pod" \
         --output json >"$evidence_dir/preflight-$component-status.json" ||
         die "cannot read the $component startup preflight Pod; no OCC writer was stopped."
       phase=$(node scripts/upgrade-startup-preflight.mjs phase "$evidence_dir/preflight-$component-status.json")
-      [[ "$phase" == Running ]] || break
+      case "$phase" in
+        Running) ;;
+        Pending:*) waiting=${phase#Pending:} ;;
+        *) break ;;
+      esac
       sleep 2
     done
     "${kube[@]}" --request-timeout=30s --namespace "$namespace" logs "pod/$pod" --container "$component" \
-      >"$evidence_dir/preflight-$component.log" 2>&1 || true
+      >"$evidence_dir/preflight-$component.log" 2>&1 || [[ "$phase" != Succeeded ]] ||
+      die "cannot read the $component startup preflight logs; no OCC writer was stopped."
     case "$phase" in
       Succeeded)
         grep -qx installation-startup-ready "$evidence_dir/preflight-$component.log" ||

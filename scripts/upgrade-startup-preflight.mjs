@@ -12,10 +12,7 @@ try {
     "/app/apps/controller/src/composition/installation-config.ts"
   );
   const startupConfiguration = await loadStartupConfigurationSnapshot({ mode: "production" });
-  const drivers = await loadInstallationConfiguration({ mode: "production", startupConfiguration });
-  if (drivers === undefined) {
-    throw new Error("The Installation startup YAML selects no production Drivers.");
-  }
+  await loadInstallationConfiguration({ mode: "production", startupConfiguration });
   process.stdout.write("installation-startup-ready\\n");
 } catch (error) {
   process.stderr.write((error instanceof Error ? error.message : String(error)) + "\\n");
@@ -38,7 +35,7 @@ function fail(message) {
 function documents(path) {
   return readFileSync(path, "utf8")
     .split("\n")
-    .filter((line) => line.trim().length > 0)
+    .filter((line) => line.trim().length > 0 && line.trim() !== "---")
     .map((line) => JSON.parse(line))
     .filter((document) => document !== null && typeof document === "object");
 }
@@ -146,8 +143,9 @@ function pod([
   };
 }
 
-// Prints Succeeded, Failed, Running, or Stuck:<reason> for a waiting state that
-// never resolves without operator action.
+// Prints Succeeded, Failed, Stuck:<reason> for a waiting state that never resolves
+// without operator action, Pending:<reason> while the Pod cannot be scheduled (an
+// autoscaler may still add capacity), or Running.
 function phase([statusPath]) {
   const status = JSON.parse(readFileSync(statusPath, "utf8")).status ?? {};
   if (status.phase === "Succeeded" || status.phase === "Failed") {
@@ -166,6 +164,15 @@ function phase([statusPath]) {
     ) {
       return `Stuck:${reason}`;
     }
+  }
+  const unscheduled = (status.conditions ?? []).find(
+    (condition) => condition.type === "PodScheduled" && condition.status === "False",
+  );
+  if (unscheduled !== undefined) {
+    const message = String(unscheduled.message ?? "")
+      .replace(/\s+/g, " ")
+      .slice(0, 300);
+    return `Pending:${unscheduled.reason ?? "Unschedulable"}: ${message}`;
   }
   return "Running";
 }
