@@ -270,6 +270,7 @@ trap 'cleanup_preflight; rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true
 # the image no longer ships, would otherwise crash-loop both after the migration.
 preflight_startup() {
   local suffix secret component pod phase waiting deadline remaining_seconds message
+  local -a failures
   suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
   secret="$release-upgrade-preflight-$suffix"
   yq -p=yaml -o=json -I=0 '.' "$rendered" >"$evidence_dir/preflight-rendered.jsonl" ||
@@ -290,43 +291,65 @@ preflight_startup() {
       --filename "$evidence_dir/preflight-$component-pod.json" >/dev/null ||
       die "cannot create the $component startup preflight Pod; no OCC writer was stopped."
   done
+  # Wait for every Pod and save each one's status and log before reporting, so a
+  # refusal shows every component that failed, not only the first.
   deadline=$((SECONDS + timeout_seconds))
+  failures=()
   for component in api worker; do
     pod="$release-upgrade-preflight-$component-$suffix"
+    phase=
     waiting=
+    message=
     while true; do
+      # Read each Pod at least once, even after an earlier one used up the deadline.
       remaining_seconds=$((deadline - SECONDS))
-      ((remaining_seconds > 0)) ||
-        die "the $component startup preflight did not finish before the timeout${waiting:+ ($waiting)}; see preflight-$component-status.json. No OCC writer was stopped."
-      "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" get "pod/$pod" \
-        --output json >"$evidence_dir/preflight-$component-status.json" ||
-        die "cannot read the $component startup preflight Pod; no OCC writer was stopped."
+      ((remaining_seconds >= 15)) || remaining_seconds=15
+      if ! "${kube[@]}" --request-timeout="${remaining_seconds}s" --namespace "$namespace" get "pod/$pod" \
+        --output json >"$evidence_dir/preflight-$component-status.json"; then
+        message="cannot read the $component startup preflight Pod; no OCC writer was stopped."
+        break
+      fi
       phase=$(node scripts/upgrade-startup-preflight.mjs phase "$evidence_dir/preflight-$component-status.json")
       case "$phase" in
-        Running) ;;
-        Pending:*) waiting=${phase#Pending:} ;;
+        Running | Pending:*)
+          [[ "$phase" != Pending:* ]] || waiting=${phase#Pending:}
+          if ((SECONDS >= deadline)); then
+            message="the $component startup preflight did not finish before the timeout${waiting:+ ($waiting)}; see preflight-$component-status.json. No OCC writer was stopped."
+            break
+          fi
+          ;;
         *) break ;;
       esac
       sleep 2
     done
-    "${kube[@]}" --request-timeout=30s --namespace "$namespace" logs "pod/$pod" --container "$component" \
-      >"$evidence_dir/preflight-$component.log" 2>&1 || [[ "$phase" != Succeeded ]] ||
-      die "cannot read the $component startup preflight logs; no OCC writer was stopped."
-    case "$phase" in
-      Succeeded)
-        grep -qx installation-startup-ready "$evidence_dir/preflight-$component.log" ||
-          die "the $component startup preflight succeeded without its result line; no OCC writer was stopped."
-        ;;
-      Stuck:*)
-        die "the $component startup preflight Pod cannot start (${phase#Stuck:}); no OCC writer was stopped."
-        ;;
-      *)
-        message=$(tail -n 3 "$evidence_dir/preflight-$component.log" | tr '\n' ' ' | cut -c 1-600)
-        [[ -n "${message// /}" ]] || message="no output (see preflight-$component-status.json). "
-        die "the selected controller image cannot start the $component with the candidate Installation: ${message}No OCC writer was stopped; correct the Installation and start again with a new evidence directory."
-        ;;
-    esac
+    if ! "${kube[@]}" --request-timeout=30s --namespace "$namespace" logs "pod/$pod" --container "$component" \
+      >"$evidence_dir/preflight-$component.log" 2>&1 && [[ -z "$message" && "$phase" == Succeeded ]]; then
+      message="cannot read the $component startup preflight logs; no OCC writer was stopped."
+    fi
+    if [[ -z "$message" ]]; then
+      case "$phase" in
+        Succeeded)
+          grep -qx installation-startup-ready "$evidence_dir/preflight-$component.log" ||
+            message="the $component startup preflight succeeded without its result line; no OCC writer was stopped."
+          ;;
+        Stuck:*)
+          message="the $component startup preflight Pod cannot start (${phase#Stuck:}); no OCC writer was stopped."
+          ;;
+        *)
+          message=$(tail -n 3 "$evidence_dir/preflight-$component.log" | tr '\n' ' ' | cut -c 1-600)
+          [[ -n "${message// /}" ]] || message="no output (see preflight-$component-status.json). "
+          message="the selected controller image cannot start the $component with the candidate Installation: ${message}No OCC writer was stopped; correct the Installation and start again with a new evidence directory."
+          ;;
+      esac
+    fi
+    [[ -z "$message" ]] || failures+=("$message")
   done
+  if [[ -n "${failures[*]+set}" ]]; then
+    for message in "${failures[@]:0:${#failures[@]}-1}"; do
+      printf 'upgrade-production-images: %s\n' "$message" >&2
+    done
+    die "${failures[${#failures[@]}-1]}"
+  fi
   cleanup_preflight
   touch "$evidence_dir/startup-preflight-passed"
 }

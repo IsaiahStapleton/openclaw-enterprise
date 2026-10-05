@@ -48,6 +48,8 @@ const standInChart = (values) => {
 // not provided. The container runs in OCC_TEST_PRODUCTION_IMAGE when set, otherwise
 // as this checkout's source with /app mapped to it. Stand-in cases only record it.
 const runPreflight = (pod) => {
+  const scripted = state.preflightResults?.[pod.spec.containers[0].name];
+  if (scripted) return scripted;
   if (!state.startupCheck) return {phase: 'Succeeded', log: 'installation-startup-ready\\n'};
   const container = pod.spec.containers[0];
   const work = fs.mkdtempSync(path.join(root, 'preflight-'));
@@ -115,7 +117,8 @@ if (tool === 'helm') {
   } else if (resource && (args.includes('get') || args.includes('logs'))) {
     const pod = state.preflight.pods[resource.slice('pod/'.length)];
     if (!pod) { console.error(resource + ' not found'); process.exit(1); }
-    out(args.includes('logs') ? pod.log : {status: {phase: pod.phase}});
+    if (args.includes('logs') && pod.log === undefined) { console.error('container is waiting to start'); process.exit(1); }
+    out(args.includes('logs') ? pod.log : {status: pod.status ?? {phase: pod.phase}});
   } else if (args.includes('--raw=/readyz')) out('ok');
   else if (args.includes('create') && args.includes('secret')) {
     const file = args.find((a) => a.startsWith('--from-file=')).slice('--from-file='.length).split('=');
@@ -259,6 +262,7 @@ async function fixture(
     workerPlacement = "container",
     collector = null,
     chart = null,
+    preflightResults = null,
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
@@ -381,6 +385,7 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
   const state = {
     realChart: Boolean(chart),
     startupCheck: Boolean(chart),
+    preflightResults,
     version: 1,
     helmStatus: "deployed",
     api: 1,
@@ -1024,6 +1029,13 @@ test("an Installation the selected controller image cannot load stops before any
   assert.equal(state.worker, 1);
   assert.equal(state.version, 1);
   assert.deepEqual(await f.events(), []);
+  // Both components fail the same way, and both logs are saved (finding 447).
+  for (const component of ["api", "worker"]) {
+    assert.match(
+      await readFile(join(f.evidence, `preflight-${component}.log`), "utf8"),
+      /Preset file \/app\/deploy\/presets\/devday\.json is unavailable\./,
+    );
+  }
   // The temporary Secret and both Pods are removed after the refusal.
   assert.deepEqual(state.preflight.secrets, {});
   assert.deepEqual(state.preflight.pods, {});
@@ -1032,6 +1044,96 @@ test("an Installation the selected controller image cannot load stops before any
     "pod",
     "secret",
   ]);
+});
+
+// The helper waits for every preflight Pod and saves its status and log before it
+// reports, so a refusal names each failing component, not only the first.
+test("a failed startup preflight reports and saves every component before cleanup", async (t) => {
+  const f = await fixture(t, {
+    controllerOnly: true,
+    preflightResults: {
+      api: {
+        status: {
+          phase: "Pending",
+          containerStatuses: [{ name: "api", state: { waiting: { reason: "ImagePullBackOff" } } }],
+        },
+      },
+      worker: { phase: "Failed", log: "loading drivers\nworker cannot load the Installation\n" },
+    },
+  });
+  await assert.rejects(f.run(), (error) => {
+    assert.match(
+      error.stderr,
+      /the api startup preflight Pod cannot start \(ImagePullBackOff\); no OCC writer was stopped\./,
+    );
+    assert.match(
+      error.stderr,
+      /cannot start the worker with the candidate Installation: loading drivers worker cannot load the Installation No OCC writer was stopped/,
+    );
+    return true;
+  });
+  const status = JSON.parse(await readFile(join(f.evidence, "preflight-api-status.json"), "utf8"));
+  assert.equal(status.status.containerStatuses[0].state.waiting.reason, "ImagePullBackOff");
+  assert.match(await readFile(join(f.evidence, "preflight-api.log"), "utf8"), /waiting to start/);
+  assert.equal(
+    JSON.parse(await readFile(join(f.evidence, "preflight-worker-status.json"), "utf8")).status
+      .phase,
+    "Failed",
+  );
+  assert.equal(
+    await readFile(join(f.evidence, "preflight-worker.log"), "utf8"),
+    "loading drivers\nworker cannot load the Installation\n",
+  );
+  const state = await f.state();
+  assert.equal(state.api, 1);
+  assert.equal(state.worker, 1);
+  assert.equal(state.version, 1);
+  assert.deepEqual(await f.events(), []);
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
+  assert.deepEqual(state.preflight.deleted.map((resource) => resource.split("/")[0]).sort(), [
+    "pod",
+    "pod",
+    "secret",
+  ]);
+});
+
+test("a preflight Pod that outlives the timeout does not hide another component's failure", async (t) => {
+  const f = await fixture(t, {
+    controllerOnly: true,
+    preflightResults: {
+      api: {
+        status: {
+          phase: "Pending",
+          conditions: [
+            {
+              type: "PodScheduled",
+              status: "False",
+              reason: "Unschedulable",
+              message: "0/3 nodes are available",
+            },
+          ],
+        },
+      },
+      worker: { phase: "Failed", log: "worker cannot load the Installation\n" },
+    },
+  });
+  await assert.rejects(f.run("--timeout-seconds", "3"), (error) => {
+    assert.match(
+      error.stderr,
+      /the api startup preflight did not finish before the timeout \(Unschedulable: 0\/3 nodes are available\)/,
+    );
+    assert.match(error.stderr, /cannot start the worker with the candidate Installation/);
+    return true;
+  });
+  assert.equal(
+    await readFile(join(f.evidence, "preflight-worker.log"), "utf8"),
+    "worker cannot load the Installation\n",
+  );
+  const state = await f.state();
+  assert.deepEqual(await f.events(), []);
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
 });
 
 test("an Installation the selected controller image loads passes the preflight and upgrades", async (t) => {
