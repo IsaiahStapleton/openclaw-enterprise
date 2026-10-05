@@ -17,12 +17,15 @@ func runHelp(t *testing.T, args ...string) (string, string, error) {
 func TestHelpForAnUnknownTopicFails(t *testing.T) {
 	for _, args := range [][]string{{"help", "agnet"}, {"help", "agent", "lst"}} {
 		out, _, err := runHelp(t, args...)
-		if err == nil || !strings.Contains(err.Error(), "unknown help topic") {
+		if err == nil || !strings.HasPrefix(err.Error(), "unknown help topic") {
 			t.Fatalf("occ %v error = %v, want an unknown help topic error", args, err)
 		}
 		if out != "" {
 			t.Fatalf("occ %v stdout = %q, want nothing", args, out)
 		}
+	}
+	if _, _, err := runHelp(t, "help", "agent", "lgos"); err == nil || !strings.Contains(err.Error(), `did you mean "agent logs"?`) {
+		t.Fatalf("occ help agent lgos error = %v, want a suggestion", err)
 	}
 	out, _, err := runHelp(t, "help", "agent", "logs")
 	if err != nil || !strings.Contains(out, "occ agent logs AGENT_ID") {
@@ -58,7 +61,7 @@ func TestAgentLogsHelpNamesTheOutputFormatsItAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `Output format: text or json (default "text")`) || strings.Contains(out, "yaml") {
+	if !strings.Contains(out, `Output format: text, json (default "text")`) || strings.Contains(out, "yaml") {
 		t.Fatalf("agent logs help does not name text and json only:\n%s", out)
 	}
 	// Other commands keep the global formats, also after logs help ran in this process.

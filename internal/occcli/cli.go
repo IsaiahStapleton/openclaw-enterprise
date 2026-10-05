@@ -1399,30 +1399,37 @@ func (app *application) agentRuntimeCredentialsCommand() *cobra.Command {
 	return command
 }
 
+// helpOnlyAnnotation marks a command whose only action is printing its help.
+const helpOnlyAnnotation = "occ/help-only"
+
 func commandGroup(use, short string) *cobra.Command {
 	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.NoArgs,
+		Use:         use,
+		Short:       short,
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{helpOnlyAnnotation: "true"},
 		RunE: func(command *cobra.Command, _ []string) error {
 			return command.Help()
 		},
 	}
 }
 
-// printsTextOnly reports commands that never call OCC: help, shell completion,
-// and command groups, which print their help. An invalid OCC_TIMEOUT_SECONDS
-// or -o must not stop them.
+// printsTextOnly reports commands that never call OCC: the root and command
+// groups, which print their help, the help command, and shell completion. An
+// invalid OCC_TIMEOUT_SECONDS or -o must not stop them.
 func printsTextOnly(command *cobra.Command) bool {
+	if !command.HasParent() || command.Annotations[helpOnlyAnnotation] != "" {
+		return true
+	}
+	if command.Parent() != command.Root() {
+		// Cobra's "completion bash" and its siblings.
+		return command.Parent().Name() == "completion" && command.Parent().Parent() == command.Root()
+	}
 	switch command.Name() {
-	case "help", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+	case "help", "completion", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
 		return true
 	}
-	// Cobra's "completion bash" and siblings.
-	if parent := command.Parent(); parent != nil && parent.Name() == "completion" && parent.Parent() == command.Root() {
-		return true
-	}
-	return command.HasSubCommands()
+	return false
 }
 
 // helpTopic is the help command's action. Cobra's own prints the closest
@@ -1433,7 +1440,18 @@ func helpTopic(command *cobra.Command, args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return fmt.Errorf("unknown help topic %q; run \"occ help\" for the command list", strings.Join(args, " "))
+		message := fmt.Sprintf("unknown help topic %q", strings.Join(args, " "))
+		if target.SuggestionsMinimumDistance <= 0 {
+			target.SuggestionsMinimumDistance = 2 // cobra's default for unknown commands
+		}
+		if suggestions := target.SuggestionsFor(rest[0]); len(suggestions) > 0 {
+			topic := append(strings.Fields(target.CommandPath())[1:], suggestions[0])
+			return fmt.Errorf("%s; did you mean %q?", message, strings.Join(topic, " "))
+		}
+		return fmt.Errorf("%s; run \"occ help\" for the command list", message)
+	}
+	if target.Context() == nil {
+		target.SetContext(command.Context())
 	}
 	target.InitDefaultHelpFlag()
 	target.InitDefaultVersionFlag()
@@ -1452,7 +1470,7 @@ func helpWithOutputFormats(help func(*cobra.Command, []string)) func(*cobra.Comm
 		}
 		formats := strings.Split(annotated, ",")
 		usage, defValue := flag.Usage, flag.DefValue
-		flag.Usage = "Output format: " + strings.Join(formats[:len(formats)-1], ", ") + " or " + formats[len(formats)-1]
+		flag.Usage = "Output format: " + strings.Join(formats, ", ")
 		flag.DefValue = formats[0]
 		defer func() { flag.Usage, flag.DefValue = usage, defValue }()
 		help(command, args)
