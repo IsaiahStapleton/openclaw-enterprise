@@ -40,6 +40,10 @@ upgrade or preserve a demo. See the [demo lifecycle](../../testing/kubernetes.md
   Do not replace the live Installation ID with another ID. Follow
   [binding the Installation](production-upgrade.md#bind-the-installation-once)
   if its Secret lacks the required annotation.
+- When the installed release predates the shared tenant namespace, inspect the
+  cluster for [split-layout tenants](../../reference/drivers/kubernetes-compute.md#existing-split-layout-installations)
+  first. The script's startup check does not detect them: it stops OCC, and the
+  new API and worker then refuse to start.
 - Meet the [upgrade permissions and concurrency requirements](production-upgrade.md#prepare-the-release).
   For runtime upgrades, review saved drafts and stop other deployments and edits:
   new revisions use the current drafts. Schedule an interruption window and
