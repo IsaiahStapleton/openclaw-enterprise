@@ -7,13 +7,13 @@ import {
   PostgresPlatformState,
 } from "../../packages/occ/src/index.ts";
 import {
-  bootstrapProductionInstallation,
+  attachProvider,
+  authRowCounts,
   composeProductionSignIn,
   consoleOrigin as origin,
   currentSession,
-  defaultInstallSettings,
   githubUpgradeSettings,
-  installationRoles,
+  onboardPasswordAccounts,
   passwordSignIn,
   signedInHeaders,
 } from "../helpers/production-sign-in.mjs";
@@ -84,57 +84,37 @@ test(
       return originalFetch(input, init);
     });
 
-    const adminPassword = await bootstrapProductionInstallation(t, {
+    // Password onboarding on the default install, then the GitHub upgrade. Members read the
+    // Installation but do not administer it, so a spent email refuses them.
+    const { admin, accounts } = await onboardPasswordAccounts(t, {
       databaseUrl,
+      state,
+      pool,
       email: adminEmail,
       authSecret,
+      secrets,
+      password,
+      accounts: {
+        member: { email: "outage-member@example.test" },
+        other: { email: "outage-other@example.test" },
+        resetMember: { email: "outage-reset@example.test" },
+        disabledMember: { email: "outage-disabled@example.test" },
+      },
     });
-    const admin = { email: adminEmail, password: adminPassword };
-    // Members read the Installation but do not administer it, so a spent email refuses them.
-    const { reader: readerRole } = await installationRoles(state, pool);
-
-    // Password onboarding on the default install, then the GitHub upgrade.
+    const { member, other, resetMember, disabledMember } = accounts;
     app = await composeProductionSignIn(t, {
       databaseUrl,
-      settings: defaultInstallSettings,
+      settings: githubUpgradeSettings(admin.id),
       secrets,
     });
-    let adminHeaders = await signedInHeaders(app, origin, admin);
-    const adminId = (await currentSession(app, adminHeaders.cookie)).user.id;
-    const members = [];
-    for (const email of [
-      "outage-member@example.test",
-      "outage-other@example.test",
-      "outage-reset@example.test",
-      "outage-disabled@example.test",
-    ]) {
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/auth/accounts",
-        headers: adminHeaders,
-        payload: { email, password, roleId: readerRole.id },
-      });
-      assert.equal(created.statusCode, 201, created.body);
-      members.push({ id: created.json().data.id, email, password });
-    }
-    const [member, other, resetMember, disabledMember] = members;
-    await app.close();
-    app = await composeProductionSignIn(t, {
-      databaseUrl,
-      settings: githubUpgradeSettings(adminId),
-      secrets,
-    });
-    adminHeaders = await signedInHeaders(app, origin, admin);
-    const account = await app.inject({
-      url: `/api/auth/accounts/${member.id}`,
-      headers: adminHeaders,
-    });
-    const attached = await app.inject({
-      method: "POST",
-      url: `/api/auth/accounts/${member.id}/providers/github`,
-      headers: adminHeaders,
-      payload: { subject: String(memberSubject), expectedVersion: account.json().data.version },
-    });
+    const adminHeaders = await signedInHeaders(app, origin, admin);
+    const attached = await attachProvider(
+      app,
+      adminHeaders,
+      member.id,
+      "github",
+      String(memberSubject),
+    );
     assert.equal(attached.statusCode, 200, attached.body);
 
     async function githubSignIn(remoteAddress = "192.0.2.50") {
@@ -152,8 +132,7 @@ test(
         headers: { cookie: cookieHeaderFromSetCookie(start.headers["set-cookie"]) },
       });
     }
-    const sessionCount = async () =>
-      (await pool.query("SELECT count(*)::int AS count FROM occ.session")).rows[0].count;
+    const sessionCount = async () => (await authRowCounts(pool)).sessions;
     async function assertFailedClosed(callback, sessionsBefore) {
       assert.equal(callback.statusCode, 302);
       assert.equal(callback.headers.location, "/console/?authError=github");
@@ -407,13 +386,13 @@ test(
       assert.equal(
         (await currentSession(app, cookieHeaderFromSetCookie(slowed.headers["set-cookie"]))).user
           .id,
-        adminId,
+        admin.id,
       );
       // The browser that signed in before spends its own lane instead.
       const known = await signInWith(device, admin, "192.0.2.64");
       assert.equal(known.statusCode, 200, known.body);
       const cookie = cookieHeaderFromSetCookie(known.headers["set-cookie"]);
-      assert.equal((await currentSession(app, cookie)).user.id, adminId);
+      assert.equal((await currentSession(app, cookie)).user.id, admin.id);
     });
 
     // A known-device entry is bound to the account's password and enabled state: a password
