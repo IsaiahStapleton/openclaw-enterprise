@@ -965,6 +965,7 @@ test("startup rejects an invalid OpenShell gateway readiness wait", async (t) =>
 /**
  * The OpenShell Credential Gateway over a recording provider store. Each provider's labels say
  * which credential source owns it; the gateway may act only on its own source's provider.
+ * Kept beside the OpenShell Sandbox cases: both members come from one OpenShell Backend.
  */
 function credentialGatewayOverProviders({ keepDeleted = false } = {}) {
   const providers = new Map();
@@ -1010,23 +1011,39 @@ function credentialGatewayOverProviders({ keepDeleted = false } = {}) {
     },
   );
   const namespace = { id: "ns_00000000-0000-4000-8000-0000000000aa", name: "placed-tenant" };
-  const source = (id) => ({
+  const signal = new AbortController().signal;
+  const source = (id, namespaceId = namespace.id) => ({
     id,
-    namespaceId: namespace.id,
-    type: "openai",
-    driverId: driver.id,
-  });
-  const context = (id) => ({ namespace, source: source(id), signal: new AbortController().signal });
-  const input = (apiKey = "synthetic-openai-key") => ({
+    namespaceId,
+    name: "openai",
     type: "openai",
     config: {},
-    secrets: { api_key: apiKey },
+    secrets: {},
+    driverId: driver.id,
+    state: "ready",
   });
-  return { calls, context, driver, input, namespace, providers, source };
+  return {
+    calls,
+    driver,
+    providers,
+    source,
+    context: (id) => ({ namespace, source: source(id), signal }),
+    revisionContext: (sources) => ({
+      namespace,
+      revision: { harness: { id: "codex", mode: "dedicated" } },
+      sources,
+      signal,
+    }),
+    input: (apiKey = "synthetic-openai-key") => ({
+      type: "openai",
+      config: {},
+      secrets: { api_key: apiKey },
+    }),
+  };
 }
 
 test("the OpenShell Credential Gateway acts only on its own source's provider", async () => {
-  const { calls, context, driver, input, namespace, providers, source } =
+  const { calls, context, driver, input, providers, revisionContext, source } =
     credentialGatewayOverProviders();
   const owner = "cs_00000000-0000-4000-8000-0000000000b1";
   const other = "cs_00000000-0000-4000-8000-0000000000b2";
@@ -1047,46 +1064,47 @@ test("the OpenShell Credential Gateway acts only on its own source's provider", 
   assert.equal((await driver.sourceStatus(context(owner))).state, "failed");
   await assert.rejects(driver.removeSource(context(owner)), ScopeViolationError);
   await assert.rejects(
-    driver.attachForRevision({
-      namespace,
-      sources: [source(owner)],
-      signal: new AbortController().signal,
-    }),
-    /unavailable/,
+    driver.attachForRevision(revisionContext([source(owner)])),
+    /provider for a bound credential source is unavailable/,
   );
   // Only the replayed create reached the store, and it was refused; nothing was overwritten.
   assert.deepEqual(
     calls.map(([operation]) => operation),
     ["createProvider"],
   );
-  assert.equal(providers.get(stored.name).credentials.OPENAI_API_KEY, "synthetic-openai-key");
+  assert.deepEqual(providers.get(stored.name).credentials, stored.credentials);
+});
 
-  // A source of another Namespace never attaches, even when its provider is present.
-  const foreign = { ...source(owner), namespaceId: "ns_00000000-0000-4000-8000-0000000000ff" };
+test("the OpenShell Credential Gateway never attaches a source of another Namespace", async () => {
+  const { context, driver, input, revisionContext, source } = credentialGatewayOverProviders();
+  const owner = "cs_00000000-0000-4000-8000-0000000000c1";
+  await driver.registerSource(context(owner), input());
+  // The provider is genuinely owned, so only the Namespace check can refuse.
+  const foreign = source(owner, "ns_00000000-0000-4000-8000-0000000000ff");
   await assert.rejects(
-    driver.attachForRevision({
-      namespace,
-      sources: [foreign],
-      signal: new AbortController().signal,
-    }),
+    driver.attachForRevision(revisionContext([foreign])),
+    (error) =>
+      error instanceof ScopeViolationError &&
+      error.message === "The credential source is not owned by this gateway.",
+  );
+  assert.equal((await driver.attachForRevision(revisionContext([source(owner)]))).length, 1);
+});
+
+test("the OpenShell Credential Gateway refuses an empty secret before creating a provider", async () => {
+  const { calls, context, driver, input, providers } = credentialGatewayOverProviders();
+  await assert.rejects(
+    driver.registerSource(context("cs_00000000-0000-4000-8000-0000000000d1"), input("")),
     ScopeViolationError,
   );
-  // An empty value is refused before any provider is written.
-  await assert.rejects(
-    driver.registerSource(context("cs_00000000-0000-4000-8000-0000000000b3"), input("")),
-    ScopeViolationError,
-  );
-  assert.deepEqual(
-    calls.map(([operation]) => operation),
-    ["createProvider"],
-  );
+  assert.deepEqual(calls, []);
+  assert.equal(providers.size, 0);
 });
 
 test("OpenShell credential source removal fails while the provider survives deletion", async () => {
   const { context, driver, input, providers } = credentialGatewayOverProviders({
     keepDeleted: true,
   });
-  const owner = "cs_00000000-0000-4000-8000-0000000000c1";
+  const owner = "cs_00000000-0000-4000-8000-0000000000e1";
   await driver.registerSource(context(owner), input());
   await assert.rejects(driver.removeSource(context(owner)), /was not deleted/);
   assert.equal(providers.size, 1);
