@@ -1910,7 +1910,8 @@ async function prepareLane({ lane, statePath }) {
     case "images-runtime-startup":
     case "images-runtime-startup-2":
       // Runtime image smoke tests run apart from packaging, in two lanes, to
-      // shorten CI wall time.
+      // shorten CI wall time. Only the lane whose tests run the Codex sandbox
+      // sets codexSeccomp; the other skips the k3d cluster it needs.
       Object.assign(
         env,
         (
