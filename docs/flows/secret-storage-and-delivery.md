@@ -1,7 +1,7 @@
 ---
 created: 2026-08-28
-updated: 2026-10-02
-last_updated_session: authoring-run/f85f64d4-af40-4918-91ea-2d16640c12b2
+updated: 2026-10-05
+last_updated_session: authoring-run/583f86ae-e997-4586-8fb5-217bb20a1410
 ---
 
 # Secret Storage and Gateway Delivery Flow
@@ -65,7 +65,7 @@ graph TD
     I --> J["OpenClaw resolves native env SecretRef"]
     I -->|missing material| Y["Gateway cannot become ready"]
     G -->|Agent harnessAuth| W["Harness auth flow delivers to model workload"]
-    W -->|local installer| V["Discover mode-specific Gateway and check model response"]
+    W -->|local installer| V["Discover tenant Gateway and check model response"]
   end
 ```
 
@@ -165,14 +165,14 @@ choices so a rerun cannot silently change topology.
 
 The tool provisions initial runtime credentials and requests deployment through
 OCC. Once the revision is active,
-[`findGateway`](../../scripts/first-agent-model.mjs) selects the physical Gateway
-placement from the admitted execution mode. Embedded execution discovers the
-tenant namespace through `openclaw.dev/namespace`; dedicated execution discovers
-the managed Gateway runtime namespace through `openclaw.dev/gateway-namespace`.
-The verifier requires the exact Agent labels, revision ConfigMap mount, and a
-Running, Ready Gateway Pod before it sends the prompt. It does not fall back to
-the other placement. The tool leaves the installation and resources in place on
-exit.
+[`findGateway`](../../scripts/first-agent-model.mjs) discovers the canonical
+tenant namespace through `openclaw.dev/namespace`. The supported local setup is
+single-cluster, so embedded and dedicated Gateways share that physical namespace
+with the provider-owned Harness. The verifier requires the exact Agent labels,
+revision ConfigMap mount, and a Running, Ready Gateway Pod before it sends the
+prompt. Kubernetes Compute owns any experimental two-cluster placement; this
+local helper does not infer physical placement from the Agent execution mode.
+The tool leaves the installation and resources in place on exit.
 
 <span id="4-render-only-the-exact-gateways-projection"></span>
 <span id="4.-render-only-the-exact-gateway's-projection"></span>
@@ -290,6 +290,8 @@ credential at its issuer.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 17:02: Align first-Agent Gateway discovery with the canonical single-cluster tenant namespace. (authoring-run/583f86ae-e997-4586-8fb5-217bb20a1410 - 1d7bd797a941a45c36280b7531ee3051b5cad830)
 
 - 2026-10-02: Canonical sources and role-specific projections share the single-cluster tenant namespace. (01a0fe72-58b2-7cc3-b770-7310f5401deb)
 

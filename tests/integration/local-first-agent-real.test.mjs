@@ -249,8 +249,8 @@ async function readSecretResourceVersion({ stateDirectory, cluster, env, namespa
     return matches[0];
   }
 
-  // Compute materializes the Secret where its consumer runs: the execution namespace or,
-  // for a dedicated Gateway, the Agent's Gateway namespace. Its labels identify it in either.
+  // Single-cluster Compute materializes each consumer and its Secret in the canonical tenant
+  // namespace. The Namespace label identifies that placement independently of Harness topology.
   return readOne(
     "secrets",
     `openclaw.dev/namespace=${namespaceId},openclaw.dev/secret=${secretId}`,
@@ -308,81 +308,56 @@ test("the first-Agent command advertises its default and preserves explicit or r
   );
 });
 
-test("the first-Agent model check discovers the gateway from its execution mode", async () => {
+test("the first-Agent model check discovers the gateway in the tenant namespace", async () => {
   const namespaceId = "ns_first_agent_placement";
   const agentId = "agt_first_agent_placement";
   const revisionId = "rev_first_agent_placement";
   const digest = (value) => createHash("sha256").update(value).digest("hex").slice(0, 12);
   const revisionConfigMap = `gateway-${digest(agentId)}-rev-${digest(revisionId)}`;
 
-  for (const expected of [
-    {
-      executionMode: "embedded",
-      namespaceLabel: "openclaw.dev/namespace",
-      namespace: "tenant-runtime",
-    },
-    {
-      executionMode: "dedicated",
-      namespaceLabel: "openclaw.dev/gateway-namespace",
-      namespace: "gateway-runtime",
-    },
-  ]) {
-    const calls = [];
-    const kubectl = async (...args) => {
-      calls.push(args);
-      if (args[0] === "get" && args[1] === "namespaces") {
-        const selector = args[args.indexOf("-l") + 1];
-        const label = selector.split("=")[0];
-        return JSON.stringify({
-          items: [
-            {
-              metadata: {
-                name:
-                  label === "openclaw.dev/gateway-namespace" ? "gateway-runtime" : "tenant-runtime",
-              },
+  const calls = [];
+  const kubectl = async (...args) => {
+    calls.push(args);
+    if (args[0] === "get" && args[1] === "namespaces") {
+      return JSON.stringify({ items: [{ metadata: { name: "tenant-runtime" } }] });
+    }
+    if (args[0] === "get" && args[1] === "pods") {
+      return JSON.stringify({
+        items: [
+          {
+            metadata: { name: "gateway-pod" },
+            spec: { volumes: [{ configMap: { name: revisionConfigMap } }] },
+            status: {
+              phase: "Running",
+              conditions: [{ type: "Ready", status: "True" }],
             },
-          ],
-        });
-      }
-      if (args[0] === "get" && args[1] === "pods") {
-        return JSON.stringify({
-          items: [
-            {
-              metadata: { name: "gateway-pod" },
-              spec: { volumes: [{ configMap: { name: revisionConfigMap } }] },
-              status: {
-                phase: "Running",
-                conditions: [{ type: "Ready", status: "True" }],
-              },
-            },
-          ],
-        });
-      }
-      if (args[0] === "exec") {
-        const input = args.at(-1)?.input ?? "";
-        const nonce = /FIRST_AGENT_[0-9a-f-]+/u.exec(input)?.[0];
-        assert.ok(nonce, "the gateway probe must include its verification nonce");
-        return JSON.stringify({ nonce });
-      }
-      throw new Error(`Unexpected kubectl invocation: ${args.join(" ")}`);
-    };
+          },
+        ],
+      });
+    }
+    if (args[0] === "exec") {
+      const input = args.at(-1)?.input ?? "";
+      const nonce = /FIRST_AGENT_[0-9a-f-]+/u.exec(input)?.[0];
+      assert.ok(nonce, "the gateway probe must include its verification nonce");
+      return JSON.stringify({ nonce });
+    }
+    throw new Error(`Unexpected kubectl invocation: ${args.join(" ")}`);
+  };
 
-    await verifyFirstAgentModel(kubectl, {
-      namespaceId,
-      agentId,
-      revisionId,
-      executionMode: expected.executionMode,
-      expectProviderKey: false,
-    });
+  await verifyFirstAgentModel(kubectl, {
+    namespaceId,
+    agentId,
+    revisionId,
+    expectProviderKey: false,
+  });
 
-    const namespaceCall = calls.find((args) => args[0] === "get" && args[1] === "namespaces");
-    assert.equal(
-      namespaceCall?.[namespaceCall.indexOf("-l") + 1],
-      `${expected.namespaceLabel}=${namespaceId}`,
-    );
-    const execCall = calls.find((args) => args[0] === "exec");
-    assert.equal(execCall?.[execCall.indexOf("--namespace") + 1], expected.namespace);
-  }
+  const namespaceCall = calls.find((args) => args[0] === "get" && args[1] === "namespaces");
+  assert.equal(
+    namespaceCall?.[namespaceCall.indexOf("-l") + 1],
+    `openclaw.dev/namespace=${namespaceId}`,
+  );
+  const execCall = calls.find((args) => args[0] === "exec");
+  assert.equal(execCall?.[execCall.indexOf("--namespace") + 1], "tenant-runtime");
 });
 
 test(
@@ -494,6 +469,11 @@ test(
         "the Agent Namespace",
       );
       assert.equal(namespaces.items.length, 1);
+      assert.equal(
+        gateway.metadata.namespace,
+        namespaces.items[0].metadata.name,
+        "the dedicated Gateway must share the single-cluster tenant namespace",
+      );
       const services = await readKubernetesJson(
         kube,
         [

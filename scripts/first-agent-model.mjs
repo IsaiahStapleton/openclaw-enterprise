@@ -23,7 +23,7 @@ const kubectlTimeout = 15_000;
 
 const discoveryMessages = {
   cluster: "Kubernetes did not answer. Check the selected kubeconfig and cluster.",
-  namespace: "The Agent's gateway namespace has not appeared. Check controller reconciliation.",
+  namespace: "The Agent's tenant namespace has not appeared. Check controller reconciliation.",
   pod: "The Agent has no gateway Pod yet. Check the deployment in the console and the controller logs.",
   revision:
     "No gateway Pod mounts the requested revision. Check whether the Agent rolled back or a different revision is active.",
@@ -82,11 +82,9 @@ function readItems(output) {
   return data.items;
 }
 
-async function findGateway(kubectl, namespaceId, agentId, revisionId, executionMode) {
+async function findGateway(kubectl, namespaceId, agentId, revisionId) {
   const deadline = Date.now() + readinessTimeout;
   const configMap = `gateway-${idHash(agentId)}-rev-${idHash(revisionId)}`;
-  const namespaceLabel =
-    executionMode === "dedicated" ? "openclaw.dev/gateway-namespace" : "openclaw.dev/namespace";
   const selector = [
     "app.kubernetes.io/managed-by=openclaw-enterprise",
     "openclaw.dev/workload-role=gateway",
@@ -99,9 +97,17 @@ async function findGateway(kubectl, namespaceId, agentId, revisionId, executionM
     let namespaces;
     try {
       namespaces = readItems(
-        await kubectl("get", "namespaces", "-l", `${namespaceLabel}=${namespaceId}`, "-o", "json", {
-          timeout: Math.min(kubectlTimeout, Math.max(1, deadline - Date.now())),
-        }),
+        await kubectl(
+          "get",
+          "namespaces",
+          "-l",
+          `openclaw.dev/namespace=${namespaceId}`,
+          "-o",
+          "json",
+          {
+            timeout: Math.min(kubectlTimeout, Math.max(1, deadline - Date.now())),
+          },
+        ),
       ).filter((namespace) => namespace.metadata?.name && !namespace.metadata.deletionTimestamp);
     } catch {
       state = "cluster";
@@ -280,17 +286,16 @@ async function probeInGateway({ nonce, prompt, expectProviderKey }) {
 
 export async function verifyFirstAgentModel(
   kubectl,
-  { namespaceId, agentId, revisionId, executionMode, prompt, apiKey, expectProviderKey = true },
+  { namespaceId, agentId, revisionId, prompt, apiKey, expectProviderKey = true },
 ) {
   if (
     !isKubernetesLabel(namespaceId) ||
     !isKubernetesLabel(agentId) ||
     typeof revisionId !== "string" ||
-    !revisionId ||
-    !["embedded", "dedicated"].includes(executionMode)
+    !revisionId
   ) {
     throw new Error(
-      "A valid namespace ID, Agent ID, deployed revision ID, and execution mode are required to check the model.",
+      "A valid namespace ID, Agent ID, and deployed revision ID are required to check the model.",
     );
   }
   if (prompt !== undefined && (typeof prompt !== "string" || !prompt.trim())) {
@@ -302,13 +307,7 @@ export async function verifyFirstAgentModel(
     );
   }
 
-  const { namespace, pod } = await findGateway(
-    kubectl,
-    namespaceId,
-    agentId,
-    revisionId,
-    executionMode,
-  );
+  const { namespace, pod } = await findGateway(kubectl, namespaceId, agentId, revisionId);
   const nonce = `FIRST_AGENT_${randomUUID()}`;
   const script = `await (${probeInGateway.toString()})(${JSON.stringify({ nonce, prompt, expectProviderKey })});`;
   let result;

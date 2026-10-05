@@ -957,7 +957,6 @@ async function main(options) {
       namespaceId: namespace.id,
       agentId: agent.id,
       revisionId: record.revisionId,
-      executionMode: agent.executionMode,
       prompt: options.prompt,
       apiKey: suppliedKey,
       expectProviderKey: record.sandboxDriver !== "openshell",

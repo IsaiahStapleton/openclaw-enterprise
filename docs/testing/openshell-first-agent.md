@@ -6,9 +6,8 @@ in k3d, and dedicated Codex in OpenShell. It records the development path proven
 on October 2, 2026. It is not production qualification.
 
 The checkpoint passed three consecutive real `openai/gpt-6-astra` turns on
-branch `feat/openshell-first-agent-codex`. The branch has an intentional dirty
-working tree containing the implementation. Start a new session with
-`git status --short --branch`; do not reset or discard those changes.
+branch `feat/openshell-first-agent-codex`. Start a new session with
+`git status --short --branch` and preserve any current work.
 
 ## Understand the working path
 
@@ -17,9 +16,9 @@ The successful path depends on all of these behaviors:
 - The development launcher installs the pinned OpenShell `v0.1.3-pre.2`
   gateway, sandbox runtime, supervisor, Agent Sandbox controller, cert-manager,
   and private Envoy routing into a fresh k3d cluster.
-- Kubernetes Compute creates one tenant execution namespace and one dedicated
-  Gateway namespace. The OpenShell Workspace has the same physical name as the
-  execution namespace.
+- Single-cluster Kubernetes Compute creates one tenant namespace containing the
+  dedicated Gateway and the provider-owned Harness. The OpenShell Workspace uses
+  that same physical name.
 - Compute waits for the first fail-closed Gateway and its workspace-node setup
   material before the OpenShell Driver creates a provider or Sandbox.
 - The Driver puts `runtime.json`, `config.toml`, and the complete one-shot
@@ -121,6 +120,9 @@ kubectl --kubeconfig "$OCC_DEVELOPMENT_STATE_DIRECTORY/kubeconfig" \
 kubectl --kubeconfig "$OCC_DEVELOPMENT_STATE_DIRECTORY/kubeconfig" \
   get namespaces -L openclaw.dev/namespace,openclaw.dev/gateway-namespace
 ```
+
+The tenant appears once and carries both placement labels; the dedicated
+Gateway and OpenShell Workspace do not require separate Kubernetes namespaces.
 
 Find the tenant's dedicated Gateway Pods and read one log without dumping its
 environment or Secret volumes:
