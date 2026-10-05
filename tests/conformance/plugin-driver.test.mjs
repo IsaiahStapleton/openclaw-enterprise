@@ -512,6 +512,101 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   await assert.rejects(reader.listCatalog(), /ChatGPT\/Codex-backed account/);
 });
 
+test("native Codex catalog reader rejects, without crashing, when Codex closes its input early", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "occ-codex-plugin-reader-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const executable = join(directory, "codex-fixture.mjs");
+  // Answers initialize after closing stdin, so the reader's next write hits a closed pipe.
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import { closeSync } from "node:fs";
+closeSync(0);
+process.stdout.write(JSON.stringify({ id: 1, result: {} }) + "\\n");
+setTimeout(() => {}, 2_000);
+`,
+  );
+  await chmod(executable, 0o755);
+  const uncaught = [];
+  const record = (error) => uncaught.push(error);
+  // Record any uncaught error so the assertion below names it.
+  process.prependListener("uncaughtException", record);
+  context.after(() => process.off("uncaughtException", record));
+
+  const reader = new NativeCodexPluginCatalogReader({
+    codexExecutable: executable,
+    codexHome: directory,
+    requestTimeoutMs: 5_000,
+  });
+  await assert.rejects(reader.listCatalog(), NotImplementedError);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(
+    uncaught.map((error) => error.code ?? error.message),
+    [],
+  );
+});
+
+test("native Codex catalog reader kills a Codex process that ignores SIGTERM after an abort", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "occ-codex-plugin-reader-"));
+  const pidFile = join(directory, "codex.pid");
+  let pid;
+  context.after(async () => {
+    if (pid !== undefined) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone: the reader stopped it.
+      }
+    }
+    await rm(directory, { recursive: true, force: true });
+  });
+  const executable = join(directory, "codex-fixture.mjs");
+  // The PID file appears only once the SIGTERM handler is installed (rename is atomic).
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import { renameSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));
+renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});
+process.stdin.resume();
+setInterval(() => {}, 1_000);
+`,
+  );
+  await chmod(executable, 0o755);
+
+  const reader = new NativeCodexPluginCatalogReader({
+    codexExecutable: executable,
+    codexHome: directory,
+    requestTimeoutMs: 60_000,
+  });
+  const controller = new AbortController();
+  const listed = reader.listCatalog(controller.signal);
+  listed.catch(() => {});
+  const started = Date.now() + 30_000;
+  while (pid === undefined && Date.now() < started) {
+    try {
+      pid = Number(await readFile(pidFile, "utf8"));
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  assert.ok(pid > 0, "the Codex fixture did not start");
+  controller.abort();
+  await assert.rejects(listed, /aborted/);
+  const deadline = Date.now() + 5_000;
+  let alive = true;
+  while (alive && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } catch {
+      alive = false;
+    }
+  }
+  assert.equal(alive, false, "the aborted Codex app-server must not outlive the request");
+});
+
 test("Codex startup default-denies plugins", () => {
   const empty = codexRuntimeArtifact({}, []);
   assert.equal(empty.kind, "codex");
