@@ -954,6 +954,50 @@ test("Installation default Presets are opt-in and reject ambiguous YAML settings
   }
 });
 
+test("an Installation Preset file named like a bundled default replaces that default", async (t) => {
+  // default-codex became a bundled default after operators could already name a file
+  // default-codex. Startup must keep the operator's file instead of refusing to start.
+  const operatorCodex = {
+    name: "default-codex",
+    template: { agent: { name: "Operator Codex", executionMode: "dedicated" } },
+  };
+  const configuration = installation();
+  configuration.presets = { includeDefaults: true, files: ["presets/codex.json"] };
+  const path = await fixture(t, configuration);
+  await mkdir(join(dirname(path), "presets"), { recursive: true });
+  const presetPath = join(dirname(path), "presets", "codex.json");
+  await writeFile(presetPath, JSON.stringify(operatorCodex));
+  const runtime = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.deepEqual(runtime.defaultPresets.map((preset) => preset.name).sort(), [
+    "Standard Codex",
+    "Standard OpenClaw",
+    "default-codex",
+  ]);
+  assert.deepEqual(
+    runtime.defaultPresets.find((preset) => preset.name === "default-codex").template,
+    operatorCodex.template,
+  );
+  // The resolved path names the file the operator must keep or rename.
+  assert.deepEqual(runtime.shadowedDefaultPresets, [
+    { presetName: "default-codex", presetFile: presetPath },
+  ]);
+  // Without includeDefaults nothing is shadowed: the file is an ordinary default.
+  configuration.presets.includeDefaults = false;
+  await writeFile(path, JSON.stringify(configuration), "utf8");
+  const filesOnly = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: path },
+  });
+  assert.deepEqual(
+    filesOnly.defaultPresets.map((preset) => preset.name),
+    ["default-codex"],
+  );
+  assert.deepEqual(filesOnly.shadowedDefaultPresets, []);
+});
+
 test("Installation Preset JSON files resolve beside startup YAML and fail closed", async (t) => {
   const validPreset = {
     name: "from-file",
@@ -1016,13 +1060,17 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     [
       "duplicate.json",
       JSON.stringify({ name: "Standard Codex", template: {} }),
-      /configured more than once/,
+      /Default Preset Standard Codex is configured more than once/,
     ],
   ]) {
     const configuration = installation();
+    // Two operator files may not share a name, even one that shadows a bundled default.
     configuration.presets = {
       includeDefaults: filename === "duplicate.json",
-      files: [`cases/${filename}`],
+      files:
+        filename === "duplicate.json"
+          ? [`cases/${filename}`, `cases/${filename}`]
+          : [`cases/${filename}`],
     };
     const path = await fixture(t, configuration);
     const directory = dirname(path);

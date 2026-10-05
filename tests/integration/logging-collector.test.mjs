@@ -405,6 +405,13 @@ test(
           ...payload,
         }),
         JSON.stringify({
+          event: "presets.bundled-default-shadowed",
+          severity: "WARN",
+          presetName: `presetname${fixture.suffix}`,
+          presetFile: `/etc/occ/presets/presetfile${fixture.suffix}.json`,
+          ...payload,
+        }),
+        JSON.stringify({
           event: "authentication.provider-unavailable-warning",
           severity: "WARN",
           provider: "google",
@@ -428,13 +435,14 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 11);
+    await waitFor(async () => (await records()).length >= 12);
     const initial = await records();
-    assert.equal(initial.length, 11, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 12, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [
       "compute.preflight-warning",
       "authentication.sign-in-limited",
       "authentication.provider-unavailable-warning",
+      "presets.bundled-default-shadowed",
       "presets.default-create-skipped",
       "presets.default-refresh-skipped",
     ];
@@ -452,6 +460,7 @@ test(
     }
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
+      "occ-api",
       "occ-api",
       "occ-api",
       "occ-api",
@@ -558,10 +567,20 @@ test(
       "log.iostream": "stdout",
       "occ.namespace.id": presetNamespaceId,
     });
+    // A bundled default an operator file shadowed carries no IDs: its name and file stay local.
+    const shadowed = initial.find(
+      ({ record }) => record.body.stringValue === "presets.bundled-default-shadowed",
+    );
+    assert.equal(shadowed.record.severityText, "WARN");
+    assert.deepEqual(attributes(shadowed.record.attributes), {
+      "event.name": "presets.bundled-default-shadowed",
+      "log.iostream": "stdout",
+    });
     const serialized = JSON.stringify(initial);
     assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
     for (const local of [
       `presetname${fixture.suffix}`,
+      `presetfile${fixture.suffix}`,
       `refusalreason${fixture.suffix}`,
       restrictionUuid,
     ]) {

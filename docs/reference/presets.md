@@ -25,11 +25,12 @@ presets:
 Omitting or disabling it stops bundled seeding; explicit `files`
 still load. Each JSON file contains one `{ "name": "...", "template": { ... } }`
 object. Relative paths resolve beside the Installation YAML; absolute paths also
-work. Mount files readably for the API and worker. Missing, malformed,
-invalid, or duplicate-name definitions prevent startup. Files are read at startup,
-not watched. API startup adds missing defaults to ready or provisioning (not failed
-or deleting) Namespaces, including the bootstrap Namespace; new Namespaces receive
-them atomically.
+work. Mount files readably for the API and worker. Missing, malformed, invalid,
+or duplicate-name files prevent startup; a file named like a bundled default, such
+as `default-codex`, replaces it and logs `presets.bundled-default-shadowed`.
+Files are read at startup, not watched. API startup adds missing defaults to ready
+or provisioning Namespaces, including the bootstrap Namespace; new Namespaces
+receive them atomically.
 
 Each copy is an ordinary Namespace-owned Preset with its own ID and normal
 read/update/delete permissions. Startup can restore a deleted or renamed
@@ -131,9 +132,8 @@ model reference is `codex/gpt-6-astra`. The preset exposes only `name` and `mode
 variables. After **Use Preset**, choose an existing service account Secret or
 **Create new Secret...** before creating the Agent.
 
-Load a copy beside your YAML as in the example above, or reference the shipped
-container file at `/app/deploy/presets/swe-preset.json`. It is opt-in and is not
-added by `includeDefaults` alone.
+Load a copy beside your YAML as above, or reference the shipped container file
+at `/app/deploy/presets/swe-preset.json`; `includeDefaults` alone does not add it.
 
 In the Console, choose **SWE Agent**, fill its variables, then use **Edit Slack**
 to configure channels, allowed senders, and Slack app/bot Secrets. No channels or
