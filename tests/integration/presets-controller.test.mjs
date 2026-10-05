@@ -11,6 +11,7 @@ import { InMemoryAuditSink } from "../../packages/audit/src/index.ts";
 import { InMemoryPlatformState } from "../../packages/occ/src/index.ts";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import { bindRole, grantRole } from "../helpers/iam-grants.mjs";
 
 async function createFixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "occ-presets-"));
@@ -83,19 +84,12 @@ test("Preset CRUD keeps Namespace names unique and filters reads by exact Native
   let limitedPrincipalId;
   const limited = await fixture.createAccountWithPolicy("preset-reader", (principal) => {
     limitedPrincipalId = principal.id;
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "preset-reader",
+      bindingId: "read-one-preset",
       namespaceId: alpha.id,
-      permissions: [{ action: "read", resourceKind: "preset" }],
-    });
-    fixture.policy.bindings.push({
-      id: "read-one-preset",
-      namespaceId: alpha.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "preset-reader",
-      resourceKind: "preset",
-      resourceId: visible.id,
+      permissions: { preset: ["read"] },
+      resource: { kind: "preset", id: visible.id },
     });
   });
   const session = await fixture.signIn(limited.credentials);
@@ -103,17 +97,11 @@ test("Preset CRUD keeps Namespace names unique and filters reads by exact Native
   // does not open the collection, so a refusal looks the same as for a missing Namespace.
   const unlisted = await fixture.request("GET", collection(alpha.id), { session });
   assert.equal(unlisted.status, 403, JSON.stringify(unlisted.body));
-  fixture.policy.roles.push({
+  grantRole(fixture.policy, limitedPrincipalId, {
     id: "alpha-namespace-reader",
+    bindingId: "read-alpha",
     namespaceId: alpha.id,
-    permissions: [{ action: "read", resourceKind: "namespace" }],
-  });
-  fixture.policy.bindings.push({
-    id: "read-alpha",
-    namespaceId: alpha.id,
-    subjectKind: "identity",
-    subjectId: limitedPrincipalId,
-    roleId: "alpha-namespace-reader",
+    permissions: { namespace: ["read"] },
   });
   const readable = await fixture.request("GET", collection(alpha.id), { session });
   assert.equal(readable.status, 200, JSON.stringify(readable.body));
@@ -347,20 +335,10 @@ test("Preset admission rejects malformed templates and credential leaks while pr
   const reader = await fixture.createAccountWithPolicy(
     "preset-user-without-secret",
     (principal) => {
-      fixture.policy.roles.push({
+      grantRole(fixture.policy, principal.id, {
         id: "preset-consumer",
         namespaceId: alpha.id,
-        permissions: [
-          { action: "read", resourceKind: "preset" },
-          { action: "create", resourceKind: "configuration" },
-        ],
-      });
-      fixture.policy.bindings.push({
-        id: "preset-consumer",
-        namespaceId: alpha.id,
-        subjectKind: "identity",
-        subjectId: principal.id,
-        roleId: "preset-consumer",
+        permissions: { preset: ["read"], configuration: ["create"] },
       });
     },
   );
@@ -1024,15 +1002,9 @@ test("Installation YAML seeds authorized default Presets for new and existing Na
 
   // Namespace creation must roll back if its caller cannot create the defaults.
   const limited = await fixture.createAccountWithPolicy("namespace-only", (identity) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, identity.id, {
       id: "namespace-only",
-      permissions: [{ action: "create", resourceKind: "namespace" }],
-    });
-    fixture.policy.bindings.push({
-      id: "namespace-only",
-      subjectKind: "identity",
-      subjectId: identity.id,
-      roleId: "namespace-only",
+      permissions: { namespace: ["create"] },
     });
   });
   const session = await fixture.signIn(limited.credentials);
@@ -1104,13 +1076,10 @@ test("startup seeds default Presets with an administrator who can create them wh
   // The administrator Role bound to the Installation resource only: it administers the
   // Installation but grants nothing inside a Namespace.
   const scoped = await fixture.createAccountWithPolicy("installation-only", (identity) => {
-    fixture.policy.bindings.push({
+    bindRole(fixture.policy, identity.id, {
       id: "installation-only-admin",
-      subjectKind: "identity",
-      subjectId: identity.id,
       roleId: adminRoleId,
-      resourceKind: "installation",
-      resourceId: installationId,
+      resource: { kind: "installation", id: installationId },
     });
   });
   const administers = await iam.authorize({
@@ -1506,13 +1475,10 @@ test("startup skips and warns about a default refresh the policy refuses instead
   const { principal: scoped } = await fixture.createAccountWithPolicy(
     "installation-only",
     (identity) => {
-      fixture.policy.bindings.push({
+      bindRole(fixture.policy, identity.id, {
         id: "installation-only-admin",
-        subjectKind: "identity",
-        subjectId: identity.id,
         roleId: adminRoleId,
-        resourceKind: "installation",
-        resourceId: installationId,
+        resource: { kind: "installation", id: installationId },
       });
     },
   );
