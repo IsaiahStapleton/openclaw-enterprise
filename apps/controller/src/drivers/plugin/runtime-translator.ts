@@ -287,6 +287,13 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
       slackApprovers(defaultApprovers);
     }
     for (const [pluginId, selection] of selectionEntries(selections)) {
+      // Resolve the plugin ID first, so a selection saved under another Driver reports
+      // the ID mismatch rather than a policy field that Driver does not support.
+      if (kind === "codex") {
+        codexNativeIdFromPluginId(pluginId);
+      } else {
+        openClawCatalogDescriptor(pluginId);
+      }
       policyRecord(selection, "Plugin selection", [
         "enabled",
         "approvers",
@@ -332,15 +339,7 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
           parseCodexToolId(id);
         }
       } else {
-        const nativeId = pluginId.startsWith(OCC_DRIVER_ID + ":")
-          ? pluginId.slice((OCC_DRIVER_ID + ":").length)
-          : pluginId;
-        const descriptor = nativeCatalog.find((entry) => entry.nativeId === nativeId);
-        if (descriptor === undefined) {
-          throw Object.assign(new Error("Unknown OpenClaw plugin selection."), {
-            policyField: "pluginId",
-          });
-        }
+        const descriptor = openClawCatalogDescriptor(pluginId);
         policyRecord(
           selection.driverPolicy === undefined ? {} : selection.driverPolicy,
           "OpenClaw driver policy",
@@ -443,6 +442,19 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
 
   function codexPluginId(nativeId: string): string {
     return CODEX_DRIVER_ID + ":" + nativeId;
+  }
+
+  function openClawCatalogDescriptor(pluginId: string): OpenClawPluginDescriptor {
+    const nativeId = pluginId.startsWith(OCC_DRIVER_ID + ":")
+      ? pluginId.slice((OCC_DRIVER_ID + ":").length)
+      : pluginId;
+    const descriptor = nativeCatalog.find((entry) => entry.nativeId === nativeId);
+    if (descriptor === undefined) {
+      throw Object.assign(new Error("Unknown OpenClaw plugin selection."), {
+        policyField: "pluginId",
+      });
+    }
+    return descriptor;
   }
 
   function codexNativeIdFromPluginId(pluginId: string): string {
