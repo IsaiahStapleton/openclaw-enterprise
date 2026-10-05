@@ -12,6 +12,7 @@ import {
   createTestAuthPrincipal,
 } from "./auth-session.mjs";
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
+import { createReadyComputeDriver } from "./development.mjs";
 import { createHarnessConfiguration } from "./harness-configuration.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
 
@@ -46,30 +47,13 @@ export function createRuntimeLogComputeDriver(options = {}) {
     ...options.state,
   };
   const podName = (revision) => `gateway-${revision.id.slice(4, 12)}-0`;
-  return {
-    id: options.id ?? "runtime-log-compute",
-    capability: "compute",
+  return createReadyComputeDriver(options.id ?? "runtime-log-compute", {
     implementation: "in-memory-runtime-log-test",
     ...(options.runtimeLogging === undefined ? {} : { runtimeLogging: options.runtimeLogging }),
     calls,
     state,
     podName,
     validateHarnessAuth() {},
-    async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
-    },
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
-    async retireRevision() {},
     ...(options.sandboxNamespace === undefined
       ? {}
       : {
@@ -235,7 +219,7 @@ export function createRuntimeLogComputeDriver(options = {}) {
             };
           },
         }),
-  };
+  });
 }
 
 /**

@@ -19,32 +19,16 @@ import {
   runBootstrapInstallation,
 } from "./bootstrap-installation.mjs";
 import { cookieHeaderFromSetCookie } from "./auth-session.mjs";
+import { createReadyComputeDriver } from "./development.mjs";
 import { idTokenSigner, rsaSigningKey } from "./id-token.mjs";
 
 // Only Compute is passive: no Agent is deployed, so sign-in proofs need no cluster.
 // Authentication, State, IAM, audit and Fastify are the production implementations.
 function passiveComputeDriver(id) {
-  return {
-    id,
-    capability: "compute",
+  return createReadyComputeDriver(id, {
     implementation: "sign-in-proof-memory-compute",
     async preflight() {},
-    async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
-    },
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
-    async retireRevision() {},
-  };
+  });
 }
 
 /** Runs the chart's initialization Job command and returns the generated administrator password. */
@@ -788,7 +772,8 @@ export async function onboardPasswordAccounts(
     admin.id = (await currentSession(app, headers.cookie)).user.id;
     const created = {};
     for (const [name, account] of Object.entries(accounts)) {
-      const role = roles[account.role ?? "reader"];
+      const roleName = account.role ?? "reader";
+      const role = Object.hasOwn(roles, roleName) ? roles[roleName] : undefined;
       if (role === undefined) {
         throw new Error(`Unknown Installation Role ${account.role} for ${name}.`);
       }
