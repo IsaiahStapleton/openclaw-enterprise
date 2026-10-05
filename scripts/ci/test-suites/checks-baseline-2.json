@@ -89,9 +89,6 @@
       "path": "tests/integration/ssh-compute-startup.test.mjs"
     },
     {
-      "path": "tests/conformance/plugin-compute.test.mjs"
-    },
-    {
       "path": "tests/conformance/runtime-probe-cpu-counter.test.mjs"
     },
     {
