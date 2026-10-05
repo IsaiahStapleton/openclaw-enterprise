@@ -458,8 +458,8 @@ function presetDefinition(value: unknown, path: string): Pick<Preset, "name" | "
 }
 
 /**
- * A `presets.files` entry that cannot become a default Preset: missing, unreadable,
- * malformed, invalid, or a duplicate name. API and worker startup report it as
+ * A `presets.files` list or entry that cannot become a default Preset: not a list of
+ * paths, or a file that is missing, unreadable, malformed, invalid, or a duplicate name. API and worker startup report it as
  * `PRESET_FILE_INVALID` without the path or message, which stay in the thrown error.
  */
 export class PresetFileError extends Error {
@@ -650,7 +650,7 @@ export async function loadInstallationConfiguration(options: {
     presets.files !== undefined &&
     (!Array.isArray(presets.files) || presets.files.some((entry) => typeof entry !== "string"))
   ) {
-    throw new Error("presets.files must be an array of Preset JSON file paths.");
+    throw new PresetFileError("presets.files must be an array of Preset JSON file paths.");
   }
   const includeDefaults = presets.includeDefaults === true;
   const bundledPresetVersions = await loadBundledPresetVersions();

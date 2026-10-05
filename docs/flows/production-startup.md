@@ -292,8 +292,8 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
   `KUBERNETES_API_UNAVAILABLE` means the Compute preflight got no answer from
   the Kubernetes API server named by `host` and `port`. Check that
   `cluster.cidrs` still lists that address; a restarted cluster can move it.
-- Code `PRESET_FILE_INVALID`: a `presets.files` entry is missing, malformed,
-  invalid or duplicated.
+- Code `PRESET_FILE_INVALID`: a bad `presets.files` list or file (missing,
+  unreadable, malformed, invalid, duplicate).
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
   first check for unsafe output storage, existing output files, database-role
   failures, auth origin errors, and administrator/IAM mismatch.

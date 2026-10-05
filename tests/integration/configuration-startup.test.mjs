@@ -1094,19 +1094,23 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
 test("API and worker name a Preset file failure in their startup error code", async (t) => {
   // An operator who lists a file the image lacks, or a broken one, needs a cause rather
   // than STARTUP_FAILED. The file path and the loader message stay out of the log.
-  for (const [filename, contents] of [
+  const duplicate = JSON.stringify({ name: "twice", template: {} });
+  for (const [filename, contents, files] of [
     ["missing.json", undefined],
     [
       "invalid-template.json",
       JSON.stringify({ name: "invalid", template: { agent: { unsupported: true } } }),
     ],
+    ["duplicate.json", duplicate, ["cases/duplicate.json", "cases/duplicate-b.json"]],
+    ["not-a-list.json", undefined, "cases/not-a-list.json"],
   ]) {
     const configuration = installation();
-    configuration.presets = { includeDefaults: false, files: [`cases/${filename}`] };
+    configuration.presets = { includeDefaults: false, files: files ?? [`cases/${filename}`] };
     const path = await fixture(t, configuration);
     await mkdir(join(dirname(path), "cases"), { recursive: true });
     if (contents !== undefined) {
       await writeFile(join(dirname(path), "cases", filename), contents);
+      await writeFile(join(dirname(path), "cases", "duplicate-b.json"), duplicate);
     }
     const shared = {
       PATH: process.env.PATH,
@@ -1127,12 +1131,10 @@ test("API and worker name a Preset file failure in their startup error code", as
       timeout: 10_000,
     });
     assert.equal(server.status, 1, filename);
-    assert.equal(
-      startupDiagnostic(server.stderr, "startup-error").code,
-      "PRESET_FILE_INVALID",
-      filename,
-    );
-    assert.ok(!server.stderr.includes(filename), server.stderr);
+    const apiDiagnostic = startupDiagnostic(server.stderr, "startup-error");
+    assert.equal(apiDiagnostic.code, "PRESET_FILE_INVALID", filename);
+    assert.equal(apiDiagnostic.message, undefined);
+    assert.ok(!server.stderr.includes(dirname(path)), server.stderr);
 
     const worker = spawnSync(process.execPath, ["apps/controller/src/worker.mjs"], {
       cwd: process.cwd(),
@@ -1141,11 +1143,9 @@ test("API and worker name a Preset file failure in their startup error code", as
       timeout: 10_000,
     });
     assert.equal(worker.status, 1, filename);
-    assert.equal(
-      startupDiagnostic(worker.stderr, "worker.startup-error").code,
-      "PRESET_FILE_INVALID",
-      filename,
-    );
-    assert.ok(!worker.stderr.includes(filename), worker.stderr);
+    const workerDiagnostic = startupDiagnostic(worker.stderr, "worker.startup-error");
+    assert.equal(workerDiagnostic.code, "PRESET_FILE_INVALID", filename);
+    assert.equal(workerDiagnostic.message, undefined);
+    assert.ok(!worker.stderr.includes(dirname(path)), worker.stderr);
   }
 });
