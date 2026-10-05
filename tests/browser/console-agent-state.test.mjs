@@ -438,6 +438,23 @@ test("Agent detail says an Agent's versions are hidden, not missing, when none i
     await page.getByText(/Creating an Agent alone does not create a version/).count(),
     0,
   );
+
+  // A first deploy still in flight has no active version, but the Agent is running.
+  const pending = await fixture.createAgent(namespace.id, "Pending history", nativeValues("v1"));
+  denyRevisionRead(fixture, namespace, await fixture.deployAgent(namespace.id, pending.id));
+  await page.goto(detailUrl(fixture, namespace.id, pending.id, "draft", "configuration").href);
+  await page.getByRole("heading", { name: "Pending history" }).waitFor();
+  await page.getByText(/^No readable versions\. This Agent has versions your access/).waitFor();
+
+  // A never-deployed Agent keeps the creation hint.
+  const fresh = await fixture.createAgent(namespace.id, "No history", nativeValues("v1"));
+  await page.goto(detailUrl(fixture, namespace.id, fresh.id, "draft", "configuration").href);
+  await page.getByRole("heading", { name: "No history" }).waitFor();
+  await page
+    .getByText(
+      "No readable versions. Creating an Agent alone does not create a version; if this Agent was deployed before, your access does not include its versions.",
+    )
+    .waitFor();
 });
 
 test("Agent detail reports a failed dedicated replacement as probably not serving", async (t) => {
