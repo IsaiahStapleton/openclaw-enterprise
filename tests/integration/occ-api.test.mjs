@@ -2556,6 +2556,13 @@ test("Installation deployment inventory fails closed on incomplete authorization
   // A complete fleet response must not turn any exact-resource denial into omission.
   for (const restriction of [
     {
+      id: "deny-inventory-installation-administer",
+      resourceKind: "installation",
+      resourceId: fixture.installationId,
+      action: "administer",
+      effect: "deny",
+    },
+    {
       id: "deny-inventory-namespace-read",
       namespaceId: namespace.id,
       resourceKind: "namespace",
