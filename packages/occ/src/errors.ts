@@ -321,7 +321,7 @@ export class NamespaceNotEmptyError extends ResourceConflictError {
 }
 
 export class NamespaceNotReadyError extends ResourceConflictError {
-  constructor(message = "The Namespace is not ready for deployment.") {
+  constructor(message = "The Namespace is not ready.") {
     super(message);
     this.name = "NamespaceNotReadyError";
   }

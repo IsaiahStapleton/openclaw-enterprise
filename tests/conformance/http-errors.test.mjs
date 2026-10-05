@@ -104,7 +104,7 @@ const cases = [
     {
       status: 409,
       code: "NAMESPACE_NOT_READY",
-      message: "The requested Namespace is not ready for deployment.",
+      message: "The requested Namespace is not ready.",
     },
   ],
   [

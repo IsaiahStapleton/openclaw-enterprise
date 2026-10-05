@@ -676,11 +676,7 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
   }
   if (error instanceof NamespaceNotReadyError) {
-    return failure(
-      409,
-      "NAMESPACE_NOT_READY",
-      "The requested Namespace is not ready for deployment.",
-    );
+    return failure(409, "NAMESPACE_NOT_READY", "The requested Namespace is not ready.");
   }
   if (error instanceof NamespaceNotEmptyError) {
     return failure(409, "NAMESPACE_NOT_EMPTY", namespaceNotEmptyMessage(error));

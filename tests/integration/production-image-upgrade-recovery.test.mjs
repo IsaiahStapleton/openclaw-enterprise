@@ -651,22 +651,26 @@ test("reviewed settings survive an interrupted controller upgrade without losing
   assert.equal(finalState.dispatches, 0);
 });
 
-test("stale baseline image fields stop before any writes", async (t) => {
+test("stale baseline image fields stop before any writes", { concurrency: true }, async (t) => {
+  const cases = [];
   for (const file of ["values", "installation"]) {
-    await t.test(file, async (subtest) => {
-      const f = await fixture(subtest, { controllerOnly: file === "values" });
-      const path = join(f.directory, `${file}.json`);
-      const baseline = JSON.parse(await readFile(path, "utf8"));
-      if (file === "values") {
-        baseline.images.controller = `registry.example.invalid/controller@sha256:${"f".repeat(64)}`;
-      } else {
-        baseline.drivers.compute.configuration.images.gateway = runtime;
-      }
-      await writeFile(path, JSON.stringify(baseline));
-      await assert.rejects(f.run(), /protected (Helm values|Installation YAML) differ/);
-      assert.deepEqual(await f.events(), []);
-    });
+    cases.push(
+      t.test(file, async (subtest) => {
+        const f = await fixture(subtest, { controllerOnly: file === "values" });
+        const path = join(f.directory, `${file}.json`);
+        const baseline = JSON.parse(await readFile(path, "utf8"));
+        if (file === "values") {
+          baseline.images.controller = `registry.example.invalid/controller@sha256:${"f".repeat(64)}`;
+        } else {
+          baseline.drivers.compute.configuration.images.gateway = runtime;
+        }
+        await writeFile(path, JSON.stringify(baseline));
+        await assert.rejects(f.run(), /protected (Helm values|Installation YAML) differ/);
+        assert.deepEqual(await f.events(), []);
+      }),
+    );
   }
+  await Promise.all(cases);
 });
 
 test("resume refuses altered reviewed candidates before another mutation", async (t) => {
@@ -681,174 +685,218 @@ test("resume refuses altered reviewed candidates before another mutation", async
   assert.equal((await f.events()).filter((event) => event === "migration").length, 0);
 });
 
-test("resume refuses changed prepared candidate and fleet evidence before another mutation", async (t) => {
-  for (const name of ["candidate-values.yaml", "targets.jsonl"]) {
-    await t.test(name, async (subtest) => {
-      const f = await fixture(subtest);
-      await f.failNext("fail-scale-worker");
-      await assert.rejects(f.run(), injectedFault);
-      const events = await f.events();
-      // An interrupted release must use the frozen candidate and Agent inventory.
-      await writeFile(join(f.evidence, name), "{}\n");
-      await assert.rejects(f.run("--resume"), /prepared upgrade evidence changed/);
-      assert.deepEqual(await f.events(), events);
-    });
-  }
-});
-
-test("candidate cannot redirect the Installation Secret or change an image outside the selected flags", async (t) => {
-  for (const field of ["secret", "image"]) {
-    await t.test(field, async (subtest) => {
-      const f = await fixture(subtest, { candidates: true });
-      const path = join(
-        f.directory,
-        field === "secret" ? "candidate-values.json" : "candidate-installation.json",
+test(
+  "resume refuses changed prepared candidate and fleet evidence before another mutation",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const name of ["candidate-values.yaml", "targets.jsonl"]) {
+      cases.push(
+        t.test(name, async (subtest) => {
+          const f = await fixture(subtest);
+          await f.failNext("fail-scale-worker");
+          await assert.rejects(f.run(), injectedFault);
+          const events = await f.events();
+          // An interrupted release must use the frozen candidate and Agent inventory.
+          await writeFile(join(f.evidence, name), "{}\n");
+          await assert.rejects(f.run("--resume"), /prepared upgrade evidence changed/);
+          assert.deepEqual(await f.events(), events);
+        }),
       );
-      const candidate = JSON.parse(await readFile(path, "utf8"));
-      if (field === "secret") {
-        candidate.installation.secretName = "other-installation";
-      } else {
-        candidate.drivers.compute.configuration.images.agent = runtime;
-      }
-      await writeFile(path, JSON.stringify(candidate));
-      await assert.rejects(f.run(), /candidate (values|Installation) change/);
-      assert.deepEqual(await f.events(), []);
-    });
-  }
-});
+    }
+    await Promise.all(cases);
+  },
+);
 
-test("candidate cannot change repository identity, grants, trust, or the Compute peer", async (t) => {
-  for (const change of [
-    "registry",
-    "driver",
-    "duration",
-    "peer",
-    "compute-authentication",
-    "remove",
-    "add",
-  ]) {
-    await t.test(change, async (subtest) => {
-      const f = await fixture(subtest, {
-        candidates: true,
-        repositoryCredentials: change !== "add",
-      });
-      const path = join(f.directory, "candidate-installation.json");
-      const candidate = JSON.parse(await readFile(path, "utf8"));
-      // These inputs select a registry, grant authority, TLS trust, and the
-      // credential service's network peer; no upgrade mutation may follow drift.
-      if (change === "registry") {
-        candidate.backend[0].configuration.registryPath = "/etc/other/registry.json";
-      } else if (change === "driver") {
-        candidate.drivers.repo.configuration.publicCaPath = "/etc/other/ca.crt";
-      } else if (change === "duration") {
-        candidate.drivers.repo.configuration.sessionDurationSeconds = 3600;
-      } else if (change === "peer") {
-        candidate.drivers.compute.configuration.network.repositoryCredentials.podLabels[
-          "app.kubernetes.io/component"
-        ] = "other";
-      } else if (change === "compute-authentication") {
-        candidate.drivers.compute.configuration.authentication = {
-          mode: "kubeconfig",
-          kubeconfigPath: "/etc/other/kubeconfig",
-          context: "other",
-        };
-      } else if (change === "remove") {
-        delete candidate.drivers.repo;
-        delete candidate.backend;
-      } else {
-        candidate.drivers.repo = { id: "repository-credentials", configuration: {} };
-        candidate.backend = [
-          {
-            id: "github-primary",
-            type: "github",
-            configuration: { registryPath: "/etc/other/registry.json" },
-            drivers: { repo: "repository-credentials" },
-          },
-        ];
-      }
-      await writeFile(path, JSON.stringify(candidate));
-      await assert.rejects(f.run(), /candidate Installation changes/);
-      assert.deepEqual(await f.events(), []);
-    });
-  }
-});
+test(
+  "candidate cannot redirect the Installation Secret or change an image outside the selected flags",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const field of ["secret", "image"]) {
+      cases.push(
+        t.test(field, async (subtest) => {
+          const f = await fixture(subtest, { candidates: true });
+          const path = join(
+            f.directory,
+            field === "secret" ? "candidate-values.json" : "candidate-installation.json",
+          );
+          const candidate = JSON.parse(await readFile(path, "utf8"));
+          if (field === "secret") {
+            candidate.installation.secretName = "other-installation";
+          } else {
+            candidate.drivers.compute.configuration.images.agent = runtime;
+          }
+          await writeFile(path, JSON.stringify(candidate));
+          await assert.rejects(f.run(), /candidate (values|Installation) change/);
+          assert.deepEqual(await f.events(), []);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
 
-test("candidate cannot change cluster credentials or other protected trust settings", async (t) => {
-  for (const change of [
-    "execution-kubeconfig",
-    "gateway-routing",
-    "chatgpt-secret",
-    "service-principal",
-    "trusted-proxy",
-    "configuration-authentication",
-    "plugin-executable",
-    "plugin-hosted",
-    "plugin-null",
-    "unreviewed-values",
-  ]) {
-    await t.test(change, async (subtest) => {
-      const f = await fixture(subtest, { candidates: true, controllerOnly: true });
-      const valuesPath = join(f.directory, "candidate-values.json");
-      const installationPath = join(f.directory, "candidate-installation.json");
-      const values = JSON.parse(await readFile(valuesPath, "utf8"));
-      const installation = JSON.parse(await readFile(installationPath, "utf8"));
-      // Each candidate redirects an identity or trust boundary while retaining
-      // the supported proxy and catalog changes; preparation must stop first.
-      if (change === "execution-kubeconfig") {
-        values.executionCluster = {
-          enabled: true,
-          apiKubeconfigSecretName: "other-api",
-          workerKubeconfigSecretName: "other-worker",
-          apiCidrs: ["198.51.100.0/24"],
-        };
-      } else if (change === "gateway-routing") {
-        values.gatewayRouting = { enabled: true, apiKeySecretName: "other-routing-key" };
-      } else if (change === "chatgpt-secret") {
-        values.backend = { chatgpt: { enabled: true, secretName: "other-chatgpt" } };
-      } else if (change === "service-principal") {
-        installation.drivers.compute.configuration.servicePrincipalCredentials = {
-          mode: "projectedServiceAccountToken",
-          audience: "other-audience",
-          expirationSeconds: 900,
-        };
-      } else if (change === "trusted-proxy") {
-        installation.drivers.compute.configuration.network = {
-          gatewayTrustedProxyCidrs: ["198.51.100.0/24"],
-        };
-      } else if (change === "configuration-authentication") {
-        installation.drivers.configuration = {
-          id: "config-kubernetes",
-          configuration: {
-            authentication: { mode: "kubeconfig", kubeconfigPath: "/etc/other", context: "other" },
-          },
-        };
-      } else if (change === "plugin-executable") {
-        installation.drivers.plugin.configuration.codexExecutable = "/etc/other/codex";
-      } else if (change === "plugin-hosted") {
-        installation.drivers.plugin.configuration.catalogSource = "hosted";
-      } else if (change === "plugin-null") {
-        installation.drivers.plugin = { id: null, configuration: { catalogSource: null } };
-      } else {
-        values.controlPlane = { extraSetting: true };
-      }
-      await writeFile(valuesPath, JSON.stringify(values));
-      await writeFile(installationPath, JSON.stringify(installation));
-      await assert.rejects(f.run(), /candidate (values|Installation) change/);
-      assert.deepEqual(await f.events(), []);
-    });
-  }
-});
+test(
+  "candidate cannot change repository identity, grants, trust, or the Compute peer",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const change of [
+      "registry",
+      "driver",
+      "duration",
+      "peer",
+      "compute-authentication",
+      "remove",
+      "add",
+    ]) {
+      cases.push(
+        t.test(change, async (subtest) => {
+          const f = await fixture(subtest, {
+            candidates: true,
+            repositoryCredentials: change !== "add",
+          });
+          const path = join(f.directory, "candidate-installation.json");
+          const candidate = JSON.parse(await readFile(path, "utf8"));
+          // These inputs select a registry, grant authority, TLS trust, and the
+          // credential service's network peer; no upgrade mutation may follow drift.
+          if (change === "registry") {
+            candidate.backend[0].configuration.registryPath = "/etc/other/registry.json";
+          } else if (change === "driver") {
+            candidate.drivers.repo.configuration.publicCaPath = "/etc/other/ca.crt";
+          } else if (change === "duration") {
+            candidate.drivers.repo.configuration.sessionDurationSeconds = 3600;
+          } else if (change === "peer") {
+            candidate.drivers.compute.configuration.network.repositoryCredentials.podLabels[
+              "app.kubernetes.io/component"
+            ] = "other";
+          } else if (change === "compute-authentication") {
+            candidate.drivers.compute.configuration.authentication = {
+              mode: "kubeconfig",
+              kubeconfigPath: "/etc/other/kubeconfig",
+              context: "other",
+            };
+          } else if (change === "remove") {
+            delete candidate.drivers.repo;
+            delete candidate.backend;
+          } else {
+            candidate.drivers.repo = { id: "repository-credentials", configuration: {} };
+            candidate.backend = [
+              {
+                id: "github-primary",
+                type: "github",
+                configuration: { registryPath: "/etc/other/registry.json" },
+                drivers: { repo: "repository-credentials" },
+              },
+            ];
+          }
+          await writeFile(path, JSON.stringify(candidate));
+          await assert.rejects(f.run(), /candidate Installation changes/);
+          assert.deepEqual(await f.events(), []);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
 
-test("repository-enabled upgrades require both image selections before mutation", async (t) => {
-  for (const controllerOnly of [true, false]) {
-    await t.test(controllerOnly ? "controller release" : "runtime release", async (subtest) => {
-      const f = await fixture(subtest, { repositoryCredentials: true, controllerOnly });
-      // Either release restarts the worker and broker, so neither may reuse an unverified pair.
-      await assert.rejects(f.run(), /require explicit controller and broker image selections/);
-      assert.deepEqual(await f.events(), []);
-    });
-  }
-});
+test(
+  "candidate cannot change cluster credentials or other protected trust settings",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const change of [
+      "execution-kubeconfig",
+      "gateway-routing",
+      "chatgpt-secret",
+      "service-principal",
+      "trusted-proxy",
+      "configuration-authentication",
+      "plugin-executable",
+      "plugin-hosted",
+      "plugin-null",
+      "unreviewed-values",
+    ]) {
+      cases.push(
+        t.test(change, async (subtest) => {
+          const f = await fixture(subtest, { candidates: true, controllerOnly: true });
+          const valuesPath = join(f.directory, "candidate-values.json");
+          const installationPath = join(f.directory, "candidate-installation.json");
+          const values = JSON.parse(await readFile(valuesPath, "utf8"));
+          const installation = JSON.parse(await readFile(installationPath, "utf8"));
+          // Each candidate redirects an identity or trust boundary while retaining
+          // the supported proxy and catalog changes; preparation must stop first.
+          if (change === "execution-kubeconfig") {
+            values.executionCluster = {
+              enabled: true,
+              apiKubeconfigSecretName: "other-api",
+              workerKubeconfigSecretName: "other-worker",
+              apiCidrs: ["198.51.100.0/24"],
+            };
+          } else if (change === "gateway-routing") {
+            values.gatewayRouting = { enabled: true, apiKeySecretName: "other-routing-key" };
+          } else if (change === "chatgpt-secret") {
+            values.backend = { chatgpt: { enabled: true, secretName: "other-chatgpt" } };
+          } else if (change === "service-principal") {
+            installation.drivers.compute.configuration.servicePrincipalCredentials = {
+              mode: "projectedServiceAccountToken",
+              audience: "other-audience",
+              expirationSeconds: 900,
+            };
+          } else if (change === "trusted-proxy") {
+            installation.drivers.compute.configuration.network = {
+              gatewayTrustedProxyCidrs: ["198.51.100.0/24"],
+            };
+          } else if (change === "configuration-authentication") {
+            installation.drivers.configuration = {
+              id: "config-kubernetes",
+              configuration: {
+                authentication: {
+                  mode: "kubeconfig",
+                  kubeconfigPath: "/etc/other",
+                  context: "other",
+                },
+              },
+            };
+          } else if (change === "plugin-executable") {
+            installation.drivers.plugin.configuration.codexExecutable = "/etc/other/codex";
+          } else if (change === "plugin-hosted") {
+            installation.drivers.plugin.configuration.catalogSource = "hosted";
+          } else if (change === "plugin-null") {
+            installation.drivers.plugin = { id: null, configuration: { catalogSource: null } };
+          } else {
+            values.controlPlane = { extraSetting: true };
+          }
+          await writeFile(valuesPath, JSON.stringify(values));
+          await writeFile(installationPath, JSON.stringify(installation));
+          await assert.rejects(f.run(), /candidate (values|Installation) change/);
+          assert.deepEqual(await f.events(), []);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
+
+test(
+  "repository-enabled upgrades require both image selections before mutation",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const controllerOnly of [true, false]) {
+      cases.push(
+        t.test(controllerOnly ? "controller release" : "runtime release", async (subtest) => {
+          const f = await fixture(subtest, { repositoryCredentials: true, controllerOnly });
+          // Either release restarts the worker and broker, so neither may reuse an unverified pair.
+          await assert.rejects(f.run(), /require explicit controller and broker image selections/);
+          assert.deepEqual(await f.events(), []);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
 
 test("broker image selection requires an enabled broker before mutation", async (t) => {
   const f = await fixture(t, { controllerOnly: true });
@@ -880,93 +928,120 @@ test("a changed eligible node stops the upgrade before mutation", async (t) => {
   assert.deepEqual(await f.events(), []);
 });
 
-test("deployed pair verification stops before Agent dispatch on failure", async (t) => {
-  for (const scenario of [
-    { flag: "wrong-broker-identity", error: /deployed worker identity does not match/ },
-    { flag: "fail-capability", error: /deployed controller cannot verify repository admission/ },
-  ]) {
-    await t.test(scenario.flag, async (subtest) => {
-      const f = await fixture(subtest, {
-        agent: true,
+test(
+  "deployed pair verification stops before Agent dispatch on failure",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const scenario of [
+      { flag: "wrong-broker-identity", error: /deployed worker identity does not match/ },
+      { flag: "fail-capability", error: /deployed controller cannot verify repository admission/ },
+    ]) {
+      cases.push(
+        t.test(scenario.flag, async (subtest) => {
+          const f = await fixture(subtest, {
+            agent: true,
+            repositoryCredentials: true,
+            simulatePair: true,
+          });
+          // Helm has completed, but an unqualified Pod must not receive Agent work.
+          await f.failNext(scenario.flag);
+          await assert.rejects(f.run(), scenario.error);
+          assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+          assert.equal((await f.state()).dispatches, 0);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
+
+test(
+  "controller upgrade verifies worker placement with and without a repository broker",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const scenario of [
+      { name: "broker disabled", repositoryCredentials: false, workerPlacement: "container" },
+      {
+        name: "broker enabled with existing chart",
         repositoryCredentials: true,
-        simulatePair: true,
-      });
-      // Helm has completed, but an unqualified Pod must not receive Agent work.
-      await f.failNext(scenario.flag);
-      await assert.rejects(f.run(), scenario.error);
-      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
-      assert.equal((await f.state()).dispatches, 0);
-    });
-  }
-});
+        workerPlacement: "container",
+      },
+      {
+        name: "broker enabled with restartable worker",
+        repositoryCredentials: true,
+        workerPlacement: "restartable",
+      },
+    ]) {
+      cases.push(
+        t.test(scenario.name, async (subtest) => {
+          const f = await fixture(subtest, {
+            ...scenario,
+            controllerOnly: true,
+            simulatePair: scenario.repositoryCredentials,
+          });
+          const result = await f.run();
+          assert.match(
+            result.stdout,
+            /Upgraded controller image; no Agent deployments were requested/,
+          );
+          assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+          assert.equal((await f.state()).controller, newController);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
 
-test("controller upgrade verifies worker placement with and without a repository broker", async (t) => {
-  for (const scenario of [
-    { name: "broker disabled", repositoryCredentials: false, workerPlacement: "container" },
-    {
-      name: "broker enabled with existing chart",
-      repositoryCredentials: true,
-      workerPlacement: "container",
-    },
-    {
-      name: "broker enabled with restartable worker",
-      repositoryCredentials: true,
-      workerPlacement: "restartable",
-    },
-  ]) {
-    await t.test(scenario.name, async (subtest) => {
-      const f = await fixture(subtest, {
-        ...scenario,
-        controllerOnly: true,
-        simulatePair: scenario.repositoryCredentials,
-      });
-      const result = await f.run();
-      assert.match(result.stdout, /Upgraded controller image; no Agent deployments were requested/);
-      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
-      assert.equal((await f.state()).controller, newController);
-    });
-  }
-});
-
-test("controller upgrade rejects missing, ambiguous, or invalid worker placement", async (t) => {
-  for (const scenario of [
-    { name: "missing worker", repositoryCredentials: true, workerPlacement: "missing" },
-    { name: "duplicate worker", repositoryCredentials: true, workerPlacement: "ambiguous" },
-    {
-      name: "nonrestartable worker",
-      repositoryCredentials: true,
-      workerPlacement: "nonrestartable",
-    },
-    {
-      name: "init worker without broker",
-      repositoryCredentials: false,
-      workerPlacement: "restartable",
-    },
-    {
-      name: "wrong worker image",
-      repositoryCredentials: true,
-      workerPlacement: "restartable",
-      wrongImage: true,
-    },
-  ]) {
-    await t.test(scenario.name, async (subtest) => {
-      const f = await fixture(subtest, {
-        ...scenario,
-        controllerOnly: true,
-        simulatePair: scenario.repositoryCredentials,
-      });
-      if (scenario.wrongImage) {
-        const state = await f.state();
-        state.workerObservedImage = oldRuntime;
-        await writeFile(join(f.directory, "state.json"), JSON.stringify(state));
-      }
-      // A malformed or unexpected Deployment must not be reported as a
-      // successful controller rollout, even if the Helm request completed.
-      await assert.rejects(f.run(), /exactly one worker with the selected controller image/);
-      assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
-    });
-  }
-});
+test(
+  "controller upgrade rejects missing, ambiguous, or invalid worker placement",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const scenario of [
+      { name: "missing worker", repositoryCredentials: true, workerPlacement: "missing" },
+      { name: "duplicate worker", repositoryCredentials: true, workerPlacement: "ambiguous" },
+      {
+        name: "nonrestartable worker",
+        repositoryCredentials: true,
+        workerPlacement: "nonrestartable",
+      },
+      {
+        name: "init worker without broker",
+        repositoryCredentials: false,
+        workerPlacement: "restartable",
+      },
+      {
+        name: "wrong worker image",
+        repositoryCredentials: true,
+        workerPlacement: "restartable",
+        wrongImage: true,
+      },
+    ]) {
+      cases.push(
+        t.test(scenario.name, async (subtest) => {
+          const f = await fixture(subtest, {
+            ...scenario,
+            controllerOnly: true,
+            simulatePair: scenario.repositoryCredentials,
+          });
+          if (scenario.wrongImage) {
+            const state = await f.state();
+            state.workerObservedImage = oldRuntime;
+            await writeFile(join(f.directory, "state.json"), JSON.stringify(state));
+          }
+          // A malformed or unexpected Deployment must not be reported as a
+          // successful controller rollout, even if the Helm request completed.
+          await assert.rejects(f.run(), /exactly one worker with the selected controller image/);
+          assert.equal((await f.events()).filter((event) => event === "migration").length, 1);
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
 
 test("a stale bundled Collector config Secret stops the upgrade before mutation", async (t) => {
   const f = await fixture(t, { controllerOnly: true, collector: "stale" });
@@ -987,20 +1062,28 @@ test("a missing bundled Collector config Secret stops the upgrade before mutatio
   assert.deepEqual(await f.events(), []);
 });
 
-test("a current or explicitly reviewed Collector config Secret lets the upgrade proceed", async (t) => {
-  for (const [collector, extra] of [
-    ["current", []],
-    ["stale", ["--collector-config-reviewed"]],
-  ]) {
-    await t.test(`${collector} ${extra.join(" ")}`.trim(), async (subtest) => {
-      const f = await fixture(subtest, { controllerOnly: true, collector });
-      await f.run(...extra);
-      assert.equal((await f.state()).controller, newController);
-      const drift = (await readFile(join(f.evidence, "collector-config-drift"), "utf8")).trim();
-      assert.equal(drift, collector === "stale" ? "collector.yaml\nkubernetes.yaml" : "");
-    });
-  }
-});
+test(
+  "a current or explicitly reviewed Collector config Secret lets the upgrade proceed",
+  { concurrency: true },
+  async (t) => {
+    const cases = [];
+    for (const [collector, extra] of [
+      ["current", []],
+      ["stale", ["--collector-config-reviewed"]],
+    ]) {
+      cases.push(
+        t.test(`${collector} ${extra.join(" ")}`.trim(), async (subtest) => {
+          const f = await fixture(subtest, { controllerOnly: true, collector });
+          await f.run(...extra);
+          assert.equal((await f.state()).controller, newController);
+          const drift = (await readFile(join(f.evidence, "collector-config-drift"), "utf8")).trim();
+          assert.equal(drift, collector === "stale" ? "collector.yaml\nkubernetes.yaml" : "");
+        }),
+      );
+    }
+    await Promise.all(cases);
+  },
+);
 
 // The 2026-09-28 release example offered DevDay Presets through presets.files; later
 // images no longer ship those files (finding 436). The selected controller image must
