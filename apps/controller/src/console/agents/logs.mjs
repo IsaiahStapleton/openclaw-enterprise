@@ -32,6 +32,20 @@ const WITHHELD_LABELS = {
   malformed: "multi-line, unparseable or deeply nested JSON",
 };
 
+// Agent output is attacker-influenced. A bidirectional override (U+202E) would display the
+// rest of a line reversed, and zero-width or other invisible characters hide text, so every
+// character that is not graphic shows as a visible escape, as `occ agent logs` prints it.
+const HIDDEN_CHARACTER = /[^\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}]/gu;
+
+function visibleText(value) {
+  return String(value).replace(HIDDEN_CHARACTER, (character) => {
+    const code = character.codePointAt(0);
+    return code > 0xffff
+      ? `\\U${code.toString(16).padStart(8, "0")}`
+      : `\\u${code.toString(16).padStart(4, "0")}`;
+  });
+}
+
 function withheldText({ count, reason }) {
   const label = WITHHELD_LABELS[reason];
   const lines = count === 1 ? "line" : "lines";
@@ -150,7 +164,9 @@ function podCard(pod) {
             element(
               "li",
               {},
-              `${event.container ? `${event.container} · ` : ""}${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
+              visibleText(
+                `${event.container ? `${event.container} · ` : ""}${event.reason}${event.count > 1 ? ` ×${event.count}` : ""}: ${event.message}`,
+              ),
             ),
           ),
         )
@@ -209,12 +225,14 @@ function recordRow(record) {
     element("span", { className: "log-time" }, record.time ? displayDate(record.time) : "—"),
     element("span", { className: `log-level log-level-${record.level}` }, record.level),
     element("span", { className: "log-kind" }, record.kind),
-    record.subsystem ? element("span", { className: "log-subsystem" }, record.subsystem) : null,
-    element("span", { className: "log-message" }, record.message),
+    record.subsystem
+      ? element("span", { className: "log-subsystem" }, visibleText(record.subsystem))
+      : null,
+    element("span", { className: "log-message" }, visibleText(record.message)),
     // A failure code is the point of the line; keep it visible without expanding.
     record.fields?.code === undefined
       ? null
-      : element("span", { className: "log-code" }, `code=${record.fields.code}`),
+      : element("span", { className: "log-code" }, `code=${visibleText(record.fields.code)}`),
   );
   const provenance = record.kind === "sandbox" ? policyProvenance(record.fields) : null;
   if (provenance !== null) {
@@ -229,20 +247,20 @@ function recordRow(record) {
   } else {
     const fields = element("dl", { className: "log-fields" });
     for (const [name, value] of Object.entries(record.fields)) {
-      fields.append(element("dt", {}, name), element("dd", {}, String(value)));
+      fields.append(element("dt", {}, visibleText(name)), element("dd", {}, visibleText(value)));
     }
     row = element("details", { className: "log-row" }, element("summary", {}, summary), fields);
   }
   // Filters match only lines; gap and withheld rows always stay visible.
   row.dataset.level = record.level;
-  row.dataset.search = [
-    record.kind,
-    record.subsystem ?? "",
-    record.message,
-    ...Object.entries(record.fields ?? {}).map(([name, value]) => `${name}=${value}`),
-  ]
-    .join(" ")
-    .toLowerCase();
+  row.dataset.search = visibleText(
+    [
+      record.kind,
+      record.subsystem ?? "",
+      record.message,
+      ...Object.entries(record.fields ?? {}).map(([name, value]) => `${name}=${value}`),
+    ].join(" "),
+  ).toLowerCase();
   return row;
 }
 
