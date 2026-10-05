@@ -153,8 +153,6 @@ runs:
       shell: bash
       env:
         CI_RUNNER_TEST_TIMEOUT_MS: ${{ (startsWith(inputs.lane, 'checks-baseline-') || startsWith(inputs.lane, 'checks-browser')) && '300000' || inputs.lane == 'k3d-model' && '5400000' || '' }}
-        # Experiment (to be reverted): oversubscribe the 2-CPU runners.
-        CI_RUNNER_FILE_CONCURRENCY: ${{ startsWith(inputs.lane, 'checks-baseline-') && '4' || '' }}
         # Browser tests write screenshots and failure.json (console, network
         # and navigation log) here only when a test fails. Limited to the
         # fixture-only browser lanes.
