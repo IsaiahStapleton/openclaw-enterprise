@@ -165,9 +165,9 @@ Deployments. The API validates production listener settings, Better Auth,
 database access, trusted Installation YAML, selected Drivers, Backend
 membership, and Kubernetes Compute preflight before readiness. It serves private
 controller routes, `/healthz`, and database-backed `/readyz` behind the
-operator-managed endpoint. A startup probe on `/healthz` (1-second period, 120
-failures) holds liveness off for 2 minutes; readiness waits for its first
-success, so the API takes traffic about a second after listening.
+operator-managed endpoint. A `/healthz` startup probe (1-second period, 120
+failures) gives the API 2 minutes to listen and lets readiness start within a
+second of listening.
 
 `apps/controller/src/index.ts:createFastifyApp`
 
@@ -183,9 +183,8 @@ failed close logs `shutdown.failed` and exits `1`. A log ending at
 
 When `controlPlane.nodeSelector` is non-empty, the chart places the API and
 worker Pods with that selector. The same selector applies to the initialization
-Job that runs the migration init container and bootstrap container, so production
-operators can keep migration, bootstrap, API, and worker Pods on a reviewed
-control-plane node pool.
+Job (migration and bootstrap), so all four stay on a reviewed control-plane node
+pool.
 `deploy/helm/openclaw-enterprise/templates/gateway-routing.yaml` also projects
 that selector into `EnvoyProxy.spec.provider.kubernetes.envoyDeployment.pod`,
 so the credential-checking private proxy stays on the trusted pool.
