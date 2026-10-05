@@ -1491,6 +1491,7 @@ test(
       [44, "preBrokerReceiptFence"],
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
+      [47, "preAdministratorCredentialSourceGrants"],
     ]) {
       await context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
@@ -1745,6 +1746,7 @@ test(
       [44, "preBrokerReceiptFence"],
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
+      [47, "preAdministratorCredentialSourceGrants"],
     ]) {
       await context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
@@ -1820,6 +1822,7 @@ test(
       [44, "preBrokerReceiptFence"],
       [45, "preModelProbeFailureCause"],
       [46, "preProvisioningConfigurationRelease"],
+      // Prefix 47 is omitted: 0048 only updates rows, so it has no DDL for the trigger to abort.
     ]) {
       await context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
@@ -2367,5 +2370,182 @@ test(
     assert.equal((await authorize(principals[0], "administer", "installation")).allowed, true);
     assert.equal((await authorize(principals[0], "read", "namespace")).allowed, true);
     assert.equal((await authorize(principals[1], "read", "namespace")).allowed, true);
+  },
+);
+
+test(
+  "Credential source grant migration upgrades only unchanged built-in administrators",
+  requiresOwnedPostgres,
+  async (context) => {
+    const fixture = await ownedPostgres();
+    const database = `openclaw_cs_grants_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+    const databaseCommand = (sql, target = "postgres") =>
+      runCommand(fixture, "docker", [
+        ...fixture.composeArgs,
+        "psql",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        "postgres",
+        "-d",
+        target,
+        "-c",
+        sql,
+      ]);
+    let pool;
+    context.after(async () => {
+      try {
+        await pool?.end();
+      } finally {
+        await databaseCommand(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
+      }
+    });
+    await databaseCommand(`CREATE DATABASE ${database}`);
+    await databaseCommand(
+      `GRANT CREATE ON DATABASE ${database} TO occ_migrator; CREATE SCHEMA occ AUTHORIZATION occ_migrator; CREATE SCHEMA drizzle AUTHORIZATION occ_migrator; REVOKE CREATE ON SCHEMA public FROM PUBLIC;`,
+      database,
+    );
+    const migrationUrl = new URL(fixture.migrationUrl);
+    migrationUrl.pathname = `/${database}`;
+    pool = new pg.Pool({ connectionString: migrationUrl.toString(), max: 1 });
+    const migration = "0048_administrator_credential_source_grants.sql";
+    const priorMigrations = (await readdir(migrationsDirectory))
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name) && name < migration)
+      .sort();
+    assert.equal(priorMigrations.at(-1), "0047_provisioning_configuration_release.sql");
+    for (const name of priorMigrations) {
+      await pool.query(await readFile(join(migrationsDirectory, name), "utf8"));
+    }
+
+    // Freeze the historical seeds: future seed edits must not alter this upgrade fixture.
+    const permissions = (entries) =>
+      entries.flatMap(([resourceKind, actions]) =>
+        actions.map((action) => ({ action, resourceKind })),
+      );
+    const presetSeed = permissions([
+      ["installation", ["administer", "read"]],
+      ["namespace", ["create", "read", "delete"]],
+      ["configuration", ["create", "read", "update", "delete"]],
+      ["service_account", ["create", "read", "update", "delete"]],
+      ["secret", ["create", "read", "update", "delete"]],
+      ["preset", ["create", "read", "update", "delete"]],
+      ["secret", ["operate"]],
+      ["agent", ["create", "read", "update", "delete", "deploy", "operate", "administer"]],
+      ["agent_revision", ["read"]],
+    ]);
+    // The 2026-09-28 release seed: credential sources without update.
+    const releaseSeed = [
+      ...presetSeed.slice(0, -8),
+      ...permissions([["credential_source", ["create", "read", "delete", "operate"]]]),
+      ...presetSeed.slice(-8),
+    ];
+    const currentGrants = permissions([
+      ["credential_source", ["create", "read", "update", "delete", "operate"]],
+    ]);
+    const installationId = `ins_${randomUUID()}`;
+    const namespaceId = `ns_${randomUUID()}`;
+    await pool.query("INSERT INTO occ.installation VALUES ($1, 'Upgrade', now())", [
+      installationId,
+    ]);
+    await pool.query(
+      "INSERT INTO occ.namespaces (id, name, status, created_at) VALUES ($1, 'Upgrade', 'ready', now())",
+      [namespaceId],
+    );
+    const role = (overrides = {}) => ({
+      id: `role_admin_${randomUUID()}`,
+      namespace_id: null,
+      name: "Installation administrator",
+      permissions: releaseSeed,
+      ...overrides,
+    });
+    const release = role();
+    const reordered = role({ permissions: [...releaseSeed].reverse() });
+    const preCredentialSources = role({ permissions: presetSeed });
+    const reduced = role({ permissions: releaseSeed.slice(1) });
+    const current = role({ permissions: [...releaseSeed, currentGrants[2]] });
+    const roles = [
+      release,
+      reordered,
+      preCredentialSources,
+      reduced,
+      current,
+      role({ permissions: [...releaseSeed, { action: "update", resourceKind: "namespace" }] }),
+      role({ name: "Custom administrator" }),
+      role({ id: `role_${randomUUID()}` }),
+      role({ namespace_id: namespaceId }),
+    ];
+    for (const entry of roles) {
+      await pool.query("INSERT INTO occ.iam_roles VALUES ($1, $2, $3, $4::jsonb)", [
+        entry.id,
+        entry.namespace_id,
+        entry.name,
+        JSON.stringify(entry.permissions),
+      ]);
+    }
+    const principals = [];
+    for (const entry of [release, preCredentialSources, reduced]) {
+      const principalId = `prn_${randomUUID()}`;
+      principals.push(principalId);
+      await pool.query(
+        "INSERT INTO occ.iam_identities (id, kind, issuer, subject) VALUES ($1, 'principal', 'upgrade', $1)",
+        [principalId],
+      );
+      await pool.query(
+        "INSERT INTO occ.iam_access_bindings (id, identity_subject_id, role_id) VALUES ($1, $2, $3)",
+        [`binding_admin_${randomUUID()}`, principalId, entry.id],
+      );
+    }
+    const [{ NativeIAMDriver }, { PostgresPlatformState }] = await Promise.all([
+      import("../../packages/iam/src/index.ts"),
+      import("../../packages/occ/src/state/postgres-state.ts"),
+    ]);
+    const iam = new NativeIAMDriver(new PostgresPlatformState(pool));
+    const sourceId = `cs_${randomUUID()}`;
+    const authorize = async (principalId, action) =>
+      (
+        await iam.authorize({
+          principalId,
+          action,
+          resource: {
+            kind: "credential_source",
+            id: action === "create" ? namespaceId : sourceId,
+            namespaceId,
+          },
+        })
+      ).allowed;
+    assert.equal(await authorize(principals[0], "update"), false);
+    assert.equal(await authorize(principals[0], "read"), true);
+    assert.equal(await authorize(principals[1], "read"), false);
+
+    // Run the repository migration itself, not copied UPDATE text or a test-only migrator.
+    const sql = await readFile(join(migrationsDirectory, migration), "utf8");
+    await pool.query(sql);
+    const upgraded = new Map([
+      [release.id, [currentGrants[2]]],
+      [reordered.id, [currentGrants[2]]],
+      [preCredentialSources.id, currentGrants],
+    ]);
+    const expected = (entry) => ({
+      ...entry,
+      permissions: [...entry.permissions, ...(upgraded.get(entry.id) ?? [])],
+    });
+    for (const entry of roles) {
+      const actual = (await pool.query("SELECT * FROM occ.iam_roles WHERE id = $1", [entry.id]))
+        .rows[0];
+      assert.deepEqual(actual, expected(entry));
+    }
+    // A repeated run changes nothing: every upgraded Role now matches the current seed.
+    await pool.query(sql);
+    for (const entry of roles) {
+      const actual = (await pool.query("SELECT * FROM occ.iam_roles WHERE id = $1", [entry.id]))
+        .rows[0];
+      assert.deepEqual(actual, expected(entry));
+    }
+    for (const { action } of currentGrants) {
+      assert.equal(await authorize(principals[0], action), true);
+      assert.equal(await authorize(principals[1], action), true);
+    }
+    assert.equal(await authorize(principals[2], "update"), false);
+    assert.equal(await authorize(principals[2], "read"), true);
   },
 );
