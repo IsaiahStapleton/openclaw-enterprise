@@ -67,14 +67,24 @@ after(async () => {
   if (deletedNamespaces.size === 0) {
     return;
   }
-  await waitFor(
-    "local-path volumes of deleted namespaces to be removed",
-    async () =>
-      !JSON.parse(await kubectl("get", "persistentvolumes", "-o", "json")).items.some(({ spec }) =>
-        deletedNamespaces.has(spec.claimRef?.namespace),
-      ),
-    180_000,
-  );
+  let remaining = [];
+  try {
+    await waitFor(
+      "local-path volumes of deleted namespaces to be removed",
+      async () => {
+        const volumes = JSON.parse(await kubectlRead("get", "persistentvolumes", "-o", "json"));
+        remaining = volumes.items
+          .filter(({ spec }) => deletedNamespaces.has(spec.claimRef?.namespace))
+          .map(({ metadata, status }) => `${metadata.name} (${status?.phase ?? "unknown"})`);
+        return remaining.length === 0;
+      },
+      180_000,
+    );
+  } catch (error) {
+    // Bound means a namespace is stuck; Released or Failed means local-path's helper failed.
+    error.message = `${error.message} Remaining: ${remaining.join(", ")}`;
+    throw error;
+  }
 });
 
 test(
