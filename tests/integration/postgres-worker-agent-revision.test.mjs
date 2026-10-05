@@ -30,10 +30,11 @@ import {
 import { waitFor } from "../helpers/wait-for.mjs";
 
 // Each test owns a database (Work claims span one), copied from one migrated template
-// per file rather than migrated again. Nothing connects to the template itself.
+// per file rather than migrated again. Nothing connects to the template itself. A failed
+// template preparation is not cached: the next test retries it, and cleanup ignores it.
 let template;
 after(async () => {
-  await (await template)?.cleanup();
+  await (await template?.catch(() => undefined))?.cleanup();
 });
 
 async function prepareDatabase(context) {
@@ -46,7 +47,10 @@ async function prepareDatabase(context) {
     file: fileURLToPath(import.meta.url),
     statePath: process.env.OPENCLAW_ENTERPRISE_CI_STATE,
   };
-  template ??= prepareFile(fixture);
+  template ??= prepareFile(fixture).catch((error) => {
+    template = undefined;
+    throw error;
+  });
   const prepared = await prepareFile({
     ...fixture,
     template: (await template).env.OCC_TEST_DATABASE_URL,

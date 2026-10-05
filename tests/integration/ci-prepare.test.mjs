@@ -1468,6 +1468,8 @@ test("prepareFile copies a per-test database from a ready template it owns witho
       server,
       database("openclaw_ci_foreign_owner", { owner: "openclaw-ci-other" }),
       database("openclaw_ci_planned", { status: "planned" }),
+      database("openclaw_ci_other_project", { composeProject: "openclaw_ci_pg_other" }),
+      database("openclaw_ci_other_port", { port: 45432 }),
     ],
   });
   await writeFile(
@@ -1501,7 +1503,7 @@ const options = {
 };
 const template = await prepareFile(options);
 const url = (name) => template.env.OCC_TEST_DATABASE_URL.replace(/[^/]+$/, name);
-for (const refused of [url("openclaw_ci_foreign_owner"), url("openclaw_ci_planned"), url("openclaw_ci_absent"), "not a url"]) {
+for (const refused of [url("openclaw_ci_foreign_owner"), url("openclaw_ci_planned"), url("openclaw_ci_other_project"), url("openclaw_ci_other_port"), url("openclaw_ci_absent"), "not a url"]) {
   await assert.rejects(() => prepareFile({ ...options, template: refused }), /template must be/);
 }
 await assert.rejects(
@@ -1515,8 +1517,13 @@ assert.notEqual(copied.pathname, new URL(template.env.OCC_TEST_DATABASE_URL).pat
 assert.match(copied.pathname, /^\\/openclaw_ci_postgres_worker_agent_revision_[a-f0-9]{12}$/);
 const prepared = JSON.parse(await readFile(statePath, "utf8"));
 assert.deepEqual(
-  prepared.resources.filter((resource) => resource.kind === "postgres-database" && resource.owner === prepared.prefix && resource.status === "ready").map((resource) => "/" + resource.name),
+  prepared.resources.filter((resource) => resource.kind === "postgres-database" && resource.owner === prepared.prefix && resource.status === "ready" && resource.name.startsWith("openclaw_ci_postgres_")).map((resource) => "/" + resource.name),
   [new URL(template.env.OCC_TEST_DATABASE_URL).pathname, copied.pathname],
+);
+// A refused template is rejected before a resource is recorded.
+assert.deepEqual(
+  prepared.resources.filter((resource) => resource.status === "planned").map((resource) => resource.name),
+  ["openclaw_ci_planned"],
 );
 await copy.cleanup();
 await template.cleanup();

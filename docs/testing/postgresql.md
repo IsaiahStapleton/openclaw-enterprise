@@ -7,7 +7,7 @@ disposable PostgreSQL databases. Start with the [shared requirements](README.md#
 
 The revision-worker suite allocates disposable databases under its run's
 owner so another test cannot consume its queue. It migrates one template database per
-run and gives each test a copy of it (`prepareFile({ template })`). Four cross-Namespace
+file and gives each test a copy of it (`prepareFile({ template })`). Four cross-Namespace
 cases explicitly share a database within their test. Tests connect as `occ_app`; preparation
 uses the existing administrator and migrator paths. The suite rejects a standalone
 `OCC_TEST_DATABASE_URL` without prepared ownership before changing that database.
