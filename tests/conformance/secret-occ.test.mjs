@@ -13,7 +13,10 @@ import {
   ScopeViolationError,
 } from "../../packages/occ/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
-import { createDevelopmentComputeDriver, selectDrivers } from "../helpers/development.mjs";
+import {
+  createDevelopmentComputeDriver,
+  registerAndSelectDrivers,
+} from "../helpers/development.mjs";
 import { bindRole, grantRole, principalIAMState } from "../helpers/iam-grants.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 
@@ -52,50 +55,33 @@ async function fixture(options = {}) {
     [administrator, deployer, noSecretOperator, secretConsumer, metadataReader, zeroGrant],
     "secret-occ-conformance",
   );
-  for (const [subjectId, role, binding, permissions] of [
-    [administrator, "administrator", "administrator", adminPermissions()],
-    [
-      deployer,
-      "deployer",
-      "deployer",
-      {
-        namespace: ["read"],
-        configuration: ["read"],
-        agent: ["read", "deploy"],
-        secret: ["operate"],
-        agent_revision: ["read"],
-      },
-    ],
-    [
-      noSecretOperator,
-      "no-secret",
-      "no-secret",
-      {
-        namespace: ["read"],
-        configuration: ["read"],
-        agent: ["read", "deploy"],
-        agent_revision: ["read"],
-      },
-    ],
-    [secretConsumer, "agent-secret", "secret-consumer", { secret: ["operate"] }],
-    [
-      metadataReader,
-      "metadata-reader",
-      "metadata-reader",
-      {
-        namespace: ["read"],
-        configuration: ["create", "read", "update"],
-        agent: ["create", "read", "update"],
-        secret: ["read"],
-      },
-    ],
-  ]) {
+  const grant = (subjectId, name, permissions, bindingName = name) =>
     grantRole(iamState, subjectId, {
-      id: `secret-occ-${role}-role`,
-      bindingId: `secret-occ-${binding}-binding`,
+      id: `secret-occ-${name}-role`,
+      bindingId: `secret-occ-${bindingName}-binding`,
       permissions,
     });
-  }
+  grant(administrator, "administrator", adminPermissions());
+  grant(deployer, "deployer", {
+    namespace: ["read"],
+    configuration: ["read"],
+    agent: ["read", "deploy"],
+    secret: ["operate"],
+    agent_revision: ["read"],
+  });
+  grant(noSecretOperator, "no-secret", {
+    namespace: ["read"],
+    configuration: ["read"],
+    agent: ["read", "deploy"],
+    agent_revision: ["read"],
+  });
+  grant(secretConsumer, "agent-secret", { secret: ["operate"] }, "secret-consumer");
+  grant(metadataReader, "metadata-reader", {
+    namespace: ["read"],
+    configuration: ["create", "read", "update"],
+    agent: ["create", "read", "update"],
+    secret: ["read"],
+  });
   const iam = new NativeIAMDriver(
     { loadNativeIAMState: async () => iamState },
     { id: "secret-occ-iam" },
@@ -106,7 +92,7 @@ async function fixture(options = {}) {
   const configurationDriver = createTestConfigurationDriver({ id: "secret-occ-configuration" });
   const secretDriver = options.secretDriver ?? createTestSecretDriver();
 
-  selectDrivers(controller, [iam, compute, configurationDriver, secretDriver]);
+  registerAndSelectDrivers(controller, [iam, compute, configurationDriver, secretDriver]);
 
   const namespace = await controller.createNamespace(administrator, {
     name: options.namespaceName ?? "Secret OCC tenant",

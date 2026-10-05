@@ -20,7 +20,7 @@ import {
 } from "../../packages/occ/src/index.ts";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
-import { selectDrivers } from "../helpers/development.mjs";
+import { registerAndSelectDrivers } from "../helpers/development.mjs";
 import { bindRole, permissionsFor } from "../helpers/iam-grants.mjs";
 import { requestFailure } from "../../apps/controller/src/http/errors.ts";
 
@@ -175,7 +175,7 @@ function createController(iam = createIAMDriver(), options = {}) {
             : `${kind}-${++nextIdentifier}`,
   });
   const drivers = createDrivers(iam);
-  selectDrivers(controller, [
+  registerAndSelectDrivers(controller, [
     drivers.iam,
     drivers.compute,
     drivers.configuration,

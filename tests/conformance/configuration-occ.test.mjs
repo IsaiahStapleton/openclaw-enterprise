@@ -20,7 +20,10 @@ import {
 } from "../../packages/occ/src/index.ts";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
-import { createDevelopmentComputeDriver, selectDrivers } from "../helpers/development.mjs";
+import {
+  createDevelopmentComputeDriver,
+  registerAndSelectDrivers,
+} from "../helpers/development.mjs";
 import { bindRole, grantRole, principalIAMState } from "../helpers/iam-grants.mjs";
 
 const administrator = "principal-configuration-administrator";
@@ -62,7 +65,7 @@ async function fixture(options = {}) {
   const state = new InMemoryPlatformState();
   const controller = new OpenClawController(installation, { state, ...options });
   const secretDriver = createTestSecretDriver();
-  selectDrivers(controller, [iam, compute, configurationDriver, secretDriver]);
+  registerAndSelectDrivers(controller, [iam, compute, configurationDriver, secretDriver]);
   const namespace = await controller.createNamespace(administrator, {
     name: "Configuration conformance tenant",
   });
