@@ -397,6 +397,10 @@ function referencePage(document, groups, entries) {
         "Each operation lists its supported status codes.",
         "A NUL character or an unpaired UTF-16 surrogate in any request body string,",
         "object key or path parameter is refused with `400 INVALID_REQUEST`.",
+        "Operations that take a request body list `413` and `415`. Any request whose",
+        "declared body size exceeds the limit is refused with `413 PAYLOAD_TOO_LARGE`,",
+        "and any non-GET request with a body that is not JSON with",
+        "`415 UNSUPPORTED_MEDIA_TYPE`, even on an operation that takes no body.",
       ].join("\n"),
       schemaTable(schema, document),
     );
