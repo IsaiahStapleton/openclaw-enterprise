@@ -1360,10 +1360,12 @@ test("the controller fails closed until an authoritative IAM Driver is selected"
 
 test("an authorization callback cannot bypass the selected IAM Driver", async () => {
   const controller = new OpenClawController(installation, {
+    // Well-formed apart from naming another Driver, so only the Driver check refuses it.
     authorize: async () => ({
       allowed: true,
       reason: "An untrusted callback attempted to grant access.",
       driverId: "unregistered-iam",
+      evidence: { groupIds: [], bindingIds: [], roleIds: [], restrictionIds: [] },
     }),
   });
 
@@ -1377,10 +1379,10 @@ test("an authorization callback cannot bypass the selected IAM Driver", async ()
   controller.registerDriver(iam);
   controller.selectDriver("iam", iam.id);
 
-  await assert.rejects(
-    controller.createNamespace("principal-admin", { name: "Wrong authority" }),
-    AuthorizationDeniedError,
-  );
+  await assert.rejects(controller.createNamespace("principal-admin", { name: "Wrong authority" }), {
+    name: "DependencyUnavailableError",
+    message: /belongs to another Driver/,
+  });
   assert.deepEqual(controller.pendingOperations(), []);
 });
 
