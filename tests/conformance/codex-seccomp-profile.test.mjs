@@ -265,11 +265,15 @@ async function withMockedPollClock(t, operation) {
       () => (settled = true),
       () => (settled = true),
     );
-    // performance.now() is not mocked: a helper that polls without arming its
-    // delay would never advance the mocked clock, so fail instead of spinning.
+    // performance.now() is not mocked. A helper that polls without arming its
+    // delay never advances the mocked clock, so fail fast instead of spinning;
+    // each run settles within milliseconds otherwise.
     const started = performance.now();
     while (!settled) {
-      assert.ok(performance.now() - started < 30_000, "the helper polled without its delay");
+      assert.ok(
+        performance.now() - started < 5_000,
+        "the helper made no progress on the mocked clock within 5 s",
+      );
       // setImmediate is not mocked: let file and injected-command work run, then
       // fire whichever poll delay the helper armed meanwhile.
       await new Promise((resolve) => setImmediate(resolve));
@@ -299,6 +303,8 @@ async function missingProfileFixture(t, observations, options = {}) {
   let cleanupCalls = 0;
   const execFile = async (command, args) => {
     // Like a real child process, every injected command completes on a later turn.
+    // This also lets withMockedPollClock's guard run between polls: a poll loop
+    // that stayed on the microtask queue would starve it.
     await new Promise((resolve) => setImmediate(resolve));
     if (command === "kubectl") {
       if (args.includes("create")) {
