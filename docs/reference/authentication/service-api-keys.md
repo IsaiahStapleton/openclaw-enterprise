@@ -96,7 +96,7 @@ sends it to `http://127.0.0.1` and the next request returns `401`.
 set -o pipefail
 umask 077
 : "${OCC_URL:?Set OCC_URL to the approved HTTPS endpoint or local console origin}"
-: "${OCC_ORIGIN:?Set OCC_ORIGIN to the origin of OCC_AUTH_BASE_URL; see Requirements}"
+: "${OCC_ORIGIN:?Set OCC_ORIGIN to the console origin; see Requirements}"
 export OCC_ADMIN_EMAIL='<first-admin@example.com>'
 export OCC_ADMIN_PASSWORD_FILE='/secure/occ/initial-admin-password'
 OCC_SESSION_DIRECTORY="$(mktemp -d)"

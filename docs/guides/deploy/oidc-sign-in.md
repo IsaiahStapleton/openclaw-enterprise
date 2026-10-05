@@ -161,7 +161,7 @@ account's `id`. Read the account version, then attach:
 ```bash
 VERSION="$(curl --fail-with-body --silent --show-error \
   --cookie "$OCC_SESSION_COOKIE_JAR" -H "Origin: $OCC_ORIGIN" \
-  "$OCC_URL/api/auth/accounts/$USER_ID" | jq -er .data.version)"
+  "$OCC_URL/api/auth/accounts/$USER_ID" | jq -er .data.version)" &&
 jq -n --arg subject '<sub>' --argjson version "$VERSION" \
   '{subject: $subject, expectedVersion: $version}' |
   curl --fail-with-body --silent --show-error \
