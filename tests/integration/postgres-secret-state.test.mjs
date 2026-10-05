@@ -253,12 +253,12 @@ async function exerciseRepository(store) {
       false,
     );
   });
-  // Secret IDs are unique, so lookups must still be scoped: a foreign ID is not found here,
-  // even when a binding claims this Namespace for it.
+  // Secret IDs are unique, so lookups must still be scoped: a foreign ID is not found here.
   await store.transact(async (state) => {
     assert.equal(await state.secrets.findSecret(namespace.id, foreignSecret.id), undefined);
     assert.equal(await state.secrets.lockSecret(namespace.id, foreignSecret.id), undefined);
   });
+  // A binding to a foreign Secret is refused, even when it claims this Namespace for it.
   for (const secretBindings of [
     bindingFor(foreignSecret),
     { MODEL_KEY: { source: { kind: "secret", namespaceId: namespace.id, id: foreignSecret.id } } },

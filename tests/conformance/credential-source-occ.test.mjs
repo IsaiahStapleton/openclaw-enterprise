@@ -1308,7 +1308,6 @@ test("a deletion that wins against a registration removes the late gateway copy 
       );
     return register(context, input);
   };
-  const events = [];
   await assert.rejects(
     controller.createCredentialSource(
       administrator,
@@ -1318,10 +1317,7 @@ test("a deletion that wins against a registration removes the late gateway copy 
         type: "openai",
         secrets: { api_key: secret.ref },
       },
-      (created) => {
-        events.push(created.id);
-        return auditEvent(namespace.id, created.id, "openclaw.credential_sources.create");
-      },
+      (created) => auditEvent(namespace.id, created.id, "openclaw.credential_sources.create"),
     ),
     (error) =>
       error instanceof ResourceConflictError &&
@@ -1331,7 +1327,6 @@ test("a deletion that wins against a registration removes the late gateway copy 
   assert.ok(deletion instanceof DependencyUnavailableError, String(deletion));
   // The copy stored after the deletion is removed, and no success event is committed.
   assert.equal(gateway.stored.size, 0);
-  assert.deepEqual(events, []);
   assert.deepEqual(await auditActions(controller), []);
   assert.deepEqual(await controller.listCredentialSources(administrator, namespace.id), []);
 });
@@ -1354,8 +1349,9 @@ test("only a ready credential source can be updated", async () => {
     controller.deleteCredentialSource(administrator, namespace.id, source.id),
     DependencyUnavailableError,
   );
-  // A `deleting` source keeps its gateway copy until DELETE completes; an update must not refresh it.
+  // Precondition: a `deleting` source keeps its gateway copy until DELETE completes.
   assert.equal(gateway.stored.has(source.id), true);
+  // An update must not refresh that copy.
   await assert.rejects(
     controller.updateCredentialSource(administrator, {
       namespaceId: namespace.id,

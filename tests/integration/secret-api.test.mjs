@@ -1199,8 +1199,8 @@ test("credential source writes commit one value-free audit row each", async () =
   });
   assert.equal(updated.status, 200, JSON.stringify(updated.body));
   assert.deepEqual(gateway.stored.get(created.data.id), { api_key: rotated });
-  // Deletion completes once no timed-out registration could still create a gateway copy.
-  now += 120_000;
+  // Past the registration fence: no timed-out registration could still create a gateway copy.
+  now += 71_000;
   const deleted = await request(fixture.app, "DELETE", `${sources}/${created.data.id}`);
   assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
   assert.equal(gateway.stored.has(created.data.id), false);
