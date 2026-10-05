@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -72,7 +72,7 @@ test("bundled Slack proxy process restricts methods and CONNECT targets", async 
   });
   await new Promise((resolve) => upstream.listen(upstreamPort, "127.0.0.1", resolve));
   t.after(() => upstream.close());
-  const dnsFixture = await writeDnsFixture(upstreamPort);
+  const dnsFixture = await writeDnsFixture(t, upstreamPort);
   const child = spawn(
     process.execPath,
     ["--import", dnsFixture, "apps/controller/src/slack-proxy.mjs"],
@@ -112,7 +112,7 @@ test("bundled Slack proxy process exits on SIGTERM and closes open tunnels", asy
   });
   await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => upstream.close());
-  const dnsFixture = await writeDnsFixture(upstream.address().port);
+  const dnsFixture = await writeDnsFixture(t, upstream.address().port);
   const child = spawn(
     process.execPath,
     ["--import", dnsFixture, "apps/controller/src/slack-proxy.mjs"],
@@ -150,8 +150,11 @@ test("bundled Slack proxy process exits on SIGTERM and closes open tunnels", asy
     tunnel.on("data", (chunk) => {
       response += chunk;
       if (response.includes("\r\n\r\n")) {
-        assert.match(response, /^HTTP\/1\.1 200 Connection Established/);
-        resolve();
+        if (response.startsWith("HTTP/1.1 200 Connection Established")) {
+          resolve();
+        } else {
+          reject(new Error(`CONNECT was refused: ${response}`));
+        }
       }
     });
     tunnel.once("close", () => reject(new Error("tunnel closed before it was established")));
@@ -170,8 +173,9 @@ test("bundled Slack proxy process exits on SIGTERM and closes open tunnels", asy
   await bound(tunnelClosed, "tunnel close");
 });
 
-async function writeDnsFixture(upstreamPort) {
+async function writeDnsFixture(t, upstreamPort) {
   const directory = await mkdtemp(join(tmpdir(), "openclaw-slack-proxy-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "dns-fixture.mjs");
   await writeFile(
     path,
