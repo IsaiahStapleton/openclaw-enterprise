@@ -157,8 +157,8 @@ jq -n --arg subject '<google sub>' --argjson version "$VERSION" \
 
 The subject is 1–255 printable ASCII characters without spaces. The call returns `409`
 when Google is not configured, the version is stale, the account is disabled, or another
-account holds the subject ("The external identity is already assigned."). Attachment advances the account version and ends the account's existing
-sessions. The account read then lists a method whose `providerId` starts with
+account holds the subject ("The external identity is already assigned."). Attachment
+advances the account version and ends the account's existing sessions. The account read then lists a method whose `providerId` starts with
 `google:`. Detach it with
 `POST /api/auth/accounts/:userId/methods/:methodId/detach`, as for GitHub. Detaching ends
 every session of the account, password sessions included; the password keeps working for

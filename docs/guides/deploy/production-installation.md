@@ -24,13 +24,9 @@ Use `ghcr.io/openclaw/openclaw-enterprise-controller:latest` and
 chart. Complete it before generating configuration; then skip the build section.
 
 Public GHCR pulls need no pull Secret. For private registry copies, give every node
-that runs control-plane or tenant Pods its own pull access, such as a node IAM role or
-the node's registry configuration. OCE adds no `imagePullSecrets` to the Pods it
-creates, and workstation `docker login` does not authenticate cluster nodes. Don't
-pull an OCE image through a Pod's `imagePullSecrets` either: where kubelet verifies
-pull credentials (`KubeletEnsureSecretPulledImages`), every later Pod using that image
-on the node, including the API, worker and initialization Job, must then pull it again,
-which fails without node access.
+that runs control-plane or tenant Pods its own pull access; see
+[private registry delivery](private-registry-images.md#configure-node-pull-access).
+Workstation `docker login` does not authenticate cluster nodes.
 
 ## Build and publish production images
 

@@ -147,7 +147,7 @@ their peers; the API row shows that `ENVOY` listens.
 
 The test Pods use the installed controller image and need the node's own pull
 access, as the OCE Pods do; OCE renders no pull Secret. Don't add `imagePullSecrets`
-([why](../deploy/production-installation.md#use-published-images)).
+([why](../deploy/private-registry-images.md#configure-node-pull-access)).
 
 ## Run the checks
 

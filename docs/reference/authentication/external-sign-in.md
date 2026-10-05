@@ -77,7 +77,7 @@ does not learn when someone leaves the organization or GitHub suspends them: wit
 an allowlist someone who left can still sign in, and live sessions continue until they
 expire (at most 8 hours). Offboarding also means acting in OCE
 ([account controls](#session-and-recovery-controls)): disable the account to end all
-access and its sessions, or detach its GitHub method to end GitHub sign-in and those
+access and its sessions, or detach its GitHub method to end GitHub sign-in and all its
 sessions; revoke ends sessions but allows a fresh sign-in.
 
 `GET /api/auth/providers` returns `github`, `google`, `oidc`, and `sessionBinding` as `true` when enabled,

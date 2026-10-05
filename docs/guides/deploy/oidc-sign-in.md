@@ -186,7 +186,7 @@ afterwards. To add someone who should sign in only through the IdP, follow
 - The provider instance is derived from the issuer and client ID. Changing either is a
   new instance: attach every identity again, then detach the old methods. Sessions
   signed in through the old instance, or through OIDC once it is removed, end on their
-  next request; password sessions and other providers' sessions are unaffected.
+  next request. Detaching an old method ends every session of that account.
 - Rotating only the client secret keeps attachments and voids pending sign-ins.
 - The API reads the JWKS on every callback, so IdP key rotation needs no restart.
 - OCE does not learn when the IdP disables someone: offboarding also means detaching or
