@@ -54,8 +54,9 @@ async function spawnSlackProxy(t, preload, port) {
         resolve(Number(match[1]));
       }
     });
-    // Undefined: the proxy exited before it listened.
-    child.once("exit", () => resolve(undefined));
+    // Undefined: the proxy exited before it listened. "close" waits for the rest of stderr,
+    // which the EADDRINUSE retry reads.
+    child.once("close", () => resolve(undefined));
   }).finally(() => clearTimeout(timer));
   return { child, port: listening, stderr: () => stderr };
 }
