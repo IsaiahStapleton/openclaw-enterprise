@@ -184,3 +184,6 @@ printed by startup so it selects the same profile and state directory.
 The explicitly selected Kubernetes-only profile rejects Compose options. Use
 `scripts/dev-up` and `scripts/dev-down` as the common entry points for every
 profile; the Compute and Sandbox Driver settings select the implementation.
+When `scripts/dev-up` fails on the Docker profile, `occ dev up` exits with the
+script's status (`2` for a usage or configuration error) and prints nothing
+beyond the script's own message.
