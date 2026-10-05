@@ -39,7 +39,8 @@ runs:
         inputs.lane != 'docker-model' && inputs.lane != 'logging-collector' &&
         !startsWith(inputs.lane, 'k3d-fixture-') && !startsWith(inputs.lane, 'k3d-observability')
       with:
-        # Runner VMs are discarded after the job; skip the builder removal.
+        # GitHub-hosted and Blacksmith runners are per-job VMs, so skip the builder
+        # removal; a persistent runner would accumulate buildx_buildkit_* containers.
         cleanup: false
     - name: Set up CI tools
       shell: bash

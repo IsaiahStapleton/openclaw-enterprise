@@ -379,8 +379,8 @@ jobs:
         run: bash scripts/ci/setup-tools.sh k3d
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          # The runner VM is discarded after the job; removing the builder took
-          # 8-33 s, which a superseding run also waits for on cancellation.
+          # GitHub-hosted runners are per-job VMs; removing the builder took 8-33 s,
+          # which a superseding run also waits for on cancellation.
           cleanup: false
       - name: Enable Kubernetes bridge packet filtering
         run: |
@@ -433,7 +433,7 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJson(needs) }}
         run: |
-          jq -r 'to_entries[] | select(.value.result == "cancelled") | "::error::\(.key) was cancelled."' <<<"$NEEDS_JSON"
+          jq -r 'to_entries[] | select(.value.result == "cancelled") | "::error::\(.key) was cancelled (superseded run, manual cancel, or timeout-minutes exceeded; see that job)."' <<<"$NEEDS_JSON"
           exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

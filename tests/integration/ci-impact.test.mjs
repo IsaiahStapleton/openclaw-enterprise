@@ -1087,7 +1087,7 @@ test("CI Required always reports and fails at once when a dependency was cancell
   const cancelled = "contains(needs.*.result, 'cancelled')";
   const [first, ...rest] = required.steps;
   assert.equal(first.if, cancelled);
-  assert.match(first.run, /exit 1/);
+  assert.match(first.run, /^exit 1$/m);
   // A superseding run waits for this one; no later step may run once a dependency is cancelled.
   for (const step of rest) {
     const condition = String(step.if ?? "");
