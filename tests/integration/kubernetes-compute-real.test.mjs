@@ -78,6 +78,9 @@ test(
 
     await kubectl("create", "namespace", platformNamespace);
     context.after(async () => {
+      // Cleanup in this file does not wait for namespace deletion: no later step reads these
+      // randomly named namespaces, and each deletion waits out namespace-controller passes
+      // (5 s each, longer while Pods terminate) that prove nothing.
       await Promise.all(
         [
           platformNamespace,
@@ -88,7 +91,7 @@ test(
           kubernetesGatewayNamespaceName(owner.id),
           kubernetesGatewayNamespaceName(cleanupOwner.id),
         ].map((name) =>
-          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=true"),
+          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=false"),
         ),
       );
       await rm(directory, { force: true, recursive: true });
@@ -450,7 +453,7 @@ test(
         "namespace",
         platformNamespace,
         "--ignore-not-found=true",
-        "--wait=true",
+        "--wait=false",
       );
     });
     const controller = await createScopedController(context, installationId, platformNamespace);
@@ -519,7 +522,7 @@ test(
             kubernetesNamespaceName(namespaceId),
             kubernetesGatewayNamespaceName(namespaceId),
             "--ignore-not-found=true",
-            "--wait=true",
+            "--wait=false",
           ),
         ),
       );
@@ -538,7 +541,7 @@ test(
         placement,
         gatewayPlacement,
         "--ignore-not-found=true",
-        "--wait=true",
+        "--wait=false",
       );
     });
 
@@ -1076,7 +1079,7 @@ test(
             ...namespaceIds.map(kubernetesGatewayNamespaceName),
           ]),
         ].map((name) =>
-          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=true"),
+          kubectl("delete", "namespace", name, "--ignore-not-found=true", "--wait=false"),
         ),
       );
     });
@@ -1737,31 +1740,36 @@ test(
         );
       }
     }
+    // A denied UDP query waits out the probe's 2.5 s timeout, so the three source Pods
+    // are probed concurrently. Each Pod still runs one probe at a time, in the same order:
+    // the allowed control, both denied queries, then the control again.
     for (const protocol of ["udp", "tcp"]) {
-      for (const source of dnsSources) {
-        assert.equal(
-          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
-          "192.0.2.53",
-          `${source.metadata.name} must resolve over ${protocol} port 5353`,
-        );
-        for (const [target, port] of [
-          [dns.selected, 5354],
-          [dns.unselected, 5353],
-        ]) {
-          await dns.assertQueryDenied(
-            `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
-            source,
-            target,
-            protocol,
-            port,
+      await Promise.all(
+        dnsSources.map(async (source) => {
+          assert.equal(
+            JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+            "192.0.2.53",
+            `${source.metadata.name} must resolve over ${protocol} port 5353`,
           );
-        }
-        assert.equal(
-          JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
-          "192.0.2.53",
-          "the allowed DNS control must still work after denied queries",
-        );
-      }
+          for (const [target, port] of [
+            [dns.selected, 5354],
+            [dns.unselected, 5353],
+          ]) {
+            await dns.assertQueryDenied(
+              `DNS from ${source.metadata.name} to ${target.metadata.name} over ${protocol} port ${port}`,
+              source,
+              target,
+              protocol,
+              port,
+            );
+          }
+          assert.equal(
+            JSON.parse(await dns.query(source, dns.selected, protocol, 5353)).address,
+            "192.0.2.53",
+            "the allowed DNS control must still work after denied queries",
+          );
+        }),
+      );
     }
 
     const deploymentPath = `/namespaces/${namespaceIds[0]}/agents/${first.id}/deployments/${admitted[0].id}`;
