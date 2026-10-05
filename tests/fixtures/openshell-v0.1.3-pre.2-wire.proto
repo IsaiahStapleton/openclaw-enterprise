@@ -169,6 +169,7 @@ message ObjectMeta {
   string id = 1;
   string name = 2;
   map<string, string> labels = 4;
+  uint64 resource_version = 5;
   map<string, string> annotations = 6;
   string workspace = 7;
 }

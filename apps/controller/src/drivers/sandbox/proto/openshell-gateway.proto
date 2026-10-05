@@ -366,7 +366,7 @@ message ProviderResponse {
   Provider provider = 1;
 }
 
-// Non-empty credential values merge into the existing provider; type and profile are fixed.
+// Non-empty config or credential values merge into the existing provider; type and profile are fixed.
 message UpdateProviderRequest {
   Provider provider = 1;
   WorkspaceSelector workspace_scope = 3;

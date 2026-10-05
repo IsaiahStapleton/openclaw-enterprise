@@ -191,6 +191,7 @@ const PLUGIN_RUNTIME_CODEX_CONFIG_ENVIRONMENT = "OPENCLAW_PLUGIN_CODEX_CONFIG_TO
 const WORKSPACE_NODE_SETUP_ENVIRONMENT = "OPENCLAW_NODE_SETUP_CODE";
 const WORKSPACE_NODE_ENVELOPE_ENVIRONMENT = "OPENCLAW_NODE_SETUP_ENVELOPE";
 const WORKSPACE_NODE_ENVELOPE_FILE = "node-setup.json";
+const WORKSPACE_NODE_SETUP_CONFIG = "node_setup_json";
 const WORKSPACE_NODE_CA_ENVIRONMENT = "OPENCLAW_NODE_CA_PEM";
 const WORKSPACE_NODE_CA_PATH_ENVIRONMENT = "OPENCLAW_NODE_CA_PATH";
 const WORKSPACE_NODE_CA_FILE = "node-ca.pem";
@@ -494,7 +495,7 @@ function codexRuntimeFiles(requirements: HarnessWorkloadRequirements): CodexRunt
         file.content,
       ]),
     ),
-    node_setup_json: "{}",
+    [WORKSPACE_NODE_SETUP_CONFIG]: "{}",
     node_ca_pem: nodeCa === undefined || "valueFrom" in nodeCa ? "" : nodeCa.value,
   });
   const profileBase: Omit<OpenShellProviderProfile, "annotations"> = {
@@ -686,7 +687,7 @@ async function codexRuntimeCredentials(
   return Object.freeze({
     credentials: Object.freeze({}),
     credentialExpirationTimes: Object.freeze({}),
-    config: Object.freeze({ node_setup_json: JSON.stringify(setupEnvelope) }),
+    config: Object.freeze({ [WORKSPACE_NODE_SETUP_CONFIG]: JSON.stringify(setupEnvelope) }),
     binding: Object.freeze({
       host: endpoint.hostname,
       port:
@@ -1623,6 +1624,80 @@ function verifyRuntimeProvider(
   }
 }
 
+interface RuntimeProviderSetupEnvelope {
+  readonly url: string;
+  readonly bootstrapToken: string;
+  readonly expiresAtMs: number;
+  readonly tlsFingerprint?: string;
+}
+
+function runtimeProviderSetupEnvelope(
+  value: string | undefined,
+): RuntimeProviderSetupEnvelope | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  let payload: ConfigurationRecord;
+  try {
+    payload = asRecord(JSON.parse(value)) ?? {};
+  } catch {
+    return undefined;
+  }
+  const allowed = new Set(["url", "bootstrapToken", "expiresAtMs", "tlsFingerprint"]);
+  if (
+    Object.keys(payload).some((key) => !allowed.has(key)) ||
+    !isNonEmptyString(payload.url) ||
+    !isNonEmptyString(payload.bootstrapToken) ||
+    typeof payload.expiresAtMs !== "number" ||
+    !Number.isSafeInteger(payload.expiresAtMs) ||
+    (payload.tlsFingerprint !== undefined && !isNonEmptyString(payload.tlsFingerprint))
+  ) {
+    return undefined;
+  }
+  return {
+    url: payload.url,
+    bootstrapToken: payload.bootstrapToken,
+    expiresAtMs: payload.expiresAtMs,
+    ...(payload.tlsFingerprint === undefined ? {} : { tlsFingerprint: payload.tlsFingerprint }),
+  };
+}
+
+function runtimeProviderSetupUpdate(
+  provider: OpenShellProviderResponse,
+  name: string,
+  expectedLabels: Readonly<Record<string, string>>,
+  expectedConfig: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> | undefined {
+  verifyRuntimeProvider(provider, name, expectedLabels);
+  if (exactStringMap(provider.config, expectedConfig)) {
+    return undefined;
+  }
+  const actualStaticConfig = { ...provider.config };
+  const expectedStaticConfig = { ...expectedConfig };
+  delete actualStaticConfig[WORKSPACE_NODE_SETUP_CONFIG];
+  delete expectedStaticConfig[WORKSPACE_NODE_SETUP_CONFIG];
+  const actualSetup = runtimeProviderSetupEnvelope(provider.config[WORKSPACE_NODE_SETUP_CONFIG]);
+  const expectedSetup = runtimeProviderSetupEnvelope(expectedConfig[WORKSPACE_NODE_SETUP_CONFIG]);
+  const now = Date.now();
+  if (
+    !exactStringMap(actualStaticConfig, expectedStaticConfig) ||
+    actualSetup === undefined ||
+    expectedSetup === undefined ||
+    actualSetup.url !== expectedSetup.url ||
+    actualSetup.tlsFingerprint !== expectedSetup.tlsFingerprint ||
+    actualSetup.expiresAtMs > now ||
+    expectedSetup.expiresAtMs <= now ||
+    expectedSetup.expiresAtMs <= actualSetup.expiresAtMs
+  ) {
+    throw new OpenShellSandboxConfigurationFailure(
+      `Refusing OpenShell provider ${name} without exact AgentRevision ownership and content.`,
+    );
+  }
+  return Object.freeze({
+    [WORKSPACE_NODE_SETUP_CONFIG]: expectedConfig[WORKSPACE_NODE_SETUP_CONFIG]!,
+  });
+}
+
 function verifyExistingSandbox(
   existing: OpenShellSandboxResponse,
   request: OpenShellSandboxCreateRequest,
@@ -2205,6 +2280,16 @@ export class OpenShellSandboxDriver implements SandboxDriver {
           );
         }
       }
+    }
+    const setupUpdate = runtimeProviderSetupUpdate(provider, name, expectedLabels, config);
+    if (setupUpdate !== undefined) {
+      provider = await client.updateProviderConfig(
+        workspace,
+        name,
+        setupUpdate,
+        provider.resourceVersion,
+        context.signal,
+      );
     }
     verifyRuntimeProvider(provider, name, expectedLabels, config);
     return Object.freeze({ name, created });

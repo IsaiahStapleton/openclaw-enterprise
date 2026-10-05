@@ -161,10 +161,13 @@ Namespace, the Driver applies those resources before creating its Workspace
 through the Gateway API, with no per-Namespace Helm release.
 
 The disposable profile enables OpenShell's unauthenticated development mode.
-In the Kubernetes-only profile, Gateway ingress admits only the OCE API and
-worker in `oce-system` and OpenShell supervisor Pods from OCE-owned tenant
-Namespaces. Per-tenant callback egress selects only OpenShell-managed supervisor
-Pods, so other tenant Pods cannot reach the Gateway administrative API.
+The pinned release serves control-plane RPCs and provider-advertised Harness
+traffic on the same Gateway port. NetworkPolicies limit access to trusted OCE,
+OpenShell, and dedicated Agent Gateway Pods, but cannot give Agent Gateways
+service-only authority on that shared listener. This limitation is accepted
+only in an owned disposable development cluster. It does not block merging or
+using these development flows, but this topology must not be qualified for
+production.
 
 `gateway.operatorWorkspaceResources` accepts the namespace-scoped
 ServiceAccount, Role, RoleBinding, and NetworkPolicy objects rendered from the
@@ -235,17 +238,21 @@ setup Secret, so the provider starts with final setup.
 Development also places the expiring setup envelope in that provider. The token
 is visible inside the Sandbox, so this is not a production credential guarantee.
 Policy limits node egress to the Gateway destination and executable. Compute
-waits for the provider route before enrollment; the Harness retains its first
-valid setup and relaunches a failed node after one second until shutdown. The raw
+waits for the provider route before enrollment. If Compute renews an expired
+setup, `provisionHarness` uses a version-fenced OpenShell update limited to
+`node_setup_json`; the endpoint, TLS fingerprint, runtime files, CA, labels, and
+ownership must remain exact. The Harness rereads the provider file before each
+node retry and retains the latest valid value during projection gaps. The raw
 app-server token stays outside the provider. Plugins and repository broker
 configuration fail before creation.
 
 Revision cleanup deletes the Sandbox before its runtime provider. Namespace
 cleanup then removes the shared profile. Replays adopt only exact
 Namespace-, Agent-, and revision-owned providers with identical nonsecret
-config. A failed or timed-out Sandbox create does not eagerly delete that
-provider because the remote mutation may still have completed; the normal
-revision cleanup path owns both resources.
+configuration except the narrowly reconciled expired setup envelope. A failed
+or timed-out Sandbox create does not eagerly delete that provider because the
+remote mutation may still have completed; the normal revision cleanup path owns
+both resources.
 
 ## Create-time app-server exposure
 
@@ -282,9 +289,11 @@ client; there is no provider-specific adapter. The controller and worker need
 Compute access, namespace-scoped policy apply, and Gateway readiness, but no
 Sandbox custom-resource permission.
 
-Kubernetes Compute retains default-deny policies. Provider transport grants the
-Agent Gateway egress only to the configured OpenShell Gateway peer and port and
-omits direct Harness ingress. Broad namespace allows can bypass this boundary.
+Kubernetes Compute retains default-deny policies. In the development profile,
+provider transport grants the Agent Gateway egress only to the configured
+shared OpenShell peer and port and omits direct Harness ingress. Broad namespace
+allows can bypass this boundary. Production must instead select the separate
+service port required by the qualification contract below.
 
 Compute passes the provider-fenced network profile (`provider-fenced-v1`) to the
 provider Harness template; the provider must retain it on the resulting Pod.
@@ -338,10 +347,17 @@ Ordinary Kubernetes Compute may retain bounded `emptyDir` volumes at
 
 ### Remaining qualification work
 
-OpenShell gateway authentication must bind the trusted caller to the requested
-Sandbox or Pod identity. Provider-managed files also require real Kubernetes
-proof of their lifecycle, limits, direct-open behavior, and failures. The
-proxy-mediated workspace-node enrollment above requires an exact k3d proof.
+Production qualification is blocked until upstream OpenShell serves
+provider-advertised Harness traffic on a port separate from control-plane and
+management RPCs. OCE must then route Agent Gateways only to the service port and
+reserve the control-plane port for authenticated Sandbox and Credential Gateway
+callers. Real-cluster proof must show a model turn through the service port and
+rejection of Agent Gateway management operations before this blocker is closed.
+
+OpenShell gateway authentication must bind each trusted control-plane caller to
+the requested Sandbox or Pod identity. Provider-managed files also require real
+Kubernetes proof of their lifecycle, limits, direct-open behavior, and failures.
+The proxy-mediated workspace-node enrollment above requires an exact k3d proof.
 Missing admission, node enrollment, or gateway guarantees must fail the revision
 instead of launching a weakened Harness.
 

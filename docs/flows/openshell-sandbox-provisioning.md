@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: 2026-10-05
-last_updated_session: authoring-run/fd7f6cdb-1d1d-40d5-8d4a-d6d80cd946e7
+last_updated_session: authoring-run/4f3e6ccd-a967-48c8-9d5d-f29a6d338d7d
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -66,7 +66,7 @@ graph TD
   Y0 -- "yes" --> Q["<b>Attach model source</b><br/>Credential provider"]
   Q --> G{"<b>Codex inputs valid?</b><br/>Verifier and files"}
   G -- "no" --> R["<b>Reject provisioning</b><br/>Candidate stays inactive"]
-  G -- "yes" --> W["<b>Own runtime provider</b><br/>Files and literal setup"]
+  G -- "yes" --> W["<b>Reconcile runtime provider</b><br/>Files and literal setup"]
   W --> H["<b>Create Sandbox</b><br/>Providers and exposure"]
   H --> V{"<b>Harness</b>"}
   V -- "Codex" --> J["<b>Resolve exposure</b><br/>Advertised WebSocket origin"]
@@ -199,9 +199,10 @@ keys, the old `passthrough` TLS spelling, or policies without executable paths
 fail before launch.
 
 Kubernetes Compute invokes `provisionHarness` only after the workspace-node
-setup Secret exists. The Driver therefore creates or adopts the runtime provider
-with the final node envelope and credential on its first mutation; it never
-creates an empty placeholder provider for a later reconciliation to replace.
+setup Secret exists. The Driver creates or adopts the runtime provider with the
+final node envelope on first mutation, never an empty placeholder.
+If Compute later renews an expired setup, the same call version-fences an
+OpenShell `UpdateProvider` that changes only `node_setup_json`.
 When configured, a bounded post-create delay keeps Compute from consuming the
 exposed route before the canonical process listens. Compute then rolls the
 Gateway to that endpoint and waits for the exact Deployment before observing
@@ -218,9 +219,11 @@ The Driver creates or adopts a revision-owned provider from the shared
 Secret and writes its complete expiring envelope, including `bootstrapToken`,
 to `node-setup.json`. This development diagnostic deliberately avoids WebSocket
 credential rewriting because OpenClaw signs the token value in its device proof.
-The Sandbox network policy still limits the connection to the exact Gateway
-endpoint and `/usr/local/bin/node`. Foreign ownership, changed config, malformed
-or expired setup, and unsupported endpoints fail before Sandbox creation.
+Before renewal, the Driver requires the same endpoint and TLS fingerprint, an
+expired stored envelope, a later live expiry, and unchanged runtime and CA
+configuration. The Sandbox network policy limits the connection to the exact
+Gateway endpoint and `/usr/local/bin/node`. Foreign ownership or other drift
+fails before Sandbox creation.
 
 The Driver mounts a revision-scoped Agent PVC subpath at
 `/sandbox/.openclaw-runtime`; persistent subpaths mount below
@@ -248,11 +251,11 @@ errored server-side unresolved forever, so when the Gateway refuses one
 (`REQUEST_OUTCOME_UNCERTAIN`, `REQUEST_ID_PAYLOAD_MISMATCH`, or
 `REQUEST_REPLAY_UNAVAILABLE`) and `getSandbox` finds no Sandbox, the Driver tries
 the next of 16 IDs: the revision UUID, then 15 derived from it. Each failing pass
-spends at most one new ID. The Sandbox name is unique per Workspace, so these
-attempts never yield two Sandboxes. Unresolved IDs never expire. Once the controller
+spends one ID; the Workspace-unique Sandbox name prevents duplicates. Unresolved
+IDs never expire. Once the controller
 identity holds 1000 unresolved or unexpired admission records, OpenShell rejects
 every new `request_id` with `RESOURCE_EXHAUSTED`, so repeated server-side create
-failures count against that quota. Completed records free up after 24 hours.
+failures count against that quota. Completed records expire after 24 hours.
 `unary` maps that exact refusal to `OpenShellAdmissionLimitError`, a
 `TransientDependencyError` (`SANDBOX_ADMISSION_LIMIT_REACHED`): revision
 provisioning waits for it until the convergence deadline without spending
@@ -265,8 +268,8 @@ calls `getSandbox` first and creates only an absent Sandbox; it adopts an
 existing or `ALREADY_EXISTS` Sandbox only when its Workspace, labels,
 annotations, and full spec match the request and it is not deleting or stopped.
 For Codex, `GetService` must also return the unnamed bearer-passthrough endpoint
-on the admitted port. Workspace `sandbox:write` is the trust boundary here: a
-holder could already delete and replace the Sandbox.
+on the admitted port. Workspace `sandbox:write` is the trust boundary because a
+holder can replace the Sandbox.
 
 The Backend shares one client per endpoint but does not cache failed setup.
 Cancellation is checked after setup and before dispatch; after dispatch it
@@ -313,11 +316,10 @@ canonical `/home/node/workspace` root.
 
 Compute then waits for the provider-owned Harness Pod and exact workspace node.
 Missing enrollment keeps the revision inactive. The dedicated Harness wrapper
-retains the first valid provider setup after OpenShell removes its projected
-startup files, then relaunches the workspace-node process one second after every
-process exit. It does not cap attempts, so an early connection failure during
-Gateway rollout does not strand the Sandbox. Revision shutdown stops the retry
-loop.
+rereads the provider setup before every node retry and retains the latest valid
+value while the projection is unavailable. It relaunches the workspace-node
+process one second after every exit without capping attempts, so Gateway rollout
+does not strand the Sandbox. Shutdown stops the retry loop.
 
 For bound sources
 Compute calls `attachmentStatus`, which reads
@@ -362,6 +364,8 @@ networking. Native OpenClaw remains a separate verification-only path.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 16:17: Documented version-fenced workspace-node setup renewal through the revision provider and supervisor refresh. (authoring-run/4f3e6ccd-a967-48c8-9d5d-f29a6d338d7d - fd9a082e2587432bde6282748a82e3025a64fd1a)
 
 - 2026-10-05 12:50: Removed repeated setup and wire-contract detail while preserving the current OpenShell provisioning sequence and moved older entries to the history page. (authoring-run/fd7f6cdb-1d1d-40d5-8d4a-d6d80cd946e7 - 4b5afe0cb653f7dd99fccdb2e3432cbf60e6a03e)
 

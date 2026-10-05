@@ -37,8 +37,9 @@ test(
       [
         'const { appendFileSync } = require("node:fs");',
         'const { spawn } = require("node:child_process");',
-        "const [events, kind] = process.argv.slice(2);",
+        "const [events, kind, args] = process.argv.slice(2);",
         "appendFileSync(events, JSON.stringify({ kind, pid: process.pid, parent: process.ppid,",
+        'args: JSON.parse(args ?? "[]"),',
         "hasSetup: process.env.OPENCLAW_NODE_SETUP_CODE !== undefined,",
         "hasModelKey: process.env.OPENAI_API_KEY !== undefined,",
         'autoUpdateDisabled: process.env.OPENCLAW_NO_AUTO_UPDATE === "1",',
@@ -58,7 +59,7 @@ test(
         ", " +
         JSON.stringify(eventsPath) +
         ", " +
-        'args[0] === "/app/openclaw.mjs" ? "node" : "codex"], options);',
+        'args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
       AGENT_WITH_NODE_ENTRYPOINT.replace(
         "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
         "\n",
@@ -155,16 +156,36 @@ test(
       }
     });
 
-    // OpenShell provider files are startup material. The supervisor must retain
-    // the reconstructed setup after that projection disappears so a failed
-    // pre-pairing node can continue retrying.
-    await rm(setupEnvelopePath);
+    const renewedSetup = {
+      url: "wss://gateway.example.test/node",
+      bootstrapToken: "renewed-provider-bootstrap-token",
+      expiresAtMs: Date.now() + 60_000,
+    };
+    await writeFile(setupEnvelopePath, JSON.stringify(renewedSetup));
     process.kill(node.pid, "SIGKILL");
     const afterNode = await waitFor(
-      "node restarted after its split setup projection disappeared",
+      "node restarted with renewed provider setup",
       (rows) => rows.filter(({ kind }) => kind === "node").length === 2,
     );
     assert.equal(afterNode.filter(({ kind }) => kind === "codex").length, 2);
+    const restartedNode = afterNode.filter(({ kind }) => kind === "node").at(-1);
+    assert.equal(
+      restartedNode.args[4],
+      Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
+    );
+
+    // Retain the most recently read setup if the provider projection is briefly
+    // unavailable during another pre-pairing retry.
+    await rm(setupEnvelopePath);
+    process.kill(restartedNode.pid, "SIGKILL");
+    const afterProjectionRemoval = await waitFor(
+      "node restarted after its renewed setup projection disappeared",
+      (rows) => rows.filter(({ kind }) => kind === "node").length === 3,
+    );
+    assert.equal(
+      afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1).args[4],
+      Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
+    );
     supervisor.kill("SIGTERM");
     assert.deepEqual(await exited, [0, null], output);
     for (const { pid } of await events()) {

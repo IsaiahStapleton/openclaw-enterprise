@@ -2602,16 +2602,33 @@ async function holdNativeOpenClawDemo(context, topology) {
 
 async function assertOpenShellToolFilesystemAndNetworkEnforcement(topology) {
   const nonce = `openshell-boundary-${randomUUID()}`;
-  const writablePath = `/home/node/workspace/${nonce}.txt`;
+  const providerWorkspaceVariable = topology.gatewayPod.spec.containers
+    .flatMap(({ env = [] }) => env)
+    .find(({ name }) => name === "OPENCLAW_REMOTE_WORKSPACE_ROOT");
+  assert.equal(
+    providerWorkspaceVariable?.value,
+    "/sandbox/enterprise",
+    "the Agent Gateway must receive the OpenShell provider workspace contract.",
+  );
+  const providerWorkspace = providerWorkspaceVariable.value;
+  const harnessWorkspaceVariable = topology.harnessPod.spec.containers
+    .flatMap(({ env = [] }) => env)
+    .find(({ name }) => name === "OPENCLAW_WORKSPACE_DIR");
+  assert.equal(
+    harnessWorkspaceVariable?.value,
+    providerWorkspace,
+    "the OpenShell Harness and Agent Gateway must use the same workspace root.",
+  );
+  const writablePath = `${providerWorkspace}/${nonce}.txt`;
   const approvedPath = '"$OPENCLAW_PLUGIN_CODEX_CONFIG_TOML"';
   const readonlyPath = approvedPath;
-  const escapedPath = `/home/node/workspace/../${nonce}-escape.txt`;
+  const escapedPath = `${providerWorkspace}/../${nonce}-escape.txt`;
   const result = await requestCodexTurnFromGatewayPod({
     namespace: topology.gatewayPlacement,
     gatewayPod: topology.gatewayPod.metadata.name,
     providerModel,
     prompt:
-      `Use the shell exec tool from /home/node/workspace. Run every numbered command in a ` +
+      `Use the shell exec tool from ${providerWorkspace}. Run every numbered command in a ` +
       `separate exec tool invocation, continuing after commands that are expected to fail: ` +
       `(1) printf '${nonce}' > ${writablePath}; ` +
       `(2) test -r ${approvedPath}; ` +
@@ -2641,7 +2658,7 @@ async function assertOpenShellToolFilesystemAndNetworkEnforcement(topology) {
     String(command).includes(`test -r ${approvedPath}`),
   );
   const readonlyCommand = completedCommands.find(({ command }) =>
-    String(command).includes(readonlyPath),
+    String(command).includes(`touch ${readonlyPath}`),
   );
   const escapedCommand = completedCommands.find(({ command }) =>
     String(command).includes(escapedPath),

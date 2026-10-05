@@ -3470,13 +3470,13 @@ const nodeCommands = [
 ];
 // The kubelet swaps Secret volume contents atomically, but an empty, truncated
 // or otherwise undecodable code is treated as absent and never started.
-// OpenShell removes projected provider files after startup, so retain the first
-// complete provider setup in this supervisor for later node-process retries.
+// Provider snapshots can change after setup renewal. Refresh the cached value
+// whenever the projection is readable and retain the latest complete snapshot
+// as a fallback while the projection is temporarily absent.
 let cachedProviderSetupCode;
 function readSetupCode() {
   if (setupEnvironment) return setupEnvironment;
   if (providerSetup) {
-    if (cachedProviderSetupCode !== undefined) return cachedProviderSetupCode;
     try {
       const payload = JSON.parse(readFileSync(setupEnvelopePath, "utf8"));
       if (
@@ -3491,7 +3491,7 @@ function readSetupCode() {
       cachedProviderSetupCode = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
       return cachedProviderSetupCode;
     } catch {
-      return undefined;
+      return cachedProviderSetupCode;
     }
   }
   let code;

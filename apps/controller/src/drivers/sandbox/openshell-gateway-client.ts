@@ -147,6 +147,7 @@ export interface OpenShellProviderResponse {
   readonly type: string;
   readonly labels: Readonly<Record<string, string>>;
   readonly config: Readonly<Record<string, string>>;
+  readonly resourceVersion: string;
 }
 
 export interface OpenShellSandboxProviderStatus {
@@ -273,6 +274,14 @@ export interface OpenShellGatewayClient extends OpenShellSandboxLogReader {
     signal: AbortSignal,
     credentialExpirationTimes?: Readonly<Record<string, string>>,
   ): Promise<void>;
+  /** Merges nonempty configuration into an existing provider with optimistic concurrency. */
+  updateProviderConfig(
+    workspace: string,
+    name: string,
+    config: Readonly<Record<string, string>>,
+    expectedResourceVersion: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellProviderResponse>;
   /** Undefined when the Sandbox no longer exists, so nothing remains to revoke. */
   detachSandboxProvider(
     workspace: string,
@@ -412,7 +421,13 @@ function providerResponse(value: unknown, operation: string): OpenShellProviderR
   const provider = asRecord(value);
   const metadata = asRecord(provider?.metadata);
   const name = metadata?.name;
-  if (typeof name !== "string" || name.trim().length === 0 || typeof provider?.type !== "string") {
+  const resourceVersion = String(metadata?.resource_version ?? "0");
+  if (
+    typeof name !== "string" ||
+    name.trim().length === 0 ||
+    typeof provider?.type !== "string" ||
+    !/^\d+$/u.test(resourceVersion)
+  ) {
     throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no stable provider.`);
   }
   // Credential values are never copied out of gateway responses.
@@ -421,6 +436,7 @@ function providerResponse(value: unknown, operation: string): OpenShellProviderR
     type: provider.type,
     labels: stringMap(metadata?.labels, "provider labels"),
     config: stringMap(provider?.config, "provider config"),
+    resourceVersion,
   });
 }
 
@@ -1234,6 +1250,43 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       },
       signal,
     );
+  }
+
+  async updateProviderConfig(
+    workspace: string,
+    name: string,
+    config: Readonly<Record<string, string>>,
+    expectedResourceVersion: string,
+    signal: AbortSignal,
+  ): Promise<OpenShellProviderResponse> {
+    if (
+      Object.keys(config).length === 0 ||
+      Object.values(config).some((value) => !isNonEmptyString(value))
+    ) {
+      // OpenShell interprets an empty value as a request to delete that field.
+      throw new OpenShellGatewayFailure("OpenShell provider config updates must be nonempty.");
+    }
+    if (!/^[1-9]\d*$/u.test(expectedResourceVersion)) {
+      throw new OpenShellGatewayFailure(
+        "OpenShell provider config updates require a positive resource version.",
+      );
+    }
+    const response = await this.unary(
+      "UpdateProvider",
+      {
+        provider: {
+          metadata: {
+            name: nonempty(name, "OpenShell provider name"),
+            resource_version: expectedResourceVersion,
+          },
+          config: { ...config },
+        },
+        workspace_scope: { workspace },
+        request_id: randomUUID(),
+      },
+      signal,
+    );
+    return providerResponse(response.provider, "UpdateProvider");
   }
 
   async detachSandboxProvider(

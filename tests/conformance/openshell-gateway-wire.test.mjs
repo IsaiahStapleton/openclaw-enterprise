@@ -1012,7 +1012,18 @@ test("OpenShell client serializes v0.1.3-pre.2 provider updates and detach recei
   server.addService(OpenShell.service, {
     UpdateProvider(call, callback) {
       requests.updates.push(call.request);
-      callback(null, { provider: { metadata: { name: call.request.provider.metadata.name } } });
+      const config = call.request.provider.config;
+      callback(null, {
+        provider: {
+          metadata: {
+            name: call.request.provider.metadata.name,
+            labels: { "app.kubernetes.io/managed-by": "openclaw-enterprise" },
+            resource_version: "8",
+          },
+          type: config === undefined ? "oce-openai" : "oce-codex-runtime",
+          ...(config === undefined ? {} : { config }),
+        },
+      });
     },
     DetachSandboxProvider(call, callback) {
       requests.detaches.push(call.request);
@@ -1042,6 +1053,13 @@ test("OpenShell client serializes v0.1.3-pre.2 provider updates and detach recei
     auth: { mode: "unauthenticated" },
   });
   try {
+    const updated = await client.updateProviderConfig(
+      "tenant-workspace",
+      "oce-runtime-0000000000000000",
+      { node_setup_json: '{"bootstrapToken":"renewed"}' },
+      "7",
+      AbortSignal.timeout(2_000),
+    );
     await client.updateProviderCredentials(
       "tenant-workspace",
       "oce-cs-000000000000000000000000",
@@ -1063,15 +1081,33 @@ test("OpenShell client serializes v0.1.3-pre.2 provider updates and detach recei
       detached.receiptId,
     );
 
-    // UpdateProvider merges only the named credential into the provider in this workspace.
-    const [update] = requests.updates;
-    assert.equal(update.workspace_scope.workspace, "tenant-workspace");
-    assert.equal(update.provider.metadata.name, "oce-cs-000000000000000000000000");
-    assert.deepEqual(update.provider.credentials, { OPENAI_API_KEY: "wire-rotated-value" });
-    assert.deepEqual(update.credential_expiration_times, {
+    // Config reconciliation fences the exact provider version and merges only
+    // the renewed setup field.
+    const [configUpdate, credentialUpdate] = requests.updates;
+    assert.equal(configUpdate.workspace_scope.workspace, "tenant-workspace");
+    assert.equal(configUpdate.provider.metadata.name, "oce-runtime-0000000000000000");
+    assert.equal(configUpdate.provider.metadata.resource_version, "7");
+    assert.deepEqual(configUpdate.provider.config, {
+      node_setup_json: '{"bootstrapToken":"renewed"}',
+    });
+    assert.match(configUpdate.request_id, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(updated, {
+      name: "oce-runtime-0000000000000000",
+      type: "oce-codex-runtime",
+      labels: { "app.kubernetes.io/managed-by": "openclaw-enterprise" },
+      config: { node_setup_json: '{"bootstrapToken":"renewed"}' },
+      resourceVersion: "8",
+    });
+    // Credential rotation retains the existing merge-only request.
+    assert.equal(credentialUpdate.workspace_scope.workspace, "tenant-workspace");
+    assert.equal(credentialUpdate.provider.metadata.name, "oce-cs-000000000000000000000000");
+    assert.deepEqual(credentialUpdate.provider.credentials, {
+      OPENAI_API_KEY: "wire-rotated-value",
+    });
+    assert.deepEqual(credentialUpdate.credential_expiration_times, {
       OPENAI_API_KEY: { seconds: "1790877600", nanos: 0 },
     });
-    assert.match(update.request_id, /^[0-9a-f-]{36}$/);
+    assert.match(credentialUpdate.request_id, /^[0-9a-f-]{36}$/);
     // Detach names the exact Sandbox and provider; status then follows the detach receipt.
     assert.equal(requests.detaches[0].workspace_scope.workspace, "tenant-workspace");
     assert.equal(requests.detaches[0].sandbox, "sandbox-wire");
