@@ -61,6 +61,11 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
     ),
     line(2, `pushing with ${secret}`),
     line(3, '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"delta":"hi"}}'),
+    // A pretty-printed JSON value, as Codex prints it: withheld as one run, never called corrupt.
+    line(3, "{"),
+    line(3, '  "id": 7,'),
+    line(3, '  "result": {}'),
+    line(3, "}"),
     line(
       4,
       '{"event":"codex.model_probe","attempt":1,"elapsedMs":900,"exitCode":1,"signal":null,"code":"AUTHENTICATION_FAILED"}',
@@ -84,7 +89,10 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   const pane = page.getByRole("log", { name: "Runtime log output" });
   await pane.getByText("runtime.startup_phase").waitFor();
   await pane.getByText("pushing with [redacted:token]").waitFor();
-  await pane.getByText("1 structured output withheld").waitFor();
+  // The reason code in parentheses is the one `occ agent logs` prints for the same rows.
+  await pane.getByText("1 structured output line withheld (unrecognised_structured)").waitFor();
+  await pane.getByText("4 multi-line or unparseable JSON lines withheld (malformed)").waitFor();
+  assert.equal(await pane.getByText(/malformed structured/).count(), 0);
   // A failure code shows on the collapsed row, not only after expanding it.
   const probe = pane.locator(".log-row", { hasText: "codex.model_probe" });
   assert.equal(
@@ -256,7 +264,10 @@ test("level chips and the text filter narrow only the loaded window; download sa
   // The wrapper's plain failure line is an error, so hiding `unknown` keeps it.
   await pane.getByText("Harness model authentication probe failed.").waitFor();
   assert.equal(await pane.getByText("model call failed").isVisible(), true);
-  assert.equal(await pane.getByText("1 structured output withheld").isVisible(), true);
+  assert.equal(
+    await pane.getByText("1 structured output line withheld (unrecognised_structured)").isVisible(),
+    true,
+  );
   await page
     .getByText(
       "Showing 3 of 5 loaded lines. Filters search only the lines loaded in this view, not the whole container log.",
