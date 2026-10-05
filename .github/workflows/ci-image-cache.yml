@@ -38,7 +38,8 @@ on:
 permissions:
   contents: read
 
-# One export at a time, never cancelled; a newer push replaces only the pending run.
+# One export at a time, never cancelled; a newer push replaces only the pending
+# run, which the Actions list then shows as cancelled.
 concurrency:
   group: ci-image-cache-${{ github.ref }}
   cancel-in-progress: false
@@ -82,7 +83,7 @@ jobs:
             core.info(`Cache scopes: ${scopes.map(({ Scope, Permission }) => `${Scope} (${Permission})`).join(', ')}`);
             const writable = scopes.filter(({ Permission }) => (Permission & 2) !== 0).map(({ Scope }) => Scope);
             if (writable.length !== 1 || writable[0] !== 'refs/heads/main') {
-              throw new Error(`The image cache warms only main's scope; this run may write: ${writable.join(', ') || 'nothing'}`);
+              throw new Error(`The image cache warms only main's scope; this token's scopes: ${JSON.stringify(scopes)}`);
             }
             core.setOutput('token', token);
             core.setOutput('url', url);

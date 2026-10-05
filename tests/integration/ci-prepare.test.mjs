@@ -209,6 +209,13 @@ if (command === "docker" || command === "podman") {
   }
   if (equals(args.slice(0, 2), ["buildx", "build"]) && args.includes("--target")) {
     assert.equal(args[args.indexOf("--target") + 1], "runtime");
+    if (scenario === "controller-build-failed") {
+      // The tag is owned before the build; cleanup must still remove it.
+      state.controller = args[args.indexOf("-t") + 1];
+      commitState();
+      process.stderr.write("#7 [runtime 3/9] synthetic controller step\nERROR: synthetic build failure\n");
+      process.exit(1);
+    }
     assert.equal(args.at(-1), ".");
     state.controller = args[args.indexOf("-t") + 1];
     finish();
@@ -991,6 +998,24 @@ test("the main image cache warm job builds the packaging images and exports both
   assert.equal(cleaned.status, 0, cleaned.stderr);
 });
 
+test("the image cache warm job prints a failed build's output and fails", async (t) => {
+  const commands = await fixtureImageCommands(
+    t,
+    "controller-build-failed",
+    "images-packaging",
+    warmCacheEnv,
+  );
+  const warmed = commands.warmImageCache();
+  assert.notEqual(warmed.status, 0);
+  assert.match(
+    warmed.stderr,
+    /^\[image-cache-warm\] controller build\n#7 \[runtime 3\/9\] synthetic controller step$/m,
+  );
+  assert.doesNotMatch(warmed.stdout + warmed.stderr, /synthetic-cache-credential/);
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
 test("the image cache warm job refuses refs other than main and lane arguments before building", async (t) => {
   for (const [label, env, args, error] of [
     [
@@ -1064,7 +1089,7 @@ test("the image cache warm workflow runs for every change to an image build inpu
       .split(/^(?=FROM\s)/m)
       .slice(1)
       .map((text) => {
-        const [, base, name] = text.match(/^FROM\s+(\S+)(?:\s+AS\s+(\S+))?/);
+        const [, base, name] = text.match(/^FROM\s+(\S+)(?:\s+AS\s+(\S+))?/i);
         const from = [...text.matchAll(/(?:--from=|,from=)([^\s,]+)/g)].map(([, stage]) => stage);
         return { name, text, needs: [base, ...from] };
       });
@@ -1089,7 +1114,7 @@ test("the image cache warm workflow runs for every change to an image build inpu
       }
       sources.push(...words.filter((word) => !word.startsWith("--")).slice(0, -1));
     }
-    for (const [, options] of text.matchAll(/--mount=type=bind,(\S+)/g)) {
+    for (const [, options] of text.matchAll(/--mount=(\S*type=bind\S*)/g)) {
       const fields = Object.fromEntries(options.split(",").map((field) => field.split("=")));
       if (!fields.from) {
         sources.push(fields.source);

@@ -790,8 +790,8 @@ function imageBuildArgs(state, role, localStore, cacheWarm = false) {
       "--cache-from",
       `${cache},timeout=60s`,
       // One writer per image avoids competing exports from the parallel image lanes.
-      // The main-only warm job exists to export, so its export may take longer and
-      // fails the job instead of being ignored.
+      // The main-only warm job exists to export, so each cache transfer may take
+      // longer and a failed export fails the job instead of being ignored.
       ...(state.lane === "images-packaging"
         ? [
             "--cache-to",
@@ -821,12 +821,26 @@ async function buildRuntimeImages(
     cacheWarm = false,
   } = {},
 ) {
-  // Plain BuildKit progress shows each step's cache hit or duration; the warm job
-  // prints it per image once the build ends, so parallel builds stay readable.
+  // Plain BuildKit progress shows each step's cache hit or duration. The warm job
+  // prints it per image once the build ends (parallel builds stay readable), also
+  // when the build fails or overruns its own deadline inside the job's.
   const progress = cacheWarm ? ["--progress=plain"] : [];
-  const showBuild = (role, { stderr }) => {
-    if (cacheWarm) {
-      process.stderr.write(`[image-cache-warm] ${role} build\n${stderr}\n`);
+  const build = async (role, args) => {
+    if (!cacheWarm) {
+      return execFile(process.env.OCC_DOCKER_BIN ?? "docker", args);
+    }
+    let output = "";
+    try {
+      const built = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", args, {
+        timeoutMs: 20 * 60_000,
+      });
+      output = built.stderr;
+      return built;
+    } catch (error) {
+      output = error.stderr ?? "";
+      throw error;
+    } finally {
+      process.stderr.write(`[image-cache-warm] ${role} build\n${output}\n`);
     }
   };
   await commandAvailable(process.env.OCC_DOCKER_BIN ?? "docker", [
@@ -850,7 +864,7 @@ async function buildRuntimeImages(
     const resource = addResource(state, "image-tag", { name: tag, owner: state.prefix });
     resources.push(resource);
     await writeState(statePath, state);
-    const built = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+    await build("controller", [
       ...imageBuildArgs(state, "controller", localStore, cacheWarm),
       ...progress,
       "--pull=false",
@@ -862,7 +876,6 @@ async function buildRuntimeImages(
       tag,
       ".",
     ]);
-    showBuild("controller", built);
     await markResourceReady(statePath, state, resource);
     env.OCC_TEST_PRODUCTION_IMAGE = tag;
     env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = tag;
@@ -884,8 +897,8 @@ async function buildRuntimeImages(
     const resource = addResource(state, "image-tag", { name: tag, owner: state.prefix });
     resources.push(resource);
     await writeState(statePath, state);
-    const built = await execFile(
-      process.env.OCC_DOCKER_BIN ?? "docker",
+    await build(
+      "runtime",
       openclawSource === undefined
         ? [
             ...imageBuildArgs(state, "runtime", localStore, cacheWarm),
@@ -909,7 +922,6 @@ async function buildRuntimeImages(
             openclawSource,
           ],
     );
-    showBuild("runtime", built);
     await markResourceReady(statePath, state, resource);
     env.OCC_TEST_RUNTIME_IMAGE = tag;
     env.OCC_DOCKER_RUNTIME_IMAGE = tag;
