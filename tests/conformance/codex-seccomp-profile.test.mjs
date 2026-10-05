@@ -285,6 +285,13 @@ async function withMockedPollClock(t, operation) {
   }
 }
 
+function probeEvidence(args, stage, exit, entered, detail = "") {
+  const nonce = args.at(-1).match(/OCE_SANDBOX_PROBE_V1:([a-f0-9]{32}):START/)?.[1];
+  assert.ok(nonce, "the owning helper must generate an invocation binding");
+  const prefix = `OCE_SANDBOX_PROBE_V1:${nonce}:`;
+  return `${prefix}START\n${entered ? `${prefix}ENTERED\n` : ""}${detail ? `${detail}\n` : ""}${prefix}END:${stage}:${exit}\n`;
+}
+
 // Exercise the real preparation/cleanup path with injected command responses.
 // These ordered API observations are synthetic, not a claimed live Pod transition.
 async function missingProfileFixture(t, observations, options = {}) {
@@ -301,6 +308,7 @@ async function missingProfileFixture(t, observations, options = {}) {
   let installedProfile;
   let missingReads = 0;
   let cleanupCalls = 0;
+  let installations = 0;
   const execFile = async (command, args) => {
     // Like a real child process, every injected command completes on a later turn.
     // This also lets withMockedPollClock's guard run between polls: a poll loop
@@ -368,12 +376,20 @@ async function missingProfileFixture(t, observations, options = {}) {
       }
       if (args.includes("exec")) {
         const name = args[args.indexOf("exec") + 1];
+        if (options.probeExec) {
+          return options.probeExec(args, {
+            baseline: !applied.get(name).spec.containers[0].securityContext.seccompProfile,
+            root,
+          });
+        }
         if (!applied.get(name).spec.containers[0].securityContext.seccompProfile) {
           const error = new Error("RuntimeDefault denied namespace creation");
-          error.stderr = "bwrap namespace denied by seccomp";
+          error.stderr =
+            options.baselineStderr ??
+            probeEvidence(args, "SANDBOX", 1, false, "bwrap namespace denied by seccomp");
           throw error;
         }
-        return { stdout: "", stderr: "" };
+        return { stdout: "", stderr: probeEvidence(args, "DONE", 0, true) };
       }
     }
     if (command === "docker") {
@@ -385,6 +401,7 @@ async function missingProfileFixture(t, observations, options = {}) {
         };
       }
       if (args[0] === "cp") {
+        installations += 1;
         installedProfile = JSON.parse(await readFile(args[1], "utf8"));
         return { stdout: "", stderr: "" };
       }
@@ -411,6 +428,7 @@ async function missingProfileFixture(t, observations, options = {}) {
         }),
       ),
     reads: () => missingReads,
+    installations: () => installations,
     async assertCleanup() {
       assert.equal(cleanupCalls, 1);
       assert.equal(
@@ -545,3 +563,139 @@ for (const [label, message] of [
     await control.assertCleanup();
   });
 }
+
+for (const [label, diagnostic] of [
+  ["Forbidden", 'Error from server (Forbidden): cannot exec in namespace "synthetic"'],
+  ["NotFound", 'Error from server (NotFound): pod absent in namespace "synthetic"'],
+]) {
+  test(`baseline origin refuses Kubernetes ${label} before profile installation`, async (t) => {
+    const control = await missingProfileFixture(t, [missingProfileWaiting], {
+      baselineStderr: diagnostic,
+    });
+    await assert.rejects(control.run, /./, "a client error must not qualify the baseline denial");
+    assert.equal(control.installations(), 0);
+    await control.assertCleanup();
+  });
+}
+
+for (const [label, alter, extra] of [
+  ["wrong nonce", (text) => text.replaceAll(/:[a-f0-9]{32}:/g, `:${"0".repeat(32)}:`)],
+  ["duplicate terminal", (text) => text + text.split("\n").at(-2) + "\n"],
+  ["partial terminal", (text) => text.slice(0, -1)],
+  ["oversized output", (text) => text + "x".repeat(4097)],
+  ["unexpected stage", (text) => text.replace("END:SANDBOX", "END:OTHER")],
+  ["wrong exit", (text) => text.replace("END:SANDBOX:1", "END:SANDBOX:127")],
+  [
+    "entered payload",
+    (text) => text.replace("START\n", "START\n" + text.split("START")[0] + "ENTERED\n"),
+  ],
+  ["version failure", (text) => text.replace("END:SANDBOX:1", "END:VERSION:64")],
+  ["timeout", (text) => text, { timedOut: true }],
+  ["signal", (text) => text, { signal: "SIGTERM" }],
+  ["success-shaped failure", (text) => text.replace("END:SANDBOX:1", "END:DONE:0")],
+]) {
+  test(`baseline origin refuses ${label} and preserves cleanup`, async (t) => {
+    const control = await missingProfileFixture(t, [missingProfileWaiting], {
+      probeExec(args) {
+        const error = new Error("probe rejected");
+        error.stderr = alter(probeEvidence(args, "SANDBOX", 1, false, "bwrap namespace denied"));
+        Object.assign(error, extra);
+        throw error;
+      },
+    });
+    await assert.rejects(control.run, /probe rejected/);
+    assert.equal(control.installations(), 0);
+    await control.assertCleanup();
+  });
+}
+
+// The real helper generates the shell. Only its two resource roots are remapped
+// into this fixture. The injected codex executable is inert: no sandbox, cluster
+// or provider is run. Successful payload execution uses an ordinary read-only file
+// to model the tested outside-workspace refusal; this is not isolation evidence.
+async function runGeneratedProbe(args, root, mode) {
+  const tools = join(root, "tools");
+  await mkdir(tools, { recursive: true });
+  const codex = join(tools, "codex");
+  await writeFile(
+    codex,
+    `#!/bin/sh
+if [ "$1" = --version ]; then
+  if [ "$PROBE_MODE" = version ]; then echo 'codex 0.0.0'; else echo 'codex 0.158.0'; fi
+  exit 0
+fi
+case "$PROBE_MODE" in
+  denied) echo 'bwrap: creating new namespace: Operation not permitted' >&2; exit 1 ;;
+  unknown) echo 'synthetic unexplained failure' >&2; exit 1 ;;
+  timeout) exit 124 ;;
+  missing) exit 127 ;;
+esac
+for arg do payload="$arg"; done
+chmod 400 "$PROBE_ROOT/home/codex-seccomp-outside"
+/bin/sh -c "$payload"
+result=$?
+chmod 600 "$PROBE_ROOT/home/codex-seccomp-outside"
+if [ "$PROBE_MODE" = assertion ]; then echo changed > "$PROBE_ROOT/home/codex-seccomp-outside"; fi
+exit "$result"
+`,
+    { mode: 0o700 },
+  );
+  const command = args
+    .at(-1)
+    .replaceAll("/home/node", join(root, "home"))
+    .replaceAll("/workspace", join(root, "workspace"));
+  const result = spawnSync("/bin/sh", ["-c", command], {
+    encoding: "utf8",
+    timeout: 5_000,
+    maxBuffer: 8192,
+    env: { PATH: `${tools}:/usr/bin:/bin`, PROBE_MODE: mode, PROBE_ROOT: root },
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  if (result.status !== 0) {
+    const error = new Error("generated probe failed");
+    Object.assign(error, { stdout: result.stdout, stderr: result.stderr });
+    throw error;
+  }
+  return { stdout: result.stdout, stderr: result.stderr };
+}
+
+for (const [mode, expectedStage] of [
+  ["version", "VERSION"],
+  ["unknown", "SANDBOX"],
+  ["timeout", "SANDBOX"],
+  ["missing", "SANDBOX"],
+  ["assertion", "ASSERTIONS"],
+]) {
+  test(`generated probe ${mode} refuses profile qualification with fixed stage`, async (t) => {
+    const control = await missingProfileFixture(t, [missingProfileWaiting], {
+      probeExec: (args, { root }) => runGeneratedProbe(args, root, mode),
+    });
+    await assert.rejects(control.run, (error) => {
+      assert.equal(error.codexSandboxProbe?.stage, expectedStage);
+      return true;
+    });
+    assert.equal(control.installations(), 0);
+    await control.assertCleanup();
+  });
+}
+
+test("generated negative and positive probes complete the real profile preparation path", async (t) => {
+  const control = await missingProfileFixture(t, [missingProfileWaiting], {
+    probeExec: (args, { baseline, root }) =>
+      runGeneratedProbe(args, root, baseline ? "denied" : "success"),
+  });
+  const result = await control.run();
+  assert.equal(result.profileName, "openclaw/codex-bwrap.json");
+  assert.equal(control.installations(), 1);
+  await control.assertCleanup();
+});
+
+test("a client success without completed probe evidence does not qualify a positive", async (t) => {
+  const control = await missingProfileFixture(t, [missingProfileWaiting], {
+    probeExec: async () => ({ stdout: "", stderr: "" }),
+  });
+  await assert.rejects(control.run, /complete invocation-bound success evidence/);
+  assert.equal(control.installations(), 0);
+  await control.assertCleanup();
+});
