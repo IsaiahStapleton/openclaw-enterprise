@@ -2553,7 +2553,8 @@ test("Installation deployment inventory fails closed on incomplete authorization
     },
   );
 
-  // A complete fleet response must not turn any exact-resource denial into omission.
+  // The inventory needs Installation administer, and a complete fleet response must not turn
+  // any exact-resource denial into omission.
   for (const restriction of [
     {
       id: "deny-inventory-installation-administer",
