@@ -325,7 +325,9 @@ native review trigger; explicit tool overrides do not need catalog annotations.
 
 ## Failures and boundaries
 
-- `400`: invalid body or policy unsupported by the selected Driver.
+- `400`: invalid body or policy unsupported by the selected Driver. A plugin ID
+  the selected Driver does not offer, such as `occ-plugin:diffs` while
+  `codex-plugin` is selected, names that Driver in the message.
 - `403`: denied exact-Agent permission.
 - `404`: missing or foreign Agent or Configuration.
 - `409`: ordinary Agent conflict, such as duplicate name.

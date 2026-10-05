@@ -337,7 +337,9 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
           : pluginId;
         const descriptor = nativeCatalog.find((entry) => entry.nativeId === nativeId);
         if (descriptor === undefined) {
-          throw new Error("Unknown OpenClaw plugin selection.");
+          throw Object.assign(new Error("Unknown OpenClaw plugin selection."), {
+            policyField: "pluginId",
+          });
         }
         policyRecord(
           selection.driverPolicy === undefined ? {} : selection.driverPolicy,
@@ -449,7 +451,10 @@ export function createPluginRuntimeTranslator(nativeCatalog: readonly OpenClawPl
       : pluginId;
     const suffix = "@" + CODEX_MARKETPLACE;
     if (!prefixed.endsWith(suffix)) {
-      throw new Error("Codex plugin ID must identify the curated remote marketplace.");
+      throw Object.assign(
+        new Error("Codex plugin ID must identify the curated remote marketplace."),
+        { policyField: "pluginId" },
+      );
     }
     return prefixed;
   }
