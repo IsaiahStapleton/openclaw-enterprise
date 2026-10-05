@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"unicode"
+	"unicode/utf16"
 
 	"github.com/openclaw/openclaw-enterprise/internal/occclient"
 	"go.yaml.in/yaml/v3"
@@ -265,7 +267,7 @@ func printTable(out io.Writer, items []any, columns []column) error {
 		}
 		row := make([]string, len(columns))
 		for index, column := range columns {
-			row[index] = displayValue(resource[column.key])
+			row[index] = tableCell(resource[column.key])
 		}
 		if _, err := fmt.Fprintln(writer, strings.Join(row, "\t")); err != nil {
 			return err
@@ -286,6 +288,35 @@ func displayValue(value any) string {
 		return "-"
 	}
 	return string(encoded)
+}
+
+// tableCell is displayValue with every non-graphic rune escaped. Names may hold
+// bidirectional overrides, zero-width or C1 control characters (the Name
+// contract rejects only C0 and DEL); printed raw they reorder or hide columns.
+// A string is Go-quoted; a structured value keeps valid JSON \u escapes.
+func tableCell(value any) string {
+	text := displayValue(value)
+	if strings.IndexFunc(text, isHiddenRune) < 0 {
+		return text
+	}
+	if _, ok := value.(string); ok {
+		return strconv.QuoteToGraphic(text)
+	}
+	var escaped strings.Builder
+	for _, character := range text {
+		if !isHiddenRune(character) {
+			escaped.WriteRune(character)
+			continue
+		}
+		for _, unit := range utf16.Encode([]rune{character}) {
+			fmt.Fprintf(&escaped, `\u%04x`, unit)
+		}
+	}
+	return escaped.String()
+}
+
+func isHiddenRune(character rune) bool {
+	return !unicode.IsGraphic(character)
 }
 
 type runtimeLogRecord struct {
