@@ -2494,6 +2494,21 @@ test(
         /prefixes 1 through 32/,
       ],
       [
+        "GitHub sign-in with an empty-string egress list",
+        { ...githubLoginValues, "auth.github.egressCidrs": "" },
+        /auth\.github\.egressCidrs must be a list of IPv4 CIDRs/,
+      ],
+      [
+        "GitHub sign-in with an empty-string organization allowlist",
+        { ...githubLoginValues, "auth.github.allowedOrgs": "" },
+        /auth\.github\.allowedOrgs must be a list of GitHub organization logins/,
+      ],
+      [
+        "GitHub sign-in with an empty-string team allowlist",
+        { ...githubLoginValues, "auth.github.allowedTeams": "" },
+        /auth\.github\.allowedTeams must be a list of org\/team-slug entries/,
+      ],
+      [
         "GitHub sign-in sharing the Better Auth Secret",
         { ...githubLoginValues, "auth.github.secretName": "occ-auth" },
         /dedicated Secret/,
