@@ -89,10 +89,10 @@ through `includeDefaults`, `presets.files`, or Preset POST to enable it.
 console's shared configuration base and ordinary creation permissions.
 
 The shipped default file also supplies the console's shared configuration base
-for empty templates, **Reset template**, and provider/Harness switches. The installed copy supplies initial draft settings;
-normal field edits preserve unrelated settings, while **Reset template** explicitly
-returns to the shipped base with the selected model. No installed credential or
-private template is exposed by the public shared-default asset.
+for empty templates, **Reset template**, and provider/Harness switches. The
+installed copy supplies initial draft settings, and field edits preserve unrelated
+settings. **Reset template** returns to the shipped base with the selected model.
+The public shared-default asset exposes no installed credential or private template.
 
 ### Standard harness presets
 
@@ -263,14 +263,13 @@ or **Use existing Secret**. Existing mode lists readable Namespace Secret metada
 and uses the selected reference without fetching its value. Switching modes clears
 the entered token; the saved Preset remains unchanged.
 
-In new mode, **Use Preset** carries the value into the masked credential input.
-**Create Agent** creates a Namespace Secret, uses its reference for authentication,
-and grants the Agent access through the ordinary creation flow. The value never
-belongs in Preset storage, Agent JSON, or Configuration JSON. API clients must also
-create a Secret and replace `secret` with `source: <SecretRef>` before submitting an
-ordinary Agent request; rendering alone creates no resources. Existing mode reuses
-the selected Secret and grants exact access through the same flow. Partial saves
-follow normal recovery; retrying credential access does not recreate the Agent.
+In new mode, **Use Preset** carries the value into the masked credential input, and
+**Create Agent** creates a Namespace Secret. Both modes then grant the Agent exact
+access through the ordinary creation flow. The value never belongs in Preset
+storage, Agent JSON, or Configuration JSON. API clients must create a Secret and
+replace `secret` with `source: <SecretRef>` before submitting an ordinary Agent
+request; rendering alone creates no resources. Partial saves follow normal
+recovery; retrying credential access does not recreate the Agent.
 
 String variables can still supply existing credential reference IDs.
 [SecretRefs](configuration/secrets.md) remain structured, unresolved references;
@@ -323,8 +322,7 @@ cannot edit an Installation Role or grant collection-wide `create`.
 Preset access grants no permission to create Agents or use referenced Secrets.
 After rendering, Configuration and Agent creation enforce their existing schemas,
 credential rules, and authorization before saving. Deployment rechecks admission.
-The console performs rendering and form checks first; these do not replace server
-validation. Audit records omit templates and variable values.
+Audit records omit templates and variable values.
 
 Invalid inputs return `400`; denied access returns `403`; a missing exact target
 returns `404`; duplicate names or lifecycle conflicts return `409`; unavailable
@@ -343,12 +341,10 @@ if the second save fails or a response is lost.
 
 A Preset is read once when selected. **Use Preset** renders its variables and
 opens an ordinary editable Agent form. The chooser closes; changing the draft
-does not update or reread the Preset. Before saving, **Start over** discards the
-unsaved draft and returns to the chooser. Restart is disabled once a Configuration
-has saved or a save outcome is uncertain. The saved Configuration remains available for recovery
-if Agent creation fails.
+does not update or reread the Preset. **Start over** discards the unsaved draft
+and returns to the chooser, but is disabled once a Configuration has saved or a
+save outcome is uncertain.
 
 A valid Preset is not necessarily a valid Agent configuration. A later Agent
 validation error can leave a saved Configuration; follow the recovery steps
-above. Later deployments read the Agent's own draft. Credential rotation retains
-its normal behavior.
+above. Later deployments read the Agent's own draft.
