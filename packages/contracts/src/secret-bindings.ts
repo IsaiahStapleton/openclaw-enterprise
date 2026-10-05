@@ -44,8 +44,8 @@ export function isAllowedSecretBindingDestination(name: string): boolean {
   return destinationRule(name) === undefined;
 }
 
-// Names the destination and the rule it broke. Only a well-formed name is echoed: it is the
-// caller's own environment variable name, never a Secret value or ID.
+// Names the rule a destination broke and, when well-formed, the destination: the caller's own
+// environment variable name, never a Secret value or ID. A malformed name is not echoed.
 function destinationMessage(name: string, rule: SecretBindingDestinationRule): string {
   switch (rule) {
     case "invalid_format":

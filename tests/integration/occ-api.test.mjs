@@ -3212,7 +3212,7 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
   assert.equal(otherDriverUpdate.body.error.code, "INVALID_REQUEST");
   assert.match(
     otherDriverUpdate.body.error.message,
-    /^The plugin selection codex-plugin:linear@openai-curated-remote names a plugin that the selected Plugin Driver \(occ-plugin\) does not offer\./,
+    /^A plugin selection names a plugin that the selected Plugin Driver \(occ-plugin\) does not offer: codex-plugin:linear@openai-curated-remote\./,
   );
   assert.deepEqual(otherDriverUpdate.body.error.details, [
     { path: `/plugins/${linearPluginId}`, code: "INVALID_VALUE" },

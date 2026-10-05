@@ -672,7 +672,9 @@ export function requestFailure(error: unknown): RequestFailure {
       error.message,
       destination === undefined
         ? undefined
-        : pointerDetail(destination.bindingsPath, destination.key, destination.code),
+        : destination.key === undefined
+          ? [{ path: destination.bindingsPath, code: destination.code }]
+          : pointerDetail(destination.bindingsPath, destination.key, destination.code),
     );
   }
   if (error instanceof NativeWorkerSupportError) {

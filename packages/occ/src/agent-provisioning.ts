@@ -88,14 +88,9 @@ export function normalizeRequestSecretBindings(
       "destination" in error &&
       typeof error.destination === "string" &&
       "destinationRule" in error
-        ? {
-            bindingsPath,
-            key: error.destination,
-            code:
-              error.destinationRule === "invalid_format"
-                ? ("INVALID_FORMAT" as const)
-                : ("INVALID_VALUE" as const),
-          }
+        ? error.destinationRule === "invalid_format"
+          ? { bindingsPath, code: "INVALID_FORMAT" as const }
+          : { bindingsPath, key: error.destination, code: "INVALID_VALUE" as const }
         : undefined;
     throw new SecretBindingValidationError(
       error instanceof Error ? error.message : "Secret bindings are invalid.",

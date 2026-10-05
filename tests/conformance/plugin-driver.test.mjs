@@ -311,7 +311,7 @@ test("Plugin Drivers name themselves when a selection names a plugin they do not
     error.name === "PluginPolicyValidationError" &&
     error.pluginId === pluginId &&
     error.message.startsWith(
-      `The plugin selection ${pluginId} names a plugin that the selected Plugin Driver (${driverId}) does not offer.`,
+      `A plugin selection names a plugin that the selected Plugin Driver (${driverId}) does not offer: ${pluginId}.`,
     );
   // The other Driver's plugin, as after an Installation switches its single Plugin Driver.
   assert.throws(

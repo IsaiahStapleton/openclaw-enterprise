@@ -201,7 +201,8 @@ export class SecretBindingValidationError extends ScopeViolationError {
    */
   readonly destination?: {
     readonly bindingsPath: string;
-    readonly key: string;
+    /** Absent for a malformed key, which is not echoed; the detail points at the map. */
+    readonly key?: string;
     readonly code: "INVALID_FORMAT" | "INVALID_VALUE";
   };
 
@@ -621,12 +622,12 @@ export class PluginPolicyValidationError extends Error {
     if (field === "unknownPlugin") {
       // driverId comes from trusted Installation configuration, never from the request.
       // pluginId is the caller's own selection key; the API contract limits it to
-      // [A-Za-z0-9._~:@-], and HTTP caps the message.
-      message = `The plugin selection ${
-        pluginId === undefined ? "" : `${pluginId} `
-      }names a plugin that the selected Plugin Driver${
+      // [A-Za-z0-9._~:@-]. It follows the rule, so HTTP's message cap cuts the advice first.
+      message = `A plugin selection names a plugin that the selected Plugin Driver${
         driverId === undefined ? "" : ` (${driverId})`
-      } does not offer. Check each plugin ID and its Driver prefix against that Driver's catalog; an Installation selects one Plugin Driver.`;
+      } does not offer${
+        pluginId === undefined ? "" : `: ${pluginId}`
+      }. Check each plugin ID and its Driver prefix against that Driver's catalog; an Installation selects one Plugin Driver.`;
     } else if (field === "aliasedPlugin") {
       message =
         'Two plugin selections name the same plugin (a native ID and its driver-prefixed ID, such as "diffs" and "occ-plugin:diffs"). Keep one selection per plugin.';
