@@ -680,7 +680,7 @@ test("router failures answer the error envelope without echoing the path", async
       "The request path has a malformed percent-encoding.",
     ],
     [
-      `${roles}/${"r".repeat(12 * 200 + 1)}`,
+      `${roles}/${"r".repeat(401)}`,
       400,
       "INVALID_REQUEST",
       `${contract}: a path parameter is too long.`,
@@ -702,6 +702,8 @@ test("router failures answer the error envelope without echoing the path", async
     const { response, payload } = await request(fixture.app, pathname);
     assert.equal(response.status, status, pathname.slice(0, 80));
     assert.deepEqual(payload.error, { code, message });
+    assert.deepEqual(Object.keys(payload).sort(), ["error", "meta"]);
+    assert.doesNotMatch(JSON.stringify(payload), /FST_ERR|%ZZ|%ED|rrrr/);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   }
