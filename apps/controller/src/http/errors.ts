@@ -332,25 +332,21 @@ export function unstorableTextFailure(
   let found: { readonly node: Node; readonly problem: "nul" | "surrogate" } | undefined;
   while (found === undefined && pending.length > 0) {
     const node = pending.pop()!;
-    if (typeof node.value === "string") {
-      const problem = unstorableText(node.value);
-      found = problem === undefined ? undefined : { node, problem };
+    // A key is checked when its entry is visited, so keys and values share document order.
+    const problem =
+      (node.key === undefined ? undefined : unstorableText(node.key)) ??
+      (typeof node.value === "string" ? unstorableText(node.value) : undefined);
+    if (problem !== undefined) {
+      found = { node, problem };
     } else if (node.value !== null && typeof node.value === "object") {
       const entries = Array.isArray(node.value)
         ? node.value.map((entry, index) => [String(index), entry] as const)
         : Object.entries(node.value);
-      const children = entries.map(([key, entry]) => ({ value: entry, parent: node, key }));
-      for (const child of children) {
-        const problem = unstorableText(child.key);
-        if (problem !== undefined) {
-          found = { node: child, problem };
-          break;
-        }
-      }
       // Reversed onto the stack, so the walk reports the first offender in document order.
-      // (A loop, not push(...children): a large array would exceed the argument limit.)
-      for (let index = children.length - 1; index >= 0; index -= 1) {
-        pending.push(children[index]!);
+      // (A loop, not push(...entries): a large array would exceed the argument limit.)
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const [key, entry] = entries[index]!;
+        pending.push({ value: entry, parent: node, key });
       }
     }
   }

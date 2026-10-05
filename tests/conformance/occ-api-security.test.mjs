@@ -683,6 +683,8 @@ test("NUL characters and unpaired surrogates are refused in bodies and path para
       "/values/first/1",
       surrogate,
     ],
+    // Keys and values share document order.
+    [configurations, '{"kind":"agent","values":{"a":"\\u0000","b\\ud800":1}}', "/values/a", nul],
     // A first segment too long for the 512-character detail path is cut, not dropped.
     [configurations, `{"${"k".repeat(600)}\\u0000":1}`, `/${"k".repeat(511)}`, nul],
     [
