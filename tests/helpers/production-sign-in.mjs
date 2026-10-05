@@ -23,7 +23,7 @@ import {
 import { cookieHeaderFromSetCookie } from "./auth-session.mjs";
 import { createReadyComputeDriver } from "./development.mjs";
 import { idTokenSigner, rsaSigningKey } from "./id-token.mjs";
-import { databaseUrl } from "./postgres-database.mjs";
+import { databaseUrl as testDatabaseUrl } from "./postgres-database.mjs";
 
 // Only Compute is passive: no Agent is deployed, so sign-in proofs need no cluster.
 // Authentication, State, IAM, audit and Fastify are the production implementations.
@@ -290,12 +290,13 @@ export async function currentSession(app, cookie) {
 }
 
 /**
- * A pool and PlatformState on the test database for one sign-in test. After the test, the
- * apps or browsers that `closeFirst()` returns close in order, then the pool ends.
+ * A pool and PlatformState on the test database for one sign-in test. After the test, each
+ * object `closeFirst()` returns (an app, or anything with `close()`) closes in order, then
+ * the pool ends.
  * `let app; const { pool, state } = postgresSignInState(t, () => [app]);`
  */
 export function postgresSignInState(context, closeFirst = () => []) {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
   const state = new PostgresPlatformState(pool);
   context.after(async () => {
     for (const closable of closeFirst()) {
