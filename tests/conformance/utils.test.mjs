@@ -107,9 +107,9 @@ test("deepFreeze freezes nested event data in place and handles cycles", () => {
   }, TypeError);
 });
 
-// The isolated repository-credentials client may load only its own modules, client-contracts
-// and Node built-ins (scripts/build-repository-credentials.mjs), so client-contracts keeps its
-// own copy of this check. Both copies must flag exactly the same characters.
+// The isolated repository-credentials runtimes never load a workspace package (their build
+// closures reject bare specifiers), so client-contracts keeps its own copy of this check.
+// Both copies must flag exactly the same characters.
 for (const [owner, check] of [
   ["@openclaw-enterprise/utils", hasControlCharacter],
   ["repository-credentials client-contracts", clientHasControlCharacter],

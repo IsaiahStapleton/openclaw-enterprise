@@ -824,6 +824,12 @@ test("channel directory lookup refuses saved IDs with C0 controls or DEL before 
     "U\ud8002",
     "U\u{1f600}2",
   ]) {
-    await assert.rejects(lookup(id), DependencyUnavailableError, JSON.stringify(id));
+    await assert.rejects(
+      lookup(id),
+      (error) =>
+        error instanceof DependencyUnavailableError &&
+        error.message === "The selected authorization Driver is unavailable.",
+      JSON.stringify(id),
+    );
   }
 });

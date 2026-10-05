@@ -11,10 +11,11 @@ export interface RepositoryCredentialClientConfiguration {
 /**
  * True when `value` contains a C0 control character (U+0000-U+001F) or DEL (U+007F).
  *
- * A deliberate copy of `hasControlCharacter` from `@openclaw-enterprise/utils`: the isolated
- * client runtime may load only its own modules, this file and Node built-ins
- * (scripts/build-repository-credentials.mjs), never a workspace package. The utils
- * conformance suite checks that both copies flag exactly the same characters.
+ * A deliberate copy of `hasControlCharacter` from `@openclaw-enterprise/utils`. The isolated
+ * repository-credentials runtimes never load a workspace package: the build closures in
+ * scripts/build-repository-credentials.mjs reject bare specifiers, and
+ * scripts/verify-repository-credentials-boundary.mjs has no reviewed import for one. The
+ * utils conformance suite checks that both copies flag exactly the same characters.
  */
 export function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
