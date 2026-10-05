@@ -95,7 +95,8 @@ under `/secure/occ`.
 
 To reuse profile output or verified YAML from
 [local operations](local-operations.md#build-images-for-local-kubernetes), set
-`OCC_INPUT_DIRECTORY` to it, skip both generation branches, and continue with the
+`OCC_INPUT_DIRECTORY` to it, copy the cluster kubeconfig there as `kubeconfig`
+with mode `0600`, skip both generation branches, and continue with the
 [shared checks](#shared-bootstrap-pvc-and-configuration-checks).
 
 ```bash
