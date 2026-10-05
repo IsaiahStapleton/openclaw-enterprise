@@ -1,5 +1,7 @@
 # Vendored from openclaw/openclaw .github/actions/setup-pnpm-store-cache at
 # ee0cf16623068ff535cc20f4a1ce175c8c5b8d25 (MIT), unchanged apart from this comment.
+# Dependabot tracks this directory, so actions/cache/restore below moves with
+# run-ci-lane's actions/cache/save.
 # Referencing it remotely made every job download the whole openclaw/openclaw
 # tarball (8-18 s per job) for these three files.
 name: Setup pnpm
