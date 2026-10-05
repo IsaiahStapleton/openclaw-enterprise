@@ -777,7 +777,7 @@ export function requestFailure(error: unknown): RequestFailure {
           ? reason === "untrusted_origin"
             ? "A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header."
             : "The request did not satisfy the configured admission boundary."
-          : "This request needs a valid session or service API key: the one sent is missing, invalid, expired or revoked, or this operation does not accept it.",
+          : "A valid session cookie or service API key is required: the credential sent is missing, invalid, expired, or revoked. Send service API keys in the x-api-key header; Authorization bearer tokens are not accepted.",
       );
     }
   }

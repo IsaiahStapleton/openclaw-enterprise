@@ -573,13 +573,13 @@ const cases = [
     },
   ],
   [
-    "missing admission evidence",
+    "a 401 admission failure",
     admissionFailure({ statusCode: 401 }),
     {
       status: 401,
       code: "UNAUTHENTICATED",
       message:
-        "This request needs a valid session or service API key: the one sent is missing, invalid, expired or revoked, or this operation does not accept it.",
+        "A valid session cookie or service API key is required: the credential sent is missing, invalid, expired, or revoked. Send service API keys in the x-api-key header; Authorization bearer tokens are not accepted.",
     },
   ],
   [
