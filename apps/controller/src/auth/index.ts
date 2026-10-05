@@ -767,8 +767,9 @@ async function sendAuthEndpoint(
     reply.status(failure.status).send({
       error: {
         code: failure.code,
-        // A refused Origin is checked before any credential, so naming it reveals nothing
-        // about the session or password; the endpoint's own message would misdirect.
+        // Every caller checks the Origin before it reads any credential, so naming the refused
+        // Origin reveals nothing about the session or password; keep it that way, because the
+        // endpoint's own message would misdirect a CLI user.
         message:
           error instanceof AdmissionFailure && error.reason === "untrusted_origin"
             ? UNTRUSTED_ORIGIN_MESSAGE
