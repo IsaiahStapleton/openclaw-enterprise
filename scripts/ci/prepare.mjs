@@ -455,20 +455,31 @@ async function commandAvailable(command, args = ["--version"]) {
   }
 }
 
+// Ports this process has handed out. PostgreSQL and k3d now reserve theirs
+// concurrently and release the probe listener before binding, so the kernel could
+// return the same free port to both; never hand one out twice.
+const reservedLoopbackPorts = new Set();
+
 async function reserveLoopbackPort() {
-  const server = createServer();
-  await new Promise((resolvePromise, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolvePromise);
-  });
-  const address = server.address();
-  await new Promise((resolvePromise, reject) => {
-    server.close((error) => (error ? reject(error) : resolvePromise()));
-  });
-  if (!address || typeof address === "string") {
-    throw new Error("Failed to reserve a loopback port.");
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const server = createServer();
+    await new Promise((resolvePromise, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolvePromise);
+    });
+    const address = server.address();
+    await new Promise((resolvePromise, reject) => {
+      server.close((error) => (error ? reject(error) : resolvePromise()));
+    });
+    if (!address || typeof address === "string") {
+      throw new Error("Failed to reserve a loopback port.");
+    }
+    if (!reservedLoopbackPorts.has(address.port)) {
+      reservedLoopbackPorts.add(address.port);
+      return address.port;
+    }
   }
-  return address.port;
+  throw new Error("Failed to reserve an unused loopback port.");
 }
 
 function dockerArgsForPostgres(resource, ...args) {
