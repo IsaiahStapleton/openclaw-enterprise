@@ -26,6 +26,8 @@ See [authentication](authentication.md) for supported credentials and their scop
 
 Non-success JSON responses use the following envelope.
 Each operation lists its supported status codes.
+A NUL character or an unpaired UTF-16 surrogate in any request body string,
+object key or path parameter is refused with `400 INVALID_REQUEST`.
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |

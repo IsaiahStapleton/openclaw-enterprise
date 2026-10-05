@@ -658,6 +658,68 @@ test("malformed, non-JSON, invalid, and oversized inputs fail without mutations"
   );
 });
 
+test("NUL characters and unpaired surrogates are refused in bodies and path parameters", async () => {
+  // PostgreSQL text and jsonb cannot store either one: they answered 500 or 503 there, while
+  // the in-memory State accepted them. A lone surrogate in a name was stored as U+FFFD.
+  const fixture = await createFixture();
+  await bootstrap(fixture);
+  const namespace = await createNamespace(fixture, "Unstorable text tenant");
+  const configurations = `/namespaces/${namespace.id}/configurations`;
+  const nul = ["a NUL character", "INVALID_FORMAT"];
+  const surrogate = ["an unpaired UTF-16 surrogate", "INVALID_VALUE"];
+  // A deep body inside the 64 KiB limit; its detail path keeps whole leading segments.
+  const deep = 30_000;
+  const deepPath = `/values/x${"/0".repeat((512 - "/values/x".length) >> 1)}`;
+  const cases = [
+    ["/namespaces", '{"name":"lone \\ud800 surrogate"}', "/name", surrogate],
+    ["/namespaces", '{"name":"trailing \\udc00"}', "/name", surrogate],
+    [configurations, '{"kind":"agent","values":{"x":"a\\u0000b"}}', "/values/x", nul],
+    [configurations, '{"kind":"agent","values":{"a\\u0000~/":"x"}}', "/values/a?~0~1", nul],
+    [configurations, '{"kind":"agent","values":{"\\udbff":"x"}}', "/values/?", surrogate],
+    [
+      configurations,
+      `{"kind":"agent","values":{"x":${"[".repeat(deep)}"\\u0000"${"]".repeat(deep)}}}`,
+      deepPath,
+      nul,
+    ],
+  ];
+  for (const [pathname, body, path, [problem, code]] of cases) {
+    const result = await request(fixture.app, pathname, { body });
+    assert.equal(result.response.status, 400, body.slice(0, 80));
+    assert.equal(result.payload.error.code, "INVALID_REQUEST");
+    assert.deepEqual(result.payload.error.details, [{ path, code }]);
+    const expected = `The request does not match the operation contract: body ${path} contains ${problem}.`;
+    // The deep path is cut to the 256-character message cap.
+    assert.equal(
+      result.payload.error.message,
+      expected.length <= 256 ? expected : `${expected.slice(0, 255)}…`,
+    );
+  }
+  // A surrogate pair is one well-formed character.
+  const paired = await request(fixture.app, "/namespaces", { body: { name: "Paired \u{1F600}" } });
+  assert.equal(paired.response.status, 201);
+
+  const role = await request(fixture.app, `/namespaces/${namespace.id}/iam/roles/role%00x`);
+  assert.equal(role.response.status, 400);
+  assert.deepEqual(role.payload.error.details, [{ path: "/roleId", code: "INVALID_FORMAT" }]);
+  assert.equal(
+    role.payload.error.message,
+    "The request does not match the operation contract: params /roleId contains a NUL character.",
+  );
+
+  const namespaces = await request(fixture.app, "/namespaces");
+  assert.deepEqual(
+    namespaces.payload.data.map(({ name }) => name),
+    ["default", "Unstorable text tenant", "Paired \u{1F600}"],
+  );
+  assert.equal(
+    fixture.auditSink.events.filter(
+      (event) => event.kind === "mutation" && event.resource.kind === "configuration",
+    ).length,
+    0,
+  );
+});
+
 test("exact Namespace ownership prevents cross-tenant access and resource traversal", async () => {
   const fixture = await createFixture();
   await bootstrap(fixture);

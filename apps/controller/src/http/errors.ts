@@ -298,6 +298,80 @@ function capped(message: string): string {
   return characters.length <= 256 ? characters.join("") : `${characters.slice(0, 255).join("")}…`;
 }
 
+// In Unicode mode, `\p{Cs}` matches only a surrogate that is not part of a pair.
+function unstorableText(value: string): "nul" | "surrogate" | undefined {
+  return value.includes("\u0000") ? "nul" : /\p{Cs}/u.test(value) ? "surrogate" : undefined;
+}
+
+/**
+ * PostgreSQL text and jsonb cannot hold U+0000, and UTF-8 has no encoding for an unpaired
+ * UTF-16 surrogate: text stores U+FFFD in its place and jsonb rejects it. Refuses either one
+ * in any string or object key of `value` (path parameters or a parsed JSON body), so the
+ * caller gets a 400 instead of a 500 or 503 from the database, or a name stored differently
+ * from the one it was shown. Detail codes follow the workspace file content rule: a NUL is
+ * INVALID_FORMAT (as a `^[^\u0000]*$` pattern reports it), a surrogate INVALID_VALUE. The
+ * walk is iterative because a body can nest deeply.
+ */
+export function unstorableTextFailure(
+  context: "params" | "body",
+  value: unknown,
+): RequestFailure | undefined {
+  interface Node {
+    readonly value: unknown;
+    readonly parent?: Node;
+    readonly key?: string;
+  }
+  const pending: Node[] = [{ value }];
+  let found: { readonly node: Node; readonly problem: "nul" | "surrogate" } | undefined;
+  while (found === undefined && pending.length > 0) {
+    const node = pending.pop()!;
+    if (typeof node.value === "string") {
+      const problem = unstorableText(node.value);
+      found = problem === undefined ? undefined : { node, problem };
+    } else if (node.value !== null && typeof node.value === "object") {
+      const entries = Array.isArray(node.value)
+        ? node.value.map((entry, index) => [String(index), entry] as const)
+        : Object.entries(node.value);
+      for (const [key, entry] of entries) {
+        const child = { value: entry, parent: node, key };
+        const problem = unstorableText(key);
+        if (problem !== undefined) {
+          found = { node: child, problem };
+          break;
+        }
+        pending.push(child);
+      }
+    }
+  }
+  if (found === undefined) {
+    return undefined;
+  }
+  const segments: string[] = [];
+  for (let node: Node | undefined = found.node; node?.key !== undefined; node = node.parent) {
+    segments.push(jsonPointer(node.key.replaceAll("\u0000", "?").replace(/\p{Cs}/gu, "?")));
+  }
+  segments.reverse();
+  // ErrorDetail paths are at most 512 characters; keep whole leading segments.
+  let path = "";
+  for (const segment of segments) {
+    if (path.length + segment.length + 1 > 512) {
+      break;
+    }
+    path += `/${segment}`;
+  }
+  const nul = found.problem === "nul";
+  return failure(
+    400,
+    "INVALID_REQUEST",
+    capped(
+      `The request does not match the operation contract: ${context} ${path || "/"} contains ${
+        nul ? "a NUL character" : "an unpaired UTF-16 surrogate"
+      }.`,
+    ),
+    [{ path, code: nul ? "INVALID_FORMAT" : "INVALID_VALUE" }],
+  );
+}
+
 /**
  * Names each remaining kind and as many of its resource IDs as fit the 256-character
  * message contract; a kind whose IDs do not all fit says how many are left.
