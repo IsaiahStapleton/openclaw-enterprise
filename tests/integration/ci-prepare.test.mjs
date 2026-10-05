@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -207,6 +207,12 @@ if (command === "docker" || command === "podman") {
     state.tag = args[args.indexOf("-t") + 1];
     finish();
   }
+  if (equals(args.slice(0, 2), ["buildx", "build"]) && args.includes("--target")) {
+    assert.equal(args[args.indexOf("--target") + 1], "runtime");
+    assert.equal(args.at(-1), ".");
+    state.controller = args[args.indexOf("-t") + 1];
+    finish();
+  }
   if ((args[0] === "build" || equals(args.slice(0, 2), ["buildx", "build"])) && args.includes("-f")) {
     assert.ok(args[args.indexOf("-f") + 1].endsWith("/deploy/runtime/Dockerfile"));
     state.runtime = args[args.indexOf("-t") + 1];
@@ -237,6 +243,7 @@ if (command === "docker" || command === "podman") {
   }
   if (equals(args, ["image", "rm", "-f", state.tag])) finish();
   if (state.runtime && equals(args, ["image", "rm", "-f", state.runtime])) finish();
+  if (state.controller && equals(args, ["image", "rm", "-f", state.controller])) finish();
   if (equals(args.slice(0, 2), ["exec", "-i"]) && ["server-0", "agent-0"].some((suffix) =>
       args[2] === "k3d-" + state.cluster + "-" + suffix)) {
     const node = args[2];
@@ -494,6 +501,8 @@ throw new Error("Unexpected external command: " + command + " " + JSON.stringify
     githubEnv,
     prepare: () =>
       run("prepare.mjs", ["--lane", lane, "--state", statePath, "--github-env", githubEnv]),
+    warmImageCache: (args = []) =>
+      run("prepare.mjs", ["--warm-image-cache", "--state", statePath, ...args]),
     prepareFile: (file) =>
       run("prepare.mjs", ["--lane", lane, "--file", file, "--state", statePath]),
     cleanup: () => run("cleanup.mjs", ["--state", statePath]),
@@ -926,6 +935,181 @@ test("image cache preparation refuses missing credentials and unmapped lanes bef
     assert.doesNotMatch(prepared.stdout + prepared.stderr, /synthetic-cache-credential/, lane);
     // Cleanup is not run: the refused build's planned tag stays owned, and this
     // shim cannot remove images. The fixture directory is removed with the test.
+  }
+});
+
+const warmCacheEnv = {
+  GITHUB_ACTIONS: "true",
+  GITHUB_REF: "refs/heads/main",
+  GITHUB_EVENT_NAME: "push",
+  GITHUB_RUN_ID: "123",
+  GITHUB_RUN_ATTEMPT: "1",
+  OCC_CI_IMAGE_CACHE: "1",
+  ACTIONS_RUNTIME_TOKEN: "synthetic-cache-credential",
+  ACTIONS_RESULTS_URL: "https://cache.example.test/",
+};
+
+test("the main image cache warm job builds the packaging images and exports both caches strictly", async (t) => {
+  const commands = await fixtureImageCommands(t, "success", "images-packaging", warmCacheEnv);
+  const warmed = commands.warmImageCache();
+  assert.equal(warmed.status, 0, warmed.stderr);
+  assert.match(
+    warmed.stderr,
+    /\[ci-timing\] lane=image-cache-warm phase=controller-runtime-image-build/,
+  );
+  // Each image's BuildKit output is printed under its own heading.
+  assert.match(warmed.stderr, /^\[image-cache-warm\] controller build$/m);
+  assert.match(warmed.stderr, /^\[image-cache-warm\] runtime build$/m);
+  const builds = (await commands.commands()).filter(({ args }) => args[0] === "buildx");
+  assert.deepEqual(
+    builds.map(({ args }) => (args.includes("--target") ? "controller" : "runtime")).sort(),
+    ["controller", "runtime"],
+  );
+  const nodeBaseImage = JSON.parse(
+    await readFile(join(repositoryRoot, "scripts/ci/test-suites/images-packaging.json"), "utf8"),
+  ).prepare.defaultEnv.NODE_BASE_IMAGE;
+  for (const { args } of builds) {
+    const role = args.includes("--target") ? "controller" : "runtime";
+    const cache = `type=gha,version=2,scope=oce-ci-${role}-${process.platform}-${process.arch}-v1`;
+    assert.deepEqual(args.slice(0, 3), ["buildx", "build", "--load"]);
+    // The lane's restore keys, an export that fails the job instead of being ignored,
+    // and plain progress so the log shows each step's cache result.
+    assert.equal(args[args.indexOf("--cache-from") + 1], `${cache},timeout=60s`);
+    assert.equal(args[args.indexOf("--cache-to") + 1], `${cache},mode=max,timeout=10m`);
+    assert.ok(args.includes("--progress=plain"));
+    if (role === "controller") {
+      assert.ok(args.includes(`NODE_BASE_IMAGE=${nodeBaseImage}`));
+    }
+  }
+  const state = await readFile(commands.statePath, "utf8");
+  assert.equal(JSON.parse(state).lane, "images-packaging");
+  assert.doesNotMatch(
+    JSON.stringify(builds) + state + warmed.stdout + warmed.stderr,
+    /synthetic-cache-credential/,
+  );
+  const cleaned = commands.cleanup();
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+});
+
+test("the image cache warm job refuses refs other than main and lane arguments before building", async (t) => {
+  for (const [label, env, args, error] of [
+    [
+      "pull request",
+      { GITHUB_REF: "refs/pull/1/merge", GITHUB_EVENT_NAME: "pull_request" },
+      [],
+      /Only a push or dispatch on main may warm the image cache/,
+    ],
+    [
+      "branch dispatch",
+      { GITHUB_REF: "refs/heads/feature", GITHUB_EVENT_NAME: "workflow_dispatch" },
+      [],
+      /Only a push or dispatch on main may warm the image cache/,
+    ],
+    [
+      "merge queue on main",
+      { GITHUB_EVENT_NAME: "merge_group" },
+      [],
+      /Only a push or dispatch on main may warm the image cache/,
+    ],
+    ["lane argument", {}, ["--lane", "images-packaging"], /--warm-image-cache takes only --state/],
+    [
+      "missing credentials",
+      { ACTIONS_RUNTIME_TOKEN: "" },
+      [],
+      /Image caching requires the hosted image lane/,
+    ],
+  ]) {
+    const commands = await fixtureImageCommands(t, "success", "images-packaging", {
+      ...warmCacheEnv,
+      ...env,
+    });
+    const warmed = commands.warmImageCache(args);
+    assert.notEqual(warmed.status, 0, label);
+    assert.match(warmed.stderr, error, label);
+    const calls = await readFile(join(dirname(commands.statePath), "commands.jsonl"), "utf8").catch(
+      () => "",
+    );
+    assert.doesNotMatch(calls, /"buildx"/, label);
+    assert.doesNotMatch(warmed.stdout + warmed.stderr, /synthetic-cache-credential/, label);
+  }
+});
+
+test("the image cache warm workflow runs for every change to an image build input", async () => {
+  const workflow = loadYaml(
+    await readFile(join(repositoryRoot, ".github/workflows/ci-image-cache.yml"), "utf8"),
+  );
+  const paths = workflow.on.push.paths;
+  assert.deepEqual(workflow.on.push.branches, ["main"]);
+  assert.equal(workflow.concurrency["cancel-in-progress"], false);
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  const patterns = paths.map(
+    (path) =>
+      new RegExp(
+        `^${path
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replaceAll("**", "\u0000")
+          .replaceAll("*", "[^/]*")
+          .replaceAll("\u0000", ".*")}$`,
+      ),
+  );
+  const covered = (path) => patterns.some((pattern) => pattern.test(path));
+  const sources = [];
+  // CI builds the controller's runtime target and the runtime Dockerfile's last
+  // stage; only stages those reach are build inputs.
+  for (const [dockerfile, target] of [
+    ["Dockerfile", "runtime"],
+    ["deploy/runtime/Dockerfile", undefined],
+  ]) {
+    const stages = (await readFile(join(repositoryRoot, dockerfile), "utf8"))
+      .split(/^(?=FROM\s)/m)
+      .slice(1)
+      .map((text) => {
+        const [, base, name] = text.match(/^FROM\s+(\S+)(?:\s+AS\s+(\S+))?/);
+        const from = [...text.matchAll(/(?:--from=|,from=)([^\s,]+)/g)].map(([, stage]) => stage);
+        return { name, text, needs: [base, ...from] };
+      });
+    const reached = new Set();
+    const visit = (stage) => {
+      if (stage && !reached.has(stage)) {
+        reached.add(stage);
+        stage.needs.forEach((name) => visit(stages.find((candidate) => candidate.name === name)));
+      }
+    };
+    visit(target ? stages.find(({ name }) => name === target) : stages.at(-1));
+    assert.ok(reached.size > 1, `${dockerfile} stages parsed`);
+    const text = stages
+      .filter((stage) => reached.has(stage))
+      .map((stage) => stage.text)
+      .join("");
+    sources.push(dockerfile);
+    for (const [, line] of text.matchAll(/^\s*COPY\s+(.+)$/gm)) {
+      const words = line.trim().split(/\s+/);
+      if (words.some((word) => word.startsWith("--from="))) {
+        continue;
+      }
+      sources.push(...words.filter((word) => !word.startsWith("--")).slice(0, -1));
+    }
+    for (const [, options] of text.matchAll(/--mount=type=bind,(\S+)/g)) {
+      const fields = Object.fromEntries(options.split(",").map((field) => field.split("=")));
+      if (!fields.from) {
+        sources.push(fields.source);
+      }
+    }
+  }
+  assert.ok(sources.length > 30, "both Dockerfiles parsed");
+  // A COPY glob or directory is covered when a path inside it is.
+  const uncovered = sources.filter((source) => {
+    const literal = source.split(/[*?[]/)[0];
+    return !covered(literal) && !covered(`${literal.replace(/\/$/, "")}/x`);
+  });
+  assert.deepEqual(uncovered, []);
+  for (const input of [
+    ".dockerignore",
+    "scripts/ci/prepare.mjs",
+    "scripts/ci/test-suites/images-packaging.json",
+    ".github/workflows/ci-image-cache.yml",
+  ]) {
+    assert.ok(covered(input), input);
   }
 });
 

@@ -761,7 +761,8 @@ async function validateLaneInputsBeforeSideEffects(lane, env = {}) {
 }
 
 // Lanes that may restore the hosted BuildKit cache. Only images-packaging
-// exports it. The repository platform lane loads its runtime image into the
+// exports it, and the main-only warm job (ci-image-cache.yml) builds with that
+// lane's state. The repository platform lane loads its runtime image into the
 // Docker engine so a default-builder fixture build can derive from it.
 const imageCacheLanes = new Map([
   ["images-packaging", { localStore: false }],
@@ -771,7 +772,7 @@ const imageCacheLanes = new Map([
   ["repository-credentials-platform", { localStore: true }],
 ]);
 
-function imageBuildArgs(state, role, localStore) {
+function imageBuildArgs(state, role, localStore, cacheWarm = false) {
   if (process.env.OCC_CI_IMAGE_CACHE === "1") {
     if (
       process.env.GITHUB_ACTIONS !== "true" ||
@@ -789,8 +790,15 @@ function imageBuildArgs(state, role, localStore) {
       "--cache-from",
       `${cache},timeout=60s`,
       // One writer per image avoids competing exports from the parallel image lanes.
+      // The main-only warm job exists to export, so its export may take longer and
+      // fails the job instead of being ignored.
       ...(state.lane === "images-packaging"
-        ? ["--cache-to", `${cache},mode=max,ignore-error=true,timeout=60s`]
+        ? [
+            "--cache-to",
+            cacheWarm
+              ? `${cache},mode=max,timeout=10m`
+              : `${cache},mode=max,ignore-error=true,timeout=60s`,
+          ]
         : []),
     ];
   }
@@ -810,8 +818,17 @@ async function buildRuntimeImages(
     runtime = false,
     nodeBaseImage = process.env.NODE_BASE_IMAGE,
     localStore = false,
+    cacheWarm = false,
   } = {},
 ) {
+  // Plain BuildKit progress shows each step's cache hit or duration; the warm job
+  // prints it per image once the build ends, so parallel builds stay readable.
+  const progress = cacheWarm ? ["--progress=plain"] : [];
+  const showBuild = (role, { stderr }) => {
+    if (cacheWarm) {
+      process.stderr.write(`[image-cache-warm] ${role} build\n${stderr}\n`);
+    }
+  };
   await commandAvailable(process.env.OCC_DOCKER_BIN ?? "docker", [
     "version",
     "--format",
@@ -833,8 +850,9 @@ async function buildRuntimeImages(
     const resource = addResource(state, "image-tag", { name: tag, owner: state.prefix });
     resources.push(resource);
     await writeState(statePath, state);
-    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      ...imageBuildArgs(state, "controller", localStore),
+    const built = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
+      ...imageBuildArgs(state, "controller", localStore, cacheWarm),
+      ...progress,
       "--pull=false",
       "--target",
       "runtime",
@@ -844,6 +862,7 @@ async function buildRuntimeImages(
       tag,
       ".",
     ]);
+    showBuild("controller", built);
     await markResourceReady(statePath, state, resource);
     env.OCC_TEST_PRODUCTION_IMAGE = tag;
     env.OCC_TEST_PRODUCTION_CONTROLLER_IMAGE = tag;
@@ -865,11 +884,12 @@ async function buildRuntimeImages(
     const resource = addResource(state, "image-tag", { name: tag, owner: state.prefix });
     resources.push(resource);
     await writeState(statePath, state);
-    await execFile(
+    const built = await execFile(
       process.env.OCC_DOCKER_BIN ?? "docker",
       openclawSource === undefined
         ? [
-            ...imageBuildArgs(state, "runtime", localStore),
+            ...imageBuildArgs(state, "runtime", localStore, cacheWarm),
+            ...progress,
             "--pull=false",
             "-f",
             runtimeDockerfile,
@@ -889,6 +909,7 @@ async function buildRuntimeImages(
             openclawSource,
           ],
     );
+    showBuild("runtime", built);
     await markResourceReady(statePath, state, resource);
     env.OCC_TEST_RUNTIME_IMAGE = tag;
     env.OCC_DOCKER_RUNTIME_IMAGE = tag;
@@ -2517,8 +2538,49 @@ async function prepareFile({ lane, file, statePath }) {
   };
 }
 
+// Builds the Images and Packaging controller and runtime images only to write
+// main's hosted BuildKit cache (ci-image-cache.yml). It uses that lane's state,
+// inputs and build arguments, so the cache keys are the ones the CI image lanes
+// restore. GitHub scopes cache writes to the run's ref; only main may warm.
+async function warmImageCache({ statePath }) {
+  if (
+    process.env.GITHUB_REF !== "refs/heads/main" ||
+    !["push", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME)
+  ) {
+    throw new Error("Only a push or dispatch on main may warm the image cache.");
+  }
+  const lane = "images-packaging";
+  await validateLaneInputsBeforeSideEffects(lane);
+  const resolvedStatePath = normalizeStatePath(statePath);
+  if (await readState(resolvedStatePath)) {
+    throw new Error(`CI state already exists at ${resolvedStatePath}; run cleanup first.`);
+  }
+  const state = baseState(lane, resolvedStatePath);
+  await writeState(resolvedStatePath, state);
+  const nodeBaseImage = effectiveLaneEnv(lane).NODE_BASE_IMAGE;
+  // The two builds are independent; in parallel their exports land sooner.
+  await timedPreparation("image-cache-warm", "controller-runtime-image-build", () =>
+    prepareTogether([
+      () =>
+        buildRuntimeImages(resolvedStatePath, state, {
+          controller: true,
+          nodeBaseImage,
+          cacheWarm: true,
+        }),
+      () => buildRuntimeImages(resolvedStatePath, state, { runtime: true, cacheWarm: true }),
+    ]),
+  );
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args["warm-image-cache"]) {
+    if (args.lane || args.file || args["github-env"]) {
+      throw new Error("--warm-image-cache takes only --state.");
+    }
+    await warmImageCache({ statePath: args.state });
+    return;
+  }
   if (!args.lane) {
     throw new Error("--lane is required.");
   }
