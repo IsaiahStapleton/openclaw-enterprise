@@ -50,6 +50,9 @@
       "path": "tests/integration/ci-image-reconciliation.test.mjs"
     },
     {
+      "path": "tests/integration/ci-prepare.test.mjs"
+    },
+    {
       "path": "tests/integration/ci-image-pull.test.mjs"
     },
     {
@@ -182,9 +185,6 @@
       "path": "tests/integration/repository-credentials-config.test.mjs"
     },
     {
-      "path": "tests/integration/repository-credentials-github-token.test.mjs"
-    },
-    {
       "path": "tests/integration/repository-credentials-http.test.mjs"
     },
     {
@@ -204,9 +204,6 @@
     },
     {
       "path": "tests/integration/repository-credentials-shutdown.test.mjs"
-    },
-    {
-      "path": "tests/integration/repository-credentials-client-config.test.mjs"
     },
     {
       "path": "tests/integration/repository-credentials-router.test.mjs"
