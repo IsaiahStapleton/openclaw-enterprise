@@ -38,6 +38,9 @@ runs:
         (inputs.profile == 'full' || inputs.profile == 'images' || inputs.profile == 'k3d') &&
         inputs.lane != 'docker-model' && inputs.lane != 'logging-collector' &&
         !startsWith(inputs.lane, 'k3d-fixture-') && !startsWith(inputs.lane, 'k3d-observability')
+      with:
+        # Runner VMs are discarded after the job; skip the builder removal.
+        cleanup: false
     - name: Set up CI tools
       shell: bash
       run: bash scripts/ci/setup-tools.sh "${{ inputs.profile }}"

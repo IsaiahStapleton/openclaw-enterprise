@@ -1074,6 +1074,23 @@ test("documentation workflow selects documentation checks and omits product test
   assert.match(aggregate, /if:.*needs\.impact\.outputs\.mode == 'full'/);
 });
 
+test("CI Required always reports and fails at once on a cancelled run", () => {
+  const { loadYaml } = createRequire(
+    new URL("../../apps/controller/package.json", import.meta.url),
+  )("@kubernetes/client-node");
+  const workflow = loadYaml(readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8"));
+  const required = workflow.jobs["ci-required"];
+  // A skipped required job counts as passing, so failed dependencies must not skip it.
+  assert.equal(required.if, "always()");
+  const [first, ...rest] = required.steps;
+  assert.equal(first.if, "cancelled()");
+  assert.match(first.run, /exit 1/);
+  // A superseding run waits for this one; no later step may run once it is cancelled.
+  for (const step of rest) {
+    assert.doesNotMatch(String(step.if ?? ""), /always\(\)/, step.name ?? step.uses);
+  }
+});
+
 test("Static Checks runs every check the CI lanes skip", () => {
   const { loadYaml } = createRequire(
     new URL("../../apps/controller/package.json", import.meta.url),
