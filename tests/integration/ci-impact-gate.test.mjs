@@ -96,6 +96,16 @@ test("gate rejects failed, cancelled, missing, and unexpectedly run or skipped j
         const result = runGate(t, mode, needs);
         assert.notEqual(result.status, 0, `${mode}: ${job} ${bad}`);
         assert.match(result.stderr, new RegExp(job));
+        if (mode === "full") {
+          for (const lane of allLanes) {
+            const source = lane === "runtime-image-fixture" ? lane : "pr-safe";
+            assert.equal(
+              result.expanded?.[lane]?.result,
+              job === source ? bad : "success",
+              `${mode}: ${job} ${bad} -> ${lane}`,
+            );
+          }
+        }
       }
     }
   }
@@ -184,6 +194,14 @@ test("tests mode rejects wrong job states and unverifiable lane sets", (t) => {
         const result = runTestsGate(t, lanes, needs);
         assert.notEqual(result.status, 0, `${job} ${bad}`);
         assert.match(result.stderr, new RegExp(job));
+        for (const lane of lanes) {
+          const source = lane === "runtime-image-fixture" ? lane : "pr-safe";
+          assert.equal(
+            result.expanded?.[lane]?.result,
+            job === source ? bad : "success",
+            `${job} ${bad} -> ${lane}`,
+          );
+        }
       }
     }
   }
