@@ -1,8 +1,7 @@
 {
-  "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE", "OCC_TEST_CODEX_SECCOMP_PROFILE"],
+  "requiredEnv": ["OCC_TEST_RUNTIME_IMAGE"],
   "prepare": {
-    "requiresPreparedStateForFile": true,
-    "codexSeccomp": true
+    "requiresPreparedStateForFile": true
   },
   "files": [
     {

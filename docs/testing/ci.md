@@ -43,10 +43,10 @@ required workflow or other external enforcement is not established by this
 source. See the [testing flow](../flows/github-actions-testing.md) for details.
 
 The repository credential platform lane proves HTTP, PostgreSQL, Unix control and credential material inside
-Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The runtime
-startup lane uses the full tool profile to derive the reviewed Codex seccomp
-profile in an owned k3d cluster and export `OCC_TEST_CODEX_SECCOMP_PROFILE`
-before native runtime image smoke tests; the lane requires that input.
+Kubernetes; compatible fixture lanes prove NetworkPolicy enforcement. The first
+runtime startup lane derives the reviewed Codex seccomp profile in an owned k3d
+cluster and requires `OCC_TEST_CODEX_SECCOMP_PROFILE`; the second runs no Codex
+sandbox, so it needs no cluster.
 
 Full Integration is manual and uses the immutable event commit. Lanes require
 `main` except `k3d-model`, which also accepts an `integration-model` branch
@@ -166,11 +166,11 @@ a mutable tag or unverified image is insufficient. Missing or mismatched images
 are pulled and rechecked before import. Other Docker inspection failures stop
 preparation. Cleanup removes owned import tags and preserves the supplied image.
 
-On GitHub-hosted runners, both observability lanes remove unused SDKs and require
-36 GiB free before building and importing images. SDK removals run concurrently
-with a ten-minute deadline and per-directory timing receipts; local runs omit this
-guarded cleanup. Both use single-node clusters and overlap independent pulls,
-builds, and cluster setup, then serialize k3d imports per cluster to avoid
+On GitHub-hosted runners, both observability lanes require 36 GiB free before
+building and importing images, removing unused SDKs only when less is free
+(concurrently, ten-minute deadline, per-directory timing receipts); local runs
+omit this guarded cleanup. Both use single-node clusters and overlap independent
+pulls, builds, and cluster setup, then serialize k3d imports per cluster to avoid
 importer races. The demo lane imports only its three services and a Node
 image for protocol fixtures; it does not build OCC. State writes remain
 serialized, and all in-flight operations settle before failure cleanup.
