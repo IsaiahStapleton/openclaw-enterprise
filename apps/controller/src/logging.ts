@@ -250,6 +250,7 @@ function sanitizedEvent(
 // Events that warn although their names carry no warning suffix.
 const WARNING_EVENTS = new Set([
   "authentication.sign-in-limited",
+  "presets.default-create-skipped",
   "presets.default-refresh-skipped",
 ]);
 
