@@ -5550,6 +5550,16 @@ export class OpenClawController {
       }
       const configuredHarnessId = resolveConfiguredHarnessId(configuration.values);
       const approvedHarness = resolveHarness(configuredHarnessId, lockedAgent.executionMode);
+      const otherMode = lockedAgent.executionMode === "dedicated" ? "embedded" : "dedicated";
+      if (
+        approvedHarness === undefined &&
+        resolveHarness(configuredHarnessId, otherMode) !== undefined
+      ) {
+        // A Harness/mode mismatch is a request the caller can fix, not a missing dependency.
+        throw new ConfigurationHarnessError(
+          `The Configuration selects the ${configuredHarnessId} Harness, which needs ${otherMode} execution; this Agent uses ${lockedAgent.executionMode}. Change the Agent's execution mode or its Configuration.`,
+        );
+      }
       if (
         approvedHarness === undefined ||
         !isNonEmptyString(approvedHarness.id) ||
