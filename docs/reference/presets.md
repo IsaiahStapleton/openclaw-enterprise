@@ -22,14 +22,14 @@ presets:
 ```
 
 `includeDefaults: true` seeds `default-codex`, **Standard Codex**, and **Standard OpenClaw**.
-Omitting it or setting it to `false` disables bundled seeding; explicit `files`
+Omitting or disabling it stops bundled seeding; explicit `files`
 still load. Each JSON file contains one `{ "name": "...", "template": { ... } }`
-object. Relative paths resolve beside the Installation YAML; absolute paths are
-also supported. Mount files readably for the API and worker. Missing, malformed,
+object. Relative paths resolve beside the Installation YAML; absolute paths also
+work. Mount files readably for the API and worker. Missing, malformed,
 invalid, or duplicate-name definitions prevent startup. Files are read at startup,
-not watched. API startup adds missing defaults to ready or provisioning Namespaces,
-including the bootstrap Namespace; new Namespaces receive them atomically. Startup
-skips failed or deleting Namespaces.
+not watched. API startup adds missing defaults to ready or provisioning (not failed
+or deleting) Namespaces, including the bootstrap Namespace; new Namespaces receive
+them atomically.
 
 Each copy is an ordinary Namespace-owned Preset with its own ID and normal
 read/update/delete permissions. Startup can restore a deleted or renamed
@@ -47,21 +47,20 @@ current template, keeping its ID and AccessBindings, and audits
 matching no shipped version are operator edits and stay; so do `presets.files`
 copies and retired names such as `standard-codex`. To keep an earlier version,
 rename the copy or change any field. A refused refresh (say, a deny Restriction
-on `preset:update`) keeps the copy and logs a `presets.default-refresh-skipped`
-warning.
+on `preset:update`) keeps the copy and logs `presets.default-refresh-skipped`.
 
 Namespace deletion removes copies that equal, by name and template, a configured
 default or any shipped bundled version, even with `includeDefaults` disabled.
 Other Presets block it with `409 NAMESPACE_NOT_EMPTY`.
 
 Startup selects a persisted Principal authorized to administer the Installation
-and requires `preset:create` wherever defaults are missing (a deny Restriction
-skips one and logs `presets.default-create-skipped`) and `preset:update` on each
-copy it refreshes. Namespace
-creators also need `preset:create` with this option. Authorization
-or template validation failure rolls back initialization and prevents startup
-or Namespace creation. The selected Configuration Driver validates native
-values; seeding does not create workloads or credentials.
+and requires `preset:create` wherever defaults are missing and `preset:update`
+on each copy it refreshes; a deny Restriction on `preset:create` skips that
+default and logs `presets.default-create-skipped`. Namespace creation with
+defaults also needs `preset:create`. Other authorization or template
+validation failures roll back initialization and prevent startup or Namespace
+creation. The Configuration Driver validates native values; seeding creates no
+workloads or credentials.
 
 ## Configuration inventory
 

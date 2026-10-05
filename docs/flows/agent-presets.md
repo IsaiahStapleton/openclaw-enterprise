@@ -101,8 +101,8 @@ order in one transaction, and skips failed/deleting Namespaces. Missing names
 require Preset create permission and ordinary template/Driver validation before
 storage and mutation audit. A deny Restriction on a creation leaves the name
 missing with one `presets.default-create-skipped` warning; a missing grant
-still needs another administrator. While `includeDefaults` is enabled, an existing copy
-of a bundled default that still equals a superseded shipped version requires
+still needs another administrator. While `includeDefaults` is enabled, an
+existing copy of a bundled default that still equals a superseded shipped version requires
 Preset update permission; its
 template is replaced in place and audited with `source: installation-defaults-refresh`.
 A refresh the policy refuses keeps the copy and logs one
