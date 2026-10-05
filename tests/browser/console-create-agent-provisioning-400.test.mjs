@@ -137,11 +137,16 @@ test("Agent name counts characters, as the API does, not UTF-16 code units", asy
   await createModelCredentialSecret(page, `model-secret-${randomUUID()}`);
   await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
   const name = page.getByLabel("Agent name");
+  // Only the writes a submit makes. Once a credential is selected, the form also prefetches
+  // the plugin catalog with a read-only POST .../agents/plugins after a 300 ms debounce,
+  // which can land at any point in this test.
+  const writePaths = new Set(
+    ["agents", "agents/provision", "configurations"].map(
+      (path) => `/namespaces/${namespace.id}/${path}`,
+    ),
+  );
   const agentPosts = () =>
-    requests.filter(
-      (request) =>
-        request.method === "POST" && request.path.startsWith(`/namespaces/${namespace.id}/agents`),
-    );
+    requests.filter((request) => request.method === "POST" && writePaths.has(request.path));
   // 200 emoji are 200 characters, the API's limit, but 400 UTF-16 code units.
   const longest = "\u{1F600}".repeat(200);
   const tooLong = `${longest}\u{1F600}`;
