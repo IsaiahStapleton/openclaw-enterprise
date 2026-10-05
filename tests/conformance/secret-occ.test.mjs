@@ -444,6 +444,23 @@ test("Secret material, metadata, and binding permissions stay separate", async (
     }),
     AuthorizationDeniedError,
   );
+  // Without a Harness Secret to recheck first, the refusal comes from the bound Secret itself.
+  const withoutHarnessAuth = await controller.createAgent(administrator, {
+    namespaceId: namespace.id,
+    name: "binding-check-agent",
+    configurationId: unboundConfiguration.id,
+  });
+  await assert.rejects(
+    controller.updateAgent(metadataReader, {
+      namespaceId: namespace.id,
+      agentId: withoutHarnessAuth.id,
+      configurationId: retainedBindings.id,
+    }),
+    (error) =>
+      error instanceof AuthorizationDeniedError &&
+      error.authorization?.action === "operate" &&
+      error.authorization.resource.id === secret.id,
+  );
 });
 
 test("listing Secrets requires Namespace read before filtering each Secret", async () => {
