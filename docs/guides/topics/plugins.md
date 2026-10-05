@@ -12,7 +12,8 @@ compatible Plugin Driver before an Agent can save nonempty plugin selections.
   [Configure Agent plugins](plugins-configure.md).
 - **Dedicated Codex** can use selected apps from its curated catalog when the
   Agent uses a ChatGPT login and the runtime supports their approval
-  policy. An API-key Agent deploys with each selected app disabled. See
+  policy. An API-key Agent deploys with each selected app disabled and a
+  `PLUGIN_AUTH_REQUIRED` warning. See
   [supported plugins and approval policies](../../reference/agent-plugins.md#current-support).
 - **SSH Compute** supports Agents without user-selected plugins or an Agent
   default plugin approver policy only.
