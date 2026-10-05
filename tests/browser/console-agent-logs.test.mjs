@@ -126,6 +126,67 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   assert.equal(await page.getByRole("button", { name: "Logs", exact: true }).count(), 0);
 });
 
+test("invisible and bidirectional characters in log text show as visible escapes", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  computeDriver.state.events = [
+    {
+      type: "Warning",
+      container: "gateway",
+      reason: "BackOff",
+      message: "pulling report\u202egnp.exe",
+      count: 1,
+      lastObservedAt: "2026-09-30T11:59:00Z",
+    },
+  ];
+  computeDriver.state.lines = [
+    // U+202E would display the rest of the line reversed ("invoice for exe.pdf").
+    line(1, "invoice for \u202efdp.exe, zero\u200bwidth and \u2066isolate\u2069 end"),
+    line(
+      2,
+      '{"event":"runtime.startup_phase","container":"gateway","phase":"conf\u202eig","outcome":"ok","ms":12,"sinceStartMs":40}',
+    ),
+    line(3, "plain text, emoji \u{1f600} and \u6f22\u5b57 stay as they are"),
+    // A tag character hides ASCII outside the Basic Multilingual Plane.
+    line(4, "tagged\u{e0041} line"),
+  ];
+
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url);
+
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  const text = pane.locator(".log-message", { hasText: "invoice for" });
+  await text.waitFor();
+  assert.equal(
+    await text.textContent(),
+    "invoice for \\u202efdp.exe, zero\\u200bwidth and \\u2066isolate\\u2069 end",
+  );
+  // The filter matches what the row shows.
+  assert.match(
+    await pane.locator(".log-row", { hasText: "invoice for" }).getAttribute("data-search"),
+    /invoice for \\u202efdp\.exe/,
+  );
+  const phase = pane.locator(".log-row", { hasText: "runtime.startup_phase" });
+  await phase.locator("summary").click();
+  await phase.locator("dd", { hasText: "conf" }).waitFor();
+  assert.equal(await phase.locator("dd", { hasText: "conf" }).textContent(), "conf\\u202eig");
+  assert.equal(
+    await pane.locator(".log-message", { hasText: "plain text" }).textContent(),
+    "plain text, emoji \u{1f600} and \u6f22\u5b57 stay as they are",
+  );
+  assert.equal(
+    await pane.locator(".log-message", { hasText: "tagged" }).textContent(),
+    "tagged\\U000e0041 line",
+  );
+  // Pasting the original text into the filter still finds the escaped row.
+  await page.getByLabel("Filter", { exact: true }).fill("for \u202efdp");
+  await pane.locator(".log-row", { hasText: "invoice for" }).waitFor({ state: "visible" });
+  await page
+    .locator(".runtime-pod")
+    .getByText("gateway · BackOff: pulling report\\u202egnp.exe")
+    .waitFor();
+});
+
 test("startup warnings on a Ready Pod without restarts read as history", async (t) => {
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
   // A healthy first deploy: readiness probes failed while the Gateway started, then it
