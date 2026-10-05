@@ -884,7 +884,9 @@ test("Repository admission retains unknown Harness and execution-mode rejection"
       const denied = await f.request("POST", `${path}/deploy`);
       assert.equal(denied.status, status, JSON.stringify(denied));
       assert.equal(denied.error.code, code);
-      if (message) assert.match(denied.error.message, message);
+      if (message) {
+        assert.match(denied.error.message, message);
+      }
       assert.deepEqual((await f.request("GET", `${path}/revisions`)).data, []);
     });
   }
