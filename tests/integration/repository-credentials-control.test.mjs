@@ -867,6 +867,47 @@ test(
   },
 );
 
+test("control refuses loose requests before acting on them", { timeout: 15000 }, async (t) => {
+  const fixture = await boundControlFixture(t);
+  const { input, send, freshId, clock, namespaceId } = fixture;
+  const socket = fixture.config.gateway.controlSocket;
+  const refused = { status: 400, body: { error: "invalid-request" } };
+  const plainText = { "content-type": "text/plain" };
+  const id = freshId();
+  await fixture.receipts.prepare(id, input.repositoryRef, input.durationSeconds);
+  const body = { ...input, durableAdmission: true };
+  assert.deepEqual(
+    await control(socket, "POST", "/v1/sessions", body, { ...plainText, "x-admission-id": id }),
+    refused,
+  );
+  // The refused request consumed nothing: the same admission still opens once.
+  const created = await send(input, id);
+  assert.equal(created.status, 201);
+  const sessionId = created.body.session.sessionId;
+
+  const lookup = { namespaceId, repositoryRefs: [] };
+  const describe = (value, headers) =>
+    control(socket, "POST", "/v1/repository-descriptions", value, headers);
+  assert.equal((await describe(lookup)).status, 200);
+  assert.deepEqual(await describe(lookup, plainText), refused);
+  assert.deepEqual(await describe({ ...lookup, extra: true }), refused);
+  for (const value of [[namespaceId], 7]) {
+    assert.deepEqual(await describe({ ...lookup, namespaceId: value }), refused);
+  }
+
+  // Reads and close carry no body; one with a body is refused and changes nothing.
+  for (const [method, path] of [
+    ["GET", "/healthz"],
+    ["GET", "/v1/capabilities"],
+    ["GET", `/v1/sessions/${sessionId}`],
+    ["POST", `/v1/sessions/${sessionId}/close`],
+  ]) {
+    assert.deepEqual(await control(socket, method, path, {}), refused, `${method} ${path}`);
+  }
+  await clock.advance(0);
+  assert.equal(fixture.service.status(sessionId).state, "OPEN");
+});
+
 async function holdControlRequest(t, target) {
   const directory = await temporaryDirectory(t, "rcs-held-");
   const socketPath = join(directory, "relay.sock");
