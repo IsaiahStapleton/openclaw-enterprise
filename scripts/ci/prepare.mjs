@@ -2006,20 +2006,22 @@ async function prepareLane({ lane, statePath }) {
       // sets codexSeccomp; the other skips the k3d cluster it needs. The
       // cluster needs no image, so it is created while the image builds.
       const codexSeccomp = lanePrepare(name).codexSeccomp;
-      const [built, cluster] = await prepareTogether([
-        () =>
-          timedPreparation(name, "runtime-image-build", () =>
-            buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
-          ),
-        ...(codexSeccomp
-          ? [
-              () =>
-                timedPreparation(name, "k3d-create", () =>
-                  ensureK3dCluster(resolvedStatePath, state),
-                ),
-            ]
-          : []),
-      ]);
+      const [built, cluster] = await timedPreparation(name, "runtime-image-build-cluster", () =>
+        prepareTogether([
+          () =>
+            timedPreparation(name, "runtime-image-build", () =>
+              buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
+            ),
+          ...(codexSeccomp
+            ? [
+                () =>
+                  timedPreparation(name, "k3d-create", () =>
+                    ensureK3dCluster(resolvedStatePath, state),
+                  ),
+              ]
+            : []),
+        ]),
+      );
       Object.assign(env, built.env);
       if (codexSeccomp) {
         await prepareRuntimeSmokeCodexSeccompProfile(resolvedStatePath, state, env, cluster);
