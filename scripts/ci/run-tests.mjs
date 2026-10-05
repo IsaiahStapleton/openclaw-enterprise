@@ -105,27 +105,48 @@ function normalizeFile(file, laneName, index, issues) {
     }
   }
 
-  // Files run one at a time unless the lane allows file concurrency and the file is
-  // audited `parallel: true`. A `serial` file names why it must run alone; an
-  // unmarked file also runs alone, so a new or unaudited file fails closed.
-  if (Object.hasOwn(file, "parallel") && file.parallel !== true) {
-    issues.push(issue("invalid-manifest", `${path}.parallel must be true when present`));
-  }
-  if (
-    Object.hasOwn(file, "serial") &&
-    (typeof file.serial !== "string" || file.serial.trim() === "")
-  ) {
-    issues.push(issue("invalid-manifest", `${path}.serial must be a non-empty reason`));
-  }
-  if (Object.hasOwn(file, "parallel") && Object.hasOwn(file, "serial")) {
-    issues.push(issue("invalid-manifest", `${path} cannot be both parallel and serial`));
-  }
-
   return {
     path: file.path,
     expectedTests: stringArray(file.expectedTests, `${path}.expectedTests`, issues),
-    parallel: file.parallel === true && !Object.hasOwn(file, "serial"),
   };
+}
+
+// Files run one at a time unless the lane sets fileConcurrency and lists the file in
+// parallelFiles, the files audited to share the runner, in the order they start.
+// serialFiles names why a file must run alone. Any other file also runs alone, so a
+// new or unaudited file fails closed.
+function fileModes(lane, laneName, files, issues) {
+  const path = `lanes.${laneName}`;
+  const paths = new Set(files.map((file) => file.path));
+  const parallel = stringArray(lane.parallelFiles, `${path}.parallelFiles`, issues);
+  const serial = lane.serialFiles ?? {};
+  if (!isObject(serial)) {
+    issues.push(issue("invalid-manifest", `${path}.serialFiles must be an object`));
+  }
+  for (const [file, reason] of isObject(serial) ? Object.entries(serial) : []) {
+    if (typeof reason !== "string" || reason.trim() === "") {
+      issues.push(issue("invalid-manifest", `${path}.serialFiles.${file} must name a reason`));
+    }
+    if (!paths.has(file)) {
+      issues.push(issue("invalid-manifest", `${path}.serialFiles.${file} is not a lane file`));
+    }
+  }
+  const seen = new Set();
+  for (const file of parallel) {
+    if (!paths.has(file)) {
+      issues.push(issue("invalid-manifest", `${path}.parallelFiles ${file} is not a lane file`));
+    }
+    if (seen.has(file)) {
+      issues.push(issue("invalid-manifest", `${path}.parallelFiles lists ${file} twice`));
+    }
+    if (isObject(serial) && Object.hasOwn(serial, file)) {
+      issues.push(issue("invalid-manifest", `${path}.parallelFiles ${file} is also serial`));
+    }
+    seen.add(file);
+  }
+  return parallel.filter(
+    (file) => paths.has(file) && !(isObject(serial) && Object.hasOwn(serial, file)),
+  );
 }
 
 function fileConcurrencyLimit(value, path, issues) {
@@ -179,6 +200,7 @@ function normalizeManifest(raw) {
         `lanes.${laneName}.fileConcurrency`,
         issues,
       ),
+      parallelFiles: [...new Set(fileModes(lane, laneName, files, issues))],
       files,
     });
   }
@@ -858,9 +880,12 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
       );
     };
     const indexes = lane.files.map((_, index) => index);
-    const parallel = concurrency > 1 ? indexes.filter((index) => lane.files[index].parallel) : [];
+    const parallel =
+      concurrency > 1
+        ? lane.parallelFiles.map((path) => lane.files.findIndex((file) => file.path === path))
+        : [];
     // Serial files run first and alone, in manifest order; then audited files share
-    // `concurrency` slots, also started in manifest order.
+    // `concurrency` slots, started in parallelFiles order.
     for (const index of indexes.filter((entry) => !parallel.includes(entry))) {
       await runAt(index, "serial");
     }

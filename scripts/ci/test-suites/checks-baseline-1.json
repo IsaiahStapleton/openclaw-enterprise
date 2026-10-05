@@ -3,10 +3,282 @@
     "NODE_OPTIONS": "--max-old-space-size=4096"
   },
   "fileConcurrency": 8,
+  "parallelFiles": [
+    "tests/integration/dev-up.test.mjs",
+    "tests/integration/occ-api.test.mjs",
+    "tests/conformance/plugin-compute.test.mjs",
+    "tests/conformance/occ-api-security.test.mjs",
+    "tests/integration/configuration-startup.test.mjs",
+    "tests/conformance/kubernetes-secret-driver.test.mjs",
+    "tests/docs/docs-site.test.mjs",
+    "tests/integration/github-login-transport.test.mjs",
+    "tests/conformance/kubernetes-compute.test.mjs",
+    "tests/conformance/workspace-node-supervisor.test.mjs",
+    "tests/integration/presets-controller.test.mjs",
+    "tests/integration/plugin-discovery-api.test.mjs",
+    "tests/integration/runtime-credentials-api.test.mjs",
+    "tests/integration/secret-api.test.mjs",
+    "tests/integration/console-api.test.mjs",
+    "tests/conformance/kubernetes-preflight.test.mjs",
+    "tests/integration/configuration-controller.test.mjs",
+    "tests/conformance/workspace-files.test.mjs",
+    "tests/conformance/runtime-logs-sandbox.test.mjs",
+    "tests/integration/device-authorization-api.test.mjs",
+    "tests/integration/git-hooks.test.mjs",
+    "tests/integration/profile-renderer.test.mjs",
+    "tests/conformance/runtime-logs-content.test.mjs",
+    "tests/conformance/node-enrollment-client.test.mjs",
+    "tests/integration/startup-ipv6-loopback.test.mjs",
+    "tests/docs/generated-api-reference.test.mjs",
+    "tests/integration/service-api-keys.test.mjs",
+    "tests/integration/driver-plugin-installation.test.mjs",
+    "tests/conformance/workspace-files-configuration.test.mjs",
+    "tests/integration/common-logging.test.mjs",
+    "tests/docs/docs-length.test.mjs",
+    "tests/integration/production-image-upgrade.test.mjs",
+    "tests/conformance/test-files.test.mjs",
+    "tests/integration/production-controller-security.test.mjs",
+    "tests/integration/sandbox-driver-startup.test.mjs",
+    "tests/conformance/kubernetes-runtime-credentials.test.mjs",
+    "tests/conformance/openshell-gateway-wire.test.mjs",
+    "tests/integration/bootstrap-volume.test.mjs",
+    "tests/integration/secret-driver-startup.test.mjs",
+    "tests/conformance/kubernetes-configuration.test.mjs",
+    "tests/conformance/occ-read.test.mjs",
+    "tests/integration/controller-lifecycle.test.mjs",
+    "tests/conformance/configuration-occ.test.mjs",
+    "tests/conformance/credential-source-occ.test.mjs",
+    "tests/conformance/kubernetes-real-kubectl.test.mjs",
+    "tests/conformance/secret-occ.test.mjs",
+    "tests/conformance/http-errors.test.mjs",
+    "tests/conformance/docker-compute.test.mjs",
+    "tests/conformance/secret-gateway-delivery.test.mjs",
+    "tests/conformance/runtime-logs-replay.test.mjs",
+    "tests/conformance/codex-seccomp-profile.test.mjs",
+    "tests/conformance/kubernetes-ownership.test.mjs",
+    "tests/conformance/service-account-driver.test.mjs",
+    "tests/conformance/harness-device-auth.test.mjs",
+    "tests/conformance/iam.test.mjs",
+    "tests/conformance/platform-state-memory.test.mjs",
+    "tests/conformance/contracts.test.mjs",
+    "tests/conformance/presets.test.mjs",
+    "tests/integration/production-healthcheck.test.mjs",
+    "tests/conformance/pr-status.test.mjs",
+    "tests/conformance/codex-stderr-filter.test.mjs",
+    "tests/docs/docs-server.test.mjs",
+    "tests/integration/console-build-metadata.test.mjs",
+    "tests/conformance/audit.test.mjs",
+    "tests/conformance/compute-lifecycle-hooks.test.mjs",
+    "tests/conformance/utils.test.mjs",
+    "tests/conformance/console-api-client.test.mjs",
+    "tests/integration/bootstrap-output.test.mjs",
+    "tests/conformance/slack-configuration.test.mjs",
+    "tests/conformance/grafana-overview-dashboard.test.mjs"
+  ],
   "files": [
     {
+      "path": "tests/conformance/audit.test.mjs"
+    },
+    {
+      "path": "tests/conformance/compute-lifecycle-hooks.test.mjs"
+    },
+    {
+      "path": "tests/conformance/codex-seccomp-profile.test.mjs"
+    },
+    {
+      "path": "tests/conformance/configuration-occ.test.mjs"
+    },
+    {
+      "path": "tests/conformance/console-api-client.test.mjs"
+    },
+    {
+      "path": "tests/conformance/contracts.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-length.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-server.test.mjs"
+    },
+    {
+      "path": "tests/docs/docs-site.test.mjs"
+    },
+    {
+      "path": "tests/docs/generated-api-reference.test.mjs"
+    },
+    {
+      "path": "tests/conformance/harness-device-auth.test.mjs"
+    },
+    {
+      "path": "tests/conformance/http-errors.test.mjs"
+    },
+    {
+      "path": "tests/conformance/credential-source-occ.test.mjs"
+    },
+    {
+      "path": "tests/conformance/docker-compute.test.mjs"
+    },
+    {
+      "path": "tests/conformance/grafana-overview-dashboard.test.mjs"
+    },
+    {
+      "path": "tests/conformance/iam.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-compute.test.mjs"
+    },
+    {
+      "path": "tests/conformance/node-enrollment-client.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-preflight.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-real-kubectl.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-runtime-credentials.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-configuration.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-ownership.test.mjs"
+    },
+    {
+      "path": "tests/conformance/kubernetes-secret-driver.test.mjs"
+    },
+    {
+      "path": "tests/conformance/occ-api-security.test.mjs"
+    },
+    {
+      "path": "tests/conformance/runtime-logs-content.test.mjs"
+    },
+    {
+      "path": "tests/conformance/runtime-logs-sandbox.test.mjs"
+    },
+    {
+      "path": "tests/conformance/runtime-logs-replay.test.mjs"
+    },
+    {
+      "path": "tests/conformance/codex-stderr-filter.test.mjs"
+    },
+    {
+      "path": "tests/conformance/occ-read.test.mjs"
+    },
+    {
+      "path": "tests/conformance/openshell-gateway-wire.test.mjs"
+    },
+    {
+      "path": "tests/conformance/platform-state-memory.test.mjs"
+    },
+    {
+      "path": "tests/conformance/pr-status.test.mjs"
+    },
+    {
+      "path": "tests/conformance/presets.test.mjs"
+    },
+    {
+      "path": "tests/conformance/secret-gateway-delivery.test.mjs"
+    },
+    {
+      "path": "tests/conformance/secret-occ.test.mjs"
+    },
+    {
+      "path": "tests/conformance/slack-configuration.test.mjs"
+    },
+    {
+      "path": "tests/conformance/service-account-driver.test.mjs"
+    },
+    {
+      "path": "tests/conformance/test-files.test.mjs"
+    },
+    {
+      "path": "tests/conformance/utils.test.mjs"
+    },
+    {
+      "path": "tests/conformance/workspace-files-configuration.test.mjs"
+    },
+    {
+      "path": "tests/conformance/workspace-files.test.mjs"
+    },
+    {
+      "path": "tests/conformance/workspace-node-supervisor.test.mjs"
+    },
+    {
+      "path": "tests/integration/presets-controller.test.mjs"
+    },
+    {
+      "path": "tests/integration/profile-renderer.test.mjs"
+    },
+    {
+      "path": "tests/integration/bootstrap-output.test.mjs"
+    },
+    {
+      "path": "tests/integration/bootstrap-volume.test.mjs"
+    },
+    {
+      "path": "tests/integration/configuration-controller.test.mjs"
+    },
+    {
+      "path": "tests/integration/configuration-startup.test.mjs"
+    },
+    {
+      "path": "tests/integration/console-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/console-build-metadata.test.mjs"
+    },
+    {
+      "path": "tests/integration/controller-lifecycle.test.mjs"
+    },
+    {
+      "path": "tests/integration/driver-plugin-installation.test.mjs"
+    },
+    {
+      "path": "tests/integration/git-hooks.test.mjs"
+    },
+    {
+      "path": "tests/integration/occ-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/production-controller-security.test.mjs"
+    },
+    {
+      "path": "tests/integration/production-healthcheck.test.mjs"
+    },
+    {
+      "path": "tests/integration/production-image-upgrade.test.mjs"
+    },
+    {
+      "path": "tests/integration/sandbox-driver-startup.test.mjs"
+    },
+    {
+      "path": "tests/integration/secret-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/plugin-discovery-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/device-authorization-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/runtime-credentials-api.test.mjs"
+    },
+    {
+      "path": "tests/integration/secret-driver-startup.test.mjs"
+    },
+    {
+      "path": "tests/integration/service-api-keys.test.mjs"
+    },
+    {
+      "path": "tests/integration/startup-ipv6-loopback.test.mjs"
+    },
+    {
+      "path": "tests/integration/common-logging.test.mjs"
+    },
+    {
       "path": "tests/integration/dev-up.test.mjs",
-      "parallel": true,
       "expectedTests": [
         "dev-up builds the default runtime only when real Compose leaves runtime images unselected",
         "dev-up preserves a selected custom runtime image and skips the quickstart build",
@@ -22,280 +294,10 @@
       ]
     },
     {
-      "path": "tests/integration/occ-api.test.mjs",
-      "parallel": true
+      "path": "tests/integration/github-login-transport.test.mjs"
     },
     {
-      "path": "tests/conformance/plugin-compute.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/audit.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/compute-lifecycle-hooks.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/codex-seccomp-profile.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/configuration-occ.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/console-api-client.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/contracts.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/docs/docs-length.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/docs/docs-server.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/docs/docs-site.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/docs/generated-api-reference.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/harness-device-auth.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/http-errors.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/credential-source-occ.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/docker-compute.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/grafana-overview-dashboard.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/iam.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-compute.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/node-enrollment-client.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-preflight.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-real-kubectl.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-runtime-credentials.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-configuration.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-ownership.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/kubernetes-secret-driver.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/occ-api-security.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/runtime-logs-content.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/runtime-logs-sandbox.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/runtime-logs-replay.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/codex-stderr-filter.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/occ-read.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/openshell-gateway-wire.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/platform-state-memory.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/pr-status.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/presets.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/secret-gateway-delivery.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/secret-occ.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/slack-configuration.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/service-account-driver.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/test-files.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/utils.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/workspace-files-configuration.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/workspace-files.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/conformance/workspace-node-supervisor.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/presets-controller.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/profile-renderer.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/bootstrap-output.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/bootstrap-volume.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/configuration-controller.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/configuration-startup.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/console-api.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/console-build-metadata.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/controller-lifecycle.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/driver-plugin-installation.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/git-hooks.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/production-controller-security.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/production-healthcheck.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/production-image-upgrade.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/sandbox-driver-startup.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/secret-api.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/plugin-discovery-api.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/device-authorization-api.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/runtime-credentials-api.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/secret-driver-startup.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/service-api-keys.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/startup-ipv6-loopback.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/common-logging.test.mjs",
-      "parallel": true
-    },
-    {
-      "path": "tests/integration/github-login-transport.test.mjs",
-      "parallel": true
+      "path": "tests/conformance/plugin-compute.test.mjs"
     }
   ]
 }

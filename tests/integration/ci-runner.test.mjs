@@ -1534,7 +1534,7 @@ test("audit rejects obsolete manifest selectors", async (t) => {
 
 test("audit rejects invalid file concurrency marks", async (t) => {
   const root = await fixture(t);
-  for (const name of ["off", "blank", "both"]) {
+  for (const name of ["one", "two"]) {
     await writeFile(join(root, `tests/integration/${name}.test.mjs`), "import 'node:test';\n");
   }
   await writeJson(join(root, "manifest.json"), {
@@ -1542,10 +1542,20 @@ test("audit rejects invalid file concurrency marks", async (t) => {
     lanes: {
       marks: {
         fileConcurrency: 0,
+        parallelFiles: [
+          "tests/integration/one.test.mjs",
+          "tests/integration/one.test.mjs",
+          "tests/integration/two.test.mjs",
+          "tests/integration/other.test.mjs",
+        ],
+        serialFiles: {
+          "tests/integration/two.test.mjs": "shared port",
+          "tests/integration/one.test.mjs": " ",
+          "tests/integration/gone.test.mjs": "moved",
+        },
         files: [
-          { path: "tests/integration/off.test.mjs", parallel: false },
-          { path: "tests/integration/blank.test.mjs", serial: " " },
-          { path: "tests/integration/both.test.mjs", parallel: true, serial: "shared port" },
+          { path: "tests/integration/one.test.mjs" },
+          { path: "tests/integration/two.test.mjs" },
         ],
       },
     },
@@ -1560,9 +1570,13 @@ test("audit rejects invalid file concurrency marks", async (t) => {
       .sort(),
     [
       "lanes.marks.fileConcurrency must be an integer from 1 to 32",
-      "lanes.marks.files.0.parallel must be true when present",
-      "lanes.marks.files.1.serial must be a non-empty reason",
-      "lanes.marks.files.2 cannot be both parallel and serial",
+      "lanes.marks.parallelFiles lists tests/integration/one.test.mjs twice",
+      "lanes.marks.parallelFiles tests/integration/one.test.mjs is also serial",
+      "lanes.marks.parallelFiles tests/integration/one.test.mjs is also serial",
+      "lanes.marks.parallelFiles tests/integration/other.test.mjs is not a lane file",
+      "lanes.marks.parallelFiles tests/integration/two.test.mjs is also serial",
+      "lanes.marks.serialFiles.tests/integration/gone.test.mjs is not a lane file",
+      "lanes.marks.serialFiles.tests/integration/one.test.mjs must name a reason",
     ],
   );
 });
@@ -1619,11 +1633,13 @@ test("run shares slots only between audited parallel files and runs the rest alo
     lanes: {
       shared: {
         fileConcurrency: 4,
+        parallelFiles: ["tests/integration/right.test.mjs", "tests/integration/left.test.mjs"],
+        serialFiles: { "tests/integration/serial.test.mjs": "writes a fixed path" },
         files: [
           { path: "tests/integration/unmarked.test.mjs" },
-          { path: "tests/integration/left.test.mjs", parallel: true },
-          { path: "tests/integration/serial.test.mjs", serial: "writes a fixed path" },
-          { path: "tests/integration/right.test.mjs", parallel: true },
+          { path: "tests/integration/left.test.mjs" },
+          { path: "tests/integration/serial.test.mjs" },
+          { path: "tests/integration/right.test.mjs" },
         ],
       },
     },
@@ -1662,6 +1678,8 @@ test("run shares slots only between audited parallel files and runs the rest alo
   assert.ok(unmarked.startOffsetMs < serial.startOffsetMs);
   assert.ok(serial.startOffsetMs + serial.wallDurationMs <= left.startOffsetMs);
   assert.ok(serial.startOffsetMs + serial.wallDurationMs <= right.startOffsetMs);
+  // Shared slots start in parallelFiles order.
+  assert.ok(right.startOffsetMs <= left.startOffsetMs);
   assert.match(
     result.stderr,
     /^run-tests: passed tests\/integration\/left\.test\.mjs \d+\.\ds \(parallel\)$/m,
