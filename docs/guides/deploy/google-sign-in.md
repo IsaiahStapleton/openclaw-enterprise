@@ -77,7 +77,8 @@ Google-only install. It names an existing local password administrator; read it 
 administrator from `data.user.id` of `GET /api/auth/session`. The chart passes it as
 `OCC_AUTH_GITHUB_RECOVERY_USER_ID`, which designates the recovery account for either
 provider. Rendering fails on incomplete Google values, a shared Secret, an HTTP base URL,
-native administration, an invalid CIDR, or an allowed domain that is not a DNS name.
+native administration, an invalid CIDR, or an allowed domain that is not a DNS name. It
+also fails when `allowedDomains` is set without `auth.google.enabled`.
 
 The chart adds the API-only NetworkPolicy
 `openclaw-enterprise-api-google-login-egress` on TCP 443. Empty
