@@ -161,8 +161,9 @@ Agent. Existing RWO-backed Agents need no recreation.
 
 ## Verify the retained installation
 
-- [ ] The Console reports the candidate source revision. API and worker run the
-      expected controller digest, and migration history is canonical.
+- [ ] The Console [debug](../../reference/console/debug-fields.md) **OCE commit**
+      matches the candidate (`OCC_BUILD_REVISION`). API and worker run the
+      expected controller digest; migration history is canonical.
 - [ ] The authenticated Installation and protected startup configuration agree.
       API and worker selected the same Driver identities.
 - [ ] Namespace, Agent, Configuration, Preset, and Secret-metadata inventories
@@ -190,7 +191,7 @@ Agent. Existing RWO-backed Agents need no recreation.
       bindings, then verify a real model response through the selected Gateway.
 - [ ] Evidence contains the before/after inventory, rendered configuration,
       migration receipt, rollout status, deployment results, and any accepted
-      exceptions. It contains no credential values.
+      exceptions, but no credential values.
 
 ## Stop and recover safely
 
