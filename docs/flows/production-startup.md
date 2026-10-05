@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: "2026-10-01"
-last_updated_session: "authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44"
+updated: "2026-10-05"
+last_updated_session: "authoring-run/54e33467-f3d2-4f4e-afad-952157ec12f0"
 ---
 
 # Production Startup Flow
@@ -123,7 +123,11 @@ UDP/TCP ports `53` and `5353` to the configured DNS peer; see the
 [Helm DNS contract](../reference/settings/production.md#required-production-controller-environment).
 
 `helm upgrade --install --wait --timeout 5m` renders the chart with native
-values. If `database.caSecretName` is set, the Pod mounts that CA Secret
+values. The chart bounds the initialization Job name to 63 characters while
+preserving the complete Helm release name. Short release names keep the existing
+`<release>-initialization` name; longer names shorten only the suffix so
+Kubernetes can admit the hook and generate its Job labels. Release labels remain
+unchanged for recovery inspection. If `database.caSecretName` is set, the Pod mounts that CA Secret
 read-only into both containers before they connect. The initialization hook first
 runs migrations with the dedicated migrator credential, then runs bootstrap with
 the lower-privilege application credential, Better Auth settings, first
@@ -322,6 +326,8 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 12:10: Bound initialization hook names for valid long Helm releases. (authoring-run/54e33467-f3d2-4f4e-afad-952157ec12f0 - 4cda6515736280ca39f0fbe92cff78194b2c3638)
 
 - 2026-10-05: Name Preset file failures `PRESET_FILE_INVALID`.
 - 2026-10-04: Time API startup phases in `listening`.
