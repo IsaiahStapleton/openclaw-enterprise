@@ -378,6 +378,10 @@ jobs:
       - name: Set up CI tools
         run: bash scripts/ci/setup-tools.sh k3d
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # GitHub-hosted runners are per-job VMs; removing the builder took 8-33 s,
+          # which a superseding run also waits for on cancellation.
+          cleanup: false
       - name: Enable Kubernetes bridge packet filtering
         run: |
           if [[ ! -e /proc/sys/net/bridge/bridge-nf-call-iptables ]]; then
@@ -416,8 +420,21 @@ jobs:
       - static-checks
       - pr-safe
       - runtime-image-fixture
+    # always(): a failed or skipped dependency must still produce a failed
+    # CI Required, never a skipped (passing) one.
     if: always()
     steps:
+      # A push that supersedes this run waits until this run has finished
+      # cancelling. cancelled() is false in a job that starts after the
+      # cancellation, so test the dependencies: fail at once instead of checking
+      # out and verifying jobs that never finished. Later steps then skip.
+      - name: Fail when a required job was cancelled
+        if: contains(needs.*.result, 'cancelled')
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          jq -r 'to_entries[] | select(.value.result == "cancelled") | "::error::\(.key) was cancelled (superseded run, manual cancel, or timeout-minutes exceeded; see that job)."' <<<"$NEEDS_JSON"
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 2
@@ -487,7 +504,7 @@ jobs:
             printf 'CI impact: full (trusted base policy unavailable)\n'
           fi
       - name: Validate selected job state
-        if: always()
+        if: ${{ !cancelled() && !contains(needs.*.result, 'cancelled') }}
         env:
           NEEDS_JSON: ${{ toJson(needs) }}
           EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
@@ -500,13 +517,13 @@ jobs:
             node scripts/ci/impact-gate.mjs --needs "$RUNNER_TEMP/raw-needs.json" --mode "$EXPECTED_MODE" --output "$RUNNER_TEMP/needs.json"
           fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: ${{ always() && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
+        if: ${{ !cancelled() && !contains(needs.*.result, 'cancelled') && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
         with:
           pattern: ci-results-*
           path: ${{ runner.temp }}/results
           merge-multiple: true
       - name: Aggregate CI results
-        if: ${{ always() && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
+        if: ${{ !cancelled() && !contains(needs.*.result, 'cancelled') && (needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests') }}
         env:
           EXPECTED_MODE: ${{ needs.impact.outputs.mode }}
           EXPECTED_LANES: ${{ needs.impact.outputs.lanes }}

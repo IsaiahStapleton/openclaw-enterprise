@@ -1074,6 +1074,31 @@ test("documentation workflow selects documentation checks and omits product test
   assert.match(aggregate, /if:.*needs\.impact\.outputs\.mode == 'full'/);
 });
 
+test("CI Required always reports and fails at once when a dependency was cancelled", () => {
+  const { loadYaml } = createRequire(
+    new URL("../../apps/controller/package.json", import.meta.url),
+  )("@kubernetes/client-node");
+  const workflow = loadYaml(readFileSync(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8"));
+  const required = workflow.jobs["ci-required"];
+  // A skipped required job counts as passing, so failed dependencies must not skip it.
+  assert.equal(required.if, "always()");
+  // cancelled() is false in a job that starts after a cancellation, so the
+  // dependency results decide.
+  const cancelled = "contains(needs.*.result, 'cancelled')";
+  const [first, ...rest] = required.steps;
+  assert.equal(first.if, cancelled);
+  assert.match(first.run, /^exit 1$/m);
+  // A superseding run waits for this one; no later step may run once a dependency is cancelled.
+  for (const step of rest) {
+    const condition = String(step.if ?? "");
+    assert.doesNotMatch(condition, /always\(\)/, step.name ?? step.uses);
+    if (condition) {
+      // A status function keeps the step running after an earlier step failed.
+      assert.ok(condition.includes(`!cancelled() && !${cancelled}`), step.name ?? step.uses);
+    }
+  }
+});
+
 test("Static Checks runs every check the CI lanes skip", () => {
   const { loadYaml } = createRequire(
     new URL("../../apps/controller/package.json", import.meta.url),
