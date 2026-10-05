@@ -1,28 +1,52 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { availablePort } from "./available-port.mjs";
 
 /**
- * Starts the bundled Slack proxy (apps/controller/src/slack-proxy.mjs) as a child process with
- * OCC_SLACK_PROXY_PORT `port` and resolves once it is listening: for a fixed port, once the
- * port accepts connections; for port 0, once the proxy logs the port it bound. The test's
- * cleanup sends it SIGTERM. With `upstreamPort`, the child resolves slack.com to 127.0.0.1 and
- * its connections to slack.com:443 reach that loopback port instead. Returns the child, the
- * listening port and `stderr()`, what the proxy has written so far.
+ * Starts the bundled Slack proxy (apps/controller/src/slack-proxy.mjs) as a child process and
+ * resolves once it logs the port it bound. By default OCC_SLACK_PROXY_PORT is 0; with
+ * `fixedPort` the helper picks a free port, passes it, and requires the proxy to bind exactly
+ * that port (another process can take a picked port first, so EADDRINUSE picks again). The
+ * test's cleanup sends the proxy SIGTERM. With `upstreamPort`, the child resolves slack.com to
+ * 127.0.0.1 and its connections to slack.com:443 reach that loopback port instead. Returns
+ * the child, the listening port and `stderr()`, what the proxy has written so far.
  */
-export async function startSlackProxy(t, { port, upstreamPort } = {}) {
+export async function startSlackProxy(t, { fixedPort = false, upstreamPort } = {}) {
   const preload =
     upstreamPort === undefined ? [] : ["--import", await writeDnsFixture(t, upstreamPort)];
+  for (let attempt = 1; ; attempt += 1) {
+    const port = fixedPort ? await availablePort({ host: "0.0.0.0" }) : 0;
+    const proxy = await spawnSlackProxy(t, preload, port);
+    if (proxy.port === undefined && fixedPort && attempt < 5 && /EADDRINUSE/.test(proxy.stderr())) {
+      continue;
+    }
+    if (proxy.port === undefined) {
+      throw new Error(`Slack proxy exited before listening: ${proxy.stderr()}`);
+    }
+    if (fixedPort) {
+      assert.equal(proxy.port, port, "the proxy listens on OCC_SLACK_PROXY_PORT");
+    }
+    return proxy;
+  }
+}
+
+async function spawnSlackProxy(t, preload, port) {
   const child = spawn(process.execPath, [...preload, "apps/controller/src/slack-proxy.mjs"], {
     cwd: new URL("../../", import.meta.url),
     env: { ...process.env, OCC_SLACK_PROXY_PORT: String(port) },
     stdio: ["ignore", "ignore", "pipe"],
   });
+  t.after(() => child.kill());
   let stderr = "";
   child.stderr.setEncoding("utf8");
-  const listening = new Promise((resolve, reject) => {
+  let timer;
+  const listening = await new Promise((resolve, reject) => {
+    // Generous: a CPU-starved runner can take seconds just to load the proxy.
+    timer = setTimeout(() => reject(new Error(`Slack proxy did not start: ${stderr}`)), 30_000);
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
       const match = /Slack proxy listening on (\d+)/.exec(stderr);
@@ -30,16 +54,10 @@ export async function startSlackProxy(t, { port, upstreamPort } = {}) {
         resolve(Number(match[1]));
       }
     });
-    child.once("exit", () => reject(new Error(`Slack proxy exited before listening: ${stderr}`)));
-  });
-  t.after(() => child.kill());
-  if (port === 0) {
-    port = await listening;
-  } else {
-    listening.catch(() => {});
-    await waitForProxy(port);
-  }
-  return { child, port, stderr: () => stderr };
+    // Undefined: the proxy exited before it listened.
+    child.once("exit", () => resolve(undefined));
+  }).finally(() => clearTimeout(timer));
+  return { child, port: listening, stderr: () => stderr };
 }
 
 async function writeDnsFixture(t, upstreamPort) {
@@ -75,24 +93,6 @@ net.connect = (...args) => {
 `,
   );
   return path;
-}
-
-async function waitForProxy(port) {
-  const started = Date.now();
-  while (Date.now() - started < 5_000) {
-    try {
-      const socket = net.connect({ host: "127.0.0.1", port });
-      await new Promise((resolve, reject) => {
-        socket.once("connect", resolve);
-        socket.once("error", reject);
-      });
-      socket.end();
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  throw new Error("Slack proxy did not start.");
 }
 
 /** Sends `CONNECT target` to the proxy on `port` and returns its response head. */

@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import test from "node:test";
-import { availablePort } from "../helpers/available-port.mjs";
 import { connectThroughProxy, startSlackProxy } from "../helpers/slack-proxy.mjs";
 
 test("a refused CONNECT reset leaves the Slack proxy running", async (t) => {
-  const proxyPort = await availablePort();
-  const { child, stderr } = await startSlackProxy(t, { port: proxyPort });
+  const { child, port: proxyPort, stderr } = await startSlackProxy(t, { fixedPort: true });
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const socket = net.connect({ host: "127.0.0.1", port: proxyPort });

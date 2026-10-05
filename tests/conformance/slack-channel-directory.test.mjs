@@ -5,7 +5,6 @@ import test from "node:test";
 import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import { ChannelDirectoryError } from "../../packages/occ/src/index.ts";
 import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
-import { availablePort } from "../helpers/available-port.mjs";
 import {
   connectThroughProxy,
   requestThroughProxy,
@@ -65,15 +64,17 @@ test("Slack directory accepts only literal IP or managed Service proxy endpoints
 });
 
 test("bundled Slack proxy process restricts methods and CONNECT targets", async (t) => {
-  const proxyPort = await availablePort();
-  const upstreamPort = await availablePort();
   const upstream = net.createServer((socket) => {
     socket.on("error", () => {});
     socket.write("fixture-upstream");
   });
-  await new Promise((resolve) => upstream.listen(upstreamPort, "127.0.0.1", resolve));
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => upstream.close());
-  await startSlackProxy(t, { port: proxyPort, upstreamPort });
+  // A fixed proxy port, so the test proves the proxy honours OCC_SLACK_PROXY_PORT.
+  const { port: proxyPort } = await startSlackProxy(t, {
+    fixedPort: true,
+    upstreamPort: upstream.address().port,
+  });
 
   assert.match(
     await requestThroughProxy(proxyPort, "GET / HTTP/1.1\r\nHost: slack.com\r\n\r\n"),
@@ -103,7 +104,6 @@ test("bundled Slack proxy process exits on SIGTERM and closes open tunnels", asy
   await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => upstream.close());
   const { child, port: proxyPort } = await startSlackProxy(t, {
-    port: 0,
     upstreamPort: upstream.address().port,
   });
   t.after(() => child.kill("SIGKILL"));
