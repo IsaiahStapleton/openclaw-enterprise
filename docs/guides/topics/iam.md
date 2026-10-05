@@ -93,7 +93,8 @@ A new account starts with no access. As a human Installation administrator:
    so these grants run as, and are audited to, that key's ServicePrincipal. To
    record them under your own account, `POST` the same JSON to
    `$OCC_URL/namespaces/$OCC_NAMESPACE/iam/roles` and `.../iam/access-bindings`
-   with your session cookie and `Origin: $OCC_ORIGIN`.
+   with your session cookie and `Origin: $OCC_ORIGIN`; read the Role ID from
+   `.data.id`.
 
 5. For a person who signs in with a password, give them the password from
    `account.json` through your own secure channel, then delete the file.

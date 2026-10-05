@@ -43,8 +43,8 @@ curl --fail-with-body --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
 Success returns HTTP `201`. The response contains the credential exactly once in
 `data.key` and a non-secret `data.id` needed to revoke it. Record the key and
 principal IDs separately for recovery; there is no plaintext retrieval endpoint.
-If the request fails, the file holds the error response instead: read its
-message, then delete the file; never give it to an automation client.
+If the request fails, read and then delete the file (it holds the error
+response, or nothing); never give it to an automation client.
 
 ## Use a service key
 
