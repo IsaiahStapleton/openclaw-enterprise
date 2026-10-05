@@ -201,6 +201,55 @@ test("refusals take the growing floor whether or not the email administers", asy
   }
 });
 
+test("Retry-After counts down to the end of the spent window", async () => {
+  const limiter = admission();
+  const email = "member@example.test";
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await status(limiter, { email }), 401);
+  }
+  const { error } = await outcome(limiter.admit({ email }, right));
+  assert.ok(error instanceof SignInRateLimited);
+  // The window opened with the first failure moments ago, so almost all of its minute remains.
+  assert.ok(
+    error.retryAfterSeconds >= 55 && error.retryAfterSeconds <= 60,
+    `Retry-After ${error.retryAfterSeconds}`,
+  );
+});
+
+test("slow attempts beyond the global occupancy are refused, an administrator's included", async () => {
+  const floors = [];
+  const limiter = admission({
+    administrators: ["a@example.test", "b@example.test"],
+    slow: {
+      ...slow,
+      occupancy: 1,
+      waitFloor: () => new Promise((resolve) => floors.push(resolve)),
+    },
+  });
+  for (const email of ["a@example.test", "b@example.test"]) {
+    for (let index = 0; index < 3; index += 1) {
+      assert.equal(await status(limiter, { email }), 401);
+    }
+  }
+  // The first administrator's slow attempt holds the only occupancy slot for its floor.
+  const held = status(limiter, { email: "a@example.test" }, right);
+  await turn();
+  assert.equal(floors.length, 1);
+  let answer;
+  const refused = status(limiter, { email: "b@example.test" }, right).then((code) => {
+    answer = code;
+  });
+  await turn();
+  // The second waits out its own floor and is refused without a password check.
+  assert.equal(floors.length, 2);
+  assert.equal(answer, undefined);
+  floors[1]();
+  await refused;
+  assert.equal(answer, 429);
+  floors[0]();
+  assert.equal(await held, 200);
+});
+
 test("a failing administrator lookup surfaces as a dependency error", async () => {
   const outage = new Error("database unavailable");
   const limiter = admission({

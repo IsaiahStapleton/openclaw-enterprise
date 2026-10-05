@@ -75,7 +75,11 @@ test(
       accounts: Object.fromEntries(
         ["member", "stranded", "disabled"].map((name) => [
           name,
-          { email: `recovery-only-${name}@example.test` },
+          {
+            email: `recovery-only-${name}@example.test`,
+            // An administrator other than the recovery account is still not reserved.
+            ...(name === "disabled" ? { role: "admin" } : {}),
+          },
         ]),
       ),
     });
@@ -151,14 +155,14 @@ test(
       });
     });
 
+    const denials = async () =>
+      (await state.transact((unit) => unit.audit.list())).filter(
+        ({ action, outcome, reasonCode }) =>
+          action === "authentication.login" &&
+          outcome === "denied" &&
+          reasonCode === "INVALID_CREDENTIALS",
+      ).length;
     await t.test("ordinary passwords get the bad-credential answer", async () => {
-      const denials = async () =>
-        (await state.transact((unit) => unit.audit.list())).filter(
-          ({ action, outcome, reasonCode }) =>
-            action === "authentication.login" &&
-            outcome === "denied" &&
-            reasonCode === "INVALID_CREDENTIALS",
-        ).length;
       const before = await denials();
       const unknown = { email: "recovery-only-nobody@example.test", password };
       const bodies = [];
@@ -172,6 +176,26 @@ test(
       // No answer distinguishes an existing account, or a right password, from anything else.
       assert.equal(new Set(bodies.map((body) => JSON.stringify(body))).size, 1);
       assert.equal((await denials()) - before, 4, "each refusal is audited as a denied login");
+    });
+
+    await t.test("a spent administrator lane is refused without reading the password", async () => {
+      // The disabled account administers the Installation. Recovery-only reserves the
+      // recovery account alone, so once another administrator's email budget is spent its
+      // attempts are refused unread: none of them is audited.
+      let answer;
+      // The email lane admits ten failures a minute; the eleventh attempt at most is refused.
+      for (let attempt = 0; attempt < 11; attempt += 1) {
+        answer = await passwordSignIn(app, origin, disabled, address());
+        if (answer.statusCode === 429) {
+          break;
+        }
+        assert.equal(answer.statusCode, 401, answer.body);
+      }
+      assert.equal(answer.statusCode, 429, answer.body);
+      const before = await denials();
+      const refused = await passwordSignIn(app, origin, disabled, address());
+      assert.equal(refused.statusCode, 429, refused.body);
+      assert.equal(await denials(), before, "the refused attempt checked no password");
     });
 
     await t.test("the recovery account still signs in with its password", async () => {
