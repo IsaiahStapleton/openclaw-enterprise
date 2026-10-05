@@ -9,7 +9,7 @@ import { renderMatrixMarkdown } from "../../scripts/generate-compute-matrix.mjs"
 export const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 /** docs/docs.json content: one English "Documentation" tab whose "Start" group lists `pages`. */
-export function docsConfig(pages = ["README"]) {
+function docsConfig(pages = ["README"]) {
   return {
     name: "OpenClaw Enterprise",
     navigation: {
@@ -26,12 +26,18 @@ export function writeDocsConfig(directory, config) {
 
 /**
  * A temporary repository holding docs/docs.json (navigation `pages`), plus the site logo under
- * docs/assets when `logo` is set. It is removed by a `t.after` hook registered here, so a test
- * that must stop a process using it first registers that hook before calling this.
+ * docs/assets when `logo` is set. A `t.after` hook removes it; `beforeRemove` runs first in that
+ * same hook (for example to stop a preview serving it), and the removal runs even if it throws.
  */
-export async function createDocsFixture(t, prefix, { pages, logo = false } = {}) {
+export async function createDocsFixture(t, prefix, { pages, logo = false, beforeRemove } = {}) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.after(async () => {
+    try {
+      await beforeRemove?.();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   await mkdir(join(directory, logo ? "docs/assets" : "docs"), { recursive: true });
   if (logo) {
     await copyFile(
@@ -46,6 +52,7 @@ export async function createDocsFixture(t, prefix, { pages, logo = false } = {})
 
 /** Writes the ComputeDriver matrix asset and a docs/README.md holding its rendered fallback. */
 export async function writeComputeMatrixReadme(directory, matrix) {
+  await mkdir(join(directory, "docs/assets"), { recursive: true });
   await writeFile(
     join(directory, "docs/assets/compute-driver-matrix.json"),
     JSON.stringify(matrix),

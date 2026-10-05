@@ -22,21 +22,23 @@ test("docs preview filters the ComputeDriver matrix in a browser", async (t) => 
   let child;
   let browser;
   let diagnostics;
-  // Registered before the fixture's own removal hook, so the preview stops first.
-  t.after(async () => {
-    try {
-      await diagnostics?.capture();
-      await browser?.close();
-    } finally {
-      if (child) {
-        await stopProcess(child, { graceMs: 5_000 });
-      }
-    }
-  });
   const { directory: fixture } = await createDocsFixture(
     t,
     "enterprise-docs-compute-matrix-browser-",
-    { logo: true },
+    {
+      logo: true,
+      // Stop the preview before its directory is removed; removal runs even if this throws.
+      async beforeRemove() {
+        try {
+          await diagnostics?.capture();
+          await browser?.close();
+        } finally {
+          if (child) {
+            await stopProcess(child, { graceMs: 5_000 });
+          }
+        }
+      },
+    },
   );
   const matrix = JSON.parse(
     await readFile(join(root, "docs/assets/compute-driver-matrix.json"), "utf8"),
