@@ -2031,20 +2031,18 @@ async function prepareLane({ lane, statePath }) {
     case "images-packaging":
       await commandAvailable(process.env.OCC_HELM_BIN ?? "helm", ["version", "--short"]);
       await commandAvailable(process.env.OCC_YQ_BIN ?? "yq", ["--version"]);
-      // The two builds are independent, as in the warm job; each restores its own
-      // cache scope, so building them in parallel overlaps the cache transfers.
-      for (const built of await timedPreparation(name, "controller-runtime-image-build", () =>
-        prepareTogether([
-          () =>
+      Object.assign(
+        env,
+        (
+          await timedPreparation(name, "controller-runtime-image-build", () =>
             buildRuntimeImages(resolvedStatePath, state, {
               controller: true,
+              runtime: true,
               nodeBaseImage: effectiveLaneEnv(name, env).NODE_BASE_IMAGE,
             }),
-          () => buildRuntimeImages(resolvedStatePath, state, { runtime: true }),
-        ]),
-      )) {
-        Object.assign(env, built.env);
-      }
+          )
+        ).env,
+      );
       // BuildKit's base-image cache is not Docker's runnable image store.
       env.OCC_TEST_CODEX_PROBE_IMAGE = await ensureDockerSourceImage(
         state,
