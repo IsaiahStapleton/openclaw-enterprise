@@ -512,6 +512,88 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   await assert.rejects(reader.listCatalog(), /ChatGPT\/Codex-backed account/);
 });
 
+test("native Codex catalog reader rejects, without crashing, when Codex closes its input early", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "occ-codex-plugin-reader-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const executable = join(directory, "codex-fixture.mjs");
+  // Answers initialize after closing stdin, so the reader's next write hits a closed pipe.
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import { closeSync } from "node:fs";
+closeSync(0);
+process.stdout.write(JSON.stringify({ id: 1, result: {} }) + "\\n");
+setTimeout(() => {}, 2_000);
+`,
+  );
+  await chmod(executable, 0o755);
+  const uncaught = [];
+  const record = (error) => uncaught.push(error);
+  // node:test reports an uncaught error asynchronously; record it so this test owns the failure.
+  process.prependListener("uncaughtException", record);
+  context.after(() => process.off("uncaughtException", record));
+
+  const reader = new NativeCodexPluginCatalogReader({
+    codexExecutable: executable,
+    codexHome: directory,
+    requestTimeoutMs: 5_000,
+  });
+  await assert.rejects(reader.listCatalog(), NotImplementedError);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(
+    uncaught.map((error) => error.code ?? error.message),
+    [],
+  );
+});
+
+test("native Codex catalog reader kills a Codex process that ignores SIGTERM after a timeout", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "occ-codex-plugin-reader-"));
+  const pidFile = join(directory, "codex.pid");
+  let pid;
+  context.after(async () => {
+    if (pid !== undefined) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone: the reader stopped it.
+      }
+    }
+    await rm(directory, { recursive: true, force: true });
+  });
+  const executable = join(directory, "codex-fixture.mjs");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.stdin.resume();
+setInterval(() => {}, 1_000);
+`,
+  );
+  await chmod(executable, 0o755);
+
+  const reader = new NativeCodexPluginCatalogReader({
+    codexExecutable: executable,
+    codexHome: directory,
+    requestTimeoutMs: 500,
+  });
+  await assert.rejects(reader.listCatalog(), /timed out/);
+  pid = Number(await readFile(pidFile, "utf8"));
+  assert.ok(pid > 0);
+  const deadline = Date.now() + 5_000;
+  let alive = true;
+  while (alive && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } catch {
+      alive = false;
+    }
+  }
+  assert.equal(alive, false, "the timed-out Codex app-server must not outlive the request");
+});
+
 test("Codex startup default-denies plugins", () => {
   const empty = codexRuntimeArtifact({}, []);
   assert.equal(empty.kind, "codex");
