@@ -131,6 +131,9 @@ func removeDevelopmentGatewayAPICRDs(data []byte) ([]byte, error) {
 }
 
 func developmentCRDEstablished(data []byte) (bool, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return false, nil
+	}
 	var resource struct {
 		Status struct {
 			Conditions []struct {
