@@ -831,7 +831,7 @@ export const occApiRoutes = [
       querystring: EmptyQuery,
       params: CredentialSourceParams,
       body: UpdateCredentialSourceBody,
-      response: { 200: CredentialSourceResponseRef, ...mutationErrors },
+      response: { 200: CredentialSourceResponseRef, ...createErrors },
     },
   },
   {

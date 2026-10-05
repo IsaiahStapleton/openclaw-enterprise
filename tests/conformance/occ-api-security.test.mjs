@@ -731,6 +731,57 @@ test("NUL characters and unpaired surrogates are refused in bodies and path para
   );
 });
 
+test("router failures answer the error envelope without echoing the path", async () => {
+  const fixture = await createFixture();
+  await bootstrap(fixture);
+  const namespace = await createNamespace(fixture, "Router failure tenant");
+  const roles = `/namespaces/${namespace.id}/iam/roles`;
+  const contract = "The request does not match the operation contract";
+  for (const [pathname, status, code, message] of [
+    // Fastify answered these itself: its own body naming FST_ERR_* and the submitted path,
+    // no meta.requestId, x-request-id, cache-control or nosniff, and 414 for a long parameter.
+    [
+      "/namespaces/%ZZ",
+      400,
+      "INVALID_REQUEST",
+      "The request path has a malformed percent-encoding.",
+    ],
+    [
+      `${roles}/role%ED%A0%80x`,
+      400,
+      "INVALID_REQUEST",
+      "The request path has a malformed percent-encoding.",
+    ],
+    [
+      `${roles}/${"r".repeat(401)}`,
+      400,
+      "INVALID_REQUEST",
+      `${contract}: a path parameter is too long.`,
+    ],
+    // Role IDs may hold 200 characters, so a long one reaches the route.
+    [
+      `${roles}/${"r".repeat(200)}`,
+      404,
+      "NOT_FOUND",
+      "The requested platform resource was not found.",
+    ],
+    [
+      `${roles}/${"%F0%9F%98%80".repeat(200)}`,
+      404,
+      "NOT_FOUND",
+      "The requested platform resource was not found.",
+    ],
+  ]) {
+    const { response, payload } = await request(fixture.app, pathname);
+    assert.equal(response.status, status, pathname.slice(0, 80));
+    assert.deepEqual(payload.error, { code, message });
+    assert.deepEqual(Object.keys(payload).sort(), ["error", "meta"]);
+    assert.doesNotMatch(JSON.stringify(payload), /FST_ERR|%ZZ|%ED|rrrr/);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  }
+});
+
 test("names are measured in characters, not UTF-16 code units", async () => {
   // 200 emoji fit the 200-character contract (and PostgreSQL char_length), but each is two
   // UTF-16 code units; the controller answered 404 NOT_FOUND for such a Namespace or Agent.
