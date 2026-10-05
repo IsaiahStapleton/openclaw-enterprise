@@ -1,7 +1,7 @@
 # Local Kubernetes and development operations
 
-Build images for a disposable Kubernetes cluster, stop the development stack
-without deleting its data, or check local Agent access. Run
+Build images for a disposable Kubernetes cluster, stop a Docker Compute
+development stack without deleting its data, or check local Agent access. Run
 commands from the repository root. If you are installing the platform for the
 first time, start with [Local Setup](../quickstart.md). For Namespace and Agent
 setup on an existing installation, use the [production deployment sequence](../deploy.md#production).
@@ -101,9 +101,8 @@ profile to arbitrary Pods grants access and is not a repair.
 ## Stop development safely
 
 For a Docker Compute stack, run the exact command under `Cleanup` in the
-`dev-up` output. For Podman, it
-uses `occ dev down` with `compose.podman.yaml` and the Compose options passed at
-startup. Keep any `CONTAINER_CONNECTION` or `CONTAINER_HOST` selection used for
+`dev-up` output. For Podman, it uses `occ dev down` with `compose.podman.yaml`
+and the Compose options passed at startup. Keep any `CONTAINER_CONNECTION` or `CONTAINER_HOST` selection used for
 startup, including macOS machine connections. See the
 [cleanup flow](../../flows/docker-compose-development.md#3-clean-up-docker-or-podman-compose)
 for how the host connection and worker socket are handled.
@@ -115,7 +114,8 @@ containers and tenant networks owned by Docker Compute.
 A Kubernetes profile's `Cleanup` command instead deletes its k3d cluster,
 database, Agents, and volumes; see [stop and clean up](local-kubernetes-development.md#stop-and-clean-up).
 To keep that data, run `k3d cluster stop` and later `k3d cluster start` with the
-cluster name instead ([storage across restarts](local-kubernetes-development.md#preserve-storage-across-restarts)).
+cluster name instead: the `Kubernetes context` from the `dev-up` output without
+its `k3d-` prefix ([storage across restarts](local-kubernetes-development.md#preserve-storage-across-restarts)).
 
 ## Development end-to-end TUI
 
