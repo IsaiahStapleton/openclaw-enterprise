@@ -103,6 +103,7 @@ import {
   RequestFailure,
   requestFailure,
   responseHeaders,
+  unstorableTextFailure,
   type ErrorDetail,
 } from "./http/errors.ts";
 import { iamHandlers } from "./http/iam.ts";
@@ -3679,6 +3680,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               "INVALID_REQUEST",
               "The request does not match the operation contract.",
             );
+          }
+          const unstorable =
+            unstorableTextFailure("params", request.params) ??
+            unstorableTextFailure("body", request.body);
+          if (unstorable !== undefined) {
+            throw unstorable;
           }
         },
         preHandler: async (request) => resolveIdentity(request, operation),
