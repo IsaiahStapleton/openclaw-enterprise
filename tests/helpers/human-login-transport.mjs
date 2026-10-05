@@ -227,7 +227,8 @@ export async function startProviderServer(t, handle) {
 // One subtest per [endpoint, step] and framing. The endpoint answers past the provider
 // response cap (64 KiB) and leaves its stream open; every other path gets `provider()`'s
 // valid answer. The callback must be denied at once, cancel the stream and log
-// oversized_response. A declared length is refused before its body: one byte is sent.
+// oversized_response. The declared case sends one byte only to flush its headers, so
+// only the declared-length check can refuse it in time.
 export async function testOversizedProviderBodies(t, { endpoints, serve, provider, login }) {
   for (const [endpoint, step] of endpoints) {
     for (const declared of [false, true]) {

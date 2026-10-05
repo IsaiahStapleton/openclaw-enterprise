@@ -179,7 +179,7 @@ test("OIDC login fetches only its pinned URLs and binds the ID token to the atte
       serve = handler;
     },
     provider,
-    login: () => loginFixture(),
+    login: loginFixture,
   });
 
   await t.test("an unavailable JWKS logs one warning with the HTTP status", async () => {
