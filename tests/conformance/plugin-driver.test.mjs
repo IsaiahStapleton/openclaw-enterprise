@@ -529,7 +529,7 @@ setTimeout(() => {}, 2_000);
   await chmod(executable, 0o755);
   const uncaught = [];
   const record = (error) => uncaught.push(error);
-  // node:test reports an uncaught error asynchronously; record it so this test owns the failure.
+  // Record any uncaught error so the assertion below names it.
   process.prependListener("uncaughtException", record);
   context.after(() => process.off("uncaughtException", record));
 
@@ -546,7 +546,7 @@ setTimeout(() => {}, 2_000);
   );
 });
 
-test("native Codex catalog reader kills a Codex process that ignores SIGTERM after a timeout", async (context) => {
+test("native Codex catalog reader kills a Codex process that ignores SIGTERM after an abort", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "occ-codex-plugin-reader-"));
   const pidFile = join(directory, "codex.pid");
   let pid;
@@ -561,12 +561,14 @@ test("native Codex catalog reader kills a Codex process that ignores SIGTERM aft
     await rm(directory, { recursive: true, force: true });
   });
   const executable = join(directory, "codex-fixture.mjs");
+  // The PID file appears only once the SIGTERM handler is installed (rename is atomic).
   await writeFile(
     executable,
     `#!/usr/bin/env node
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {});
-writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));
+renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});
 process.stdin.resume();
 setInterval(() => {}, 1_000);
 `,
@@ -576,11 +578,22 @@ setInterval(() => {}, 1_000);
   const reader = new NativeCodexPluginCatalogReader({
     codexExecutable: executable,
     codexHome: directory,
-    requestTimeoutMs: 500,
+    requestTimeoutMs: 60_000,
   });
-  await assert.rejects(reader.listCatalog(), /timed out/);
-  pid = Number(await readFile(pidFile, "utf8"));
-  assert.ok(pid > 0);
+  const controller = new AbortController();
+  const listed = reader.listCatalog(controller.signal);
+  listed.catch(() => {});
+  const started = Date.now() + 30_000;
+  while (pid === undefined && Date.now() < started) {
+    try {
+      pid = Number(await readFile(pidFile, "utf8"));
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  assert.ok(pid > 0, "the Codex fixture did not start");
+  controller.abort();
+  await assert.rejects(listed, /aborted/);
   const deadline = Date.now() + 5_000;
   let alive = true;
   while (alive && Date.now() < deadline) {
@@ -591,7 +604,7 @@ setInterval(() => {}, 1_000);
       alive = false;
     }
   }
-  assert.equal(alive, false, "the timed-out Codex app-server must not outlive the request");
+  assert.equal(alive, false, "the aborted Codex app-server must not outlive the request");
 });
 
 test("Codex startup default-denies plugins", () => {
