@@ -99,7 +99,8 @@ jobs:
       # One row per pr-safe lane (runtime-image-fixture is its own job). Full
       # mode runs every row; tests mode runs the rows the policy selected.
       # The baseline tests are split in two, balanced by measured file
-      # durations; only part 1 runs the lint, format, docs and type checks.
+      # durations; only part 1 runs the type and Go CLI checks (Static Checks
+      # runs lint, format, OpenAPI and docs beside the lanes).
       # Image Runtime Startup is split from Images and Packaging, which it
       # would otherwise lengthen by about five minutes. The runtime image
       # startup tests are split in two, balanced by measured case durations;
@@ -234,10 +235,13 @@ jobs:
       - name: Audit suite manifest and workflows
         run: node scripts/ci/run-tests.mjs audit
 
-  docs-checks:
-    name: Documentation Checks
+  static-checks:
+    name: Static Checks
     needs: impact
-    if: ${{ needs.impact.outputs.mode == 'docs' }}
+    # Workspace boundary, lint, format, OpenAPI and documentation checks need no
+    # test fixture, so they run beside the test lanes in every mode instead of
+    # before Checks and Conformance 1's tests (about 40 s of its critical path).
+    if: ${{ needs.impact.outputs.mode == 'docs' || needs.impact.outputs.mode == 'full' || needs.impact.outputs.mode == 'tests' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -255,8 +259,14 @@ jobs:
           cache-mode: read-write
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Run workspace boundary check
+        run: pnpm check:workspace
+      - name: Run lint check
+        run: pnpm lint
       - name: Check formatting
         run: pnpm format:check
+      - name: Run OpenAPI check
+        run: pnpm openapi:check
       - name: Check and build documentation
         run: pnpm docs:install && pnpm docs:check && pnpm docs:build
 
@@ -311,6 +321,8 @@ jobs:
           profile: ${{ matrix.profile }}
           node-version: ${{ env.NODE_VERSION }}
           artifact-prefix: ci-results
+          # Static Checks runs them in this workflow.
+          static-checks: "false"
       - name: Upload repository credential image identities
         if: always() && matrix.lane == 'repository-credentials-container'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -400,7 +412,7 @@ jobs:
     needs:
       - impact
       - audit
-      - docs-checks
+      - static-checks
       - pr-safe
       - runtime-image-fixture
     if: always()
