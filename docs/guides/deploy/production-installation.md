@@ -225,7 +225,8 @@ yq e -e '.auth.baseUrl != "" and .bootstrap.adminEmail != "" and
   (.api.clients | length > 0) and .gatewayRouting.enabled == true and
   .gatewayRouting.gatewayClassName != "" and
   .gatewayRouting.apiKeySecretName != "" and (.agentNativeAdmin.enabled == true or
-  .auth.github.enabled == true or .auth.google.enabled == true)' \
+  .auth.github.enabled == true or .auth.google.enabled == true or
+  .auth.oidc.enabled == true)' \
   "$OCC_INPUT_DIRECTORY/values.yaml" >/dev/null
 yq e -e '.drivers.compute.configuration.images.requireImmutableDigest == true and
   (.drivers.compute.configuration.images.gateway | test("@sha256:[a-f0-9]{64}$")) and
