@@ -83,8 +83,9 @@ also fails when `allowedDomains` is set without `auth.google.enabled`.
 
 The chart adds the API-only NetworkPolicy
 `openclaw-enterprise-api-google-login-egress` on TCP 443. Empty
-`auth.google.egressCidrs` allows `0.0.0.0/0`. Google publishes no small, stable address
-range for these hosts, so narrow egress with an egress proxy rather than static CIDRs.
+`auth.google.egressCidrs` allows any address except link-local `169.254.0.0/16`. Google
+publishes no small, stable address range for these hosts, so narrow egress with an egress
+proxy rather than static CIDRs.
 
 The API reads these variables; see
 [production settings](../../reference/settings/production.md#google-sign-in):
