@@ -112,7 +112,7 @@ const response = await fetch(url, {
   body: JSON.stringify({ name: "model-api-key", value }),
 });
 if (response.status !== 201) {
-  const { error } = await response.json().catch(() => ({}));
+  const error = (await response.json().catch(() => null))?.error;
   throw new Error(`Secret creation failed: HTTP ${response.status} ${error?.code ?? ""}: ${error?.message ?? ""}`);
 }
 console.log(JSON.stringify(await response.json()));
@@ -263,10 +263,10 @@ metadata cleanup after OCC verifies the stored backend identity.
 
 ## Troubleshooting
 
-- **Secret create returns `409`:** If the message says the name already exists,
-  choose another name or update the existing Secret. Otherwise wait until the
-  platform Namespace is `ready` and its backing Kubernetes namespace is bound to
-  the exact Namespace ID.
+- **Secret create returns `409`:** For `RESOURCE_CONFLICT` with "A Secret with
+  this name already exists in this Namespace", choose another name or update the
+  existing Secret. For `NAMESPACE_NOT_READY`, wait until the platform Namespace is
+  `ready` and its backing Kubernetes namespace is bound to the exact Namespace ID.
 - **Secret operation returns `403`:** Verify OCC permission for the exact Secret
   or parent Namespace. For binding or Agent assignment, also verify caller
   `operate` on each exact Secret. For deployment, verify both the deploying actor
