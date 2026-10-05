@@ -12835,6 +12835,8 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
     logs: { agent: "", gateway: "" },
     logError: undefined,
     eventError: undefined,
+    nodeName: "runtime-logs-node",
+    extraEvents: [],
   };
   const pod = (role) => ({
     apiVersion: "v1",
@@ -12850,6 +12852,7 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
         "openclaw.dev/workload-role": role,
       },
     },
+    spec: state.nodeName === undefined ? {} : { nodeName: state.nodeName },
     status: {
       phase: "Running",
       conditions: [{ type: "Ready", status: "True" }],
@@ -12921,6 +12924,10 @@ function runtimeLogDriverFixture({ twoCluster = false } = {}) {
         const uid = fieldSelector.replace("involvedObject.uid=", "");
         return {
           items: [
+            ...state.extraEvents.map((event) => ({
+              ...event,
+              involvedObject: { kind: "Pod", uid, namespace },
+            })),
             {
               type: "Warning",
               reason: "BackOff",
@@ -13077,6 +13084,53 @@ test("Kubernetes runtime description reads each plane's Pods and only their own 
     fixture.driver.describeAgentRuntime(fixture.binding, new AbortController().signal),
     /invalid Pod/,
   );
+});
+
+test("Kubernetes runtime description drops only a settled VolumeBinding conflict", async () => {
+  const fixture = runtimeLogDriverFixture();
+  const conflict = {
+    type: "Warning",
+    reason: "FailedScheduling",
+    message:
+      'running PreBind plugin "VolumeBinding": Operation cannot be fulfilled on persistentvolumeclaims "workspace-agt-0123": the object has been modified; please apply your changes to the latest version and try again',
+    lastTimestamp: new Date("2026-09-30T10:00:01Z"),
+  };
+  const kept = [
+    // Other scheduling failures, including other VolumeBinding errors, stay visible.
+    {
+      type: "Warning",
+      reason: "FailedScheduling",
+      message:
+        "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector. preemption: 0/3 nodes are available.",
+      lastTimestamp: new Date("2026-09-30T10:00:02Z"),
+    },
+    {
+      type: "Warning",
+      reason: "FailedScheduling",
+      message: 'running PreBind plugin "VolumeBinding": binding volumes: context deadline exceeded',
+      lastTimestamp: new Date("2026-09-30T10:00:03Z"),
+    },
+    // The same text under another reason is not the scheduler's retry.
+    { ...conflict, reason: "FailedBinding", lastTimestamp: new Date("2026-09-30T10:00:04Z") },
+  ];
+  fixture.state.extraEvents = [conflict, ...kept];
+  const reasons = async () =>
+    (await fixture.driver.describeAgentRuntime(fixture.binding, new AbortController().signal)).pods
+      .find(({ role }) => role === "gateway")
+      .events.map(({ reason, message }) => `${reason}: ${message}`);
+
+  const scheduled = await reasons();
+  assert.equal(scheduled.includes(`FailedScheduling: ${conflict.message}`), false);
+  for (const event of kept) {
+    assert.ok(scheduled.includes(`${event.reason}: ${event.message}`), event.message);
+  }
+  assert.equal(scheduled.length, kept.length + 3);
+
+  // While the Pod has no node the retry has not succeeded yet, so the Event stays.
+  fixture.state.nodeName = undefined;
+  const pending = await reasons();
+  assert.ok(pending.includes(`FailedScheduling: ${conflict.message}`));
+  assert.equal(pending.length, kept.length + 4);
 });
 
 test("Kubernetes runtime description for a log read lists one source's Pods and no Events", async () => {
