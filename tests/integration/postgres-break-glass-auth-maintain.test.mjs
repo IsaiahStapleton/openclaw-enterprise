@@ -74,6 +74,37 @@ async function withPool(work) {
   }
 }
 
+// A running controller that has run no query for 10 s holds no database connection:
+// its pool closes idle clients (pg's default idleTimeoutMillis), and the maintenance
+// guard, which lists connected clients, then cannot see it. /readyz runs SELECT 1 on
+// the controller's own pool, so probing it keeps the controller connected however
+// long each maintenance command takes. Returns a stop function.
+async function keepControllerConnected(app) {
+  const probe = async () => {
+    const ready = await app.inject({ url: "/readyz" });
+    assert.equal(ready.statusCode, 200, ready.body);
+  };
+  await probe();
+  let failure;
+  let running;
+  const timer = setInterval(() => {
+    running ??= probe()
+      .catch((error) => {
+        failure ??= error;
+      })
+      .finally(() => {
+        running = undefined;
+      });
+  }, 500);
+  return async () => {
+    clearInterval(timer);
+    await running;
+    if (failure !== undefined) {
+      throw failure;
+    }
+  };
+}
+
 // Break-glass when the recovery password is lost: with the API stopped, auth:maintain
 // resets it (GitHub may be down), and deactivation returns the Installation to the
 // password-only default, which then starts without any GitHub configuration.
@@ -129,14 +160,19 @@ test(
       assert.equal(status.code, 0, status.stderr);
       assert.equal(status.output.profile, "guarded");
       assert.equal(status.output.designation.userId, admin.id);
-      for (const args of [
-        ["reset-recovery-password", "--password-file", passwordFile, "--writers-stopped"],
-        ["deactivate", "--writers-stopped"],
-      ]) {
-        const refused = await maintain(args);
-        assert.equal(refused.code, 2, `${args[0]}: ${refused.stderr}`);
-        assert.equal(refused.output.event, "auth-maintain.writers-running");
-        assert.ok(refused.output.backends.some(({ user }) => user === "occ_app"));
+      const stopProbing = await keepControllerConnected(app);
+      try {
+        for (const args of [
+          ["reset-recovery-password", "--password-file", passwordFile, "--writers-stopped"],
+          ["deactivate", "--writers-stopped"],
+        ]) {
+          const refused = await maintain(args);
+          assert.equal(refused.code, 2, `${args[0]}: ${refused.stderr}`);
+          assert.equal(refused.output.event, "auth-maintain.writers-running");
+          assert.ok(refused.output.backends.some(({ user }) => user === "occ_app"));
+        }
+      } finally {
+        await stopProbing();
       }
       assert.equal(
         (await currentSession(app, adminHeaders.cookie)).user.id,
