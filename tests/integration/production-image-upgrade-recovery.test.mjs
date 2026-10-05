@@ -22,7 +22,7 @@ const oldRuntime = `registry.example.invalid/runtime@sha256:${"c".repeat(64)}`;
 const executable = `#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const root = process.env.UPGRADE_FIXTURE;
 const tool = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
@@ -33,13 +33,57 @@ const log = (value) => fs.appendFileSync(path.join(root, 'events'), value + '\\n
 const take = (name) => { const p = path.join(root, name); if (!fs.existsSync(p)) return false; fs.unlinkSync(p); return true; };
 const out = (value) => process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value));
 const fileArg = (name) => args[args.indexOf(name) + 1];
+const yq = (expression, file) => execFileSync('yq', ['-p=yaml', '-r', expression, file], {encoding: 'utf8'}).trim();
+// Unless a case selects the real chart, a stand-in renders only what the startup
+// preflight reads: each controller container's image and Installation mount.
+const standInChart = (values) => {
+  const secretName = yq('.installation.secretName // "occ-installation-startup"', values);
+  const key = yq('.installation.key // "installation.yaml"', values);
+  const deployment = (component, placement) => ({kind: 'Deployment', metadata: {name: 'openclaw-enterprise-' + component}, spec: {template: {spec: {serviceAccountName: 'openclaw-enterprise-' + component, volumes: [{name: 'installation-startup', secret: {secretName, items: [{key, path: 'installation.yaml'}]}}], [placement]: [{name: component, image: yq('.images.controller', values), env: [{name: 'OCC_CONFIG_PATH', value: '/etc/openclaw/installation/installation.yaml'}], volumeMounts: [{name: 'installation-startup', mountPath: '/etc/openclaw/installation', readOnly: true}]}]}}}});
+  const repository = yq('.repositoryCredentials.enabled // false', values) === 'true';
+  return [deployment('api', 'containers'), deployment('worker', repository ? 'initContainers' : 'containers')].map((document) => '---\\n' + JSON.stringify(document) + '\\n').join('');
+};
+// Starts the preflight Pod's container once with its Secret volumes and literal
+// environment. Other cluster inputs (Secret-backed env, CA and token volumes) are
+// not provided. The container runs in OCC_TEST_PRODUCTION_IMAGE when set, otherwise
+// as this checkout's source with /app mapped to it. Stand-in cases only record it.
+const runPreflight = (pod) => {
+  if (!state.startupCheck) return {phase: 'Succeeded', log: 'installation-startup-ready\\n'};
+  const container = pod.spec.containers[0];
+  const work = fs.mkdtempSync(path.join(root, 'preflight-'));
+  fs.chmodSync(work, 0o755);
+  const mounts = [];
+  for (const mount of container.volumeMounts ?? []) {
+    const volume = pod.spec.volumes.find((item) => item.name === mount.name);
+    const secret = volume?.secret && state.preflight.secrets[volume.secret.secretName];
+    if (!secret) continue;
+    const directory = path.join(work, mount.name);
+    // The helper's umask is 077; the image's unprivileged user must still read the mount.
+    fs.mkdirSync(directory);
+    fs.chmodSync(directory, 0o755);
+    for (const item of volume.secret.items) {
+      fs.writeFileSync(path.join(directory, item.path), Buffer.from(secret.data[item.key], 'base64'));
+      fs.chmodSync(path.join(directory, item.path), 0o644);
+    }
+    mounts.push([directory, mount.mountPath]);
+  }
+  const env = (container.env ?? []).filter((item) => typeof item.value === 'string');
+  const image = process.env.OCC_TEST_PRODUCTION_IMAGE;
+  const result = image
+    ? spawnSync('docker', ['run', '--rm', '--network', 'none', ...mounts.flatMap(([source, target]) => ['--mount', 'type=bind,src=' + source + ',dst=' + target + ',readonly']), ...env.flatMap((item) => ['--env', item.name + '=' + item.value]), '--entrypoint', container.command[0], image, ...container.args], {encoding: 'utf8'})
+    : (() => {
+      const local = (value) => mounts.reduce((current, [source, target]) => current.split(target).join(source), value).split('/app/apps/').join(process.cwd() + '/apps/');
+      return spawnSync(process.execPath, container.args.map(local), {encoding: 'utf8', env: Object.fromEntries(env.map((item) => [item.name, local(item.value)]))});
+    })();
+  return {phase: result.status === 0 ? 'Succeeded' : 'Failed', log: (result.stdout ?? '') + (result.stderr ?? '')};
+};
 if (tool === 'helm') {
   if (args[0] === 'status') {
     out(args.includes('json') ? {version: state.version, info: {status: state.helmStatus}} : state.helmStatus);
   } else if (args[0] === 'get') {
     out(fs.readFileSync(path.join(root, 'live-values'), 'utf8'));
   } else if (args[0] === 'template') {
-    out('rendered');
+    out(state.realChart ? execFileSync(process.env.REAL_HELM, args, {encoding: 'utf8'}) : standInChart(fileArg('--values')));
   } else if (args[0] === 'upgrade' && !args.includes('--dry-run=server')) {
     if (state.api !== 0 || state.worker !== 0) { console.error('old writers were not stopped'); process.exit(2); }
     log('migration');
@@ -55,7 +99,24 @@ if (tool === 'helm') {
     if (take('lost-helm-response')) process.exit(9);
   }
 } else if (tool === 'kubectl') {
-  if (args.includes('--raw=/readyz')) out('ok');
+  state.preflight ??= {secrets: {}, pods: {}, deleted: []};
+  const resource = args.find((a) => /^(pod|secret)\\//.test(a));
+  if (args.includes('create') && args.includes('--filename')) {
+    const source = fileArg('--filename');
+    const object = JSON.parse(fs.readFileSync(source === '-' ? 0 : source, 'utf8'));
+    if (object.kind === 'Secret') state.preflight.secrets[object.metadata.name] = object;
+    else state.preflight.pods[object.metadata.name] = {...runPreflight(object), spec: object.spec};
+    save();
+  } else if (resource && args.includes('delete')) {
+    const [kind, name] = resource.split('/');
+    delete state.preflight[kind + 's'][name];
+    state.preflight.deleted.push(resource);
+    save();
+  } else if (resource && (args.includes('get') || args.includes('logs'))) {
+    const pod = state.preflight.pods[resource.slice('pod/'.length)];
+    if (!pod) { console.error(resource + ' not found'); process.exit(1); }
+    out(args.includes('logs') ? pod.log : {status: {phase: pod.phase}});
+  } else if (args.includes('--raw=/readyz')) out('ok');
   else if (args.includes('create') && args.includes('secret')) {
     const file = args.find((a) => a.startsWith('--from-file=')).slice('--from-file='.length).split('=');
     out({metadata: {name: 'occ-installation-startup'}, data: {[file[0]]: fs.readFileSync(file[1]).toString('base64')}});
@@ -154,6 +215,11 @@ if (tool === 'helm') {
 // run must stop at that fault and not at an earlier refusal.
 const injectedFault = { code: 9 };
 
+// The fixture's helm stands in for the real binary; chart cases still render with it.
+const realHelm = (
+  await execute("bash", ["-c", "command -v helm"]).catch(() => ({ stdout: "" }))
+).stdout.trim();
+
 const shippedCollectorConfig = (key) => readFile(join(repository, "deploy/logging", key));
 
 // The bundled Collector's operator-created config Secret, as created from
@@ -192,6 +258,7 @@ async function fixture(
     simulatePair = false,
     workerPlacement = "container",
     collector = null,
+    chart = null,
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
@@ -222,7 +289,7 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
     await chmod(path, 0o755);
   }
   const collectorSecretName = "occ-demo-collector-config";
-  const values = JSON.stringify({
+  let values = JSON.stringify({
     images: { controller },
     ...(collector
       ? { logging: { collector: { enabled: true, configSecretName: collectorSecretName } } }
@@ -240,7 +307,7 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
         }
       : {}),
   });
-  const installation = JSON.stringify({
+  let installation = JSON.stringify({
     ...(repositoryCredentials
       ? {
           backend: [
@@ -286,7 +353,34 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
       },
     },
   });
+  if (chart) {
+    // The release's example values and Installation, rendered by the real chart.
+    const example = async (name) =>
+      JSON.parse(
+        (
+          await execute("yq", [
+            "-o=json",
+            ".",
+            join(repository, "deploy/examples/production", name),
+          ])
+        ).stdout,
+      );
+    const exampleValues = await example("values.yaml");
+    exampleValues.images.controller = controller;
+    exampleValues.installation = {
+      secretName: "occ-installation-startup",
+      key: "installation.yaml",
+    };
+    values = JSON.stringify(exampleValues);
+    const exampleInstallation = await example("installation.yaml");
+    exampleInstallation.drivers.compute.configuration.network.gatewayTrustedProxyCidrs = [
+      "10.42.0.0/16",
+    ];
+    installation = JSON.stringify(chart.installation(exampleInstallation));
+  }
   const state = {
+    realChart: Boolean(chart),
+    startupCheck: Boolean(chart),
     version: 1,
     helmStatus: "deployed",
     api: 1,
@@ -376,6 +470,7 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
     UPGRADE_FIXTURE: directory,
+    REAL_HELM: realHelm,
     OCC_URL: "https://occ.example.invalid",
     OCC_SERVICE_KEY_FILE: join(directory, "key"),
   };
@@ -900,4 +995,72 @@ test("a current or explicitly reviewed Collector config Secret lets the upgrade 
       assert.equal(drift, collector === "stale" ? "collector.yaml\nkubernetes.yaml" : "");
     });
   }
+});
+
+// The 2026-09-28 release example offered DevDay Presets through presets.files; later
+// images no longer ship those files (finding 436). The selected controller image must
+// reject that Installation before quiescence, so the old release keeps serving.
+test("an Installation the selected controller image cannot load stops before any writer stops", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
+  const f = await fixture(t, {
+    controllerOnly: true,
+    chart: {
+      installation: (installation) => ({
+        ...installation,
+        presets: { includeDefaults: true, files: ["/app/deploy/presets/devday.json"] },
+      }),
+    },
+  });
+  await assert.rejects(f.run(), (error) =>
+    /cannot start the api with the candidate Installation: .*Preset file \/app\/deploy\/presets\/devday\.json is unavailable\..*No OCC writer was stopped/s.test(
+      error.stderr,
+    ),
+  );
+  const state = await f.state();
+  assert.equal(state.api, 1);
+  assert.equal(state.worker, 1);
+  assert.equal(state.version, 1);
+  assert.deepEqual(await f.events(), []);
+  // The temporary Secret and both Pods are removed after the refusal.
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
+  assert.deepEqual(state.preflight.deleted.map((resource) => resource.split("/")[0]).sort(), [
+    "pod",
+    "pod",
+    "secret",
+  ]);
+});
+
+test("an Installation the selected controller image loads passes the preflight and upgrades", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
+  const f = await fixture(t, {
+    controllerOnly: true,
+    chart: { installation: (installation) => installation },
+  });
+  await f.run();
+  const state = await f.state();
+  assert.equal(state.controller, newController);
+  assert.deepEqual(await f.events(), ["scale-api", "scale-worker", "migration"]);
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
+  const pod = JSON.parse(await readFile(join(f.evidence, "preflight-worker-pod.json"), "utf8"));
+  // The Pod runs the selected image with the chart's service account and Installation mount.
+  assert.equal(pod.spec.containers[0].image, newController);
+  assert.equal(pod.spec.serviceAccountName, "openclaw-enterprise-worker");
+  assert.equal(
+    pod.spec.volumes.find((volume) => volume.name === "installation-startup").secret.secretName,
+    state.preflight.deleted
+      .find((resource) => resource.startsWith("secret/"))
+      .slice("secret/".length),
+  );
+  assert.match(
+    await readFile(join(f.evidence, "preflight-api.log"), "utf8"),
+    /^installation-startup-ready$/m,
+  );
 });
