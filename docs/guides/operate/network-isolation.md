@@ -145,9 +145,9 @@ must be `OPEN`; skip any target your network blocks for every Pod. `ENVOY` and
 the Agent ports deny the control Pod, because their ingress policies admit only
 their peers; the API row shows that `ENVOY` listens.
 
-The test Pods use the installed controller image. If a node cannot pull it,
-create the release's pull Secret in the test Pod's namespace and add
-`imagePullSecrets` to the Pod.
+The test Pods use the installed controller image and need the node's own pull
+access, as the OCE Pods do; OCE renders no pull Secret. Don't add `imagePullSecrets`
+([why](../deploy/production-installation.md#use-published-images)).
 
 ## Run the checks
 

@@ -23,9 +23,14 @@ Use `ghcr.io/openclaw/openclaw-enterprise-controller:latest` and
 `CONTROLLER_IMAGE` and `RUNTIME_IMAGE` and selects the matching checkout and
 chart. Complete it before generating configuration; then skip the build section.
 
-Public GHCR pulls need no pull Secret. For private registry copies, configure
-pull credentials for control-plane and tenant Pods; workstation `docker login`
-does not authenticate cluster nodes.
+Public GHCR pulls need no pull Secret. For private registry copies, give every node
+that runs control-plane or tenant Pods its own pull access, such as a node IAM role or
+the node's registry configuration. OCE adds no `imagePullSecrets` to the Pods it
+creates, and workstation `docker login` does not authenticate cluster nodes. Don't
+pull an OCE image through a Pod's `imagePullSecrets` either: where kubelet verifies
+pull credentials (`KubeletEnsureSecretPulledImages`), every later Pod using that image
+on the node, including the API, worker and initialization Job, must then pull it again,
+which fails without node access.
 
 ## Build and publish production images
 
@@ -454,7 +459,8 @@ including its [model-response check](production-agents.md#verify-production-work
 
 ## Enable GitHub browser sign-in
 
-The published controller lacks GitHub sign-in; [build a compatible image](#build-and-publish-production-images).
+Use a controller image that includes GitHub sign-in: a [published image](#use-published-images)
+from a revision that has it, or [your own build](#build-and-publish-production-images).
 Follow the [single-controller profile](../../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
 during stopped maintenance, after first installing without GitHub as above.
 

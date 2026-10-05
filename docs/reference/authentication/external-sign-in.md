@@ -244,12 +244,12 @@ session. A stale
 
 Send the version just read, such as `{"expectedVersion":1}`:
 
-| Operation                                                  | Effect                                                                                     |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `POST /api/auth/accounts/:userId/disable`                  | Disables the account, invalidating sessions and pending proofs; refuses the recovery user. |
-| `POST /api/auth/accounts/:userId/enable`                   | Re-enables a disabled account; users sign in again.                                        |
-| `POST /api/auth/accounts/:userId/revoke`                   | Invalidates all account sessions and pending proofs; fresh sign-in still works.            |
-| `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and its sessions; password methods return `409`.    |
+| Operation                                                  | Effect                                                                                                |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/accounts/:userId/disable`                  | Disables the account, invalidating sessions and pending proofs; refuses the recovery user.            |
+| `POST /api/auth/accounts/:userId/enable`                   | Re-enables a disabled account; users sign in again.                                                   |
+| `POST /api/auth/accounts/:userId/revoke`                   | Invalidates all account sessions and pending proofs; fresh sign-in still works.                       |
+| `POST /api/auth/accounts/:userId/methods/:methodId/detach` | Removes one attached external identity and ends every account session; password methods return `409`. |
 
 `POST /api/auth/accounts/:userId/enrol` (no body) enrolls a skipped account holding
 its Principal and one password. These operations serialize with session issuance
