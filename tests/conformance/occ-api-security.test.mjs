@@ -17,7 +17,11 @@ import {
   createRuntimeLogFixture,
   operateGrants,
 } from "../helpers/runtime-logs.mjs";
-import { createTenantReaderFixture, tenantANamespaceId } from "../helpers/tenant-reader-app.mjs";
+import {
+  createTenantReaderFixture,
+  tenantANamespaceId,
+  tenantRequest as request,
+} from "../helpers/tenant-reader-app.mjs";
 
 const installationId = "ins_3033697e-6397-4cc6-9b04-8ec17af78cf1";
 const missingRevisionId = "rev_3dd29693-ce8b-4b4c-97c4-14b4c68c6e9c";
@@ -59,53 +63,6 @@ function createFixture(options = {}) {
     }),
     options,
   });
-}
-
-async function request(app, pathname, options = {}) {
-  const headers = new Headers(
-    options.identity === false ? {} : authenticatedHeaders(options.session ?? app.defaultSession),
-  );
-
-  for (const [name, value] of Object.entries(options.headers ?? {})) {
-    if (value === null) {
-      headers.delete(name);
-    } else {
-      headers.set(name, value);
-    }
-  }
-
-  const hasBody = Object.hasOwn(options, "body");
-  if (hasBody && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  const body = hasBody
-    ? typeof options.body === "string"
-      ? options.body
-      : JSON.stringify(options.body)
-    : undefined;
-  const response = await app.fetch(
-    new Request(new URL(pathname, options.origin ?? "http://127.0.0.1"), {
-      method: options.method ?? (hasBody ? "POST" : "GET"),
-      headers,
-      ...(body === undefined ? {} : { body }),
-    }),
-  );
-  const contentType = response.headers.get("content-type");
-  assert.match(contentType ?? "", /^application\/json\b/i);
-  const payload = await response.json();
-  assert.match(
-    payload.meta?.requestId ?? "",
-    /^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-  );
-
-  if (response.ok) {
-    assert.ok(Object.hasOwn(payload, "data"));
-  } else {
-    assert.equal(typeof payload.error?.code, "string");
-    assert.equal(typeof payload.error?.message, "string");
-  }
-
-  return { response, payload };
 }
 
 async function bootstrap(fixture) {
