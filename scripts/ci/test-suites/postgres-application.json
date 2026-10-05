@@ -53,6 +53,13 @@
         "revision dispatch refuses a different selected Secret Driver before binding or activating the Agent",
         "revision dispatch never substitutes a later ChatGPT credential or reconfigured Backend for its admitted snapshot"
       ]
+    },
+    {
+      "path": "tests/integration/auth-maintain.test.mjs",
+      "expectedTests": [
+        "auth:maintain requires an explicit writers-stopped claim for every change",
+        "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
+      ]
     }
   ]
 }
