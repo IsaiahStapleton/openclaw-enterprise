@@ -77,6 +77,7 @@ const runPreflight = (pod) => {
   const env = (container.env ?? []).filter((item) => typeof item.value === 'string');
   const image = process.env.OCC_TEST_PRODUCTION_IMAGE;
   const result = image
+    // Host networking reaches the test's loopback Kubernetes API only with rootful Docker.
     ? spawnSync('docker', ['run', '--rm', ...(state.kubeconfig ? ['--network', 'host', '--mount', 'type=bind,src=' + state.kubeconfig + ',dst=' + state.kubeconfig + ',readonly'] : ['--network', 'none']), ...mounts.flatMap(([source, target]) => ['--mount', 'type=bind,src=' + source + ',dst=' + target + ',readonly']), ...env.flatMap((item) => ['--env', item.name + '=' + item.value]), '--entrypoint', container.command[0], image, ...container.args], {encoding: 'utf8'})
     : (() => {
       const local = (value) => mounts.reduce((current, [source, target]) => current.split(target).join(source), value).split('/app/apps/').join(process.cwd() + '/apps/');
@@ -107,8 +108,8 @@ if (tool === 'helm') {
   }
 } else if (tool === 'kubectl') {
   state.preflight ??= {secrets: {}, pods: {}, networkpolicies: {}, deleted: []};
-  const resource = args.find((a) => /^(pod|secret|networkpolicy)\\//.test(a));
-  const collection = {pod: 'pods', secret: 'secrets', networkpolicy: 'networkpolicies'};
+  const resource = args.find((a) => /^(pod|secret|networkpolicy\\.networking\\.k8s\\.io)\\//.test(a));
+  const collection = {pod: 'pods', secret: 'secrets', 'networkpolicy.networking.k8s.io': 'networkpolicies'};
   if (args.includes('create') && args.includes('--filename')) {
     const source = fileArg('--filename');
     const object = JSON.parse(fs.readFileSync(source === '-' ? 0 : source, 'utf8'));
@@ -263,7 +264,7 @@ async function collectorConfigSecret(name, collector) {
 // with a bearer token, from the Namespaces a case seeds. The real Kubernetes
 // Compute Driver in the preflight Pod decides whether that state may start; this
 // is not live cluster or RBAC proof.
-async function kubernetesApi(t, directory, namespaces) {
+async function kubernetesApi(t, directory, namespaces, denied) {
   const certificate = join(directory, "kubernetes-api.crt");
   const key = join(directory, "kubernetes-api.key");
   await execute("openssl", [
@@ -292,7 +293,11 @@ async function kubernetesApi(t, directory, namespaces) {
         response.writeHead(status, { "content-type": "application/json" });
         response.end(JSON.stringify(body));
       };
-      if (request.method !== "GET" || request.headers.authorization !== "Bearer preflight-token") {
+      if (
+        denied ||
+        request.method !== "GET" ||
+        request.headers.authorization !== "Bearer preflight-token"
+      ) {
         reply(403, { kind: "Status", apiVersion: "v1", status: "Failure", code: 403 });
         return;
       }
@@ -352,6 +357,7 @@ async function fixture(
     chart = null,
     preflightResults = null,
     kubernetesNamespaces = [],
+    kubernetesDenied = false,
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "occ-upgrade-recovery-"));
@@ -472,7 +478,7 @@ if (args[0] === 'scripts/upgrade-repository-image-probe.mjs') {
     ];
     // Outside a cluster the preflight Pod has no service account, so Compute
     // reaches the stand-in Kubernetes API through an explicit kubeconfig.
-    api = await kubernetesApi(t, directory, kubernetesNamespaces);
+    api = await kubernetesApi(t, directory, kubernetesNamespaces, kubernetesDenied);
     exampleInstallation.drivers.compute.configuration.authentication = {
       mode: "kubeconfig",
       kubeconfigPath: api.kubeconfig,
@@ -1224,7 +1230,7 @@ test("an Installation the selected controller image cannot load stops before any
   assert.deepEqual(state.preflight.pods, {});
   assert.deepEqual(state.preflight.networkpolicies, {});
   assert.deepEqual(state.preflight.deleted.map((resource) => resource.split("/")[0]).sort(), [
-    "networkpolicy",
+    "networkpolicy.networking.k8s.io",
     "pod",
     "pod",
     "secret",
@@ -1272,6 +1278,37 @@ test("split-layout Gateway storage stops the startup preflight before any writer
   assert.equal(state.version, 1);
   assert.deepEqual(await f.events(), []);
   assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
+  assert.deepEqual(state.preflight.networkpolicies, {});
+});
+
+// A Kubernetes API the preflight Pod cannot use is not a refusal of the release:
+// the helper says so, names the access the Pod had, and still stops first.
+test("a denied Kubernetes API stops the startup preflight as incomplete", async (t) => {
+  if (!realHelm) {
+    t.skip("helm is unavailable to render the real chart");
+    return;
+  }
+  const f = await fixture(t, {
+    controllerOnly: true,
+    chart: { installation: (installation) => installation },
+    kubernetesDenied: true,
+  });
+  await assert.rejects(f.run(), (error) => {
+    for (const component of ["api", "worker"]) {
+      assert.match(
+        error.stderr,
+        new RegExp(
+          `the ${component} startup preflight stopped: Kubernetes Compute startup preflight could not complete: .* No OCC writer was stopped; the old release keeps serving\\. The Pod uses the installed release's service account and RBAC`,
+        ),
+      );
+    }
+    assert.doesNotMatch(error.stderr, /refused the candidate release|split-layout/);
+    return true;
+  });
+  const state = await f.state();
+  assert.equal(state.version, 1);
+  assert.deepEqual(await f.events(), []);
   assert.deepEqual(state.preflight.pods, {});
   assert.deepEqual(state.preflight.networkpolicies, {});
 });
@@ -1417,5 +1454,7 @@ test("an Installation the selected controller image loads passes the preflight a
     ).spec.egress,
   );
   assert.deepEqual(state.preflight.networkpolicies, {});
-  assert.ok(state.preflight.deleted.includes(`networkpolicy/${policy.metadata.name}`));
+  assert.ok(
+    state.preflight.deleted.includes(`networkpolicy.networking.k8s.io/${policy.metadata.name}`),
+  );
 });

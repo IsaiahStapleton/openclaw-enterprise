@@ -284,7 +284,7 @@ preflight_startup() {
     "$secret" "$namespace" "$release" >"$evidence_dir/preflight-networkpolicy.json" ||
     die "cannot build the startup preflight NetworkPolicy from the rendered chart; no OCC writer was stopped."
   if [[ "$(cat "$evidence_dir/preflight-networkpolicy.json")" != null ]]; then
-    preflight_resources+=("networkpolicy/$secret")
+    preflight_resources+=("networkpolicy.networking.k8s.io/$secret")
     "${kube[@]}" --request-timeout=30s --namespace "$namespace" create \
       --filename "$evidence_dir/preflight-networkpolicy.json" >/dev/null ||
       die "cannot create the startup preflight NetworkPolicy $secret; no OCC writer was stopped."
@@ -350,14 +350,14 @@ preflight_startup() {
           message="the $component startup preflight Pod cannot start (${phase#Stuck:}); no OCC writer was stopped."
           ;;
         *)
-          refusal=$(grep -m 1 '^Kubernetes Compute startup preflight refused the candidate release:' \
+          refusal=$(grep -m 1 -E '^Kubernetes Compute startup preflight (refused the candidate release|could not complete):' \
             "$evidence_dir/preflight-$component.log" | cut -c 1-600 || true)
           if [[ -n "$refusal" ]]; then
             message="the $component startup preflight stopped: $refusal No OCC writer was stopped; the old release keeps serving."
             if [[ "$refusal" == *split-layout* ]]; then
               message+=" See docs/reference/drivers/kubernetes-compute.md#existing-split-layout-installations."
             else
-              message+=" The Pod has only the chart's dependency egress (preflight-networkpolicy.json)."
+              message+=" The Pod uses the installed release's service account and RBAC and only the chart's dependency egress (preflight-networkpolicy.json); fix its Kubernetes API access and start again with a new evidence directory."
             fi
           else
             message=$(tail -n 3 "$evidence_dir/preflight-$component.log" | tr '\n' ' ' | cut -c 1-600)

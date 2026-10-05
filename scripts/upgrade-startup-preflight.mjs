@@ -5,8 +5,11 @@
 // API and worker do at startup, without a database.
 import { readFileSync } from "node:fs";
 
-// Printed before the image's own message when Compute preflight refuses startup.
+// Printed before the image's own message when Compute preflight stops startup:
+// a refusal is the Driver's ConfigurationFailure (such as split-layout storage);
+// anything else, such as a denied or unreachable Kubernetes API, is incomplete.
 const computeRefusal = "Kubernetes Compute startup preflight refused the candidate release:";
+const computeIncomplete = "Kubernetes Compute startup preflight could not complete:";
 
 // Runs inside the controller image. It reads OCC_CONFIG_PATH and the chart's
 // environment, loads Drivers and Preset files, and never opens the database.
@@ -36,7 +39,13 @@ try {
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(${JSON.stringify(computeRefusal)} + " " + message + "\\n");
+  const refused = error?.constructor?.name === "ConfigurationFailure";
+  process.stderr.write(
+    (refused ? ${JSON.stringify(computeRefusal)} : ${JSON.stringify(computeIncomplete)}) +
+      " " +
+      message +
+      "\\n",
+  );
   process.exit(1);
 }
 process.stdout.write("installation-startup-ready\\n");

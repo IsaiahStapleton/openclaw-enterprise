@@ -90,8 +90,8 @@ mounts, service account) into a one-shot Pod whose Installation volume reads a
 temporary Secret holding the candidate. The Pod runs `loadStartupConfigurationSnapshot`
 and `loadInstallationConfiguration`, which resolve Drivers and Preset files
 without the database. With the bundled Kubernetes Compute Driver it then runs
-`KubernetesComputeDriver.preflight` with the Pod's service account, as API and
-worker startup do; that check refuses, for example, single-cluster
+`KubernetesComputeDriver.preflight` with the Pod's Kubernetes credentials (its
+service account in `inCluster` mode), as API and worker startup do; that check refuses, for example, single-cluster
 [split-layout Gateway storage](../reference/drivers/kubernetes-compute.md#existing-split-layout-installations).
 Because the chart's default-deny NetworkPolicy also selects these Pods, the
 helper first creates a temporary NetworkPolicy carrying the rendered

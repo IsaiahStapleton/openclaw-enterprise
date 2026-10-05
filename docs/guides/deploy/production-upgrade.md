@@ -268,15 +268,15 @@ Before it stops anything, the command runs a startup preflight: one-shot API and
 worker Pods on the selected controller image, built from the rendered chart (same
 environment, mounts and service account), with the candidate Installation in a
 temporary Secret and the chart's API and worker dependency egress in a temporary
-NetworkPolicy. Each loads the Installation, Drivers and `presets.files` and runs
-Kubernetes Compute preflight as startup does, without opening the database. If
-either fails, as when a listed Preset file is missing from the image or
-split-layout tenants remain, the command prints each failure, deletes these
-resources, and stops; the old release keeps serving. Logs and status are saved as
-`preflight-<api|worker>.log` and `-status.json`, up to about 90 seconds past
-`--timeout-seconds`. Runtime upgrades run it on the current controller image. If
-the helper is killed first, delete what it left with
-`kubectl delete pod,secret,networkpolicy -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=upgrade-preflight`.
+NetworkPolicy. Each loads the Installation, Drivers and `presets.files`, then
+runs the bundled Kubernetes Compute Driver's preflight as startup does, without
+opening the database. If either fails, as when a listed Preset file is missing
+from the image or split-layout tenants remain, the command prints each failure,
+deletes these resources, and stops; the old release keeps serving. Logs and
+status are saved as `preflight-<api|worker>.log` and `-status.json`, taking up
+to about 90 seconds past `--timeout-seconds`. Runtime upgrades use the current
+controller image. If the helper is killed, delete its leftovers with
+`kubectl delete pod,secret,networkpolicy.networking.k8s.io -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=upgrade-preflight`.
 
 The command then applies reviewed settings, scales the API and worker to zero, and
 waits for their Pods to terminate. Helm restores the candidate Deployments after
