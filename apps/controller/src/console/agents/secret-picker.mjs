@@ -175,6 +175,8 @@ export function createSecretReferenceField({
   let loaded = false;
   let loading = false;
   let selectedSecret = null;
+  // Set once a binding is staged, so a Secret list that arrives later keeps its hint.
+  let staged = false;
   let manuallyDisabled = disabled;
   let requiredWhenEnabled = required;
   let listboxOpen = false;
@@ -377,6 +379,7 @@ export function createSecretReferenceField({
         secrets.push(secret);
       }
       setSecretOptions();
+      staged = true;
       status.textContent = stagedHint;
     } finally {
       updateValidity();
@@ -588,20 +591,21 @@ export function createSecretReferenceField({
         if (!isCurrent()) {
           return;
         }
-        secrets.splice(
-          0,
-          secrets.length,
-          ...(Array.isArray(items)
-            ? items.filter((item) => isSecretMetadata(item, context.namespaceId))
-            : []),
-        );
+        const listed = Array.isArray(items)
+          ? items.filter((item) => isSecretMetadata(item, context.namespaceId))
+          : [];
+        // A Secret created or chosen while this read was pending is newer than the list.
+        const added = secrets.filter((secret) => !listed.some((item) => item.id === secret.id));
+        secrets.splice(0, secrets.length, ...listed, ...added);
         loaded = true;
         loading = false;
         setSecretOptions({ preserveSearch: true });
-        status.className = "hint";
-        status.textContent = secrets.length
-          ? "Choose an existing Secret or create a new one."
-          : "No readable Secrets yet. Create a new Secret to bind this field.";
+        if (!staged) {
+          status.className = "hint";
+          status.textContent = secrets.length
+            ? "Choose an existing Secret or create a new one."
+            : "No readable Secrets yet. Create a new Secret to bind this field.";
+        }
         updateValidity();
       })
       .catch((error) => {
