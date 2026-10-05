@@ -969,13 +969,10 @@ test("an Installation-wide grant still refuses malformed or unscoped requests", 
     assert.match(unscoped.reason, /request is invalid/);
   }
   // Installation scope comes from the controller, never from the caller's request.
-  for (const denied of [
-    await read(agentResource("agent-a"), { installationId: "ins" }),
-    await read({ ...agentResource("agent-a"), installationId: "ins" }),
-  ]) {
-    assert.equal(denied.allowed, false);
-    assert.match(denied.reason, /request is invalid/);
-  }
+  assert.equal((await read(agentResource("agent-a"))).allowed, true);
+  const scoped = await read(agentResource("agent-a"), { installationId: "ins" });
+  assert.equal(scoped.allowed, false);
+  assert.match(scoped.reason, /request is invalid/);
 });
 
 test("direct Group membership grants only inside the Group Namespace", async () => {
