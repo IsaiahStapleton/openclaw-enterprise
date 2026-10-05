@@ -619,9 +619,11 @@ test("service API keys authenticate scoped automation without replacing sessions
     // The key's fixed Namespace refuses every other route before IAM is asked, and the
     // refusal is audited against the key's service principal.
     for (const other of [`/namespaces/${tenantB.data.id}`, "/installation"]) {
+      const eventsBefore = auditSink.events.length;
       const denied = await request("GET", other, { headers });
       assert.equal(denied.status, 403);
       assert.equal(denied.error.message, "The admitted Namespace does not match.");
+      assert.equal(auditSink.events.length, eventsBefore + 1);
       const audit = auditSink.events.at(-1);
       assert.equal(audit.kind, "authorization_denial");
       assert.equal(audit.actorId, principal.id);
@@ -940,6 +942,7 @@ test("service API keys authenticate scoped automation without replacing sessions
       await alter({});
       assert.equal(await read(), 200);
     } finally {
+      await alter({});
       for (const identity of [agentPrincipal, unscopedPrincipal]) {
         policy.identities.splice(policy.identities.indexOf(identity), 1);
         policy.bindings.splice(

@@ -543,12 +543,14 @@ test("bootstrap without Installation administer is refused and audited", async (
   ];
   const fixture = await createFixture({ restrictions });
 
+  const eventsBefore = fixture.auditSink.events.length;
   const denied = await request(fixture.app, "/installation/bootstrap", {
     body: { name: "Refused Installation" },
   });
   assert.equal(denied.response.status, 403);
   assert.equal(denied.payload.error.code, "FORBIDDEN");
   assert.equal(fixture.controller, undefined);
+  assert.equal(fixture.auditSink.events.length, eventsBefore + 1);
   const deniedEvent = fixture.auditSink.events.at(-1);
   assert.equal(deniedEvent.kind, "authorization_denial");
   assert.equal(deniedEvent.actorId, fixture.administrator.id);
