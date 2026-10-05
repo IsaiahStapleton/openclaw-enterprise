@@ -38,8 +38,9 @@ and who can stop affected workloads if access must be revoked immediately.
 For routine renewal, follow [issue a service key](../../reference/authentication/service-api-keys.md#issue-a-service-key)
 using an authorized administrator. Store the one-time value privately and retain
 its non-secret ID and expiry. Switch the client to the replacement, then exercise
-an operation the client normally performs. Verify that its permissions allow
-that operation and reject one outside its grants.
+an operation the client normally performs. For a principal with narrower grants
+than the Installation service administrator, also check that an operation
+outside them returns `403`.
 
 Only after that check, [revoke the old key](../../reference/authentication/service-api-keys.md#revoke-or-rotate-a-service-key)
 and verify that it returns `401`. Issuing or revoking a key does not change IAM
