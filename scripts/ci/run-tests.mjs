@@ -138,6 +138,7 @@ function fileModes(lane, laneName, files, issues) {
     }
     if (seen.has(file)) {
       issues.push(issue("invalid-manifest", `${path}.parallelFiles lists ${file} twice`));
+      continue;
     }
     if (isObject(serial) && Object.hasOwn(serial, file)) {
       issues.push(issue("invalid-manifest", `${path}.parallelFiles ${file} is also serial`));
@@ -508,7 +509,9 @@ const maxReporterBytes = 50 * 1024 * 1024;
 
 // spawnSync's contract, without blocking the runner while other files run: stdout
 // is kept up to maxReporterBytes (ENOBUFS past it), stdin is closed at once, and the
-// timeout sends SIGTERM and reports ETIMEDOUT. Child stderr is not retained.
+// timeout sends SIGTERM and reports ETIMEDOUT. Like spawnSync, stopping also closes
+// the pipes, so a grandchild holding them cannot keep the file running. Child
+// stderr is not retained.
 function runNode(args, { cwd, env, timeout }) {
   return new Promise((resolvePromise) => {
     const chunks = [];
@@ -520,10 +523,14 @@ function runNode(args, { cwd, env, timeout }) {
       if (error === undefined) {
         error = Object.assign(new Error(`child ${code}`), { code });
         child.kill("SIGTERM");
+        child.stdout.destroy();
+        child.stderr.destroy();
       }
     };
     const timer = setTimeout(() => stop("ETIMEDOUT"), timeout);
-    child.stdin.on("error", () => {});
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", () => {});
+    }
     child.stdin.end();
     child.stderr.resume();
     child.stdout.on("data", (chunk) => {
@@ -753,7 +760,8 @@ async function runFile(root, lane, file, statePath, prepareFile, setup = (step) 
     );
   } finally {
     // Capture before cleanup so passing k3d runs keep their Agent Pod timeline.
-    await agentActivity?.finish();
+    // The capture updates the lane's diagnostics file; keep it out of other setup.
+    await setup(async () => agentActivity?.finish());
     if (prepared.cleanup) {
       try {
         await setup(prepared.cleanup);
@@ -872,8 +880,10 @@ async function runLane(root, manifest, laneName, statePath, resultsPath) {
       const fileStarted = performance.now();
       const result = await runFile(root, lane, lane.files[index], statePath, prepareFile, setup);
       result.mode = mode;
+      // Round both ends, so start + duration is the rounded end and never passes a
+      // later file's start.
       result.startOffsetMs = Math.round(fileStarted - laneStarted);
-      result.wallDurationMs = Math.round(performance.now() - fileStarted);
+      result.wallDurationMs = Math.round(performance.now() - laneStarted) - result.startOffsetMs;
       results[index] = result;
       process.stderr.write(
         `run-tests: ${result.status} ${result.path} ${(result.wallDurationMs / 1000).toFixed(1)}s${mode === "parallel" ? " (parallel)" : ""}\n`,

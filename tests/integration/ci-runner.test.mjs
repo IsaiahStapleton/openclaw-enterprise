@@ -1572,7 +1572,6 @@ test("audit rejects invalid file concurrency marks", async (t) => {
       "lanes.marks.fileConcurrency must be an integer from 1 to 32",
       "lanes.marks.parallelFiles lists tests/integration/one.test.mjs twice",
       "lanes.marks.parallelFiles tests/integration/one.test.mjs is also serial",
-      "lanes.marks.parallelFiles tests/integration/one.test.mjs is also serial",
       "lanes.marks.parallelFiles tests/integration/other.test.mjs is not a lane file",
       "lanes.marks.parallelFiles tests/integration/two.test.mjs is also serial",
       "lanes.marks.serialFiles.tests/integration/gone.test.mjs is not a lane file",
