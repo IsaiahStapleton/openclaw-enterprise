@@ -242,6 +242,7 @@ test(
       "rejected headerless logout writes no logout audit",
     );
 
+    // Browser-style sign-ins from here on: only their cookies matter.
     const adminHeaders = await signedInHeaders(ordinary, origin, { email, password });
     const expectedVersion = (await readAccount(ordinary, adminHeaders, recoveryUserId)).version;
     const administrationProxy = await commitAckProxy(databaseUrl);
@@ -287,6 +288,11 @@ test(
     });
     assert.equal(stale.statusCode, 409, stale.body);
     assert.equal(await auditCount("authentication.account.revoke"), 1);
+    assert.equal(
+      (await readAccount(ordinary, recoveredHeaders, recoveryUserId)).version,
+      expectedVersion + 1,
+      "a refused stale revoke writes nothing",
+    );
 
     await t.test(
       "a lost GitHub session COMMIT reply preserves the committed login without identity denial",

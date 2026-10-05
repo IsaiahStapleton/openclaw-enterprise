@@ -77,7 +77,8 @@ function watchFloors(expected) {
   return watch;
 }
 
-// The default install (no external provider), composed twice over one database: behind a
+// The default install (no external provider), composed twice over one database after
+// onboarding its accounts through a third, short-lived composition: behind a
 // trusted ingress, where admission keys on the resolved client address and the email, and
 // with the chart's defaults (no trusted proxy), where only the email lane applies. Only
 // failures count; once the budget is spent, administrators are slowed, never refused.
