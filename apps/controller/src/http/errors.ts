@@ -84,6 +84,19 @@ export function jsonPointer(segment: string): string {
   return segment.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
+/**
+ * One INVALID_VALUE detail for a submitted object key under `parent`. The error contract
+ * caps detail paths at 512 characters; a key too long to fit points at `parent` instead.
+ */
+function pointerDetail(
+  parent: string,
+  key: string,
+  code: ErrorDetail["code"] = "INVALID_VALUE",
+): readonly ErrorDetail[] {
+  const path = `${parent}/${jsonPointer(key.replaceAll("\u0000", "?").replace(/\p{Cs}/gu, "?"))}`;
+  return [{ path: path.length <= 512 ? path : parent, code }];
+}
+
 export function responseHeaders(reply: FastifyReply, requestId: string): void {
   reply.header("cache-control", "no-store");
   reply.header("content-type", "application/json; charset=utf-8");
@@ -651,13 +664,29 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof SecretBindingValidationError) {
-    return failure(400, "INVALID_REQUEST", error.message);
+    // The message names the rule, and the detail the submitted destination key.
+    const { destination } = error;
+    return failure(
+      400,
+      "INVALID_REQUEST",
+      error.message,
+      destination === undefined
+        ? undefined
+        : destination.key === undefined
+          ? [{ path: destination.bindingsPath, code: destination.code }]
+          : pointerDetail(destination.bindingsPath, destination.key, destination.code),
+    );
   }
   if (error instanceof NativeWorkerSupportError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof PluginPolicyValidationError) {
-    return failure(400, "INVALID_REQUEST", error.message);
+    return failure(
+      400,
+      "INVALID_REQUEST",
+      error.message,
+      error.pluginId === undefined ? undefined : pointerDetail("/plugins", error.pluginId),
+    );
   }
   if (error instanceof PresetValidationError && error instanceof Error) {
     // Preset messages name the template path (including submitted object keys) and the

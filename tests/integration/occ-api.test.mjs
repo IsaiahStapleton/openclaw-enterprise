@@ -3200,6 +3200,23 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
       assert.equal(response.body.error.message, message);
     }
   }
+  // A plugin the selected Driver does not offer, as after an Installation switches Drivers:
+  // the refusal names the rejected ID and points at its selection.
+  const otherDriverUpdate = await controller.request("PATCH", agentPath, {
+    body: {
+      configurationId: configuration.id,
+      plugins: { [diffsPluginId]: pluginPolicy(), [linearPluginId]: pluginPolicy() },
+    },
+  });
+  assert.equal(otherDriverUpdate.status, 400);
+  assert.equal(otherDriverUpdate.body.error.code, "INVALID_REQUEST");
+  assert.match(
+    otherDriverUpdate.body.error.message,
+    /^A plugin selection names a plugin that the selected Plugin Driver \(occ-plugin\) does not offer: codex-plugin:linear@openai-curated-remote\./,
+  );
+  assert.deepEqual(otherDriverUpdate.body.error.details, [
+    { path: `/plugins/${linearPluginId}`, code: "INVALID_VALUE" },
+  ]);
   const afterUnsupported = await controller.request("GET", agentPath);
   assert.deepEqual(afterUnsupported.data, afterInvalidUpdate.data);
   const savedAgents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
@@ -4285,7 +4302,8 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
   assert.equal(agent.status, 201, JSON.stringify(agent.body));
   const agentPath = `/namespaces/${namespaceId}/agents/${agent.data.id}`;
 
-  const reserved = "A secret binding uses a reserved or invalid environment destination.";
+  const reserved =
+    "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.";
   const crossNamespace = "Secret references cannot cross Namespaces.";
   const writes = [
     [
@@ -4322,6 +4340,13 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
       assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
       if (message !== undefined) {
         assert.equal(result.body.error.message, message, label);
+      }
+      if (message === reserved) {
+        assert.deepEqual(
+          result.body.error.details,
+          [{ path: "/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" }],
+          label,
+        );
       }
     }
   }
@@ -4509,7 +4534,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
-      "A secret binding uses a reserved or invalid environment destination.",
+      "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.",
     ],
   ];
 
@@ -4529,6 +4554,16 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
+  // The reserved destination is named by its pointer under the inline Configuration.
+  const reservedProvisioning = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: invalidBodies.find(([description]) => description.startsWith("reserved"))[1] },
+  );
+  assert.deepEqual(reservedProvisioning.body.error.details, [
+    { path: "/configuration/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" },
+  ]);
 
   // A model provider baseUrl the runtime cannot use is refused at admission with the field
   // named, instead of surfacing later as an unexplained startup model check failure.
