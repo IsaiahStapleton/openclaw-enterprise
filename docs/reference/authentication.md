@@ -193,6 +193,15 @@ Protected requests resolve the current stored session with cookie caching
 disabled. A missing, expired, revoked, or forged session is rejected, as is an
 `Authorization` header even alongside a session cookie.
 
+In the password-only profile a session lasts seven days from sign-in; using it
+does not extend it. With GitHub, Google or OIDC sign-in enabled, every session,
+password sessions included, lasts eight hours
+([session controls](authentication/external-sign-in.md#session-and-recovery-controls)).
+The password-only profile cannot end another account's sessions online: removing
+the person's IAM bindings refuses their protected requests at once, and
+`purge-sessions --user <userId>` with
+[stopped maintenance](../guides/deploy/auth-maintenance.md) ends the sessions.
+
 ## GitHub sign-in for existing accounts
 
 An Installation can let enrolled existing accounts sign in with GitHub, Google or one
