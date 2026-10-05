@@ -25,10 +25,11 @@ own topology.
       dependencies, and required Kubernetes assets.
 - [ ] Confirm the candidate image still ships every `/app/deploy/presets/` file
       that `presets.files` names; a missing file stops API and worker startup.
-      Releases after 2026-09-30 dropped the four `devday*.json` files
-      (`devday.json` became `swe-preset.json`). The image helper refuses
-      Installation changes, so first remove such entries, or point them at a
-      copy mounted beside the YAML, and restart.
+      Images built after #779 (2026-09-30) drop the four `devday*.json` files.
+      The image helper refuses Installation changes other than the Plugin
+      Driver, so remove those entries and restart first; saved Presets stay.
+      After the upgrade, you can add `/app/deploy/presets/swe-preset.json`
+      (the former `devday.json`).
 - [ ] Confirm the recorded image source includes the changes required for this
       release; a published tag alone does not establish their inclusion.
 - [ ] Decide whether this is a controller-only, runtime-only, or coordinated
