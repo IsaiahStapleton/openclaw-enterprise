@@ -12,14 +12,16 @@ func TestTableEscapesInvisibleAndControlCharactersInCells(t *testing.T) {
 	list := `[` +
 		`{"id":"agt_1","name":"report\u202egnp.exe","status":"active"},` +
 		`{"id":"agt_2","name":"zero\u200bwidth\u009b2J","status":"active"},` +
-		`{"id":"agt_3","name":"日本語 エージェント","status":"active"}` +
+		`{"id":"agt_3","name":"日本語 エージェント","status":"active"},` +
+		`{"id":"agt_4","name":"\"report\\u202egnp.exe\"","status":"active"}` +
 		`]`
 	responses := map[string]string{"GET /namespaces/" + testNamespaceID + "/agents": list}
 	out, _, err := runOCC(t, responses, "--namespace", testNamespaceID, "agent", "list")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"report\u202egnp.exe"`, `"zero\u200bwidth\u009b2J"`, "日本語 エージェント"} {
+	// A name that only looks escaped is quoted too, so the two cannot be confused.
+	for _, want := range []string{`"report\u202egnp.exe"`, `"zero\u200bwidth\u009b2J"`, "日本語 エージェント", `"\"report\\u202egnp.exe\""`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("table lacks %s:\n%s", want, out)
 		}

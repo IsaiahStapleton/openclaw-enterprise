@@ -155,7 +155,7 @@ occ agent logs agt_... --source gateway --follow -o json | jq -r .message
 Table output is meant for people; it prints `-` for unset fields and `No
 resources found.` for an empty list. A cell holding an invisible or control
 character, such as a bidirectional override in a name, is printed quoted with
-that character escaped. JSON and YAML print the exact resource or array
+that character escaped; so is a value that starts with `"`. JSON and YAML print the exact resource or array
 without the HTTP envelope. Deleting a Configuration prints
 `Deleted configuration ID.` in table mode; structured output contains
 `deleted`, `kind`, and `id`.

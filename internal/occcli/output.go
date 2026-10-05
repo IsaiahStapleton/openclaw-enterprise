@@ -293,13 +293,18 @@ func displayValue(value any) string {
 // tableCell is displayValue with every non-graphic rune escaped. Names may hold
 // bidirectional overrides, zero-width or C1 control characters (the Name
 // contract rejects only C0 and DEL); printed raw they reorder or hide columns.
-// A string is Go-quoted; a structured value keeps valid JSON \u escapes.
+// A string is Go-quoted, as is one that starts with a quote so that a quoted
+// cell always means escaping; a structured value keeps valid JSON \u escapes.
 func tableCell(value any) string {
 	text := displayValue(value)
+	_, isString := value.(string)
+	if isString && strings.HasPrefix(text, `"`) {
+		return strconv.QuoteToGraphic(text)
+	}
 	if strings.IndexFunc(text, isHiddenRune) < 0 {
 		return text
 	}
-	if _, ok := value.(string); ok {
+	if isString {
 		return strconv.QuoteToGraphic(text)
 	}
 	var escaped strings.Builder
