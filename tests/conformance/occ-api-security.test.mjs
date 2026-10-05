@@ -9,6 +9,7 @@ import {
   RuntimeLogsForbiddenByClusterError,
 } from "../../packages/occ/src/index.ts";
 import { authenticatedHeaders } from "../helpers/auth-session.mjs";
+import { createReadyComputeDriver } from "../helpers/development.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 import {
   administerGrants,
@@ -40,34 +41,6 @@ const permissions = [
   { action: "administer", resourceKind: "agent" },
 ];
 
-// A Compute Driver whose Namespaces and Revisions are always ready.
-const createComputeDriver = () => ({
-  id: "compute-security",
-  capability: "compute",
-  implementation: "deterministic-test",
-  async ensureNamespace(namespace) {
-    return {
-      namespaceId: namespace.id,
-      namespaceReady: true,
-    };
-  },
-  async deleteNamespace(namespace) {
-    return {
-      namespaceId: namespace.id,
-      namespaceDeleted: true,
-    };
-  },
-  async prepareRevision(revision) {
-    return {
-      namespaceId: revision.namespaceId,
-      agentId: revision.agentId,
-      revisionId: revision.id,
-      ready: true,
-    };
-  },
-  async retireRevision() {},
-});
-
 function createFixture(options = {}) {
   return createTenantReaderFixture({
     installationId,
@@ -75,7 +48,7 @@ function createFixture(options = {}) {
     administratorName: "Security Administrator",
     readerName: "Tenant A Reader",
     administratorPermissions: permissions,
-    computeDriver: createComputeDriver(),
+    computeDriver: createReadyComputeDriver("compute-security"),
     recordOperations: true,
     appOptions: (overrides) => ({
       ...(overrides.maxBodyBytes === undefined ? {} : { maxBodyBytes: overrides.maxBodyBytes }),

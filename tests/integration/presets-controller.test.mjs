@@ -1620,6 +1620,71 @@ test("startup skips and warns about a default refresh the policy refuses instead
   );
 });
 
+test("startup keeps a default missing where a deny Restriction refuses its creation", async (t) => {
+  const { initializeInstallationPresets } =
+    await import("../../apps/controller/src/composition/installation-config.ts");
+  const { emitOccLogEvent } = await import("../../apps/controller/src/logging.ts");
+  const runtime = await bundledRuntime(t, true);
+  const fixture = await createFixture(t, {
+    defaultPresets: runtime.defaultPresets,
+    bundledPresetVersions: runtime.bundledPresetVersions,
+    refreshBundledDefaultPresets: runtime.installation.presets.includeDefaults,
+  });
+  const iam = fixture.controller.selectDriver("iam", "console-native-iam");
+  const principal = fixture.policy.identities.find((identity) => identity.kind === "principal");
+  // An operator removed one default copy, then froze the Namespace's Presets.
+  const frozen = await fixture.createNamespace("Frozen presets", { ready: true });
+  const removed = (await fixture.request("GET", collection(frozen.id))).data.find(
+    (preset) => preset.name === "default-codex",
+  );
+  await deletePreset(fixture, frozen.id, removed.id);
+  fixture.policy.restrictions.push({
+    id: "freeze-preset-creation",
+    namespaceId: frozen.id,
+    action: "create",
+    resourceKind: "preset",
+    effect: "deny",
+  });
+  // Another Namespace is missing the same default and may still receive it.
+  const open = await fixture.createNamespace("Open presets", { ready: true });
+  const openCopy = (await fixture.request("GET", collection(open.id))).data.find(
+    (preset) => preset.name === "default-codex",
+  );
+  await deletePreset(fixture, open.id, openCopy.id);
+  const names = async (namespaceId) =>
+    (await fixture.request("GET", collection(namespaceId))).data
+      .map((preset) => preset.name)
+      .sort();
+  const before = await names(frozen.id);
+  const lines = [];
+  const logger = Object.fromEntries(
+    ["error", "warn", "info", "debug"].map((level) => [
+      level,
+      (record) => lines.push({ level, ...record }),
+    ]),
+  );
+
+  await initializeInstallationPresets(
+    fixture.controller,
+    iam,
+    [principal],
+    runtime.defaultPresets,
+    (event) => emitOccLogEvent(logger, event),
+  );
+  assert.deepEqual(await names(frozen.id), before);
+  assert.ok((await names(open.id)).includes("default-codex"));
+  assert.deepEqual(lines, [
+    {
+      level: "warn",
+      event: "presets.default-create-skipped",
+      namespaceId: frozen.id,
+      presetName: "default-codex",
+      reason: "An applicable Restriction denies the exact action and resource.",
+      restrictionIds: ["freeze-preset-creation"],
+    },
+  ]);
+});
+
 test("Namespace deletion treats every shipped bundled version as unmodified, even with defaults off", async (t) => {
   const runtime = await bundledRuntime(t, false);
   assert.deepEqual(runtime.defaultPresets, []);

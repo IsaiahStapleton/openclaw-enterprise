@@ -30,7 +30,7 @@ import {
   type NativeWorkerSupport,
   type OpenClawController,
   type PostgresPlatformState,
-  type SkippedDefaultPresetRefresh,
+  type SkippedDefaultPreset,
 } from "@openclaw-enterprise/occ";
 import { Check, Errors } from "typebox/value";
 import { validatePresetTemplate } from "@openclaw-enterprise/contracts";
@@ -130,7 +130,9 @@ export interface InstallationRuntimeDrivers {
  * one `presets.default-refresh-skipped` event naming it. The first pass skips only refusals
  * from a deny Restriction, which binds every administrator alike, so an administrator without
  * a Namespace grant never stands in for one who could refresh. If none can, the second pass
- * skips every refusal. Missing defaults still need an administrator who can create them.
+ * skips every refusal. Missing defaults still need an administrator who can create them,
+ * unless a deny Restriction refuses the creation: then the default stays missing and
+ * `onWarning` receives one `presets.default-create-skipped` event naming it.
  */
 export async function initializeInstallationPresets(
   controller: OpenClawController,
@@ -159,7 +161,7 @@ export async function initializeInstallationPresets(
   let denied: AuthorizationDeniedError | undefined;
   for (const skipRefusedRefresh of ["restricted", "denied"] as const) {
     for (const principalId of administrators) {
-      let skipped: readonly SkippedDefaultPresetRefresh[];
+      let skipped: readonly SkippedDefaultPreset[];
       try {
         skipped = await controller.initializeDefaultPresets(principalId, { skipRefusedRefresh });
       } catch (error) {
@@ -176,14 +178,17 @@ export async function initializeInstallationPresets(
         denied = error;
         continue;
       }
-      for (const refresh of skipped) {
+      for (const preset of skipped) {
         onWarning?.({
-          event: "presets.default-refresh-skipped",
-          namespaceId: refresh.namespaceId,
-          presetId: refresh.presetId,
-          presetName: refresh.presetName,
-          reason: refresh.reason,
-          restrictionIds: refresh.restrictionIds,
+          event:
+            preset.operation === "create"
+              ? "presets.default-create-skipped"
+              : "presets.default-refresh-skipped",
+          namespaceId: preset.namespaceId,
+          ...(preset.operation === "update" ? { presetId: preset.presetId } : {}),
+          presetName: preset.presetName,
+          reason: preset.reason,
+          restrictionIds: preset.restrictionIds,
         });
       }
       return;

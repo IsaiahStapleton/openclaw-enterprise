@@ -14,6 +14,7 @@ import {
   signInToControllerApp,
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createReadyComputeDriver } from "../helpers/development.mjs";
 import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
@@ -39,29 +40,6 @@ function bodyAtJsonLimit(limit, buildBody) {
   const body = buildBody(value);
   assert.equal(jsonBodyBytes(body), limit);
   return { body, value };
-}
-
-function createTestComputeDriver() {
-  return {
-    id: "compute-secret-api",
-    capability: "compute",
-    implementation: "deterministic-test",
-    async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
-    },
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
-    async retireRevision() {},
-  };
 }
 
 async function createFixture(options = {}) {
@@ -111,7 +89,7 @@ async function createFixture(options = {}) {
             },
           }),
       iamDriver,
-      computeDriver: options.computeDriver ?? createTestComputeDriver(),
+      computeDriver: options.computeDriver ?? createReadyComputeDriver("compute-secret-api"),
       configurationDriver: createTestConfigurationDriver({ id: "configuration-secret-api" }),
       secretDriver,
       resolveHarness: resolveApprovedDevelopmentHarness,
@@ -214,7 +192,7 @@ function createModelDiscoveryFixture() {
   const native = createTestKubernetesComputeDriver("compute-model-discovery");
   return createFixture({
     computeDriver: {
-      ...createTestComputeDriver(),
+      ...createReadyComputeDriver("compute-secret-api"),
       discoverHarnessModels: native.discoverHarnessModels,
     },
   });
@@ -837,7 +815,7 @@ for (const [model, method, executionMode] of [
     const fixture = await createFixture({
       recordOperations: true,
       computeDriver: {
-        ...createTestComputeDriver(),
+        ...createReadyComputeDriver("compute-secret-api"),
         validateHarnessAuth: harnessAuthDriver.validateHarnessAuth.bind(harnessAuthDriver),
       },
     });

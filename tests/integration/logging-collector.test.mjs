@@ -396,6 +396,15 @@ test(
           ...payload,
         }),
         JSON.stringify({
+          event: "presets.default-create-skipped",
+          severity: "WARN",
+          namespaceId: presetNamespaceId,
+          presetName: `presetname${fixture.suffix}`,
+          reason: `refusalreason${fixture.suffix}`,
+          restrictionIds: [`res_${restrictionUuid}`],
+          ...payload,
+        }),
+        JSON.stringify({
           event: "authentication.provider-unavailable-warning",
           severity: "WARN",
           provider: "google",
@@ -419,13 +428,14 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 10);
+    await waitFor(async () => (await records()).length >= 11);
     const initial = await records();
-    assert.equal(initial.length, 10, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 11, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [
       "compute.preflight-warning",
       "authentication.sign-in-limited",
       "authentication.provider-unavailable-warning",
+      "presets.default-create-skipped",
       "presets.default-refresh-skipped",
     ];
     for (const { resource, record } of initial) {
@@ -442,6 +452,7 @@ test(
     }
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
+      "occ-api",
       "occ-api",
       "occ-api",
       "occ-api",
@@ -536,6 +547,16 @@ test(
       "log.iostream": "stdout",
       "occ.namespace.id": presetNamespaceId,
       "occ.preset.id": presetId,
+    });
+    // A default creation a Restriction refused keeps only its Namespace ID.
+    const uncreated = initial.find(
+      ({ record }) => record.body.stringValue === "presets.default-create-skipped",
+    );
+    assert.equal(uncreated.record.severityText, "WARN");
+    assert.deepEqual(attributes(uncreated.record.attributes), {
+      "event.name": "presets.default-create-skipped",
+      "log.iostream": "stdout",
+      "occ.namespace.id": presetNamespaceId,
     });
     const serialized = JSON.stringify(initial);
     assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
