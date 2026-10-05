@@ -8,14 +8,16 @@ AgentRevision.
 ## Set files when creating an Agent
 
 1. Open **Agents** in the intended Namespace and start creating an Agent.
-2. Open **Advanced settings**. In **Workspace files**, review the prefilled OpenClaw defaults and edit the
-   files you want to customize. Leaving the text unchanged submits that default;
-   clearing a field submits an empty file. Each field accepts up to 16 KiB of
-   UTF-8 text. The browser uses LF newlines.
-3. Select **Create Agent**. The form says what happens next: a Dedicated Agent
-   is provisioned and deployed at once; an Embedded Agent is saved undeployed,
-   so deploy it from its Agent page. Creation saves the inputs privately, and
-   the first deployment applies them before execution starts.
+2. Open **Advanced settings**. In **Workspace files**, review the prefilled
+   OpenClaw defaults and edit the files you want to customize. Leaving the text
+   unchanged submits that default; clearing a field submits an empty file. Each
+   field accepts up to 16 KiB of UTF-8 text. The browser uses LF newlines.
+3. Select **Create Agent**. Where the installation supports Dedicated
+   provisioning, a Dedicated Agent starts provisioning and its first
+   deployment. Otherwise, including every Embedded Agent, creation saves an
+   undeployed draft; deploy it with **Deploy new version** on its Agent page.
+   Creation saves the inputs privately, and the first deployment applies them
+   before execution starts.
 4. Once the revision is active, open **Workspace files** on the Agent and reload
    the files to check the contents.
 
@@ -26,8 +28,8 @@ overwrite conflicting edits during an incomplete attempt. After completion,
 restarting or redeploying preserves subsequent workspace edits.
 
 You cannot edit staged inputs on an undeployed Agent. To correct them, delete
-the Agent (**Delete Agent** on its page, or the API) and create it again.
-The [initial contents reference](../../reference/agents.md#initial-contents-at-creation)
+the Agent (**Delete Agent** on its page, or the API; both need Agent `delete`)
+and create it again. The [initial contents reference](../../reference/agents.md#initial-contents-at-creation)
 defines API omission, empty values, and the pinned defaults contract.
 
 ## Edit a file

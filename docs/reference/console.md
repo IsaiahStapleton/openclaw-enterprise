@@ -258,9 +258,8 @@ for application before the first deployment runs.
 Creation stages these inputs privately; the live workspace editor becomes
 available after deployment. Staged inputs on an undeployed Agent have no editor;
 to correct them, delete the Agent ([Delete Agent](#delete-an-agent) or the API)
-and create it again. If creation
-reports that defaults changed, reload the form and review them before
-resubmitting. See [initial contents](agents.md#initial-contents-at-creation)
+and create it again. If creation reports that defaults changed, reload the form
+and review them before resubmitting. See [initial contents](agents.md#initial-contents-at-creation)
 for the release binding, limits, and deployment failure behavior.
 
 ## Edit workspace files
