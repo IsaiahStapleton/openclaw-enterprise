@@ -48,8 +48,8 @@ Prepare:
 - with the bundled Collector enabled, its config Secret
   [refreshed](../observability.md#refresh-the-collector-configuration-on-upgrade)
   from this checkout and the Collector restarted, even for an image-only
-  release. Helm does not update it, and the helper stops before mutation on
-  any drift;
+  release. Helm does not update the Secret, and the helper stops before mutation
+  when its `collector.yaml` or `kubernetes.yaml` differs;
 - a PostgreSQL backup before a controller release whose migrations may require
   data restoration; and
 - Agent-volume backups before a runtime release whose recovery may require
@@ -109,8 +109,6 @@ test -z "$(git status --porcelain)" || echo 'The release checkout is not clean.'
 ```
 
 The evidence directory must not exist. The command creates it with mode `0700`.
-Only [other Installation changes](#apply-other-installation-changes) use the
-installed release's checkout instead of this one.
 
 ### Include reviewed settings
 
@@ -203,17 +201,18 @@ The new checksum restarts the API and worker so they read the new Installation.
 This path has no startup preflight, and the API stops before its replacement
 starts: an Installation the controller rejects keeps the API down, with a
 `startup-error` code such as `PRESET_FILE_INVALID`, until you undo the change.
-The loop checks that each `presets.files` entry is readable, not its contents.
-Helm reports a rejection only after its 5-minute timeout; the API log shows
-`startup-error` sooner.
+The Preset loop checks file readability, not contents. Helm reports a rejection
+only after its 5-minute timeout; the API log shows `startup-error` sooner, but
+let Helm return before you undo.
 The patch replaces only the Installation key and keeps the Secret's
 `openclaw.dev/installation-id` annotation. Do not re-create the Secret with
 `kubectl apply`: if its last applied configuration carries that annotation,
 apply deletes it and the next upgrade refuses the Secret. Settings that
 shape Agent Pods, such as Gateway resources, apply only to Pods created
 afterward; deploy an Agent to apply them to it. To undo, restore the `.before`
-file and repeat the commands without the loop, which needs a running API
-container. The edited files are the baseline for the next upgrade.
+file and rerun the Secret patch, checksum and `helm upgrade` commands; skip the
+loop, which needs a running API container. The edited files are the baseline for
+the next upgrade.
 
 ## Bind the Installation once
 
