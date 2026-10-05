@@ -344,7 +344,7 @@ test("console shows the external observability link only to Installation adminis
   );
   await login(page, fixture, "/console/", limited.credentials);
   assert.equal((await limitedProbe).status(), 403);
-  await page.getByRole("heading", { name: "Agents" }).waitFor();
+  await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Observability" }).count(), 0);
   // A denied read is audited, so navigation must not repeat it.
   await page.getByRole("link", { name: "Namespaces" }).click();
