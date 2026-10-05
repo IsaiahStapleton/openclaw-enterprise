@@ -21,6 +21,13 @@
         "provisioning API and worker hand off a dedicated Agent with real Kubernetes fixture storage",
         "authenticated PostgreSQL OCC API and worker deploy real Agent-owned gateways, Secret bindings, and revisions"
       ]
+    },
+    {
+      "path": "tests/integration/kubernetes-plugin-status-real.test.mjs",
+      "expectedTests": [
+        "real Kubernetes Compute reads plugin runtime status from the exact gateway Pod",
+        "real Kubernetes Compute reports plugin install warnings and disables failed plugin config"
+      ]
     }
   ]
 }
