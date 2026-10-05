@@ -204,15 +204,18 @@ test("refusals take the growing floor whether or not the email administers", asy
 test("Retry-After counts down to the end of the spent window", async () => {
   const limiter = admission();
   const email = "member@example.test";
+  const started = performance.now();
   for (let index = 0; index < 3; index += 1) {
     assert.equal(await status(limiter, { email }), 401);
   }
   const { error } = await outcome(limiter.admit({ email }, right));
   assert.ok(error instanceof SignInRateLimited);
-  // The window opened with the first failure moments ago, so almost all of its minute remains.
+  // The window opened with the first failure, so at most the time spent since then is gone
+  // from its minute, however slow the machine.
+  const elapsedSeconds = Math.ceil((performance.now() - started) / 1000);
   assert.ok(
-    error.retryAfterSeconds >= 55 && error.retryAfterSeconds <= 60,
-    `Retry-After ${error.retryAfterSeconds}`,
+    error.retryAfterSeconds >= 60 - elapsedSeconds && error.retryAfterSeconds <= 60,
+    `Retry-After ${error.retryAfterSeconds} after ${elapsedSeconds} s`,
   );
 });
 
