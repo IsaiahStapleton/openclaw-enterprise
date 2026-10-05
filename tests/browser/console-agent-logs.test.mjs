@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import { grantRole } from "../helpers/iam-grants.mjs";
 import { createRuntimeLogComputeDriver } from "../helpers/runtime-logs.mjs";
 import {
   apiRequests,
@@ -384,23 +385,16 @@ test("an operator without administer sees status but no log text and is never re
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
   computeDriver.state.lines = [line(1, "operator must not see this")];
   const operator = await fixture.createAccountWithPolicy("runtime-operator", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-operator",
+      bindingId: "binding-console-runtime-operator",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "operate", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-operator",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-operator",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read", "operate"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
@@ -434,23 +428,16 @@ test("a log reader without operate reads log text in the Logs tab without runtim
   computeDriver.state.lines = [line(1, "log reader can see this")];
   computeDriver.state.previousLines = [line(0, "output before the restart")];
   const reader = await fixture.createAccountWithPolicy("runtime-log-reader", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-log-reader",
+      bindingId: "binding-console-runtime-log-reader",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "read_logs", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-log-reader",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-log-reader",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read", "read_logs"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
@@ -728,22 +715,16 @@ test("the Gateway hint skips a rollout's old Harness Pod and covers a Harness wi
 test("a reader without operate learns what log text needs and is asked for status once per page", async (t) => {
   const { fixture, namespace, agent, revisionId } = await logsFixture(t);
   const reader = await fixture.createAccountWithPolicy("runtime-reader", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-reader",
+      bindingId: "binding-console-runtime-reader",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-reader",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-reader",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
@@ -772,22 +753,16 @@ test("a reader without operate learns what log text needs and is asked for statu
 test("a status denial for one operator does not carry over to the next sign-in on the tab", async (t) => {
   const { fixture, namespace, agent, revisionId } = await logsFixture(t);
   const reader = await fixture.createAccountWithPolicy("runtime-switch-reader", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-switch-reader",
+      bindingId: "binding-console-runtime-switch-reader",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-switch-reader",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-switch-reader",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
