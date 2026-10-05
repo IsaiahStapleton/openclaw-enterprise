@@ -52,6 +52,10 @@ is an administrator credential and must remain on your machine.
 
 If startup stalls on cert-manager, follow [local startup troubleshooting](operate/troubleshooting.md#local-startup-stalls-on-cert-manager).
 
+`none` selects no OpenShell Sandbox Driver. Startup still checks the Codex
+sandbox on the node. If that check fails, follow
+[local Codex sandbox troubleshooting](operate/troubleshooting.md#local-codex-sandbox-check-fails).
+
 ## Open the platform console
 
 Import the printed browser CA certificate into your browser's trusted CA store
@@ -59,6 +63,12 @@ using your browser's own certificate settings, then open the printed HTTPS
 browser console URL. Only import the public `browser-ca.crt`; keep its private
 key and the entire state directory private. Remove the CA from your browser's
 trust store when you discard this installation.
+
+Open the printed URL on the machine that ran `./bin/occ dev up`. Kubernetes-only
+mode publishes the console port on that machine's loopback, and the hostname
+ends in `.localhost`, so another computer resolves it to itself. When the
+browser is on a different computer, follow
+[Open the console from another machine](operate/troubleshooting.md#open-the-console-from-another-machine).
 
 Sign in as `admin@development.openclaw.invalid` using the generated password in
 the administrator password file printed by startup. That file and the service

@@ -41,8 +41,17 @@ another version or the draft. Its milestones use the persisted record:
 
 A `failed` result shows the stored error and an **Open vN Logs** link to that
 version's [Logs tab](../topics/agent-logs.md), which the draft does not have.
+For `RUNTIME_AUTHENTICATION_FAILED`, `RUNTIME_MODEL_PROBE_FAILED`,
+`RUNTIME_MODEL_PROBE_TIMEOUT` and `AGENT_GATEWAY_UNAUTHORIZED` it also states
+the next step and links **Credentials** or the draft **Configuration** (for
+`AGENT_GATEWAY_UNAUTHORIZED`, select **Enable gateway password access** there). A provider the runtime cannot
+reach (refused connection, unknown host) usually reports
+`RUNTIME_MODEL_PROBE_TIMEOUT` with OpenClaw and `RUNTIME_MODEL_PROBE_FAILED`
+with Codex.
 Startup evidence may identify the runtime component, failed check, code, and
-check time. Plugin warnings describe that attempt. An unavailable record has
+check time. A failed startup model check may also show its **Cause**, such as
+the provider reporting a rate limit or the check process exiting with an error
+([causes](../../reference/agents/deployment.md#model-check-failure-cause)). Plugin warnings describe that attempt. An unavailable record has
 unknown status. While the record is `queued` or `running`, the panel rereads it
 every few seconds and stops at `succeeded`, `failed`, or a read error.
 **Refresh deployment** rereads it, the selected version, and that version's
@@ -89,7 +98,9 @@ read access to that version.
 and redacted container output. It can follow new lines, filter the loaded
 lines by level or text, and download the last 1000 lines. Status needs the same
 grants as diagnostics; log text needs Agent `administer` instead of `operate`.
-See [Agent logs](../topics/agent-logs.md).
+When a Pod is Ready and its containers have not restarted, its warning Events
+appear in muted text as earlier warnings, such as readiness probes that failed
+while it started. See [Agent logs](../topics/agent-logs.md).
 
 There is no rollback or redeploy-old-revision button. See
 [Agent Revisions](../topics/agent-revisions.md) for the lifecycle.
@@ -132,7 +143,7 @@ deployment; nothing repairs them.
 | **Compute**                            | Revision's Compute Driver identifier and implementation.                                                         |
 | **View admitted native configuration** | Expands the revision's formatted native JSON. The draft uses **View native Configuration**.                      |
 
-In the draft, **Enable Gateway password access** stages the generated-password
+In the draft, **Enable gateway password access** stages the generated-password
 reference; authentication mode and proxy settings stay unchanged. The Compute
 Driver owns the password; the Console shows only its reference.
 
@@ -219,6 +230,20 @@ access needs an active revision with a reachable gateway. An uncertain save
 requires a successful Reload before retrying. See
 [Workspace Files](../topics/workspace-files.md).
 
+## Talk to the Agent
+
+The console has no chat panel. To give an Agent a task:
+
+- Message it in a channel its Configuration sets up, such as Slack. The
+  [channel settings](channels-and-credentials.md#slack-editor), not OCE grants,
+  decide who may mention it.
+- With Agent `administer`, use the [native admin panel](#conditional-native-admin-panel)
+  when the Installation enables it. It is unavailable under GitHub, Google, or
+  OIDC sign-in.
+- Otherwise ask someone who can edit the Agent's Configuration to let you into
+  its channel. An operator with cluster access can check a real response with
+  [model verification](../operate/model-verification.md).
+
 ## Conditional native admin panel
 
 When enabled by the Installation and permitted for your account, **Native admin
@@ -248,8 +273,11 @@ revision. See [Stop and resume](../../reference/agents/deployment.md#stop-and-re
 ## Delete Agent and error recovery
 
 **Delete Agent** opens a confirmation dialog. **Cancel** closes it without changes.
-**Permanently delete Agent** irreversibly removes the Agent, revision history,
-and workspace data; Namespace Configurations and Secrets remain. Exact Agent
+**Permanently delete Agent** irreversibly removes the Agent, version history,
+and workspace data; Namespace Configurations and Secrets remain. The dialog
+gives the commands that delete the Agent's Configuration and, if it has one, its
+model credential Secret: both are kept even when Create Agent made them, and the
+console cannot list or delete them. Exact Agent
 `delete` permission is required. Accepted deletion starts asynchronous cleanup;
 the page checks it every few seconds and returns to Agents once the Agent is gone.
 **Refresh deletion status** checks it immediately.

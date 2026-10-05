@@ -1,7 +1,7 @@
 ---
 created: "2026-09-21"
 updated: 2026-09-30
-last_updated_session: authoring-run/b158c89c-3010-42ae-95b4-350b05de7441
+last_updated_session: authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a
 ---
 
 # OpenShell Sandbox provisioning flow
@@ -96,14 +96,16 @@ endpoint, the Sandbox, and a Credential Gateway whose `binaries` list holds the
 native Codex executable. The Sandbox policy has no model-egress rule; the
 credential source's provider profile supplies it.
 
-The environment selects Kubernetes Compute and OpenShell. `scripts/dev-up`
-validates that combination and delegates lifecycle ownership to `occ dev up`.
-The control plane defaults to Compose; `OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes`
-selects the Kubernetes-only profile. Both verify the `v0.1.3-pre.1` source archive
-before packaging its Gateway and Workspace charts, and import the matching
-digest-pinned Gateway, Sandbox, and supervisor images. The launcher supplies v0.1.3-pre.1's separate
-image registry, repository, and digest values for each component and omits the
-NetworkPolicy acknowledgement removed from that chart.
+`scripts/dev-up` validates Kubernetes Compute with OpenShell and delegates to
+`occ dev up`. Compose is the default control plane;
+`OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` selects Kubernetes-only.
+Both verify the `v0.1.3-pre.1` source archive, package its Gateway and Workspace
+charts, and import digest-pinned Gateway, Sandbox, and supervisor images using
+separate registry, repository, and digest values. The removed NetworkPolicy
+acknowledgement is omitted.
+Before tool discovery or state creation, Kubernetes-only `upK3d` rejects equal
+development and Kubernetes API host ports, with or without OpenShell. Without a
+Sandbox Driver, it also rejects browser-port collisions.
 The CLI records the exact engine endpoint, cluster,
 platform Namespace, API port, and key destination before creating resources.
 The Kubernetes-only mode creates k3d without a Compose network, imports the OCE controller, Agent
@@ -183,6 +185,9 @@ immutable revision to OpenShell instead of creating the Deployment itself.
 
 OpenShell accepts only dedicated Codex or OpenClaw revisions pinned to the selected Driver.
 It builds filesystem, process, and network policy plus Kubernetes driver config.
+It always sends `hard_requirement` Landlock compatibility; Installation startup
+rejects any other `policy.landlockCompatibility` value. On a node that cannot
+enforce Landlock, the OpenShell supervisor refuses to launch the workload.
 Network TLS, enforcement, and access spellings must be own keys in the Driver's
 allowlists before they are converted to the exact `v0.1.3-pre.1` protobuf enums.
 It rejects inherited object names and the old `passthrough` TLS spelling,
@@ -213,16 +218,35 @@ enrollment CA.
 
 `apps/controller/src/drivers/sandbox/openshell-gateway-client.ts:createSandbox`
 
-The client sends the Sandbox identity, spec, Namespace Workspace scope, and
-revision UUID as `request_id`. Codex requests one unnamed exposure for
-`APP_SERVER_PORT` and requires its `service_urls` entry. Native OpenClaw connects
-outbound, so it requests no exposure and rejects any returned URL. A replay
-returns the same result; a Sandbox that predates replayable creation fails.
+The client sends the Sandbox identity, spec, Namespace Workspace scope, and a
+`request_id`: the revision UUID first. OpenShell keeps a `request_id` whose create
+errored server-side unresolved forever, so when the Gateway refuses one
+(`REQUEST_OUTCOME_UNCERTAIN`, `REQUEST_ID_PAYLOAD_MISMATCH`, or
+`REQUEST_REPLAY_UNAVAILABLE`) and `getSandbox` finds no Sandbox, the Driver tries
+the next of 16 IDs: the revision UUID, then 15 derived from it. Each failing pass
+spends at most one new ID. The Sandbox name is unique per Workspace, so these
+attempts never yield two Sandboxes. Unresolved IDs never expire. Once the controller
+identity holds 1000 unresolved or unexpired admission records, OpenShell rejects
+every new `request_id` with `RESOURCE_EXHAUSTED`, so repeated server-side create
+failures count against that quota. Completed records free up after 24 hours.
+`unary` maps that exact refusal to `OpenShellAdmissionLimitError`, a
+`TransientDependencyError` (`SANDBOX_ADMISSION_LIMIT_REACHED`): revision
+provisioning waits for it until the convergence deadline without spending
+attempts; Namespace work retries it as usual. Codex requests one unnamed
+exposure for `APP_SERVER_PORT` and requires its `service_urls` entry. Native
+OpenClaw connects outbound, so it requests no exposure and rejects any returned
+URL. The Driver
+calls `getSandbox` first and creates only an absent Sandbox; it adopts an
+existing or `ALREADY_EXISTS` Sandbox only when its annotations name this
+revision, it is not deleting or stopped, and, for Codex, `getServiceUrl` finds
+the unnamed endpoint. Workspace `sandbox:write` is the trust boundary here: a
+holder could already delete and replace the Sandbox.
 
 For each unary Gateway call, the client checks cancellation after client setup
 and credential-metadata preparation and before dispatch. An abort during setup
 is observed when the pending setup step settles; it does not bound a stalled
-initialization or file read. Once dispatched, an abort requests cancellation
+initialization or file read. The Backend shares one client per gateway endpoint;
+a failed setup is not cached, so the next call retries it. Once dispatched, an abort requests cancellation
 of the local gRPC call and rejects the caller. That request does not prove a
 remote mutation stopped; the calling lifecycle must handle any uncertain
 effect through its existing recovery and cleanup path.
@@ -321,6 +345,8 @@ Kubernetes Compute delete the Kubernetes namespace.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-09-30 23:45: Required hard Landlock compatibility in the OpenShell Sandbox request and rejected weaker Installation settings. (authoring-run/62afbbd6-1a38-43bf-b998-665eab33521a - 129723ab)
 
 - 2026-09-30 21:14: Updated the OpenShell source, images, charts, and wire fixture to v0.1.3-pre.1 while preserving the default service authorization and fail-closed projection boundaries. (authoring-run/b158c89c-3010-42ae-95b4-350b05de7441 - 37bbee705ea3808ad000413dd54bdcc718980179)
 

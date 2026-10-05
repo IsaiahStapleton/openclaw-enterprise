@@ -8,6 +8,7 @@ import type {
   OccApiRoute,
 } from "@openclaw-enterprise/contracts";
 import {
+  NoActiveAgentRevisionError,
   ResourceConflictError,
   type AuthorizationDeniedError,
   type OpenClawController,
@@ -61,6 +62,7 @@ interface NativeAdminOptions {
   readonly auth: ControllerAuth;
   readonly nativeAdmin: NativeAdminAccessConfig | undefined;
   readonly nativeAdminGatewayApiKey: (() => Promise<string>) | undefined;
+  readonly webSocketLeaseIntervalMs: number | undefined;
   readonly auditSink: AuditSink;
 }
 
@@ -208,7 +210,12 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
   function requireNativeAdminHumanSession(request: FastifyRequest, context: RequestContext) {
     const admitted = getAdmission(request);
     if (admitted?.method !== "session") {
-      throw failure(403, "FORBIDDEN", "The exact platform operation was not authorized.");
+      // Depends only on how the caller authenticated, so it discloses nothing about the Agent.
+      throw failure(
+        403,
+        "FORBIDDEN",
+        "Native admin UI requires a signed-in console session; service API keys cannot open it.",
+      );
     }
     const session = admitted.session;
     if (session.userId !== context.subject || Date.parse(session.expiresAt) <= Date.now()) {
@@ -525,7 +532,9 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
       if (error instanceof ResourceConflictError) {
         return { status: "stopped" };
       }
-      if (isDependencyUnavailable(error)) {
+      // A running Agent still activating its first revision is a state the console shows.
+      // Every other dependency failure, an IAM outage included, reaches the error handler.
+      if (error instanceof NoActiveAgentRevisionError) {
         return { status: "unavailable" };
       }
       throw error;
@@ -771,6 +780,11 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
         gatewayBase: resolved.gatewayBase,
       };
     } catch (error) {
+      // A dependency outage (IAM or State) is not a denial, though its error class extends
+      // AuthorizationDeniedError: close or refuse it as a dependency failure.
+      if (isDependencyUnavailable(error)) {
+        return nativeAdminProxyDenial("dependency_failure");
+      }
       if (isAuthorizationDenied(error)) {
         return nativeAdminProxyDenial("authorization_denied", {
           actorId: currentActor,
@@ -865,6 +879,9 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
       head,
       context,
       connectionId,
+      ...(options.webSocketLeaseIntervalMs === undefined
+        ? {}
+        : { leaseIntervalMs: options.webSocketLeaseIntervalMs }),
       lease: async () => {
         const renewed = await boundedNativeAdminAdmission(
           nativeAdminProxyContext(request, hostname, admission.revisionId),

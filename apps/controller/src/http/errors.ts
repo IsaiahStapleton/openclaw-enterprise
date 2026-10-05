@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyReply } from "fastify";
 import { PresetValidationError } from "@openclaw-enterprise/contracts";
+import { UNTRUSTED_ORIGIN_MESSAGE } from "../admission/admission-verifier.ts";
 import {
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
@@ -10,10 +11,13 @@ import {
   ConfigurationHarnessError,
   CredentialGatewayNotConfiguredError,
   DependencyUnavailableError,
+  DeviceAuthorizationStartError,
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
   IAMRoleInUseError,
+  ModelCredentialValueError,
   ModelDiscoveryError,
+  ModelProviderSettingError,
   PluginDiscoveryError,
   NamespaceNotEmptyError,
   NamespaceNotReadyError,
@@ -23,8 +27,11 @@ import {
   PostgresCommitOutcomeUnknownError,
   ResourceConflictError,
   ResourceStateConflictError,
+  RuntimeCredentialsForbiddenByClusterError,
   RuntimeLogsError,
   ScopeViolationError,
+  SecretBindingValidationError,
+  SecretValueError,
   type RuntimeLogsErrorCode,
 } from "@openclaw-enterprise/occ";
 import {
@@ -89,7 +96,8 @@ export function canonicalFailure(reply: FastifyReply, error: RequestFailure): vo
   reply.status(error.status).send({
     error: {
       code: error.code,
-      message: error.message,
+      // Some messages come from Drivers or name submitted values; none may break the cap.
+      message: capped(error.message),
       ...(error.details === undefined ? {} : { details: error.details }),
     },
     meta: { requestId: reply.request.id },
@@ -114,24 +122,140 @@ function validationCode(keyword: string): ErrorDetail["code"] {
   }
 }
 
-function validationDetails(error: FastifyError): readonly ErrorDetail[] {
-  if (!Array.isArray(error.validation)) {
-    return [];
+type ValidationEntry = NonNullable<FastifyError["validation"]>[number];
+
+interface ContractProblem {
+  readonly detail: ErrorDetail;
+  /** The accepted type or values, taken from the schema, never from the request. */
+  readonly expected?: string;
+}
+
+function expectedType(parameters: Record<string, unknown>): string | undefined {
+  const type = Array.isArray(parameters.type) ? parameters.type.join(", ") : parameters.type;
+  return typeof type === "string" && type.length > 0 ? type : undefined;
+}
+
+const LIMITS: Readonly<Record<string, readonly [bound: string, unit?: string]>> = Object.freeze({
+  minLength: ["at least", "character"],
+  maxLength: ["at most", "character"],
+  minItems: ["at least", "item"],
+  maxItems: ["at most", "item"],
+  minProperties: ["at least", "field"],
+  maxProperties: ["at most", "field"],
+  minimum: ["at least"],
+  maximum: ["at most"],
+  exclusiveMinimum: ["more than"],
+  exclusiveMaximum: ["less than"],
+});
+
+// Names the schema's bound or accepted values for keywords that reject a value by its size or
+// range, such as an empty required string.
+function expectedBound(keyword: string, parameters: Record<string, unknown>): string | undefined {
+  if (keyword === "enum" && Array.isArray(parameters.allowedValues)) {
+    return `one of ${parameters.allowedValues.map((value) => JSON.stringify(value)).join(", ")}`;
   }
-  return error.validation.slice(0, 32).map((detail): ErrorDetail => {
-    const parameters = detail.params as Record<string, unknown>;
-    let path = typeof detail.instancePath === "string" ? detail.instancePath : "";
-    if (detail.keyword === "required" && typeof parameters.missingProperty === "string") {
+  // Own keys only: an inherited name such as "constructor" is not a bound.
+  const bound = Object.hasOwn(LIMITS, keyword) ? LIMITS[keyword] : undefined;
+  const limit = parameters.limit;
+  if (bound === undefined || typeof limit !== "number") {
+    return undefined;
+  }
+  const [relation, unit] = bound;
+  return unit === undefined
+    ? `${relation} ${limit}`
+    : `${relation} ${limit} ${unit}${limit === 1 ? "" : "s"}`;
+}
+
+// A union of literals or scalar types fails once per member, at the same field. Report that
+// field once with the accepted members instead of one contradictory problem per member.
+function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly ContractProblem[] {
+  const collapsed = new Map<ValidationEntry, ContractProblem | null>();
+  // A member of a union that does not collapse names only one alternative, so it gets no hint.
+  const unionMembers = new Set<ValidationEntry>();
+  for (const union of entries) {
+    if (union.keyword !== "anyOf" || typeof union.schemaPath !== "string") {
+      continue;
+    }
+    const members = entries.filter(
+      (entry) =>
+        entry.schemaPath.startsWith(`${union.schemaPath}/`) &&
+        (entry.instancePath === union.instancePath ||
+          entry.instancePath.startsWith(`${union.instancePath}/`)),
+    );
+    for (const member of members) {
+      unionMembers.add(member);
+    }
+    if (
+      members.length === 0 ||
+      !members.every(
+        (entry) =>
+          entry.instancePath === union.instancePath &&
+          (entry.keyword === "const" || entry.keyword === "type"),
+      )
+    ) {
+      continue;
+    }
+    // A literal member can fail on both its JSON type and its value; name it by its value.
+    const branches = new Map<string, ValidationEntry[]>();
+    for (const member of members) {
+      const branch = member.schemaPath.slice(union.schemaPath.length + 1).split("/")[0] ?? "";
+      branches.set(branch, [...(branches.get(branch) ?? []), member]);
+    }
+    const accepted = [
+      ...new Set(
+        [...branches.values()].map((failures) => {
+          const literal = failures.find((entry) => entry.keyword === "const");
+          return literal === undefined
+            ? expectedType(failures[0]!.params as Record<string, unknown>)
+            : JSON.stringify((literal.params as Record<string, unknown>).allowedValue);
+        }),
+      ),
+    ];
+    if (accepted.some((value) => value === undefined)) {
+      continue;
+    }
+    const literals = members.some((entry) => entry.keyword === "const");
+    collapsed.set(union, {
+      detail: { path: union.instancePath, code: literals ? "INVALID_VALUE" : "INVALID_TYPE" },
+      expected: `one of ${accepted.join(", ")}`,
+    });
+    for (const member of members) {
+      collapsed.set(member, null);
+    }
+  }
+  return entries.flatMap((entry) => {
+    const replacement = collapsed.get(entry);
+    if (replacement !== undefined) {
+      return replacement === null ? [] : [replacement];
+    }
+    const parameters = entry.params as Record<string, unknown>;
+    let path = typeof entry.instancePath === "string" ? entry.instancePath : "";
+    if (entry.keyword === "required" && typeof parameters.missingProperty === "string") {
       path += `/${jsonPointer(parameters.missingProperty)}`;
     }
     if (
-      detail.keyword === "additionalProperties" &&
+      entry.keyword === "additionalProperties" &&
       typeof parameters.additionalProperty === "string"
     ) {
       path += `/${jsonPointer(parameters.additionalProperty)}`;
     }
-    return { path, code: validationCode(detail.keyword) };
+    const expected = unionMembers.has(entry)
+      ? undefined
+      : entry.keyword === "type"
+        ? expectedType(parameters)
+        : entry.keyword === "const"
+          ? JSON.stringify(parameters.allowedValue)
+          : expectedBound(entry.keyword, parameters);
+    const detail = { path, code: validationCode(entry.keyword) };
+    return [expected === undefined ? { detail } : { detail, expected }];
   });
+}
+
+function validationProblems(error: FastifyError): readonly ContractProblem[] {
+  if (!Array.isArray(error.validation)) {
+    return [];
+  }
+  return collapseScalarUnions(error.validation).slice(0, 32);
 }
 
 const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({
@@ -146,8 +270,8 @@ const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.fr
 
 // Names the first few offending fields so clients that print only the message, such as
 // occ, still show which field to fix. The full list stays in `details`.
-function contractMessage(error: FastifyError, details: readonly ErrorDetail[]): string {
-  if (details.length === 0) {
+function contractMessage(error: FastifyError, found: readonly ContractProblem[]): string {
+  if (found.length === 0) {
     return "The request does not match the operation contract.";
   }
   const context =
@@ -156,14 +280,161 @@ function contractMessage(error: FastifyError, details: readonly ErrorDetail[]): 
       : "";
   const problems = [
     ...new Set(
-      details.map((detail) => `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}`),
+      found.map(
+        ({ detail, expected }) =>
+          `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}${
+            expected === undefined ? "" : ` (expected ${expected})`
+          }`,
+      ),
     ),
   ];
   const shown = problems.slice(0, 3).join("; ");
   const more = problems.length > 3 ? `; and ${problems.length - 3} more` : "";
-  const message = `The request does not match the operation contract: ${shown}${more}.`;
-  // The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
-  return message.length <= 256 ? message : `${message.slice(0, 255)}…`;
+  return capped(`The request does not match the operation contract: ${shown}${more}.`);
+}
+
+// The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+// Control and format characters from submitted object keys are replaced, and the cut keeps whole characters.
+function capped(message: string): string {
+  const characters = Array.from(message.replace(/[\p{Cc}\p{Cf}]/gu, "?"));
+  return characters.length <= 256 ? characters.join("") : `${characters.slice(0, 255).join("")}…`;
+}
+
+// In Unicode mode, `\p{Cs}` matches only a surrogate that is not part of a pair.
+const UNPAIRED_SURROGATE = /\p{Cs}/u;
+
+function unstorableText(value: string): "nul" | "surrogate" | undefined {
+  return value.includes("\u0000")
+    ? "nul"
+    : UNPAIRED_SURROGATE.test(value)
+      ? "surrogate"
+      : undefined;
+}
+
+/**
+ * PostgreSQL text and jsonb cannot hold U+0000, and UTF-8 has no encoding for an unpaired
+ * UTF-16 surrogate: text stores U+FFFD in its place and jsonb rejects it. Refuses either one
+ * in any string or object key of `value` (path parameters or a parsed JSON body), so the
+ * caller gets a 400 instead of a 500 or 503 from the database, or a name stored differently
+ * from the one it was shown. It names the first offender in document order. Detail codes
+ * follow the workspace file content rule: a NUL is INVALID_FORMAT (as a `^[^\u0000]*$`
+ * pattern reports it), a surrogate INVALID_VALUE. The walk is iterative because a body can
+ * nest deeply.
+ */
+export function unstorableTextFailure(
+  context: "params" | "body",
+  value: unknown,
+): RequestFailure | undefined {
+  interface Node {
+    readonly value: unknown;
+    readonly parent?: Node;
+    readonly key?: string;
+  }
+  const pending: Node[] = [{ value }];
+  let found: { readonly node: Node; readonly problem: "nul" | "surrogate" } | undefined;
+  while (found === undefined && pending.length > 0) {
+    const node = pending.pop()!;
+    // A key is checked when its entry is visited, so keys and values share document order.
+    const problem =
+      (node.key === undefined ? undefined : unstorableText(node.key)) ??
+      (typeof node.value === "string" ? unstorableText(node.value) : undefined);
+    if (problem !== undefined) {
+      found = { node, problem };
+    } else if (node.value !== null && typeof node.value === "object") {
+      const entries = Array.isArray(node.value)
+        ? node.value.map((entry, index) => [String(index), entry] as const)
+        : Object.entries(node.value);
+      // Reversed onto the stack, so the walk reports the first offender in document order.
+      // (A loop, not push(...entries): a large array would exceed the argument limit.)
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const [key, entry] = entries[index]!;
+        pending.push({ value: entry, parent: node, key });
+      }
+    }
+  }
+  if (found === undefined) {
+    return undefined;
+  }
+  const segments: string[] = [];
+  for (let node: Node | undefined = found.node; node?.key !== undefined; node = node.parent) {
+    segments.push(jsonPointer(node.key.replaceAll("\u0000", "?").replace(/\p{Cs}/gu, "?")));
+  }
+  segments.reverse();
+  // ErrorDetail paths are at most 512 characters; keep whole leading segments, or as much of
+  // the first one as fits (cut between escapes and whole characters).
+  let path = "";
+  for (const segment of segments) {
+    if (path.length + segment.length + 1 <= 512) {
+      path += `/${segment}`;
+      continue;
+    }
+    if (path === "") {
+      path = "/";
+      for (const piece of segment.match(/~[01]|[^]/gu) ?? []) {
+        if (path.length + piece.length > 512) {
+          break;
+        }
+        path += piece;
+      }
+    }
+    break;
+  }
+  const nul = found.problem === "nul";
+  return failure(
+    400,
+    "INVALID_REQUEST",
+    capped(
+      `The request does not match the operation contract: ${context} ${path || "/"} contains ${
+        nul ? "a NUL character" : "an unpaired UTF-16 surrogate"
+      }.`,
+    ),
+    [{ path, code: nul ? "INVALID_FORMAT" : "INVALID_VALUE" }],
+  );
+}
+
+/**
+ * Names each remaining kind and as many of its resource IDs as fit the 256-character
+ * message contract; a kind whose IDs do not all fit says how many are left.
+ */
+function namespaceNotEmptyMessage(error: NamespaceNotEmptyError): string {
+  const prefix = "The requested Namespace is not empty.";
+  if (error.contents.length === 0) {
+    return prefix;
+  }
+  const shown = new Map(error.contents.map((kind) => [kind, 0]));
+  const render = (): string => {
+    const parts = error.contents.map((kind) => {
+      const ids = error.ids[kind] ?? [];
+      const count = shown.get(kind) ?? 0;
+      if (ids.length === 0) {
+        return kind;
+      }
+      if (count === 0) {
+        return `${kind} (${ids.length})`;
+      }
+      const more = ids.length - count;
+      return `${kind} (${ids.slice(0, count).join(", ")}${more === 0 ? "" : ` and ${more} more`})`;
+    });
+    return `${prefix} It still contains: ${parts.join(", ")}.`;
+  };
+  // Add one ID per kind in turn, so a kind with many IDs cannot crowd out the ones after it
+  // (Configurations, the kind with no list route). A kind whose next ID does not fit is done.
+  const kinds = new Set(error.contents);
+  const done = new Set<string>();
+  while (done.size < kinds.size) {
+    for (const kind of kinds) {
+      const count = shown.get(kind) ?? 0;
+      if (done.has(kind)) {
+        continue;
+      }
+      shown.set(kind, count + 1);
+      if (count + 1 > (error.ids[kind]?.length ?? 0) || Array.from(render()).length > 256) {
+        shown.set(kind, count);
+        done.add(kind);
+      }
+    }
+  }
+  return capped(render());
 }
 
 function errorName(error: unknown): string | undefined {
@@ -232,6 +503,13 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof RuntimeLogsError) {
     const mapped = RUNTIME_LOG_FAILURES[error.code];
     return failure(mapped.status, error.code, mapped.message);
+  }
+  if (error instanceof RuntimeCredentialsForbiddenByClusterError) {
+    return failure(
+      503,
+      "RUNTIME_CREDENTIALS_CLUSTER_RBAC",
+      "The cluster denied OCC access needed for this Agent's runtime credentials. Ask a platform operator to grant the API ServiceAccount the documented tenant RoleBindings in the Agent's Kubernetes namespaces.",
+    );
   }
   if (error instanceof ChannelCredentialError) {
     const messages = {
@@ -311,6 +589,17 @@ export function requestFailure(error: unknown): RequestFailure {
         );
     }
   }
+  if (error instanceof DeviceAuthorizationStartError) {
+    // Device login starts at auth.openai.com from the API Pods, which the chart's default
+    // network policy does not allow, so name that cause when no connection was made.
+    return failure(
+      503,
+      "DEPENDENCY_UNAVAILABLE",
+      error.reason === "unreachable"
+        ? "OCC could not reach the sign-in service at auth.openai.com. An operator must allow HTTPS egress from the API Pods to it (Helm api.modelDiscoveryCidrs or the cluster's egress policy), then try again."
+        : "The sign-in service could not start device login. Try again.",
+    );
+  }
   if (error instanceof PluginDiscoveryError) {
     switch (error.reason) {
       case "credentials_rejected":
@@ -355,7 +644,13 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof CredentialGatewayNotConfiguredError) {
     return failure(409, "CREDENTIAL_GATEWAY_NOT_CONFIGURED", error.message);
   }
+  if (error instanceof SecretValueError) {
+    return failure(400, "INVALID_REQUEST", error.message, [{ path: "/value", code: error.code }]);
+  }
   if (error instanceof ConfigurationHarnessError) {
+    return failure(400, "INVALID_REQUEST", error.message);
+  }
+  if (error instanceof SecretBindingValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof NativeWorkerSupportError) {
@@ -364,8 +659,16 @@ export function requestFailure(error: unknown): RequestFailure {
   if (error instanceof PluginPolicyValidationError) {
     return failure(400, "INVALID_REQUEST", error.message);
   }
-  if (error instanceof PresetValidationError) {
-    return failure(400, "INVALID_REQUEST", "The supplied Preset template is invalid.");
+  if (error instanceof PresetValidationError && error instanceof Error) {
+    // Preset messages name the template path (including submitted object keys) and the
+    // rule, not submitted values.
+    return failure(400, "INVALID_REQUEST", capped(error.message));
+  }
+  if (error instanceof ModelCredentialValueError || error instanceof ModelProviderSettingError) {
+    // The message names only the field; other Configuration validation stays generic.
+    // The field's path includes a submitted provider name, so it is capped like other
+    // messages that name submitted object keys.
+    return failure(400, "INVALID_REQUEST", capped(error.message));
   }
   if (error instanceof ConfigurationValidationError) {
     return failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.");
@@ -374,16 +677,10 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(503, "DEPENDENCY_UNAVAILABLE", "A required platform dependency is unavailable.");
   }
   if (error instanceof NamespaceNotReadyError) {
-    return failure(
-      409,
-      "NAMESPACE_NOT_READY",
-      "The requested Namespace is not ready for deployment.",
-    );
+    return failure(409, "NAMESPACE_NOT_READY", "The requested Namespace is not ready.");
   }
   if (error instanceof NamespaceNotEmptyError) {
-    const contents =
-      error.contents.length === 0 ? "" : ` It still contains: ${error.contents.join(", ")}.`;
-    return failure(409, "NAMESPACE_NOT_EMPTY", `The requested Namespace is not empty.${contents}`);
+    return failure(409, "NAMESPACE_NOT_EMPTY", namespaceNotEmptyMessage(error));
   }
   if (error instanceof AgentDeletingError) {
     return failure(409, "AGENT_DELETING", "The requested Agent is being deleted.");
@@ -460,12 +757,12 @@ export function requestFailure(error: unknown): RequestFailure {
       candidate.code === "FST_ERR_CTP_INVALID_JSON_BODY" ||
       candidate.statusCode === 400
     ) {
-      const details = validationDetails(candidate);
+      const problems = validationProblems(candidate);
       return failure(
         400,
         "INVALID_REQUEST",
-        contractMessage(candidate, details),
-        details.length > 0 ? details : undefined,
+        contractMessage(candidate, problems),
+        problems.length > 0 ? problems.map(({ detail }) => detail) : undefined,
       );
     }
     if (error.name === "AdmissionFailure") {
@@ -479,9 +776,9 @@ export function requestFailure(error: unknown): RequestFailure {
         status === 403 ? "FORBIDDEN" : "UNAUTHENTICATED",
         status === 403
           ? reason === "untrusted_origin"
-            ? "A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header."
+            ? UNTRUSTED_ORIGIN_MESSAGE
             : "The request did not satisfy the configured admission boundary."
-          : "The caller did not provide valid admission evidence.",
+          : "A valid session cookie or service API key is required: the credential sent is missing, invalid, expired, or revoked. Send service API keys in the x-api-key header; Authorization bearer tokens are not accepted.",
       );
     }
   }

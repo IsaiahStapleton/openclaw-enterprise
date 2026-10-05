@@ -149,6 +149,72 @@ async function exportedRecords(out, mapRecord) {
     });
 }
 
+// A test that checks what the Collector drops ends its OTLP request with this
+// sentinel, a record the Collector exports. The logs pipeline is a single chain,
+// and its batch processor takes a request whole and sends it in one export (these
+// requests are far below send_batch_max_size), so once the sentinel reaches the
+// backend, so has every earlier record of the request that survived filtering.
+const sentinelPhase = "collector-sentinel";
+
+function sentinelLogs(resource) {
+  const record = {
+    event: "runtime.startup_phase",
+    container: "sentinel",
+    phase: sentinelPhase,
+    outcome: "ok",
+    ms: 0,
+    sinceStartMs: 0,
+  };
+  return {
+    resource,
+    scopeLogs: [
+      {
+        logRecords: [
+          {
+            timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+            body: { stringValue: JSON.stringify(record) },
+            attributes: [{ key: "log.iostream", value: { stringValue: "stderr" } }],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+// Waits for the sentinel and returns the other exported records.
+async function exportedThroughSentinel(out, mapRecord) {
+  const isSentinel = (record) =>
+    attributes(record.attributes)["occ.startup.phase"] === sentinelPhase;
+  let exported = [];
+  let unreadable;
+  try {
+    await waitFor(async () => {
+      try {
+        exported = await exportedRecords(out, (resource, record) => ({ resource, record }));
+        unreadable = undefined;
+      } catch (error) {
+        // The backend may still be writing the export line.
+        if (error instanceof SyntaxError) {
+          unreadable = error;
+          return false;
+        }
+        throw error;
+      }
+      return exported.some(({ record }) => isSentinel(record));
+    });
+  } catch (error) {
+    if (unreadable !== undefined) {
+      throw new Error(`The Collector export never became readable: ${unreadable.message}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  return exported
+    .filter(({ record }) => !isSentinel(record))
+    .map(({ resource, record }) => mapRecord(resource, record));
+}
+
 test(
   "native Collector filters actual Docker forwarding, binds transport identity, and survives exporter outage",
   {
@@ -179,6 +245,9 @@ test(
     const namespaceId = `ns_${randomUUID()}`;
     const agentId = `agt_${randomUUID()}`;
     const revisionId = `rev_${randomUUID()}`;
+    const presetNamespaceId = `ns_${randomUUID()}`;
+    const presetId = `pre_${randomUUID()}`;
+    const restrictionUuid = randomUUID();
     const canaries = ["password", "token", "prompt", "tool-output", "email", "session"].map(
       (kind) => `CANARY_${kind}_${fixture.suffix}`,
     );
@@ -306,6 +375,51 @@ test(
           status: 503,
           ...payload,
         }),
+        JSON.stringify({
+          event: "authentication.provider-unavailable-warning",
+          severity: "WARN",
+          provider: "github",
+          providerId: `github:providerkey${fixture.suffix}`,
+          step: "membership",
+          cause: "http_status",
+          status: 403,
+          ...payload,
+        }),
+        JSON.stringify({
+          event: "presets.default-refresh-skipped",
+          severity: "WARN",
+          namespaceId: presetNamespaceId,
+          presetId,
+          presetName: `presetname${fixture.suffix}`,
+          reason: `refusalreason${fixture.suffix}`,
+          restrictionIds: [`res_${restrictionUuid}`],
+          ...payload,
+        }),
+        JSON.stringify({
+          event: "presets.default-create-skipped",
+          severity: "WARN",
+          namespaceId: presetNamespaceId,
+          presetName: `presetname${fixture.suffix}`,
+          reason: `refusalreason${fixture.suffix}`,
+          restrictionIds: [`res_${restrictionUuid}`],
+          ...payload,
+        }),
+        JSON.stringify({
+          event: "presets.bundled-default-shadowed",
+          severity: "WARN",
+          presetName: `presetname${fixture.suffix}`,
+          presetFile: `/etc/occ/presets/presetfile${fixture.suffix}.json`,
+          ...payload,
+        }),
+        JSON.stringify({
+          event: "authentication.provider-unavailable-warning",
+          severity: "WARN",
+          provider: "google",
+          providerId: `google:providerkey${fixture.suffix}`,
+          step: "token",
+          cause: "client_rejected",
+          ...payload,
+        }),
       ],
       [],
       ["com.docker.compose.service=controller"],
@@ -321,13 +435,16 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 7);
+    await waitFor(async () => (await records()).length >= 12);
     const initial = await records();
-    assert.equal(initial.length, 7, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 12, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [
       "compute.preflight-warning",
       "authentication.sign-in-limited",
       "authentication.provider-unavailable-warning",
+      "presets.bundled-default-shadowed",
+      "presets.default-create-skipped",
+      "presets.default-refresh-skipped",
     ];
     for (const { resource, record } of initial) {
       assert.ok(record.timeUnixNano, "OTLP record has an Engine timestamp");
@@ -343,6 +460,11 @@ test(
     }
     assert.deepEqual(initial.map(({ resource }) => resource["service.name"]).sort(), [
       "codex-app-server",
+      "occ-api",
+      "occ-api",
+      "occ-api",
+      "occ-api",
+      "occ-api",
       "occ-api",
       "occ-api",
       "occ-api",
@@ -402,14 +524,68 @@ test(
       {
         "event.name": "authentication.provider-unavailable-warning",
         "log.iostream": "stdout",
+        "occ.sign_in.provider": "github",
+        "occ.sign_in.step": "membership",
+        "occ.sign_in.cause": "http_status",
+        "occ.sign_in.status": "403",
+      },
+      {
+        "event.name": "authentication.provider-unavailable-warning",
+        "log.iostream": "stdout",
+        "occ.sign_in.provider": "google",
+        "occ.sign_in.step": "token",
+        "occ.sign_in.cause": "client_rejected",
+      },
+      {
+        "event.name": "authentication.provider-unavailable-warning",
+        "log.iostream": "stdout",
         "occ.code": "ECONNREFUSED",
         "occ.sign_in.provider": "oidc",
         "occ.sign_in.step": "token",
         "occ.sign_in.cause": "connect_refused",
       },
     ]);
+    // A refused default-Preset refresh keeps the Namespace and Preset IDs; the Preset name,
+    // the refusal text and the Restriction IDs stay in local logs.
+    const skipped = initial.find(
+      ({ record }) => record.body.stringValue === "presets.default-refresh-skipped",
+    );
+    assert.equal(skipped.record.severityText, "WARN");
+    assert.deepEqual(attributes(skipped.record.attributes), {
+      "event.name": "presets.default-refresh-skipped",
+      "log.iostream": "stdout",
+      "occ.namespace.id": presetNamespaceId,
+      "occ.preset.id": presetId,
+    });
+    // A default creation a Restriction refused keeps only its Namespace ID.
+    const uncreated = initial.find(
+      ({ record }) => record.body.stringValue === "presets.default-create-skipped",
+    );
+    assert.equal(uncreated.record.severityText, "WARN");
+    assert.deepEqual(attributes(uncreated.record.attributes), {
+      "event.name": "presets.default-create-skipped",
+      "log.iostream": "stdout",
+      "occ.namespace.id": presetNamespaceId,
+    });
+    // A bundled default an operator file shadowed carries no IDs: its name and file stay local.
+    const shadowed = initial.find(
+      ({ record }) => record.body.stringValue === "presets.bundled-default-shadowed",
+    );
+    assert.equal(shadowed.record.severityText, "WARN");
+    assert.deepEqual(attributes(shadowed.record.attributes), {
+      "event.name": "presets.bundled-default-shadowed",
+      "log.iostream": "stdout",
+    });
     const serialized = JSON.stringify(initial);
     assert.equal(serialized.includes("compute.preflight-warning-unreviewed"), false);
+    for (const local of [
+      `presetname${fixture.suffix}`,
+      `presetfile${fixture.suffix}`,
+      `refusalreason${fixture.suffix}`,
+      restrictionUuid,
+    ]) {
+      assert.equal(serialized.includes(local), false, local);
+    }
     assert.equal(serialized.includes(`limitkey${fixture.suffix}`), false);
     assert.equal(serialized.includes(`providerkey${fixture.suffix}`), false);
     for (const value of [...canaries, "forged-service", "forged-agent"]) {
@@ -822,16 +998,13 @@ test(
           },
         ],
       },
+      sentinelLogs(resource("gateway")),
     ]);
-    const records = async () =>
-      exportedRecords(fixture.out, (resource, record) => ({
-        resource: attributes(resource.resource?.attributes),
-        attributes: attributes(record.attributes),
-        record,
-      }));
-    await waitFor(async () => (await records()).length >= 13);
-    await delay(1_000);
-    const exported = await records();
+    const exported = await exportedThroughSentinel(fixture.out, (resource, record) => ({
+      resource: attributes(resource.resource?.attributes),
+      attributes: attributes(record.attributes),
+      record,
+    }));
     for (const { resource } of exported) {
       assert.equal(resource["openclaw.namespace.id"], namespaceId);
       assert.equal(resource["openclaw.agent.id"], agentId);
@@ -1004,15 +1177,12 @@ test(
           },
         ],
       },
+      sentinelLogs(resource),
     ]);
-    const records = async () =>
-      exportedRecords(fixture.out, (_resource, record) => ({
-        attributes: attributes(record.attributes),
-        record,
-      }));
-    await waitFor(async () => (await records()).length >= 9);
-    await delay(1_000);
-    const exported = await records();
+    const exported = await exportedThroughSentinel(fixture.out, (_resource, record) => ({
+      attributes: attributes(record.attributes),
+      record,
+    }));
     const summary = exported
       .map(({ attributes: kept, record }) =>
         JSON.stringify([
@@ -1133,15 +1303,12 @@ test(
           },
         ],
       },
+      sentinelLogs(resource),
     ]);
-    const records = async () =>
-      exportedRecords(fixture.out, (_resource, record) => ({
-        attributes: attributes(record.attributes),
-        record,
-      }));
-    await waitFor(async () => (await records()).length >= 5);
-    await delay(1_000);
-    const exported = await records();
+    const exported = await exportedThroughSentinel(fixture.out, (_resource, record) => ({
+      attributes: attributes(record.attributes),
+      record,
+    }));
     assert.deepEqual(
       exported
         .map(({ attributes: kept, record }) =>

@@ -1,3 +1,15 @@
+import {
+  ADMISSION_LIMIT_DETAILS,
+  OpenShellAdmissionLimitError,
+  OpenShellGatewayFailure,
+  OpenShellProviderAlreadyExistsError,
+  OpenShellRequestReplayRefusedError,
+  OpenShellSandboxAlreadyExistsError,
+  OpenShellWorkspaceAlreadyExistsError,
+  REPLAY_REFUSAL_REASONS,
+  openShellErrorReason,
+  statusCode,
+} from "./openshell-gateway-errors.ts";
 import { asRecord, isNonEmptyString } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -6,6 +18,14 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Client, ClientUnaryCall, Metadata, ServiceClientConstructor } from "@grpc/grpc-js";
 import type { PackageDefinition } from "@grpc/proto-loader";
+
+export {
+  OpenShellAdmissionLimitError,
+  OpenShellProviderAlreadyExistsError,
+  OpenShellRequestReplayRefusedError,
+  OpenShellSandboxAlreadyExistsError,
+  OpenShellWorkspaceAlreadyExistsError,
+} from "./openshell-gateway-errors.ts";
 
 type RecordValue = Readonly<Record<string, unknown>>;
 
@@ -31,9 +51,17 @@ export interface OpenShellSandboxCreateRequest {
   }[];
 }
 
+/** Selects one Sandbox by name in a Workspace (GetSandbox, DeleteSandbox). */
 export interface OpenShellSandboxDeleteRequest {
   readonly name: string;
   readonly workspace: string;
+}
+
+export interface OpenShellServiceRequest {
+  readonly sandbox: string;
+  readonly workspace: string;
+  /** Empty selects the unnamed endpoint. */
+  readonly service: string;
 }
 
 export interface OpenShellSandboxResponse {
@@ -41,6 +69,7 @@ export interface OpenShellSandboxResponse {
   readonly id?: string;
   readonly workspace?: string;
   readonly labels: Readonly<Record<string, string>>;
+  readonly annotations: Readonly<Record<string, string>>;
   readonly phase?: string | number;
   readonly serviceUrls: Readonly<Record<string, string>>;
 }
@@ -169,6 +198,13 @@ export interface OpenShellGatewayClient extends OpenShellSandboxLogReader {
     request: OpenShellSandboxCreateRequest,
     signal: AbortSignal,
   ): Promise<OpenShellSandboxResponse>;
+  /** Undefined when the Sandbox does not exist. Service URLs are always empty. */
+  getSandbox(
+    request: OpenShellSandboxDeleteRequest,
+    signal: AbortSignal,
+  ): Promise<OpenShellSandboxResponse | undefined>;
+  /** The exposed service's URL, or undefined when the endpoint does not exist. */
+  getServiceUrl(request: OpenShellServiceRequest, signal: AbortSignal): Promise<string | undefined>;
   deleteSandbox(request: OpenShellSandboxDeleteRequest, signal: AbortSignal): Promise<void>;
   getProviderProfile(
     workspace: string,
@@ -231,6 +267,8 @@ type OpenShellMethod =
   | "CreateWorkspace"
   | "DeleteWorkspace"
   | "CreateSandbox"
+  | "GetSandbox"
+  | "GetService"
   | "DeleteSandbox"
   | "GetSandboxLogs"
   | "GetSandboxProviderStatus"
@@ -254,35 +292,6 @@ type OpenShellUnaryMethod = (
 
 type OpenShellGrpcClient = Client & Record<OpenShellMethod, OpenShellUnaryMethod>;
 
-class OpenShellGatewayFailure extends Error {}
-
-export class OpenShellSandboxAlreadyExistsError extends Error {
-  readonly sandboxName: string;
-
-  constructor(sandboxName: string) {
-    super(`OpenShell Sandbox ${sandboxName} already exists.`);
-    this.sandboxName = sandboxName;
-  }
-}
-
-export class OpenShellProviderAlreadyExistsError extends Error {
-  readonly providerName: string;
-
-  constructor(providerName: string) {
-    super(`OpenShell provider ${providerName} already exists.`);
-    this.providerName = providerName;
-  }
-}
-
-export class OpenShellWorkspaceAlreadyExistsError extends Error {
-  readonly workspaceName: string;
-
-  constructor(workspaceName: string) {
-    super(`OpenShell Workspace ${workspaceName} already exists.`);
-    this.workspaceName = workspaceName;
-  }
-}
-
 const CLIENT_MODULE = "@grpc/grpc-js";
 const LOADER_MODULE = "@grpc/proto-loader";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -298,9 +307,40 @@ function deadline(timeoutMs: number): Date {
   return new Date(Date.now() + timeoutMs);
 }
 
-function statusCode(error: unknown): number | undefined {
-  const candidate = asRecord(error)?.code;
-  return typeof candidate === "number" ? candidate : undefined;
+function sandboxResponse(
+  response: RecordValue,
+  operation: string,
+  endpoint: string,
+): OpenShellSandboxResponse {
+  const sandbox = asRecord(response.sandbox);
+  const metadata = asRecord(sandbox?.metadata);
+  const name = metadata?.name;
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new OpenShellGatewayFailure(`OpenShell ${operation} returned no stable name.`);
+  }
+  const phase = asRecord(sandbox?.status)?.phase;
+  return Object.freeze({
+    name,
+    ...(typeof metadata?.id === "string" && metadata.id.length > 0 ? { id: metadata.id } : {}),
+    ...(typeof metadata?.workspace === "string" && metadata.workspace.length > 0
+      ? { workspace: metadata.workspace }
+      : {}),
+    labels: Object.freeze({
+      ...(asRecord(metadata?.labels) as Record<string, string> | undefined),
+    }),
+    annotations: Object.freeze({
+      ...(asRecord(metadata?.annotations) as Record<string, string> | undefined),
+    }),
+    serviceUrls: Object.freeze(
+      Object.fromEntries(
+        Object.entries(asRecord(response.service_urls) ?? {}).map(([service, value]) => [
+          service,
+          normalizeServiceUrl(value, endpoint),
+        ]),
+      ),
+    ),
+    ...(phase === undefined ? {} : { phase: phase as string | number }),
+  });
 }
 
 function workspaceResponse(response: RecordValue, operation: string): OpenShellWorkspaceResponse {
@@ -715,39 +755,71 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
       if (statusCode(error) === grpc.status.ALREADY_EXISTS) {
         throw new OpenShellSandboxAlreadyExistsError(request.name);
       }
+      const reason = openShellErrorReason(error, grpc.status.FAILED_PRECONDITION);
+      if (
+        statusCode(error) === grpc.status.FAILED_PRECONDITION &&
+        reason !== undefined &&
+        REPLAY_REFUSAL_REASONS.has(reason)
+      ) {
+        const details = asRecord(error)?.details;
+        throw new OpenShellRequestReplayRefusedError(
+          reason,
+          typeof details === "string" ? details : "request_id refused",
+        );
+      }
       throw error;
-    }
-    const sandbox = asRecord(response.sandbox);
-    const metadata = asRecord(sandbox?.metadata);
-    const name = metadata?.name;
-    if (typeof name !== "string" || name.trim().length === 0) {
-      throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no stable name.");
     }
     const serviceUrls = asRecord(response.service_urls);
     if (serviceUrls === undefined && request.serviceExposures.length !== 0) {
       throw new OpenShellGatewayFailure("OpenShell CreateSandbox returned no service URL map.");
     }
-    return Object.freeze({
-      name,
-      ...(typeof metadata?.id === "string" && metadata.id.length > 0 ? { id: metadata.id } : {}),
-      ...(typeof metadata?.workspace === "string" && metadata.workspace.length > 0
-        ? { workspace: metadata.workspace }
-        : {}),
-      labels: Object.freeze({
-        ...(asRecord(metadata?.labels) as Record<string, string> | undefined),
-      }),
-      serviceUrls: Object.freeze(
-        Object.fromEntries(
-          Object.entries(serviceUrls ?? {}).map(([service, value]) => [
-            service,
-            normalizeServiceUrl(value, this.options.endpoint),
-          ]),
+    return sandboxResponse(response, "CreateSandbox", this.options.endpoint);
+  }
+
+  async getSandbox(
+    request: OpenShellSandboxDeleteRequest,
+    signal: AbortSignal,
+  ): Promise<OpenShellSandboxResponse | undefined> {
+    try {
+      return sandboxResponse(
+        await this.unary(
+          "GetSandbox",
+          { name: request.name, workspace_scope: { workspace: request.workspace } },
+          signal,
         ),
-      ),
-      ...(asRecord(sandbox?.status)?.phase === undefined
-        ? {}
-        : { phase: asRecord(sandbox?.status)?.phase as string | number }),
-    });
+        "GetSandbox",
+        this.options.endpoint,
+      );
+    } catch (error) {
+      if (await this.isStatus(error, "NOT_FOUND")) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  async getServiceUrl(
+    request: OpenShellServiceRequest,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    let response: RecordValue;
+    try {
+      response = await this.unary(
+        "GetService",
+        {
+          sandbox: request.sandbox,
+          name: request.service,
+          workspace_scope: { workspace: request.workspace },
+        },
+        signal,
+      );
+    } catch (error) {
+      if (await this.isStatus(error, "NOT_FOUND")) {
+        return undefined;
+      }
+      throw error;
+    }
+    return normalizeServiceUrl(response.url, this.options.endpoint);
   }
 
   async deleteSandbox(request: OpenShellSandboxDeleteRequest, signal: AbortSignal): Promise<void> {
@@ -1101,7 +1173,14 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
               return;
             }
             if (error !== null) {
-              reject(error);
+              const details = asRecord(error)?.details;
+              reject(
+                statusCode(error) === grpc.status.RESOURCE_EXHAUSTED &&
+                  typeof details === "string" &&
+                  details.startsWith(ADMISSION_LIMIT_DETAILS)
+                  ? new OpenShellAdmissionLimitError(method, error)
+                  : error,
+              );
               return;
             }
             resolve(asRecord(response) ?? {});
@@ -1126,8 +1205,16 @@ export class GrpcOpenShellGatewayClient implements OpenShellGatewayClient {
     if (this.client !== undefined) {
       return this.client;
     }
-    this.client = this.createClient();
-    return this.client;
+    const created = this.createClient();
+    this.client = created;
+    // A failed setup (unreadable root certificate, missing gRPC module) is retried
+    // by the next call instead of failing every later call for this endpoint.
+    created.catch(() => {
+      if (this.client === created) {
+        this.client = undefined;
+      }
+    });
+    return created;
   }
 
   private async createClient(): Promise<{

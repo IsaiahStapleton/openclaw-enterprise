@@ -111,7 +111,10 @@ const response = await fetch(url, {
   headers: { "x-api-key": key, "content-type": "application/json" },
   body: JSON.stringify({ name: "model-api-key", value }),
 });
-if (response.status !== 201) throw new Error(`Secret creation failed: HTTP ${response.status}`);
+if (response.status !== 201) {
+  const error = (await response.json().catch(() => null))?.error;
+  throw new Error(`Secret creation failed: HTTP ${response.status} ${error?.code ?? ""}: ${error?.message ?? ""}`);
+}
 console.log(JSON.stringify(await response.json()));
 JS
 ```
@@ -226,8 +229,8 @@ for verification and safe upstream revocation.
 There is no value history, automatic rotation, automatic workload restart, or
 value rollback. Updating or deleting an OCC Secret does not remove credentials
 already delivered to a running process environment, and deletion is blocked while
-current Configurations, Agent drafts, active revisions, or pending deployments still depend on
-the Secret. For a compromised credential, stop the affected workloads and revoke
+current Configurations, credential sources, Agent drafts, active revisions, or pending
+deployments still depend on the Secret. For a compromised credential, stop the affected workloads and revoke
 the credential at the upstream provider; then update the OCC Secret with a
 replacement value and redeploy the intended consumers. Delete the Secret only
 after its reference dependencies are cleared; see [Delete](#delete).
@@ -240,7 +243,7 @@ at the configured `OCC_URL`. Set `OCC_ORIGIN` to the configured Console origin
 from `OCC_AUTH_BASE_URL` (scheme, host, and optional port only):
 
 ```bash
-curl -fsS \
+curl --fail-with-body -sS \
   "$OCC_URL/namespaces/$NAMESPACE_ID/secrets/$SECRET_ID" \
   -X DELETE \
   -H "Origin: $OCC_ORIGIN" \
@@ -248,7 +251,7 @@ curl -fsS \
 ```
 
 Successful deletion returns HTTP `204`. OCC denies deletion while the Secret is
-referenced by any current Configuration, credential source, Agent draft, active revision, or pending deployment.
+referenced by any current Configuration, credential source, Agent draft, active revision, pending deployment, or queued or running Agent provisioning request.
 Inactive historical revisions alone do not prevent deletion.
 Namespace removal is also blocked while owned Secrets remain. Agent removal does
 not own or garbage-collect Namespace Secret storage.
@@ -260,8 +263,10 @@ metadata cleanup after OCC verifies the stored backend identity.
 
 ## Troubleshooting
 
-- **Secret create returns `409`:** Wait until the platform Namespace is `ready`
-  and its backing Kubernetes namespace is bound to the exact Namespace ID.
+- **Secret create returns `409`:** For `RESOURCE_CONFLICT` with "A Secret with
+  this name already exists in this Namespace", choose another name or update the
+  existing Secret. For `NAMESPACE_NOT_READY`, wait until the platform Namespace is
+  `ready` and its backing Kubernetes namespace is bound to the exact Namespace ID.
 - **Secret operation returns `403`:** Verify OCC permission for the exact Secret
   or parent Namespace. For binding or Agent assignment, also verify caller
   `operate` on each exact Secret. For deployment, verify both the deploying actor

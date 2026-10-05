@@ -32,7 +32,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" get storageclasses
 ```
 
 Check that the node list shows both roles and that the expected StorageClasses
-exist. Allow capacity for all running Agents. Dedicated Codex also needs a node
+exist. Allow node memory for all running Agents: with the profile defaults each
+embedded OpenClaw Agent requests 1792 MiB and each dedicated Codex Agent 2560
+MiB ([sizing](installation-profiles.md)). Dedicated Codex also needs a node
 syscall policy compatible with its command sandbox; review the
 [Compute requirements](../../reference/drivers/kubernetes-compute.md#requirements)
 before selecting node images.
@@ -58,6 +60,12 @@ Record the DNS Pod selectors for both Helm `dns` and Installation Compute
 addresses and ports as observed from controller Pods. These become the shared
 installation's network settings; do not substitute whole cluster or VPC ranges.
 See [networking and isolation](../../reference/drivers/kubernetes-compute/networking-and-isolation.md).
+
+On OpenShift, select the actual DNS backend namespace and Pod labels; the
+[Helm DNS grants](../../reference/settings/production.md#required-production-controller-environment)
+permit both Service and backend ports. Verify UDP and TCP DNS resolution from
+the initialization, API, worker, and enabled supporting workloads, plus denied
+traffic to a Pod outside the configured DNS selectors.
 
 ## Configure the protected copies and install
 

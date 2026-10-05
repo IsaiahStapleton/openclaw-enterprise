@@ -8,10 +8,10 @@ The Slack card shows **Not configured**, **Disabled**, or
 **Configured (enabled)** based on saved settings: Socket Mode, selected channels, and allowed users. This is not a
 live connection indicator.
 
-Version cards are read-only. On the new version draft, **Configure** or **Edit** opens
-a drawer; **Disable** saves a disabled channel setting. These changes affect
+Version cards are read-only. On the new version draft, **Configure Slack** or **Edit Slack**
+opens a drawer; **Disable Slack** saves a disabled channel setting. These changes affect
 future deployments, including other Agents sharing that Configuration. They do
-not stop a running channel or modify an existing revision. Channels require
+not stop a running channel or modify an existing version. Channels require
 Dedicated execution; unsupported native settings can make the simple editor
 unavailable.
 
@@ -34,6 +34,10 @@ Saving preserves existing direct-message and group policies. Channel user IDs do
 not edit `allowFrom`, and **No selected channels** describes the saved channel
 list; it does not by itself determine whether DMs work.
 See [Slack setup](../integrations/slack.md) for credentials and policy details.
+
+In any Secret picker, typing a Secret's exact name selects it when you press
+Enter or leave the field, as choosing its suggestion does; other text restores
+the bound Secret.
 
 **Create Secret** stores the value immediately. Cancelling the channel drawer
 discards token selections but does not delete that Namespace Secret. The modal

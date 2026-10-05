@@ -26,11 +26,18 @@ See [authentication](authentication.md) for supported credentials and their scop
 
 Non-success JSON responses use the following envelope.
 Each operation lists its supported status codes.
+A NUL character or an unpaired UTF-16 surrogate in any request body string,
+object key or path parameter is refused with `400 INVALID_REQUEST`.
+Operations that take a request body list `413` and `415`. Any request whose
+declared body size exceeds the route's limit is refused with
+`413 PAYLOAD_TOO_LARGE`, and any POST, PUT, PATCH or DELETE request with a
+body that is not JSON with `415 UNSUPPORTED_MEDIA_TYPE`, even on an
+operation that takes no body.
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `error` | `object` | Yes | — |
-| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "CREDENTIAL_GATEWAY_NOT_CONFIGURED" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE" or "CHANNEL_CREDENTIAL_ROLE_MISMATCH" or "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED" or "CHANNEL_CREDENTIAL_UNAVAILABLE" or "CHANNEL_CREDENTIAL_BINDING_REQUIRED" or "RUNTIME_LOGS_CURSOR_INVALID" or "RUNTIME_LOGS_POD_INVALID" or "RUNTIME_LOGS_SOURCE_UNAVAILABLE" or "RUNTIME_LOGS_RATE_LIMITED" or "RUNTIME_LOGS_CLUSTER_RBAC" or "RUNTIME_LOGS_SANDBOX_NOT_FOUND" or "RUNTIME_LOGS_UNAVAILABLE" or "RUNTIME_LOGS_AUDIT_UNAVAILABLE" or "RUNTIME_LOGS_TIMEOUT"` | Yes | — |
+| `error.code` | `"INVALID_REQUEST" or "UNAUTHENTICATED" or "FORBIDDEN" or "NOT_FOUND" or "METHOD_NOT_ALLOWED" or "INSTALLATION_EXISTS" or "RESOURCE_CONFLICT" or "AGENT_DELETING" or "NAMESPACE_NOT_READY" or "NAMESPACE_NOT_EMPTY" or "PAYLOAD_TOO_LARGE" or "UNSUPPORTED_MEDIA_TYPE" or "UNKNOWN_OUTCOME" or "NOT_IMPLEMENTED" or "INTERNAL_ERROR" or "DEPENDENCY_UNAVAILABLE" or "CREDENTIAL_GATEWAY_NOT_CONFIGURED" or "REPOSITORY_OPTIONS_UNAVAILABLE" or "MODEL_DISCOVERY_CREDENTIALS_REJECTED" or "MODEL_DISCOVERY_RATE_LIMITED" or "MODEL_DISCOVERY_UNAVAILABLE" or "MODEL_DISCOVERY_INVALID_RESPONSE" or "PLUGIN_DISCOVERY_CREDENTIALS_REJECTED" or "PLUGIN_DISCOVERY_RATE_LIMITED" or "PLUGIN_DISCOVERY_UNAVAILABLE" or "PLUGIN_DISCOVERY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_CREDENTIALS_REJECTED" or "CHANNEL_DIRECTORY_MISSING_SCOPE" or "CHANNEL_DIRECTORY_RATE_LIMITED" or "CHANNEL_DIRECTORY_INVALID_RESPONSE" or "CHANNEL_DIRECTORY_UNAVAILABLE" or "CHANNEL_CREDENTIAL_ROLE_MISMATCH" or "CHANNEL_CREDENTIAL_CREDENTIALS_REJECTED" or "CHANNEL_CREDENTIAL_UNAVAILABLE" or "CHANNEL_CREDENTIAL_BINDING_REQUIRED" or "RUNTIME_LOGS_CURSOR_INVALID" or "RUNTIME_LOGS_POD_INVALID" or "RUNTIME_LOGS_SOURCE_UNAVAILABLE" or "RUNTIME_LOGS_RATE_LIMITED" or "RUNTIME_LOGS_CLUSTER_RBAC" or "RUNTIME_LOGS_SANDBOX_NOT_FOUND" or "RUNTIME_LOGS_UNAVAILABLE" or "RUNTIME_LOGS_AUDIT_UNAVAILABLE" or "RUNTIME_LOGS_TIMEOUT" or "RUNTIME_CREDENTIALS_CLUSTER_RBAC"` | Yes | — |
 | `error.details` | `array<object>` | No | max items: 32 |
 | `error.details[].code` | `"REQUIRED" or "UNKNOWN_FIELD" or "INVALID_TYPE" or "INVALID_FORMAT" or "INVALID_VALUE" or "TOO_LONG" or "TOO_DEEP"` | Yes | — |
 | `error.details[].path` | `string` | Yes | max length: 512; pattern: `^(?:/(?:[^~/]\|~0\|~1)*)*$` |
@@ -1885,8 +1892,6 @@ Experimental: Discard a local device login without upstream revocation
 | `403` | Forbidden |
 | `404` | Not Found |
 | `409` | Conflict |
-| `413` | Payload Too Large |
-| `415` | Unsupported Media Type |
 | `500` | Internal Server Error |
 | `501` | Not Implemented |
 | `503` | Service Unavailable |
@@ -2166,12 +2171,13 @@ Create a new Agent and queue first-time provisioning
 
 **Operation ID:** `provisionAgent`
 
-**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires create permission for Configuration resources in the requested Namespace. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each existing Secret reference supplied in provisioning inputs.
+**Permissions:** Requires create permission for Agent resources in the requested Namespace. Requires create permission for Configuration resources in the requested Namespace. Requires administer permission on the requested Installation. Requires read permission on each currently associated or newly associated ServiceAccount when present. Requires operate permission on each existing Secret reference supplied in provisioning inputs.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
 | `create` | `agent` | `namespace` |
 | `create` | `configuration` | `namespace` |
+| `administer` | `installation` | `requested` |
 | `read` | `service_account` | `requested` (when associated) |
 | `operate` | `secret` | `requested` (when bound) |
 
@@ -2195,7 +2201,7 @@ Create a new Agent and queue first-time provisioning
 | `configuration.secretBindings` | `object<string, object>` | No | Optional Secret binding map. Keys are destination environment variable names; at most 64 bindings are accepted. Each value must contain `source.kind`, `source.namespaceId`, and `source.id`, and may contain `delivery.type: "env"`. Admission rejects reserved or process-control destinations such as `OPENCLAW_*`, `CODEX_*`, `OPENAI_*`, `ANTHROPIC_*`, `OCC_*`, `KUBERNETES_*`, `PATH`, `HOME`, and proxy variables. Model authentication belongs to Agent.harnessAuth. |
 | `configuration.values` | `object<string, SafeJsonValue>` | Yes | A native OpenClaw configuration document. |
 | `executionMode` | `"embedded" or "dedicated"` | No | — |
-| `harnessAuth` | `object or object or object or object or object or object or null` | No | — |
+| `harnessAuth` | `object or object or object or object or object or object or null` | No | Dedicated Harness authentication. `credential_source` is refused with 400 INVALID_REQUEST: create the Agent with the source, then deploy it. |
 | `initialWorkspaceFiles` | `object` | No | — |
 | `initialWorkspaceFiles.AGENTS.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
 | `initialWorkspaceFiles.IDENTITY.md` | `string` | No | max length: 16384; pattern: `^[^\u0000]*$` |
@@ -2261,11 +2267,20 @@ Get first-time provisioning status for one exact work item
 
 **Operation ID:** `getAgentProvisioning`
 
-**Permissions:** Requires current read authorization for the accepted Agent provisioning record. Before Agent creation, only the initiating actor in the exact Namespace can use the work item.
+**Permissions:** Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can read it. The caller also needs read, operate and deploy permission on the work's Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret the work binds or uses for Harness authentication, and read permission on its Harness ServiceAccount when present. OCC re-checks these grants against the initiator while the work runs.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `read` | `agent` | `requested` |
+| `create` | `agent` | `namespace` |
+| `create` | `configuration` | `namespace` |
+| `administer` | `installation` | `requested` |
+| `read` | `agent` | `requested` (once created) |
+| `operate` | `agent` | `requested` (once created) |
+| `deploy` | `agent` | `requested` (once created) |
+| `read` | `configuration` | `requested` (once created) |
+| `update` | `configuration` | `requested` (once created) |
+| `read` | `service_account` | `requested` (when associated) |
+| `operate` | `secret` | `requested` (when bound) |
 
 ##### Parameters
 
@@ -2314,11 +2329,20 @@ Retry failed first-time provisioning for one exact work item
 
 **Operation ID:** `retryAgentProvisioning`
 
-**Permissions:** Requires current operate authorization for the accepted Agent provisioning record. Before Agent creation, only the initiating actor in the exact Namespace can use the work item.
+**Permissions:** Requires create permission for Agent and Configuration resources in the requested Namespace and administer permission on the Installation. These are checked from the request path before any lookup, so a caller without them gets 403 whether or not the Namespace or work item exists. Only the principal that started the work can retry it. The caller also needs read, operate and deploy permission on the work's Agent and read and update permission on its Configuration once the work has created them, operate permission on each Secret the work binds or uses for Harness authentication, and read permission on its Harness ServiceAccount when present. OCC re-checks these grants against the initiator while the work runs.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
-| `operate` | `agent` | `requested` |
+| `create` | `agent` | `namespace` |
+| `create` | `configuration` | `namespace` |
+| `administer` | `installation` | `requested` |
+| `read` | `agent` | `requested` (once created) |
+| `operate` | `agent` | `requested` (once created) |
+| `deploy` | `agent` | `requested` (once created) |
+| `read` | `configuration` | `requested` (once created) |
+| `update` | `configuration` | `requested` (once created) |
+| `read` | `service_account` | `requested` (when associated) |
+| `operate` | `secret` | `requested` (when bound) |
 
 ##### Parameters
 
@@ -2658,6 +2682,7 @@ Revoke one credential source from an Agent's active revision
 | `data.requestedBy` | `string` | Yes | min length: 1; max length: 256; Principal whose `agent:operate` permission the worker re-checks before revoking. |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.state` | `"pending" or "revoked"` | Yes | `revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve. |
+| `data.withdrawalInProgress` | `boolean` | Yes | `true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -2710,6 +2735,7 @@ Get the withdrawal state of a credential source for an Agent's active revision
 | `data.requestedBy` | `string` | Yes | min length: 1; max length: 256; Principal whose `agent:operate` permission the worker re-checks before revoking. |
 | `data.revisionId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.state` | `"pending" or "revoked"` | Yes | `revoked` only after the Credential Gateway confirmed that the revision's placeholders no longer resolve. |
+| `data.withdrawalInProgress` | `boolean` | Yes | `true` while a withdrawal attempt is queued or running. A `pending` withdrawal with `false` has no attempt queued; unless revision maintenance queues one, send the withdraw request again to retry it. |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -2896,8 +2922,6 @@ Experimental: Discard a local device login without upstream revocation
 | `403` | Forbidden |
 | `404` | Not Found |
 | `409` | Conflict |
-| `413` | Payload Too Large |
-| `415` | Unsupported Media Type |
 | `500` | Internal Server Error |
 | `501` | Not Implemented |
 | `503` | Service Unavailable |
@@ -3128,8 +3152,6 @@ Read selected Plugin Driver policy capabilities for an active Agent with caller 
 | `403` | Forbidden |
 | `404` | Not Found |
 | `409` | Conflict |
-| `413` | Payload Too Large |
-| `415` | Unsupported Media Type |
 | `500` | Internal Server Error |
 | `501` | Not Implemented |
 | `503` | Service Unavailable |
@@ -3712,7 +3734,7 @@ Get the durable deployment status for one admitted Agent revision
 | `data` | `object` | Yes | — |
 | `data.agentId` | `string` | Yes | pattern: `^agt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.deploymentId` | `string` | Yes | pattern: `^rev_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
-| `data.error` | `null or object` | Yes | Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs and data.runtimeFailure with bounded startup-failure evidence. Native error text is never returned. |
+| `data.error` | `null or object` | Yes | Null unless deployment failed. A failure contains code, a fixed safe message, and optional allowlisted data. CONVERGENCE_DEADLINE_EXCEEDED may include data.timeoutMs and data.runtimeFailure with bounded startup-failure evidence. RUNTIME_MODEL_PROBE_FAILED may include data.runtimeFailure with the classified cause of the startup model check failure. Native error text is never returned. |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.progress` | `null or object` | Yes | Pending deployment progress. Null for terminal outcomes. A last attempt describes a recorded result, not current runtime health. |
 | `data.status` | `"queued" or "running" or "succeeded" or "failed"` | Yes | — |
@@ -4504,6 +4526,8 @@ Push current or replacement Secret values to the Credential Gateway copy
 | `403` | Forbidden |
 | `404` | Not Found |
 | `409` | Conflict |
+| `413` | Payload Too Large |
+| `415` | Unsupported Media Type |
 | `500` | Internal Server Error |
 | `503` | Service Unavailable |
 
@@ -4593,7 +4617,7 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 
 **Operation ID:** `createIAMAccessBinding`
 
-**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
+**Permissions:** Requires administer permission on the requested Installation. Requires read permission on the requested Namespace. Requires read permission on the request body Agent when the AccessBinding targets that resource kind. Requires read permission on the request body AgentRevision when the AccessBinding targets that resource kind. Requires read permission on the request body Configuration when the AccessBinding targets that resource kind. Requires read permission on the request body CredentialSource when the AccessBinding targets that resource kind. Requires read permission on the request body Namespace when the AccessBinding targets that resource kind. Requires read permission on the request body Preset when the AccessBinding targets that resource kind. Requires read permission on the request body Secret when the AccessBinding targets that resource kind. Requires read permission on the request body ServiceAccount when the AccessBinding targets that resource kind.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
@@ -4602,7 +4626,9 @@ Create an immutable exact-resource Namespace IAM AccessBinding
 | `read` | `agent` | `request_body` |
 | `read` | `agent_revision` | `request_body` |
 | `read` | `configuration` | `request_body` |
+| `read` | `credential_source` | `request_body` |
 | `read` | `namespace` | `request_body` |
+| `read` | `preset` | `request_body` |
 | `read` | `secret` | `request_body` |
 | `read` | `service_account` | `request_body` |
 
@@ -4939,10 +4965,11 @@ List readable Presets in one Namespace
 
 **Operation ID:** `listPresets`
 
-**Permissions:** Only Preset resources with individual read permission are returned.
+**Permissions:** Requires read permission on the requested Namespace. Only Preset resources with individual read permission are returned.
 
 | Action | Resource | Scope |
 | --- | --- | --- |
+| `read` | `namespace` | `requested` |
 | `read` | `preset` | `each_returned` |
 
 ##### Parameters
@@ -4990,7 +5017,7 @@ List readable Presets in one Namespace
 | `data[].template.configuration` | `object` | No | — |
 | `data[].template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data[].template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data[].template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data[].template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5041,7 +5068,7 @@ Create a reusable Namespace-owned Agent Preset
 | `template.configuration` | `object` | No | — |
 | `template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `template.variables` | `object<string, object or object or object or object>` | No | — |
+| `template.variables` | `object<string, object>` | No | — |
 
 ##### Responses
 
@@ -5085,7 +5112,7 @@ Create a reusable Namespace-owned Agent Preset
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data.template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data.template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5183,7 +5210,7 @@ Read one exact Namespace-owned Preset
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data.template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data.template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 
@@ -5235,7 +5262,7 @@ Update a Preset without changing existing Agents
 | `template.configuration` | `object` | No | — |
 | `template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `template.variables` | `object<string, object or object or object or object>` | No | — |
+| `template.variables` | `object<string, object>` | No | — |
 
 ##### Responses
 
@@ -5279,7 +5306,7 @@ Update a Preset without changing existing Agents
 | `data.template.configuration` | `object` | No | — |
 | `data.template.configuration.secretBindings` | `object<string, SafeJsonValue>` | No | Namespace-owned Secret bindings. Reference fields may use {{ vars.name }}. |
 | `data.template.configuration.values` | `object<string, SafeJsonValue>` | No | A native OpenClaw configuration document. |
-| `data.template.variables` | `object<string, object or object or object or object>` | No | — |
+| `data.template.variables` | `object<string, object>` | No | — |
 | `meta` | `object` | Yes | — |
 | `meta.requestId` | `string` | Yes | pattern: `^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 

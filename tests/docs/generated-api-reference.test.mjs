@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import test from "node:test";
 
-import { generateApiReferenceOutputs } from "../../scripts/generate-occ-api-reference.mjs";
+import {
+  generateApiReferenceOutputs,
+  httpMethods,
+} from "../../scripts/generate-occ-api-reference.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const contractPath = fileURLToPath(
@@ -18,9 +21,23 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A path item also holds path-level keys (`parameters`, `summary`); only HTTP
+// methods are operations, as in the generator.
+function contractOperations(document) {
+  return Object.values(document.paths).flatMap((pathItem) =>
+    Object.entries(pathItem)
+      .filter(([method]) => httpMethods.has(method))
+      .map(([, operation]) => operation),
+  );
+}
+
 test("generated API reference stays on the approved single page", async () => {
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const outputs = generateApiReferenceOutputs(document);
+  // Legal path-level keys are not operations and must not change the reference.
+  const [firstPath] = Object.keys(document.paths);
+  Object.assign(document.paths[firstPath], { summary: "Path-level summary", parameters: [] });
+  assert.deepEqual(generateApiReferenceOutputs(document), outputs);
 
   assert.deepEqual(
     outputs.map((output) => output.path),
@@ -28,8 +45,24 @@ test("generated API reference stays on the approved single page", async () => {
   );
 
   const page = outputs[0].content;
-  assert.match(page, /\| \[Agents\]\(#agents\) \| 20 operations \|/);
-  assert.match(page, /\| \[Backends\]\(#backends\) \| 1 operation \|/);
+  // The Resources table counts each tag's operations from the contract, singular for one.
+  const operationsByTag = new Map();
+  for (const operation of contractOperations(document)) {
+    const tag = operation.tags?.[0] ?? "Untagged";
+    operationsByTag.set(tag, (operationsByTag.get(tag) ?? 0) + 1);
+  }
+  assert.ok(operationsByTag.get("Agents") > 1);
+  assert.ok(
+    [...operationsByTag.values()].includes(1),
+    "No tag has exactly one operation, so the singular label is untested",
+  );
+  for (const [tag, count] of operationsByTag) {
+    const label = count === 1 ? "1 operation" : `${count} operations`;
+    assert.match(
+      page,
+      new RegExp(`^\\| \\[${escapeRegExp(tag)}\\]\\(#[^)]+\\) \\| ${label} \\|$`, "m"),
+    );
+  }
   assert.match(
     page,
     /\[`GET \/namespaces\/\{namespaceId\}\/agents\/\{agentId\}\/workspace\/files\/\{name\}`\]\(#get-namespacesnamespaceidagentsagentidworkspacefilesname\)/,
@@ -44,9 +77,7 @@ test("generated API reference stays on the approved single page", async () => {
   );
   assert.doesNotMatch(page, /api\/agents-workspace\.md/);
 
-  const operationIds = Object.values(document.paths)
-    .flatMap((operations) => Object.values(operations))
-    .map((operation) => operation.operationId);
+  const operationIds = contractOperations(document).map((operation) => operation.operationId);
   for (const operationId of operationIds) {
     const matches =
       page.match(new RegExp(`\\*\\*Operation ID:\\*\\* \`${escapeRegExp(operationId)}\``, "g")) ??
@@ -55,45 +86,60 @@ test("generated API reference stays on the approved single page", async () => {
   }
 });
 
+test("every operation with a request body documents 413 and 415", async () => {
+  // The controller answers an oversized body 413 and a non-JSON media type 415 on every
+  // route that reads a body; updateCredentialSource documented neither. The /api/auth/*
+  // operations below have the same gap and are fixed separately; shrink this list then.
+  const authOperationsWithoutBodyErrors = [
+    "createAuthAccount",
+    "disableAuthAccount",
+    "enableAuthAccount",
+    "detachAuthMethod",
+    "attachGitHubIdentity",
+    "attachGoogleIdentity",
+    "attachOidcIdentity",
+    "revokeAuthAccountSessions",
+    "confirmGitHubSignIn",
+    "confirmGoogleSignIn",
+    "confirmOidcSignIn",
+    "replaceAuthRecovery",
+    "createServiceKey",
+    "signInEmail",
+  ];
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const missing = contractOperations(document)
+    .filter((operation) => operation.requestBody !== undefined)
+    .filter((operation) => !("413" in operation.responses && "415" in operation.responses))
+    .map((operation) => operation.operationId);
+  assert.deepEqual(missing.sort(), authOperationsWithoutBodyErrors.sort());
+});
+
 test("AccessBinding creation documents request body target read permissions", async () => {
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const operation =
     document.paths["/namespaces/{namespaceId}/iam/access-bindings"]?.post ?? undefined;
   assert.ok(operation, "createIAMAccessBinding OpenAPI operation is missing");
 
+  // Every bindable target kind requires read on the exact request body target.
+  const targets = [
+    "agent",
+    "agent_revision",
+    "configuration",
+    "credential_source",
+    "namespace",
+    "preset",
+    "secret",
+    "service_account",
+  ];
   assert.deepEqual(operation["x-openclaw-permissions"], [
     { action: "administer", resourceKind: "installation", scope: "requested" },
     { action: "read", resourceKind: "namespace", scope: "requested" },
-    {
+    ...targets.map((resourceKind) => ({
       action: "read",
-      resourceKind: "agent",
+      resourceKind,
       scope: "request_body",
       condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "agent_revision",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "configuration",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "secret",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
-    {
-      action: "read",
-      resourceKind: "service_account",
-      scope: "request_body",
-      condition: "iam_binding_target",
-    },
+    })),
   ]);
 });
 
@@ -176,4 +222,15 @@ test("OpenAPI check rejects unexpected generated API child pages in an isolated 
     result.stderr + result.stdout,
     /Unexpected generated API reference file: docs\/reference\/api\/unexpected-ci-check\.md/,
   );
+});
+
+test("operations without a request body do not list 413 or 415", async () => {
+  // The reference introduction says when any request answers 413 or 415; an operation
+  // lists them only when it takes a body. Three bodiless operations listed them.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const listed = contractOperations(document)
+    .filter((operation) => operation.requestBody === undefined)
+    .filter((operation) => "413" in operation.responses || "415" in operation.responses)
+    .map((operation) => operation.operationId);
+  assert.deepEqual(listed, []);
 });
