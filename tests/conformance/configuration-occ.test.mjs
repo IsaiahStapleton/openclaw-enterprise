@@ -859,7 +859,7 @@ test("Harness admission rejects conflicting selections, mode mismatches, and una
     (error) =>
       error instanceof ConfigurationHarnessError &&
       error.message ===
-        "The Configuration selects the codex Harness, which needs dedicated execution; this Agent uses embedded. Change the Agent's execution mode or its Configuration.",
+        "The Configuration selects the Codex Harness, which needs dedicated execution; this Agent uses embedded execution. Change the Agent's execution mode or its Configuration.",
   );
   await assert.rejects(
     controller.deployAgent(

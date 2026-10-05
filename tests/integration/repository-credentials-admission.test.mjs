@@ -873,7 +873,7 @@ test("Repository admission retains unknown Harness and execution-mode rejection"
       executionMode: "embedded",
       status: 400,
       code: "INVALID_REQUEST",
-      message: /selects the codex Harness, which needs dedicated execution/,
+      message: /selects the Codex Harness, which needs dedicated execution/,
     },
   ]) {
     await t.test(`${harness}/${executionMode}`, async (t) => {
