@@ -269,7 +269,8 @@ startup does, without opening the database. If either fails, as when a listed
 Preset file is missing from the image, the command waits for both Pods, prints
 each failure, deletes the Pods and Secret, and stops; the old release keeps
 serving. Each Pod's log and status are saved as `preflight-<api|worker>.log` and
-`preflight-<api|worker>-status.json`. Runtime upgrades run it on the current controller image. If
+`preflight-<api|worker>-status.json`; saving them can run up to about 90 seconds
+past `--timeout-seconds`. Runtime upgrades run it on the current controller image. If
 the helper is killed first, delete what it left with
 `kubectl delete pod,secret -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=upgrade-preflight`.
 

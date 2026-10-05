@@ -26,8 +26,12 @@ only to keep a reviewed custom configuration.
 EOF
 }
 
-die() {
+warn() {
   printf 'upgrade-production-images: %s\n' "$1" >&2
+}
+
+die() {
+  warn "$1"
   exit "${2:-1}"
 }
 
@@ -269,8 +273,7 @@ trap 'cleanup_preflight; rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true
 # Configuration the image rejects, such as a presets.files entry naming a file
 # the image no longer ships, would otherwise crash-loop both after the migration.
 preflight_startup() {
-  local suffix secret component pod phase waiting deadline remaining_seconds message
-  local -a failures
+  local suffix secret component pod phase waiting deadline remaining_seconds message failures
   suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
   secret="$release-upgrade-preflight-$suffix"
   yq -p=yaml -o=json -I=0 '.' "$rendered" >"$evidence_dir/preflight-rendered.jsonl" ||
@@ -346,7 +349,7 @@ preflight_startup() {
   done
   if [[ -n "${failures[*]+set}" ]]; then
     for message in "${failures[@]:0:${#failures[@]}-1}"; do
-      printf 'upgrade-production-images: %s\n' "$message" >&2
+      warn "$message"
     done
     die "${failures[${#failures[@]}-1]}"
   fi
