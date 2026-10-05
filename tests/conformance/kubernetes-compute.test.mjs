@@ -38,7 +38,7 @@ import {
   conformanceKubeconfig,
   conformanceKubernetesOptions,
 } from "../helpers/kubernetes-compute.mjs";
-import { writeUnsafeKubeconfigs } from "../helpers/unsafe-kubeconfigs.mjs";
+import { writeSafeKubeconfig, writeUnsafeKubeconfigs } from "../helpers/unsafe-kubeconfigs.mjs";
 
 const { kubeconfigPath, context: contextName } = conformanceKubeconfig;
 const tenant = {
@@ -7173,6 +7173,24 @@ test("the official Kubernetes client rejects ambiguous identity and insecure API
       scenario.name,
     );
   }
+
+  // The safe kubeconfig these scenarios depart from passes validation and fails only at the
+  // unreachable API server, which is retryable.
+  const safe = await writeSafeKubeconfig(t);
+  const driver = createKubernetesComputeDriver(
+    options({
+      authentication: {
+        mode: "kubeconfig",
+        kubeconfigPath: safe.kubeconfigPath,
+        context: safe.context,
+      },
+    }),
+  );
+  assert.deepEqual(await driver.ensureNamespace(tenant), {
+    namespaceId: tenant.id,
+    namespaceReady: false,
+    failure: "retryable",
+  });
 });
 
 test("immutable image policy accepts digests and rejects mutable tags", () => {
