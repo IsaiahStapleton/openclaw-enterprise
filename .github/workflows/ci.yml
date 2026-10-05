@@ -101,9 +101,10 @@ jobs:
       # The baseline tests are split in two, balanced by measured file
       # durations; only part 1 runs the lint, format, docs and type checks.
       # Image Runtime Startup is split from Images and Packaging, which it
-      # would otherwise lengthen by about five minutes; it needs the k3d tools
-      # for its seccomp profile. The runtime image startup tests are split in
-      # two, balanced by measured case durations.
+      # would otherwise lengthen by about five minutes. The runtime image
+      # startup tests are split in two, balanced by measured case durations;
+      # only part 1 runs the Codex sandbox, so only it needs the k3d tools for
+      # the seccomp profile.
       - id: matrix
         name: Build lane matrix
         env:
@@ -122,7 +123,7 @@ jobs:
               {"lane": "images-packaging", "title": "Images and Packaging", "profile": "full", "timeout": 45},
               {"lane": "images-model-probes", "title": "Image Model Probes", "profile": "images", "timeout": 25},
               {"lane": "images-runtime-startup", "title": "Image Runtime Startup", "profile": "full", "timeout": 30},
-              {"lane": "images-runtime-startup-2", "title": "Image Runtime Startup 2", "profile": "full", "timeout": 30},
+              {"lane": "images-runtime-startup-2", "title": "Image Runtime Startup 2", "profile": "images", "timeout": 30},
               {"lane": "k3d-fixture-configuration", "title": "k3d Fixture and Configuration", "profile": "k3d", "timeout": 45},
               {"lane": "k3d-fixture-state", "title": "k3d State and Lifecycle", "profile": "k3d", "timeout": 45},
               {"lane": "k3d-fixture-plugins", "title": "k3d Plugin Status", "profile": "k3d", "timeout": 45},
