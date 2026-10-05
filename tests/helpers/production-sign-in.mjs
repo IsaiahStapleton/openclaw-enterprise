@@ -320,8 +320,26 @@ export async function installationRoles(state, pool) {
 }
 
 /**
- * A local stand-in for github.com and api.github.com. The controller's fixed provider
- * endpoints are redirected here by mocking fetch, as postgres-github-sign-in.test.mjs does.
+ * Listens `server` on loopback and, for the rest of test `t`, mocks fetch so the controller's
+ * fixed github.com and api.github.com endpoints reach it; other origins pass through. The
+ * caller owns closing `server`. Returns the server's origin.
+ */
+export async function serveAsGitHub(t, server) {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const providerOrigin = `http://127.0.0.1:${server.address().port}`;
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === "https://github.com" || url.origin === "https://api.github.com") {
+      return originalFetch(new URL(url.pathname + url.search, providerOrigin), init);
+    }
+    return originalFetch(input, init);
+  });
+  return providerOrigin;
+}
+
+/**
+ * A local stand-in for github.com and api.github.com, served through `serveAsGitHub`.
  * The authorization code names the GitHub subject: `subject-<id>`; its login is
  * `fixture-<id>`. Modes: "up", "error" (503) and "hang" (never answers). Set
  * `fixture.membership(path, subject)` to answer the allowlist's membership lookups with
@@ -379,16 +397,7 @@ export async function startFakeGitHub(t) {
       response.end("{}");
     }
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const providerOrigin = `http://127.0.0.1:${server.address().port}`;
-  const originalFetch = globalThis.fetch;
-  t.mock.method(globalThis, "fetch", (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    if (url.origin === "https://github.com" || url.origin === "https://api.github.com") {
-      return originalFetch(new URL(url.pathname + url.search, providerOrigin), init);
-    }
-    return originalFetch(input, init);
-  });
+  await serveAsGitHub(t, server);
   t.after(async () => {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

@@ -17,7 +17,11 @@ import { createTestConfigurationDriver } from "../helpers/configuration-driver.m
 import { createDevelopmentComputeDriver } from "../helpers/development.mjs";
 import { ensureDevelopmentBootstrap } from "../helpers/bootstrap-installation.mjs";
 import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
-import { assertReservedLane, attachProvider } from "../helpers/production-sign-in.mjs";
+import {
+  assertReservedLane,
+  attachProvider,
+  serveAsGitHub,
+} from "../helpers/production-sign-in.mjs";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
@@ -425,16 +429,7 @@ test(
         response.end();
       }
     });
-    await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
-    const providerOrigin = `http://127.0.0.1:${provider.address().port}`;
-    const originalFetch = globalThis.fetch;
-    t.mock.method(globalThis, "fetch", (input, init) => {
-      const url = new URL(input instanceof Request ? input.url : input);
-      if (url.origin === "https://github.com" || url.origin === "https://api.github.com") {
-        return originalFetch(new URL(url.pathname + url.search, providerOrigin), init);
-      }
-      return originalFetch(input, init);
-    });
+    await serveAsGitHub(t, provider);
 
     async function start(target = app) {
       const response = await target.inject({
