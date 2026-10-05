@@ -404,12 +404,11 @@ test("first deployment requires Agent read and operate only when generating cred
         id: roleId,
         bindingId: `${roleId}-binding`,
         namespaceId: namespace.id,
-        permissions: [
-          { action: "deploy", resourceKind: "agent" },
-          ...agentActions.map((action) => ({ action, resourceKind: "agent" })),
-          { action: "read", resourceKind: "configuration" },
-          { action: "operate", resourceKind: "secret" },
-        ],
+        permissions: {
+          agent: ["deploy", ...agentActions],
+          configuration: ["read"],
+          secret: ["operate"],
+        },
       });
     });
     const denied = await fixture.request("POST", `${agentPath}/deploy`, { session });
@@ -516,7 +515,7 @@ test("runtime credential POST keeps session CSRF and exact Agent read plus opera
         id: roleId,
         bindingId: `${roleId}-binding`,
         namespaceId: namespace.id,
-        permissions: [{ action: held, resourceKind: "agent" }],
+        permissions: { agent: [held] },
       });
     });
     const denied = await fixture.request("POST", path, {
