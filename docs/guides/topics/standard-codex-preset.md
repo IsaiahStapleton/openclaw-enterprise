@@ -60,12 +60,13 @@ Open **Agents → Create Agent**, choose **Standard Codex**, and supply:
 | `model`       | Your available Codex model ID, without the `codex/` prefix; for example, `gpt-6-astra`. |
 | `modelSecret` | The model API key, entered in a masked password field.                                  |
 
-Select **Use Preset** and review the draft; the API key remains masked.
-**Create Agent** stores it as a Secret in the current Namespace and binds that
-Secret to the Agent. The template needs no Namespace ID or existing Secret ID. Complete the
-existing [credentials and deployment procedure](../../reference/console/create-and-deploy.md#initial-runtime-credentials),
-including the Agent's authorization to use its model Secret and gateway runtime
-credentials. The template keeps `${APP_SERVER_URL}`, `${APP_SERVER_TOKEN}`,
+To bind an API key Secret already in the Namespace instead, choose **Use
+existing Secret**. Select **Use Preset** and review the draft; the API key
+remains masked. **Create Agent** stores it as a Secret in the current Namespace,
+binds it to the Agent, grants the Agent `operate` on it, creates the
+[gateway runtime credentials](../../reference/console/create-and-deploy.md#initial-runtime-credentials),
+and deploys the first version. Check that deployment on the Agent page. The
+template needs no Namespace ID or existing Secret ID. It keeps `${APP_SERVER_URL}`, `${APP_SERVER_TOKEN}`,
 and the gateway password SecretRef unresolved. Compute supplies transport
 credentials; the model credential belongs only in the dedicated Harness.
 
@@ -125,7 +126,10 @@ host when Go downloads it through its module proxy.
 ## Enforcement boundary
 
 The native bridge requests a workspace-write permission profile with its managed
-network proxy enabled, `mode: limited`, and the build allowlist above. The
+network proxy enabled, `mode: limited`, and the build allowlist above. Limited
+mode passes only `GET`, `HEAD`, and `OPTIONS` requests, so Git over HTTPS fails:
+cloning `github.com` sends a `POST` and gets `403`. The trace above used a
+proxy without that limit. The
 shipped map has no wildcard grants. Upstream proxies, local binding, SOCKS, and unrestricted
 Unix-socket access are disabled. `approvalPolicy: on-request` lets Codex request
 approval when needed; `approvalsReviewer: user` selects the user as reviewer.
@@ -165,7 +169,9 @@ On your selected runtime, verify all of these through a fresh gateway session:
 
 1. Read effective app-server thread configuration: the named permission profile
    contains only the listed build hosts, the approval policy is `on-request`, and search is cached.
-   Inspect the rendered runtime configuration as well as the saved draft.
+   Inspect the rendered runtime configuration as well as the saved draft. On
+   Kubernetes, that is the gateway's `/etc/openclaw/openclaw.json`; the Harness
+   log records each proxy decision as `CONNECT allowed` or `CONNECT blocked`.
 2. Execute a tool request to a listed package host, then to a known reachable,
    operator-controlled hostname outside the allowlist. Confirm success for the
    listed host and native proxy denial for the unlisted host. Attempt direct-IP/proxy-bypass access from

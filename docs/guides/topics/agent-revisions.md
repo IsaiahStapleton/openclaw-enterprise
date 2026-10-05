@@ -10,9 +10,10 @@ but you must deploy each Agent that should use the change.
 
 Use the [OCC CLI](../cli.md#connect-to-your-installation) with an identity that
 can read the Agent, read and update its Configuration, and deploy the exact
-Agent. The Namespace must be `ready`. Reading revision history requires
-permission to read the returned revisions. The selected model credential may
-require [additional permissions](../../reference/agents.md#harness-authentication).
+Agent. Deploying also needs `operate` on each bound Secret or credential source,
+including the [model credential](../../reference/agents.md#harness-authentication).
+Deployment status and revision history need `read` on each exact revision; a
+binding cannot name a revision before it exists. The Namespace must be `ready`.
 The commands below also use `jq`.
 
 1. Set the Namespace and Agent IDs and find the Agent's Configuration:
@@ -44,18 +45,19 @@ The commands below also use `jq`.
    If the response is lost, check revision history before retrying: a second
    accepted request creates another revision.
 
-4. Check whether the worker selected that revision:
+4. Check the deployment until it reports `succeeded` or `failed`:
 
    ```bash
+   occ agent deployment-status "$AGENT_ID" '<revision-id>'
    occ agent get "$AGENT_ID" --output json |
      jq '{desiredRuntimeState, activeRevisionId}'
    ```
 
-   `activeRevisionId` should match the revision ID from deployment. If it does
-   not, run `occ agent deployment-status "$AGENT_ID" '<revision-id>'` to see
-   where work stopped. The [deployment status reference](../../reference/agents.md#deployment-status)
-   defines each result. An active revision does not prove that the model
-   responds; use the [runtime verification guide](../deploy/production-agents.md#verify-production-workloads).
+   `queued` and `running` are not final; run the command again. The
+   [deployment status reference](../../reference/agents.md#deployment-status)
+   defines each result. The worker sets `activeRevisionId` before the runtime is
+   ready, so a match is not a health result. A succeeded deployment does not
+   prove that the model responds; use the [runtime verification guide](../deploy/production-agents.md#verify-production-workloads).
 
 ## Inspect an earlier revision
 
