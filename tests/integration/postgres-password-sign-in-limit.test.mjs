@@ -6,13 +6,11 @@ import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
 import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
-  bootstrapProductionInstallation,
   composeProductionSignIn,
   consoleOrigin as origin,
   defaultInstallSettings,
-  installationRoles,
   memoryLogger,
-  signedInHeaders,
+  onboardPasswordAccounts,
 } from "../helpers/production-sign-in.mjs";
 import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 import { assertSpentDeviceProofRefusal } from "../helpers/password-proof-refusal.mjs";
@@ -96,13 +94,42 @@ test(
       await plainApp?.close();
       await pool.end();
     });
-    const adminPassword = await bootstrapProductionInstallation(t, {
+    const {
+      admin,
+      accounts: {
+        member,
+        target,
+        secondAdmin,
+        plainAdmin,
+        typist,
+        knownMember,
+        knownOther,
+        knownAdmin,
+        knownReset,
+        proofFairness,
+      },
+    } = await onboardPasswordAccounts(t, {
       databaseUrl,
+      state,
+      pool,
       email: adminEmail,
       authSecret,
+      secrets,
+      password: "limit-account-password",
+      accounts: {
+        member: { email: "limit-member@example.test" },
+        target: { email: "limit-target@example.test" },
+        secondAdmin: { email: "limit-second-admin@example.test", role: "admin" },
+        plainAdmin: { email: "limit-plain-admin@example.test", role: "admin" },
+        typist: { email: "limit-typist@example.test" },
+        // Known-device accounts.
+        knownMember: { email: "limit-known@example.test" },
+        knownOther: { email: "limit-known-other@example.test" },
+        knownAdmin: { email: "limit-known-admin@example.test", role: "admin" },
+        knownReset: { email: "limit-known-reset@example.test" },
+        proofFairness: { email: "limit-proof-fairness@example.test" },
+      },
     });
-    const admin = { email: adminEmail, password: adminPassword };
-    const roles = await installationRoles(state, pool);
     const proxiedLog = memoryLogger();
     app = await composeProductionSignIn(t, {
       databaseUrl,
@@ -126,7 +153,7 @@ test(
         url: "/api/auth/sign-in/email",
         remoteAddress: ingress,
         headers: { origin },
-        payload: account,
+        payload: { email: account.email, password: account.password },
       });
     const signIn = (client, account) =>
       app.inject({
@@ -134,29 +161,13 @@ test(
         url: "/api/auth/sign-in/email",
         remoteAddress: ingress,
         headers: { origin, "x-forwarded-for": client },
-        payload: account,
+        payload: { email: account.email, password: account.password },
       });
     const timed = async (client, account) => {
       const started = performance.now();
       const response = await signIn(client, account);
       return { response, elapsed: performance.now() - started };
     };
-    const adminHeaders = await signedInHeaders(app, origin, admin);
-    const accountPassword = "limit-account-password";
-    const createAccount = async (email, roleId) => {
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/auth/accounts",
-        headers: adminHeaders,
-        payload: { email, password: accountPassword, roleId },
-      });
-      assert.equal(created.statusCode, 201, created.body);
-      return { email, password: accountPassword };
-    };
-    const member = await createAccount("limit-member@example.test", roles.reader.id);
-    const target = await createAccount("limit-target@example.test", roles.reader.id);
-    const secondAdmin = await createAccount("limit-second-admin@example.test", roles.admin.id);
-    const plainAdmin = await createAccount("limit-plain-admin@example.test", roles.admin.id);
     const limitWarnings = (events) =>
       events.filter((event) => event.event === "authentication.sign-in-limit-warning");
 
@@ -223,7 +234,6 @@ test(
     );
 
     await t.test("a successful sign-in resets that email's failures", async () => {
-      const typist = await createAccount("limit-typist@example.test", roles.reader.id);
       for (let round = 0; round < 2; round += 1) {
         for (let index = 0; index < 9; index += 1) {
           const response = await plainSignIn({ ...typist, password: wrongPassword });
@@ -390,12 +400,8 @@ test(
         url: "/api/auth/sign-in/email",
         remoteAddress: ingress,
         headers: { origin, cookie },
-        payload: account,
+        payload: { email: account.email, password: account.password },
       });
-    const knownMember = await createAccount("limit-known@example.test", roles.reader.id);
-    const knownOther = await createAccount("limit-known-other@example.test", roles.reader.id);
-    const knownAdmin = await createAccount("limit-known-admin@example.test", roles.admin.id);
-    const knownReset = await createAccount("limit-known-reset@example.test", roles.reader.id);
     let memberDevice;
 
     await t.test("the known-device cookie is set only after a successful sign-in", async () => {
@@ -462,14 +468,16 @@ test(
     await t.test(
       "proof-read saturation cannot reopen a throttled cookie's password allowance",
       async (t) => {
-        const account = await createAccount("limit-proof-fairness@example.test", roles.reader.id);
-        const signedIn = await plainSignIn(account);
+        const signedIn = await plainSignIn(proofFairness);
         assert.equal(signedIn.statusCode, 200, signedIn.body);
         const cookie = knownDeviceOf(signedIn).split(";", 1)[0];
         // Keep one cookie: changing it would select another device instead of exercising
         // the transition from a verified device to an unavailable proof on the same entry.
         for (let index = 0; index < 10; index += 1) {
-          const response = await plainSignInWith(cookie, { ...account, password: wrongPassword });
+          const response = await plainSignInWith(cookie, {
+            ...proofFairness,
+            password: wrongPassword,
+          });
           assert.equal(response.statusCode, 401, `attempt ${index}: ${response.body}`);
         }
         await assertSpentDeviceProofRefusal({
@@ -485,7 +493,7 @@ test(
                   "SELECT u.id AS user_id, m.id AS method_id, m.authentication_version",
                 ) &&
                 statement.includes("WHERE u.email = $1") &&
-                parameters?.[0] === account.email &&
+                parameters?.[0] === proofFairness.email &&
                 typeof args[2] !== "function"
               ) {
                 return holdRead(() => query.apply(this, args));
@@ -493,7 +501,7 @@ test(
               return query.apply(this, args);
             });
           },
-          signIn: () => plainSignInWith(cookie, { ...account, password: wrongPassword }),
+          signIn: () => plainSignInWith(cookie, { ...proofFairness, password: wrongPassword }),
           knownDeviceOf,
         });
       },
