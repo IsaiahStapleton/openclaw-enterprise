@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RequestFailure, requestFailure } from "../../apps/controller/src/http/errors.ts";
+import {
+  canonicalFailure,
+  RequestFailure,
+  requestFailure,
+} from "../../apps/controller/src/http/errors.ts";
 import {
   ConfigurationOwnershipError,
   ConfigurationValidationError,
@@ -724,5 +728,18 @@ for (const [name, error, expected] of cases) {
       expected,
     );
     assert.doesNotMatch(failure.message, /internal detail/);
+    // The wire cap (256 characters) must not cut a mapped message, such as a trailing doc link.
+    let sent;
+    const reply = {
+      request: { id: "req_1" },
+      header: () => reply,
+      status: () => reply,
+      send: (body) => {
+        sent = body;
+        return reply;
+      },
+    };
+    canonicalFailure(reply, failure);
+    assert.equal(sent.error.message, failure.message);
   });
 }

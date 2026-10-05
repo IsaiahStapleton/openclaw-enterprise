@@ -1166,6 +1166,17 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     );
   }
 
+  // A long list of create Permissions is shortened so the guidance still fits the cap.
+  const manyCreates = await createRole(
+    ["agent", "configuration", "credential_source", "preset", "secret", "service_account"].map(
+      (resourceKind) => ({ action: "create", resourceKind }),
+    ),
+  );
+  const long = await bind(manyCreates, "namespace", namespace.id);
+  assert.equal(long.status, 400, JSON.stringify(long.body));
+  assert.ok(Array.from(long.body.error.message).length <= 256, long.body.error.message);
+  assert.match(long.body.error.message, / and \d+ more\. .*remove them from the Role\.$/);
+
   // A Role with no Permission for the target's kind would grant nothing there.
   const agentReader = await createRole([{ action: "read", resourceKind: "agent" }]);
   const nothing = await bind(agentReader, "namespace", namespace.id);
@@ -1575,6 +1586,20 @@ test("Namespace IAM reports invalid policy input as 400 with the field and refus
       new RegExp(`grant nothing: ${resourceKind}:${action}\\.`),
     );
   }
+  // A Role naming many of them gets a message within the 256-character error contract.
+  const kinds = ["agent_revision", "configuration", "credential_source", "preset", "secret"];
+  const actions = ["administer", "create", "delete", "deploy", "operate", "read_logs", "update"];
+  const many = await createRole(
+    namespace.id,
+    kinds.flatMap((resourceKind) => actions.map((action) => ({ action, resourceKind }))),
+  );
+  assert.equal(many.status, 400, JSON.stringify(many.body));
+  assert.deepEqual(many.body.error.details, [{ path: "/permissions", code: "INVALID_VALUE" }]);
+  assert.ok(Array.from(many.body.error.message).length <= 256, many.body.error.message);
+  assert.match(
+    many.body.error.message,
+    /^No operation checks these Permissions, so they would grant nothing: agent_revision:administer, .* and \d+ more\. See the per-kind actions in the permissions reference\.$/,
+  );
   const duplicate = await createRole(namespace.id, [
     { action: "read", resourceKind: "agent" },
     { action: "read", resourceKind: "agent" },
