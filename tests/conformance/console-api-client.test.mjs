@@ -72,3 +72,21 @@ test("a lost sharing response remains an error and never retries the write", asy
   });
   assert.equal(fetch.mock.callCount(), 1);
 });
+
+test("only a read that outlives the view survives the view's reset", async (t) => {
+  const signals = [];
+  t.mock.method(globalThis, "fetch", async (_path, init) => {
+    signals.push(init.signal);
+    return new Response(JSON.stringify({ data: {} }), { status: 200 });
+  });
+  const reads = new AbortController();
+  const lifetime = { signal: reads.signal, capture: () => 1, isCurrent: () => true };
+  const request = createApiClient({ lifetime, hasSession: () => true, onExpired() {} });
+  await request("/view");
+  await request("/session", { outlivesView: true });
+  reads.abort();
+  assert.deepEqual(
+    signals.map((signal) => signal.aborted),
+    [true, false],
+  );
+});
