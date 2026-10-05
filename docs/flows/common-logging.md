@@ -180,7 +180,8 @@ name, refusal text and Restriction IDs stay local. `presets.default-create-skipp
 (a missing default left uncreated because a deny Restriction refused it) is WARN and
 keeps only `occ.namespace.id`. `presets.bundled-default-shadowed` (a bundled
 default replaced by a same-named `presets.files` entry) is WARN and carries no IDs;
-the Preset name and file path stay local. The Collector drops malformed,
+the Preset name and file path stay local. These three Preset events come only from
+`occ-api`: the worker never applies default Presets. The Collector drops malformed,
 oversized, unclassified, unspecified-severity, and Codex protocol stdout records.
 OpenClaw's Gateway startup failure (an `error` record with no subsystem whose
 message starts `Gateway failed to start:`) is exported as
@@ -229,6 +230,7 @@ for panels, correlation, and authorization limits.
 
 ## Changelog
 
+- 2026-10-05 05:30: Note that the Preset startup warnings come only from the API.
 - 2026-10-05 03:30: Export `presets.bundled-default-shadowed` as WARN with only its event name.
 - 2026-10-05 02:30: Export `presets.default-create-skipped` as WARN with only the Namespace ID.
 - 2026-10-04 23:10: Export `presets.default-refresh-skipped` as WARN with only the Namespace and Preset IDs. (bh13-fu2-collector - e54a08048)

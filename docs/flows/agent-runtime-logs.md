@@ -78,9 +78,12 @@ reads, so a denial is always audited and never spends a token.
 
 `KubernetesComputeDriver.describeAgentRuntime` resolves the owned Namespace, then
 lists Pods by the exact Agent, revision and workload-role labels: dedicated
-Gateways in the control-plane Gateway namespace, Harnesses and embedded Gateways
-in the tenant namespace on the execution plane. It lists Events by
-`involvedObject.uid`, keeps only that Pod's Events, caps them at 100 and takes each
+Gateways and Harnesses in the shared tenant namespace in a single cluster. The
+two-cluster profile reads dedicated Gateways in its control target and Harnesses
+in its execution target. It lists Events by
+`involvedObject.uid`, keeps only that Pod's Events, drops the scheduler's
+`FailedScheduling` retry after a lost PVC update race once the Pod has a node,
+caps them at 100 and takes each
 Event's `container` from `involvedObject.fieldPath` (`spec.containers{name}` or
 the init or ephemeral form; `null` for Pod-level Events such as `Scheduled`). A log
 read passes `{ source, events: false }`, so it lists only that source's Pods and
@@ -223,12 +226,15 @@ fixed `RUNTIME_LOGS_*` codes; the whole request has a ten-second deadline.
 ## Changelog
 
 - 2026-10-05 11:38: Document clean CLI follow cancellation during initial revision lookup with the accompanying fix. (authoring-run/2afba01b-8db4-41d7-a942-e14bd7f44262 - 0698d533b97dc3abe7bef7ff7907a0f4335c3182)
+- 2026-10-05 10:51: Preserve shared tenant placement while incorporating main startup and runtime diagnostics. (01a0fe72-58b2-7cc3-b770-7310f5401deb - 71a1cedb)
 
 - 2026-10-04 07:00: Authorize before the rate and concurrency limits so every denial is audited. (bh11-runtime-log-authz)
 
 - 2026-10-03 22:00: A resumed view moves past a line longer than the 1 MiB read limit instead of re-reading it on every poll. (f349-log-resume)
 
 - 2026-10-03 03:00: A cursor from a page that delivered no line resumes from that page, not the whole tail. (bughunt-1/fix-runtime-logs-quiet-follow)
+
+- 2026-10-02: Describe shared single-cluster runtime placement. (01a0fe72-58b2-7cc3-b770-7310f5401deb)
 
 - 2026-10-01 14:00: Add the server-side `minLevel` floor and the console's **Include debug** control. (fix-d79 - 3d6ce1fdb)
 

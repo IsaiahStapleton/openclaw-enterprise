@@ -461,20 +461,22 @@ test(
           egress,
           label,
         );
-        // The default OIDC egress is any address except link-local, on TCP 443 only.
-        const oidcEgress = policies.find(({ metadata }) =>
-          metadata.name.endsWith("-api-oidc-login-egress"),
-        );
-        assert.deepEqual(
-          oidcEgress.spec.egress,
-          [
-            {
-              to: [{ ipBlock: { cidr: "0.0.0.0/0", except: ["169.254.0.0/16"] } }],
-              ports: [{ protocol: "TCP", port: 443 }],
-            },
-          ],
-          label,
-        );
+        // Every default sign-in egress is any address except link-local, on TCP 443 only.
+        for (const provider of egress) {
+          const providerEgress = policies.find(({ metadata }) =>
+            metadata.name.endsWith(`-api-${provider}-login-egress`),
+          );
+          assert.deepEqual(
+            providerEgress.spec.egress,
+            [
+              {
+                to: [{ ipBlock: { cidr: "0.0.0.0/0", except: ["169.254.0.0/16"] } }],
+                ports: [{ protocol: "TCP", port: 443 }],
+              },
+            ],
+            `${label}: ${provider}`,
+          );
+        }
         assert.ok(
           !deploymentEnv(objects, "worker").some(({ name }) => /^OCC_AUTH_OIDC_/.test(name)),
           label,
@@ -484,15 +486,27 @@ test(
         assert.equal(await startupCode(directory, environment), "PERSISTENCE_UNAVAILABLE", label);
       }),
     );
+    // A listed CIDR replaces the default, link-local included, for each provider.
     const narrowed = await renderChart({
+      ...githubUpgradeValues(recoveryUserId),
+      ...googleUpgradeValues(recoveryUserId),
       ...oidcUpgradeValues(recoveryUserId),
+      "auth.github.egressCidrs[0]": "140.82.112.0/20",
+      "auth.google.egressCidrs[0]": "169.254.10.0/24",
       "auth.oidc.egressCidrs[0]": "198.51.100.0/24",
     });
-    assert.deepEqual(
-      narrowed.find(({ metadata }) => metadata.name.endsWith("-api-oidc-login-egress")).spec
-        .egress[0].to,
-      [{ ipBlock: { cidr: "198.51.100.0/24" } }],
-    );
+    for (const [provider, cidr] of [
+      ["github", "140.82.112.0/20"],
+      ["google", "169.254.10.0/24"],
+      ["oidc", "198.51.100.0/24"],
+    ]) {
+      assert.deepEqual(
+        narrowed.find(({ metadata }) => metadata.name.endsWith(`-api-${provider}-login-egress`))
+          .spec.egress[0].to,
+        [{ ipBlock: { cidr } }],
+        provider,
+      );
+    }
   },
 );
 
@@ -664,6 +678,42 @@ const invalid = [
       ),
     },
     parser: /list at most 10 entries together/,
+  },
+  // An allowlist without its provider is refused, never dropped: an operator who sets one
+  // expects it to limit sign-in. Entries are checked first, as the API does.
+  ...[
+    ["organization", "auth.github.allowedOrgs[0]", "OCC_AUTH_GITHUB_ALLOWED_ORGS", "acme"],
+    ["team", "auth.github.allowedTeams[0]", "OCC_AUTH_GITHUB_ALLOWED_TEAMS", "acme/platform"],
+  ].map(([kind, key, variable, value]) => ({
+    name: `an allowed GitHub ${kind} without GitHub sign-in`,
+    values: { [key]: value },
+    chart:
+      /auth\.github\.allowedOrgs and auth\.github\.allowedTeams require auth\.github\.enabled: true/,
+    env: { [variable]: value },
+    parser: /requires client ID, client secret and recovery user ID/,
+  })),
+  {
+    name: "an allowed GitHub organization that is not a login, without GitHub sign-in",
+    values: { "auth.github.allowedOrgs[0]": "acme/platform" },
+    chart: /auth\.github\.allowedOrgs requires GitHub organization logins/,
+    env: { OCC_AUTH_GITHUB_ALLOWED_ORGS: "acme/platform" },
+    parser:
+      /OCC_AUTH_GITHUB_ALLOWED_ORGS must be a comma-separated list of GitHub organization logins/,
+  },
+  {
+    name: "an allowed GitHub team without its organization, without GitHub sign-in",
+    values: { "auth.github.allowedTeams[0]": "platform" },
+    chart: /auth\.github\.allowedTeams requires org\/team-slug entries/,
+    env: { OCC_AUTH_GITHUB_ALLOWED_TEAMS: "platform" },
+    parser:
+      /OCC_AUTH_GITHUB_ALLOWED_TEAMS must be a comma-separated list of org\/team-slug entries/,
+  },
+  {
+    name: "an allowed Google domain without Google sign-in",
+    values: { "auth.google.allowedDomains[0]": "example.com" },
+    chart: /auth\.google\.allowedDomains requires auth\.google\.enabled: true/,
+    env: { OCC_AUTH_GOOGLE_ALLOWED_DOMAINS: "example.com" },
+    parser: /Google sign-in requires both client ID and client secret/,
   },
   {
     name: "Google without a recovery user",

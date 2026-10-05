@@ -457,6 +457,15 @@ function presetDefinition(value: unknown, path: string): Pick<Preset, "name" | "
   });
 }
 
+/**
+ * A `presets.files` list or entry that cannot become a default Preset: not a list of
+ * paths, or a file that is missing, unreadable, malformed, invalid, or a duplicate name. API and worker startup report it as
+ * `PRESET_FILE_INVALID` without the path or message, which stay in the thrown error.
+ */
+export class PresetFileError extends Error {
+  override readonly name = "PresetFileError";
+}
+
 async function loadPresetDefinition(
   path: string | URL,
 ): Promise<Pick<Preset, "name" | "template">> {
@@ -641,7 +650,7 @@ export async function loadInstallationConfiguration(options: {
     presets.files !== undefined &&
     (!Array.isArray(presets.files) || presets.files.some((entry) => typeof entry !== "string"))
   ) {
-    throw new Error("presets.files must be an array of Preset JSON file paths.");
+    throw new PresetFileError("presets.files must be an array of Preset JSON file paths.");
   }
   const includeDefaults = presets.includeDefaults === true;
   const bundledPresetVersions = await loadBundledPresetVersions();
@@ -653,16 +662,25 @@ export async function loadInstallationConfiguration(options: {
   for (const entry of (presets.files ?? []) as readonly string[]) {
     const trimmed = entry.trim();
     if (trimmed.length === 0) {
-      throw new Error("presets.files entries must be nonempty file paths.");
+      throw new PresetFileError("presets.files entries must be nonempty file paths.");
     }
     if (!isAbsolute(trimmed) && configurationPath === undefined) {
-      throw new Error("Relative presets.files entries require an Installation startup YAML path.");
+      throw new PresetFileError(
+        "Relative presets.files entries require an Installation startup YAML path.",
+      );
     }
     const path = isAbsolute(trimmed) ? trimmed : resolve(dirname(configurationPath!), trimmed);
-    const preset = await loadPresetDefinition(path);
+    let preset: Pick<Preset, "name" | "template">;
+    try {
+      preset = await loadPresetDefinition(path);
+    } catch (error) {
+      throw new PresetFileError(error instanceof Error ? error.message : String(error), {
+        cause: error,
+      });
+    }
     const earlier = filePresetPaths.get(preset.name);
     if (earlier !== undefined) {
-      throw new Error(
+      throw new PresetFileError(
         `Default Preset ${preset.name} is configured more than once: ${earlier} and ${path}.`,
       );
     }
