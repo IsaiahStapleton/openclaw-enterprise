@@ -23,11 +23,20 @@ const GAP_LABELS = {
   truncated: "Page limit reached",
   buffer_lost: "Sandbox buffer lost lines",
 };
+// What each withheld reason means, followed by the API's reason code as `occ agent logs`
+// prints it. `malformed` is mostly a pretty-printed JSON value split across lines (normal
+// Codex output), so the text never calls it corrupt.
 const WITHHELD_LABELS = {
-  unrecognised_structured: "structured output withheld",
-  oversized: "oversized lines withheld",
-  malformed: "malformed structured lines withheld",
+  unrecognised_structured: "structured output",
+  oversized: "oversized",
+  malformed: "multi-line, unparseable or deeply nested JSON",
 };
+
+function withheldText({ count, reason }) {
+  const label = WITHHELD_LABELS[reason];
+  const lines = count === 1 ? "line" : "lines";
+  return `${count} ${label ? `${label} ${lines}` : lines} withheld (${reason})`;
+}
 
 function runtimeErrorText(error, tier, source) {
   if (error.status === 403) {
@@ -191,7 +200,7 @@ function recordRow(record) {
     return element(
       "div",
       { className: "log-row log-row-withheld", role: "note" },
-      `${record.count} ${WITHHELD_LABELS[record.reason] ?? "lines withheld"}`,
+      withheldText(record),
     );
   }
   const summary = element(
