@@ -18,7 +18,7 @@ const hiddenRunes = "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200
 // visibly; NDJSON output stays the exact record.
 func TestAgentLogsEscapeBidiAndZeroWidthCharactersInTextAndNotices(t *testing.T) {
 	line := `{"type":"line","time":"2026-09-30T12:00:01.000000001Z","stream":{"source":"gateway"},"contentClass":"operational","kind":"openclaw","level":"info",` +
-		`"message":"paid \u202e0001$ \u200bok\\u202e","subsystem":"gate\u2066way","fields":{"user":"eve\u202d","z\u2067":"v"}}`
+		`"message":"paid \u202e0001$ \u200bok\\u202e","subsystem":"gate\u2066way","fields":{"user":"eve\u202d","z\u2067":"v","note":"eve\u00a0admin"}}`
 	// These two carry the characters themselves, as OCC's JSON encoder sends them.
 	gap := "{\"type\":\"gap\",\"time\":null,\"stream\":{\"source\":\"gateway\"},\"reason\":\"stream\u202ereplaced\",\"remedy\":\"Container \ufeffrestarted.\"}"
 	withheld := "{\"type\":\"withheld\",\"time\":\"2026-09-30T12:00:02Z\",\"stream\":{\"source\":\"gateway\"},\"reason\":\"over\u200dlimit\",\"count\":3}"
@@ -36,8 +36,9 @@ func TestAgentLogsEscapeBidiAndZeroWidthCharactersInTextAndNotices(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The literal \u202e already in the message stays as it was.
-	if want := `2026-09-30T12:00:01.000000001Z INFO openclaw [gate\u2066way] paid \u202e0001$ \u200bok\u202e user="eve\u202d" z\u2067=v` + "\n"; out != want {
+	// The literal \u202e already in the message stays as it was; a value with a
+	// no-break space is quoted so it cannot read as two fields.
+	if want := `2026-09-30T12:00:01.000000001Z INFO openclaw [gate\u2066way] paid \u202e0001$ \u200bok\u202e note="eve\u00a0admin" user="eve\u202d" z\u2067=v` + "\n"; out != want {
 		t.Errorf("text output = %q, want %q", out, want)
 	}
 	for _, want := range []string{

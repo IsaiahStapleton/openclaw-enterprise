@@ -420,7 +420,11 @@ func runtimeLogLineText(at string, record runtimeLogRecord) string {
 	slices.Sort(names)
 	for _, name := range names {
 		value := displayValue(record.Fields[name])
-		if value == "" || strings.ContainsAny(value, " \t\"=") || strings.IndexFunc(value, isHiddenRune) >= 0 {
+		// Quote a value that is empty, holds a space (any Unicode space, which
+		// would read as a field break) or a separator, or holds anything
+		// strconv.Quote would escape.
+		if value == "" || strings.ContainsAny(value, "\"=") || !utf8.ValidString(value) ||
+			strings.ContainsFunc(value, func(character rune) bool { return character == ' ' || !strconv.IsPrint(character) }) {
 			value = strconv.Quote(value)
 		}
 		fmt.Fprintf(&text, " %s=%s", name, value)
