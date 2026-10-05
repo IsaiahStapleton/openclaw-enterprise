@@ -28,8 +28,9 @@ Envoy Gateway and cert-manager controllers on trusted nodes as well.
 
 The shared Gateway and certificate resources are in the Helm release namespace.
 Envoy's proxy Service and Pods are in `envoyNamespace`. Each Agent's HTTPRoute
-and gateway Service are in its Gateway runtime namespace for dedicated execution,
-or its tenant data-plane namespace for embedded execution. The installer needs
+and gateway Service are in its tenant namespace, or for a dedicated Agent in the
+two-cluster profile, its `oce-gateways-<hash>` namespace in the control cluster.
+The installer needs
 permission to create the shared resources, including the NetworkPolicy in the
 Envoy namespace. The worker needs tenant HTTPRoute and SecurityPolicy permissions; the API does
 not need to write routes or execute commands in gateway Pods.

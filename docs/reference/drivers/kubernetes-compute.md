@@ -45,6 +45,9 @@ Before replacing the controller images, inspect the existing storage targets:
 kubectl get namespaces -l openclaw.dev/gateway-namespace -L openclaw.dev/namespace
 ```
 
+In a single cluster, a row with an empty `NAMESPACE` column is a split-layout
+tenant. The two-cluster profile's control-cluster rows are expected.
+
 If an Installation has split-layout tenants, keep its existing controller release
 and both namespaces. Preserve their Secrets, ConfigMaps, PVCs and database
 references. Do not delete the old namespace, remove its storage-role label or
@@ -174,7 +177,7 @@ drivers:
         gatewayNodeSelector: { oce-role: control-plane }
         transportSecretPrefix: openclaw-agent-transport
         # Optional; first install this reviewed profile on every eligible node.
-        codexSeccompProfile: profiles/codex-0.158.0.json
+        codexSeccompProfile: profiles/codex-0.160.0.json
 ```
 
 This is only the Compute Driver portion of the Installation configuration; the

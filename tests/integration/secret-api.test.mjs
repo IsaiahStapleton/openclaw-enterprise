@@ -1058,7 +1058,18 @@ test("Harness source admission rejects foreign references and superseded model s
     },
   });
   assert.equal(malformed.status, 400);
-  for (const destination of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
+  // Provider keys, reserved prefixes and process-control names, in any letter case.
+  for (const destination of [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "openclaw_gateway_token",
+    "LD_PRELOAD",
+    "KUBECONFIG",
+    "PATH",
+    "path",
+    "HTTPS_PROXY",
+  ]) {
     const reserved = await request(
       fixture.app,
       "POST",
