@@ -156,7 +156,10 @@ Then verify the ordinary Agent workflow with `sandbox: workspace-write` and
 `approvalPolicy: never`. Request a native command that writes and reads a unique
 workspace marker and attempts the same outside-workspace write. Inspect the
 native tool events and resulting files: a model's prose or an approved
-`require_escalated` command does not prove this path.
+`require_escalated` command does not prove this path. The Agent's sandboxed command can
+report the outside write as successful, because paths outside its writable roots may be
+a private view that is discarded; the proof is that the container's own copy of the
+outside file is unchanged.
 
 Verify repository access separately through genuine native Git reads using the
 Agent's existing repository credentials. For dedicated Codex, start that proof
