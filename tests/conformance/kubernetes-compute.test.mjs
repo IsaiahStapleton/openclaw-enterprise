@@ -1531,6 +1531,7 @@ test("an upgraded file-delivered node drops its leftover setup code and tolerate
 // wait on a start. Lower these counts when a change removes a start or a pass;
 // never raise them silently.
 test("a first dedicated deploy pins its workload starts through activation", async () => {
+  const clock = { now: 0 };
   const {
     state,
     driver,
@@ -1542,7 +1543,11 @@ test("a first dedicated deploy pins its workload starts through activation", asy
     read,
     prepare,
     markReady,
-  } = dedicatedFirstDeployFixture({ clock: { now: 0 } });
+  } = dedicatedFirstDeployFixture({ clock });
+  // Activation's ack poll waits on the same clock, so a missing ack fails instead of spinning.
+  driver.delay = async (ms) => {
+    clock.now += ms;
+  };
   const environment = (template) =>
     new Set(template.spec.containers[0].env.map(({ name }) => name));
   // Workloads become ready as soon as the controller waits on them, so every
