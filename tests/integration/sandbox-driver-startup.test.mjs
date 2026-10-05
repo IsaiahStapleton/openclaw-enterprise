@@ -6,11 +6,15 @@ import { OpenShellGateway } from "../../apps/controller/src/backends/openshell.t
 import { OpenShellCredentialGatewayDriver } from "../../apps/controller/src/drivers/credential-gateway/openshell.ts";
 import { OpenShellSandboxDriver } from "../../apps/controller/src/drivers/sandbox/openshell.ts";
 import {
+  OpenShellProviderAlreadyExistsError,
   OpenShellRequestReplayRefusedError,
   OpenShellSandboxAlreadyExistsError,
 } from "../../apps/controller/src/drivers/sandbox/openshell-gateway-client.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
-import { SandboxRevisionUnsupportedError } from "../../packages/occ/src/index.ts";
+import {
+  SandboxRevisionUnsupportedError,
+  ScopeViolationError,
+} from "../../packages/occ/src/index.ts";
 import { createInstallationDriverConfiguration as installation } from "../helpers/installation-driver-configuration.mjs";
 import { loadInstallationFile } from "../helpers/installation-file.mjs";
 
@@ -956,4 +960,134 @@ test("startup rejects an invalid OpenShell gateway readiness wait", async (t) =>
     loadInstallationFile(t, configuration),
     /OpenShell gateway readiness timeout must be a positive safe integer/,
   );
+});
+
+/**
+ * The OpenShell Credential Gateway over a recording provider store. Each provider's labels say
+ * which credential source owns it; the gateway may act only on its own source's provider.
+ */
+function credentialGatewayOverProviders({ keepDeleted = false } = {}) {
+  const providers = new Map();
+  const calls = [];
+  const client = {
+    async getProviderProfile() {
+      return undefined;
+    },
+    async importProviderProfile() {},
+    async updateProviderProfile() {},
+    async deleteProviderProfile() {},
+    async createProvider(provider) {
+      calls.push(["createProvider", provider.name]);
+      if (providers.has(provider.name)) {
+        throw new OpenShellProviderAlreadyExistsError(provider.name);
+      }
+      providers.set(provider.name, { ...provider });
+    },
+    async getProvider(_workspace, name) {
+      return providers.get(name);
+    },
+    async listProviders() {
+      return [...providers.values()];
+    },
+    async updateProviderCredentials(_workspace, name, credentials) {
+      calls.push(["updateProviderCredentials", name]);
+      providers.set(name, { ...providers.get(name), credentials });
+    },
+    async deleteProvider(_workspace, name) {
+      calls.push(["deleteProvider", name]);
+      if (!keepDeleted) {
+        providers.delete(name);
+      }
+    },
+  };
+  const driver = new OpenShellCredentialGatewayDriver(
+    { binaries: ["/usr/local/bin/codex"] },
+    {
+      backend: {
+        drivers: { credential_gateway: "credential-gateway-openshell" },
+        client: { clientForNamespace: () => client },
+      },
+    },
+  );
+  const namespace = { id: "ns_00000000-0000-4000-8000-0000000000aa", name: "placed-tenant" };
+  const source = (id) => ({
+    id,
+    namespaceId: namespace.id,
+    type: "openai",
+    driverId: driver.id,
+  });
+  const context = (id) => ({ namespace, source: source(id), signal: new AbortController().signal });
+  const input = (apiKey = "synthetic-openai-key") => ({
+    type: "openai",
+    config: {},
+    secrets: { api_key: apiKey },
+  });
+  return { calls, context, driver, input, namespace, providers, source };
+}
+
+test("the OpenShell Credential Gateway acts only on its own source's provider", async () => {
+  const { calls, context, driver, input, namespace, providers, source } =
+    credentialGatewayOverProviders();
+  const owner = "cs_00000000-0000-4000-8000-0000000000b1";
+  const other = "cs_00000000-0000-4000-8000-0000000000b2";
+  assert.deepEqual(await driver.registerSource(context(owner), input()), { state: "ready" });
+  const [stored] = providers.values();
+  assert.equal(stored.labels["openclaw.dev/credential-source-id"], owner);
+  // Another source's provider stored under this source's name: same manager and type, other id.
+  providers.set(stored.name, {
+    ...stored,
+    labels: { ...stored.labels, "openclaw.dev/credential-source-id": other },
+  });
+  calls.length = 0;
+  await assert.rejects(driver.registerSource(context(owner), input()), ScopeViolationError);
+  await assert.rejects(
+    driver.updateSource(context(owner), input("replacement")),
+    ScopeViolationError,
+  );
+  assert.equal((await driver.sourceStatus(context(owner))).state, "failed");
+  await assert.rejects(driver.removeSource(context(owner)), ScopeViolationError);
+  await assert.rejects(
+    driver.attachForRevision({
+      namespace,
+      sources: [source(owner)],
+      signal: new AbortController().signal,
+    }),
+    /unavailable/,
+  );
+  // Only the replayed create reached the store, and it was refused; nothing was overwritten.
+  assert.deepEqual(
+    calls.map(([operation]) => operation),
+    ["createProvider"],
+  );
+  assert.equal(providers.get(stored.name).credentials.OPENAI_API_KEY, "synthetic-openai-key");
+
+  // A source of another Namespace never attaches, even when its provider is present.
+  const foreign = { ...source(owner), namespaceId: "ns_00000000-0000-4000-8000-0000000000ff" };
+  await assert.rejects(
+    driver.attachForRevision({
+      namespace,
+      sources: [foreign],
+      signal: new AbortController().signal,
+    }),
+    ScopeViolationError,
+  );
+  // An empty value is refused before any provider is written.
+  await assert.rejects(
+    driver.registerSource(context("cs_00000000-0000-4000-8000-0000000000b3"), input("")),
+    ScopeViolationError,
+  );
+  assert.deepEqual(
+    calls.map(([operation]) => operation),
+    ["createProvider"],
+  );
+});
+
+test("OpenShell credential source removal fails while the provider survives deletion", async () => {
+  const { context, driver, input, providers } = credentialGatewayOverProviders({
+    keepDeleted: true,
+  });
+  const owner = "cs_00000000-0000-4000-8000-0000000000c1";
+  await driver.registerSource(context(owner), input());
+  await assert.rejects(driver.removeSource(context(owner)), /was not deleted/);
+  assert.equal(providers.size, 1);
 });

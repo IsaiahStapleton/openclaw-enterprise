@@ -407,3 +407,32 @@ test("static acquisition checks every bound before borrowing and never dispatche
   );
   assert.equal(session.custody.records.size, 1);
 });
+
+test("a factory binding must name the configured provider instance and repository", () => {
+  const binding = (identity) => ({
+    options: {
+      binding: {
+        profile: "git-write",
+        identity: {
+          providerInstanceId: "github-test",
+          repositoryId: "73",
+          grantId: "x",
+          ...identity,
+        },
+      },
+    },
+  });
+  tokenFactory(binding({})).owner.close();
+  for (const [name, identity] of [
+    ["another repository", { repositoryId: "74" }],
+    ["another provider instance", { providerInstanceId: "github-other" }],
+  ]) {
+    const owner = createGitHubStaticTokenOwner({ token: Buffer.from(oauthToken) });
+    assert.throws(
+      () => tokenFactory({ ...binding(identity), owner }),
+      { message: "invalid-binding" },
+      name,
+    );
+    owner.close();
+  }
+});
