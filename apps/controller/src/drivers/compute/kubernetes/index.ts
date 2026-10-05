@@ -696,7 +696,7 @@ function runtimeEventContainer(fieldPath: unknown): string | null {
 // this exact message, and only once the Pod has a node, is dropped from runtime status;
 // every other FailedScheduling Event is kept.
 const SETTLED_VOLUME_BINDING_CONFLICT =
-  /^running PreBind plugin "?VolumeBinding"?: Operation cannot be fulfilled on persistentvolumeclaims "?[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?"?: the object has been modified; please apply your changes to the latest version and try again$/;
+  /^running PreBind plugin "VolumeBinding": Operation cannot be fulfilled on persistentvolumeclaims "[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?": the object has been modified; please apply your changes to the latest version and try again$/;
 
 function settledSchedulingConflict(
   event: Record<string, unknown> | undefined,
