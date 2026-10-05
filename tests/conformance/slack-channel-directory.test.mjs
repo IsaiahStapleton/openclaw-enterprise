@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import net from "node:net";
+import { createRequire } from "node:module";
 import test from "node:test";
-import { Agent, fetch as undiciFetch } from "undici";
 import { SlackChannelDriver } from "../../apps/controller/src/drivers/channel/slack.ts";
 import { ChannelDirectoryError } from "../../packages/occ/src/index.ts";
 import { syntheticCredentialUrl } from "../fixtures/synthetic-credential-url.mjs";
@@ -11,6 +11,10 @@ import {
   requestThroughProxy,
   startSlackProxy,
 } from "../helpers/slack-proxy.mjs";
+
+const { Agent, fetch: undiciFetch } = createRequire(
+  new URL("../../apps/controller/package.json", import.meta.url),
+)("undici");
 
 const token = "xoxb-fixture";
 
