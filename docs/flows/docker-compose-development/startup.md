@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-10-04
-last_updated_session: authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76
+updated: 2026-10-05
+last_updated_session: authoring-run/91705365-6496-4de8-943f-15c1ba105410
 ---
 
 # Compose development startup
@@ -164,12 +164,20 @@ PostgreSQL remains the OCC metadata system of record.
 
 ### 5. The worker selects Docker compute and claims durable work
 
-`apps/controller/src/worker.mjs:configuration`
+`apps/controller/src/worker.mjs:configuration`,
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.preflight`,
+`apps/controller/src/drivers/compute/docker/index.ts:DockerComputeDriver.request`
 
 After the controller is healthy, the worker starts with the same
 application-role `OCC_DATABASE_URL`. Without `OCC_CONFIG_PATH`, development
 selects `compute-docker-development` with implementation `docker-local`;
 otherwise it uses the trusted Driver set in that file.
+
+Before opening its database pool, the worker runs the default Driver's engine
+ping, version, and image checks. Requests observe the existing 10-second deadline
+and claim-owned cancellation. Response-stream errors reject interrupted
+operations without automatic retry; complete responses retain their status
+and JSON validation.
 
 The worker loads the singleton Installation, validates persisted IAM policy,
 and polls the PostgreSQL work queue. Readiness means it can claim durable work;
@@ -370,6 +378,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 16:01: Reject interrupted Docker response streams in the existing request owner, with transport and native before/after proof. (authoring-run/91705365-6496-4de8-943f-15c1ba105410 - 9b5a60467022d815d1259ff30d3ed64657657247)
 
 - 2026-10-04 01:12: Pointed the API startup step at the existing composition function. (authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76 - 7a8a64046ac8ef3e7b5a4ed46b1d4cef9f1573f3)
 
