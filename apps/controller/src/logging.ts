@@ -57,6 +57,7 @@ const ALLOWED_FIELDS = new Set([
   "pending",
   "port",
   "prepareMs",
+  "presetFile",
   "presetId",
   "presetName",
   "provider",
@@ -134,6 +135,12 @@ function safeString(value: string): string | undefined {
   return value;
 }
 
+function safePath(value: unknown): string | undefined {
+  return typeof value === "string" && SAFE_PATH.test(value) && !SECRET_VALUE.test(value)
+    ? value
+    : undefined;
+}
+
 function safeNumber(key: string, value: number): number | undefined {
   if (!Number.isFinite(value)) {
     return undefined;
@@ -207,8 +214,9 @@ function safeAttempt(
       continue;
     }
     if ((key === "passwordFile" || key === "serviceKeyFile") && typeof field === "string") {
-      if (SAFE_PATH.test(field) && !SECRET_VALUE.test(field)) {
-        result[key] = field;
+      const path = safePath(field);
+      if (path !== undefined) {
+        result[key] = path;
       }
       continue;
     }
@@ -239,7 +247,9 @@ function sanitizedEvent(
         ? safeAttempt(value)
         : key === "skippedUserIds" || key === "restrictionIds"
           ? safeIdentifiers(value)
-          : safeScalar(key, value);
+          : key === "presetFile"
+            ? safePath(value)
+            : safeScalar(key, value);
     if (safe !== undefined) {
       result[key] = safe;
     }
@@ -250,6 +260,7 @@ function sanitizedEvent(
 // Events that warn although their names carry no warning suffix.
 const WARNING_EVENTS = new Set([
   "authentication.sign-in-limited",
+  "presets.bundled-default-shadowed",
   "presets.default-create-skipped",
   "presets.default-refresh-skipped",
 ]);
