@@ -90,8 +90,8 @@ test(
 // through a private CA), and observes the wrapper from outside.
 // The production example lets both roles burst to four cores; these cases run
 // tighter, the Codex wrapper at 500m and the embedded Gateway at one core (its
-// probe cap counts at most one core); runtime-image-model-probe-outcomes.test.mjs
-// and runtime-image-model-probe.test.mjs cover the Gateway at 500m.
+// probe cap counts at most one core); the runtime image model probe tests cover
+// the Gateway at 500m.
 const startupProbeCpuLimit = "0.5";
 const gatewayStartupProbeCpuLimit = "1";
 const startupProbeMemoryLimit = "2g";

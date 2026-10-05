@@ -21,8 +21,8 @@ import {
 
 // The embedded Gateway's startup model probe on the real runtime image under CPU
 // contention (setup: tests/helpers/runtime-image-model-probe.mjs). Its other
-// outcomes run in runtime-image-model-probe-outcomes.test.mjs, in another lane,
-// because this case alone takes 110-230 s.
+// outcomes run in the model probe outcomes file, in another lane, because this
+// case alone takes 110-230 s.
 
 // CPU contention may delay the probe past its cap, but faster hosts can still
 // complete the real turn. Require correct settlement in either case. The

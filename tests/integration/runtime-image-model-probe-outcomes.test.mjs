@@ -14,7 +14,7 @@ import {
 
 // The embedded Gateway's startup model probe on the real runtime image at a 500m
 // CPU limit (setup: tests/helpers/runtime-image-model-probe.mjs). The CPU
-// contention case runs in runtime-image-model-probe.test.mjs, in its own lane.
+// contention case runs in the runtime image model probe file, in its own lane.
 
 // The Gateway at a 500m CPU limit, with a model turn a real provider can take,
 // passes its probe and becomes ready.
