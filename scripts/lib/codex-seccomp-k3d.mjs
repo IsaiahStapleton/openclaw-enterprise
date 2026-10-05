@@ -247,9 +247,15 @@ function receiveSandboxProbe(result, nonce) {
   // Partial, duplicate and foreign invocation markers cannot qualify a failure.
   const lines = stderr.split("\n").filter((line) => line.includes(prefix));
   const entered = lines.length === 3;
-  if (lines.length !== 2 && !entered) return null;
-  if (lines[0] !== `${prefix}${nonce}:START`) return null;
-  if (entered && lines[1] !== `${prefix}${nonce}:ENTERED`) return null;
+  if (lines.length !== 2 && !entered) {
+    return null;
+  }
+  if (lines[0] !== `${prefix}${nonce}:START`) {
+    return null;
+  }
+  if (entered && lines[1] !== `${prefix}${nonce}:ENTERED`) {
+    return null;
+  }
   const terminal = lines
     .at(-1)
     .match(
@@ -261,16 +267,18 @@ function receiveSandboxProbe(result, nonce) {
     Number(terminal[3]) > 255 ||
     !stderr.endsWith("\n") ||
     stdout.includes(prefix)
-  )
+  ) {
     return null;
+  }
   const stage = terminal[2];
   const exit = Number(terminal[3]);
   if (
     (stage === "DONE") !== (exit === 0) ||
     (entered && ["VERSION", "PREPARE"].includes(stage)) ||
     (!entered && ["ASSERTIONS", "CLEANUP", "DONE"].includes(stage))
-  )
+  ) {
     return null;
+  }
   return { stage, exit, entered };
 }
 
