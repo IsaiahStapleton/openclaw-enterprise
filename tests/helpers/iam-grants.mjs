@@ -13,6 +13,9 @@ export function permissionsFor(actionsByKind) {
  * `namespaceId` scopes the binding and `resource` ({ kind, id }) narrows it to one resource.
  */
 export function bindRole(policy, subjectId, { id, roleId, namespaceId, resource }) {
+  if (typeof roleId !== "string" || roleId.length === 0) {
+    throw new TypeError(`binding ${id} needs a roleId`);
+  }
   const binding = {
     id,
     ...(namespaceId === undefined ? {} : { namespaceId }),
@@ -37,7 +40,7 @@ export function grantRole(
   const role = {
     id,
     ...(namespaceId === undefined ? {} : { namespaceId }),
-    permissions: Array.isArray(permissions) ? permissions : permissionsFor(permissions),
+    permissions: Array.isArray(permissions) ? [...permissions] : permissionsFor(permissions),
   };
   policy.roles.push(role);
   const binding = bindRole(policy, subjectId, { id: bindingId, roleId: id, namespaceId, resource });
