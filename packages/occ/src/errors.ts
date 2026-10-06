@@ -297,8 +297,10 @@ export class ComputeGatewaySettingError extends ResourceStateConflictError {
   readonly setting: string;
 
   constructor(setting: string, requirement: string) {
+    // A submitted key can be part of the setting's path; status stores this message as is.
+    const shown = setting.replace(/[\p{Cc}\p{Cf}]|\p{Cs}/gu, "?");
     super(
-      configurationFieldMessage(setting, (path) => `Configuration setting ${path} ${requirement}.`),
+      configurationFieldMessage(shown, (path) => `Configuration setting ${path} ${requirement}.`),
     );
     this.name = "ComputeGatewaySettingError";
     this.setting = setting;

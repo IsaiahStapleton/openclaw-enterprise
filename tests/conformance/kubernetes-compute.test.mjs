@@ -3590,6 +3590,90 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
     );
   }
 
+  for (const [configuration, expected] of [
+    [{ gateway: { auth: { mode: "oauth" } } }, /trusted-proxy/i],
+    [
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            unsupportedField: true,
+          },
+        },
+      },
+      /gateway\.auth\.unsupportedField is not a supported/i,
+    ],
+    [
+      {
+        gateway: {
+          auth: {
+            identityScopes: { "occ-workspace-files": ["operator.read"] },
+          },
+        },
+      },
+      /identityScopes/i,
+    ],
+    [{ gateway: { trustedProxies: ["10.99.0.0/16"] } }, /gatewayTrustedProxyCidrs/i],
+  ]) {
+    for (const configure of [options, routedOptions]) {
+      for (const operation of ["prepareRevision", "activateRevision"]) {
+        const failClosed = createKubernetesComputeDriver(configure());
+        const invalid = routedRevision(failClosed, {
+          configuration: { ...revision.configuration, ...configuration },
+        });
+        let clusterTouched = false;
+        failClosed.clients = async () => {
+          clusterTouched = true;
+          throw new Error("cluster touched");
+        };
+        await assert.rejects(failClosed[operation](invalid, authContext(invalid)), expected);
+        assert.equal(clusterTouched, false);
+      }
+    }
+  }
+
+  const multiProxyDriver = createKubernetesComputeDriver(
+    routedOptions({
+      network: { gatewayTrustedProxyCidrs: ["10.42.0.0/16", "10.43.0.0/16"] },
+    }),
+  );
+  const multiProxyRevision = routedRevision(multiProxyDriver, {
+    configuration: {
+      ...revision.configuration,
+      gateway: {
+        ...revision.configuration.gateway,
+        trustedProxies: ["10.43.0.0/16", "10.42.0.0/16"],
+      },
+    },
+  });
+  assert.doesNotThrow(() =>
+    multiProxyDriver.gatewayConfiguration(multiProxyRevision, undefined, {
+      name: kubernetesNamespaceName(tenant.id),
+      plane: "execution",
+    }),
+  );
+});
+
+test("agent provisioning validation reuses native trusted-proxy admission before cluster access", () => {
+  const driver = createKubernetesComputeDriver(routedOptions());
+  const revision = routedRevision(driver);
+  assert.deepEqual(driver.agentProvisioning.executionModes, ["dedicated"]);
+
+  assert.doesNotThrow(() =>
+    driver.validateAgentProvisioning({
+      executionMode: "dedicated",
+      configuration: revision.configuration,
+    }),
+  );
+  assert.throws(
+    () =>
+      driver.validateAgentProvisioning({
+        executionMode: "embedded",
+        configuration: revision.configuration,
+      }),
+    /dedicated execution mode/i,
+  );
+
   // Gateway settings in the caller's own Configuration are refused with a typed error that
   // names the setting and what is accepted, never the submitted value (API: 409 with this text).
   for (const [configuration, setting, requirement] of [

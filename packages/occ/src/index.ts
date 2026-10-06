@@ -690,7 +690,12 @@ export type ReconciliationOperation = PlatformOperation;
 
 export type AgentProvisioningWorkerOutcome =
   | { readonly outcome: "succeeded"; readonly revisionId: string }
-  | { readonly outcome: "retry" | "permanent"; readonly code: string };
+  | {
+      readonly outcome: "retry" | "permanent";
+      readonly code: string;
+      /** A Compute refusal's reason for the operator log; status keeps the fixed text. */
+      readonly reason?: string;
+    };
 
 export interface AgentProvisioningWorkerOptions {
   readonly runEffect?: <T>(operation: (signal: AbortSignal) => Promise<T>) => Promise<T>;
@@ -783,8 +788,9 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
 /**
  * The provisioning status message for a worker failure. Only the shared duplicate-name and
  * Compute refusal texts and the plugin-policy and native-support refusals pass through; other
- * error messages stay internal. Those refusals name only Installation configuration and the
- * work's own plugin selection, and HTTP returns them verbatim. The status contract caps
+ * error messages stay internal. Those refusals name only Installation configuration, the
+ * work's own plugin selection and gateway settings in its own Configuration, and HTTP returns
+ * them verbatim. The status contract caps
  * `error.message` at 256 characters.
  */
 function provisioningFailureMessage(code: string, error: unknown): string {
@@ -2337,6 +2343,7 @@ export class OpenClawController {
       return Object.freeze({
         outcome: disposition,
         code,
+        ...(error instanceof ComputeProvisioningRefusedError ? { reason: error.reason } : {}),
       });
     }
   }

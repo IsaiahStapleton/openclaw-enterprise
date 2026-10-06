@@ -455,6 +455,8 @@ class ConfigurationFailure extends Error {}
  * provision. It names the setting's path and what is accepted, never the submitted value.
  * Deployment treats it as any other ConfigurationFailure; provisioning validation reports it
  * to the caller as a ComputeGatewaySettingError.
+ * TODO: raise it for trustedProxy.allowUsers too once open #906, which rewrites that check,
+ * lands or closes; until then that refusal keeps the fixed 409 text and a logged reason.
  */
 class GatewaySettingFailure extends ConfigurationFailure {
   readonly setting: string;

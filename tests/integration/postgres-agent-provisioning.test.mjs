@@ -395,6 +395,7 @@ async function createFixture(context, options = {}) {
       leaseDurationMs: options.leaseDurationMs ?? 30_000,
       maxAttempts: 3,
       emit: (event) => {
+        options.onWorkerEvent?.(event);
         // This persistence case ends at durable handoff, before credential service dispatch.
         if (options.stopAfterProvisioning && event.code === "PROVISIONING_HANDED_OFF") {
           workerCompletion = worker.stop();
@@ -1710,8 +1711,10 @@ test(
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
     const computeDriver = createRuntimeComputeDriver();
+    const workerEvents = [];
     const fixture = await createFixture(context, {
       computeDriver,
+      onWorkerEvent: (event) => workerEvents.push(event),
       configurationDriver: createProvisioningConfigurationDriver({
         id: "configuration-provisioning-compute-refusal",
       }),
@@ -1749,6 +1752,19 @@ test(
     assert.deepEqual(work.rows, [
       { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED", attempt_count: 1 },
     ]);
+    // The status keeps fixed text; the worker's log line names the Driver's reason.
+    const completed = workerEvents.filter(
+      (event) => event.event === "worker.completed" && event.code === "PROVISIONING_REJECTED",
+    );
+    assert.deepEqual(
+      completed.map(({ outcome, reason }) => ({ outcome, reason })),
+      [
+        {
+          outcome: "permanent",
+          reason: "Dedicated Harness storage requires gateway routing and node enrollment.",
+        },
+      ],
+    );
 
     // Reading status reports the stored failure rather than a 500 or a fresh refusal.
     const status = await fixture.request("GET", admitted.data.provisioning.url);

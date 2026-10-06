@@ -1614,6 +1614,10 @@ export class ControllerWorker {
       outcome: this.passOutcome,
       code: result.outcome === "succeeded" ? "PROVISIONING_HANDED_OFF" : result.code,
       ...(result.outcome === "succeeded" ? { revisionId: result.revisionId } : {}),
+      // A Compute refusal's reason; status and the Collector export keep only the code.
+      ...(result.outcome !== "succeeded" && result.reason !== undefined
+        ? { reason: result.reason }
+        : {}),
     });
   }
 
