@@ -576,15 +576,21 @@ function preparationFailureDiagnostic(error: unknown): ComputePrepareRevisionFai
   };
 }
 
-// Socket-level failures: the request never reached a Kubernetes API server.
-// TLS trust and HTTP status failures keep their original error.
+// Socket-level failures: the request never reached a Kubernetes API server, or its
+// connection broke before an answer. EPIPE is a write to a connection the peer already
+// closed; ECONNABORTED is a connection the local kernel aborted (a socket destroyed
+// through sock_diag, as `ss -K` does). undici's header and body timeouts are absent: they
+// default to 300 s, so REQUEST_TIMEOUT_MS always ends a request first. TLS trust and
+// HTTP status failures keep their original error.
 const UNREACHABLE_SOCKET_CODES = new Set([
   "EAI_AGAIN",
+  "ECONNABORTED",
   "ECONNREFUSED",
   "ECONNRESET",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",
+  "EPIPE",
   "ETIMEDOUT",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_SOCKET",
@@ -9224,6 +9230,7 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
         { mutating: true },
       );
     } catch (error) {
+      this.operationSignal()?.throwIfAborted();
       throw privateWriteFailure("Workspace setup private delivery is unavailable.", error);
     }
   }

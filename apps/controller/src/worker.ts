@@ -167,15 +167,29 @@ function repositoryCleanupRecheckMs(intervalMs: number, ageMs: number): number {
 
 const LOGGED_ERROR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
 
+function loggedHttpStatus(error: unknown): number | undefined {
+  const status =
+    error !== null && typeof error === "object"
+      ? (error as { readonly code?: unknown }).code
+      : undefined;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
+
 /**
  * Log fields that say which dependency failed and why, without provider text:
  * a transient dependency names itself and a closed reason; any other failure
- * gives only its error class and, for an HTTP SDK error, the status.
+ * gives only its error class and, for an HTTP SDK error, the status. A Driver
+ * error that replaces an SDK error to keep private request data out of logs
+ * (a Kubernetes private Secret write) keeps the status and Status reason on
+ * its `cause`; those are logged too.
  */
 function revisionFailureLogFields(error: unknown): {
   readonly dependency?: string;
   readonly cause?: string;
   readonly status?: number;
+  readonly reason?: string;
 } {
   if (error instanceof TransientDependencyError) {
     return { dependency: error.dependency, cause: error.reason };
@@ -191,14 +205,19 @@ function revisionFailureLogFields(error: unknown): {
             LOGGED_ERROR_NAME.test(candidate),
         );
   // Kubernetes SDK errors carry the HTTP status in `code`.
-  const status = (record as { readonly code?: unknown } | undefined)?.code;
-  const httpStatus =
-    typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
-      ? status
+  const ownStatus = loggedHttpStatus(record);
+  const evidence =
+    ownStatus === undefined
+      ? (record as { readonly cause?: unknown } | undefined)?.cause
       : undefined;
+  const causeStatus = loggedHttpStatus(evidence);
+  const httpStatus = ownStatus ?? causeStatus;
+  const reason =
+    causeStatus === undefined ? undefined : (evidence as { readonly reason?: unknown }).reason;
   return {
     cause: name ?? "Error",
     ...(httpStatus === undefined ? {} : { status: httpStatus }),
+    ...(typeof reason === "string" && LOGGED_ERROR_NAME.test(reason) ? { reason } : {}),
   };
 }
 
