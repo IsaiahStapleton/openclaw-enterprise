@@ -776,6 +776,26 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
   return render(shown);
 }
 
+/**
+ * The provisioning status message for a worker failure. Only the shared duplicate-name text and
+ * the plugin-policy and native-support refusals pass through; other error messages stay
+ * internal. Those refusals name only Installation configuration and the work's own plugin
+ * selection, and HTTP returns them verbatim. The status contract caps `error.message` at 256
+ * characters.
+ */
+function provisioningFailureMessage(code: string, error: unknown): string {
+  if (code === "PROVISIONING_REJECTED") {
+    if (error instanceof ResourceStateConflictError && error.message === AGENT_NAME_CONFLICT) {
+      return AGENT_NAME_CONFLICT;
+    }
+    if (error instanceof PluginPolicyValidationError || error instanceof NativeWorkerSupportError) {
+      const characters = Array.from(error.message);
+      return characters.length <= 256 ? error.message : `${characters.slice(0, 255).join("")}…`;
+    }
+  }
+  return "Agent provisioning could not complete.";
+}
+
 // At most 200 characters counted as code points, as the API contract (JSON Schema
 // maxLength) and PostgreSQL char_length count them, not UTF-16 code units.
 function validName(value: unknown): value is string {
@@ -2215,7 +2235,11 @@ export class OpenClawController {
           error instanceof ResourceConflictError ||
           error instanceof AuthorizationDeniedError ||
           error instanceof AgentDeletingError ||
-          error instanceof NamespaceNotReadyError)
+          error instanceof NamespaceNotReadyError ||
+          // An Installation change (Plugin Driver, runtime image) refuses the stored plan
+          // the same way on every attempt, as HTTP retry does with a 400.
+          error instanceof PluginPolicyValidationError ||
+          error instanceof NativeWorkerSupportError)
       ) {
         code = "PROVISIONING_REJECTED";
       }
@@ -2225,13 +2249,7 @@ export class OpenClawController {
           : "permanent";
       const authorizationDenied =
         error instanceof AuthorizationDeniedError && !(error instanceof DependencyUnavailableError);
-      // Only the shared duplicate-name text passes through; other error messages stay internal.
-      const message =
-        code === "PROVISIONING_REJECTED" &&
-        error instanceof ResourceStateConflictError &&
-        error.message === AGENT_NAME_CONFLICT
-          ? AGENT_NAME_CONFLICT
-          : "Agent provisioning could not complete.";
+      const message = provisioningFailureMessage(code, error);
       await this.mutate(async (state) => {
         const current = await state.provisioning.findByWorkId(claim.idempotencyKey);
         if (current === undefined) {

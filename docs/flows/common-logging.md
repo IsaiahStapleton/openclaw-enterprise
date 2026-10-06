@@ -63,6 +63,10 @@ graph TD
 
 API and worker parse trusted YAML once and pass `startupConfiguration.logging`
 to driver composition. Invalid settings fail startup before requests or work.
+Bootstrap, maintenance, and the worker's fallback read only the logging section
+through `apps/controller/src/composition/startup-file.ts:loadOperationalLoggingConfiguration`,
+which shares the snapshot's file reader and checks. The migration command imports
+that module directly, so it never loads Drivers.
 See the [settings reference](../reference/settings.md) for YAML shape and values.
 
 ### 2. Processes log fixed sanitized events
@@ -78,8 +82,8 @@ keeps reviewed scalar fields and drops unapproved fields, credentials, provider
 payloads, request/reply objects, and unsafe strings. This source boundary precedes
 the separate Collector filter in step 7. For worker records, the Collector retains
 allowlisted `work.operation` values and bounded `work.id` shapes. Agent stop keys
-include the operation UUID; deletion keys have no operation suffix. Unsupported
-values and key shapes are excluded.
+and credential withdrawal keys include the operation UUID; deletion keys have no
+operation suffix. Unsupported values and key shapes are excluded.
 
 Compute preparation failures may include a Driver-reviewed stage, classification,
 status, and bounded message. The worker never serializes the raw exception, and

@@ -783,9 +783,103 @@ test(
           (line) => line === JSON.stringify({ event: "migration.checked", history: "completed" }),
         ),
     );
+
+    // The migration command reads only the logging section of the Installation startup file,
+    // through the controller's own startup reader. A file the controller would refuse fails the
+    // command with no migration output and the usual single structured failure line.
+    const configDirectory = await mkdtemp(join(tmpdir(), "occ-migration-config-"));
+    context.after(() => rm(configDirectory, { recursive: true, force: true }));
+    const startupFile = async (name, contents) => {
+      const path = join(configDirectory, name);
+      await writeFile(path, contents, "utf8");
+      return path;
+    };
+    // One refusal from each layer: the logging section, the file reader, and the path rules.
+    const refused = [
+      await startupFile("trace.yaml", "logging:\n  level: trace\n"),
+      await startupFile("invalid.yaml", "logging: [\n"),
+      "relative/startup.yaml",
+    ];
+    for (const path of refused) {
+      const result = await runMigrationCheck(fixture, path);
+      assert.equal(result.code, 1, path);
+      assert.equal(result.stdout, "", path);
+      assert.deepEqual(
+        logEvents(result.stderr),
+        [
+          {
+            severity: "ERROR",
+            service: "occ-migration",
+            event: "migration.failed",
+            code: "MIGRATION_FAILED",
+          },
+        ],
+        path,
+      );
+    }
+    // An accepted file sets the command's log level: info keeps the success event, warn drops it.
+    const checkedOutput = `${JSON.stringify({ event: "migration.checked", history: "completed" })}\n`;
+    const atInfo = await runMigrationCheck(
+      fixture,
+      await startupFile("info.yaml", "logging:\n  level: info\n"),
+    );
+    assert.equal(atInfo.code, 0);
+    assert.equal(atInfo.stdout, checkedOutput);
+    assert.deepEqual(logEvents(atInfo.stderr), [
+      { severity: "INFO", service: "occ-migration", event: "migration.checked" },
+    ]);
+    const atWarn = await runMigrationCheck(
+      fixture,
+      await startupFile("warn.yaml", "logging:\n  level: warn\n"),
+    );
+    assert.equal(atWarn.code, 0);
+    assert.equal(atWarn.stdout, checkedOutput);
+    assert.deepEqual(logEvents(atWarn.stderr), []);
     assert.equal(await runCommand(fixture, "docker", dumpArgs), beforeSchema);
   },
 );
+
+async function runMigrationCheck(fixture, configPath) {
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      ["scripts/migrate-production.mjs", "--check"],
+      {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          OCC_MIGRATION_DATABASE_URL: fixture.migrationUrl,
+          OCC_CONFIG_PATH: configPath,
+        },
+        encoding: "utf8",
+        timeout: 180_000,
+      },
+    );
+    return { code: 0, stdout, stderr };
+  } catch (error) {
+    if (typeof error.code !== "number") {
+      // Subprocess errors can retain connection credentials in stdout or stderr.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(
+        `Migration subprocess failed unexpectedly (signal=${error.signal ?? "none"}).`,
+      );
+    }
+    return { code: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+}
+
+// Structured log lines without their timestamps.
+function logEvents(stderr) {
+  return stderr
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const { time, ...event } = JSON.parse(line);
+      assert.equal(typeof time, "string");
+      return event;
+    });
+}
 
 const historySelectors = [
   process.env.OCC_MIGRATION_HISTORY_DATABASE_URL,

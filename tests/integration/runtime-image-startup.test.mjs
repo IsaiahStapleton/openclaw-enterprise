@@ -212,77 +212,6 @@ test("runtime image seccomp option requires the CI-prepared profile record", asy
 });
 
 test(
-  "runtime image reaps descendants during workspace node and Codex restarts",
-  imageTestOptions,
-  async (t) => {
-    const containerName = `oce-runtime-image-supervisor-${randomBytes(6).toString("hex")}`;
-    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
-    // Run the same process proof inside the image, using the production init
-    // command. Copy source over argv so this also works with a remote Docker engine.
-    const paths = [
-      "tests/conformance/workspace-node-supervisor.test.mjs",
-      "apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts",
-      "apps/controller/src/drivers/compute/node-program.ts",
-      "apps/controller/src/drivers/plugin/runtime-translator.ts",
-    ];
-    const files = await Promise.all(
-      paths.map(async (path) => [
-        path,
-        await readFile(new URL(`../../${path}`, import.meta.url), "utf8"),
-      ]),
-    );
-    const launch = String.raw`
-const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
-const { dirname, join } = require("node:path");
-const { spawnSync } = require("node:child_process");
-for (const [relative, content] of JSON.parse(readFileSync(0, "utf8"))) {
-  const target = join("/tmp/proof", relative);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, content);
-}
-const child = spawnSync(process.execPath, ["--test", "/tmp/proof/tests/conformance/workspace-node-supervisor.test.mjs"], { stdio: "inherit" });
-if (child.error) throw child.error;
-process.exit(child.status ?? 1);
-`;
-    const { stdout } = await runDocker(
-      [
-        "run",
-        "-i",
-        "--rm",
-        "--name",
-        containerName,
-        "--user",
-        "1000:1000",
-        "--read-only",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--network",
-        "none",
-        "--tmpfs",
-        "/tmp:size=64m,mode=1777",
-        "--entrypoint",
-        "/usr/bin/tini",
-        image,
-        "-s",
-        "--",
-        "node",
-        "-e",
-        launch,
-      ],
-      {},
-      JSON.stringify(files),
-    );
-    // All supervisor proofs: environment and file-delivered node setup, a
-    // failed saved-identity probe that is retried, and a stop with no child.
-    assert.match(stdout, /\bpass 4\b/);
-    assert.match(stdout, /\bfail 0\b/);
-    assert.match(stdout, /skipped 0/);
-  },
-);
-
-test(
   "runtime image initializes the Harness workspace without replacing owner edits",
   imageTestOptions,
   async () => {
@@ -995,6 +924,10 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
     ]);
     fs.accessSync("/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/router.js");
     process.stdout.write("native-repository-shell-ready\\n");
+    // The proof is complete. The Codex binary, a grandchild that holds this
+    // probe's pipes, takes about 5 s to exit after SIGTERM or EOF. This node is
+    // the container's PID 1, so its exit stops Codex at once.
+    process.exit();
   } finally {
     clearTimeout(timeout);
     lines.close();

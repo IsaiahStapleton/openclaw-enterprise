@@ -50,6 +50,17 @@ async function secretGrants(fixture, requests, namespaceId, agent) {
   });
 }
 
+// The Socket Mode binding the console saves for a Slack token Secret.
+const envBinding = (secret) => ({ source: secret.ref, delivery: { type: "env" } });
+
+// The app and bot token Secrets an Agent was already bound to.
+async function existingSlackSecrets(fixture, namespaceId) {
+  return [
+    await fixture.createSecret(namespaceId, "Existing Slack app token", "xapp-old"),
+    await fixture.createSecret(namespaceId, "Existing Slack bot token", "xoxb-old"),
+  ];
+}
+
 async function savedSecretBindings(fixture, namespaceId, configurationId) {
   const saved = await fixture.request(
     "GET",
@@ -186,7 +197,7 @@ test("active Agent can deploy the current saved draft as a new version", async (
   const secretBindings = {};
   for (const key of ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"]) {
     const secret = await fixture.createSecret(namespace.id, key, `test-${key}`);
-    secretBindings[key] = { source: secret.ref, delivery: { type: "env" } };
+    secretBindings[key] = envBinding(secret);
     fixture.policy.bindings.push({
       id: `binding-${secret.id}`,
       namespaceId: namespace.id,
@@ -404,25 +415,10 @@ test("bound Slack credential fields show Secret references without reading value
   await fixture.bootstrap();
   const namespace = await fixture.createNamespace("Bound Slack credential gate", { ready: true });
   const values = nativeValues("slack-bound", { harnessId: "codex", channels: { slack } });
-  const appSecret = await fixture.createSecret(
-    namespace.id,
-    "Existing Slack app token",
-    "xapp-old",
-  );
-  const botSecret = await fixture.createSecret(
-    namespace.id,
-    "Existing Slack bot token",
-    "xoxb-old",
-  );
+  const [appSecret, botSecret] = await existingSlackSecrets(fixture, namespace.id);
   const secretBindings = {
-    SLACK_APP_TOKEN: {
-      source: appSecret.ref,
-      delivery: { type: "env" },
-    },
-    SLACK_BOT_TOKEN: {
-      source: botSecret.ref,
-      delivery: { type: "env" },
-    },
+    SLACK_APP_TOKEN: envBinding(appSecret),
+    SLACK_BOT_TOKEN: envBinding(botSecret),
   };
   const agent = await fixture.createAgent(namespace.id, "Bound Slack Agent", values, {
     executionMode: "dedicated",
@@ -457,30 +453,15 @@ test("Slack credential replacement switches only selected Secret references", as
     ready: true,
   });
   const values = nativeValues("slack-replacement", { harnessId: "codex", channels: { slack } });
-  const appSecret = await fixture.createSecret(
-    namespace.id,
-    "Existing Slack app token",
-    "xapp-old",
-  );
-  const botSecret = await fixture.createSecret(
-    namespace.id,
-    "Existing Slack bot token",
-    "xoxb-old",
-  );
+  const [appSecret, botSecret] = await existingSlackSecrets(fixture, namespace.id);
   const replacementAppSecret = await fixture.createSecret(
     namespace.id,
     "Replacement Slack app token",
     "xapp-replacement",
   );
   const secretBindings = {
-    SLACK_APP_TOKEN: {
-      source: appSecret.ref,
-      delivery: { type: "env" },
-    },
-    SLACK_BOT_TOKEN: {
-      source: botSecret.ref,
-      delivery: { type: "env" },
-    },
+    SLACK_APP_TOKEN: envBinding(appSecret),
+    SLACK_BOT_TOKEN: envBinding(botSecret),
   };
   const agent = await fixture.createAgent(namespace.id, "Replacement Slack Agent", values, {
     executionMode: "dedicated",
@@ -508,7 +489,7 @@ test("Slack credential replacement switches only selected Secret references", as
   await expectNoText(page, /xapp-replacement/);
   const saved = await savedSecretBindings(fixture, namespace.id, agent.configurationId);
   assert.deepEqual(saved, {
-    SLACK_APP_TOKEN: { source: replacementAppSecret.ref, delivery: { type: "env" } },
+    SLACK_APP_TOKEN: envBinding(replacementAppSecret),
     SLACK_BOT_TOKEN: secretBindings.SLACK_BOT_TOKEN,
   });
   assert.deepEqual(secretWrites(requests, namespace.id), []);
@@ -538,10 +519,7 @@ test("partially bound Slack credentials save only the missing token", async (t) 
   );
   const botSecret = await fixture.createSecret(namespace.id, "New Slack bot token", "xoxb-new-bot");
   const secretBindings = {
-    SLACK_APP_TOKEN: {
-      source: appSecret.ref,
-      delivery: { type: "env" },
-    },
+    SLACK_APP_TOKEN: envBinding(appSecret),
   };
   const agent = await fixture.createAgent(namespace.id, "Partial Slack Agent", values, {
     executionMode: "dedicated",
@@ -589,7 +567,7 @@ test("partially bound Slack credentials save only the missing token", async (t) 
   const saved = await savedSecretBindings(fixture, namespace.id, agent.configurationId);
   assert.deepEqual(saved, {
     SLACK_APP_TOKEN: secretBindings.SLACK_APP_TOKEN,
-    SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+    SLACK_BOT_TOKEN: envBinding(botSecret),
   });
   assert.deepEqual(await secretGrants(fixture, requests, namespace.id, agent), [botSecret.id]);
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
@@ -658,8 +636,8 @@ test("missing Slack credential fields require both Secret references before savi
   assert.equal(pageText.includes("xoxb-console-secret"), false);
   const saved = await savedSecretBindings(fixture, namespace.id, agent.configurationId);
   assert.deepEqual(saved, {
-    SLACK_APP_TOKEN: { source: appSecret.ref, delivery: { type: "env" } },
-    SLACK_BOT_TOKEN: { source: botSecret.ref, delivery: { type: "env" } },
+    SLACK_APP_TOKEN: envBinding(appSecret),
+    SLACK_BOT_TOKEN: envBinding(botSecret),
   });
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });

@@ -908,14 +908,24 @@ test(
       assert.equal(serialized.includes(internal), false, `${internal} must not leak downstream`);
     }
 
-    // Stop work includes a per-operation UUID; deletion work has no suffix.
-    // Unsupported shapes must lose correlation fields without losing the event.
+    // Stop and credential withdrawal work include a per-operation UUID; deletion work has no
+    // suffix. Unsupported shapes must lose correlation fields without losing the event.
     const agentId = `agt_${randomUUID()}`;
     const stopWorkId = `agent:${agentId}:reconcile:stopped:${randomUUID()}`;
     const deleteWorkId = `agent:${agentId}:reconcile:deleted`;
+    const withdrawalWorkId = `agent_revision:rev_${randomUUID()}:reconcile:credentials_withdrawn`;
     const cases = [
       { operation: "agent.stop", workId: stopWorkId },
       { operation: "agent.delete", workId: deleteWorkId },
+      {
+        operation: "agent_revision.credential_withdrawal",
+        workId: `${withdrawalWorkId}:${randomUUID()}`,
+      },
+      {
+        operation: "agent_revision.credential_withdrawal",
+        workId: `${withdrawalWorkId}:CANARY_SESSION`,
+        discardWorkId: true,
+      },
       {
         operation: "agent.stop",
         workId: `agent:${agentId}:reconcile:stopped`,

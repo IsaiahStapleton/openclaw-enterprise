@@ -1668,12 +1668,15 @@ test("does not preserve falsely known targets through reassigned paths or loader
     "apps/app/src/reassigned.mjs",
     `
     import { createRequire } from "node:module";
+    import { dirname } from "node:path";
     let target = "./index.ts";
     target = process.env.TARGET;
     await import(target);
     let load = createRequire(import.meta.url);
     load = (name) => name;
     load("./index.ts");
+    await import(load.resolve("./index.ts"));
+    await import(dirname(createRequire(import.meta.url).resolve("./index.ts")));
   `,
   );
   const report = await check();
@@ -1685,6 +1688,18 @@ test("does not preserve falsely known targets through reassigned paths or loader
     report.violations.some(
       (edge) => edge.rule === "unresolved-dynamic-import" && edge.from.endsWith("reassigned.mjs"),
     ),
+  );
+  // Each dynamic import reports why its target stays unknown.
+  assert.deepEqual(
+    report.violations
+      .filter((edge) => edge.from.endsWith("reassigned.mjs") && edge.kind === "dynamic-import")
+      .map((edge) => edge.message)
+      .sort(),
+    [
+      "A recognized loader binding is assigned elsewhere in this source.",
+      "Module paths require a local const initializer with no assignment.",
+      "Path manipulation around require.resolve is outside bounded analysis.",
+    ],
   );
 });
 
@@ -1700,10 +1715,17 @@ test("bounds cyclic loader provenance and reports an unresolved dependency witho
     load("./x.mjs");
   `,
   );
+  // A self-referencing path constant must stay unknown as well.
+  await write(
+    "apps/app/src/cyclic-path.mjs",
+    'const target = target + ".mjs"; await import(target);',
+  );
   const report = await check();
   assert.equal(report.ok, false);
   assert.ok(violates(report, "apps/app/src/cyclic-loader.mjs", "unresolved-dynamic-import"));
   assert.equal(from(report, "apps/app/src/cyclic-loader.mjs").length, 0);
+  assert.ok(violates(report, "apps/app/src/cyclic-path.mjs", "unresolved-dynamic-import"));
+  assert.equal(from(report, "apps/app/src/cyclic-path.mjs").length, 0);
 });
 
 test("bounds cyclic computed factory provenance inside dynamic imports", async (t) => {
