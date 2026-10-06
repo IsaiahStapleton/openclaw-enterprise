@@ -2146,7 +2146,8 @@ export class OpenClawController {
           "Provisioning cannot retry after cancellation or deployment handoff.",
         );
       }
-      // Full admission, including the native support and plugin policy checks the status read skips.
+      // Full admission, including the native support, plugin policy, Compute plan and Harness
+      // authentication checks the status read skips.
       await this.authorizeProvisioningRecord(state, principalId, record);
       if (record.status === "queued" || record.status === "running") {
         return Object.freeze({ provisioning: provisioningProgress(record, observed) });
@@ -7001,8 +7002,8 @@ export class OpenClawController {
     if (found.record.actorId !== principalId) {
       throw new AuthorizationDeniedError("Only the initiating actor can read provisioning status.");
     }
-    // Retry repeats the full check, native support, plugin policy and the Compute plan check
-    // included, after its lifecycle checks.
+    // Retry repeats the full check, native support, plugin policy, the Compute plan and Harness
+    // authentication checks included, after its lifecycle checks.
     await this.authorizeProvisioningRecord(state, principalId, found.record, { statusRead: true });
     return found;
   }
