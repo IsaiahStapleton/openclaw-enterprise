@@ -431,11 +431,16 @@ test(
         JSON.stringify({
           event: "worker.compute-prepare-failed",
           severity: "ERROR",
+          workId: `agent_revision:${revisionId}:reconcile`,
+          operation: "agent_revision.reconcile",
+          namespaceId,
+          agentId,
+          revisionId,
+          computeDriverId: "kubernetes",
           code: "KUBERNETES_API_REJECTED",
           step: "gateway",
           errorClass: "HttpError",
           status: 403,
-          computeDriverId: "kubernetes",
           message: canaries.join(" "),
           ...payload,
         }),
@@ -509,8 +514,9 @@ test(
       "log.iostream": "stdout",
       "occ.code": "KUBERNETES_VERSION_BELOW_MINIMUM",
     });
-    // A failed Compute prepare is exported at ERROR with its bounded code; the stage,
-    // error class, status and message stay in local logs.
+    // A failed Compute prepare is exported at ERROR with its bounded code and the IDs and
+    // work identity other worker events keep; the stage, error class, status and message
+    // stay in local logs.
     const prepareFailed = initial.find(
       ({ record }) => record.body.stringValue === "worker.compute-prepare-failed",
     );
@@ -519,7 +525,12 @@ test(
     assert.deepEqual(attributes(prepareFailed.record.attributes), {
       "event.name": "worker.compute-prepare-failed",
       "log.iostream": "stdout",
+      "occ.agent.id": agentId,
       "occ.code": "KUBERNETES_API_REJECTED",
+      "occ.namespace.id": namespaceId,
+      "occ.revision.id": revisionId,
+      "work.id": `agent_revision:${revisionId}:reconcile`,
+      "work.operation": "agent_revision.reconcile",
     });
     // A limited sign-in lane is promoted with its lane; the hashed key stays in local logs.
     const limited = initial.find(
@@ -620,7 +631,7 @@ test(
     }
     assert.equal(serialized.includes(`limitkey${fixture.suffix}`), false);
     assert.equal(serialized.includes(`providerkey${fixture.suffix}`), false);
-    for (const value of [...canaries, "forged-service", "forged-agent"]) {
+    for (const value of [...canaries, "forged-service", "forged-agent", "HttpError"]) {
       assert.equal(serialized.includes(value), false);
     }
     const metrics = await fetch(`http://${metricsAddress}/metrics`).then((r) => r.text());
