@@ -776,10 +776,24 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
   return render(shown);
 }
 
-/** Fits a refusal into the provisioning status contract's 256-character `error.message`. */
-function provisioningStatusMessage(message: string): string {
-  const characters = Array.from(message);
-  return characters.length <= 256 ? message : `${characters.slice(0, 255).join("")}…`;
+/**
+ * The provisioning status message for a worker failure. Only the shared duplicate-name text and
+ * the plugin-policy and native-support refusals pass through; other error messages stay
+ * internal. Those refusals name only Installation configuration and the work's own plugin
+ * selection, and HTTP returns them verbatim. The status contract caps `error.message` at 256
+ * characters.
+ */
+function provisioningFailureMessage(code: string, error: unknown): string {
+  if (code === "PROVISIONING_REJECTED") {
+    if (error instanceof ResourceStateConflictError && error.message === AGENT_NAME_CONFLICT) {
+      return AGENT_NAME_CONFLICT;
+    }
+    if (error instanceof PluginPolicyValidationError || error instanceof NativeWorkerSupportError) {
+      const characters = Array.from(error.message);
+      return characters.length <= 256 ? error.message : `${characters.slice(0, 255).join("")}…`;
+    }
+  }
+  return "Agent provisioning could not complete.";
 }
 
 // At most 200 characters counted as code points, as the API contract (JSON Schema
@@ -2235,18 +2249,7 @@ export class OpenClawController {
           : "permanent";
       const authorizationDenied =
         error instanceof AuthorizationDeniedError && !(error instanceof DependencyUnavailableError);
-      // Only the shared duplicate-name text and the plugin-policy and native-support refusals
-      // pass through; other error messages stay internal. Those refusals name only Installation
-      // configuration and the work's own plugin selection, and HTTP returns them verbatim.
-      const message =
-        code !== "PROVISIONING_REJECTED"
-          ? "Agent provisioning could not complete."
-          : error instanceof ResourceStateConflictError && error.message === AGENT_NAME_CONFLICT
-            ? AGENT_NAME_CONFLICT
-            : error instanceof PluginPolicyValidationError ||
-                error instanceof NativeWorkerSupportError
-              ? provisioningStatusMessage(error.message)
-              : "Agent provisioning could not complete.";
+      const message = provisioningFailureMessage(code, error);
       await this.mutate(async (state) => {
         const current = await state.provisioning.findByWorkId(claim.idempotencyKey);
         if (current === undefined) {
