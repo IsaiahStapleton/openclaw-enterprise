@@ -74,6 +74,7 @@ export function memoryLogger() {
 }
 
 export const consoleOrigin = "https://console.oce.example.internal";
+export const sessionCookieName = "__Host-openclaw_occ.session_token";
 const gatewayApiKeyPath = "/etc/openclaw/gateway-api-key/key";
 const secretRef = (name, key) => ({ secretKeyRef: { name, key } });
 
@@ -303,8 +304,6 @@ export async function assertConsoleSignIn(app, callback, userId) {
   return assertSessionUser(app, callback, userId);
 }
 
-export const sessionCookieName = "__Host-openclaw_occ.session_token";
-
 /** Audited login denials with `reason`, only those for `provider` when one is given. */
 export async function loginDenialCount(state, reason, provider) {
   return (await state.transact((unit) => unit.audit.list())).filter(
@@ -319,7 +318,8 @@ export async function loginDenialCount(state, reason, provider) {
 /**
  * Asserts that an external provider's callback was refused: a redirect to the Console with
  * `authError=<provider>`, no session cookie, no new user, method or session row, and one more
- * login denial with `reason`. `signIn()` resolves to `{ callback }`; `denials(reason)` counts.
+ * login denial with `reason`. `signIn()` resolves to `{ callback }`; `denials(reason)` resolves
+ * to the number of matching denials so far (usually `loginDenialCount`).
  */
 export async function assertExternalSignInRefused(
   { pool, provider, denials, signIn },

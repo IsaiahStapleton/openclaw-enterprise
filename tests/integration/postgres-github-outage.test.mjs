@@ -17,7 +17,6 @@ import {
   signedInHeaders,
   startFakeGitHub,
 } from "../helpers/production-sign-in.mjs";
-import { cookieHeaderFromSetCookie } from "../helpers/auth-session.mjs";
 import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
 import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 import { assertSpentDeviceProofRefusal } from "../helpers/password-proof-refusal.mjs";
@@ -328,11 +327,7 @@ test(
       const slowed = await passwordSignIn(app, origin, admin, "192.0.2.65");
       assert.equal(slowed.statusCode, 200, slowed.body);
       assert.ok(performance.now() - started >= slowLane.maxFloorMs - 10, "the attempt was slowed");
-      assert.equal(
-        (await currentSession(app, cookieHeaderFromSetCookie(slowed.headers["set-cookie"]))).user
-          .id,
-        admin.id,
-      );
+      await assertSessionUser(app, slowed, admin.id);
       // The browser that signed in before spends its own lane instead.
       const known = await signInWith(device, admin, "192.0.2.64");
       assert.equal(known.statusCode, 200, known.body);
