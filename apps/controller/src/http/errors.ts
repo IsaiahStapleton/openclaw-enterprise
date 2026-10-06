@@ -533,8 +533,10 @@ const SHORTENED_PATH_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = O
 
 // The error contract caps messages at 256 characters.
 const MESSAGE_CAP = 256;
-// The shortest cut path a message shows when it lists more than one problem.
+// The shortest cut path a message shows when it lists more than one problem, and when it
+// shows only one (a character and the ellipsis).
 const MIN_SHOWN_PATH = 32;
+const MIN_SOLE_PATH = 2;
 
 // Names the first few offending fields so clients that print only the message, such as
 // occ, still show which field to fix. The full list stays in `details`.
@@ -568,14 +570,15 @@ function contractMessage(error: FastifyError, found: readonly ContractProblem[])
     const paths = pathsWithin(
       shown.map(({ path }) => path),
       MESSAGE_CAP - Array.from(fixed).length,
-      count === 1 ? 2 : MIN_SHOWN_PATH,
+      count === 1 ? MIN_SOLE_PATH : MIN_SHOWN_PATH,
     );
     if (paths !== undefined) {
       const listed = shown.map(({ wording }, index) => `${paths[index]}${wording}`).join("; ");
       return capped(`${prefix}${listed}${more}.`);
     }
   }
-  // Wording too long for the cap even with the shortest cut path: cut the message end.
+  // Wording too long for the cap even with the shortest cut path (none is today): cut the
+  // message end.
   const listed = problems
     .slice(0, 3)
     .map(({ path, wording }) => `${path}${wording}`)
@@ -588,7 +591,7 @@ function contractMessage(error: FastifyError, found: readonly ContractProblem[])
  * Cuts the longest of `paths` first, each to the same length ending in "…", so that together
  * they take at most `budget` characters. Paths that fit stay whole. Returns undefined when a
  * cut path would be shorter than `minimum` characters. Counts code points, so a cut never
- * leaves half of a surrogate pair.
+ * leaves half of a surrogate pair; it can split a `~0` or `~1` escape, which `details` keeps.
  */
 function pathsWithin(
   paths: readonly string[],
@@ -624,7 +627,11 @@ function pathsWithin(
  * the cap and `after`, the problem wording, stays whole.
  */
 function pathMessage(before: string, path: string, after: string): string {
-  const [shown] = pathsWithin([path], MESSAGE_CAP - Array.from(before + after).length, 2) ?? [path];
+  const [shown] = pathsWithin(
+    [path],
+    MESSAGE_CAP - Array.from(before + after).length,
+    MIN_SOLE_PATH,
+  ) ?? [path];
   return capped(`${before}${shown}${after}`);
 }
 
