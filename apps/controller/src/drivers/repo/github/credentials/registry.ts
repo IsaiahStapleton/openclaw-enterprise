@@ -3,7 +3,6 @@ import type {
   AdmittedRepositoryBinding,
   RepositoryBindingRequest,
 } from "@openclaw-enterprise/contracts";
-import { isBackendId } from "@openclaw-enterprise/contracts";
 import type { GitHubProfile } from "./types.ts";
 import { githubCapabilityPolicy, permissionsForProfile } from "./profiles.ts";
 import {
@@ -35,6 +34,7 @@ export interface GitHubRepositoryRegistry {
 }
 
 const selectorPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const backendPattern = /^(?!\s)(?!.*\s$).{1,200}$/;
 const repositoryPattern = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 function invalid(): never {
@@ -100,7 +100,7 @@ export function validateGitHubRepositoryRegistry(
     "maximumDurationSeconds",
     "repositories",
   ]);
-  const backendId = isBackendId(root.backendId) ? root.backendId : invalid();
+  const backendId = text(root.backendId, backendPattern);
   if (root.version !== 1 || (expectedBackendId !== undefined && backendId !== expectedBackendId)) {
     return invalid();
   }

@@ -62,7 +62,9 @@ The singular `backend` key is an array; omission or `[]` means none. IDs are
 unique strings of 1–200 characters, counted as Unicode code points, with no
 leading or trailing whitespace and no control characters (C0, DEL or C1) or
 line (U+2028) or paragraph (U+2029) separators. An Agent's `backendId` follows
-the same rule, so any configured ID can be selected. `openai` is an operator-chosen ID. The bundled types are
+the same rule, so any configured ID can be selected. A GitHub Backend ID must
+also fit in 200 UTF-16 code units (100 emoji), the bound repository bindings are
+stored under. `openai` is an operator-chosen ID. The bundled types are
 `chatgpt`, `github`, and `openshell`; each has its own closed configuration and
 required member Drivers. A ChatGPT workspace UUID identifies the upstream workspace, not a Namespace.
 

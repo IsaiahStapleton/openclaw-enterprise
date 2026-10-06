@@ -47,6 +47,14 @@ function validateBackendDefinition(value: unknown, index: number): BackendDefini
   ) {
     throw new ScopeViolationError(path(id, "type") + " must be chatgpt, github, or openshell.");
   }
+  // Repository bindings still store a GitHub Backend ID under a 200 UTF-16 code unit bound
+  // (occ.repository_credentials_are_valid, the repository registry and the binding state), so
+  // a GitHub Backend ID must fit that too until those count code points.
+  if (candidate.type === "github" && id.length > BACKEND_ID_MAX_CHARACTERS) {
+    throw new ScopeViolationError(
+      `backend[${index}].id must fit in ${BACKEND_ID_MAX_CHARACTERS} UTF-16 code units for a GitHub Backend, the bound repository bindings are stored under.`,
+    );
+  }
 
   const configuration = asRecord(candidate.configuration);
   if (configuration === undefined) {

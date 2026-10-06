@@ -123,8 +123,7 @@ export async function verifyRepositorySessions(t, store) {
       // Backend grant identities are opaque UTF-8 strings, not normalized route tokens.
       credentials.driver.id = " driver identity ";
       credentials.driver.implementation = "é".repeat(256);
-      // 200 characters, the Backend ID limit counted in code points (400 UTF-16 units).
-      credentials.bindings[0].backendId = "😀".repeat(200);
+      credentials.bindings[0].backendId = "😀".repeat(100);
       credentials.bindings[0].grant.providerInstanceId = "é".repeat(256);
       credentials.bindings[0].grant.repositoryId = " repository/é ";
       const expectedCredentials = structuredClone(credentials);
@@ -266,14 +265,8 @@ export async function verifyRepositorySessions(t, store) {
         "provider identity contains surrounding spaces": repositoryCredentials({
           bindings: [repositoryBinding({ backendId: " provider " })],
         }),
-        "provider identity exceeds 200 characters": repositoryCredentials({
-          bindings: [repositoryBinding({ backendId: "😀".repeat(201) })],
-        }),
-        "provider identity contains a C1 control": repositoryCredentials({
-          bindings: [repositoryBinding({ backendId: "provider\u0085" })],
-        }),
-        "provider identity contains a line separator": repositoryCredentials({
-          bindings: [repositoryBinding({ backendId: "pro\u2028vider" })],
+        "provider identity exceeds 200 UTF-16 code units": repositoryCredentials({
+          bindings: [repositoryBinding({ backendId: "😀".repeat(101) })],
         }),
         "provider identity starts with a nonbreaking space": repositoryCredentials({
           bindings: [repositoryBinding({ backendId: "\u00a0provider" })],

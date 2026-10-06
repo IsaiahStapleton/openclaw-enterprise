@@ -31,11 +31,12 @@ export const AgentProvisioningWorkId = Type.String({
 });
 /**
  * The Backend ID rule, shared by the API schema, OCC's Installation configuration check and
- * the state stores. An ID is 1 to 200 code points (Ajv counts `maxLength` that way, and so
- * does PostgreSQL `char_length`), has no leading or trailing whitespace, and has no control
- * character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029) anywhere.
- * C1 is refused because PostgreSQL's `[[:cntrl:]]` check on stored Backend IDs refuses it in
- * a UTF-8 locale, so an ID the API accepted could not be saved.
+ * the in-memory state store. An ID is 1 to 200 code points (Ajv counts `maxLength` that way,
+ * and so does PostgreSQL `char_length`), has no leading or trailing whitespace, and has no
+ * control character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029)
+ * anywhere. C1 is refused because the `[[:cntrl:]]` check on agents.backend_id and
+ * agent_revisions.backend_id refuses it in an en_US.utf8 (libc) database, so an ID the API
+ * accepted could not be saved.
  */
 export const BACKEND_ID_PATTERN = /^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/
   .source;
@@ -47,12 +48,17 @@ export const BackendId = Type.String({
 });
 
 const BACKEND_ID = new RegExp(BACKEND_ID_PATTERN, "u");
+const LONE_SURROGATE = /\p{Cs}/u;
 
-/** True when `value` meets the Backend ID rule, checked the way Ajv checks the schema. */
+/**
+ * True when `value` meets the Backend ID rule, checked the way Ajv checks the schema. A lone
+ * surrogate is refused too: it has no UTF-8 spelling, so it could not be stored as given.
+ */
 export function isBackendId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     BACKEND_ID.test(value) &&
+    !LONE_SURROGATE.test(value) &&
     Array.from(value).length <= BACKEND_ID_MAX_CHARACTERS
   );
 }

@@ -4,11 +4,11 @@ import type {
   RepositoryBindingSelection,
   RepositoryRevisionState,
 } from "@openclaw-enterprise/contracts";
-import { isBackendId } from "@openclaw-enterprise/contracts";
 import { hasControlCharacter, immutableCopy } from "@openclaw-enterprise/utils";
 import { ScopeViolationError } from "../errors.ts";
 
 const token = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const backendIdentifier = /^(?!\s)(?!.*\s$).{1,200}$/;
 
 function boundedToken(value: unknown): value is string {
   return typeof value === "string" && token.exec(value)?.[0] === value;
@@ -47,7 +47,9 @@ function selection(value: unknown, admitted: boolean): boolean {
   }
   return (
     !admitted ||
-    (isBackendId(value.backendId) &&
+    (typeof value.backendId === "string" &&
+      backendIdentifier.test(value.backendId) &&
+      !hasControlCharacter(value.backendId) &&
       Buffer.from(value.backendId, "utf8").toString("utf8") === value.backendId &&
       exactObject(value.grant, ["providerInstanceId", "repositoryId", "grantId"]) &&
       opaqueIdentity(value.grant.providerInstanceId) &&

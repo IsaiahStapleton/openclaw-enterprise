@@ -261,6 +261,17 @@ test("repository startup constructs the same local resolver without a private so
     combinedDrivers.installation.backend.map((backend) => backend.type),
     ["github", "chatgpt"],
   );
+  // Repository bindings store a GitHub Backend ID under a 200 UTF-16 code unit bound, so
+  // 101 emoji (101 characters, 202 units) is refused for a GitHub Backend only.
+  const astral = structuredClone(configuration);
+  astral.backend[0].id = "😀".repeat(101);
+  await assert.rejects(
+    loadInstallationConfiguration({
+      mode: "production",
+      environment: { OCC_CONFIG_PATH: await fixture(t, astral) },
+    }),
+    /backend\[0\]\.id must fit in 200 UTF-16 code units for a GitHub Backend/,
+  );
 
   // The actual API reaches its ordinary database dependency while the configured
   // Unix directory is absent. No private service inputs are supplied to it.
@@ -446,13 +457,20 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
       (value) => (value.backend[0].id = "a".repeat(201)),
       /backend\[0\]\.id must be a string of 1 to 200/,
     ],
-    // 201 code points, a C1 control and a line separator, refused as the API refuses them.
-    ...["openai ", "open\u0007ai", 7, "😀".repeat(201), "open\u0085ai", "open\u2028ai"].map(
-      (id) => [
-        (value) => (value.backend[0].id = id),
-        /backend\[0\]\.id must be a string of 1 to 200/,
-      ],
-    ),
+    // 201 code points, a C1 control and a line separator, refused as the API refuses them, and
+    // a lone surrogate, which has no UTF-8 spelling.
+    ...[
+      "openai ",
+      "open\u0007ai",
+      7,
+      "😀".repeat(201),
+      "open\u0085ai",
+      "open\u2028ai",
+      "open\ud800ai",
+    ].map((id) => [
+      (value) => (value.backend[0].id = id),
+      /backend\[0\]\.id must be a string of 1 to 200/,
+    ]),
     [(value) => (value.backend[0].type = "installed"), /must be chatgpt/],
     [(value) => (value.backend[0].package = "@example/backend"), /unsupported option package/],
     [
