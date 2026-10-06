@@ -632,6 +632,14 @@ async function runGeneratedProbe(args, root, mode) {
     .at(-1)
     .match(/if \[ "\$version" != "([0-9]+\.[0-9]+\.[0-9]+)" \]/)?.[1];
   assert.ok(expectedVersion, "generated probe declares its selected Codex version");
+  // Check the complete command delivered at the exec boundary before remapping
+  // its two resource roots for safe host execution.
+  const syntax = spawnSync("/bin/sh", ["-n", "-c", args.at(-1)], {
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  assert.equal(syntax.error, undefined);
+  assert.equal(syntax.status, 0, syntax.stderr);
   const tools = join(root, "tools");
   await mkdir(tools, { recursive: true });
   const codex = join(tools, "codex");
@@ -642,6 +650,11 @@ if [ "$1" = --version ]; then
   if [ "$PROBE_MODE" = version ]; then echo 'codex 0.0.0'; else echo 'codex ${expectedVersion}'; fi
   exit 0
 fi
+# Validate the real command's sandbox arguments, independently of its shell layout.
+[ "$#" -eq 9 ] && [ "$1" = sandbox ] && [ "$2" = -c ] &&
+  [ "$3" = sandbox_mode=workspace-write ] && [ "$4" = -c ] &&
+  [ "$5" = sandbox_workspace_write.network_access=false ] &&
+  [ "$6" = -- ] && [ "$7" = sh ] && [ "$8" = -c ] || exit 65
 case "$PROBE_MODE" in
   denied) echo 'bwrap: creating new namespace: Operation not permitted' >&2; exit 1 ;;
   unknown) echo 'synthetic unexplained failure' >&2; exit 1 ;;
@@ -649,12 +662,30 @@ case "$PROBE_MODE" in
   missing) exit 127 ;;
 esac
 for arg do payload="$arg"; done
-chmod 400 "$PROBE_ROOT/home/codex-seccomp-outside"
+if [ "$PROBE_MODE" != escape ]; then chmod 400 "$PROBE_ROOT/home/codex-seccomp-outside"; fi
 /bin/sh -c "$payload"
 result=$?
 chmod 600 "$PROBE_ROOT/home/codex-seccomp-outside"
 if [ "$PROBE_MODE" = assertion ]; then echo changed > "$PROBE_ROOT/home/codex-seccomp-outside"; fi
 exit "$result"
+`,
+    { mode: 0o700 },
+  );
+  // Fail actual shell commands at preparation and cleanup, leaving the probe's
+  // trap and stage transitions responsible for reporting the failure.
+  await writeFile(
+    join(tools, "mkdir"),
+    `#!/bin/sh
+if [ "$PROBE_MODE" = prepare ]; then exit 73; fi
+exec /bin/mkdir "$@"
+`,
+    { mode: 0o700 },
+  );
+  await writeFile(
+    join(tools, "rm"),
+    `#!/bin/sh
+if [ "$PROBE_MODE" = cleanup ] && [ -f "$PROBE_ROOT/workspace/codex-seccomp-ok" ]; then exit 74; fi
+exec /bin/rm "$@"
 `,
     { mode: 0o700 },
   );
@@ -684,19 +715,23 @@ exit "$result"
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-for (const [mode, expectedStage] of [
-  ["version", "VERSION"],
-  ["unknown", "SANDBOX"],
-  ["timeout", "SANDBOX"],
-  ["missing", "SANDBOX"],
-  ["assertion", "ASSERTIONS"],
+for (const [mode, stage, exit, entered] of [
+  ["version", "VERSION", 64, false],
+  ["prepare", "PREPARE", 73, false],
+  ["unknown", "SANDBOX", 1, false],
+  ["timeout", "SANDBOX", 124, false],
+  ["missing", "SANDBOX", 127, false],
+  ["escape", "SANDBOX", 70, true],
+  ["assertion", "ASSERTIONS", 1, true],
+  ["cleanup", "CLEANUP", 74, true],
 ]) {
   test(`generated probe ${mode} refuses profile qualification with fixed stage`, async (t) => {
     const control = await missingProfileFixture(t, [missingProfileWaiting], {
       probeExec: (args, { root }) => runGeneratedProbe(args, root, mode),
     });
     await assert.rejects(control.run, (error) => {
-      assert.equal(error.codexSandboxProbe?.stage, expectedStage);
+      assert.deepEqual(error.codexSandboxProbe, { stage, exit, entered });
+      assert.equal(error.exitCode, exit);
       return true;
     });
     assert.equal(control.installations(), 0);
