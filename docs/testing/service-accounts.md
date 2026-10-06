@@ -78,7 +78,7 @@ transaction-failure compensation, and execution-mode admission.
 Its Backend regression uses built-in fetch and real HTTPS connections against a
 loopback TLS server with a test-owned certificate. An unfinished 429, 503 or
 oversized declared response must release a single-connection pool so the next
-account request completes before a three-second deadline. Fetch, response bodies
+account request completes before a five-second deadline. Fetch, response bodies
 and cancellation are not mocked; the provider replies and credentials are synthetic.
 The test restores the original dispatcher, destroys its pool, closes the server
 and removes the temporary certificate/key directory. It requires `openssl`.
