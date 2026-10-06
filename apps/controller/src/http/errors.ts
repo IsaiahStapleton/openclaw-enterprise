@@ -198,20 +198,22 @@ function unionBranch(union: ValidationEntry, member: ValidationEntry): string {
 }
 
 // A member failure that says the value has another shape than this branch: the wrong type or
-// literal, a field the branch requires or does not accept, or a different value for a literal
-// field the branch declares, which is how a discriminated union tells its shapes apart.
+// literal, a field the branch requires or does not accept, or a field outside the literal,
+// enum or union of literals that the branch declares for it, which is how a discriminated
+// union tells its shapes apart. Ajv stops each branch at its first failure and checks
+// properties in declaration order: declare such fields before content fields in request
+// unions, or a content failure can hide that the branch has the wrong shape.
 function rejectsBranchShape(union: ValidationEntry, member: ValidationEntry): boolean {
   if (member.instancePath === union.instancePath) {
     return ["required", "additionalProperties", "type", "const", "enum", "anyOf"].includes(
       member.keyword,
     );
   }
-  const branchPath = member.schemaPath.slice(union.schemaPath.length + 1).split("/");
+  const [, keyword, field] = member.schemaPath.slice(union.schemaPath.length + 1).split("/");
   return (
-    member.keyword === "const" &&
-    branchPath.length === 4 &&
-    branchPath[1] === "properties" &&
-    branchPath[3] === "const"
+    keyword === "properties" &&
+    member.instancePath === `${union.instancePath}/${field}` &&
+    ["const", "enum", "anyOf"].includes(member.keyword)
   );
 }
 
@@ -227,6 +229,11 @@ function mismatchedUnionShapes(entries: readonly ValidationEntry[]): ReadonlySet
     .filter((entry) => entry.keyword === "anyOf" && typeof entry.schemaPath === "string")
     .sort((left, right) => right.schemaPath.length - left.schemaPath.length);
   for (const union of unions) {
+    // A recursive union reports every level with one schema path, so its members cannot be
+    // told apart by level.
+    if (unions.some((other) => other !== union && other.schemaPath === union.schemaPath)) {
+      continue;
+    }
     const branches = new Map<string, ValidationEntry[]>();
     const remaining = entries.filter((entry) => !dropped.has(entry));
     for (const member of unionMembersOf(union, remaining)) {
