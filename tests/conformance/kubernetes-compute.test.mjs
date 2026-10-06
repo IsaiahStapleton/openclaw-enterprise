@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { spawnSync } from "node:child_process";
+import { inspect } from "node:util";
 import { inflateRawSync } from "node:zlib";
 import test from "node:test";
 import {
@@ -11564,6 +11565,85 @@ test("Kubernetes workspace setup redacts backend failures and refuses foreign pr
   });
   assert.equal(fixture.records.length, before);
 });
+
+// A private Secret write that the API server answers with 429 or 5xx clears by itself, so it
+// must surface as a transient Kubernetes API failure: the worker then waits within the
+// convergence deadline instead of spending its attempt budget. Other answers keep the redacted
+// delivery error. Either way the status and Status reason stay visible to diagnostics, while
+// the client error, whose message and body echo the submitted Secret, stays behind.
+for (const embedded of [true, false]) {
+  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} private Secret writes classify API answers without echoing Secret data`, async () => {
+    const targets = [
+      {
+        name: /^(harness|gateway)-secrets-/u,
+        message: "Runtime credential delivery is unavailable.",
+        stage: embedded ? "gateway_secret_environment" : "harness_auth",
+      },
+      {
+        name: /^workspace-setup-/u,
+        message: "Workspace setup private delivery is unavailable.",
+        stage: "workspace_setup",
+      },
+    ];
+    for (const target of targets) {
+      for (const [status, reason, transient] of [
+        [503, "ServiceUnavailable", true],
+        [429, "TooManyRequests", true],
+        [403, "Forbidden", false],
+      ]) {
+        const fixture = workspaceSetupFixture(embedded);
+        const clients = await fixture.driver.apiClients;
+        const create = clients.core.createNamespacedSecret;
+        let rejected = 0;
+        clients.core.createNamespacedSecret = async (request) => {
+          if (target.name.test(request.body.metadata.name)) {
+            rejected += 1;
+            // Shaped like the client's ApiException, which echoes the request body.
+            const echoed = JSON.stringify(request.body);
+            throw Object.assign(new Error(`HTTP-Code: ${status}\nBody: ${echoed}`), {
+              code: status,
+              body: { kind: "Status", code: status, reason, message: echoed },
+              headers: {},
+            });
+          }
+          return create(request);
+        };
+        const error = await fixture.driver.prepareRevision(fixture.revision, fixture.context).then(
+          () => assert.fail("the private Secret write must fail"),
+          (failure) => failure,
+        );
+        assert.equal(rejected, 1, "a mutating write is never retried inside the pass");
+        if (transient) {
+          assert.equal(error.name, "TransientDependencyError");
+          assert.equal(error.code, "KUBERNETES_API_UNAVAILABLE");
+          assert.equal(error.reason, "unavailable");
+          assert.equal(error.message, `The Kubernetes API answered HTTP ${status}.`);
+        } else {
+          assert.equal(error.name, "DependencyUnavailableError");
+          assert.equal(error.message, target.message);
+        }
+        assert.equal(error.cause.code, status);
+        assert.equal(error.cause.reason, reason);
+        assert.equal(error.cause.cause, undefined);
+        assert.deepEqual(fixture.driver.describePrepareRevisionFailure(error), {
+          code: transient ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
+          stage: target.stage,
+          errorClass: "KubernetesApiError",
+          message: "The Kubernetes API rejected revision preparation.",
+          status,
+        });
+        const evidence = inspect(error, { depth: 8 });
+        for (const secret of [
+          "fixture-model-key",
+          "private-create-documents",
+          Buffer.from("fixture-model-key").toString("base64"),
+        ]) {
+          assert.equal(evidence.includes(secret), false);
+        }
+      }
+    }
+  });
+}
 
 for (const embedded of [true, false]) {
   test(`Kubernetes ${embedded ? "embedded" : "dedicated"} failed workspace initialization reports safe evidence and retains retry content`, async () => {
