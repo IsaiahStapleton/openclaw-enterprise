@@ -787,10 +787,10 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
 
 /**
  * The provisioning status message for a worker failure. Only the shared duplicate-name and
- * Compute refusal texts and the plugin-policy and native-support refusals pass through; other
- * error messages stay internal. Those refusals name only Installation configuration, the
- * work's own plugin selection and gateway settings in its own Configuration, and HTTP returns
- * them verbatim. The status contract caps
+ * Compute refusal texts and the plugin-policy, native-support and Configuration Harness
+ * refusals pass through; other error messages stay internal. Those refusals name only
+ * Installation configuration, the work's own plugin selection and settings in its own
+ * Configuration, and HTTP returns them verbatim. The status contract caps
  * `error.message` at 256 characters.
  */
 function provisioningFailureMessage(code: string, error: unknown): string {
@@ -802,9 +802,16 @@ function provisioningFailureMessage(code: string, error: unknown): string {
     ) {
       return error.message;
     }
-    if (error instanceof PluginPolicyValidationError || error instanceof NativeWorkerSupportError) {
-      const characters = Array.from(error.message);
-      return characters.length <= 256 ? error.message : `${characters.slice(0, 255).join("")}…`;
+    if (
+      error instanceof PluginPolicyValidationError ||
+      error instanceof NativeWorkerSupportError ||
+      error instanceof ConfigurationHarnessError
+    ) {
+      // A Configuration refusal can name a submitted key; status stores the message as is.
+      const characters = Array.from(error.message.replace(/[\p{Cc}\p{Cf}]|\p{Cs}/gu, "?"));
+      return characters.length <= 256
+        ? characters.join("")
+        : `${characters.slice(0, 255).join("")}…`;
     }
   }
   return "Agent provisioning could not complete.";
@@ -6934,7 +6941,13 @@ export class OpenClawController {
     }
     try {
       compute.validateHarnessAuth(harness, auth, configuration, plan.configuration.secretBindings);
-    } catch {
+    } catch (error) {
+      // As in deployment, a Driver that names unsupported Configuration content the caller
+      // owns keeps that message on writes (a 400; the caller was authorized above). A status
+      // read keeps answering the fixed 409 for any refusal.
+      if (error instanceof ConfigurationHarnessError && !statusRead) {
+        throw error;
+      }
       throw new ResourceStateConflictError(
         "The configured model, authentication, or channel bindings cannot be provisioned.",
       );
