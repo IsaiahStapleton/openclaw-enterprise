@@ -25,16 +25,20 @@ const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.l
 
 // A subtest sets this to see the slow-lane floors start and to keep them from ending.
 let floorWatch;
+// Every slow-lane floor started so far: an attempt that starts none was not paced.
+let floorsStarted = 0;
 
-// The production slow lane with its floor capped at 2 s instead of 8 s. Every paced attempt
-// waits its floor in real time, so the cap sets this suite's length; the 1 s first floor,
-// the doubling, the slots and the per-minute budgets stay the production values. An attempt
-// holds its email's slot from the start of its floor, which floorWatch observes.
+// The production slow lane with shorter floors: 250 ms doubling to a 500 ms cap instead of
+// 1 s doubling to 8 s. Every paced attempt waits its floor in real time, so the floors set
+// this suite's length; the doubling, the slots and the per-minute budgets stay the
+// production values. An attempt holds its email's slot from the start of its floor, which
+// floorWatch observes.
 const slowLane = {
-  floorMs: passwordFailureBudget.slow.floorMs,
-  maxFloorMs: 2000,
+  floorMs: 250,
+  maxFloorMs: 500,
   async waitFloor(floorMs) {
     const watch = floorWatch;
+    floorsStarted += 1;
     watch?.started();
     await delay(floorMs, undefined, { ref: false });
     await watch?.released;
@@ -426,10 +430,10 @@ test(
         assert.equal((await plainSignIn(knownMember)).statusCode, 429, "a new browser is refused");
         // The member's own browser still signs in, at once and repeatedly.
         for (let index = 0; index < 3; index += 1) {
-          const started = performance.now();
+          const floorsBefore = floorsStarted;
           const response = await plainSignInWith(memberDevice, knownMember);
           assert.equal(response.statusCode, 200, `sign-in ${index}: ${response.body}`);
-          assert.ok(performance.now() - started < 1000, "not paced");
+          assert.equal(floorsStarted, floorsBefore, "not paced");
           memberDevice = knownDeviceOf(response).split(";", 1)[0];
         }
         // The cookie is bound to its account: it does not open another account's spent lane.
