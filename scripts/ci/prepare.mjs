@@ -311,9 +311,9 @@ async function prepareTogether(operations, concurrency = operations.length) {
   return results;
 }
 
-// The Actions runner refuses NODE_OPTIONS in $GITHUB_ENV and logs an ##[error] for it. A lane's
-// own env, such as the checks lanes' heap limit, needs no export: run-tests.mjs sets it on
-// each test process.
+// The Actions runner refuses NODE_OPTIONS in $GITHUB_ENV, compared without case, and logs an
+// ##[error] for it. A lane's own env, such as the checks lanes' heap limit, needs no export:
+// run-tests.mjs sets it on each test process.
 const GITHUB_ENV_REFUSED = new Set(["NODE_OPTIONS"]);
 
 async function appendGithubEnv(path, env) {
@@ -321,7 +321,7 @@ async function appendGithubEnv(path, env) {
     return;
   }
   const lines = Object.entries(env)
-    .filter(([name]) => !GITHUB_ENV_REFUSED.has(name))
+    .filter(([name]) => !GITHUB_ENV_REFUSED.has(name.toUpperCase()))
     .map(([name, value]) => `${name}=${value}`);
   if (lines.length === 0) {
     return;
