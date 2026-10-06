@@ -11601,8 +11601,10 @@ for (const embedded of [true, false]) {
       const fixture = workspaceSetupFixture(embedded);
       const clients = await fixture.driver.apiClients;
       if (write === "replace") {
-        // A first pass creates every Secret. Then the runtime Secret's stored data drifts
-        // and the workspace setup completes, so the next pass replaces the target.
+        // A first pass creates every Secret. Then the runtime Secret's stored data differs
+        // from the admitted credentials (as after a rotation), and the workspace setup is
+        // completed while the stored payload is not (as after a lost ready acknowledgement),
+        // so the next pass replaces the target.
         await fixture.driver.prepareRevision(fixture.revision, fixture.context);
         for (const object of fixture.objects.values()) {
           if (

@@ -7678,7 +7678,7 @@ test(
 );
 
 test(
-  "an activation pass that a refused private Secret write ends logs the API status and reason",
+  "an activation pass that a failed private Secret write ends logs the API status and reason",
   requiresPostgres,
   async (context) => {
     const fixture = await setup(context);
@@ -7690,16 +7690,28 @@ test(
     // The Kubernetes Driver writes a revision's private Secrets on activation too. When the
     // API server refuses such a write, it raises its own DependencyUnavailableError rather
     // than the client error, whose message and body echo the Secret, and keeps only the HTTP
-    // status and Status reason as the cause (tests/conformance/kubernetes-compute.test.mjs
-    // pins that shape). The worker's log must carry that status and reason, not only the class.
+    // status and Status reason as the cause. tests/conformance/kubernetes-compute.test.mjs
+    // pins that Driver shape; this case proves the worker's side: its log must carry that
+    // status and reason, not only the class. A 429 or 5xx answer is transient instead and
+    // keeps the same evidence as its cause.
     const refused = new DependencyUnavailableError(
       "Workspace setup private delivery is unavailable.",
     );
     refused.cause = Object.assign(new Error("The Kubernetes API answered HTTP 403 (Forbidden)."), {
-      name: "KubernetesApiFailureEvidence",
       code: 403,
       reason: "Forbidden",
     });
+    const unavailable = new TransientDependencyError(
+      "kubernetes_api",
+      "unavailable",
+      "The Kubernetes API answered HTTP 503.",
+      {
+        cause: Object.assign(
+          new Error("The Kubernetes API answered HTTP 503 (ServiceUnavailable)."),
+          { code: 503, reason: "ServiceUnavailable" },
+        ),
+      },
+    );
     await fixture.start(
       {
         ...fixture.compute,
@@ -7708,6 +7720,9 @@ test(
           if (activations === 1) {
             throw refused;
           }
+          if (activations === 2) {
+            throw unavailable;
+          }
           return fixture.compute.activateRevision?.(revision, revisionContext);
         },
       },
@@ -7715,7 +7730,7 @@ test(
     );
 
     await fixture.work(candidate, "succeeded", 30_000);
-    assert.equal(activations, 2);
+    assert.equal(activations, 3);
     const pending = events.filter(
       (event) =>
         event.event === "worker.completed" &&
@@ -7737,6 +7752,13 @@ test(
           cause: "DependencyUnavailableError",
           status: 403,
           reason: "Forbidden",
+        },
+        {
+          code: "KUBERNETES_API_UNAVAILABLE",
+          dependency: "kubernetes_api",
+          cause: "unavailable",
+          status: 503,
+          reason: "ServiceUnavailable",
         },
       ],
     );
