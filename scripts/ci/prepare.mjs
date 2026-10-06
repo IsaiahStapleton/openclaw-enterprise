@@ -1555,17 +1555,35 @@ async function ensureDockerSourceImage(state, image, envName) {
 // "no such image". Wait a bounded time for that one answer; any other failure is final.
 const criImageCacheWaitMs = 5_000;
 
+// Each check or tag on a node after the import is one short exec; a hung one (an
+// unresponsive node or engine) fails the step with a clear message instead of stalling
+// it until the job timeout.
+const k3dImageCheckTimeoutMs =
+  Number(process.env.OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS) > 0
+    ? Number(process.env.OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS)
+    : 30_000;
+
+async function k3dNodeImageCheck(node, args, what) {
+  try {
+    return await execFile(process.env.OCC_DOCKER_BIN ?? "docker", ["exec", node, ...args], {
+      timeoutMs: k3dImageCheckTimeoutMs,
+    });
+  } catch (error) {
+    if (error.timedOut === true) {
+      throw new Error(
+        `${what} on ${node} did not answer within ${k3dImageCheckTimeoutMs} ms (${args.join(" ")}).`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
 async function inspectK3dCriImage(lane, node, reference, envName) {
   const deadline = performance.now() + criImageCacheWaitMs;
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-        "exec",
-        node,
-        "crictl",
-        "inspecti",
-        reference,
-      ]);
+      return await k3dNodeImageCheck(node, ["crictl", "inspecti", reference], "CRI");
     } catch (error) {
       const remainingMs = deadline - performance.now();
       if (!/\bno such image\b/i.test(error.stderr ?? "") || remainingMs <= 0) {
@@ -1582,15 +1600,11 @@ async function inspectK3dCriImage(lane, node, reference, envName) {
 
 async function assertK3dImageReference(lane, cluster, reference, envName) {
   for (const node of cluster.nodes) {
-    const listed = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      "exec",
+    const listed = await k3dNodeImageCheck(
       node,
-      "ctr",
-      "-n",
-      "k8s.io",
-      "images",
-      "list",
-    ]);
+      ["ctr", "-n", "k8s.io", "images", "list"],
+      "containerd",
+    );
     const found = listed.stdout.split(/\r?\n/).some((entry) => entry.split(/\s+/)[0] === reference);
     if (!found) {
       throw new Error(`Unable to find imported ${envName} reference ${reference}.`);
@@ -1713,15 +1727,11 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
     ]),
   );
 
-  const listed = await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-    "exec",
+  const listed = await k3dNodeImageCheck(
     `k3d-${cluster.name}-server-0`,
-    "ctr",
-    "-n",
-    "k8s.io",
-    "images",
-    "list",
-  ]);
+    ["ctr", "-n", "k8s.io", "images", "list"],
+    "containerd",
+  );
   const line = listed.stdout
     .split(/\r?\n/)
     .find((entry) => entry.split(/\s+/)[0] === importReference);
@@ -1733,17 +1743,11 @@ async function registerImageInK3d(statePath, state, cluster, image, envName) {
   // The approved source image remains recorded and was verified before transport.
   const runtimeReference = `${importReference.slice(0, importReference.lastIndexOf(":"))}@${digest}`;
   for (const node of cluster.nodes) {
-    await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
-      "exec",
+    await k3dNodeImageCheck(
       node,
-      "ctr",
-      "-n",
-      "k8s.io",
-      "images",
-      "tag",
-      importReference,
-      runtimeReference,
-    ]);
+      ["ctr", "-n", "k8s.io", "images", "tag", importReference, runtimeReference],
+      "containerd",
+    );
   }
   await assertK3dImageReference(state.lane, cluster, runtimeReference, envName);
   resource.reference = runtimeReference;
