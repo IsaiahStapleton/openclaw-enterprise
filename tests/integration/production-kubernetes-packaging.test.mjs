@@ -2496,7 +2496,7 @@ test(
       [
         "GitHub sign-in with an empty-string egress list",
         { ...githubLoginValues, "auth.github.egressCidrs": "" },
-        /auth\.github\.egressCidrs must be a list of IPv4 CIDRs; leave it unset or \[\]/,
+        /auth\.github\.egressCidrs must be a list of IPv4 CIDRs; leave it unset, or set \[\] in a values file or with --set-json,/,
       ],
       [
         "GitHub sign-in with an empty-string organization allowlist",
