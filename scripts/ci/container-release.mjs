@@ -474,7 +474,7 @@ async function smoke(directory, env) {
     }
     console.log(`Smoke ${env.IMAGE} ${env.PLATFORM} @ ${descriptor.digest}`);
     // CI runs the runtime startup tests in two lanes; the release smoke runs
-    // both files, one at a time as in CI, since some cases measure timing.
+    // their startup files one at a time, since some cases measure timing.
     execFileSync(
       process.execPath,
       [
@@ -485,6 +485,7 @@ async function smoke(directory, env) {
           : [
               "tests/integration/runtime-image-startup.test.mjs",
               "tests/integration/runtime-image-startup-probe.test.mjs",
+              "tests/integration/runtime-image-gateway-peer.test.mjs",
             ]),
       ],
       {
