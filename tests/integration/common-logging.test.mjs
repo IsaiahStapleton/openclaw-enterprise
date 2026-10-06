@@ -462,8 +462,8 @@ test("Fastify contract errors drop the request values that verbose validation at
     logger,
   });
   // The app's own Ajv options (verbose, so each failure carries its value) and error handler
-  // judge this body. onError runs after the error handler, so it sees what a later log of the
-  // error would see.
+  // judge this body. onError keeps a reference to the error; after the response it holds what
+  // any later log of the error would see.
   const seen = [];
   app.addHook("onError", async (_request, _reply, error) => {
     seen.push(error);

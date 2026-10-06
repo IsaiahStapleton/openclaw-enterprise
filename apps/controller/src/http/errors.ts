@@ -429,6 +429,8 @@ function forgetValidationValues(entries: readonly ValidationEntry[]): void {
   }
 }
 
+// Runs once per error (the app's error handler): a discriminated union is read from the
+// verbose fields that this drops, so a second call would report every shape again.
 function validationProblems(error: FastifyError): readonly ContractProblem[] {
   if (!Array.isArray(error.validation)) {
     return [];

@@ -251,8 +251,12 @@ test("Plugin discovery validates bounded credential and identity input before Dr
     ["", { accessToken, q: "x".repeat(1025) }, [{ path: "/q", code: "TOO_LONG" }]],
     ["", { accessToken, accountId: "caller-supplied-authority" }, undefined],
     ["", { secretRef: wrongKind }, [{ path: "/secretRef/kind", code: "INVALID_VALUE" }]],
-    ["/details", { accessToken, pluginId: "" }, undefined],
-    ["/details", { accessToken, pluginId: "x".repeat(257) }, undefined],
+    ["/details", { accessToken, pluginId: "" }, [{ path: "/pluginId", code: "INVALID_VALUE" }]],
+    [
+      "/details",
+      { accessToken, pluginId: "x".repeat(257) },
+      [{ path: "/pluginId", code: "TOO_LONG" }],
+    ],
   ]) {
     const invalid = await fixture.request("POST", `${fixture.path}${suffix}`, { body });
     const label = `${suffix || "list"} ${JSON.stringify(Object.keys(body))}: ${JSON.stringify(invalid.body)}`;
@@ -263,8 +267,7 @@ test("Plugin discovery validates bounded credential and identity input before Dr
     assert.equal(JSON.stringify(invalid.body).includes(accessToken), false, label);
   }
   assert.deepEqual(fixture.calls, []);
-  // Contract errors carry the request value they judged until their problems are built; none
-  // of it, such as the token, reaches a log.
+  // No validation failure logs the submitted token.
   assert.doesNotMatch(logs.join(""), /at-plugin-discovery/);
 });
 
