@@ -2,16 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createCustody } from "../../apps/controller/src/drivers/repo/credentials/custody.ts";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
+import { custodyLimits } from "../fixtures/repository-credentials/builders.mjs";
 
 function setup() {
   const clock = createControlledClock(1700000000000);
   let admitted = true;
   const custody = createCustody({
     clock,
-    maximumSlots: 2,
-    maximumAccessBytes: 16384,
-    maximumRenewalBytes: 16384,
-    maximumCallbacks: 2,
+    ...custodyLimits,
     admitted: () => admitted,
     changed() {},
   });
