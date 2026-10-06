@@ -11577,7 +11577,7 @@ for (const embedded of [true, false]) {
       {
         name: /^(harness|gateway)-secrets-/u,
         message: "Runtime credential delivery is unavailable.",
-        stage: embedded ? "gateway_secret_environment" : "harness_auth",
+        stage: "harness_auth",
       },
       {
         name: /^workspace-setup-/u,
