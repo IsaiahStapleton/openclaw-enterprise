@@ -11740,7 +11740,8 @@ for (const embedded of [true, false]) {
         const fixture = workspaceSetupFixture(embedded);
         const clients = await fixture.driver.apiClients;
         const create = clients.core.createNamespacedSecret;
-        // Each request's deadline is the latest one made; the write passes it while in flight.
+        // request() makes its deadline right before it calls the write, so the latest
+        // AbortSignal.timeout is this write's deadline; the write lets it lapse while in flight.
         let deadline;
         const timeout = context.mock.method(AbortSignal, "timeout", () => {
           deadline = new AbortController();

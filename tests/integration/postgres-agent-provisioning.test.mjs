@@ -1630,7 +1630,7 @@ test(
 );
 
 test(
-  "a runtime image without native worker support before the worker runs rejects dedicated OpenClaw provisioning",
+  "dropping native worker support from the runtime image before the worker runs rejects dedicated OpenClaw provisioning",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
     const drivers = {
@@ -1669,6 +1669,9 @@ test(
 
     // The Installation now runs a runtime image without native worker support. Every attempt
     // would refuse the plan the same way, so the worker fails it on the first one and says why.
+    // The first recorded error settles it: a retried refusal would leave the work running. Status
+    // is read from the database because the HTTP status read rechecks native worker support and
+    // answers 400 in this state (a known gap, unlike the Plugin Driver switch above).
     const switched = await createFixture(context, drivers);
     await switched.startWorker();
     const failed = await waitFor(
