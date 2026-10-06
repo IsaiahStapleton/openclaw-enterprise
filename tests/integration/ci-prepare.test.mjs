@@ -327,6 +327,17 @@ if (command === "docker" || command === "podman") {
         process.stderr.write("synthetic CRI image not found\n");
         process.exit(19);
       }
+      // CRI fills its image cache from containerd events after ctr tags the
+      // reference, so the worker's CRI can briefly miss it, or never catch up.
+      state.criLookups ??= {};
+      state.criLookups[node] = (state.criLookups[node] ?? 0) + 1;
+      if (node.endsWith("-agent-0") &&
+          (scenario === "absent-worker-cri" ||
+            (scenario === "lagging-worker-cri" && state.criLookups[node] <= 2))) {
+        commitState();
+        process.stderr.write('time="2026-10-06T11:05:15Z" level=fatal msg="no such image \\"' + alias + '\\" present"\n');
+        process.exit(1);
+      }
       finish(JSON.stringify({ status: { id: configId, repoDigests: [alias] } }));
     }
   }
@@ -552,6 +563,8 @@ for (const { scenario, error } of [
   },
   { scenario: "missing-cri", error: /synthetic CRI image not found/ },
   { scenario: "missing-worker-cri", error: /synthetic CRI image not found/ },
+  { scenario: "lagging-worker-cri" },
+  { scenario: "absent-worker-cri", error: /level=fatal msg="no such image / },
   { scenario: "nonzero-import", error: /synthetic import command failure/ },
   { scenario: "nonzero-worker-import", error: /synthetic import command failure/ },
   { scenario: "save-failed", error: /synthetic export failure/ },
@@ -597,6 +610,33 @@ for (const { scenario, error } of [
     }
 
     const preparation = await commands.commands();
+    const criLookups = (suffix) =>
+      preparation.filter(
+        ({ args }) => args[1] === `k3d-${cluster.name}-${suffix}` && args[2] === "crictl",
+      ).length;
+    // Only CRI's "no such image" answer waits for its event-fed cache; other
+    // CRI failures stay final on the first lookup.
+    const expectedWorkerLookups = {
+      "missing-worker-cri": 1,
+      "lagging-worker-cri": 3,
+    }[scenario];
+    if (expectedWorkerLookups) {
+      assert.equal(criLookups("agent-0"), expectedWorkerLookups);
+    }
+    if (scenario === "missing-cri") {
+      assert.equal(criLookups("server-0"), 1);
+    }
+    if (scenario === "lagging-worker-cri" || scenario === "absent-worker-cri") {
+      assert.match(
+        result.stderr,
+        /CRI on k3d-\S+-agent-0 does not list the imported \S+ reference yet \(attempt 2\); retrying\./,
+      );
+    }
+    if (scenario === "absent-worker-cri") {
+      // The bounded wait is about 5 s; the lookups back off to one per second.
+      const lookups = criLookups("agent-0");
+      assert.ok(lookups >= 3 && lookups <= 12, `bounded CRI wait made ${lookups} lookups`);
+    }
     const save = preparation.find(
       ({ command, args }) =>
         ["docker", "podman"].includes(command) && args[0] === "image" && args[1] === "save",
