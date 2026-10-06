@@ -196,7 +196,7 @@ for document-only changes, without running product tests.
 `0001`, required statuses and author logins,
 relative `rfc` references to RFC entry points, and local Markdown link targets.
 Run `node scripts/check-specs.mjs` for that check alone. It does not check remote
-URLs, heading fragments, or the meaning of a recorded decision. Three preserved
+URLs or the meaning of a recorded decision. Three preserved
 local artifact links in the historical architecture audit are reported as
 unverified; archived documents are not scanned.
 
