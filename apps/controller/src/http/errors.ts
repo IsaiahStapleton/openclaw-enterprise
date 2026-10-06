@@ -173,7 +173,7 @@ interface ContractProblem {
   readonly detail: ErrorDetail;
   /** The accepted type or values, taken from the schema, never from the request. */
   readonly expected?: string;
-  /** The path was cut to the detail path cap, so it names an ancestor of the field. */
+  /** The path lost segments to the detail path cap, so it names an ancestor of the field. */
   readonly shortened?: boolean;
 }
 
@@ -491,11 +491,10 @@ function validationProblems(error: FastifyError): readonly ContractProblem[] {
   const problems = collapseScalarUnions(error.validation)
     .map((problem): ContractProblem => {
       const path = cappedPath(problem.detail.path);
-      return {
-        ...problem,
-        detail: { ...problem.detail, path },
-        shortened: path !== problem.detail.path,
-      };
+      // Dropped segments make the path an ancestor of the field. A cut inside one long first key
+      // still names that key, so it keeps the field's own wording.
+      const shortened = path.split("/").length < problem.detail.path.split("/").length;
+      return { ...problem, detail: { ...problem.detail, path }, shortened };
     })
     .filter(({ detail, expected, shortened }) => {
       const key = JSON.stringify([detail.path, detail.code, expected, shortened]);
@@ -520,8 +519,8 @@ const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.fr
   TOO_DEEP: "is nested too deeply",
 });
 
-// A path cut to the cap names an ancestor of the offending field (or a prefix of a long first
-// key), which may well be accepted, so the message places the problem inside it.
+// A path that lost segments to the cap names an ancestor of the offending field, which may
+// well be accepted, so the message places the problem inside it.
 const SHORTENED_PATH_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({
   REQUIRED: "or an object under it is missing a required field",
   UNKNOWN_FIELD: "contains a field that is not accepted",

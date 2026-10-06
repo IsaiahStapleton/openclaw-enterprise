@@ -401,7 +401,8 @@ function referencePage(document, groups, entries) {
         "that take no body refuse a JSON body the same way.",
         "A detail path longer than 512 characters is cut to its leading whole",
         "segments (or the start of a long first key, keeping whole `~0` and `~1`",
-        "escapes); the message then says that the cut path contains the offending field.",
+        "escapes). When whole segments were dropped, a contract validation message",
+        "says that the cut path contains the offending field.",
       ].join("\n"),
       schemaTable(schema, document),
     );
