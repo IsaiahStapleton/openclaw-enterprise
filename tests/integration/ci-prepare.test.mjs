@@ -329,7 +329,11 @@ if (command === "docker" || command === "podman") {
     if (equals(args.slice(2, 7), [...ctr, "rm"]) && args.length === 8 &&
         [state.tag, alias].includes(args[7])) finish();
     if (equals(args.slice(2), ["crictl", "inspecti", alias]) && alias) {
-      if (scenario === "hung-worker-cri" && node.endsWith("-agent-0")) await hang();
+      if (scenario === "hung-worker-cri" && node.endsWith("-agent-0")) {
+        // A cache-miss answer before the hang: a timeout must still not be retried as one.
+        process.stderr.write('time="2026-10-06T11:05:15Z" level=fatal msg="no such image"\n');
+        await hang();
+      }
       if (scenario === "missing-cri" ||
           (scenario === "missing-worker-cri" && node.endsWith("-agent-0"))) {
         process.stderr.write("synthetic CRI image not found\n");

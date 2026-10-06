@@ -1557,7 +1557,8 @@ const criImageCacheWaitMs = 5_000;
 
 // Each check or tag on a node after the import is one short exec; a hung one (an
 // unresponsive node or engine) fails the step with a clear message instead of stalling
-// it until the job timeout.
+// it until the job timeout. The timeout stops the engine CLI; a process it started inside
+// the node may keep running until the cluster is removed.
 const k3dImageCheckTimeoutMs =
   Number(process.env.OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS) > 0
     ? Number(process.env.OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS)
