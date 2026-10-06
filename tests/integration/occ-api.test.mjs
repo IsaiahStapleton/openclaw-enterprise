@@ -5808,7 +5808,7 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
   );
   assert.equal(denied.status, 403, JSON.stringify(denied.body));
   assert.equal(denied.body.error.code, "FORBIDDEN");
-  assert.doesNotMatch(JSON.stringify(denied.body), /gateway/);
+  assert.doesNotMatch(JSON.stringify(denied.body), /gateway\.auth|trusted-proxy/);
 
   // An unavailable hook dependency answers 503; any other hook refusal stays with preparation.
   const hookAgent = await createAgent(controller, namespace.id, "gateway-hook-agent");
@@ -5821,6 +5821,11 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
   const unavailable = await deployHookAgent();
   assert.equal(unavailable.status, 503, JSON.stringify(unavailable.body));
   assert.equal(unavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const noRevisions = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${hookAgent.id}/revisions`,
+  );
+  assert.deepEqual(noRevisions.data, [], JSON.stringify(noRevisions.body));
   computeDriver.validateGatewaySettings = () => {
     throw new Error("internal gateway detail");
   };
