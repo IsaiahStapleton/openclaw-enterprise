@@ -701,11 +701,14 @@ async function runFile(root, lane, file, statePath, prepareFile, setup = (step) 
   let measurements = [];
   try {
     if (issues.length === 0) {
-      agentActivity = await startAgentNamespaceCapture({
-        statePath,
-        lane: lane.name,
-        file: relativePath,
-      }).catch(() => undefined);
+      // The capture reads the lane state file, which concurrent files' setup rewrites.
+      agentActivity = await setup(() =>
+        startAgentNamespaceCapture({
+          statePath,
+          lane: lane.name,
+          file: relativePath,
+        }),
+      ).catch(() => undefined);
       nodeResult = await runNode(["--test", "--test-reporter", reporterPath, absolutePath], {
         cwd: root,
         env,

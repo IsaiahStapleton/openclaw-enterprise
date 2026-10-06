@@ -1486,6 +1486,75 @@ test("run keeps bounded Agent namespace activity from a passing k3d file", async
   assert.doesNotMatch(text, /do-not-publish|unrelated system event/);
   // Raw watch streams hold full Pod specs; only the projection survives.
   assert.deepEqual(await readdir(clusterDirectory), []);
+
+  // Two files sharing the runner under fileConcurrency watch the same cluster at once. Each
+  // keeps its own watch streams, so neither truncates nor deletes the other's capture.
+  await writeFile(
+    join(root, "tests/integration/agent-sibling.test.mjs"),
+    [
+      'import test from "node:test";',
+      'import { setTimeout as delay } from "node:timers/promises";',
+      'test("sibling file passes", () => delay(300));',
+      "",
+    ].join("\n"),
+  );
+  const pairFiles = [
+    "tests/integration/agent.test.mjs",
+    "tests/integration/agent-sibling.test.mjs",
+  ];
+  await writeJson(join(root, "scripts/ci/pair-suites.json"), {
+    version: 1,
+    lanes: {
+      "k3d-pair": {
+        fileConcurrency: 2,
+        parallelFiles: pairFiles,
+        files: [
+          { path: pairFiles[0], expectedTests: ["agent file passes"] },
+          { path: pairFiles[1], expectedTests: ["sibling file passes"] },
+        ],
+      },
+    },
+    groups: {},
+  });
+  const pairStatePath = join(root, "state/k3d-pair.json");
+  await writeJson(pairStatePath, {
+    lane: "k3d-pair",
+    resources: JSON.parse(await readFile(statePath, "utf8")).resources,
+  });
+  const pairResultsPath = join(root, "results/k3d-pair.json");
+  const pair = run(
+    root,
+    [
+      "run",
+      "k3d-pair",
+      "--manifest",
+      join(root, "scripts/ci/pair-suites.json"),
+      "--root",
+      root,
+      "--state",
+      pairStatePath,
+      "--results",
+      pairResultsPath,
+    ],
+    { OCC_KUBECTL_BIN: kubectl, CI_RUNNER_FILE_CONCURRENCY: "2" },
+  );
+  assert.equal(pair.status, 0, pair.stderr);
+  const pairSummary = JSON.parse(await readFile(pairResultsPath, "utf8"));
+  assert.deepEqual(
+    pairSummary.files.map(({ mode }) => mode),
+    ["parallel", "parallel"],
+  );
+  const pairReport = JSON.parse(await readFile(`${pairStatePath}.diagnostics.json`, "utf8"));
+  assert.deepEqual(
+    // Files finish in either order; each appends its own record.
+    pairReport.agentNamespaces
+      .map(({ file, namespaces, pods }) => [file, namespaces, pods.length])
+      .sort(([left], [right]) => left.localeCompare(right)),
+    pairFiles
+      .map((file) => [file, ["occ-agent-a"], 3])
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  assert.deepEqual(await readdir(clusterDirectory), []);
 });
 
 test("audit fails when a referenced lane cannot be loaded", async (t) => {
