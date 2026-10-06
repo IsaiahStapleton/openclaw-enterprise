@@ -1094,6 +1094,9 @@ test(
     };
     // Both supported startup callers must reject old storage before admitting
     // API writes or claiming work, even when running the development profile.
+    // Until it is gone, this Namespace fails every Compute preflight in the cluster
+    // (driver.preflight, worker start). Under fileConcurrency, keep this file's lane
+    // free of other files that preflight.
     const legacyOwner = namespace("dev-upgrade");
     const legacyName = `oce-gateways-${hash(legacyOwner.id, 24)}`;
     await kubectl("create", "namespace", legacyName);

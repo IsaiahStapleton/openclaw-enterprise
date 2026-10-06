@@ -64,7 +64,7 @@ follows measured file durations, so add a new file to `postgres-platform` or
 `postgres-auth`, keeping the job times close.
 Kubernetes fixture files run in `k3d-fixture-configuration`,
 `k3d-fixture-state`, and `k3d-fixture-plugins`, each with independent cluster,
-database, image, and cleanup state. Files run sequentially within each lane. The audit requires one owner per file; Full Integration aggregates its selected `full` group or targeted lane.
+database, image, and cleanup state. Each lane runs two files concurrently. The audit requires one owner per file; Full Integration aggregates its selected `full` group or targeted lane.
 
 The `repository-credentials-container` lane builds
 `.build/repository-credentials/{service,client}` with Dockerfiles under

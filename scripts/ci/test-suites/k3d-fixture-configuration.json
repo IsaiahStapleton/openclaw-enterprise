@@ -13,6 +13,11 @@
     "k3d": true,
     "requiresPreparedStateForFile": true
   },
+  "fileConcurrency": 2,
+  "parallelFiles": [
+    "tests/integration/kubernetes-compute-real.test.mjs",
+    "tests/integration/kubernetes-plugin-status-real.test.mjs"
+  ],
   "files": [
     {
       "path": "tests/integration/kubernetes-plugin-status-real.test.mjs",
