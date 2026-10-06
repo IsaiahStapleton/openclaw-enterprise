@@ -7693,7 +7693,8 @@ test(
     // status and Status reason as the cause. tests/conformance/kubernetes-compute.test.mjs
     // pins that Driver shape; this case proves the worker's side: its log must carry that
     // status and reason, not only the class. A 429 or 5xx answer is transient instead and
-    // keeps the same evidence as its cause.
+    // keeps the same evidence as its cause. A client error the Driver passes on unchanged
+    // carries the status in its own code.
     const refused = new DependencyUnavailableError(
       "Workspace setup private delivery is unavailable.",
     );
@@ -7723,6 +7724,9 @@ test(
           if (activations === 2) {
             throw unavailable;
           }
+          if (activations === 3) {
+            throw Object.assign(new Error("HTTP-Code: 409 Message: conflict"), { code: 409 });
+          }
           return fixture.compute.activateRevision?.(revision, revisionContext);
         },
       },
@@ -7730,7 +7734,7 @@ test(
     );
 
     await fixture.work(candidate, "succeeded", 30_000);
-    assert.equal(activations, 3);
+    assert.equal(activations, 4);
     const pending = events.filter(
       (event) =>
         event.event === "worker.completed" &&
@@ -7759,6 +7763,13 @@ test(
           cause: "unavailable",
           status: 503,
           reason: "ServiceUnavailable",
+        },
+        {
+          code: "REVISION_FINALIZATION_INCOMPLETE",
+          dependency: undefined,
+          cause: "Error",
+          status: 409,
+          reason: undefined,
         },
       ],
     );
