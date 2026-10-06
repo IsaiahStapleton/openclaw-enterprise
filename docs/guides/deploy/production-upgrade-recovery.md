@@ -97,7 +97,7 @@ Before selecting an older controller or runtime image, verify it can read all
 state written by the candidate and restore compatible data if required. Never
 delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.
 
-## Installation name
+## Correct an invalid Installation name
 
 If the candidate API and worker log `INSTALLATION_NAME_INVALID`, the stored
 Installation name breaks the API Name rule: 1 to 200 characters, with no leading
@@ -114,13 +114,20 @@ if (!isName(JSON.parse(s).name)) { console.error(NAME_RULE); process.exit(1); }'
 
 No API renames an Installation, so correct `occ.installation.name` with the
 dedicated migrator credential (`OCC_MIGRATION_DATABASE_URL` as in
-[the upgrade baseline](upgrade-baseline.md)), then resume:
+[the upgrade baseline](upgrade-baseline.md)). Shell-quote the name; psql's
+`:'name'` quotes it for SQL:
 
 ```bash
 psql "$OCC_MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -v name='<intended name>' <<'SQL'
 UPDATE occ.installation SET name = :'name';
 SQL
 ```
+
+psql prints `UPDATE 1`. The database accepts some names the rule refuses, so
+rerun the check while the old release still serves. If the helper already
+stopped OCC, Helm's `--wait` has marked the candidate release `failed`: follow
+the Helm failure steps above, then repeat the command with
+`--resume --migration-history-checked`.
 
 ## Roll back across human sign-in
 

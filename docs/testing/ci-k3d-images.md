@@ -24,7 +24,7 @@ k3d's online release channel. Set `OPENCLAW_CI_K3S_IMAGE` to another approved
 override it. Both paths require the API server to report Kubernetes 1.35.x;
 OpenShell retains its separately pinned image. Mutable overrides fail before
 resource creation. Clean up a failed run's owned resources with
-`node scripts/ci/cleanup.mjs --state <state-file>` before reusing its state path.
+`node scripts/ci/cleanup.mjs --state <private-state-file>` before reusing its state path.
 
 Preparation reuses a supplied immutable workload image in the local Docker daemon
 only when `docker image inspect` records the requested digest in `RepoDigests`;
