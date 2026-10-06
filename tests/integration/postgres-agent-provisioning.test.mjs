@@ -1905,7 +1905,7 @@ test(
     assert.equal(status.data.status, "failed");
     assert.deepEqual(status.data.error, failed.progress.error);
     assert.equal(harnessChecks, checksBeforeStatus, "a status read runs no Harness check");
-    // A replay of the admitted request runs the plan again and names the setting too.
+    // A replay of the admitted request checks the stored plan again and names the setting too.
     const provisionPath = `/namespaces/${namespace.id}/agents/provision`;
     const replayed = await fixture.request("POST", provisionPath, { body });
     assert.equal(replayed.status, 400, JSON.stringify(replayed.body));
@@ -1934,11 +1934,12 @@ test(
       },
     );
 
-    // A Driver that refuses only the revision's Harness passes admission and every worker
-    // fence, so the deployment handoff refuses the work. Its message is named as well. Over
-    // the cap, format characters and lone surrogates become "?" and the cut keeps whole
+    // Admission and the worker fences check the placeholder "provisioning" Harness version;
+    // deployment checks the approved runtime version. A Driver that refuses only the latter
+    // fails the work at the deployment handoff, and its message is named as well. Over the
+    // cap, format characters and lone surrogates become "?" and the cut keeps whole
     // characters.
-    const emoji = "\u{1F600}".repeat(200);
+    const emoji = "\u{1F600}".repeat(220);
     computeDriver.validateHarnessAuth = (harness) => {
       if (harness.version !== "provisioning") {
         throw new ConfigurationHarnessError(settingRefusal(`op\u200Benai\uD800${emoji}`));
@@ -1953,6 +1954,7 @@ test(
       return row.progress.error === undefined ? undefined : row;
     });
     await fixture.stopWorker();
+    assert.equal(handoffFailed.status, "failed");
     assert.notEqual(handoffFailed.agent_id, null, "the handoff runs after the Agent exists");
     const shown = Array.from(settingRefusal(`op?enai?${emoji}`))
       .slice(0, 255)
