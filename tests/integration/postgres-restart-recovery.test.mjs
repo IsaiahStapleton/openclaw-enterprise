@@ -700,12 +700,14 @@ for (const source of ["claimed", "queued"]) {
       }
 
       const reasonCode = source === "claimed" ? "LEASE_EXPIRED" : "MAX_ATTEMPTS_EXHAUSTED";
+      // The recovery ends the work, so its evidence is final.
       const snapshot = async (client) => {
         const result = await client.query(
           `SELECT namespace.status, work.state, work.claim_token, work.lease_expires_at,
                   work.completed_at,
                   (SELECT count(*)::integer FROM occ.audit_events
-                   WHERE resource_id = $2 AND details->>'reasonCode' = $3) AS evidence
+                   WHERE resource_id = $2 AND details->>'reasonCode' = $3
+                     AND details->'final' = 'true'::jsonb) AS evidence
            FROM occ.controller_work AS work
            JOIN occ.namespaces AS namespace ON namespace.id = work.namespace_id
            WHERE work.idempotency_key = $1`,

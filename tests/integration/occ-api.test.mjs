@@ -4531,6 +4531,21 @@ test("Agent provisioning API validates inline configuration with existing Secret
       "The request does not match the operation contract: body /harnessAuth/source/namespaceId is required.",
     ],
     [
+      // Only the source kind is wrong, so the api_key shape fits and the other Harness
+      // authentication shapes' fields are not listed.
+      "Harness Secret source of another kind",
+      provisioningRequestBody(namespace.data.id, secrets, {
+        harnessAuth: {
+          method: "api_key",
+          source: {
+            ...exactSecretRef(namespace.data.id, secrets.modelApiKey.id),
+            kind: "provisioning-secret",
+          },
+        },
+      }),
+      "The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value.",
+    ],
+    [
       "too many binding destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: { secretBindings: oversizedBindings },
