@@ -284,6 +284,8 @@ async function sourceFiles(directory, extensions) {
 // Guides, references and flows tell operators to look for OCC events by name. A named
 // event the Collector drops never reaches the log backend those operators search, as
 // happened to `shutdown.failed` and `device_authorization.start_failed` (finding 600).
+// The scan covers dotted names emitted as `event: "<name>"` literals; undotted names such
+// as `listening` and names built at runtime need their own Collector case.
 test("the Collector exports every OCC API and worker event the docs name", async () => {
   const pattern = await exportedOccEventPattern();
   const emitted = new Set();
@@ -1260,15 +1262,16 @@ test(
         "container.id": `containerd://${randomUUID()}`,
       }).map(([key, value]) => ({ key, value: { stringValue: value } })),
     });
-    // Records as the API and worker print them: Pino JSON on stdout, and the PostgreSQL
-    // pool's idle-connection warning written directly to stderr.
+    // Records as the API and worker print them: Pino JSON on stdout (with the `service`
+    // base field and an ISO time), and the PostgreSQL pool's idle-connection warning written
+    // directly to stderr. `note` is a hostile extra field that must never be exported.
     const line = (record, stream = "stdout") => ({
       timeUnixNano: String(BigInt(Date.now()) * 1000000n),
       body: {
         stringValue: JSON.stringify({
-          time: Date.now(),
-          pid: 1,
-          hostname: canary,
+          time: new Date().toISOString(),
+          service: "api",
+          note: canary,
           ...record,
         }),
       },
@@ -1285,12 +1288,12 @@ test(
           {
             logRecords: [
               line({ severity: "INFO", event: "shutdown.started", signal: "SIGTERM" }),
-              line({ severity: "INFO", event: "shutdown.completed", durationMs: 1250 }),
+              line({ severity: "INFO", event: "shutdown.completed", durationMs: 1250.375 }),
               line({
                 severity: "ERROR",
                 event: "shutdown.failed",
                 code: "SHUTDOWN_FAILED",
-                durationMs: 30000,
+                durationMs: 30000.5,
               }),
               line({ level: "warn", event: "database.idle-client-error", code: "57P01" }, "stderr"),
               // The pool logs a Node transport code when the socket fails first.
@@ -1416,11 +1419,11 @@ test(
       ),
       sort([
         api("INFO", { "event.name": "shutdown.started" }),
-        api("INFO", { "event.name": "shutdown.completed", duration_ms: "1250" }),
+        api("INFO", { "event.name": "shutdown.completed", duration_ms: "1250.375" }),
         api("ERROR", {
           "event.name": "shutdown.failed",
           "occ.code": "SHUTDOWN_FAILED",
-          duration_ms: "30000",
+          duration_ms: "30000.5",
         }),
         api("WARN", { "event.name": "database.idle-client-error", "occ.code": "57P01" }, "stderr"),
         api(
@@ -1432,7 +1435,8 @@ test(
         api("WARN", {
           "event.name": "device_authorization.start_failed",
           "request.id": requestId,
-          "occ.code": "TimeoutError",
+          "occ.device_authorization.reason": "unreachable",
+          "occ.device_authorization.failure": "TimeoutError",
         }),
         api("WARN", {
           "event.name": "agent_runtime_credentials.cluster_denied",

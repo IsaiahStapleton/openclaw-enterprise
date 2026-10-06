@@ -189,12 +189,14 @@ API lifecycle and dependency warnings are exported too. `shutdown.started`,
 `shutdown.completed` and `shutdown.failed` (ERROR, `occ.code`) carry the drain's
 `duration_ms` once it ends; the signal stays local. `database.idle-client-error`
 keeps its SQLSTATE or transport code as `occ.code`. `device_authorization.start_failed`
-keeps its bounded failure (such as `TimeoutError`) as `occ.code`, and
+keeps `request.id`, `occ.device_authorization.reason` (`unreachable` or `unavailable`)
+and its bounded failure (such as `TimeoutError`) as `occ.device_authorization.failure`.
 `agent_runtime_credentials.cluster_denied` keeps only `request.id`; the denied verb,
 resource and Kubernetes namespace stay local. `native_admin.websocket_audit_failed`
 keeps the Namespace, Agent and revision IDs, and `native_admin.websocket_denial_audit_failed`
-carries none. `authentication.activation-warning`, `.password-sign-in-warning` and
-`.recovery-seed-warning` keep at most `occ.code`; account IDs and messages stay local.
+carries none. `authentication.activation-warning`, `authentication.password-sign-in-warning`
+and `authentication.recovery-seed-warning` keep at most `occ.code`; account IDs and
+messages stay local.
 `presets.default-refresh-skipped` (a default Preset copy kept because policy refused
 its refresh) is WARN and keeps `occ.namespace.id` and `occ.preset.id`; the Preset
 name, refusal text and Restriction IDs stay local. `presets.default-create-skipped`

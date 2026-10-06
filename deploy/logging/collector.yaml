@@ -45,10 +45,11 @@ processors:
           - set(attributes["occ.agent.id"], cache["record"]["agentId"]) where attributes["event.name"] != nil and (attributes["service.name"] == "occ-api" or attributes["service.name"] == "occ-worker") and IsString(cache["record"]["agentId"]) and IsMatch(cache["record"]["agentId"], "^([a-z_]+_)?[a-f0-9-]{36}$$")
           - set(attributes["occ.revision.id"], cache["record"]["revisionId"]) where attributes["event.name"] != nil and (attributes["service.name"] == "occ-api" or attributes["service.name"] == "occ-worker") and IsString(cache["record"]["revisionId"]) and IsMatch(cache["record"]["revisionId"], "^([a-z_]+_)?[a-f0-9-]{36}$$")
           - set(attributes["occ.code"], cache["record"]["code"]) where attributes["event.name"] != nil and (attributes["service.name"] == "occ-api" or attributes["service.name"] == "occ-worker") and IsString(cache["record"]["code"]) and IsMatch(cache["record"]["code"], "^[A-Z][A-Z0-9_]{0,63}$$")
-          # A dropped idle PostgreSQL connection keeps its SQLSTATE (such as 57P01), and a
-          # device login that could not start keeps its bounded failure (such as TimeoutError).
+          # A dropped idle PostgreSQL connection keeps its SQLSTATE (such as 57P01). A device
+          # login that could not start keeps its reason and bounded failure (such as TimeoutError).
           - set(attributes["occ.code"], cache["record"]["code"]) where attributes["event.name"] == "database.idle-client-error" and IsString(cache["record"]["code"]) and IsMatch(cache["record"]["code"], "^[0-9A-Z]{5}$$")
-          - set(attributes["occ.code"], cache["record"]["failure"]) where attributes["event.name"] == "device_authorization.start_failed" and IsString(cache["record"]["failure"]) and IsMatch(cache["record"]["failure"], "^[A-Za-z][A-Za-z0-9_]{0,63}$$")
+          - set(attributes["occ.device_authorization.reason"], cache["record"]["reason"]) where attributes["event.name"] == "device_authorization.start_failed" and IsString(cache["record"]["reason"]) and IsMatch(cache["record"]["reason"], "^(unreachable|unavailable)$$")
+          - set(attributes["occ.device_authorization.failure"], cache["record"]["failure"]) where attributes["event.name"] == "device_authorization.start_failed" and IsString(cache["record"]["failure"]) and IsMatch(cache["record"]["failure"], "^[A-Za-z][A-Za-z0-9_]{0,63}$$")
           # A stuck repository cleanup keeps its bounded cause code.
           - set(attributes["occ.worker.cause"], cache["record"]["cause"]) where attributes["event.name"] == "worker.repository-cleanup-warning" and IsString(cache["record"]["cause"]) and IsMatch(cache["record"]["cause"], "^[A-Z][A-Z0-9_]{0,63}$$")
           # A kept default-Preset copy names the Preset; its name, the refusal text and the
