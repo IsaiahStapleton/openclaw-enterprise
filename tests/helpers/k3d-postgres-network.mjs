@@ -33,7 +33,18 @@ async function breakStaleLock(lockPath, deadHolder) {
     if (error.code !== "EEXIST") {
       throw error;
     }
-    // A breaker is held for one read and one unlink; an old one belongs to a dead process.
+    // Judge a breaker by its holder like the lock; a stalled but live holder blocks
+    // waiters until the deadline rather than losing exclusion. Age decides only for a
+    // breaker whose creator died before writing its pid. Two waiters removing the same
+    // dead breaker within one sub-millisecond window could still overlap; that needs a
+    // crash inside the breaker's two-call window and is accepted.
+    const breakerHolder = await lockHolder(breakerPath);
+    if (Number.isInteger(breakerHolder) && breakerHolder > 0) {
+      if (!processAlive(breakerHolder)) {
+        await rm(breakerPath, { force: true });
+      }
+      return;
+    }
     const age =
       Date.now() - (await stat(breakerPath).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs;
     if (age > 10_000) {
@@ -89,10 +100,13 @@ async function readHolders(registryPath) {
     }
     return { connectedByHarness: true, holders: {} };
   }
+  if (registry === null || typeof registry !== "object" || Array.isArray(registry)) {
+    return { connectedByHarness: true, holders: {} };
+  }
   return {
-    connectedByHarness: registry?.connectedByHarness === true,
+    connectedByHarness: registry.connectedByHarness === true,
     holders:
-      registry?.holders !== null && typeof registry?.holders === "object" ? registry.holders : {},
+      registry.holders !== null && typeof registry.holders === "object" ? registry.holders : {},
   };
 }
 
