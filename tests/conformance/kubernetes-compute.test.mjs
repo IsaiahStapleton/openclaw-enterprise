@@ -3406,10 +3406,10 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   assert.equal(privateNativeAdminPod.initContainers[0].args[0].includes("copyFileSync"), false);
 
   for (const [configuration, expected] of [
-    [{ gateway: null }, /gateway configuration/i],
-    [{ gateway: [] }, /gateway configuration/i],
-    [{ gateway: { auth: null } }, /gateway auth/i],
-    [{ gateway: { auth: [] } }, /gateway auth/i],
+    [{ gateway: null }, /setting gateway must be an object/i],
+    [{ gateway: [] }, /setting gateway must be an object/i],
+    [{ gateway: { auth: null } }, /gateway\.auth must be an object/i],
+    [{ gateway: { auth: [] } }, /gateway\.auth must be an object/i],
     [
       {
         gateway: {
@@ -3456,7 +3456,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
           trustedProxies: ["10.42.0.0/16"],
         },
       },
-      /unsupported field unsupportedField/i,
+      /gateway\.auth\.unsupportedField is not a supported/i,
     ],
     [
       {
