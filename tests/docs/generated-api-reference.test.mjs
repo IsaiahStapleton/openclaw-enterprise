@@ -86,19 +86,15 @@ test("generated API reference stays on the approved single page", async () => {
   }
 });
 
-test("every operation with a request body documents 400, 413 and 415", async () => {
-  // The controller validates every body against its schema (400) and answers an oversized
-  // body 413 and a non-JSON media type 415 on every route that reads a body. Fourteen
-  // /api/auth/* operations, whose schemas are inline rather than in the shared route
-  // contract, once listed none of 413 and 415 and most not 400.
+test("every operation with a request body documents 413 and 415", async () => {
+  // The controller answers an oversized body 413 and a non-JSON media type 415 on every
+  // route that reads a body; updateCredentialSource and the /api/auth/* operations
+  // documented neither.
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const missing = contractOperations(document)
     .filter((operation) => operation.requestBody !== undefined)
-    .flatMap((operation) =>
-      ["400", "413", "415"]
-        .filter((status) => !(status in operation.responses))
-        .map((status) => `${operation.operationId} ${status}`),
-    );
+    .filter((operation) => !("413" in operation.responses && "415" in operation.responses))
+    .map((operation) => operation.operationId);
   assert.deepEqual(missing, []);
 });
 
@@ -221,6 +217,18 @@ test("operations without a request body do not list 413 or 415", async () => {
     .filter((operation) => "413" in operation.responses || "415" in operation.responses)
     .map((operation) => operation.operationId);
   assert.deepEqual(listed, []);
+});
+
+test("every operation with a request body documents 400", async () => {
+  // Every body is validated against its operation's schema before the handler runs. Eleven
+  // /api/auth/* operations, whose schemas are inline rather than in the shared route
+  // contract, once omitted the 400 that validation answers.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const missing = contractOperations(document)
+    .filter((operation) => operation.requestBody !== undefined)
+    .filter((operation) => !("400" in operation.responses))
+    .map((operation) => operation.operationId);
+  assert.deepEqual(missing, []);
 });
 
 test("the error envelope table documents the shared ErrorResponse, not an inline copy", async () => {
