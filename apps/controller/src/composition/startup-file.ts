@@ -11,7 +11,7 @@ import { type LoggingConfiguration, operationalLoggingConfiguration } from "../l
 
 export type ConfigurationRecord = Readonly<Record<string, unknown>>;
 
-export interface LoadedStartupConfiguration {
+interface LoadedStartupConfiguration {
   readonly configuration?: ConfigurationRecord;
   readonly path?: string;
 }
@@ -105,8 +105,8 @@ export async function startupConfiguration(
     throw new Error("The configured Installation startup YAML is unavailable.");
   }
 
-  // Imported on first use: the Kubernetes client costs about 0.35 s of startup CPU, and the migration
-  // command runs without a startup file in CI and in the Helm migration Job.
+  // Imported on first use, so commands that run without a startup file (the migration command in CI
+  // and in the Helm migration Job) never load the Kubernetes client.
   const { loadYaml } = await import("@kubernetes/client-node");
   let parsed: unknown;
   try {

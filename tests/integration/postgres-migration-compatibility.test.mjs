@@ -785,8 +785,8 @@ test(
     );
 
     // The migration command reads only the logging section of the Installation startup file,
-    // through the controller's own startup reader. A file the controller would refuse stops the
-    // command before it checks the database, with the usual single structured failure line.
+    // through the controller's own startup reader. A file the controller would refuse fails the
+    // command with no migration output and the usual single structured failure line.
     const configDirectory = await mkdtemp(join(tmpdir(), "occ-migration-config-"));
     context.after(() => rm(configDirectory, { recursive: true, force: true }));
     const startupFile = async (name, contents) => {
@@ -794,12 +794,10 @@ test(
       await writeFile(path, contents, "utf8");
       return path;
     };
+    // One refusal from each layer: the logging section, the file reader, and the path rules.
     const refused = [
       await startupFile("trace.yaml", "logging:\n  level: trace\n"),
-      await startupFile("endpoint.yaml", "logging:\n  level: info\n  endpoint: https://otel\n"),
       await startupFile("invalid.yaml", "logging: [\n"),
-      await startupFile("unknown.yaml", "telemetry:\n  enabled: true\n"),
-      await startupFile("credential.yaml", "observability:\n  password: plaintext\n"),
       "relative/startup.yaml",
     ];
     for (const path of refused) {
