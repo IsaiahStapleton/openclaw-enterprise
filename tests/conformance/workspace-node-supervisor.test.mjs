@@ -23,12 +23,14 @@ async function jsonLines(path) {
     .map((line) => JSON.parse(line));
 }
 
-// Runs the supervisor program the container receives, without native initialization
-// (the runtime-image test covers it). Each child it spawns runs `child` (lines of
-// child.cjs) with the events path, "node" or "codex", and its JSON arguments; children
-// append rows to events.jsonl in `directory`. `stubs` are extra program lines that
-// replace other external bodies. Cleanup kills the supervisor and every recorded pid,
-// then removes `directory`.
+// Runs the supervisor program the container receives; supervision, signals and
+// environments run unchanged.
+// - Stubbed: native initialization (the runtime-image test covers it), and every child
+//   the supervisor spawns, which runs `child` (the lines of child.cjs) with the events
+//   path, "node" or "codex", and its JSON arguments. `stubs` are extra program lines
+//   that replace other external bodies.
+// - Events: children append JSON rows to `directory`/events.jsonl.
+// - Cleanup kills the supervisor and every recorded pid, then removes `directory`.
 async function startSupervisor(t, directory, { child, stubs = [], env }) {
   const eventsPath = join(directory, "events.jsonl");
   const childPath = join(directory, "child.cjs");
@@ -119,7 +121,6 @@ test(
         expiresAtMs: Date.now() + 60_000,
       }),
     );
-    // Supervision, signals and environments run unchanged.
     const { supervisor, exited, events, waitFor, output } = await startSupervisor(t, directory, {
       child: [
         'const { appendFileSync } = require("node:fs");',
