@@ -2467,6 +2467,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       401: { description: "Unauthorized", ...error },
       503: { description: "Service Unavailable", ...error },
     });
+    // Every route that reads a body answers an oversized one 413 and a non-JSON one 415.
+    const bodyErrors = {
+      413: { description: "Payload Too Large", ...error },
+      415: { description: "Unsupported Media Type", ...error },
+    };
     const accountBody = (
       createAuthAccountOperation.schema as {
         readonly body: { readonly properties: Record<string, unknown> };
@@ -2559,6 +2564,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
             409: { description: "Conflict", ...error },
+            ...(creating ? bodyErrors : {}),
           },
         } as DocumentedFastifySchema,
         onRequest: async (request) => admit(request, operation),
@@ -2838,6 +2844,8 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               properties: { attemptId: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
             },
             response: {
+              // A body without the exact attemptId fails the schema.
+              400: { description: "Bad Request", ...error },
               ...responses({
                 type: "object",
                 additionalProperties: false,
@@ -2845,6 +2853,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 properties: { sessionKey: { type: "string" } },
               }),
               403: { description: "Forbidden", ...error },
+              ...bodyErrors,
             },
           },
         },
@@ -3116,9 +3125,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 required: ["userId"],
                 properties: { userId: { type: "string" } },
               }),
+              400: { description: "Bad Request", ...error },
               403: { description: "Forbidden", ...error },
               404: { description: "Not Found", ...error },
               409: { description: "Conflict", ...error },
+              ...bodyErrors,
             },
           },
           onRequest: async (request) => admit(request, operation),
@@ -3269,9 +3280,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
               required: [...recoveryResponse.required, "changed"],
               properties: { ...recoveryResponse.properties, changed: { type: "boolean" } },
             }),
+            400: { description: "Bad Request", ...error },
             403: { description: "Forbidden", ...error },
             404: { description: "Not Found", ...error },
             409: { description: "Conflict", ...error },
+            ...bodyErrors,
           },
         },
         onRequest: async (request) => admit(request, recoveryReplaceOperation),
@@ -3438,6 +3451,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             }),
             400: { description: "Bad Request", ...error },
             429: { description: "Too Many Requests", ...error },
+            ...bodyErrors,
           },
         },
       },
@@ -3524,6 +3538,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             400: { description: "Bad Request", ...error },
             403: { description: "Forbidden", ...error },
             409: { description: "Conflict", ...error },
+            ...bodyErrors,
           },
         },
         onRequest: async (request) => admit(request, createAuthAccountOperation),
