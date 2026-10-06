@@ -26,7 +26,8 @@ separately. The console reports persisted deployment state, not live gateway hea
 You need a working model credential, the Agent's local gateway password, Bash,
 Python 3, and `kubectl` permission to get and list Pods and create
 `pods/portforward` requests in the Gateway's physical namespace. If you retrieve the generated
-password from Kubernetes, you also need read access to that exact Secret. Keep `AGENT_ID`, `NAMESPACE_ID`, `TENANT_NAMESPACE`,
+password from Kubernetes, you also need read access to the Agent's `gateway-password-<suffix>` Secret (and to its
+transport Secret for an Agent deployed before that separate Secret existed). Keep `AGENT_ID`, `NAMESPACE_ID`, `TENANT_NAMESPACE`,
 `KUBECONFIG_FILE`, and `CONTEXT` from the [production Agent guide](../deploy/production-agents.md).
 Set `REVISION_ID` to the immutable revision you want to verify.
 
@@ -49,9 +50,11 @@ gateway:
 ```
 
 The [Gateway-password Secret](../../reference/drivers/kubernetes-compute/storage-and-credentials.md#runtime-credentials)
-must have a `gateway-password` key. Dedicated mode keeps it in the Gateway
-namespace; embedded mode uses the combined transport bundle in the tenant
-namespace. The initial credential API generates the password;
+must have a `gateway-password` key. Both execution modes keep it in the
+`gateway-password-<suffix>` Secret next to the Gateway (for two-cluster dedicated
+execution, in the control-plane Gateway namespace); an Agent deployed before that
+separate Secret existed keeps it in its transport Secret until its next
+deployment. The initial credential API generates the password;
 external operators can provision one during [Agent deployment](../deploy/production-agents.md#configure-the-agent-runtime).
 If these Configuration fields changed, [deploy a new revision](../deploy/production-agents.md#configure-the-agent-runtime)
 and capture its new `REVISION_ID`. Wait for that deployment to succeed and for OCC
@@ -162,7 +165,11 @@ fetch_gateway_password() {
   # Both execution modes keep the password in the Agent's separate password Secret.
   # An Agent deployed before that Secret existed still carries it in its transport Secret.
   if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$GATEWAY_NAMESPACE" \
-    get secret "gateway-password-$agent_suffix" -o json 2>/dev/null)"; then
+    get secret "gateway-password-$agent_suffix" --ignore-not-found -o json)"; then
+    rmdir -- "$working_directory"
+    return 1
+  fi
+  if [ -z "$secret_json" ]; then
     transport_secret="openclaw-agent-transport-$agent_suffix"
     if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$GATEWAY_NAMESPACE" \
       get secret "$transport_secret" -o json)"; then
