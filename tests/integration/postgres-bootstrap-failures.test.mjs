@@ -804,7 +804,7 @@ test(
       encoding: "utf8",
       timeout: 20_000,
     });
-    assert.equal(workerProcess.status, 1, workerProcess.stderr);
+    assert.equal(workerProcess.status, 1, `${workerProcess.error ?? ""}\n${workerProcess.stderr}`);
     const workerFailure = jsonLines(workerProcess.stderr).find(
       (line) => line.event === "worker.startup-error",
     );

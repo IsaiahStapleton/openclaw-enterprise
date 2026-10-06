@@ -278,6 +278,7 @@ test("repository startup constructs the same local resolver without a private so
   await writeFile(
     astral.backend[0].configuration.registryPath,
     JSON.stringify({ ...registry, backendId: astral.backend[0].id }),
+    { mode: 0o644 },
   );
   const fits = await loadInstallationConfiguration({
     mode: "production",
