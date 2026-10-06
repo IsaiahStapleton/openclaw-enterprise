@@ -71,20 +71,41 @@ function isKubernetesObjectConflict(error) {
   );
 }
 
+// The Driver does not retry a failed write, and it reports a failed runtime Secret write
+// as DependencyUnavailableError without the API error. The worker retries that error on
+// its next reconcile, so this direct caller retries it too. CI saw it once while another
+// file shared the k3d cluster. A failure that persists still ends the wait, and the
+// timeout names the last transient error.
+function isTransientPrepareFailure(error) {
+  return isKubernetesObjectConflict(error) || error?.name === "DependencyUnavailableError";
+}
+
 async function prepareRevisionEventually(fixture, driver = fixture.driver) {
-  return waitFor(
-    "real Compute prepareRevision to avoid transient Kubernetes conflicts",
-    async () => {
-      try {
-        return await driver.prepareRevision(fixture.candidate, fixture.auth.context);
-      } catch (error) {
-        if (isKubernetesObjectConflict(error)) {
-          return undefined;
+  let lastTransient;
+  try {
+    return await waitFor(
+      "real Compute prepareRevision to avoid transient Kubernetes failures",
+      async () => {
+        try {
+          return await driver.prepareRevision(fixture.candidate, fixture.auth.context);
+        } catch (error) {
+          if (isTransientPrepareFailure(error)) {
+            lastTransient = error;
+            process.stderr.write(
+              `Transient prepareRevision failure (${error.message}); retrying\n`,
+            );
+            return undefined;
+          }
+          throw error;
         }
-        throw error;
-      }
-    },
-  );
+      },
+    );
+  } catch (error) {
+    if (lastTransient !== undefined && /^Timed out waiting for /.test(error.message)) {
+      error.message = `${error.message} Last transient failure: ${lastTransient.message}`;
+    }
+    throw error;
+  }
 }
 
 async function assertPrerequisites() {
