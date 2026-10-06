@@ -146,27 +146,30 @@ async function gatewayProcess() {
   return found;
 }
 
-async function waitFor(description, timeoutMs, check) {
+async function waitFor(description, timeoutMs, check, detail = () => "") {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const result = await check();
     if (result) {
       return result;
     }
-    assert.ok(Date.now() < deadline, `timed out waiting for ${description}`);
+    assert.ok(Date.now() < deadline, `timed out waiting for ${description}${detail()}`);
     await setTimeout(200);
   }
 }
 
-// The wrapper's apply budget runs from the native spawn. On a starved runner
+// The wrapper's 30 s apply budget runs from the native spawn. On a starved runner
 // OpenClaw can outlast it and the wrapper reports GATEWAY_UNAVAILABLE or
 // RELOAD_NOT_CONFIRMED, which the ack clears. That report can also be stale: the
 // wrapper does not poll during the peer outage below. Any other failure is final.
 const pendingWorkspaceNodeFailures = new Set(["GATEWAY_UNAVAILABLE", "RELOAD_NOT_CONFIRMED"]);
+let lastWorkspaceNodeStatus;
 
 async function workspaceNodeAck() {
   const status = await (await fetch(runtimeStatusUrl)).json();
+  lastWorkspaceNodeStatus = status;
   if (status.workspaceNodeId === workspaceNodeId) {
+    assert.equal(status.workspaceNodeFailure, undefined, JSON.stringify(status));
     return true;
   }
   assert.ok(
@@ -175,6 +178,10 @@ async function workspaceNodeAck() {
     JSON.stringify(status),
   );
   return false;
+}
+
+function workspaceNodeDetail() {
+  return `: ${JSON.stringify(lastWorkspaceNodeStatus)}`;
 }
 
 function linearEnabled(config) {
@@ -270,7 +277,7 @@ try {
   assert.equal(afterOutage[0].startTicks, before.startTicks);
   assert.equal(afterOutage[0].token, before.token);
 
-  await waitFor("the first workspace node ack", 60_000, workspaceNodeAck);
+  await waitFor("the first workspace node ack", 60_000, workspaceNodeAck, workspaceNodeDetail);
   const assetsBefore = (await stat("/home/node/openclaw-runtime-assets/bundled-skills")).mtimeMs;
 
   // The Harness restarts: a new startup and pod, and the plugin is now authorized.
@@ -306,7 +313,7 @@ try {
   assert.equal(after.token, appServerToken("harness-startup-2"));
   assert.equal(linearEnabled(JSON.parse(await readFile(configPath, "utf8"))), true);
   // The new process loaded the node binding again and acknowledged it itself.
-  await waitFor("the respawned workspace node ack", 60_000, workspaceNodeAck);
+  await waitFor("the respawned workspace node ack", 60_000, workspaceNodeAck, workspaceNodeDetail);
   const ackAt = Date.now() - changedAt;
   // Runtime assets were published once, by the first start.
   assert.equal(
