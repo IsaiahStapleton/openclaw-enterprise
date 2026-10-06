@@ -11573,6 +11573,9 @@ test("Kubernetes workspace setup redacts backend failures and refuses foreign pr
 // the client error, whose message and body echo the submitted Secret, stays behind.
 for (const embedded of [true, false]) {
   test(`Kubernetes ${embedded ? "embedded" : "dedicated"} private Secret writes classify API answers without echoing Secret data`, async () => {
+    const { ApiException } = createRequire(
+      new URL("../../apps/controller/package.json", import.meta.url),
+    )("@kubernetes/client-node");
     const targets = [
       {
         name: /^(harness|gateway)-secrets-/u,
@@ -11600,13 +11603,10 @@ for (const embedded of [true, false]) {
           if (target.name.test(request.body.metadata.name)) {
             rejected += 1;
             written.push(...Object.values(request.body.data));
-            // Shaped like the client's ApiException, which echoes the request body.
-            const echoed = JSON.stringify(request.body);
-            throw Object.assign(new Error(`HTTP-Code: ${status}\nBody: ${echoed}`), {
-              code: status,
-              body: { kind: "Status", code: status, reason, message: echoed },
-              headers: {},
-            });
+            // The client's own error keeps the answer as JSON text and echoes it in its
+            // message; this answer also echoes the submitted Secret.
+            const answer = { kind: "Status", code: status, reason, message: request.body };
+            throw new ApiException(status, "Unknown API Status Code!", JSON.stringify(answer), {});
           }
           return create(request);
         };

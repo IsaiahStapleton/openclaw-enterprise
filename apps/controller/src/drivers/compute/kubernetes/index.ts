@@ -639,13 +639,27 @@ class KubernetesApiFailureEvidence extends Error {
   }
 }
 
-/** The Status reason of a Kubernetes API answer, only when it is a bare CamelCase word. */
+/**
+ * The Status reason of a Kubernetes API answer, only when it is a bare CamelCase word. The
+ * client keeps an error answer's body as its JSON text.
+ */
 function kubernetesStatusReason(error: unknown): string | undefined {
-  const reason = asRecord(asRecord(error)?.body)?.reason;
+  const body = asRecord(error)?.body;
+  let status: unknown = body;
+  if (typeof body === "string" && body.length <= 65_536) {
+    try {
+      status = JSON.parse(body);
+    } catch {
+      return undefined;
+    }
+  }
+  const reason = asRecord(status)?.reason;
   return typeof reason === "string" && /^[A-Za-z]{1,64}$/u.test(reason) ? reason : undefined;
 }
 
-function kubernetesApiFailureEvidence(error: unknown): Error | undefined {
+function kubernetesApiFailureEvidence(
+  error: unknown,
+): KubernetesApiFailureEvidence | KubernetesRequestTimeout | undefined {
   const socket = unreachableSocketCause(error);
   if (socket === "timeout") {
     return new KubernetesRequestTimeout("Kubernetes API request timed out.");
@@ -679,8 +693,14 @@ function privateWriteFailure(message: string, error: unknown): Error {
   return failure;
 }
 
-/** The sanitized API evidence beneath a private Secret write's own error, if any. */
-function privateWriteEvidence(error: unknown): unknown {
+/**
+ * The sanitized API evidence beneath a private Secret write's own error, if any. The
+ * preparation stage tags that outer error, so the cause walk in preparationFailure stops
+ * there and never reaches the evidence by itself.
+ */
+function privateWriteEvidence(
+  error: unknown,
+): KubernetesApiFailureEvidence | KubernetesRequestTimeout | undefined {
   const cause = asRecord(error)?.cause;
   return (error instanceof TransientDependencyError ||
     error instanceof DependencyUnavailableError) &&
