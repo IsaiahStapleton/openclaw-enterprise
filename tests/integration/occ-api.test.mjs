@@ -4608,7 +4608,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
-      "The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value.",
+      'The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value (expected "secret").',
     ],
     [
       // A string fits neither a Harness authentication shape nor null: one wrong-type problem

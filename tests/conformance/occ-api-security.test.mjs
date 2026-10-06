@@ -764,6 +764,67 @@ test("NUL characters and unpaired surrogates are refused in bodies and path para
   );
 });
 
+test("contract error details stay within the published path cap and name what a field accepts", async () => {
+  const fixture = await createFixture();
+  await bootstrap(fixture);
+  const namespace = await createNamespace(fixture, "Contract detail tenant");
+  const configurations = `/namespaces/${namespace.id}/configurations`;
+  const configuration = { kind: "agent", values: {} };
+  const source = { kind: "secret", namespaceId: namespace.id, id: `sec_${randomUUID()}` };
+  const longBinding = "K".repeat(600);
+  const contract = "The request does not match the operation contract: body";
+  const cases = [
+    // A submitted field name too long for the 512-character detail path is cut, as the NUL
+    // check cuts it.
+    [{ ...configuration, ["k".repeat(700)]: 1 }, `/${"k".repeat(511)}`, "UNKNOWN_FIELD"],
+    // Under a long map key the instance path itself is too long: whole leading segments stay.
+    [
+      { ...configuration, secretBindings: { [longBinding]: { source, extra: 1 } } },
+      "/secretBindings",
+      "UNKNOWN_FIELD",
+    ],
+    [
+      { ...configuration, secretBindings: { [longBinding]: { source: "x" } } },
+      "/secretBindings",
+      "INVALID_TYPE",
+    ],
+  ];
+  for (const [body, path, code] of cases) {
+    const result = await request(fixture.app, configurations, { body });
+    assert.equal(result.response.status, 400, JSON.stringify(result.payload).slice(0, 200));
+    assert.deepEqual(result.payload.error.details, [{ path, code }]);
+  }
+
+  // A union whose shapes all accept one type names that type, not "one of" a single entry.
+  const wholeBody = await request(
+    fixture.app,
+    `/namespaces/${namespace.id}/channel-directory/lookup`,
+    { body: '"x"' },
+  );
+  assert.equal(wholeBody.response.status, 400);
+  assert.deepEqual(wholeBody.payload.error.details, [{ path: "", code: "INVALID_TYPE" }]);
+  assert.equal(
+    wholeBody.payload.error.message,
+    `${contract} / has the wrong type (expected object).`,
+  );
+  // The method selects the api_key shape, so a problem inside it names what its field accepts.
+  const wrongSource = await request(fixture.app, `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "Contract detail agent",
+      configurationId: `cfg_${randomUUID()}`,
+      harnessAuth: { method: "api_key", source: "x" },
+    },
+  });
+  assert.equal(wrongSource.response.status, 400);
+  assert.deepEqual(wrongSource.payload.error.details, [
+    { path: "/harnessAuth/source", code: "INVALID_TYPE" },
+  ]);
+  assert.equal(
+    wrongSource.payload.error.message,
+    `${contract} /harnessAuth/source has the wrong type (expected object).`,
+  );
+});
+
 test("router failures answer the error envelope without echoing the path", async () => {
   const fixture = await createFixture();
   await bootstrap(fixture);
