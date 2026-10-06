@@ -91,9 +91,9 @@ number, starting at `0042` or higher; check `specs/plans/` and Git history so de
 or renamed task plans do not free numbers.
 
 Keep one row per RFC in `specs/README.md`, with its linked number and name in
-the first column, its `implementation_status` in the second, and concise notes
-in the third. Link current evidence and identify material gaps for partial work.
-Update the row when the RFC’s name or implementation status changes. Link an RFC and its plan to each other; plans
+the first column, its `implementation_status` in the second, concise notes
+in the third, and its author in the fourth. Link current evidence and identify material gaps for partial work.
+Keep the row synchronized with the RFC’s name, implementation status, and author. Link an RFC and its plan to each other; plans
 are not listed in the RFC index. If a standalone task later gains an RFC, retain
 its task ID and path and add the relationship.
 
@@ -140,6 +140,11 @@ use the contributor who will open its PR. When backfilling, follow file history
 through renames and use the original PR author, not a later editor or merger.
 Do not replace authorship with a responsible team; describe responsibilities in
 the proposal.
+
+Treat the author as the RFC owner; do not maintain a separate `owner` field.
+Show the author in the index, linking their GitHub profile and matching the
+`author` frontmatter. Do not repeat the author in the RFC body. Preserve
+historical responsibility statements in the proposal.
 
 Companion Markdown notes have an `rfc` frontmatter link to the owning entry
 point, relative to the note (usually `rfc: index.md`). Read the decision status
