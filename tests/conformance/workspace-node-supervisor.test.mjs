@@ -214,18 +214,16 @@ test(
       "node restarted after its renewed setup projection disappeared",
       (rows) => rows.filter(({ kind }) => kind === "node").length === 3,
     );
+    const cachedSetupNode = afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1);
     assert.equal(
-      afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1).args[4],
+      cachedSetupNode.args[4],
       Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
     );
 
     // An envelope without a bootstrap token is not a setup: the node is not
     // started and the supervisor falls back to the saved-identity probe.
     await writeFile(setupEnvelopePath, JSON.stringify({ ...renewedSetup, bootstrapToken: "" }));
-    process.kill(
-      afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1).pid,
-      "SIGKILL",
-    );
+    process.kill(cachedSetupNode.pid, "SIGKILL");
     const afterEmptyToken = await waitFor(
       "identity probe or node start after an empty bootstrap token",
       (rows) =>
@@ -237,7 +235,7 @@ test(
     // Stop exits once the children are gone, without waiting for the probe.
     supervisor.kill("SIGTERM");
     assert.deepEqual(await exited, [0, null], output());
-    for (const { pid } of (await events()).filter(({ kind }) => kind !== "probe")) {
+    for (const { pid } of (await events()).filter(({ pid }) => pid !== undefined)) {
       assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     }
   },
