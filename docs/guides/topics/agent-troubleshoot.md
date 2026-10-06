@@ -39,6 +39,12 @@ GET /namespaces/:namespaceId/agents/:agentId/deployments/:revisionId
 
 For Kubernetes workload problems, operators can use the
 [Compute failure checks](../../reference/drivers/kubernetes-compute.md#failure-conditions).
+When a deployment fails with `DEPENDENCY_UNAVAILABLE` after its retries, the
+worker log's `worker.compute-prepare-failed` events for that revision name the
+code, preparation step and reason; the log Collector exports only the code.
+`KUBERNETES_OWNERSHIP_CONFLICT` means an object with the Agent's workload name
+exists without OCE's ownership labels. The driver never adopts it: move or
+delete the object, then deploy again.
 
 <span id="the-console-says-serving-status-unavailable"></span>
 
