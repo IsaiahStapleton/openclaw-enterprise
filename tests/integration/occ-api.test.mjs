@@ -5772,6 +5772,65 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
     `/namespaces/${namespace.id}/agents/${allowUsersAgent.id}/deploy`,
   );
   assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+  // The driver hook names only settings every preparation attempt refuses.
+  assert.doesNotThrow(() =>
+    kubernetes.validateGatewaySettings({
+      gateway: { auth: { mode: "trusted-proxy", trustedProxy: { allowUsers: ["someone"] } } },
+    }),
+  );
+
+  // Deploy authorization comes first: a caller who cannot deploy learns nothing of the setting.
+  const deniedAgent = await createAgent(controller, namespace.id, "gateway-denied-agent", {
+    gateway: { auth: { mode: "token" } },
+  });
+  await bindHarnessKey(fixture, namespace.id, deniedAgent);
+  const { principal: viewer } = await fixture.createAuthPrincipal("gateway-deploy-viewer");
+  fixture.state.identities.push(viewer);
+  fixture.state.roles.push({
+    id: "role-gateway-deploy-viewer",
+    namespaceId: namespace.id,
+    permissions: [
+      { action: "read", resourceKind: "agent" },
+      { action: "read", resourceKind: "configuration" },
+    ],
+  });
+  fixture.state.bindings.push({
+    id: "binding-gateway-deploy-viewer",
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: viewer.id,
+    roleId: "role-gateway-deploy-viewer",
+  });
+  const denied = await injectedRequest(
+    fixture.createApp(viewer),
+    "POST",
+    `/namespaces/${namespace.id}/agents/${deniedAgent.id}/deploy`,
+  );
+  assert.equal(denied.status, 403, JSON.stringify(denied.body));
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+  assert.doesNotMatch(JSON.stringify(denied.body), /gateway\.auth|trusted-proxy/);
+
+  // An unavailable hook dependency answers 503; any other hook refusal stays with preparation.
+  const hookAgent = await createAgent(controller, namespace.id, "gateway-hook-agent");
+  await bindHarnessKey(fixture, namespace.id, hookAgent);
+  const deployHookAgent = () =>
+    controller.request("POST", `/namespaces/${namespace.id}/agents/${hookAgent.id}/deploy`);
+  computeDriver.validateGatewaySettings = () => {
+    throw new DependencyUnavailableError("The gateway setting check is unavailable.");
+  };
+  const unavailable = await deployHookAgent();
+  assert.equal(unavailable.status, 503, JSON.stringify(unavailable.body));
+  assert.equal(unavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  const noRevisions = await controller.request(
+    "GET",
+    `/namespaces/${namespace.id}/agents/${hookAgent.id}/revisions`,
+  );
+  assert.deepEqual(noRevisions.data, [], JSON.stringify(noRevisions.body));
+  computeDriver.validateGatewaySettings = () => {
+    throw new Error("internal gateway detail");
+  };
+  const deferred = await deployHookAgent();
+  assert.equal(deferred.status, 202, JSON.stringify(deferred.body));
 });
 
 test("deploy audit preserves its authorization decision and rolls back with append failure", async () => {
