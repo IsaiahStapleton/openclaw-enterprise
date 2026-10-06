@@ -74,7 +74,13 @@ const runPreflight = (pod) => {
     }
     mounts.push([directory, mount.mountPath]);
   }
-  const env = (container.env ?? []).filter((item) => typeof item.value === 'string');
+  // Kubernetes expands $(VAR) in literal values from earlier variables and turns $$ into $.
+  const expanded = {};
+  const env = (container.env ?? []).filter((item) => typeof item.value === 'string').map((item) => {
+    const value = item.value.replace(/\\$\\$|\\$\\(([A-Za-z_][A-Za-z0-9_]*)\\)/g, (match, name) => match === '$$' ? '$' : expanded[name] ?? match);
+    expanded[item.name] = value;
+    return {name: item.name, value};
+  });
   const image = process.env.OCC_TEST_PRODUCTION_IMAGE;
   const result = image
     // Host networking reaches the test's loopback Kubernetes API only with rootful Docker.
@@ -1455,6 +1461,9 @@ test("an Installation the selected controller image loads passes the preflight a
   }
   const f = await fixture(t, {
     controllerOnly: true,
+    // A 200-character name: if Kubernetes expanded $(OCC_CONFIG_PATH) in the Pod's
+    // environment, the preflight would see a longer name and refuse it.
+    installationName: `${"A".repeat(182)}$(OCC_CONFIG_PATH)`,
     chart: { installation: (installation) => installation },
   });
   await f.run();

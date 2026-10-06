@@ -62,10 +62,14 @@ try {
   process.stderr.write((error instanceof Error ? error.message : String(error)) + "\\n");
   process.exit(1);
 }
-if (
-  typeof contracts.isName === "function" &&
-  !contracts.isName(JSON.parse(process.env.${nameVariable}))
-) {
+let storedName;
+try {
+  storedName = JSON.parse(process.env.${nameVariable});
+} catch (error) {
+  process.stderr.write((error instanceof Error ? error.message : String(error)) + "\\n");
+  process.exit(1);
+}
+if (typeof contracts.isName === "function" && !contracts.isName(storedName)) {
   process.stderr.write(
     ${JSON.stringify(nameRefusal)} + " " + contracts.NAME_RULE + ".\\n",
   );
@@ -178,9 +182,11 @@ function pod([
   container.command = ["node"];
   container.args = ["--input-type=module", "-e", startupCheck];
   // JSON keeps any control character in the name intact through the environment.
+  // Kubernetes expands $(VAR) and turns $$ into $ in env values; doubling every $
+  // makes it deliver the name unchanged.
   container.env = [
     ...(container.env ?? []).filter((variable) => variable.name !== nameVariable),
-    { name: nameVariable, value: JSON.stringify(storedName) },
+    { name: nameVariable, value: JSON.stringify(storedName).replaceAll("$", () => "$$") },
   ];
   const mounted = new Set((container.volumeMounts ?? []).map((mount) => mount.name));
   const volumes = structuredClone(

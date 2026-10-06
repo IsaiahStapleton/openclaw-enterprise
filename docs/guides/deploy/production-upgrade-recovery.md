@@ -125,9 +125,19 @@ UPDATE occ.installation SET name = :'name';
 SQL
 ```
 
-psql prints `UPDATE 1`. The database accepts some names the rule refuses, so
-run the upgrade command again with a new evidence directory; its preflight
-checks the name again. If the candidate API and worker log
+psql prints `UPDATE 1`. The running API keeps the name it read at startup, so
+restart it before you check again:
+
+```bash
+kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
+  --namespace openclaw-system rollout restart deployment/openclaw-enterprise-api
+kubectl --kubeconfig /secure/occ/kubeconfig --context '<reviewed-context>' \
+  --namespace openclaw-system rollout status deployment/openclaw-enterprise-api
+```
+
+The database accepts some names the rule refuses, so run the upgrade command
+again with a new evidence directory; its preflight checks the name again. If
+the candidate API and worker log
 `INSTALLATION_NAME_INVALID` after the helper stopped OCC (the name changed after
 the preflight), Helm's `--wait` has marked the candidate release `failed`:
 rename as above, follow the Helm failure steps above, then repeat the command

@@ -275,7 +275,7 @@ trap 'cleanup_preflight; rmdir "$evidence_dir/.upgrade-lock" 2>/dev/null || true
 # such as split-layout Gateway storage, would otherwise crash-loop both after the
 # migration.
 preflight_startup() {
-  local suffix secret component pod phase waiting deadline remaining_seconds message failures refusal
+  local suffix secret component pod phase waiting deadline remaining_seconds message failures refusal name_refusal
   suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
   secret="$release-upgrade-preflight-$suffix"
   yq -p=yaml -o=json -I=0 '.' "$rendered" >"$evidence_dir/preflight-rendered.jsonl" ||
