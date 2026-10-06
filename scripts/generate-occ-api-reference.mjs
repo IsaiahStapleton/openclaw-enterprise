@@ -399,6 +399,9 @@ function referencePage(document, groups, entries) {
         "operation that takes no body. A query string sent to an operation that lists",
         "no query parameters is refused with `400 INVALID_REQUEST`; most operations",
         "that take no body refuse a JSON body the same way.",
+        "A detail path longer than 512 characters is cut to its leading whole",
+        "segments (or the start of a long first key, keeping whole `~0` and `~1`",
+        "escapes); the message then says that the cut path contains the offending field.",
       ].join("\n"),
       schemaTable(schema, document),
     );
