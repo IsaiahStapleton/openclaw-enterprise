@@ -108,13 +108,11 @@ in ready k3d clusters; `scripts/ci/k3d-diagnostics.mjs:projectAgentNamespaceActi
 appends Pod transitions and those namespaces' events to the report under
 `agentNamespaces` on pass or failure. Each file retains at most 200 Pod and 200
 event records, and the report retains 40 files. Messages are redacted and
-truncated, and Pod specs dropped. Raw watch streams live in the cluster directory
-and are removed when the file's capture finishes. Each file's capture streams to
-its own files, so files sharing a cluster under `fileConcurrency` keep separate
-records; the watches are cluster-wide, so a record can also list a concurrent
-sibling's namespaces and shares its record caps with that sibling's activity. A
-capture that cannot start stops any watches it began and logs that the file has
-no activity. Each lane that writes the artifact uploads it.
+truncated, and Pod specs dropped. Each file streams raw watches to its own files
+in the cluster directory and removes them when done. Watches are cluster-wide, so
+under `fileConcurrency` a record can include a sibling's namespaces. A failed
+start logs `Agent namespace activity unavailable`. Each lane that writes the
+artifact uploads it.
 
 Dedicated Codex preparation and the operator's offline profile generator share
 `scripts/lib/codex-seccomp-profile.mjs:deriveCodexBwrapProfile`. Preparation
@@ -194,7 +192,7 @@ Per-file cleanup releases its disposable database; job cleanup removes only stat
 
 ## Changelog
 
-- 2026-10-06 02:00: Give each file's Agent namespace capture its own watch files, and stop started watches when a capture cannot start. (audit-followup-ci-runner)
+- 2026-10-06 02:00: Per-file Agent namespace watch files. (audit-followup-ci-runner)
 
 - 2026-10-04 03:44: Add a non-required affected-package advisory to the accompanying CI change. (authoring-run/5808365b-c590-4c11-92d6-4ee32efc3626 - 070147565f45e720918de9e649b93cad71820b07)
 

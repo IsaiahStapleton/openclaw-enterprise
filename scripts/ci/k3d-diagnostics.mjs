@@ -357,13 +357,14 @@ export async function startAgentNamespaceCapture({ statePath, lane, file }) {
         output = await open(path, "w", 0o600);
       } catch (error) {
         // The caller gets no finish to call: stop the watches already started, whose
-        // open handles would otherwise keep the runner alive, and drop their streams.
+        // running child processes would otherwise keep the runner alive, and drop
+        // their streams.
         const started = [...watches, { paths, children }];
         await Promise.all(started.flatMap((watch) => watch.children).map(stopWatch));
         await Promise.all(
           started
             .flatMap((watch) => Object.values(watch.paths))
-            .map((started) => rm(started, { force: true })),
+            .map((stream) => rm(stream, { force: true })),
         );
         throw error;
       }

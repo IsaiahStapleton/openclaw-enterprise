@@ -1559,7 +1559,7 @@ test("run keeps bounded Agent namespace activity from passing k3d files, alone a
 
   // A second cluster whose directory is gone fails the capture after the first cluster's
   // watches started. The file still runs, and those watches are stopped: left running,
-  // their open handles would hold the runner until the watch timeout.
+  // their child processes would hold the runner until the watch timeout.
   const brokenStatePath = join(root, "state/k3d-broken.json");
   await writeJson(brokenStatePath, {
     lane: "k3d-lane",
