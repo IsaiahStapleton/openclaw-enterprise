@@ -2704,14 +2704,15 @@ test("Channel directory lookup checks the exact edit target and Secret before an
   });
   assert.equal(mixed.status, 400);
   // The body is a union of lookup and hydration shapes. A lookup whose query is too long
-  // names only that field, not the fields other shapes require.
+  // names only that field, not the fields other shapes require, and only the lookup shape
+  // fits, so the message names its bound.
   const longQuery = await controller.request("POST", path, {
     body: { ...body, query: "q".repeat(201) },
   });
   assert.equal(longQuery.status, 400);
   assert.equal(
     longQuery.body.error.message,
-    "The request does not match the operation contract: body /query is too long.",
+    "The request does not match the operation contract: body /query is too long (expected at most 200 characters).",
   );
   assert.deepEqual(longQuery.body.error.details, [{ path: "/query", code: "TOO_LONG" }]);
   // An unknown kind fits no shape, so every shape's problem stays, but the three hydration
@@ -4610,7 +4611,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
-      "The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value.",
+      'The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value (expected "secret").',
     ],
     [
       // A string fits neither a Harness authentication shape nor null: one wrong-type problem

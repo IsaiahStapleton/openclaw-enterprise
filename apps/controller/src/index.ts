@@ -96,6 +96,7 @@ import { configurationHandlers } from "./http/configurations.ts";
 import { credentialSourceHandlers } from "./http/credential-sources.ts";
 import {
   canonicalFailure,
+  cappedPath,
   dependencyUnavailable,
   failure,
   isAuthorizationDenied,
@@ -380,7 +381,7 @@ function validAuthorizationEvidence(value: unknown): value is AuthorizationEvide
 function validateConfiguration(value: unknown, depth = 0, path = ""): void {
   if (depth > 24) {
     throw failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.", [
-      { path, code: "TOO_DEEP" },
+      { path: cappedPath(path), code: "TOO_DEEP" },
     ]);
   }
   if (value === null || typeof value !== "object") {
@@ -395,7 +396,7 @@ function validateConfiguration(value: unknown, depth = 0, path = ""): void {
   for (const [key, entry] of Object.entries(value)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") {
       throw failure(400, "INVALID_REQUEST", "The supplied configuration is invalid.", [
-        { path: `${path}/${jsonPointer(key)}`, code: "INVALID_VALUE" },
+        { path: cappedPath(`${path}/${jsonPointer(key)}`), code: "INVALID_VALUE" },
       ]);
     }
     validateConfiguration(entry, depth + 1, `${path}/${jsonPointer(key)}`);
