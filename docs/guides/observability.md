@@ -289,7 +289,12 @@ to assign alert recipients and response procedures alongside these collection ch
   replaced Collector Pod, including after the `rollout restart` an upgrade
   refresh needs, reads every collected Pod log still on its node from the
   beginning, so the backend receives duplicates of records it already has, with
-  their original timestamps. An outage can lose operational logs without
+  their original timestamps. A backend can refuse the oldest of them instead:
+  Loki answers `400` `entry too far behind` for records outside its
+  out-of-order window, so `otelcol_exporter_send_failed_log_records` rises and
+  the Collector logs `Exporting failed. Dropping data.` Expect
+  this after each restart; it is an export failure only if new records stop
+  arriving. An outage can lose operational logs without
   blocking OCC work. Audit records are
   stored separately in PostgreSQL.
 
