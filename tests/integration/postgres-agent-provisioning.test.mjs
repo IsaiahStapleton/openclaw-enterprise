@@ -4,7 +4,7 @@ import test from "node:test";
 import pg from "pg";
 
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
-import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import { NativeWorkerSupportError, PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import {
@@ -210,11 +210,14 @@ function installationDrivers({
   secretDriver,
   repoDriver,
   pluginDriver,
+  sandboxDriver,
+  nativeWorkerSupport,
 }) {
   return {
     installation: {
       occ: { cluster: "postgres-agent-provisioning" },
       logging: {},
+      ...(nativeWorkerSupport === undefined ? {} : { runtime: { nativeWorkerSupport } }),
       backend:
         repoDriver === undefined
           ? []
@@ -243,11 +246,21 @@ function installationDrivers({
           implementation: secretDriver.implementation,
           configuration: {},
         },
+        ...(sandboxDriver === undefined
+          ? {}
+          : {
+              sandbox: {
+                id: sandboxDriver.id,
+                implementation: sandboxDriver.implementation,
+                configuration: {},
+              },
+            }),
       },
     },
     computeDriver,
     configurationDriver,
     secretDriver,
+    ...(sandboxDriver === undefined ? {} : { sandboxDriver }),
     ...(repoDriver === undefined ? {} : { repoDriver }),
     ...(pluginDriver === undefined ? {} : { pluginDriver }),
     createIAMDriver: (state) =>
@@ -286,6 +299,8 @@ async function createFixture(context, options = {}) {
     secretDriver,
     repoDriver: options.repoDriver,
     pluginDriver: options.pluginDriver,
+    sandboxDriver: options.sandboxDriver,
+    nativeWorkerSupport: options.nativeWorkerSupport,
   });
   const app = await composePostgresDevelopment(
     {
@@ -1604,6 +1619,71 @@ test(
     // Cut to the 256-character cap with an ellipsis that says text is missing.
     assert.equal(Array.from(failed.data.error.message).length, 256);
     assert.ok(failed.data.error.message.endsWith("…"), failed.data.error.message);
+    const work = await switched.pool.query(
+      "SELECT state, reason_code, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+      [admitted.data.provisioning.workId],
+    );
+    assert.deepEqual(work.rows, [
+      { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED", attempt_count: 1 },
+    ]);
+  },
+);
+
+test(
+  "a runtime image without native worker support before the worker runs rejects dedicated OpenClaw provisioning",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const drivers = {
+      computeDriver: createRuntimeComputeDriver(),
+      configurationDriver: createProvisioningConfigurationDriver({
+        id: "configuration-provisioning-native-support",
+      }),
+      secretDriver: createTestSecretDriver({ id: "secret-provisioning" }),
+      // Dedicated native OpenClaw needs a full-containment provisioning Sandbox Driver.
+      sandboxDriver: {
+        id: "sandbox-provisioning",
+        capability: "sandbox",
+        implementation: "openshell",
+        facets: ["networking", "filesystem", "process"],
+        async provisionHarness() {
+          assert.fail("a refused plan never reaches the Sandbox");
+        },
+        async cleanup() {},
+      },
+    };
+    const fixture = await createFixture(context, {
+      ...drivers,
+      nativeWorkerSupport: "custom-image",
+    });
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const body = provisioningBody(namespace.id, secrets);
+    body.configuration.values.agents.defaults = {
+      model: "openai/gpt-5",
+      models: { "openai/gpt-5": { agentRuntime: { id: "openclaw" } } },
+    };
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body,
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+
+    // The Installation now runs a runtime image without native worker support. Every attempt
+    // would refuse the plan the same way, so the worker fails it on the first one and says why.
+    const switched = await createFixture(context, drivers);
+    await switched.startWorker();
+    const failed = await waitFor(
+      "the switched worker to refuse the provisioning work",
+      async () => {
+        const row = await provisioningRow(switched.pool, namespace.id, body.requestId);
+        return row.progress.error === undefined ? undefined : row;
+      },
+    );
+    await switched.stopWorker();
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(failed.progress.error, {
+      code: "PROVISIONING_REJECTED",
+      message: new NativeWorkerSupportError().message,
+    });
     const work = await switched.pool.query(
       "SELECT state, reason_code, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
       [admitted.data.provisioning.workId],
