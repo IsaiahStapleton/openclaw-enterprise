@@ -1,6 +1,6 @@
 # Write RFCs and implementation plans
 
-Start with the [specification index](../../specs/README.md) and the current
+Start with the [RFC index](../../specs/README.md) and the current
 [platform design](../design.md). Reuse an existing decision or plan when it owns
 the work. Follow [Contributing](../../CONTRIBUTING.md) for review and merge policy.
 
@@ -79,7 +79,7 @@ RFC entry points use a continuous sequence from `0001`, with unique numeric
 prefixes of at least four digits. Allocate one above the highest RFC number on
 the current base branch. Rejected and superseded RFCs stay in place so their
 numbers remain occupied. Historical RFCs have been renumbered into this sequence;
-see the [old-to-new lookup](../../specs/README.md#renumbered-rfcs).
+see the [old-to-new lookup](#renumbered-rfcs).
 
 An unmerged proposal does not reserve a gap on the base branch. Before merging,
 recheck its number against the current base and renumber it and its links to the
@@ -87,12 +87,14 @@ next available ID if needed. Never overwrite an existing document.
 
 Task-plan IDs keep their independent sequence. Historical shared numbers through
 **41** remain reserved for task plans. Allocate one above the highest used task
-number, starting at `0042` or higher; check the index and Git history so deleted
+number, starting at `0042` or higher; check `specs/plans/` and Git history so deleted
 or renamed task plans do not free numbers.
 
-Add one index row per workstream and link between an RFC and its plan. If a
-standalone task later gains an RFC, retain its task ID and path and add the
-relationship; do not create a duplicate plan merely to change its category.
+Keep one row per RFC in `specs/README.md`, with its linked number and name in
+the first column and its frontmatter status in the second. Update the row when
+the RFC’s name or status changes. Link an RFC and its plan to each other; plans
+are not listed in the RFC index. If a standalone task later gains an RFC, retain
+its task ID and path and add the relationship.
 
 When substantial evidence, diagrams, or independently useful milestones need
 companions, use a directory named `<number>-<topic>/` with the main document at
@@ -119,7 +121,7 @@ and recordings remain outside the repository, as required by
 
 ## Status and review
 
-Keep status in the owning document rather than duplicating it in the index.
+The RFC’s frontmatter owns its decision status; the RFC index mirrors that value.
 Every RFC entry point must begin with YAML frontmatter containing `status` and
 `author`:
 
@@ -202,7 +204,35 @@ use `index.md` for the main document. Do not infer completion from placement or
 rewrite historical content to match the new template.
 
 This first phase moves non-archived specifications and supporting evidence.
-`specs/.archive/` retains its content and placement and is linked from the index.
+`specs/.archive/` retains its content and placement.
 The console spec's image links point to a preserved Git revision after removal
 of `specs/assets/`. Archived links may point to removed files; forwarding pages
 are not required. A future archive reorganization requires a separate change.
+
+## Renumbered RFCs
+
+The 18 existing RFCs were renumbered from `0001` through `0018`.
+This lookup maps their original paths to the current IDs. New RFCs take the next
+number; unmerged proposals must reconcile their IDs before merging.
+Plan filenames and historical commit links retain their original names.
+
+| Previous RFC path                         | Current RFC                                                             |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| `0042-oidc-sign-in.md`                    | [RFC-0001](../../specs/rfcs/0001-oidc-sign-in.md)                       |
+| `21-agent-workload-tags.md`               | [RFC-0002](../../specs/rfcs/0002-agent-workload-tags.md)                |
+| `28-gateway-harness-storage-split.md`     | [RFC-0003](../../specs/rfcs/0003-gateway-harness-storage-split.md)      |
+| `28-occ-prometheus-metrics.md`            | [RFC-0004](../../specs/rfcs/0004-occ-prometheus-metrics.md)             |
+| `30-harness-auth-binding.md`              | [RFC-0005](../../specs/rfcs/0005-harness-auth-binding.md)               |
+| `31-basic-rbac`                           | [RFC-0006](../../specs/rfcs/0006-basic-rbac/index.md)                   |
+| `31-human-federated-sign-in`              | [RFC-0007](../../specs/rfcs/0007-human-federated-sign-in/index.md)      |
+| `31-repository-credentials`               | [RFC-0008](../../specs/rfcs/0008-repository-credentials/index.md)       |
+| `35-native-plugin-tool-policy.md`         | [RFC-0009](../../specs/rfcs/0009-native-plugin-tool-policy.md)          |
+| `36-agent-access.md`                      | [RFC-0010](../../specs/rfcs/0010-agent-access.md)                       |
+| `36-coordinated-image-upgrade.md`         | [RFC-0011](../../specs/rfcs/0011-coordinated-image-upgrade.md)          |
+| `36-production-observability.md`          | [RFC-0012](../../specs/rfcs/0012-production-observability.md)           |
+| `37-platform-audit`                       | [RFC-0013](../../specs/rfcs/0013-platform-audit/index.md)               |
+| `37-plugin-policy-enforcement.md`         | [RFC-0014](../../specs/rfcs/0014-plugin-policy-enforcement.md)          |
+| `39-repository-credential-recovery.md`    | [RFC-0015](../../specs/rfcs/0015-repository-credential-recovery.md)     |
+| `39-sandbox-credential-injection.md`      | [RFC-0016](../../specs/rfcs/0016-sandbox-credential-injection.md)       |
+| `40-agent-egress-0x`                      | [RFC-0017](../../specs/rfcs/0017-agent-egress-0x/index.md)              |
+| `2026-09-28-installation-profiles-design` | [RFC-0018](../../specs/rfcs/0018-installation-profiles-design/index.md) |

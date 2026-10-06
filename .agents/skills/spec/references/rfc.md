@@ -39,7 +39,7 @@ its decision status; do not duplicate the status in companions. When adding
 metadata to historical RFCs, use recorded decision evidence. If no decision is
 established, use `status: Unspecified` with a `status_note` explaining the gap,
 without rewriting historical body text. Recheck that the path and number are not
-already assigned before writing. Use the specification index's old-to-new lookup
+already assigned before writing. Use the specification process's old-to-new lookup
 to resolve historical RFC names; never guess from a duplicated old number.
 
 State the proposed decision early, followed by the behavior and ownership needed
@@ -63,8 +63,10 @@ policy and actual decision evidence.
 
 - Remove unused template prompts and optional sections. Keep links repository
   relative, and verify their paths and any referenced heading anchors.
-- Add or update the workstream in `specs/README.md`; link the RFC and plan to each
-  other when both exist. Store decision status in the RFC, not copied in the index.
+- Add or update the RFC’s row in `specs/README.md`, showing its linked number
+  and name in the first column and its frontmatter status in the second. Keep
+  the row synchronized when the name or status changes. Link the RFC and plan
+  to each other when both exist.
 - Check the document against current source, scope, alternatives, failure
   behavior, and required outcomes. Apply the technical-writing clarity pass.
 - Run documentation length and link checks, and formatting for changed authored
