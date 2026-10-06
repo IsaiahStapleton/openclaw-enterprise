@@ -665,6 +665,13 @@ test(
     assert.equal(recoveredRevision.idempotencyKey, staleRevisionKey);
     assert.notEqual(recoveredRevision.claimToken, staleRevision.claimToken);
     await queue.complete(recoveredRevision);
+    // A completion also ends the work, but only a failure that ends it has a final field.
+    const completion = await pool.query(
+      `SELECT details ? 'final' AS final FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' = 'RECONCILE_SUCCEEDED'`,
+      [staleRevisionId],
+    );
+    assert.deepEqual(completion.rows, [{ final: false }]);
     const recoveredNamespace = await queue.claim();
     assert.equal(recoveredNamespace.idempotencyKey, namespaceKey);
     assert.notEqual(recoveredNamespace.claimToken, staleNamespace.claimToken);
@@ -700,12 +707,16 @@ for (const source of ["claimed", "queued"]) {
       }
 
       const reasonCode = source === "claimed" ? "LEASE_EXPIRED" : "MAX_ATTEMPTS_EXHAUSTED";
+      // The recovery ends the work, so its evidence is final.
       const snapshot = async (client) => {
         const result = await client.query(
           `SELECT namespace.status, work.state, work.claim_token, work.lease_expires_at,
                   work.completed_at,
                   (SELECT count(*)::integer FROM occ.audit_events
-                   WHERE resource_id = $2 AND details->>'reasonCode' = $3) AS evidence
+                   WHERE resource_id = $2 AND details->>'reasonCode' = $3) AS evidence,
+                  (SELECT count(*)::integer FROM occ.audit_events
+                   WHERE resource_id = $2 AND details->>'reasonCode' = $3
+                     AND details->'final' = 'true'::jsonb) AS final_evidence
            FROM occ.controller_work AS work
            JOIN occ.namespaces AS namespace ON namespace.id = work.namespace_id
            WHERE work.idempotency_key = $1`,
@@ -720,6 +731,7 @@ for (const source of ["claimed", "queued"]) {
         claim_token: null,
         lease_expires_at: null,
         evidence: 1,
+        final_evidence: 1,
       };
 
       // Block Namespace publication to force a real server-side statement
