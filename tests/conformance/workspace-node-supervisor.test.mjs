@@ -9,7 +9,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { AGENT_WITH_NODE_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 
-// Reads a JSON-lines file; a file that does not exist yet has no rows.
+// Reads a JSON-lines file; a file that does not exist yet has no rows. Children append
+// rows while the test polls, and a read can see a large append half-written (a Codex
+// row carries its whole program), so a last line without its newline is not a row yet.
 async function jsonLines(path) {
   const contents = await readFile(path, "utf8").catch((error) => {
     if (error.code === "ENOENT") {
@@ -18,6 +20,7 @@ async function jsonLines(path) {
     throw error;
   });
   return contents
+    .slice(0, contents.lastIndexOf("\n") + 1)
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
