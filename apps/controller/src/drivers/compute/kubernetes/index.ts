@@ -88,6 +88,7 @@ import { admittedLoggingLevel, normalizeSecretBindings } from "@openclaw-enterpr
 import {
   ActivationFailedError,
   ActivationPendingError,
+  ComputeGatewaySettingError,
   ConfigurationHarnessError,
   DependencyUnavailableError,
   ResourceConflictError,
@@ -448,6 +449,25 @@ interface PrivateStatusReadback {
 
 class OwnershipFailure extends Error {}
 class ConfigurationFailure extends Error {}
+
+/**
+ * A gateway setting in the caller's own Configuration that Kubernetes Compute cannot
+ * provision. It names the setting's path and what is accepted, never the submitted value.
+ * Deployment treats it as any other ConfigurationFailure; provisioning validation reports it
+ * to the caller as a ComputeGatewaySettingError.
+ * TODO: raise it for trustedProxy.allowUsers too once open #906, which rewrites that check,
+ * lands or closes; until then that refusal keeps the fixed 409 text and a logged reason.
+ */
+class GatewaySettingFailure extends ConfigurationFailure {
+  readonly setting: string;
+  readonly requirement: string;
+
+  constructor(setting: string, requirement: string) {
+    super(`Configuration setting ${setting} ${requirement}.`);
+    this.setting = setting;
+    this.requirement = requirement;
+  }
+}
 
 class KubernetesRequestTimeout extends Error {}
 
@@ -2585,7 +2605,15 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Kubernetes Agent provisioning supports only dedicated execution mode.",
       );
     }
-    const configuration = this.kubernetesGatewayConfigurationDocument(input.configuration);
+    let configuration: OpenClawConfigurationDocument;
+    try {
+      configuration = this.kubernetesGatewayConfigurationDocument(input.configuration);
+    } catch (error) {
+      if (error instanceof GatewaySettingFailure) {
+        throw new ComputeGatewaySettingError(error.setting, error.requirement);
+      }
+      throw error;
+    }
     this.verifyGatewayRoutingConfiguration({
       configuration,
       harness: { id: "codex", version: "provisioning", mode: "dedicated" },
@@ -9337,55 +9365,68 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
   ): OpenClawConfigurationDocument {
     const gatewayRecord = asRecord(configuration.gateway);
     if (configuration.gateway !== undefined && gatewayRecord === undefined) {
-      throw new ConfigurationFailure("Kubernetes native gateway configuration must be an object.");
+      throw new GatewaySettingFailure("gateway", "must be an object");
     }
     const gateway = (gatewayRecord ?? {}) as Record<string, OpenClawConfigurationValue>;
     const authRecord = asRecord(gateway.auth);
     if (gateway.auth !== undefined && authRecord === undefined) {
-      throw new ConfigurationFailure("Kubernetes native gateway auth must be an object.");
+      throw new GatewaySettingFailure("gateway.auth", "must be an object");
     }
     const auth = (authRecord ?? {}) as Record<string, OpenClawConfigurationValue>;
     const trustedProxyRecord = asRecord(auth.trustedProxy);
     if (auth.trustedProxy !== undefined && trustedProxyRecord === undefined) {
-      throw new ConfigurationFailure("Kubernetes native trustedProxy auth must be an object.");
+      throw new GatewaySettingFailure("gateway.auth.trustedProxy", "must be an object");
     }
     const trustedProxy = (trustedProxyRecord ?? {}) as Record<string, OpenClawConfigurationValue>;
     const identityScopesRecord = asRecord(auth.identityScopes);
     if (auth.identityScopes !== undefined && identityScopesRecord === undefined) {
-      throw new ConfigurationFailure("Kubernetes native identityScopes must be an object.");
+      throw new GatewaySettingFailure("gateway.auth.identityScopes", "must be an object");
     }
     const identityScopes = identityScopesRecord as
       Record<string, OpenClawConfigurationValue> | undefined;
     const unsupported = unsupportedNativeGatewayAuthFields(auth);
     if (unsupported.length > 0) {
-      throw new ConfigurationFailure(
-        `Kubernetes native gateway authentication contains unsupported field ${unsupported[0]}.`,
+      throw new GatewaySettingFailure(
+        `gateway.auth.${unsupported[0]}`,
+        "is not a supported native gateway authentication field",
       );
     }
     if (auth.mode !== undefined && auth.mode !== "trusted-proxy") {
-      throw new ConfigurationFailure(
-        "Kubernetes Compute supports only native trusted-proxy gateway authentication.",
+      throw new GatewaySettingFailure(
+        "gateway.auth.mode",
+        "must be trusted-proxy: Kubernetes Compute supports only native trusted-proxy gateway authentication",
       );
     }
-    if (
-      gateway.trustedProxies !== undefined &&
-      !cidrSetsEqual(
-        trustedProxyCidrSet(gateway.trustedProxies, "Kubernetes native trustedProxies"),
-        trustedProxyCidrSet(this.options.network.gatewayTrustedProxyCidrs, "Trusted proxy CIDR"),
-      )
-    ) {
-      throw new ConfigurationFailure(
-        "Kubernetes native trustedProxies must match network.gatewayTrustedProxyCidrs.",
+    if (gateway.trustedProxies !== undefined) {
+      const installation = trustedProxyCidrSet(
+        this.options.network.gatewayTrustedProxyCidrs,
+        "Trusted proxy CIDR",
       );
+      let submitted: ReadonlySet<string> | undefined;
+      try {
+        submitted = trustedProxyCidrSet(gateway.trustedProxies, "Kubernetes native trustedProxies");
+      } catch (error) {
+        if (!(error instanceof ConfigurationFailure)) {
+          throw error;
+        }
+      }
+      if (submitted === undefined || !cidrSetsEqual(submitted, installation)) {
+        throw new GatewaySettingFailure(
+          "gateway.trustedProxies",
+          "must be omitted or match the Installation's network.gatewayTrustedProxyCidrs",
+        );
+      }
     }
     if (gateway.allowRealIpFallback !== undefined && gateway.allowRealIpFallback !== true) {
-      throw new ConfigurationFailure(
-        "Kubernetes native trusted-proxy authentication requires allowRealIpFallback.",
+      throw new GatewaySettingFailure(
+        "gateway.allowRealIpFallback",
+        "must be true when set: native trusted-proxy authentication requires it",
       );
     }
     if (trustedProxy.userHeader !== undefined && trustedProxy.userHeader !== TRUSTED_PROXY_HEADER) {
-      throw new ConfigurationFailure(
-        `Kubernetes native trustedProxy.userHeader must be ${TRUSTED_PROXY_HEADER}.`,
+      throw new GatewaySettingFailure(
+        "gateway.auth.trustedProxy.userHeader",
+        `must be ${TRUSTED_PROXY_HEADER} when set`,
       );
     }
     if (
@@ -9397,8 +9438,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       );
     }
     if (trustedProxy.allowLoopback !== undefined && trustedProxy.allowLoopback !== false) {
-      throw new ConfigurationFailure(
-        "Kubernetes native trustedProxy.allowLoopback must be false when configured.",
+      throw new GatewaySettingFailure(
+        "gateway.auth.trustedProxy.allowLoopback",
+        "must be false when set",
       );
     }
     if (
@@ -9406,8 +9448,9 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       (!isDeepStrictEqual(Object.keys(identityScopes).sort(), [TRUSTED_PROXY_IDENTITY]) ||
         !isDeepStrictEqual(identityScopes[TRUSTED_PROXY_IDENTITY], ["operator.admin"]))
     ) {
-      throw new ConfigurationFailure(
-        `Kubernetes native identityScopes must grant only ${TRUSTED_PROXY_IDENTITY} operator.admin.`,
+      throw new GatewaySettingFailure(
+        "gateway.auth.identityScopes",
+        `must grant only ${TRUSTED_PROXY_IDENTITY} operator.admin when set`,
       );
     }
     return {

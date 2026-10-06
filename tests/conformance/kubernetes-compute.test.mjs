@@ -26,6 +26,7 @@ import {
 import {
   ActivationFailedError,
   ActivationPendingError,
+  ComputeGatewaySettingError,
   ConfigurationHarnessError,
 } from "../../packages/occ/src/index.ts";
 import {
@@ -3405,10 +3406,10 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
   assert.equal(privateNativeAdminPod.initContainers[0].args[0].includes("copyFileSync"), false);
 
   for (const [configuration, expected] of [
-    [{ gateway: null }, /gateway configuration/i],
-    [{ gateway: [] }, /gateway configuration/i],
-    [{ gateway: { auth: null } }, /gateway auth/i],
-    [{ gateway: { auth: [] } }, /gateway auth/i],
+    [{ gateway: null }, /setting gateway must be an object/i],
+    [{ gateway: [] }, /setting gateway must be an object/i],
+    [{ gateway: { auth: null } }, /gateway\.auth must be an object/i],
+    [{ gateway: { auth: [] } }, /gateway\.auth must be an object/i],
     [
       {
         gateway: {
@@ -3455,7 +3456,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
           trustedProxies: ["10.42.0.0/16"],
         },
       },
-      /unsupported field unsupportedField/i,
+      /gateway\.auth\.unsupportedField is not a supported/i,
     ],
     [
       {
@@ -3600,7 +3601,7 @@ test("gateway routing derives stable endpoints and exact Envoy HTTPRoutes", asyn
           },
         },
       },
-      /unsupported field unsupportedField/i,
+      /gateway\.auth\.unsupportedField is not a supported/i,
     ],
     [
       {
@@ -3673,8 +3674,14 @@ test("agent provisioning validation reuses native trusted-proxy admission before
     /dedicated execution mode/i,
   );
 
-  for (const [configuration, expected] of [
-    [{ gateway: { auth: { mode: "oauth" } } }, /trusted-proxy/i],
+  // Gateway settings in the caller's own Configuration are refused with a typed error that
+  // names the setting and what is accepted, never the submitted value (API: 409 with this text).
+  for (const [configuration, setting, requirement] of [
+    [
+      { gateway: { auth: { mode: "oauth" } } },
+      "gateway.auth.mode",
+      "must be trusted-proxy: Kubernetes Compute supports only native trusted-proxy gateway authentication",
+    ],
     [
       {
         gateway: {
@@ -3684,7 +3691,8 @@ test("agent provisioning validation reuses native trusted-proxy admission before
           },
         },
       },
-      /unsupported field unsupportedField/i,
+      "gateway.auth.unsupportedField",
+      "is not a supported native gateway authentication field",
     ],
     [
       {
@@ -3694,9 +3702,20 @@ test("agent provisioning validation reuses native trusted-proxy admission before
           },
         },
       },
-      /identityScopes/i,
+      "gateway.auth.identityScopes",
+      "must grant only occ-workspace-files operator.admin when set",
     ],
-    [{ gateway: { trustedProxies: ["10.99.0.0/16"] } }, /gatewayTrustedProxyCidrs/i],
+    [
+      { gateway: { trustedProxies: ["10.99.0.0/16"] } },
+      "gateway.trustedProxies",
+      "must be omitted or match the Installation's network.gatewayTrustedProxyCidrs",
+    ],
+    // An invalid list is the same caller mistake, not an Installation fault.
+    [
+      { gateway: { trustedProxies: ["0.0.0.0/0"] } },
+      "gateway.trustedProxies",
+      "must be omitted or match the Installation's network.gatewayTrustedProxyCidrs",
+    ],
   ]) {
     const failClosed = createKubernetesComputeDriver(routedOptions());
     let clusterTouched = false;
@@ -3710,7 +3729,12 @@ test("agent provisioning validation reuses native trusted-proxy admission before
           executionMode: "dedicated",
           configuration: { ...revision.configuration, ...configuration },
         }),
-      expected,
+      (error) => {
+        assert.ok(error instanceof ComputeGatewaySettingError, String(error));
+        assert.equal(error.setting, setting);
+        assert.equal(error.message, `Configuration setting ${setting} ${requirement}.`);
+        return true;
+      },
     );
     assert.equal(clusterTouched, false);
   }
@@ -3720,13 +3744,16 @@ test("agent provisioning validation reuses native trusted-proxy admission before
       runtime: { transportSecretPrefix: "transport", gatewayStorageClassName: "local-path" },
     }),
   );
+  // An Installation that cannot route the plan is not the caller's setting to fix.
   assert.throws(
     () =>
       missingRouting.validateAgentProvisioning({
         executionMode: "dedicated",
         configuration: revision.configuration,
       }),
-    /gateway routing and node enrollment/i,
+    (error) =>
+      !(error instanceof ComputeGatewaySettingError) &&
+      /gateway routing and node enrollment/i.test(error.message),
   );
 });
 

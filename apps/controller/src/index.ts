@@ -49,6 +49,7 @@ import {
   AuthorizationDeniedError,
   DeletionRetryOwnedError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
+  ComputeProvisioningRefusedError,
   createRuntimeLogCursorCodec,
   DependencyUnavailableError,
   DeviceAuthorizationStartError,
@@ -3848,6 +3849,16 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
         kubernetesNamespace: error.kubernetesNamespace,
         plane: error.plane,
         kubernetesStatus: error.status,
+      });
+    }
+    if (error instanceof ComputeProvisioningRefusedError) {
+      // The response keeps fixed text, because the Compute Driver's reason can name
+      // Installation gateway or routing settings; the operator finds it here by request ID.
+      app.log.warn({
+        event: "agent_provisioning.compute_refused",
+        requestId: request.id,
+        route: request.routeOptions.url ?? "unmatched",
+        reason: error.reason,
       });
     }
     if (error instanceof DeviceAuthorizationStartError) {
