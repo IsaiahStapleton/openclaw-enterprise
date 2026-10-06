@@ -2215,7 +2215,11 @@ export class OpenClawController {
           error instanceof ResourceConflictError ||
           error instanceof AuthorizationDeniedError ||
           error instanceof AgentDeletingError ||
-          error instanceof NamespaceNotReadyError)
+          error instanceof NamespaceNotReadyError ||
+          // An Installation change (Plugin Driver, runtime image) refuses the stored plan
+          // the same way on every attempt, as HTTP retry does with a 400.
+          error instanceof PluginPolicyValidationError ||
+          error instanceof NativeWorkerSupportError)
       ) {
         code = "PROVISIONING_REJECTED";
       }
