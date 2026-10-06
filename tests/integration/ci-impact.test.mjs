@@ -1099,6 +1099,28 @@ test("CI Required always reports and fails at once when a dependency was cancell
   }
 });
 
+test("full-integration lanes read NODE_BASE_IMAGE from a variable their environment has", () => {
+  // Only the integration-model and integration-otel environments define NODE_BASE_IMAGE; every
+  // other lane reads the repository variable, or it can never start (finding 662).
+  const { loadYaml } = createRequire(
+    new URL("../../apps/controller/package.json", import.meta.url),
+  )("@kubernetes/client-node");
+  const workflow = loadYaml(
+    readFileSync(join(repositoryRoot, ".github/workflows/full-integration.yml"), "utf8"),
+  );
+  const lanes = Object.entries(workflow.jobs).filter(([, job]) => job.env?.NODE_BASE_IMAGE);
+  for (const [lane, job] of lanes) {
+    const variable = ["integration-model", "integration-otel"].includes(job.environment)
+      ? "NODE_BASE_IMAGE"
+      : "CONTAINER_NODE_BASE_IMAGE";
+    assert.equal(job.env.NODE_BASE_IMAGE, `\${{ vars.${variable} }}`, lane);
+  }
+  const names = lanes.map(([name]) => name);
+  for (const lane of ["gateway-routing", "slack", "openshell"]) {
+    assert.ok(names.includes(lane), lane);
+  }
+});
+
 test("Static Checks runs every check the CI lanes skip", () => {
   const { loadYaml } = createRequire(
     new URL("../../apps/controller/package.json", import.meta.url),
