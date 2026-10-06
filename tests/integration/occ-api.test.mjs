@@ -4634,7 +4634,11 @@ test("Agent provisioning API validates inline configuration with existing Secret
     fixture.app,
     "POST",
     `/namespaces/${namespace.data.id}/agents/provision`,
-    { body: invalidBodies.find(([description]) => description.startsWith("Harness authentication"))[1] },
+    {
+      body: invalidBodies.find(([description]) =>
+        description.startsWith("Harness authentication"),
+      )[1],
+    },
   );
   assert.deepEqual(wrongTypeHarnessAuth.body.error.details, [
     { path: "/harnessAuth", code: "INVALID_TYPE" },
