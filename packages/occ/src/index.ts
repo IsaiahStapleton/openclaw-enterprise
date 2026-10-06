@@ -1894,7 +1894,6 @@ export class OpenClawController {
         `Agent provisioning needs ${provisioningModes.join(" or ")} execution; this request uses ${executionMode} execution. Set executionMode.`,
       );
     }
-    validateComputeAgentProvisioning(compute, executionMode, configurationInput.values);
     if (harnessAuth === null || harnessAuth.method === "runtime") {
       throw new ScopeViolationError(
         "Agent provisioning requires dedicated Harness authentication.",
@@ -1945,6 +1944,8 @@ export class OpenClawController {
         id: input.namespaceId,
         namespaceId: input.namespaceId,
       });
+      // A replay is checked against the current Installation by authorizeProvisioningRecord.
+      validateComputeAgentProvisioning(compute, executionMode, configurationInput.values);
       // Reject foreign references before channel validation can report them as a scope miss.
       rejectCrossNamespaceSecretSources(
         input.namespaceId,
@@ -2271,7 +2272,8 @@ export class OpenClawController {
           error instanceof AgentDeletingError ||
           error instanceof NamespaceNotReadyError ||
           // An Installation change (Plugin Driver, runtime image) refuses the stored plan
-          // the same way on every attempt, as HTTP retry does with a 400.
+          // the same way on every attempt, as HTTP retry does with a 400. A Compute plan
+          // refusal arrives as a ResourceConflictError (409) and is rejected the same way.
           error instanceof PluginPolicyValidationError ||
           error instanceof NativeWorkerSupportError)
       ) {
@@ -6950,8 +6952,8 @@ export class OpenClawController {
     if (found.record.actorId !== principalId) {
       throw new AuthorizationDeniedError("Only the initiating actor can read provisioning status.");
     }
-    // Retry repeats the full check, native support and plugin policy included, after its
-    // lifecycle checks.
+    // Retry repeats the full check, native support, plugin policy and the Compute plan check
+    // included, after its lifecycle checks.
     await this.authorizeProvisioningRecord(state, principalId, found.record, { statusRead: true });
     return found;
   }

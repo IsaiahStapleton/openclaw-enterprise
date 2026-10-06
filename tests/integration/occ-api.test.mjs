@@ -23,6 +23,7 @@ import {
   AgentDeletingError,
   BOOTSTRAP_DEFAULT_NAMESPACE_NAME,
   ConfigurationHarnessError,
+  DependencyUnavailableError,
   InMemoryPlatformState,
   OpenClawController,
 } from "../../packages/occ/src/index.ts";
@@ -4713,13 +4714,25 @@ test("Agent provisioning API validates inline configuration with existing Secret
     `/namespaces/${namespace.data.id}/agents/provision`,
     { body: provisioningRequestBody(namespace.data.id, secrets) },
   );
-  computeDriver.validateAgentProvisioning = () => {};
   assert.equal(computeRefused.status, 409, JSON.stringify(computeRefused.body));
   assert.equal(computeRefused.body.error.code, "RESOURCE_CONFLICT");
   assert.equal(
     computeRefused.body.error.message,
     "The Compute Driver cannot provision this execution mode or gateway configuration.",
   );
+  // A dependency the Compute Driver reports as unavailable stays retryable.
+  computeDriver.validateAgentProvisioning = () => {
+    throw new DependencyUnavailableError("The Compute Driver is unavailable.");
+  };
+  const computeUnavailable = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  computeDriver.validateAgentProvisioning = () => {};
+  assert.equal(computeUnavailable.status, 503, JSON.stringify(computeUnavailable.body));
+  assert.equal(computeUnavailable.body.error.code, "DEPENDENCY_UNAVAILABLE");
   const wrongTypeHarnessAuth = await injectedRequest(
     fixture.app,
     "POST",

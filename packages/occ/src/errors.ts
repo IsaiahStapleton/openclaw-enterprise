@@ -174,9 +174,11 @@ export class ScopeViolationError extends Error {
 }
 
 /**
- * Admitted Configuration content cannot select a supported Harness runtime. The
- * caller can already see the Configuration, so HTTP reports the static message as
- * an invalid request instead of hiding it as a scope miss.
+ * Admitted Configuration content cannot select a supported Harness runtime, or a
+ * provisioning request names an execution mode the Compute Driver does not provision
+ * (public through the Installation capabilities). The caller can already see what the
+ * message names, so HTTP reports it as an invalid request instead of hiding it as a
+ * scope miss.
  */
 export class ConfigurationHarnessError extends ScopeViolationError {
   constructor(message: string) {
