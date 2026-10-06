@@ -3,7 +3,7 @@
 ## Invocation and destination
 
 Use `plan <description>` for implementation planning, whether or not an RFC
-exists. Use `plan RFC-0042 <description>` or an explicit RFC path when the caller
+exists. Use `plan RFC-0001 <description>` or an explicit RFC path when the caller
 selects its architectural owner.
 
 Read `AGENTS.md`, `docs/contributing/specifications.md`, and `specs/README.md`.

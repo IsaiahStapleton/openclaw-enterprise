@@ -23,7 +23,7 @@ The repository-local [spec skill](../../.agents/skills/spec/SKILL.md) supports:
 
 ```text
 $spec rfc <description>
-$spec plan RFC-0042 <description>
+$spec plan RFC-0001 <description>
 $spec plan <description>
 ```
 
@@ -41,14 +41,14 @@ Use single Markdown files by default:
 specs/
   README.md
   rfcs/
-    0042-runtime-trust.md
+    0001-runtime-trust.md
   plans/
-    0042-runtime-trust.md
+    0001-runtime-trust.md
     0042-credential-cleanup.md
 ```
 
 **RFC numbers and task-plan numbers are independent sequences.** Use the full
-identifiers `RFC-0042` and `TASK-0042` in conversation and links. An RFC plan
+identifiers `RFC-0001` and `TASK-0042` in conversation and links. An RFC plan
 reuses its RFC's number and topic; it does not allocate another number. Keep one
 primary plan per RFC, with milestones inside it. Link additional relevant RFCs
 as dependencies. All plans share `specs/plans/`; use the document's ID to
@@ -61,31 +61,34 @@ becomes the primary plan for an RFC, retain its `TASK` ID and path instead of
 creating an RFC-numbered duplicate.
 
 When a plan relates to an RFC, set `rfc` in its YAML frontmatter to a path
-relative to the plan file. For example, in `specs/plans/0042-runtime-trust.md`:
+relative to the plan file. For example, in `specs/plans/0001-runtime-trust.md`:
 
 ```yaml
 ---
-rfc: ../rfcs/0042-runtime-trust.md
+rfc: ../rfcs/0001-runtime-trust.md
 ---
 ```
 
-For `specs/plans/0042-runtime-trust/index.md`, the link would be
-`../../rfcs/0042-runtime-trust.md`. If the RFC uses a folder, include its
+For `specs/plans/0001-runtime-trust/index.md`, the link would be
+`../../rfcs/0001-runtime-trust.md`. If the RFC uses a folder, include its
 `index.md` in the path. Omit `rfc` when no RFC applies. Keep this relationship
 in the plan's frontmatter and use body links for specific requirements or other
 RFC dependencies; the frontmatter link does not imply acceptance.
 
-For each sequence, allocate one above its highest used number, with at least
-four digits. Inspect existing files, the index, and Git history so deleted or
-renamed records do not free numbers. Historical shared numbers through **41**
-are reserved in both sequences; new numbers start at **0042** or higher.
-RFC entry points must use unique numeric prefixes of at least four digits.
-The historical RFCs were renumbered as `0063`–`0079`; see the
-[old-to-new lookup](../../specs/README.md#renumbered-rfcs). Numbers `0043`–`0062`
-remain reserved by existing history and proposals under review.
-Recheck for collisions before creating a file and before merging. If concurrent
-branches allocate the same new ID, renumber the later unmerged document and
-update its links. Never overwrite an existing document.
+RFC entry points use a continuous sequence from `0001`, with unique numeric
+prefixes of at least four digits. Allocate one above the highest RFC number on
+the current base branch. Rejected and superseded RFCs stay in place so their
+numbers remain occupied. Historical RFCs have been renumbered into this sequence;
+see the [old-to-new lookup](../../specs/README.md#renumbered-rfcs).
+
+An unmerged proposal does not reserve a gap on the base branch. Before merging,
+recheck its number against the current base and renumber it and its links to the
+next available ID if needed. Never overwrite an existing document.
+
+Task-plan IDs keep their independent sequence. Historical shared numbers through
+**41** remain reserved for task plans. Allocate one above the highest used task
+number, starting at `0042` or higher; check the index and Git history so deleted
+or renamed task plans do not free numbers.
 
 Add one index row per workstream and link between an RFC and its plan. If a
 standalone task later gains an RFC, retain its task ID and path and add the
@@ -99,10 +102,10 @@ ID, update incoming and relative links, and link companions from `index.md` and
 back to it. This applies to RFCs, RFC-linked plans, and standalone task plans:
 
 ```text
-specs/rfcs/0042-runtime-trust/
+specs/rfcs/0001-runtime-trust/
   index.md
   architecture.svg
-specs/plans/0042-runtime-trust/
+specs/plans/0001-runtime-trust/
   index.md
   qualification.md
 specs/plans/0042-credential-cleanup/
@@ -173,7 +176,8 @@ authorized scope change is recorded. Acceptance of an RFC is not evidence of
 availability. Use [documentation checks](documentation.md#preview-and-check)
 for document-only changes, without running product tests.
 
-`pnpm docs:check` also checks non-archived specs for unique RFC numbers, required statuses and author logins,
+`pnpm docs:check` also checks non-archived specs for continuous RFC numbering from
+`0001`, required statuses and author logins,
 relative `rfc` references to RFC entry points, and local Markdown link targets.
 Run `node scripts/check-specs.mjs` for that check alone. It does not check remote
 URLs, heading fragments, or the meaning of a recorded decision. Three preserved

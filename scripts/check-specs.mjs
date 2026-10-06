@@ -52,9 +52,9 @@ for (const file of rfcEntries) {
       : path.basename(file, ".md");
   const number = name.match(/^(\d{4,})-[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)?.[1];
   const id = Number(number);
-  if (!number || !Number.isSafeInteger(id) || id < 42) {
+  if (!number || !Number.isSafeInteger(id) || id < 1) {
     errors.push(
-      `${path.relative(root, file)}: RFC requires a numeric prefix of at least four digits (0042 or higher)`,
+      `${path.relative(root, file)}: RFC requires a numeric prefix of at least four digits (0001 or higher)`,
     );
   } else if (rfcIds.has(id)) {
     errors.push(`${path.relative(root, file)}: duplicate RFC number ${number}`);
@@ -63,6 +63,16 @@ for (const file of rfcEntries) {
   }
   if (!fs.existsSync(file)) {
     errors.push(`${path.relative(root, file)}: missing RFC entry point`);
+  }
+}
+
+for (const [index, id] of [...rfcIds].sort((a, b) => a - b).entries()) {
+  const expected = index + 1;
+  if (id !== expected) {
+    errors.push(
+      `RFC numbers must be continuous from 0001: expected ${String(expected).padStart(4, "0")}, found ${String(id).padStart(4, "0")}`,
+    );
+    break;
   }
 }
 
