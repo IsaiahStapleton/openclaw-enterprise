@@ -789,7 +789,23 @@ const concurrentHistoryPostgres = { ...requiresHistoryPostgres, concurrency: 4 }
 
 async function migrationHistoryFixture() {
   if (historySelectors.every((value) => value === undefined)) {
-    return { ...(await ownedPostgres()), databasePrefix: "openclaw_ci_canonical" };
+    const fixture = await ownedPostgres();
+    // Resolve the Compose service's container once: `docker exec` skips the Compose
+    // project load that each of the several hundred administrator psql calls would repeat.
+    const container = (
+      await runCommand(fixture, "docker", [
+        ...fixture.composeArgs.slice(0, 5),
+        "ps",
+        "-q",
+        "postgres",
+      ])
+    ).trim();
+    assert.match(container, /^[a-f0-9]{12,64}$/);
+    return {
+      ...fixture,
+      composeArgs: ["exec", container],
+      databasePrefix: "openclaw_ci_canonical",
+    };
   }
   assert.ok(historySelectors.every((value) => typeof value === "string" && value.length > 0));
   const [migrationUrl, container, databasePrefix] = historySelectors;
