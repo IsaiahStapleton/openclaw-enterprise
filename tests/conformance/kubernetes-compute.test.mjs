@@ -23,7 +23,6 @@ import {
   kubernetesGatewayNamespaceName,
   resolveKubernetesNamespace,
 } from "../../apps/controller/src/drivers/compute/kubernetes/index.ts";
-import { KubernetesApiUnavailableError } from "../../apps/controller/src/drivers/kubernetes/client.ts";
 import {
   ActivationFailedError,
   ActivationPendingError,
@@ -2829,6 +2828,8 @@ test("explicit existing namespace adoption claims tenant identity only after sec
 // The worker logs a failed ensure's reason, so the reason never carries response text and stays
 // loggable: other failures map to fixed texts, and the Driver's own refusals are cleaned and cut.
 test("a failed Namespace ensure reports a fixed or cleaned, bounded reason", async (t) => {
+  const { KubernetesApiUnavailableError } =
+    await import("../../apps/controller/src/drivers/kubernetes/client.ts");
   const selection = { ...tenant, status: "provisioning", existingNamespace: "customer-support" };
   const ensure = (readNamespace, namespace = selection) => {
     const driver = createKubernetesComputeDriver(options());
