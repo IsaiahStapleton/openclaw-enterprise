@@ -11595,9 +11595,11 @@ for (const embedded of [true, false]) {
         const clients = await fixture.driver.apiClients;
         const create = clients.core.createNamespacedSecret;
         let rejected = 0;
+        const written = [];
         clients.core.createNamespacedSecret = async (request) => {
           if (target.name.test(request.body.metadata.name)) {
             rejected += 1;
+            written.push(...Object.values(request.body.data));
             // Shaped like the client's ApiException, which echoes the request body.
             const echoed = JSON.stringify(request.body);
             throw Object.assign(new Error(`HTTP-Code: ${status}\nBody: ${echoed}`), {
@@ -11633,11 +11635,8 @@ for (const embedded of [true, false]) {
           status,
         });
         const evidence = inspect(error, { depth: 8 });
-        for (const secret of [
-          "fixture-model-key",
-          "private-create-documents",
-          Buffer.from("fixture-model-key").toString("base64"),
-        ]) {
+        assert.ok(written.length > 0);
+        for (const secret of [...written, "fixture-model-key", "private-create-documents"]) {
           assert.equal(evidence.includes(secret), false);
         }
       }
