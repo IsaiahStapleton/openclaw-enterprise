@@ -665,6 +665,13 @@ test(
     assert.equal(recoveredRevision.idempotencyKey, staleRevisionKey);
     assert.notEqual(recoveredRevision.claimToken, staleRevision.claimToken);
     await queue.complete(recoveredRevision);
+    // A completion also ends the work, but only a failure that ends it is marked final.
+    const completion = await pool.query(
+      `SELECT details->'final' AS final FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' = 'RECONCILE_SUCCEEDED'`,
+      [staleRevisionId],
+    );
+    assert.deepEqual(completion.rows, [{ final: null }]);
     const recoveredNamespace = await queue.claim();
     assert.equal(recoveredNamespace.idempotencyKey, namespaceKey);
     assert.notEqual(recoveredNamespace.claimToken, staleNamespace.claimToken);

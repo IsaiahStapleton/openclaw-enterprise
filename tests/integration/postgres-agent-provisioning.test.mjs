@@ -1479,8 +1479,11 @@ test(
     const namespace = await fixture.bootstrapNamespace();
     const secrets = await createProvisioningSecrets(fixture, namespace.id);
     const pluginId = "codex-plugin:linear@openai-curated-remote";
+    const body = provisioningBody(namespace.id, secrets, {
+      plugins: { [pluginId]: { enabled: true } },
+    });
     const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
-      body: provisioningBody(namespace.id, secrets, { plugins: { [pluginId]: { enabled: true } } }),
+      body,
     });
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
     await fixture.startWorker();
@@ -1520,6 +1523,11 @@ test(
       ),
     );
     assert.equal(Object.hasOwn(retried.body.error, "details"), false);
+    // Replaying the original request admits the stored plan again, so it is refused the same way.
+    const provisionPath = `/namespaces/${namespace.id}/agents/provision`;
+    const replayed = await switched.request("POST", provisionPath, { body });
+    assert.equal(replayed.status, 400, JSON.stringify(replayed.body));
+    assert.deepEqual(replayed.body.error, retried.body.error);
     const work = await switched.pool.query(
       "SELECT state FROM occ.controller_work WHERE idempotency_key = $1",
       [admitted.data.provisioning.workId],
