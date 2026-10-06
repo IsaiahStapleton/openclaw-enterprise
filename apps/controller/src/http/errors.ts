@@ -217,12 +217,61 @@ function rejectsBranchShape(union: ValidationEntry, member: ValidationEntry): bo
   );
 }
 
+// The literal that each required field of an object shape declares with `const`, as a
+// TypeBox Literal does.
+function literalFields(shape: unknown): ReadonlyMap<string, unknown> {
+  const literals = new Map<string, unknown>();
+  const { properties, required } = (shape ?? {}) as { properties?: unknown; required?: unknown };
+  if (properties === null || typeof properties !== "object" || !Array.isArray(required)) {
+    return literals;
+  }
+  for (const field of required.filter((name) => typeof name === "string")) {
+    const property: unknown = Object.hasOwn(properties, field)
+      ? (properties as Record<string, unknown>)[field]
+      : undefined;
+    if (property !== null && typeof property === "object" && Object.hasOwn(property, "const")) {
+      literals.set(field, (property as { const: unknown }).const);
+    }
+  }
+  return literals;
+}
+
+// The shape a discriminated union selects: every shape requires the same field with its own
+// literal, and the value's field equals exactly one shape's literal. That shape's problems are
+// the request's, even a missing field, so `{"method":"api_key"}` reports only the missing
+// source instead of every other method's fields. Ajv (verbose) attaches the union's shapes and
+// value to its failure. No such field, or a value naming no shape or several, selects none.
+function discriminatedBranch(union: ValidationEntry): string | undefined {
+  const { schema: shapes, data: value } = union as { schema?: unknown; data?: unknown };
+  if (!Array.isArray(shapes) || value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const literals = shapes.map(literalFields);
+  for (const field of literals[0]?.keys() ?? []) {
+    if (!literals.every((shape) => shape.has(field))) {
+      continue;
+    }
+    const chosen = (value as Record<string, unknown>)[field];
+    const matching = literals.flatMap((shape, index) =>
+      shape.get(field) === chosen ? [String(index)] : [],
+    );
+    if (matching.length === 1) {
+      return matching[0];
+    }
+  }
+  return undefined;
+}
+
 // A union of object shapes fails once per shape, so its message would also list the fields
-// that the other shapes require. When some shapes fit the value and fail only on a field's
-// content, report just those shapes' problems and drop the others and the union itself.
-// When no shape fits, every problem stays: the request matches none of them.
+// that the other shapes require. When the value selects one shape of a discriminated union,
+// or some shapes fit the value and fail only on a field's content, report just those shapes'
+// problems and drop the others and the union itself. When no shape fits, every problem stays:
+// the request matches none of them.
 function mismatchedUnionShapes(entries: readonly ValidationEntry[]): ReadonlySet<ValidationEntry> {
   const dropped = new Set<ValidationEntry>();
+  // Problems of a shape that a discriminated union selected. An outer union's branch that
+  // holds them fits the value, whatever the problems are.
+  const selected = new Set<ValidationEntry>();
   // Inner unions first: a nested union that found its shape no longer counts against the
   // outer union's branch that contains it.
   const unions = entries
@@ -240,8 +289,18 @@ function mismatchedUnionShapes(entries: readonly ValidationEntry[]): ReadonlySet
       const branch = unionBranch(union, member);
       branches.set(branch, [...(branches.get(branch) ?? []), member]);
     }
+    const chosen = discriminatedBranch(union);
+    if (chosen !== undefined && branches.has(chosen)) {
+      dropped.add(union);
+      for (const [branch, failures] of branches) {
+        for (const member of failures) {
+          (branch === chosen ? selected : dropped).add(member);
+        }
+      }
+      continue;
+    }
     const mismatched = [...branches.values()].filter((failures) =>
-      failures.some((member) => rejectsBranchShape(union, member)),
+      failures.some((member) => !selected.has(member) && rejectsBranchShape(union, member)),
     );
     if (mismatched.length === branches.size) {
       continue;

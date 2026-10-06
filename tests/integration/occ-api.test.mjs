@@ -4441,6 +4441,38 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
         assert.equal(result.body.error.message, message, label);
       }
     }
+    // The method selects the api_key shape: only its missing source is reported. An unknown
+    // method selects no shape, so every shape's problem stays.
+    const withoutSource = await injectedRequest(fixture.app, method, url, {
+      body: body({ method: "api_key" }),
+    });
+    assert.equal(withoutSource.status, 400, `${path}: ${JSON.stringify(withoutSource.body)}`);
+    assert.equal(
+      withoutSource.body.error.message,
+      "The request does not match the operation contract: body /harnessAuth/source is required.",
+      path,
+    );
+    assert.deepEqual(
+      withoutSource.body.error.details,
+      [{ path: "/harnessAuth/source", code: "REQUIRED" }],
+      path,
+    );
+    const unknownMethod = await injectedRequest(fixture.app, method, url, {
+      body: body({ method: "password" }),
+    });
+    assert.equal(unknownMethod.status, 400, `${path}: ${JSON.stringify(unknownMethod.body)}`);
+    assert.deepEqual(
+      unknownMethod.body.error.details,
+      [
+        { path: "/harnessAuth/method", code: "INVALID_VALUE" },
+        { path: "/harnessAuth/source", code: "REQUIRED" },
+        { path: "/harnessAuth/serviceAccountId", code: "REQUIRED" },
+        { path: "/harnessAuth/sourceId", code: "REQUIRED" },
+        { path: "/harnessAuth", code: "INVALID_VALUE" },
+        { path: "/harnessAuth", code: "INVALID_TYPE" },
+      ],
+      path,
+    );
   }
 
   // A resource the caller cannot find stays a not-found even when the request is invalid.
@@ -4566,6 +4598,13 @@ test("Agent provisioning API validates inline configuration with existing Secret
       "The request does not match the operation contract: body /harnessAuth has the wrong type (expected one of object, null).",
     ],
     [
+      // The method selects the api_key shape, so only its missing source is reported, not
+      // the fields of the other methods' shapes or the runtime method's literal.
+      "Harness authentication method without its source",
+      provisioningRequestBody(namespace.data.id, secrets, { harnessAuth: { method: "api_key" } }),
+      "The request does not match the operation contract: body /harnessAuth/source is required.",
+    ],
+    [
       "too many binding destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: { secretBindings: oversizedBindings },
@@ -4642,6 +4681,19 @@ test("Agent provisioning API validates inline configuration with existing Secret
   );
   assert.deepEqual(wrongTypeHarnessAuth.body.error.details, [
     { path: "/harnessAuth", code: "INVALID_TYPE" },
+  ]);
+  const methodWithoutSource = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    {
+      body: invalidBodies.find(([description]) =>
+        description.startsWith("Harness authentication method"),
+      )[1],
+    },
+  );
+  assert.deepEqual(methodWithoutSource.body.error.details, [
+    { path: "/harnessAuth/source", code: "REQUIRED" },
   ]);
   // The reserved destination is named by its pointer under the inline Configuration.
   const reservedProvisioning = await injectedRequest(
