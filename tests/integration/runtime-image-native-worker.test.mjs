@@ -137,10 +137,16 @@ process.exit(child.status ?? 1);
       // in-image proof that failed first (main run 37424312731 lost it).
       const report = commandOutput(error);
       const failing = report.indexOf("failing tests:");
-      throw new Error(
-        `The in-image supervisor proof failed: ${failing === -1 ? report.slice(-2_000) : report.slice(failing, failing + 2_000)}`,
-        { cause: error },
-      );
+      const summary =
+        failing !== -1
+          ? report.slice(failing, failing + 2_000)
+          : report.trim() !== ""
+            ? report.slice(-2_000)
+            : error.message;
+      const stopped = error.killed ? ` (killed by ${error.signal ?? "a signal"})` : "";
+      throw new Error(`The in-image supervisor proof failed${stopped}: ${summary}`, {
+        cause: error,
+      });
     });
     // All supervisor proofs: environment and file-delivered node setup, a
     // failed saved-identity probe that is retried, and a stop with no child.
