@@ -86,32 +86,20 @@ test("generated API reference stays on the approved single page", async () => {
   }
 });
 
-test("every operation with a request body documents 413 and 415", async () => {
-  // The controller answers an oversized body 413 and a non-JSON media type 415 on every
-  // route that reads a body; updateCredentialSource documented neither. The /api/auth/*
-  // operations below have the same gap and are fixed separately; shrink this list then.
-  const authOperationsWithoutBodyErrors = [
-    "createAuthAccount",
-    "disableAuthAccount",
-    "enableAuthAccount",
-    "detachAuthMethod",
-    "attachGitHubIdentity",
-    "attachGoogleIdentity",
-    "attachOidcIdentity",
-    "revokeAuthAccountSessions",
-    "confirmGitHubSignIn",
-    "confirmGoogleSignIn",
-    "confirmOidcSignIn",
-    "replaceAuthRecovery",
-    "createServiceKey",
-    "signInEmail",
-  ];
+test("every operation with a request body documents 400, 413 and 415", async () => {
+  // The controller validates every body against its schema (400) and answers an oversized
+  // body 413 and a non-JSON media type 415 on every route that reads a body. Fourteen
+  // /api/auth/* operations, whose schemas are inline rather than in the shared route
+  // contract, once listed none of 413 and 415 and most not 400.
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const missing = contractOperations(document)
     .filter((operation) => operation.requestBody !== undefined)
-    .filter((operation) => !("413" in operation.responses && "415" in operation.responses))
-    .map((operation) => operation.operationId);
-  assert.deepEqual(missing.sort(), authOperationsWithoutBodyErrors.sort());
+    .flatMap((operation) =>
+      ["400", "413", "415"]
+        .filter((status) => !(status in operation.responses))
+        .map((status) => `${operation.operationId} ${status}`),
+    );
+  assert.deepEqual(missing, []);
 });
 
 test("AccessBinding creation documents request body target read permissions", async () => {

@@ -4,7 +4,11 @@ import test from "node:test";
 
 import { createConsoleAppFixture, backendFixtures } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
-import { cookieHeaderFromSetCookie, setCookieHeaders } from "../helpers/auth-session.mjs";
+import {
+  authenticatedHeaders,
+  cookieHeaderFromSetCookie,
+  setCookieHeaders,
+} from "../helpers/auth-session.mjs";
 
 const contract = JSON.parse(
   await readFile(
@@ -365,6 +369,47 @@ test("console auth routes reject untrusted browser origins and issue production 
       Object.hasOwn(contract.paths[path].post.responses, status),
       `POST ${path} answered ${status}, which its OpenAPI operation does not list`,
     );
+  }
+});
+
+test("every /api/auth operation that takes a body answers the 400, 413 and 415 it lists", async (t) => {
+  const fixture = await createConsoleAppFixture(t, {
+    authMode: "production",
+    development: { enabled: false },
+  });
+  const session = await fixture.signIn();
+  const operations = Object.entries(contract.paths)
+    .filter(([path]) => path.startsWith("/api/auth/"))
+    .flatMap(([path, item]) =>
+      Object.entries(item)
+        .filter(([, operation]) => operation.requestBody !== undefined)
+        .map(([method, operation]) => ({ method: method.toUpperCase(), path, operation })),
+    );
+  // Fourteen such operations exist today; an empty scan would prove nothing.
+  assert.ok(operations.length >= 14, `found ${operations.length} operations`);
+  // An Installation administrator with a trusted Origin passes admission, so each refusal
+  // comes from the body itself: the declared size before parsing, then the media type, then
+  // the operation's schema.
+  for (const { method, path, operation } of operations) {
+    for (const [status, code, contentType, payload] of [
+      ["413", "PAYLOAD_TOO_LARGE", "application/json", `{"pad":"${"x".repeat(70 * 1024)}"}`],
+      ["415", "UNSUPPORTED_MEDIA_TYPE", "text/plain", "expectedVersion=1"],
+      ["400", "INVALID_REQUEST", "application/json", JSON.stringify({ unexpected: true })],
+    ]) {
+      const response = await fixture.app.inject({
+        method,
+        url: path.replace("{userId}", "usr_unknown").replace("{methodId}", "method_unknown"),
+        headers: authenticatedHeaders(session, {
+          origin: fixture.origin,
+          "content-type": contentType,
+        }),
+        payload,
+      });
+      const label = `${operation.operationId} ${status}`;
+      assert.equal(String(response.statusCode), status, `${label}: ${response.body}`);
+      assert.equal(JSON.parse(response.body).error.code, code, label);
+      assert.ok(Object.hasOwn(operation.responses, status), `${label} is not in the contract`);
+    }
   }
 });
 
