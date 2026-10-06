@@ -4807,7 +4807,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
   );
   fixture.state.restrictions.pop();
   assert.equal(refusedUnauthorized.status, 403, JSON.stringify(refusedUnauthorized.body));
-  // The logged reason keeps at most 512 characters, and a thrown non-Error is not logged.
+  // The logged reason keeps at most 512 characters, and a thrown non-Error's value is not logged.
   for (const [thrown, reason] of [
     [new Error("r".repeat(600)), "r".repeat(512)],
     ["internal driver detail", "The Compute Driver refused the plan."],
@@ -4815,6 +4815,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
     computeDriver.validateAgentProvisioning = () => {
       throw thrown;
     };
+    const logged = logLines.length;
     const refused = await injectedRequest(
       fixture.app,
       "POST",
@@ -4822,11 +4823,13 @@ test("Agent provisioning API validates inline configuration with existing Secret
       { body: provisioningRequestBody(namespace.data.id, secrets) },
     );
     assert.equal(refused.status, 409, JSON.stringify(refused.body));
-    assert.doesNotMatch(JSON.stringify(refused.body), /internal driver detail|rrrr/);
-    const logged = logLines.filter((line) => line.event === "agent_provisioning.compute_refused");
+    assert.doesNotMatch(JSON.stringify(refused.body), /internal driver detail|r{512}/);
     assert.deepEqual(
-      { requestId: logged.at(-1).requestId, reason: logged.at(-1).reason },
-      { requestId: refused.body.meta.requestId, reason },
+      logLines
+        .slice(logged)
+        .filter((line) => line.event === "agent_provisioning.compute_refused")
+        .map((line) => ({ requestId: line.requestId, reason: line.reason })),
+      [{ requestId: refused.body.meta.requestId, reason }],
     );
   }
   // A dependency the Compute Driver reports as unavailable stays retryable.
