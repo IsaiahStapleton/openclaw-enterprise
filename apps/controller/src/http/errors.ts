@@ -281,29 +281,31 @@ function collapseScalarUnions(allEntries: readonly ValidationEntry[]): readonly 
     .filter((entry) => entry.keyword === "anyOf" && typeof entry.schemaPath === "string")
     .sort((left, right) => right.schemaPath.length - left.schemaPath.length);
   for (const union of unions) {
-    // A collapsed inner union stands for its own members.
-    const members = unionMembersOf(union, entries).filter((entry) => collapsed.get(entry) !== null);
+    const allMembers = unionMembersOf(union, entries);
+    // A collapsed inner union stands for its own members. Every member, collapsed or not, must
+    // fail at the union's own value: a recursive union's deeper level shares its schema path,
+    // so it is no member that could block a collapse here.
+    const members = allMembers.filter((entry) => collapsed.get(entry) !== null);
     if (
       members.length === 0 ||
+      !allMembers.every((entry) => entry.instancePath === union.instancePath) ||
       !members.every(
-        (entry) =>
-          entry.instancePath === union.instancePath &&
-          (entry.keyword === "const" || entry.keyword === "type" || acceptedBy.has(entry)),
+        (entry) => entry.keyword === "const" || entry.keyword === "type" || acceptedBy.has(entry),
       )
     ) {
       continue;
     }
-    // A literal member can fail on both its JSON type and its value; name it by its value.
     const branches = new Map<string, ValidationEntry[]>();
     for (const member of members) {
       const branch = unionBranch(union, member);
       branches.set(branch, [...(branches.get(branch) ?? []), member]);
     }
     const values = [...branches.values()].flatMap((failures) => {
-      const inner = acceptedBy.get(failures[0]!);
+      const inner = failures.find((entry) => acceptedBy.has(entry));
       if (inner !== undefined) {
-        return failures.length === 1 ? inner.values : [undefined];
+        return failures.length === 1 ? acceptedBy.get(inner)!.values : [undefined];
       }
+      // A literal member can fail on both its JSON type and its value; name it by its value.
       const literal = failures.find((entry) => entry.keyword === "const");
       return literal === undefined
         ? expectedType(failures[0]!.params as Record<string, unknown>)
