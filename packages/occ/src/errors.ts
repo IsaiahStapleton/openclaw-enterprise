@@ -195,9 +195,23 @@ export class ConfigurationHarnessError extends ScopeViolationError {
  * later and stays a scope miss.
  */
 export class SecretBindingValidationError extends ScopeViolationError {
-  constructor(message: string) {
+  /**
+   * The submitted destination key that broke a destination rule, and the JSON Pointer of
+   * the binding map that holds it. Never a Secret value or ID.
+   */
+  readonly destination?: {
+    readonly bindingsPath: string;
+    /** Absent for a malformed key, which is not echoed; the detail points at the map. */
+    readonly key?: string;
+    readonly code: "INVALID_FORMAT" | "INVALID_VALUE";
+  };
+
+  constructor(message: string, destination?: SecretBindingValidationError["destination"]) {
     super(message);
     this.name = "SecretBindingValidationError";
+    if (destination !== undefined) {
+      this.destination = Object.freeze({ ...destination });
+    }
   }
 }
 
@@ -321,7 +335,7 @@ export class NamespaceNotEmptyError extends ResourceConflictError {
 }
 
 export class NamespaceNotReadyError extends ResourceConflictError {
-  constructor(message = "The Namespace is not ready for deployment.") {
+  constructor(message = "The Namespace is not ready.") {
     super(message);
     this.name = "NamespaceNotReadyError";
   }
@@ -331,7 +345,7 @@ export class NamespaceNotReadyError extends ResourceConflictError {
 export class NativeWorkerSupportError extends Error {
   constructor() {
     super(
-      "Dedicated native OpenClaw is unavailable: the pinned OpenClaw runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See https://docs-enterprise.openclaw.org/reference/harness-execution/#native-worker-support",
+      "Dedicated native OpenClaw is unavailable: the pinned runtime does not support required worker placement (cloudWorkers.requiredProfile) or native worker inference. See https://docs-enterprise.openclaw.org/reference/harness-execution/#native-worker-support",
     );
     this.name = "NativeWorkerSupportError";
   }
@@ -591,11 +605,30 @@ export class RuntimeLogsError extends Error {
 }
 
 export class PluginPolicyValidationError extends Error {
+  /** The rejected plugin selection key, so HTTP can point at `/plugins/<id>`. */
+  readonly pluginId?: string;
+
   constructor(
-    field?: "toolDefaults.reviewer" | "tools[id].reviewer" | "approvers" | "aliasedPlugin",
+    field?:
+      | "toolDefaults.reviewer"
+      | "tools[id].reviewer"
+      | "approvers"
+      | "aliasedPlugin"
+      | "unknownPlugin",
+    driverId?: string,
+    pluginId?: string,
   ) {
     let message = "The supplied plugin policies are invalid.";
-    if (field === "aliasedPlugin") {
+    if (field === "unknownPlugin") {
+      // driverId comes from trusted Installation configuration, never from the request.
+      // pluginId is the caller's own selection key; the API contract limits it to
+      // [A-Za-z0-9._~:@-]. It follows the rule, so HTTP's message cap cuts the advice first.
+      message = `A plugin selection names a plugin that the selected Plugin Driver${
+        driverId === undefined ? "" : ` (${driverId})`
+      } does not offer${
+        pluginId === undefined ? "" : `: ${pluginId}`
+      }. Check each plugin ID and its Driver prefix against that Driver's catalog; an Installation selects one Plugin Driver.`;
+    } else if (field === "aliasedPlugin") {
       message =
         'Two plugin selections name the same plugin (a native ID and its driver-prefixed ID, such as "diffs" and "occ-plugin:diffs"). Keep one selection per plugin.';
     } else if (field === "approvers") {
@@ -610,6 +643,9 @@ export class PluginPolicyValidationError extends Error {
     }
     super(message);
     this.name = "PluginPolicyValidationError";
+    if (field === "unknownPlugin" && pluginId !== undefined) {
+      this.pluginId = pluginId;
+    }
   }
 }
 

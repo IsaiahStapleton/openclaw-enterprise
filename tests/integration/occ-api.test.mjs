@@ -744,6 +744,13 @@ test("OCC Fastify serves singleton, Namespace, Configuration, and Agent resource
   assert.equal(stopped.status, 202);
   assert.equal(stopped.data.desiredRuntimeState, "stopped");
   assert.equal(stopped.data.id, agent.id);
+  const stopAudit = controller.fixture.auditSink.events.findLast(
+    (event) => event.action === "openclaw.agents.stop",
+  );
+  assert.deepEqual(
+    [stopAudit?.kind, stopAudit?.outcome, stopAudit?.resource.id],
+    ["mutation", "success", agent.id],
+  );
 
   const deployment = await controller.request(
     "POST",
@@ -1166,6 +1173,17 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     );
   }
 
+  // A long list of create Permissions is shortened so the guidance still fits the cap.
+  const manyCreates = await createRole(
+    ["agent", "configuration", "credential_source", "preset", "secret", "service_account"].map(
+      (resourceKind) => ({ action: "create", resourceKind }),
+    ),
+  );
+  const long = await bind(manyCreates, "namespace", namespace.id);
+  assert.equal(long.status, 400, JSON.stringify(long.body));
+  assert.ok(Array.from(long.body.error.message).length <= 256, long.body.error.message);
+  assert.match(long.body.error.message, / and \d+ more\. .*remove them from the Role\.$/);
+
   // A Role with no Permission for the target's kind would grant nothing there.
   const agentReader = await createRole([{ action: "read", resourceKind: "agent" }]);
   const nothing = await bind(agentReader, "namespace", namespace.id);
@@ -1246,7 +1264,8 @@ test("Secret values with an unpaired surrogate are refused as an invalid value",
   });
   assert.equal(secret.status, 201, JSON.stringify(secret.body));
 
-  // The request schema admits these strings; OCC refuses them because they are not UTF-8.
+  // The request schema admits these strings; every API route refuses them before validation
+  // because they are not UTF-8 (OCC's own Secret value check would refuse them too).
   for (const value of ["\ud800", "prefix-\udfff-suffix"]) {
     for (const [method, path, body] of [
       ["POST", `/namespaces/${namespace.id}/secrets`, { name: "Unpaired surrogate", value }],
@@ -1255,7 +1274,10 @@ test("Secret values with an unpaired surrogate are refused as an invalid value",
       const rejected = await controller.request(method, path, { body });
       assert.equal(rejected.status, 400, `${method} ${JSON.stringify(rejected.body)}`);
       assert.equal(rejected.body.error.code, "INVALID_REQUEST");
-      assert.match(rejected.body.error.message, /Secret value must be nonempty UTF-8/);
+      assert.equal(
+        rejected.body.error.message,
+        "The request does not match the operation contract: body /value contains an unpaired UTF-16 surrogate.",
+      );
       assert.deepEqual(rejected.body.error.details, [{ path: "/value", code: "INVALID_VALUE" }]);
     }
   }
@@ -1571,6 +1593,20 @@ test("Namespace IAM reports invalid policy input as 400 with the field and refus
       new RegExp(`grant nothing: ${resourceKind}:${action}\\.`),
     );
   }
+  // A Role naming many of them gets a message within the 256-character error contract.
+  const kinds = ["agent_revision", "configuration", "credential_source", "preset", "secret"];
+  const actions = ["administer", "create", "delete", "deploy", "operate", "read_logs", "update"];
+  const many = await createRole(
+    namespace.id,
+    kinds.flatMap((resourceKind) => actions.map((action) => ({ action, resourceKind }))),
+  );
+  assert.equal(many.status, 400, JSON.stringify(many.body));
+  assert.deepEqual(many.body.error.details, [{ path: "/permissions", code: "INVALID_VALUE" }]);
+  assert.ok(Array.from(many.body.error.message).length <= 256, many.body.error.message);
+  assert.match(
+    many.body.error.message,
+    /^No operation checks these Permissions, so they would grant nothing: agent_revision:administer, .* and \d+ more\. See the per-kind actions in the permissions reference\.$/,
+  );
   const duplicate = await createRole(namespace.id, [
     { action: "read", resourceKind: "agent" },
     { action: "read", resourceKind: "agent" },
@@ -2524,8 +2560,16 @@ test("Installation deployment inventory fails closed on incomplete authorization
     },
   );
 
-  // A complete fleet response must not turn any exact-resource denial into omission.
+  // The inventory needs Installation administer, and a complete fleet response must not turn
+  // any exact-resource denial into omission.
   for (const restriction of [
+    {
+      id: "deny-inventory-installation-administer",
+      resourceKind: "installation",
+      resourceId: fixture.installationId,
+      action: "administer",
+      effect: "deny",
+    },
     {
       id: "deny-inventory-namespace-read",
       namespaceId: namespace.id,
@@ -3156,6 +3200,23 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
       assert.equal(response.body.error.message, message);
     }
   }
+  // A plugin the selected Driver does not offer, as after an Installation switches Drivers:
+  // the refusal names the rejected ID and points at its selection.
+  const otherDriverUpdate = await controller.request("PATCH", agentPath, {
+    body: {
+      configurationId: configuration.id,
+      plugins: { [diffsPluginId]: pluginPolicy(), [linearPluginId]: pluginPolicy() },
+    },
+  });
+  assert.equal(otherDriverUpdate.status, 400);
+  assert.equal(otherDriverUpdate.body.error.code, "INVALID_REQUEST");
+  assert.match(
+    otherDriverUpdate.body.error.message,
+    /^A plugin selection names a plugin that the selected Plugin Driver \(occ-plugin\) does not offer: codex-plugin:linear@openai-curated-remote\./,
+  );
+  assert.deepEqual(otherDriverUpdate.body.error.details, [
+    { path: `/plugins/${linearPluginId}`, code: "INVALID_VALUE" },
+  ]);
   const afterUnsupported = await controller.request("GET", agentPath);
   assert.deepEqual(afterUnsupported.data, afterInvalidUpdate.data);
   const savedAgents = await controller.request("GET", `/namespaces/${namespace.id}/agents`);
@@ -4241,7 +4302,8 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
   assert.equal(agent.status, 201, JSON.stringify(agent.body));
   const agentPath = `/namespaces/${namespaceId}/agents/${agent.data.id}`;
 
-  const reserved = "A secret binding uses a reserved or invalid environment destination.";
+  const reserved =
+    "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.";
   const crossNamespace = "Secret references cannot cross Namespaces.";
   const writes = [
     [
@@ -4278,6 +4340,13 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
       assert.equal(result.body.error.code, status === 400 ? "INVALID_REQUEST" : "NOT_FOUND", label);
       if (message !== undefined) {
         assert.equal(result.body.error.message, message, label);
+      }
+      if (message === reserved) {
+        assert.deepEqual(
+          result.body.error.details,
+          [{ path: "/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" }],
+          label,
+        );
       }
     }
   }
@@ -4465,7 +4534,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           },
         },
       }),
-      "A secret binding uses a reserved or invalid environment destination.",
+      "A secret binding destination uses the reserved prefix OPENCLAW_*: OPENCLAW_TOKEN.",
     ],
   ];
 
@@ -4485,6 +4554,16 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
+  // The reserved destination is named by its pointer under the inline Configuration.
+  const reservedProvisioning = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: invalidBodies.find(([description]) => description.startsWith("reserved"))[1] },
+  );
+  assert.deepEqual(reservedProvisioning.body.error.details, [
+    { path: "/configuration/secretBindings/OPENCLAW_TOKEN", code: "INVALID_VALUE" },
+  ]);
 
   // A model provider baseUrl the runtime cannot use is refused at admission with the field
   // named, instead of surfacing later as an unexplained startup model check failure.

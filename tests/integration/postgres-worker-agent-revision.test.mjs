@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { prepareFile } from "../../scripts/ci/prepare.mjs";
@@ -29,15 +29,31 @@ import {
 } from "../helpers/postgres-backend-state.mjs";
 import { waitFor } from "../helpers/wait-for.mjs";
 
+// Each test owns a database (Work claims span one), copied from one migrated template
+// per file rather than migrated again. Nothing connects to the template itself. A failed
+// template preparation is not cached: the next test retries it, and cleanup ignores it.
+let template;
+after(async () => {
+  await (await template?.catch(() => undefined))?.cleanup();
+});
+
 async function prepareDatabase(context) {
   assert.ok(
     process.env.OPENCLAW_ENTERPRISE_CI_STATE,
     "Worker tests require an owned PostgreSQL fixture; see docs/testing/postgresql.md.",
   );
-  const prepared = await prepareFile({
+  const fixture = {
     lane: "postgres-application",
     file: fileURLToPath(import.meta.url),
     statePath: process.env.OPENCLAW_ENTERPRISE_CI_STATE,
+  };
+  template ??= prepareFile(fixture).catch((error) => {
+    template = undefined;
+    throw error;
+  });
+  const prepared = await prepareFile({
+    ...fixture,
+    template: (await template).env.OCC_TEST_DATABASE_URL,
   });
   const pools = new Set();
   const workers = new Set();
@@ -6946,6 +6962,72 @@ test(
 );
 
 test(
+  "the revision worker emits bounded Driver diagnostics for failed Compute preparation",
+  requiresPostgres,
+  async (context) => {
+    const events = [];
+    const fixture = await setup(context, { maxAttempts: 1 });
+    const owner = await fixture.agent("compute-preparation-diagnostic");
+    const candidate = await fixture.revision(owner, 1);
+    const failure = new Error("opaque provider response that must not be logged");
+
+    await fixture.start(
+      {
+        ...fixture.compute,
+        async prepareRevision(revision) {
+          if (revision.id === candidate.id) {
+            throw failure;
+          }
+          return fixture.compute.prepareRevision(revision);
+        },
+        describePrepareRevisionFailure(error) {
+          assert.equal(error, failure);
+          return {
+            code: "KUBERNETES_API_REJECTED",
+            stage: "gateway_deployment",
+            errorClass: "KubernetesApiError",
+            message: "The Kubernetes API rejected revision preparation.",
+            status: 422,
+          };
+        },
+      },
+      (event) => events.push(event),
+    );
+
+    await fixture.work(candidate, "failed_permanent");
+    const diagnostic = events.find(
+      (event) =>
+        event.event === "worker.compute-prepare-failed" && event.revisionId === candidate.id,
+    );
+    assert.deepEqual(diagnostic, {
+      event: "worker.compute-prepare-failed",
+      workId: candidate.idempotencyKey,
+      attempt: 1,
+      operation: "agent_revision.reconcile",
+      namespaceId: fixture.namespace.id,
+      agentId: owner.id,
+      revisionId: candidate.id,
+      computeDriverId: fixture.compute.id,
+      code: "KUBERNETES_API_REJECTED",
+      step: "gateway_deployment",
+      errorClass: "KubernetesApiError",
+      message: "The Kubernetes API rejected revision preparation.",
+      status: 422,
+    });
+    assert.equal(JSON.stringify(events).includes(failure.message), false);
+    assert.ok(
+      events.some(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.revisionId === candidate.id &&
+          event.code === "DEPENDENCY_UNAVAILABLE" &&
+          event.outcome === "retry",
+      ),
+    );
+  },
+);
+
+test(
   "an overdue Agent runtime fails closed without activating its incomplete revision",
   requiresPostgres,
   async (context) => {
@@ -7366,7 +7448,7 @@ test(
         observations += 1;
         throw new SandboxRevisionUnsupportedError(
           "SANDBOX_SECRET_ENVIRONMENT_UNSUPPORTED",
-          "OpenShell v0.1.3-pre.1 cannot receive secretKeyRef environment APP_SERVER_TOKEN.",
+          "OpenShell v0.1.3-pre.2 cannot receive secretKeyRef environment APP_SERVER_TOKEN.",
         );
       },
     });

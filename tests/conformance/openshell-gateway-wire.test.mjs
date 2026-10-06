@@ -11,6 +11,7 @@ import {
   OpenShellRequestReplayRefusedError,
 } from "../../apps/controller/src/drivers/sandbox/openshell-gateway-client.ts";
 import { TransientDependencyError } from "../../packages/occ/src/index.ts";
+import { DependencyUnavailableError } from "../../packages/occ/src/errors.ts";
 
 const require = createRequire(new URL("../../apps/controller/package.json", import.meta.url));
 const grpc = require("@grpc/grpc-js");
@@ -37,13 +38,15 @@ function bindWireServer(server) {
   );
 }
 
-test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", async () => {
+test("OpenShell client serializes v0.1.3-pre.2 create-time service exposure", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
   const createRequests = [];
+  const getRequests = [];
+  const serviceRequests = [];
   const deleteRequests = [];
   const server = new grpc.Server();
 
@@ -52,6 +55,13 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
   server.addService(OpenShell.service, {
     CreateSandbox(call, callback) {
       createRequests.push(call.request);
+      if (call.request.name === "sandbox-wire-invalid") {
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          details: "sandbox spec rejected\nby the Kubernetes driver",
+        });
+        return;
+      }
       const omitServiceUrls = call.request.name !== "sandbox-wire";
       callback(null, {
         sandbox: {
@@ -71,6 +81,38 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
             }),
       });
     },
+    GetSandbox(call, callback) {
+      getRequests.push(call.request);
+      const created = createRequests.find(({ name }) => name === call.request.name);
+      if (created === undefined) {
+        callback({ code: grpc.status.NOT_FOUND });
+        return;
+      }
+      callback(null, {
+        sandbox: {
+          metadata: {
+            id: "sandbox-id",
+            name: created.name,
+            workspace: created.workspace_scope.workspace,
+            labels: created.labels,
+            annotations: created.annotations,
+          },
+          spec: created.spec,
+        },
+      });
+    },
+    GetService(call, callback) {
+      serviceRequests.push(call.request);
+      callback(null, {
+        endpoint: {
+          sandbox: call.request.sandbox,
+          name: call.request.name,
+          target_port: 18_790,
+          authorization_mode: "SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH",
+        },
+        url: `http://tenant-workspace--${call.request.sandbox}.openshell.localhost:8080/`,
+      });
+    },
     DeleteSandbox(call, callback) {
       deleteRequests.push(call.request);
       callback(null, { deleted: true });
@@ -86,7 +128,9 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
       requestId: "7dfed2b8-8cef-4513-ab04-020baf3ccbf3",
       labels: { owner: "openclaw" },
       annotations: {},
-      serviceExposures: [{ service: "", targetPort: 18_790 }],
+      serviceExposures: [
+        { service: "", targetPort: 18_790, authorizationMode: "bearer_passthrough" },
+      ],
       spec: {
         policy: {
           network_policies: {
@@ -97,9 +141,13 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
                 {
                   host: "api.openai.com",
                   ports: [443],
+                  protocol: "rest",
                   tls: "NETWORK_TLS_MODE_SKIP",
                   enforcement: "NETWORK_ENFORCEMENT_MODE_ENFORCE",
                   access: "NETWORK_ACCESS_PRESET_FULL",
+                  path: "/node",
+                  websocket_credential_rewrite: true,
+                  credential_binding: { provider: "oce-runtime-example" },
                 },
               ],
             },
@@ -108,6 +156,16 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
       },
     };
     const created = await client.createSandbox(request, AbortSignal.timeout(2_000));
+    const observed = await client.getSandbox(
+      { name: request.name, workspace: request.workspace },
+      AbortSignal.timeout(2_000),
+    );
+    const service = await client.getService(
+      request.workspace,
+      request.name,
+      "",
+      AbortSignal.timeout(2_000),
+    );
     await client.deleteSandbox(
       { name: request.name, workspace: request.workspace },
       AbortSignal.timeout(2_000),
@@ -117,6 +175,18 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
     assert.deepEqual(created.serviceUrls, {
       "": `http://tenant-workspace--${request.name}.openshell.localhost:${port}/`,
     });
+    assert.deepEqual(observed.annotations, request.annotations);
+    assert.deepEqual(observed.spec, request.spec);
+    assert.equal(service.targetPort, 18_790);
+    assert.equal(service.authorizationMode, "SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH");
+    assert.equal(
+      service.advertisedUrl,
+      `http://tenant-workspace--${request.name}.openshell.localhost:8080/`,
+    );
+    assert.equal(
+      service.url,
+      `http://tenant-workspace--${request.name}.openshell.localhost:${port}/`,
+    );
     assert.deepEqual(createRequests[0].workspace_scope, {
       workspace: "tenant-workspace",
       selection: "workspace",
@@ -125,15 +195,33 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
       workspace: "tenant-workspace",
       selection: "workspace",
     });
+    assert.deepEqual(getRequests[0].workspace_scope, {
+      workspace: "tenant-workspace",
+      selection: "workspace",
+    });
+    assert.deepEqual(serviceRequests[0], {
+      sandbox: request.name,
+      name: "",
+      workspace_scope: { workspace: "tenant-workspace", selection: "workspace" },
+    });
     assert.equal(createRequests[0].request_id, request.requestId);
-    // Omission keeps upstream's STRIP default; this upgrade does not enable bearer passthrough.
-    assert.deepEqual(createRequests[0].service_exposures, [{ service: "", target_port: 18_790 }]);
+    assert.deepEqual(createRequests[0].service_exposures, [
+      {
+        service: "",
+        target_port: 18_790,
+        authorization_mode: "SERVICE_AUTHORIZATION_MODE_BEARER_PASSTHROUGH",
+      },
+    ]);
     assert.deepEqual(createRequests[0].spec.policy.network_policies.model.endpoints[0], {
       host: "api.openai.com",
       ports: [443],
+      protocol: "rest",
       tls: "NETWORK_TLS_MODE_SKIP",
       enforcement: "NETWORK_ENFORCEMENT_MODE_ENFORCE",
       access: "NETWORK_ACCESS_PRESET_FULL",
+      path: "/node",
+      websocket_credential_rewrite: true,
+      credential_binding: { provider: "oce-runtime-example" },
     });
     assert.deepEqual(createRequests[0].spec.policy.network_policies.model.binaries, [
       { path: "/app/bin/model-client" },
@@ -145,6 +233,23 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
     );
     assert.deepEqual(outboundOnly.serviceUrls, {});
     assert.deepEqual(createRequests[1].service_exposures ?? [], []);
+
+    await assert.rejects(
+      client.createSandbox(
+        { ...request, name: "sandbox-wire-invalid" },
+        AbortSignal.timeout(2_000),
+      ),
+      (error) => {
+        assert.ok(error instanceof DependencyUnavailableError);
+        assert.equal(error.grpcStatus, grpc.status.INVALID_ARGUMENT);
+        assert.equal(error.code, undefined);
+        assert.equal(
+          error.message,
+          "OpenShell CreateSandbox failed with gRPC status 3: sandbox spec rejected by the Kubernetes driver",
+        );
+        return true;
+      },
+    );
 
     await assert.rejects(
       client.createSandbox(
@@ -161,7 +266,7 @@ test("OpenShell client serializes v0.1.3-pre.1 create-time service exposure", as
 
 test("OpenShell client reads an existing Sandbox and its service endpoint", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -253,7 +358,7 @@ test("OpenShell client reads an existing Sandbox and its service endpoint", asyn
 
 test("OpenShell client reports a refused CreateSandbox request_id from its ErrorInfo reason", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -346,7 +451,7 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
 
 test("OpenShell client holds only the durable admission limit as a transient dependency", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -414,9 +519,9 @@ test("OpenShell client holds only the durable admission limit as a transient dep
   }
 });
 
-test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, and attachment status", async () => {
+test("OpenShell client serializes v0.1.3-pre.2 credential providers, profiles, and attachment status", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -470,6 +575,9 @@ test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, a
         type: "oce-openai",
         labels: {},
         credentials: { OPENAI_API_KEY: "wire-test-value" },
+        credentialExpirationTimes: {
+          OPENAI_API_KEY: "2026-10-01T18:00:00.123Z",
+        },
       },
       abort.signal,
     );
@@ -492,6 +600,13 @@ test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, a
             headerName: "authorization",
           },
         ],
+        files: [
+          {
+            path: "runtime.json",
+            content: "{{config.runtime_json}}",
+            environmentVariable: "OPENCLAW_PLUGIN_RUNTIME_MANIFEST",
+          },
+        ],
         endpoints: [{ host: "api.openai.com", port: 443, protocol: "rest", path: "/v1/**" }],
         binaries: ["/app/bin/codex"],
         inferenceCapable: true,
@@ -506,6 +621,10 @@ test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, a
         type: "oce-openai",
         labels: { "openclaw.dev/credential-source-id": "cs_example" },
         credentials: { OPENAI_API_KEY: "wire-test-value" },
+        credentialExpirationTimes: {
+          OPENAI_API_KEY: "2026-10-01T18:00:00.123Z",
+        },
+        config: { runtime_json: '{"kind":"codex","selections":{}}' },
       },
       AbortSignal.timeout(2_000),
     );
@@ -542,6 +661,13 @@ test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, a
         header_name: "authorization",
       },
     ]);
+    assert.deepEqual(profileImport.profiles[0].profile.files, [
+      {
+        path: "runtime.json",
+        content: "{{config.runtime_json}}",
+        env_var: "OPENCLAW_PLUGIN_RUNTIME_MANIFEST",
+      },
+    ]);
     assert.deepEqual(profileImport.profiles[0].profile.endpoints, [
       {
         host: "api.openai.com",
@@ -558,7 +684,16 @@ test("OpenShell client serializes v0.1.3-pre.1 credential providers, profiles, a
     assert.deepEqual(requests.providers[0].provider.credentials, {
       OPENAI_API_KEY: "wire-test-value",
     });
+    assert.deepEqual(requests.providers[0].provider.credential_expiration_times, {
+      OPENAI_API_KEY: { seconds: "1790877600", nanos: 123_000_000 },
+    });
     assert.equal(requests.providers[0].provider.type, "oce-openai");
+    assert.deepEqual(requests.providers[0].provider.config, {
+      runtime_json: '{"kind":"codex","selections":{}}',
+    });
+    assert.deepEqual(provider.config, {
+      runtime_json: '{"kind":"codex","selections":{}}',
+    });
     // The profile lives in the provider's workspace, not in platform scope.
     assert.equal(requests.providers[0].provider.profile_workspace, "tenant-workspace");
     assert.equal(
@@ -597,7 +732,11 @@ test("OpenShell client retries setup after a failed first connection", async (t)
       rootCertificatePath,
       "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n",
     );
-    await assert.rejects(client.health(signal), { code: grpc.status.UNAVAILABLE });
+    await assert.rejects(client.health(signal), (error) => {
+      assert.ok(error instanceof DependencyUnavailableError);
+      assert.equal(error.grpcStatus, grpc.status.UNAVAILABLE);
+      return true;
+    });
   } finally {
     client.close();
   }
@@ -605,7 +744,7 @@ test("OpenShell client retries setup after a failed first connection", async (t)
 
 test("OpenShell client cancels an in-flight provider request", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -756,9 +895,9 @@ test("OpenShell client closes cancellation races around provider dispatch", asyn
   });
 });
 
-test("OpenShell client reads v0.1.3-pre.1 sandbox logs with nanosecond times", async () => {
+test("OpenShell client reads v0.1.3-pre.2 sandbox logs with nanosecond times", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -842,9 +981,9 @@ test("OpenShell client reads v0.1.3-pre.1 sandbox logs with nanosecond times", a
   }
 });
 
-test("OpenShell client serializes v0.1.3-pre.1 provider updates and detach receipts", async () => {
+test("OpenShell client serializes v0.1.3-pre.2 provider updates and detach receipts", async () => {
   const proto = await loader.load(
-    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.1-wire.proto"),
+    join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
     { keepCase: true, longs: String, enums: String, defaults: false, oneofs: true },
   );
   const OpenShell = grpc.loadPackageDefinition(proto).openshell.v1.OpenShell;
@@ -853,7 +992,18 @@ test("OpenShell client serializes v0.1.3-pre.1 provider updates and detach recei
   server.addService(OpenShell.service, {
     UpdateProvider(call, callback) {
       requests.updates.push(call.request);
-      callback(null, { provider: { metadata: { name: call.request.provider.metadata.name } } });
+      const config = call.request.provider.config;
+      callback(null, {
+        provider: {
+          metadata: {
+            name: call.request.provider.metadata.name,
+            labels: { "app.kubernetes.io/managed-by": "openclaw-enterprise" },
+            resource_version: "8",
+          },
+          type: config === undefined ? "oce-openai" : "oce-codex-runtime",
+          ...(config === undefined ? {} : { config }),
+        },
+      });
     },
     DetachSandboxProvider(call, callback) {
       requests.detaches.push(call.request);
@@ -879,11 +1029,19 @@ test("OpenShell client serializes v0.1.3-pre.1 provider updates and detach recei
     auth: { mode: "unauthenticated" },
   });
   try {
+    const updated = await client.updateProviderConfig(
+      "tenant-workspace",
+      "oce-runtime-0000000000000000",
+      { node_setup_json: '{"bootstrapToken":"renewed"}' },
+      "7",
+      AbortSignal.timeout(2_000),
+    );
     await client.updateProviderCredentials(
       "tenant-workspace",
       "oce-cs-000000000000000000000000",
       { OPENAI_API_KEY: "wire-rotated-value" },
       AbortSignal.timeout(2_000),
+      { OPENAI_API_KEY: "2026-10-01T18:00:00Z" },
     );
     const detached = await client.detachSandboxProvider(
       "tenant-workspace",
@@ -899,12 +1057,33 @@ test("OpenShell client serializes v0.1.3-pre.1 provider updates and detach recei
       detached.receiptId,
     );
 
-    // UpdateProvider merges only the named credential into the provider in this workspace.
-    const [update] = requests.updates;
-    assert.equal(update.workspace_scope.workspace, "tenant-workspace");
-    assert.equal(update.provider.metadata.name, "oce-cs-000000000000000000000000");
-    assert.deepEqual(update.provider.credentials, { OPENAI_API_KEY: "wire-rotated-value" });
-    assert.match(update.request_id, /^[0-9a-f-]{36}$/);
+    // Config reconciliation fences the exact provider version and merges only
+    // the renewed setup field.
+    const [configUpdate, credentialUpdate] = requests.updates;
+    assert.equal(configUpdate.workspace_scope.workspace, "tenant-workspace");
+    assert.equal(configUpdate.provider.metadata.name, "oce-runtime-0000000000000000");
+    assert.equal(configUpdate.provider.metadata.resource_version, "7");
+    assert.deepEqual(configUpdate.provider.config, {
+      node_setup_json: '{"bootstrapToken":"renewed"}',
+    });
+    assert.match(configUpdate.request_id, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(updated, {
+      name: "oce-runtime-0000000000000000",
+      type: "oce-codex-runtime",
+      labels: { "app.kubernetes.io/managed-by": "openclaw-enterprise" },
+      config: { node_setup_json: '{"bootstrapToken":"renewed"}' },
+      resourceVersion: "8",
+    });
+    // Credential rotation retains the existing merge-only request.
+    assert.equal(credentialUpdate.workspace_scope.workspace, "tenant-workspace");
+    assert.equal(credentialUpdate.provider.metadata.name, "oce-cs-000000000000000000000000");
+    assert.deepEqual(credentialUpdate.provider.credentials, {
+      OPENAI_API_KEY: "wire-rotated-value",
+    });
+    assert.deepEqual(credentialUpdate.credential_expiration_times, {
+      OPENAI_API_KEY: { seconds: "1790877600", nanos: 0 },
+    });
+    assert.match(credentialUpdate.request_id, /^[0-9a-f-]{36}$/);
     // Detach names the exact Sandbox and provider; status then follows the detach receipt.
     assert.equal(requests.detaches[0].workspace_scope.workspace, "tenant-workspace");
     assert.equal(requests.detaches[0].sandbox, "sandbox-wire");

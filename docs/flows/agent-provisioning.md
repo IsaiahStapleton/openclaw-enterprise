@@ -81,6 +81,8 @@ The existing worker dispatches the job under its queue claim. Before effects and
 
 The Compute Driver prepares runtime credentials through the existing credential path, without a loopback HTTP call. The Kubernetes Driver owns trusted-proxy configuration and generated credential protection; provisioning carries no gateway token or trust override.
 
+Kubernetes Configuration requests inherit the provisioning claim cancellation signal. Losing the claim stops an outstanding configuration request instead of holding the serial worker after its owner is gone.
+
 ### 4. Deployment becomes the lifecycle owner
 
 `packages/occ/src/index.ts:OpenClawController.deployAgent`
@@ -128,6 +130,8 @@ While initialization owns an Agent, conflicting edits and manual deployment are 
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 23:30: A binding destination failure names the broken rule; a reserved destination also names its key, with a `/configuration/secretBindings/<key>` detail. (findings-sweep-1-api)
 
 - 2026-10-03 15:30: Provisioning rejects reserved binding destinations and cross-Namespace Secret references as invalid requests instead of not-found. (f239/provisioning-binding-validation)
 

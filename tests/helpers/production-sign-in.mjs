@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import pg from "pg";
 import { composeProduction } from "../../apps/controller/src/composition/production.ts";
 import { loadInstallationConfiguration } from "../../apps/controller/src/composition/installation-config.ts";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../../apps/controller/src/auth/index.ts";
 import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
+import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { createInstallationDriverConfiguration } from "./installation-driver-configuration.mjs";
 import { createTestConfigurationDriver } from "./configuration-driver.mjs";
 import { createTestSecretDriver } from "./secret-driver.mjs";
@@ -21,6 +23,7 @@ import {
 import { cookieHeaderFromSetCookie } from "./auth-session.mjs";
 import { createReadyComputeDriver } from "./development.mjs";
 import { idTokenSigner, rsaSigningKey } from "./id-token.mjs";
+import { databaseUrl as testDatabaseUrl } from "./postgres-database.mjs";
 
 // Only Compute is passive: no Agent is deployed, so sign-in proofs need no cluster.
 // Authentication, State, IAM, audit and Fastify are the production implementations.
@@ -286,6 +289,24 @@ export async function currentSession(app, cookie) {
   return (await app.inject({ url: "/api/auth/session", headers: { cookie } })).json().data;
 }
 
+/**
+ * A pool and PlatformState on the test database for one sign-in test. After the test, each
+ * object `closeFirst()` returns (an app, or anything with `close()`) closes in order, then
+ * the pool ends.
+ * `let app; const { pool, state } = postgresSignInState(t, () => [app]);`
+ */
+export function postgresSignInState(context, closeFirst = () => []) {
+  const pool = new pg.Pool({ connectionString: testDatabaseUrl });
+  const state = new PostgresPlatformState(pool);
+  context.after(async () => {
+    for (const closable of closeFirst()) {
+      await closable?.close();
+    }
+    await pool.end();
+  });
+  return { pool, state };
+}
+
 /** Distinct client addresses, so a suite's many sign-ins never meet the per-address limit. */
 export function clientAddresses(prefix = "198.18") {
   let next = 0;
@@ -320,8 +341,26 @@ export async function installationRoles(state, pool) {
 }
 
 /**
- * A local stand-in for github.com and api.github.com. The controller's fixed provider
- * endpoints are redirected here by mocking fetch, as postgres-github-sign-in.test.mjs does.
+ * Listens `server` on loopback and, for the rest of test `t`, mocks fetch so the controller's
+ * fixed github.com and api.github.com endpoints reach it; other origins pass through. The
+ * caller owns closing `server`. Returns the server's origin.
+ */
+export async function serveAsGitHub(t, server) {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const providerOrigin = `http://127.0.0.1:${server.address().port}`;
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === "https://github.com" || url.origin === "https://api.github.com") {
+      return originalFetch(new URL(url.pathname + url.search, providerOrigin), init);
+    }
+    return originalFetch(input, init);
+  });
+  return providerOrigin;
+}
+
+/**
+ * A local stand-in for github.com and api.github.com, served through `serveAsGitHub`.
  * The authorization code names the GitHub subject: `subject-<id>`; its login is
  * `fixture-<id>`. Modes: "up", "error" (503) and "hang" (never answers). Set
  * `fixture.membership(path, subject)` to answer the allowlist's membership lookups with
@@ -358,6 +397,7 @@ export async function startFakeGitHub(t) {
         ),
       );
     } else if (request.url === "/user") {
+      // Strict on purpose: suites rely on this 401 to catch a wrong Authorization header.
       const subject = /^Bearer ghu_fixture_([0-9]+)$/.exec(request.headers.authorization ?? "");
       if (subject === null) {
         response.writeHead(401);
@@ -379,16 +419,7 @@ export async function startFakeGitHub(t) {
       response.end("{}");
     }
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const providerOrigin = `http://127.0.0.1:${server.address().port}`;
-  const originalFetch = globalThis.fetch;
-  t.mock.method(globalThis, "fetch", (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    if (url.origin === "https://github.com" || url.origin === "https://api.github.com") {
-      return originalFetch(new URL(url.pathname + url.search, providerOrigin), init);
-    }
-    return originalFetch(input, init);
-  });
+  await serveAsGitHub(t, server);
   t.after(async () => {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

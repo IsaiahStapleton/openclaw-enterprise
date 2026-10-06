@@ -23,13 +23,23 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "oce-node-supervisor-"));
     const eventsPath = join(directory, "events.jsonl");
     const childPath = join(directory, "child.cjs");
+    const setupEnvelopePath = join(directory, "node-setup.json");
+    await writeFile(
+      setupEnvelopePath,
+      JSON.stringify({
+        url: "wss://gateway.example.test/node",
+        bootstrapToken: "provider-bootstrap-token",
+        expiresAtMs: Date.now() + 60_000,
+      }),
+    );
     await writeFile(
       childPath,
       [
         'const { appendFileSync } = require("node:fs");',
         'const { spawn } = require("node:child_process");',
-        "const [events, kind] = process.argv.slice(2);",
+        "const [events, kind, args] = process.argv.slice(2);",
         "appendFileSync(events, JSON.stringify({ kind, pid: process.pid, parent: process.ppid,",
+        'args: JSON.parse(args ?? "[]"),',
         "hasSetup: process.env.OPENCLAW_NODE_SETUP_CODE !== undefined,",
         "hasModelKey: process.env.OPENAI_API_KEY !== undefined,",
         'autoUpdateDisabled: process.env.OPENCLAW_NO_AUTO_UPDATE === "1",',
@@ -49,7 +59,7 @@ test(
         ", " +
         JSON.stringify(eventsPath) +
         ", " +
-        'args[0] === "/app/openclaw.mjs" ? "node" : "codex"], options);',
+        'args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
       AGENT_WITH_NODE_ENTRYPOINT.replace(
         "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
         "\n",
@@ -61,7 +71,8 @@ test(
         PATH: process.env.PATH,
         HOME: directory,
         OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
-        OPENCLAW_NODE_SETUP_CODE: "synthetic-setup",
+        OPENCLAW_NODE_SETUP_ENVELOPE: setupEnvelopePath,
+        OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
         OPENAI_API_KEY: "synthetic-model-key",
         APP_SERVER_TOKEN: "synthetic-transport-token",
       },
@@ -145,12 +156,36 @@ test(
       }
     });
 
+    const renewedSetup = {
+      url: "wss://gateway.example.test/node",
+      bootstrapToken: "renewed-provider-bootstrap-token",
+      expiresAtMs: Date.now() + 60_000,
+    };
+    await writeFile(setupEnvelopePath, JSON.stringify(renewedSetup));
     process.kill(node.pid, "SIGKILL");
     const afterNode = await waitFor(
-      "node restarted",
+      "node restarted with renewed provider setup",
       (rows) => rows.filter(({ kind }) => kind === "node").length === 2,
     );
     assert.equal(afterNode.filter(({ kind }) => kind === "codex").length, 2);
+    const restartedNode = afterNode.filter(({ kind }) => kind === "node").at(-1);
+    assert.equal(
+      restartedNode.args[4],
+      Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
+    );
+
+    // Retain the most recently read setup if the provider projection is briefly
+    // unavailable during another pre-pairing retry.
+    await rm(setupEnvelopePath);
+    process.kill(restartedNode.pid, "SIGKILL");
+    const afterProjectionRemoval = await waitFor(
+      "node restarted after its renewed setup projection disappeared",
+      (rows) => rows.filter(({ kind }) => kind === "node").length === 3,
+    );
+    assert.equal(
+      afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1).args[4],
+      Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
+    );
     supervisor.kill("SIGTERM");
     assert.deepEqual(await exited, [0, null], output);
     for (const { pid } of await events()) {
@@ -220,6 +255,7 @@ test(
         HOME: directory,
         OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
         OPENCLAW_NODE_SETUP_PATH: setupPath,
+        OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
         OPENCLAW_NODE_DISPLAY_NAME: "agent-0123456789ab-workspace",
       },
       stdio: ["ignore", "ignore", "pipe"],
@@ -315,7 +351,6 @@ test(
     // Every start names the node after the Agent, not the first Pod's host name.
     const displayName = (args) => args[args.indexOf("--display-name") + 1];
     assert.equal(displayName(paired.args), "agent-0123456789ab-workspace");
-    assert.match(output, /"phase":"node-setup"/);
 
     // After pairing the controller removes the code and the kubelet removes the
     // file. A node restart then reconnects with its saved device identity.
@@ -386,6 +421,7 @@ test(
         HOME: directory,
         OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
         OPENCLAW_NODE_SETUP_PATH: join(directory, "setup", "setup-code"),
+        OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
       },
       stdio: ["ignore", "ignore", "pipe"],
     });

@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import pg from "pg";
-import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
   assertReservedLane,
@@ -19,6 +17,7 @@ import {
   googleUpgradeSettings,
   onboardPasswordAccounts,
   passwordSignIn,
+  postgresSignInState,
   readAccount,
   signedInHeaders,
   startFakeGitHub,
@@ -61,13 +60,8 @@ test(
   "PostgreSQL Google sign-in admits only attached identities through the guarded profile",
   requiresPostgres,
   async (t) => {
-    const pool = new pg.Pool({ connectionString: databaseUrl });
-    const state = new PostgresPlatformState(pool);
     let app;
-    t.after(async () => {
-      await app?.close();
-      await pool.end();
-    });
+    const { pool, state } = postgresSignInState(t, () => [app]);
     const google = fakeGoogle(t, {
       clientId: googleClientId,
       clientSecret: googleClientSecret,

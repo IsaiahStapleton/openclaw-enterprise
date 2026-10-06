@@ -14,9 +14,10 @@ Configuration.
 | OpenClaw | `dedicated`          | Experimental native worker; requires full-facet Sandbox provisioning. Stock OpenShell has [upstream blockers](#optional-sandbox-provisioning), so this is not a supported production path. |
 
 Agent creation defaults to `embedded`; an update that omits the mode preserves
-it. Unsupported Harness/mode pairs are rejected before work is admitted. A
-Harness is not a separately created resource or Driver. Availability and
-isolation also depend on the installation's Compute and optional Sandbox. On
+it. Deployment rejects a Harness that the Agent's execution mode cannot run with
+`400 INVALID_REQUEST` before work is admitted. A Harness is not a separately
+created resource or Driver. Availability and isolation also depend on the
+installation's Compute and optional Sandbox. On
 Kubernetes, a dedicated gateway runs in an OCC-managed control-plane runtime
 namespace with its own private storage and ServiceAccount, while its Harness
 stays in the data-plane namespace. Embedded OpenClaw remains one untrusted
@@ -278,7 +279,7 @@ Gateway supplies the model key. The upstream OpenShell Gateway must still
 support the app-server token Secret reference and projected workload identity
 the admitted workload requires; stock OpenShell incompatibilities fail
 explicitly, and test bridges do not establish turnkey production support. See its
-[upstream preconditions](drivers/openshell-sandbox.md#current-upstream-preconditions).
+[qualification contract](drivers/openshell-sandbox.md#qualification-contract).
 
 ### Native worker support
 

@@ -1851,10 +1851,12 @@ test(
         assert.deepEqual(container.livenessProbe.httpGet, { path: "/healthz", port: "http" });
         assert.deepEqual(container.readinessProbe.httpGet, { path: "/readyz", port: "http" });
         // A slow boot must not trip liveness: the startup probe holds liveness off for 2 min.
+        // Readiness waits for the first startup success, so a 1 s period lets the API take
+        // traffic about when it listens instead of at a later probe tick.
         assert.deepEqual(container.startupProbe, {
           httpGet: { path: "/healthz", port: "http" },
-          periodSeconds: 5,
-          failureThreshold: 24,
+          periodSeconds: 1,
+          failureThreshold: 120,
         });
       } else {
         const readinessMount = container.volumeMounts.find(
@@ -2381,13 +2383,16 @@ test(
   },
 );
 
-test("GitHub sign-in egress defaults to HTTPS to any IPv4 address", tooling, async () => {
+test("GitHub sign-in egress defaults to HTTPS except link-local", tooling, async () => {
   const { apiEnv, egress } = await signInObjects(githubLoginValues);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, undefined);
   assert.equal(apiEnv.OCC_AUTH_TRUSTED_PROXY_PRESET, undefined);
   assert.equal(apiEnv.OCC_AUTH_CLIENT_IP_HEADER, undefined);
   assert.deepEqual(egress.spec.egress, [
-    { to: [{ ipBlock: { cidr: "0.0.0.0/0" } }], ports: [{ protocol: "TCP", port: 443 }] },
+    {
+      to: [{ ipBlock: { cidr: "0.0.0.0/0", except: ["169.254.0.0/16"] } }],
+      ports: [{ protocol: "TCP", port: 443 }],
+    },
   ]);
 });
 
@@ -2487,6 +2492,21 @@ test(
         "GitHub sign-in with a /0 egress entry",
         { ...githubLoginValues, "auth.github.egressCidrs[0]": "0.0.0.0/0" },
         /prefixes 1 through 32/,
+      ],
+      [
+        "GitHub sign-in with an empty-string egress list",
+        { ...githubLoginValues, "auth.github.egressCidrs": "" },
+        /auth\.github\.egressCidrs must be a list of IPv4 CIDRs/,
+      ],
+      [
+        "GitHub sign-in with an empty-string organization allowlist",
+        { ...githubLoginValues, "auth.github.allowedOrgs": "" },
+        /auth\.github\.allowedOrgs must be a list of GitHub organization logins/,
+      ],
+      [
+        "GitHub sign-in with an empty-string team allowlist",
+        { ...githubLoginValues, "auth.github.allowedTeams": "" },
+        /auth\.github\.allowedTeams must be a list of org\/team-slug entries/,
       ],
       [
         "GitHub sign-in sharing the Better Auth Secret",
