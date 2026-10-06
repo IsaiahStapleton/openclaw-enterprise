@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -119,6 +119,7 @@ async function ownedPostgres() {
     database,
     port,
     migrationUrl: migration.toString(),
+    composeProjectArgs: ["compose", "-f", server.composeFile, "-p", server.name],
     composeArgs: ["compose", "-f", server.composeFile, "-p", server.name, "exec", "-T", "postgres"],
   };
 }
@@ -769,6 +770,19 @@ test(
     // Native preparation performed the first migration; rerun the supported entry point.
     await runCommand(fixture, "corepack", ["pnpm", "db:migrate"]);
     assert.deepEqual((await pool.query(journalQuery)).rows, beforeJournal);
+    // The history cases run the script text directly; prove pnpm forwards --check too.
+    const checked = await runCommand(fixture, "corepack", [
+      "pnpm",
+      "db:migrate:production",
+      "--check",
+    ]);
+    assert.ok(
+      checked
+        .split("\n")
+        .some(
+          (line) => line === JSON.stringify({ event: "migration.checked", history: "completed" }),
+        ),
+    );
     assert.equal(await runCommand(fixture, "docker", dumpArgs), beforeSchema);
   },
 );
@@ -789,7 +803,18 @@ const concurrentHistoryPostgres = { ...requiresHistoryPostgres, concurrency: 4 }
 
 async function migrationHistoryFixture() {
   if (historySelectors.every((value) => value === undefined)) {
-    return { ...(await ownedPostgres()), databasePrefix: "openclaw_ci_canonical" };
+    const fixture = await ownedPostgres();
+    // Resolve the Compose service's container once: `docker exec` skips the Compose
+    // project load that each of the several hundred administrator psql calls would repeat.
+    const container = (
+      await runCommand(fixture, "docker", [...fixture.composeProjectArgs, "ps", "-q", "postgres"])
+    ).trim();
+    assert.match(container, /^[a-f0-9]{12,64}$/);
+    return {
+      ...fixture,
+      composeArgs: ["exec", container],
+      databasePrefix: "openclaw_ci_canonical",
+    };
   }
   assert.ok(historySelectors.every((value) => typeof value === "string" && value.length > 0));
   const [migrationUrl, container, databasePrefix] = historySelectors;
@@ -927,18 +952,27 @@ async function installProviderCompletedHistory(db) {
   }
 }
 
+// The history cases start several hundred migration commands on a CPU-bound 2-CPU CI
+// runner, and pnpm's own startup costs about 1 s of CPU per call. Run each package.json
+// script's exact text through `sh` with this Node first on PATH, as pnpm does. The "Drizzle
+// second migration" case still runs both commands through `corepack pnpm`, every prepared CI
+// database is migrated that way, and the Helm migration Job runs the script file directly.
+const migrationScripts = readFile(join(repositoryRoot, "package.json"), "utf8").then(
+  (text) => JSON.parse(text).scripts,
+);
+
 async function runHistoryMigration(db, mode = "development", checkOnly = false) {
-  const args = [
-    "pnpm",
-    mode === "production" ? "db:migrate:production" : "db:migrate",
-    ...(checkOnly ? ["--check"] : []),
+  const script = (await migrationScripts)[
+    mode === "production" ? "db:migrate:production" : "db:migrate"
   ];
+  assert.equal(typeof script, "string");
+  const args = ["-c", `${script} "$@"`, "sh", ...(checkOnly ? ["--check"] : [])];
   try {
-    const { stdout } = await execFileAsync("corepack", args, {
+    const { stdout } = await execFileAsync("sh", args, {
       cwd: repositoryRoot,
       env: {
         ...process.env,
-        pnpm_config_verify_deps_before_run: "false",
+        PATH: `${dirname(process.execPath)}:${process.env.PATH}`,
         OCC_MIGRATION_DATABASE_URL: db.migrationUrl,
       },
       encoding: "utf8",

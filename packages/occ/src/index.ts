@@ -2072,6 +2072,7 @@ export class OpenClawController {
           "Provisioning cannot retry after cancellation or deployment handoff.",
         );
       }
+      // Full admission, including the plugin policy that the status read skips.
       await this.authorizeProvisioningRecord(state, principalId, record);
       if (record.status === "queued" || record.status === "running") {
         return Object.freeze({ provisioning: provisioningProgress(record, observed) });
@@ -6739,6 +6740,7 @@ export class OpenClawController {
     state: PlatformUnitOfWork,
     principalId: string,
     record: Readonly<AgentProvisioningRecord>,
+    { statusRead = false }: { readonly statusRead?: boolean } = {},
   ): Promise<void> {
     const namespaceId = record.namespaceId;
     await this.authorizeProvisioningRequest(principalId, namespaceId);
@@ -6850,11 +6852,15 @@ export class OpenClawController {
         "The configured model, authentication, or channel bindings cannot be provisioned.",
       );
     }
-    this.validatePluginPolicies(
-      normalizeAgentPlugins(record.plan.plugins as PluginDesiredState | undefined),
-      normalizeAgentPluginApprovers(record.plan.pluginApprovers as PluginApprovers | undefined),
-      "stored",
-    );
+    // Plugin policy is admission for writes (replay, retry, the worker). A status read reports
+    // the stored work, so an Installation Plugin Driver switch does not turn it into a 400.
+    if (!statusRead) {
+      this.validatePluginPolicies(
+        normalizeAgentPlugins(record.plan.plugins as PluginDesiredState | undefined),
+        normalizeAgentPluginApprovers(record.plan.pluginApprovers as PluginApprovers | undefined),
+        "stored",
+      );
+    }
     if (agent !== undefined) {
       this.admitRepositoryCredentials(
         agent,
@@ -6886,7 +6892,8 @@ export class OpenClawController {
     if (found.record.actorId !== principalId) {
       throw new AuthorizationDeniedError("Only the initiating actor can read provisioning status.");
     }
-    await this.authorizeProvisioningRecord(state, principalId, found.record);
+    // Retry repeats the full check, plugin policy included, after its lifecycle checks.
+    await this.authorizeProvisioningRecord(state, principalId, found.record, { statusRead: true });
     return found;
   }
 
