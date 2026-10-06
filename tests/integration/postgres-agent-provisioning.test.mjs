@@ -1568,10 +1568,14 @@ test(
     await switched.stopWorker();
     const failed = await switched.request("GET", admitted.data.provisioning.url);
     assert.equal(failed.status, 200, JSON.stringify(failed.body));
-    assert.deepEqual(failed.data.error, {
-      code: "PROVISIONING_REJECTED",
-      message: "Agent provisioning could not complete.",
-    });
+    // The refusal names the stored plugin, as HTTP retry would, so Console can say why.
+    assert.equal(failed.data.error.code, "PROVISIONING_REJECTED");
+    assert.match(
+      failed.data.error.message,
+      new RegExp(
+        `^A plugin selection names a plugin that the selected Plugin Driver \\(occ-plugin\\) does not offer: ${pluginId}\\.`,
+      ),
+    );
     const work = await switched.pool.query(
       "SELECT state, reason_code, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
       [admitted.data.provisioning.workId],

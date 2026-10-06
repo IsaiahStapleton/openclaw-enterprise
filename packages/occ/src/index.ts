@@ -776,6 +776,12 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
   return render(shown);
 }
 
+/** Fits a refusal into the provisioning status contract's 256-character `error.message`. */
+function provisioningStatusMessage(message: string): string {
+  const characters = Array.from(message);
+  return characters.length <= 256 ? message : `${characters.slice(0, 255).join("")}…`;
+}
+
 // At most 200 characters counted as code points, as the API contract (JSON Schema
 // maxLength) and PostgreSQL char_length count them, not UTF-16 code units.
 function validName(value: unknown): value is string {
@@ -2229,13 +2235,18 @@ export class OpenClawController {
           : "permanent";
       const authorizationDenied =
         error instanceof AuthorizationDeniedError && !(error instanceof DependencyUnavailableError);
-      // Only the shared duplicate-name text passes through; other error messages stay internal.
+      // Only the shared duplicate-name text and the plugin-policy and native-support refusals
+      // pass through; other error messages stay internal. Those refusals name only Installation
+      // configuration and the work's own plugin selection, and HTTP returns them verbatim.
       const message =
-        code === "PROVISIONING_REJECTED" &&
-        error instanceof ResourceStateConflictError &&
-        error.message === AGENT_NAME_CONFLICT
-          ? AGENT_NAME_CONFLICT
-          : "Agent provisioning could not complete.";
+        code !== "PROVISIONING_REJECTED"
+          ? "Agent provisioning could not complete."
+          : error instanceof ResourceStateConflictError && error.message === AGENT_NAME_CONFLICT
+            ? AGENT_NAME_CONFLICT
+            : error instanceof PluginPolicyValidationError ||
+                error instanceof NativeWorkerSupportError
+              ? provisioningStatusMessage(error.message)
+              : "Agent provisioning could not complete.";
       await this.mutate(async (state) => {
         const current = await state.provisioning.findByWorkId(claim.idempotencyKey);
         if (current === undefined) {
