@@ -777,6 +777,10 @@ test("contract error details stay within the published path cap and name what a 
     // A submitted field name too long for the 512-character detail path is cut, as the NUL
     // check cuts it.
     [{ ...configuration, ["k".repeat(700)]: 1 }, `/${"k".repeat(511)}`, "UNKNOWN_FIELD"],
+    // The cut keeps whole escapes: no dangling "~".
+    [{ ...configuration, ["~".repeat(300)]: 1 }, `/${"~0".repeat(255)}`, "UNKNOWN_FIELD"],
+    // Keys that the Configuration check refuses are named by a capped path too.
+    [{ kind: "agent", values: { [longBinding]: { prototype: 1 } } }, "/values", "INVALID_VALUE"],
     // Under a long map key the instance path itself is too long: whole leading segments stay.
     [
       { ...configuration, secretBindings: { [longBinding]: { source, extra: 1 } } },

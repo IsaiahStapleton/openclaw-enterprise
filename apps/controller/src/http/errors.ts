@@ -125,7 +125,7 @@ function cappedPointer(segments: readonly string[]): string {
 }
 
 /** `cappedPointer` for a whole JSON Pointer, such as an Ajv instance path. */
-function cappedPath(pointer: string): string {
+export function cappedPath(pointer: string): string {
   return pointer.length <= 512 ? pointer : cappedPointer(pointer.split("/").slice(1));
 }
 
@@ -365,10 +365,15 @@ function collapseScalarUnions(allEntries: readonly ValidationEntry[]): readonly 
   const entries = allEntries.filter((entry) => !dropped.has(entry));
   const collapsed = new Map<ValidationEntry, ContractProblem | null>();
   // A member of a union that does not collapse names only one alternative, so it gets no hint,
-  // unless the union resolved to that member's shape.
+  // unless the union resolved to that member's shape. Only anyOf unions resolve; a oneOf
+  // never does.
   const unionMembers = new Set<ValidationEntry>();
   for (const union of allEntries) {
-    if (union.keyword === "anyOf" && typeof union.schemaPath === "string" && !resolved.has(union)) {
+    if (
+      (union.keyword === "anyOf" || union.keyword === "oneOf") &&
+      typeof union.schemaPath === "string" &&
+      !resolved.has(union)
+    ) {
       for (const member of unionMembersOf(union, allEntries)) {
         unionMembers.add(member);
       }
