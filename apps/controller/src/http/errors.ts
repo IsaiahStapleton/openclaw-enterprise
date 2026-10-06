@@ -251,7 +251,9 @@ function discriminatedBranch(union: ValidationEntry): string | undefined {
     if (!literals.every((shape) => shape.has(field))) {
       continue;
     }
-    const chosen = (value as Record<string, unknown>)[field];
+    const chosen = Object.hasOwn(value, field)
+      ? (value as Record<string, unknown>)[field]
+      : undefined;
     const matching = literals.flatMap((shape, index) =>
       shape.get(field) === chosen ? [String(index)] : [],
     );
@@ -414,13 +416,26 @@ function collapseScalarUnions(allEntries: readonly ValidationEntry[]): readonly 
   });
 }
 
+// Ajv runs in verbose mode (index.ts), so each entry also holds the request value it judged
+// (`data`, which can be a token or a whole body) and its schema. Problems are built from paths
+// and schema values only; once they are, drop those fields so that nothing that later logs or
+// serializes the error can carry request values.
+function forgetValidationValues(entries: readonly ValidationEntry[]): void {
+  for (const entry of entries) {
+    const verbose = entry as { data?: unknown; schema?: unknown; parentSchema?: unknown };
+    delete verbose.data;
+    delete verbose.schema;
+    delete verbose.parentSchema;
+  }
+}
+
 function validationProblems(error: FastifyError): readonly ContractProblem[] {
   if (!Array.isArray(error.validation)) {
     return [];
   }
   // Shapes that fail the same way report the same problem; list it once, in first-seen order.
   const seen = new Set<string>();
-  return collapseScalarUnions(error.validation)
+  const problems = collapseScalarUnions(error.validation)
     .filter(({ detail, expected }) => {
       const key = JSON.stringify([detail.path, detail.code, expected]);
       if (seen.has(key)) {
@@ -430,6 +445,8 @@ function validationProblems(error: FastifyError): readonly ContractProblem[] {
       return true;
     })
     .slice(0, 32);
+  forgetValidationValues(error.validation);
+  return problems;
 }
 
 const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({

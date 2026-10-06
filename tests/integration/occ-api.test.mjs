@@ -4457,6 +4457,26 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
       [{ path: "/harnessAuth/source", code: "REQUIRED" }],
       path,
     );
+    // Switching to the runtime method while leaving the old source in place: the method
+    // selects the runtime shape, so only the field it does not accept is reported.
+    const runtimeWithSource = await injectedRequest(fixture.app, method, url, {
+      body: body({ method: "runtime", source: foreign }),
+    });
+    assert.equal(
+      runtimeWithSource.status,
+      400,
+      `${path}: ${JSON.stringify(runtimeWithSource.body)}`,
+    );
+    assert.equal(
+      runtimeWithSource.body.error.message,
+      "The request does not match the operation contract: body /harnessAuth/source is not an accepted field.",
+      path,
+    );
+    assert.deepEqual(
+      runtimeWithSource.body.error.details,
+      [{ path: "/harnessAuth/source", code: "UNKNOWN_FIELD" }],
+      path,
+    );
     const unknownMethod = await injectedRequest(fixture.app, method, url, {
       body: body({ method: "password" }),
     });
