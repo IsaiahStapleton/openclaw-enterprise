@@ -140,8 +140,8 @@ Default Compose development uses the filesystem Driver. Each write exclusively
 creates a private temporary file under the exact Namespace directory, writes the
 approved document, closes the file, then atomically renames it to the Configuration
 path. A finally block removes only that write's temporary file, including after
-partial writes such as `ENOSPC` or a failed rename. The prior destination is not
-replaced on failure, and other writers' temporary files remain untouched. Storage
+partial writes such as `ENOSPC` or a failed rename. The prior destination stays
+intact until rename succeeds, and other writers' temporary files remain untouched. Storage
 and cleanup failures propagate to the caller; this does not add automatic retries
 or alter OCC's metadata transaction and compensation boundary.
 
