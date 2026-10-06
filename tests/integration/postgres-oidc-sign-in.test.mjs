@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 import {
+  assertConsoleSignIn,
+  assertExternalSignInRefused,
   attachProvider,
-  authRowCounts,
   clientAddresses,
   composeProductionSignIn,
   consoleOrigin as origin,
@@ -15,6 +16,7 @@ import {
   githubUpgradeSettings,
   googleSignIn,
   googleUpgradeSettings,
+  loginDenialCount,
   memoryLogger,
   oidcSignIn,
   oidcUpgradeSettings,
@@ -57,7 +59,6 @@ const disabledSubject = "auth0|6500000000000000000000a3";
 const bothSubject = "auth0|6500000000000000000000a4";
 const bothGoogleSubject = "110000000000000000044";
 const bothGithubSubject = "9600004";
-const sessionCookieName = "__Host-openclaw_occ.session_token";
 
 const recoveryOnly = (settings) =>
   Object.freeze({ ...settings, OCC_AUTH_PASSWORD_SIGN_IN: "recovery-only" });
@@ -94,36 +95,23 @@ test(
     const { member, disabled, both, stranded } = accounts;
     let adminHeaders;
 
-    const counts = () => authRowCounts(pool);
-    const denials = async (reason) =>
-      (await state.transact((unit) => unit.audit.list())).filter(
-        ({ action, outcome, reasonCode, details }) =>
-          action === "authentication.login" &&
-          outcome === "denied" &&
-          reasonCode === reason &&
-          details?.provider === "oidc",
-      ).length;
+    const denials = (reason) => loginDenialCount(state, reason, "oidc");
     const attach = (userId, subject, provider = "oidc") =>
       attachProvider(app, adminHeaders, userId, provider, subject);
-    async function assertRefused(authorization, message, reason = "EXTERNAL_IDENTITY_REJECTED") {
-      const before = await counts();
-      const deniedBefore = await denials(reason);
-      const { callback } = await oidcSignIn(app, origin, idp, authorization, address());
-      assert.equal(callback.statusCode, 302, message);
-      assert.equal(callback.headers.location, "/console/?authError=oidc", message);
-      assert.equal(
-        String(callback.headers["set-cookie"] ?? "").includes(sessionCookieName),
-        false,
-        `${message}: no session cookie`,
+    const assertRefused = (authorization, message, reason) =>
+      assertExternalSignInRefused(
+        {
+          pool,
+          provider: "oidc",
+          denials,
+          signIn: () => oidcSignIn(app, origin, idp, authorization, address()),
+        },
+        message,
+        reason,
       );
-      assert.deepEqual(await counts(), before, `${message}: no user, method or session`);
-      assert.equal(await denials(reason), deniedBefore + 1, `${message}: the denial is audited`);
-    }
     async function assertSignIn(subject, userId, extra = {}) {
       const signIn = await oidcSignIn(app, origin, idp, { subject, ...extra }, address());
-      assert.equal(signIn.callback.headers.location, "/console/", signIn.callback.body);
-      const cookie = cookieHeaderFromSetCookie(signIn.callback.headers["set-cookie"]);
-      assert.equal((await currentSession(app, cookie)).user.id, userId);
+      const cookie = await assertConsoleSignIn(app, signIn.callback, userId);
       return { ...signIn, cookie };
     }
 
