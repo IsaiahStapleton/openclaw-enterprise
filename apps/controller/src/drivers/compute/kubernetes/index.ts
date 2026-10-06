@@ -1715,6 +1715,9 @@ function harnessModels(configuration: OpenClawConfigurationDocument): readonly s
   return [...new Set(models as string[])];
 }
 
+// The error contract caps the message a ConfigurationHarnessError becomes.
+const HARNESS_MESSAGE_CAP = 256;
+
 // A dedicated Codex Gateway entrypoint rewrites these settings at every start
 // (excludeGatewayLocalCodexTools, pinCodexProviderTransport) and refuses to start
 // on a shape it cannot rewrite. Reject those shapes here, before a deployment
@@ -1722,10 +1725,20 @@ function harnessModels(configuration: OpenClawConfigurationDocument): readonly s
 // are replaced at start, so they are accepted. The caller owns this Configuration,
 // so the error names the setting path and admission returns it as invalid content.
 function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurationDocument): void {
+  const message = (path: string, shape: string) =>
+    `Configuration setting ${path} must be ${shape}: a dedicated Codex Gateway cannot apply it otherwise.`;
   const unsupported = (path: string, shape: string) =>
-    new ConfigurationHarnessError(
-      `Configuration setting ${path} must be ${shape}: a dedicated Codex Gateway cannot apply it otherwise.`,
-    );
+    new ConfigurationHarnessError(message(path, shape));
+  // A provider key is submitted and can be any length. Cut it (by whole characters, ending
+  // in "…") so the message fits the 256-character error cap with its wording whole, as
+  // contract messages cut long paths.
+  const unsupportedProvider = (key: string, rest: string, shape: string) => {
+    const room =
+      HARNESS_MESSAGE_CAP - Array.from(message(`models.providers.${rest}`, shape)).length;
+    const characters = Array.from(key);
+    const shown = characters.length <= room ? key : `${characters.slice(0, room - 1).join("")}…`;
+    return unsupported(`models.providers.${shown}${rest}`, shape);
+  };
   const object = (value: unknown, path: string): Record<string, unknown> | undefined => {
     if (value === undefined || value === null) {
       return undefined;
@@ -1753,13 +1766,13 @@ function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurat
     }
     const row = asRecord(provider);
     if (row === undefined) {
-      throw unsupported(`models.providers.${key}`, "an object");
+      throw unsupportedProvider(key, "", "an object");
     }
     if (
       row.models !== undefined &&
       (!Array.isArray(row.models) || !row.models.every((model) => asRecord(model) !== undefined))
     ) {
-      throw unsupported(`models.providers.${key}.models`, "a list of objects");
+      throw unsupportedProvider(key, ".models", "a list of objects");
     }
   }
 }
