@@ -1,7 +1,7 @@
 import { migrateWithHistory } from "./migration-history.mjs";
 import { createPostgresPool } from "../packages/occ/src/state/postgres-pool.ts";
 import { createOccLogger, emitOccLogEvent } from "../apps/controller/src/logging.ts";
-import { loadOperationalLoggingConfiguration } from "../apps/controller/src/composition/installation-config.ts";
+import { loadOperationalLoggingConfiguration } from "../apps/controller/src/composition/startup-file.ts";
 
 const databaseUrl = process.env.OCC_MIGRATION_DATABASE_URL;
 let pool;
