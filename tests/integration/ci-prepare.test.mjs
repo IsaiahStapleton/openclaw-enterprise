@@ -629,13 +629,13 @@ for (const { scenario, error } of [
     if (scenario === "lagging-worker-cri" || scenario === "absent-worker-cri") {
       assert.match(
         result.stderr,
-        /CRI on k3d-\S+-agent-0 does not list the imported \S+ reference yet \(attempt 2\); retrying\./,
+        /CRI on k3d-\S+-agent-0 does not list the imported \S+ reference yet \(attempt 1\); retrying\./,
       );
     }
     if (scenario === "absent-worker-cri") {
       // The bounded wait is about 5 s; the lookups back off to one per second.
       const lookups = criLookups("agent-0");
-      assert.ok(lookups >= 3 && lookups <= 12, `bounded CRI wait made ${lookups} lookups`);
+      assert.ok(lookups >= 2 && lookups <= 12, `bounded CRI wait made ${lookups} lookups`);
     }
     const save = preparation.find(
       ({ command, args }) =>

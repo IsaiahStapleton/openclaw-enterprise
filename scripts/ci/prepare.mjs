@@ -1556,7 +1556,7 @@ async function ensureDockerSourceImage(state, image, envName) {
 const criImageCacheWaitMs = 5_000;
 
 async function inspectK3dCriImage(lane, node, reference, envName) {
-  const deadline = Date.now() + criImageCacheWaitMs;
+  const deadline = performance.now() + criImageCacheWaitMs;
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await execFile(process.env.OCC_DOCKER_BIN ?? "docker", [
@@ -1567,7 +1567,7 @@ async function inspectK3dCriImage(lane, node, reference, envName) {
         reference,
       ]);
     } catch (error) {
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - performance.now();
       if (!/\bno such image\b/i.test(error.stderr ?? "") || remainingMs <= 0) {
         throw error;
       }
