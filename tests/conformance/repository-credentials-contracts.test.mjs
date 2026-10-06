@@ -13,7 +13,7 @@ import {
   createTlsMaterial,
 } from "../fixtures/repository-credentials/process.mjs";
 import { createControlledClock } from "../fixtures/repository-credentials/clock.mjs";
-import { createServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
+import { createLoopbackServiceConfiguration } from "../fixtures/repository-credentials/service.mjs";
 import { startGitHubFixture } from "../fixtures/repository-credentials/github.mjs";
 import { startGitSmartHttpFixture } from "../fixtures/repository-credentials/git.mjs";
 import {
@@ -606,8 +606,7 @@ test(
     const resources = createTestResourceScope(t);
     const clock = createControlledClock();
     const tls = await createTlsMaterial(resources);
-    const original = await createServiceConfiguration(resources);
-    const config = { ...original, gateway: { ...original.gateway, listen: "127.0.0.1:0" } };
+    const config = await createLoopbackServiceConfiguration(resources);
     const github = await startGitHubFixture(resources, { clock, tls });
     const git = await startGitSmartHttpFixture(resources, { authorize: github.authorize, tls });
     const factory = await createGitHubServiceFactory(resources, {
