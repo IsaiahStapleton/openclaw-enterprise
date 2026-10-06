@@ -27,9 +27,13 @@ state: each retry, permanent failure, expired claim, and completion. A pass that
 leaves work waiting, such as a deployment whose runtime is still starting, is
 recorded only when its result differs from the work item's previous one, so a
 deployment that waits for minutes writes one waiting event, not one per check.
-Each event's details carry `workId`, `reasonCode` and `attemptCount`. A retry and
-the final failure look the same. The final one is the `failure` event whose
-`attemptCount` reaches the worker's attempt limit, 5 by default.
+Each event's details carry `workId`, `reasonCode` and `attemptCount`. A `failure`
+event after which the worker stops trying also carries `final: true`: a permanent
+error, or a failure with no attempts left (5 by default), including a claim that
+expired on its last attempt (`LEASE_EXPIRED`) and queued work with none left
+(`MAX_ATTEMPTS_EXHAUSTED`). A failure the worker will retry has no `final` field.
+Retrying failed work, such as an Agent or Namespace deletion, is its own audited
+action, and the same `workId` can then record more events.
 Authorization denials and lifecycle events such as revision activation are
 always recorded. An external sign-in callback that matches no pending attempt is
 not: anyone can send one, so the API counts it in a
