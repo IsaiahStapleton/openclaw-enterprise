@@ -12,6 +12,7 @@ specs/
 An RFC defines a decision; a plan describes its implementation. Plans can also
 stand alone, and link relevant RFCs through `rfc` frontmatter. Use one Markdown
 file per document, or a folder with `index.md` when companions are needed.
+Browse [implementation plans](plans/) directly for delivery records.
 See the [specification process](../docs/contributing/specifications.md) for
 authoring, numbering, and review.
 

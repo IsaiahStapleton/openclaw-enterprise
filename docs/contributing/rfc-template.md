@@ -19,6 +19,7 @@ defined in the specification process.
 ```yaml
 ---
 status: Proposed
+implementation_status: Not implemented
 author: github-login
 ---
 ```
