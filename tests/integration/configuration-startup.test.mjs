@@ -270,7 +270,7 @@ test("repository startup constructs the same local resolver without a private so
       mode: "production",
       environment: { OCC_CONFIG_PATH: await fixture(t, astral) },
     }),
-    /backend\[0\]\.id must fit in 200 UTF-16 code units for a GitHub Backend/,
+    /backend\[0\]\.id must fit in 200 UTF-16 code units for a GitHub Backend, because/,
   );
 
   // The actual API reaches its ordinary database dependency while the configured

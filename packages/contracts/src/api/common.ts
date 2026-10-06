@@ -34,9 +34,9 @@ export const AgentProvisioningWorkId = Type.String({
  * the in-memory state store. An ID is 1 to 200 code points (Ajv counts `maxLength` that way,
  * and so does PostgreSQL `char_length`), has no leading or trailing whitespace, and has no
  * control character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029)
- * anywhere. C1 is refused because the `[[:cntrl:]]` check on agents.backend_id and
- * agent_revisions.backend_id refuses it in an en_US.utf8 (libc) database, so an ID the API
- * accepted could not be saved.
+ * anywhere. C1 and the separators are refused because the `[[:cntrl:]]` check on
+ * agents.backend_id and agent_revisions.backend_id refuses them in an en_US.utf8 (libc)
+ * database, so an ID the API accepted could not be saved.
  */
 export const BACKEND_ID_PATTERN = /^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/
   .source;
