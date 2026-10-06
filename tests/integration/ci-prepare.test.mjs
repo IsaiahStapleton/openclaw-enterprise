@@ -305,8 +305,15 @@ if (command === "docker" || command === "podman") {
         ? "10.42.7.0 dev flannel.1\n"
         : "10.42.7.0 via 10.42.7.0 dev flannel.1 src 10.42.3.0\n");
     }
+    // A node exec that does not answer; preparation must time it out. It exits on its own
+    // later, so a regression cannot leave it running.
+    async function hang() {
+      setTimeout(() => process.exit(124), 40_000);
+      await new Promise(() => {});
+    }
     const ctr = ["ctr", "-n", "k8s.io", "images"];
     if (equals(args.slice(2), [...ctr, "list"])) {
+      if (scenario === "hung-ctr-list" && node.endsWith("-agent-0")) await hang();
       const references = [state.importedNodes?.[node] && state.tag, alias].filter(Boolean);
       finish("REF TYPE DIGEST SIZE PLATFORMS LABELS\n" + references.map((ref) =>
         ref + " application/vnd.oci.image.manifest.v1+json " + manifestDigest + " 1 linux/amd64 -\n",
@@ -322,6 +329,11 @@ if (command === "docker" || command === "podman") {
     if (equals(args.slice(2, 7), [...ctr, "rm"]) && args.length === 8 &&
         [state.tag, alias].includes(args[7])) finish();
     if (equals(args.slice(2), ["crictl", "inspecti", alias]) && alias) {
+      if (scenario === "hung-worker-cri" && node.endsWith("-agent-0")) {
+        // A cache-miss answer before the hang: a timeout must still not be retried as one.
+        process.stderr.write('time="2026-10-06T11:05:15Z" level=fatal msg="no such image"\n');
+        await hang();
+      }
       if (scenario === "missing-cri" ||
           (scenario === "missing-worker-cri" && node.endsWith("-agent-0"))) {
         process.stderr.write("synthetic CRI image not found\n");
@@ -565,12 +577,27 @@ for (const { scenario, error } of [
   { scenario: "missing-worker-cri", error: /synthetic CRI image not found/ },
   { scenario: "lagging-worker-cri" },
   { scenario: "absent-worker-cri", error: /level=fatal msg="no such image / },
+  // A hung check fails at its own timeout (1 s here), never retried as a cache miss.
+  {
+    scenario: "hung-worker-cri",
+    error: /CRI on k3d-\S+-agent-0 did not answer within 1000 ms \(crictl inspecti \S+\)\./,
+  },
+  {
+    scenario: "hung-ctr-list",
+    error:
+      /containerd on k3d-\S+-agent-0 did not answer within 1000 ms \(ctr -n k8s\.io images list\)\./,
+  },
   { scenario: "nonzero-import", error: /synthetic import command failure/ },
   { scenario: "nonzero-worker-import", error: /synthetic import command failure/ },
   { scenario: "save-failed", error: /synthetic export failure/ },
 ]) {
   test(`fixture image CLI verifies runtime registration and cleanup: ${scenario}`, async (t) => {
-    const commands = await fixtureImageCommands(t, scenario);
+    const commands = await fixtureImageCommands(
+      t,
+      scenario,
+      undefined,
+      scenario.startsWith("hung-") ? { OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS: "1000" } : {},
+    );
     const result = commands.prepare();
     assert.equal(result.error, undefined);
     const state = JSON.parse(await readFile(commands.statePath, "utf8"));
@@ -619,6 +646,7 @@ for (const { scenario, error } of [
     const expectedWorkerLookups = {
       "missing-worker-cri": 1,
       "lagging-worker-cri": 3,
+      "hung-worker-cri": 1,
     }[scenario];
     if (expectedWorkerLookups) {
       assert.equal(criLookups("agent-0"), expectedWorkerLookups);
