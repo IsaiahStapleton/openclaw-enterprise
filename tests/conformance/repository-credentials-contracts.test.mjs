@@ -587,6 +587,7 @@ test("a cleanup deadline is a failure and does not prevent remaining resource re
   resources.after(() => pendingCleanup.promise);
   const closed = resources.close();
   await assert.rejects(closed, (error) => {
+    assert.ok(error instanceof AggregateError);
     assert.equal(error.errors.length, 1);
     assert.match(error.errors[0].message, /cleanup timed out/);
     return true;
@@ -596,6 +597,7 @@ test("a cleanup deadline is a failure and does not prevent remaining resource re
   await pendingCleanup.promise;
   // Late completion cannot replace the recorded cleanup deadline with success.
   assert.equal(resources.close(), closed);
+  await assert.rejects(resources.close(), /credential fixture cleanup failed/);
 });
 
 test(
