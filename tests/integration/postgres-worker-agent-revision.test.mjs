@@ -7918,7 +7918,9 @@ for (const { label, failure, code, message } of [
     `a dependency still failing at the convergence deadline fails deployment with its own code (${label})`,
     requiresPostgres,
     async (context) => {
-      const fixture = await setup(context);
+      // The 2.5 s deadline fits only three to six passes on a loaded runner, so a
+      // one-attempt budget keeps "more passes than the attempt budget" clear of it.
+      const fixture = await setup(context, { maxAttempts: 1 });
       const owner = await fixture.agent("dependency-down");
       const candidate = await fixture.revision(owner, 1);
       let observations = 0;
@@ -7937,7 +7939,7 @@ for (const { label, failure, code, message } of [
 
       const failed = await fixture.work(candidate, "failed_permanent", 30_000);
       assert.ok(
-        observations > 5,
+        observations > 1,
         `expected more passes than the attempt budget, saw ${observations}`,
       );
       assert.equal(failed.attempt_count, 1);
