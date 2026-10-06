@@ -1669,9 +1669,7 @@ test(
 
     // The Installation now runs a runtime image without native worker support. Every attempt
     // would refuse the plan the same way, so the worker fails it on the first one and says why.
-    // The first recorded error settles it: a retried refusal would leave the work running. Status
-    // is read from the database because the HTTP status read rechecks native worker support and
-    // answers 400 in this state (a known gap, unlike the Plugin Driver switch above).
+    // The first recorded error settles it: a retried refusal would leave the work running.
     const switched = await createFixture(context, drivers);
     await switched.startWorker();
     const failed = await waitFor(
@@ -1694,6 +1692,16 @@ test(
     assert.deepEqual(work.rows, [
       { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED", attempt_count: 1 },
     ]);
+
+    // Reading status reports the stored failure: native worker support is admission for writes.
+    const status = await switched.request("GET", admitted.data.provisioning.url);
+    assert.equal(status.status, 200, JSON.stringify(status.body));
+    assert.equal(status.data.status, "failed");
+    assert.deepEqual(status.data.error, failed.progress.error);
+    // Retry would run the plan again, so it is still refused for the missing support.
+    const retried = await switched.request("POST", `${admitted.data.provisioning.url}/retry`);
+    assert.equal(retried.status, 400, JSON.stringify(retried.body));
+    assert.equal(retried.body.error.message, new NativeWorkerSupportError().message);
   },
 );
 
