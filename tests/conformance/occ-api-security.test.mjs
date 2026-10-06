@@ -1727,6 +1727,16 @@ test("contract error details stay within the published path cap and name what a 
       "/secretBindings or an object under it is missing a required field.",
     ],
     [
+      configurations,
+      { ...configuration, secretBindings: { [longBinding]: { source: { ...source, id: "x" } } } },
+      "/secretBindings contains a field that has an invalid format.",
+    ],
+    [
+      configurations,
+      { ...configuration, secretBindings: { [longBinding]: { source: { ...source, kind: "x" } } } },
+      '/secretBindings contains a field that has an unsupported value (expected "secret").',
+    ],
+    [
       agents,
       { ...agent, harnessAuth: { method: "api_key", source, [longBinding]: 1 } },
       "/harnessAuth contains a field that is not accepted.",
