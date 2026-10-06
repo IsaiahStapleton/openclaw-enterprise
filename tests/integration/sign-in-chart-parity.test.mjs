@@ -930,7 +930,7 @@ test(
       [
         "an empty-string egress list",
         { ...google, "auth.google.egressCidrs": "" },
-        /auth\.google\.egressCidrs must be a list of IPv4 CIDRs/,
+        /auth\.google\.egressCidrs must be a list of IPv4 CIDRs; leave it unset or \[\]/,
       ],
       [
         "an empty-string domain allowlist",
@@ -987,7 +987,7 @@ test(
       [
         "an empty-string egress list",
         { ...oidc, "auth.oidc.egressCidrs": "" },
-        /auth\.oidc\.egressCidrs must be a list of IPv4 CIDRs/,
+        /auth\.oidc\.egressCidrs must be a list of IPv4 CIDRs; leave it unset or \[\]/,
       ],
       [
         "an HTTP base URL",
