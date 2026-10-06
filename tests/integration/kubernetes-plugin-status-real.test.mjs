@@ -71,13 +71,17 @@ function isKubernetesObjectConflict(error) {
   );
 }
 
-// The Driver does not retry a failed write, and it reports a failed runtime Secret write
-// as DependencyUnavailableError without the API error. The worker retries that error on
-// its next reconcile, so this direct caller retries it too. CI saw it once while another
-// file shared the k3d cluster. A failure that persists still ends the wait, and the
-// timeout names the last transient error.
+// The Driver does not retry a failed write. A runtime Secret write the API server answers
+// with 429 or 5xx surfaces as TransientDependencyError, and other failures of it as
+// DependencyUnavailableError. The worker retries both on a later pass, so this direct
+// caller retries them too. CI saw one while another file shared the k3d cluster. A failure
+// that persists still ends the wait, and the timeout names the last transient error.
 function isTransientPrepareFailure(error) {
-  return isKubernetesObjectConflict(error) || error?.name === "DependencyUnavailableError";
+  return (
+    isKubernetesObjectConflict(error) ||
+    error?.name === "TransientDependencyError" ||
+    error?.name === "DependencyUnavailableError"
+  );
 }
 
 async function prepareRevisionEventually(fixture, driver = fixture.driver) {

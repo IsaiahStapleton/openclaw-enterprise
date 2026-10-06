@@ -516,7 +516,7 @@ function preparationFailure(
 
 function preparationFailureDiagnostic(error: unknown): ComputePrepareRevisionFailureDiagnostic {
   const failure = preparationFailure(error);
-  const cause = failure.error;
+  const cause = privateWriteEvidence(failure.error) ?? failure.error;
   const status = numericErrorStatus(cause);
   if (cause instanceof ConfigurationFailure) {
     return {
@@ -552,7 +552,8 @@ function preparationFailureDiagnostic(error: unknown): ComputePrepareRevisionFai
   }
   if (status !== undefined) {
     return {
-      code: status >= 500 ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
+      code:
+        status === 429 || status >= 500 ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
       stage: failure.stage,
       errorClass: "KubernetesApiError",
       message: "The Kubernetes API rejected revision preparation.",
@@ -589,19 +590,123 @@ const UNREACHABLE_SOCKET_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
-function unreachableSocketFailure(error: unknown, depth = 0): boolean {
+function unreachableSocketFailure(error: unknown): boolean {
+  return unreachableSocketCause(error) !== undefined;
+}
+
+/** "timeout" for a request timeout, else the socket code that never reached an API server. */
+function unreachableSocketCause(error: unknown, depth = 0): string | undefined {
   if (error instanceof KubernetesRequestTimeout) {
-    return true;
+    return "timeout";
   }
   const record = asRecord(error);
   if (record === undefined || depth > 4) {
-    return false;
+    return undefined;
   }
   if (typeof record.code === "string" && UNREACHABLE_SOCKET_CODES.has(record.code)) {
-    return true;
+    return record.code;
   }
   const nested = Array.isArray(record.errors) ? record.errors : [];
-  return [record.cause, ...nested].some((entry) => unreachableSocketFailure(entry, depth + 1));
+  for (const entry of [record.cause, ...nested]) {
+    const cause = unreachableSocketCause(entry, depth + 1);
+    if (cause !== undefined) {
+      return cause;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * What a private Secret write keeps of a Kubernetes API failure: the HTTP status and Status
+ * reason, or the socket code. The client error stays behind, because its message, body and
+ * request can echo the private data that was written.
+ */
+class KubernetesApiFailureEvidence extends Error {
+  // Named like the client error's HTTP status and a socket error's code, so the
+  // existing classifiers read the evidence unchanged.
+  readonly code: number | string;
+  readonly reason: string | undefined;
+
+  constructor(code: number | string, reason?: string) {
+    super(
+      typeof code === "string"
+        ? `The Kubernetes API was unreachable (${code}).`
+        : `The Kubernetes API answered HTTP ${code}${reason === undefined ? "" : ` (${reason})`}.`,
+    );
+    this.name = "KubernetesApiFailureEvidence";
+    this.code = code;
+    this.reason = reason;
+  }
+}
+
+/**
+ * The Status reason of a Kubernetes API answer, only when it is a bare CamelCase word. The
+ * client keeps an error answer's body as its JSON text.
+ */
+function kubernetesStatusReason(error: unknown): string | undefined {
+  const body = asRecord(error)?.body;
+  let status: unknown = body;
+  if (typeof body === "string" && body.length <= 65_536) {
+    try {
+      status = JSON.parse(body);
+    } catch {
+      return undefined;
+    }
+  }
+  const reason = asRecord(status)?.reason;
+  return typeof reason === "string" && /^[A-Za-z]{1,64}$/u.test(reason) ? reason : undefined;
+}
+
+function kubernetesApiFailureEvidence(
+  error: unknown,
+): KubernetesApiFailureEvidence | KubernetesRequestTimeout | undefined {
+  const socket = unreachableSocketCause(error);
+  if (socket === "timeout") {
+    return new KubernetesRequestTimeout("Kubernetes API request timed out.");
+  }
+  if (socket !== undefined) {
+    return new KubernetesApiFailureEvidence(socket);
+  }
+  // Only an HTTP status counts: a DOMException abort also carries a numeric code.
+  const status = numericErrorStatus(error);
+  return status === undefined || status < 100 || status > 599
+    ? undefined
+    : new KubernetesApiFailureEvidence(status, kubernetesStatusReason(error));
+}
+
+/**
+ * The error a failed private Secret write raises in place of the client error: a transient
+ * Kubernetes API failure stays transient, so the worker waits within the deadline instead of
+ * spending its attempt budget; anything else becomes `message`. Either keeps only sanitized
+ * API evidence as its cause.
+ */
+function privateWriteFailure(message: string, error: unknown): Error {
+  const evidence = kubernetesApiFailureEvidence(error);
+  const transient = evidence === undefined ? undefined : transientKubernetesFailure(evidence);
+  if (transient instanceof TransientDependencyError) {
+    return transient;
+  }
+  const failure = new DependencyUnavailableError(message);
+  if (evidence !== undefined) {
+    failure.cause = evidence;
+  }
+  return failure;
+}
+
+/**
+ * The sanitized API evidence beneath a private Secret write's own error, if any. The
+ * preparation stage tags that outer error, so the cause walk in preparationFailure stops
+ * there and never reaches the evidence by itself.
+ */
+function privateWriteEvidence(
+  error: unknown,
+): KubernetesApiFailureEvidence | KubernetesRequestTimeout | undefined {
+  const cause = asRecord(error)?.cause;
+  return (error instanceof TransientDependencyError ||
+    error instanceof DependencyUnavailableError) &&
+    (cause instanceof KubernetesApiFailureEvidence || cause instanceof KubernetesRequestTimeout)
+    ? cause
+    : undefined;
 }
 
 /**
@@ -9118,8 +9223,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
             : clients.core.replaceNamespacedSecret({ name, namespace: namespace.name, body }),
         { mutating: true },
       );
-    } catch {
-      throw new DependencyUnavailableError("Workspace setup private delivery is unavailable.");
+    } catch (error) {
+      throw privateWriteFailure("Workspace setup private delivery is unavailable.", error);
     }
   }
 
@@ -11583,10 +11688,10 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
           uid: required(observed.metadata.uid, "Runtime Secret UID"),
         },
       }));
-    } catch {
+    } catch (error) {
       this.operationSignal()?.throwIfAborted();
       // API failures can echo private request bodies; never expose them through status or logs.
-      throw new DependencyUnavailableError("Runtime credential delivery is unavailable.");
+      throw privateWriteFailure("Runtime credential delivery is unavailable.", error);
     }
   }
 
