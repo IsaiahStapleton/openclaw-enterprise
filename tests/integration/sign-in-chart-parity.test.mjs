@@ -1026,3 +1026,20 @@ test(
     }
   },
 );
+
+test("a null optional sign-in map renders like an absent one", tooling, async () => {
+  // `auth.github: null` (or `--set auth.github=null`) deletes the map's defaults. The chart
+  // must then render the password-only install without a trusted proxy, as validation and
+  // the install notes already assume, instead of failing with a template nil pointer.
+  for (const key of ["auth.github", "auth.google", "auth.oidc", "api.trustedProxy"]) {
+    const objects = await renderChart({ [key]: "null" });
+    assert.deepEqual(signInSettings(deploymentEnv(objects, "api")), defaultInstallSettings, key);
+    assert.equal(
+      objects.filter(
+        ({ kind, metadata }) => kind === "NetworkPolicy" && /-login-egress$/.test(metadata.name),
+      ).length,
+      0,
+      key,
+    );
+  }
+});
