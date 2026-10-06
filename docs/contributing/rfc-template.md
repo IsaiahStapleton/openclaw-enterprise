@@ -6,9 +6,9 @@ the actual decision. Allocate the number using the
 [specification process](specifications.md#files-and-numbering).
 If the RFC needs companion files, use `<number>-<topic>/index.md` instead.
 Replace `github-login` with the original RFC PR author's GitHub login (without `@`).
-The author is required and is treated as the RFC owner. Show the same author
-near the title and in the index; no separate owner field is needed. Describe
-team responsibilities in the proposal where relevant.
+The author is required and is treated as the RFC owner. The index uses this
+frontmatter value; do not repeat it in the body or add a separate owner field.
+Describe team responsibilities in the proposal where relevant.
 Adapt the headings to the change and remove sections that do not apply. See the
 [RFC process](rfcs.md) for review, length, and diagram guidance.
 
@@ -28,7 +28,6 @@ author: github-login
 
 # Proposal: [Decision or capability]
 
-- **Author:** [@github-login](https://github.com/github-login)
 - **ID:** RFC-[number]
 - **Created:** [YYYY-MM-DD]
 - **Last updated:** [YYYY-MM-DD]

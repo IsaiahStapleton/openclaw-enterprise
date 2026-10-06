@@ -6,8 +6,6 @@ status: Accepted
 
 # Installation profiles: openclaw and codex
 
-**Author:** [@kevinlin-openai](https://github.com/kevinlin-openai)
-
 **Date:** 2026-09-28
 
 **Status:** Implementing; profile defaults and scope decisions accepted

@@ -34,8 +34,9 @@ When converting an existing single file, preserve its ID and content and update
 all incoming and relative links; do not leave a top-level duplicate.
 Start the file with YAML frontmatter containing `status: Proposed`,
 `implementation_status: Not implemented`, and the required `author` GitHub login,
-as defined in the specification process. Treat the author as the RFC owner,
-show the same author near the title, and do not add a separate owner field. Companion
+as defined in the specification process. Treat the author as the RFC owner;
+keep attribution in frontmatter and the index without repeating it in the body
+or adding a separate owner field. Companion
 Markdown notes use an `rfc` frontmatter link to the main document and inherit
 its decision status; do not duplicate the status in companions. When adding
 metadata to historical RFCs, use recorded decision evidence. If no decision is

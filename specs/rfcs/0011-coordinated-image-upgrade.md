@@ -6,8 +6,6 @@ status: Proposed
 
 # Independent production image upgrades
 
-**Author:** [@RomneyDa](https://github.com/RomneyDa)
-
 Status: Proposed. This specification selects the first production upgrade
 workflow for review; it does not describe behavior available on `main`.
 

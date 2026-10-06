@@ -7,8 +7,6 @@ status_note: "Recorded as proposed; the Memory and Skills placement is supersede
 
 # Gateway–Harness storage split
 
-**Author:** [@Kimiyu-186](https://github.com/Kimiyu-186)
-
 > **Memory and Skills placement is superseded by [spec30](../plans/30-storage-split-integration.md).**
 > The current proposal keeps the Memory index on Gateway; the original design below is preserved as history.
 

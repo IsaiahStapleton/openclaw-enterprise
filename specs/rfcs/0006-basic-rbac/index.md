@@ -7,8 +7,6 @@ status_note: "Deferred past 0.x; retained as direction, not an accepted release 
 
 # RFC: Basic RBAC for personal and team Agents
 
-**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
-
 **Date:** 2026-09-18
 
 **Status:** Direction; deferred past 0.x — not an MVP requirement.

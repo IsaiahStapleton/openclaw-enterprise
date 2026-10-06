@@ -9,8 +9,6 @@ status_note: "The record describes implementation and amendments but does not st
 
 # RFC: GitHub sign-in for existing accounts
 
-**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
-
 - **Status:** Implementing. M1 to M4 are on `main`, implemented by [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305), [#520](https://github.com/openclaw/openclaw-enterprise/pull/520), [#521](https://github.com/openclaw/openclaw-enterprise/pull/521) and [#522](https://github.com/openclaw/openclaw-enterprise/pull/522). Untagged statements describe `main`; the M1.1 tag marks deferred work and covers its paragraph or table row. Completed after live GitHub verification.
 - **Owner:** freeqaz (PR #246).
 - **Related:** [PR #305](https://github.com/openclaw/openclaw-enterprise/pull/305) (M1), [#522](https://github.com/openclaw/openclaw-enterprise/pull/522) (M2), [#521](https://github.com/openclaw/openclaw-enterprise/pull/521) (M3), [#520](https://github.com/openclaw/openclaw-enterprise/pull/520) (M4) and [PR #509](https://github.com/openclaw/openclaw-enterprise/pull/509) (exact `Origin` on sign-out and every cookie-authenticated mutation).

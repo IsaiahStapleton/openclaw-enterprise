@@ -7,8 +7,6 @@ status_note: "The record reports local implementation and qualification, not an 
 
 # Default production observability
 
-**Author:** [@russellb](https://github.com/russellb)
-
 Status: Implemented locally on 2026-09-23; default k3d acceptance passed.
 See the [qualification report](../plans/36-production-observability/qualification.md)
 for separate model-turn, hosted CI, and review status.

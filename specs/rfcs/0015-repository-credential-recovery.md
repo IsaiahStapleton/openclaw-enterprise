@@ -7,8 +7,6 @@ status_note: "The incremental implementation is under review; the broader recove
 
 # Recover repository credential cleanup after broker loss
 
-**Author:** [@kevinlin-openai](https://github.com/kevinlin-openai)
-
 **Status: Implementing.** The incremental terminal-receipt path is under review;
 the broader action-recovery design remains proposed. The current
 [repository credential reference](../../docs/reference/repository-credentials.md)

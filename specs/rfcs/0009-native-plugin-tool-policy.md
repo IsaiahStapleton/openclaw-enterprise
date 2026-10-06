@@ -6,8 +6,6 @@ status: Proposed
 
 # Native OpenClaw plugin tool policies
 
-**Author:** [@stevenlee-oai](https://github.com/stevenlee-oai)
-
 Status: Proposed. Full policy coverage is requested; the configuration surface
 and native automatic-review semantics below await acceptance.
 

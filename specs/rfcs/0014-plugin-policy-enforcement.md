@@ -6,8 +6,6 @@ status: Proposed
 
 # Plugin policy enforcement
 
-**Author:** [@stevenlee-oai](https://github.com/stevenlee-oai)
-
 Status: **Proposed for alignment**, 2026-09-24. Draft implementation: [#362](https://github.com/openclaw/openclaw-enterprise/pull/362).
 The common policy model below records the agreed direction. Recommendations
 explicitly marked for alignment are not settled product decisions. This proposal

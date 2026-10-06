@@ -6,8 +6,6 @@ status: Proposed
 
 # Agent access (Proposed)
 
-**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
-
 ## Decision
 
 An Installation administrator assigns people to separate OpenClaw Enterprise (OCE) Agent deployments. People sign in, discover assigned Agents and open OpenClaw native administration UI. The first release grants **full native administration** on embedded Kubernetes, without a SandboxDriver.

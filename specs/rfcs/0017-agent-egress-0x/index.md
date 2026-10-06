@@ -7,8 +7,6 @@ status_note: "The record gives the 0.x direction; explicit acceptance applies to
 
 # Agent egress for 0.x
 
-**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
-
 <a id="current-disposition"></a>
 
 ## Problem and decision

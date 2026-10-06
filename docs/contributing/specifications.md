@@ -142,9 +142,9 @@ Do not replace authorship with a responsible team; describe responsibilities in
 the proposal.
 
 Treat the author as the RFC owner; do not maintain a separate `owner` field.
-Show the author near the RFC title and in the index, linking their GitHub profile.
-Keep both displays synchronized with `author` frontmatter. Preserve historical
-responsibility statements in the proposal.
+Show the author in the index, linking their GitHub profile and matching the
+`author` frontmatter. Do not repeat the author in the RFC body. Preserve
+historical responsibility statements in the proposal.
 
 Companion Markdown notes have an `rfc` frontmatter link to the owning entry
 point, relative to the note (usually `rfc: index.md`). Read the decision status

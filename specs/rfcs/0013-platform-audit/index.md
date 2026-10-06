@@ -6,8 +6,6 @@ status: Proposed
 
 # RFC: Platform audit
 
-**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
-
 ## Problem and decision
 
 Humans need administrative facts without broader access. **Proposed:** this view awaits human/IAM/State decision as a narrow exception to [RFC250’s deferred Installation search][history-security]. RFC250 retains its [repository read][repository], exact retained/deleted-Agent `read_audit`, parentage, attribution, recovery, [both retention modes and expiry/purge/restore gates][retention], and unresolved decisions. Platform grants give no History access or new retention policy. Ledger controls apply.
