@@ -83,8 +83,7 @@ payloads, request/reply objects, and unsafe strings. This source boundary preced
 the separate Collector filter in step 7. For worker records, the Collector retains
 allowlisted `work.operation` values and bounded `work.id` shapes. Agent stop keys
 and credential withdrawal keys include the operation UUID; deletion keys have no
-operation suffix. Unsupported
-values and key shapes are excluded.
+operation suffix. Unsupported values and key shapes are excluded.
 
 Compute preparation failures may include a Driver-reviewed stage, classification,
 status, and bounded message. The worker never serializes the raw exception, and
