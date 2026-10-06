@@ -1578,6 +1578,10 @@ test(
   async () => {
     for (const [overrides, message] of [
       [{ "repositoryCredentials.image": "repository-credentials:latest" }, /immutable SHA-256/],
+      [
+        { "repositoryCredentials.image": `repository-credentials@sha256:${"B".repeat(64)}` },
+        /immutable SHA-256/,
+      ],
       [{ "repositoryCredentials.backendId": "" }, /backendId is required/],
       [{ "repositoryCredentials.registryConfigMapName": "" }, /registryConfigMapName is required/],
       [{ "repositoryCredentials.publicCaSecretName": "repository-tls" }, /dedicated Secret/],
@@ -2800,6 +2804,23 @@ test(
         render(override),
         ({ code, stderr }) => code !== 0 && stderr.length > 0,
         description,
+      );
+    }
+    // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other
+    // spellings at pull time. The uppercase algorithm was already refused; uppercase hex
+    // was not.
+    for (const image of [
+      `registry.example/controller@sha256:${"A".repeat(64)}`,
+      `registry.example/controller@SHA256:${"a".repeat(64)}`,
+    ]) {
+      await assert.rejects(
+        render({ "images.controller": image }),
+        ({ code, stderr }) =>
+          code !== 0 &&
+          stderr.includes(
+            "images.controller must be an approved immutable SHA-256 image reference",
+          ),
+        image,
       );
     }
   },

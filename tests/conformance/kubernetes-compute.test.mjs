@@ -7237,6 +7237,27 @@ test("immutable image policy accepts digests and rejects mutable tags", () => {
       ),
     /digest|immutable/i,
   );
+  // The OCI image specification allows only `sha256` and lowercase hex for SHA-256
+  // digests; containerd refuses any other spelling at pull time, so the Driver refuses
+  // it at configuration time instead of leaving every Agent Pod failing to pull.
+  for (const [description, digest] of [
+    ["uppercase hex", `sha256:${"A".repeat(64)}`],
+    ["uppercase algorithm", `SHA256:${"a".repeat(64)}`],
+  ]) {
+    for (const role of ["gateway", "agent"]) {
+      const images = {
+        gateway: `registry.example/gateway@sha256:${"a".repeat(64)}`,
+        agent: `registry.example/agent@sha256:${"b".repeat(64)}`,
+        requireImmutableDigest: true,
+        [role]: `registry.example/${role}@${digest}`,
+      };
+      assert.throws(
+        () => createKubernetesComputeDriver(options({ images })),
+        /immutable SHA-256 digest/,
+        `${role} ${description}`,
+      );
+    }
+  }
 
   assert.doesNotThrow(() =>
     createKubernetesComputeDriver(
