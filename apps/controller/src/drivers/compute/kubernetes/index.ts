@@ -2605,19 +2605,34 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Kubernetes Agent provisioning supports only dedicated execution mode.",
       );
     }
-    let configuration: OpenClawConfigurationDocument;
+    this.verifyGatewayRoutingConfiguration({
+      configuration: this.namedGatewayConfigurationDocument(input.configuration),
+      harness: { id: "codex", version: "provisioning", mode: "dedicated" },
+    });
+  }
+
+  validateGatewaySettings(configuration: Readonly<OpenClawConfigurationDocument>): void {
     try {
-      configuration = this.kubernetesGatewayConfigurationDocument(input.configuration);
+      this.namedGatewayConfigurationDocument(configuration);
+    } catch (error) {
+      if (error instanceof ComputeGatewaySettingError) {
+        throw error;
+      }
+      // Other refusals (trustedProxy.allowUsers until open #906) stay with preparation.
+    }
+  }
+
+  private namedGatewayConfigurationDocument(
+    configuration: Readonly<OpenClawConfigurationDocument>,
+  ): OpenClawConfigurationDocument {
+    try {
+      return this.kubernetesGatewayConfigurationDocument(configuration);
     } catch (error) {
       if (error instanceof GatewaySettingFailure) {
         throw new ComputeGatewaySettingError(error.setting, error.requirement);
       }
       throw error;
     }
-    this.verifyGatewayRoutingConfiguration({
-      configuration,
-      harness: { id: "codex", version: "provisioning", mode: "dedicated" },
-    });
   }
 
   validateHarnessAuth(

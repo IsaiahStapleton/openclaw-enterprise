@@ -5724,6 +5724,9 @@ export class OpenClawController {
           "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
         );
       }
+      // Every preparation attempt would refuse such a gateway setting and the deployment would
+      // fail as an unavailable dependency, so refuse it here with the 409 provisioning answers.
+      compute.validateGatewaySettings?.(admittedConfiguration);
       const pluginState =
         lockedAgent.plugins === undefined || Object.keys(lockedAgent.plugins).length === 0
           ? undefined

@@ -1707,6 +1707,12 @@ export interface ComputeDriver extends Driver {
     readonly apiKey: string;
   }): Promise<readonly { readonly id: string; readonly name: string }[]>;
   validateAgentProvisioning?(input: ComputeAgentProvisioningInput): void;
+  /**
+   * Side-effect-free deployment admission check of the caller's native gateway settings.
+   * Throws ComputeGatewaySettingError, naming the setting but never its value, for a setting
+   * every preparation attempt would refuse; other refusals stay with preparation.
+   */
+  validateGatewaySettings?(configuration: Readonly<OpenClawConfigurationDocument>): void;
   validateHarnessAuth?(
     harness: RevisionHarnessDescriptor,
     auth: HarnessAuthSnapshot,
