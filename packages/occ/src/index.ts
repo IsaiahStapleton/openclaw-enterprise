@@ -5702,11 +5702,12 @@ export class OpenClawController {
         );
       } catch (error) {
         // A driver names unsupported Configuration content the caller owns; keep that
-        // message. Other refusals stay generic.
+        // message. Other refusals get this fixed text; the caller is already authorized
+        // for deploy.
         if (error instanceof ConfigurationHarnessError) {
           throw error;
         }
-        throw new ResourceConflictError(
+        throw new ResourceStateConflictError(
           "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
         );
       }

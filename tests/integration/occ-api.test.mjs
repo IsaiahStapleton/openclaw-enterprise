@@ -5602,11 +5602,15 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
   assert.equal(named.body.error.code, "INVALID_REQUEST");
   assert.equal(named.body.error.message, refusal.message);
 
-  // Other driver refusals can carry internal detail and stay generic.
+  // Other driver refusals can carry internal detail and get fixed text, not "already exists".
   refusal = new Error("internal driver detail");
   const generic = await deploy();
   assert.equal(generic.status, 409, JSON.stringify(generic.body));
   assert.equal(generic.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    generic.body.error.message,
+    "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
+  );
   assert.doesNotMatch(JSON.stringify(generic.body), /internal driver detail/);
 });
 

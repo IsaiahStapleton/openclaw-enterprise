@@ -396,7 +396,9 @@ function referencePage(document, groups, entries) {
         "declared body size exceeds the route's limit is refused with",
         "`413 PAYLOAD_TOO_LARGE`, and any POST, PUT, PATCH or DELETE request with a",
         "body that is not JSON with `415 UNSUPPORTED_MEDIA_TYPE`, even on an",
-        "operation that takes no body.",
+        "operation that takes no body. A query string sent to an operation that lists",
+        "no query parameters is refused with `400 INVALID_REQUEST`; most operations",
+        "that take no body refuse a JSON body the same way.",
       ].join("\n"),
       schemaTable(schema, document),
     );
