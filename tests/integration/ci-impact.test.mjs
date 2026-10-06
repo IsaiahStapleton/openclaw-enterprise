@@ -1105,16 +1105,26 @@ test("full-integration lanes read NODE_BASE_IMAGE from a variable their environm
   const { loadYaml } = createRequire(
     new URL("../../apps/controller/package.json", import.meta.url),
   )("@kubernetes/client-node");
-  const workflow = loadYaml(
-    readFileSync(join(repositoryRoot, ".github/workflows/full-integration.yml"), "utf8"),
+  const source = readFileSync(
+    join(repositoryRoot, ".github/workflows/full-integration.yml"),
+    "utf8",
   );
+  const workflow = loadYaml(source);
   const lanes = Object.entries(workflow.jobs).filter(([, job]) => job.env?.NODE_BASE_IMAGE);
+  const repository = "${{ vars.CONTAINER_NODE_BASE_IMAGE }}";
+  const environment = "${{ vars.NODE_BASE_IMAGE }}";
   for (const [lane, job] of lanes) {
-    const variable = ["integration-model", "integration-otel"].includes(job.environment)
-      ? "NODE_BASE_IMAGE"
-      : "CONTAINER_NODE_BASE_IMAGE";
-    assert.equal(job.env.NODE_BASE_IMAGE, `\${{ vars.${variable} }}`, lane);
+    const name = job.environment?.name ?? job.environment;
+    const allowed = ["integration-model", "integration-otel"].includes(name)
+      ? [repository, environment]
+      : [repository];
+    assert.ok(allowed.includes(job.env.NODE_BASE_IMAGE), lane);
   }
+  // No workflow- or step-level read escapes the job check.
+  assert.equal(
+    source.split("vars.NODE_BASE_IMAGE").length - 1,
+    lanes.filter(([, job]) => job.env.NODE_BASE_IMAGE === environment).length,
+  );
   const names = lanes.map(([name]) => name);
   for (const lane of ["gateway-routing", "slack", "openshell"]) {
     assert.ok(names.includes(lane), lane);

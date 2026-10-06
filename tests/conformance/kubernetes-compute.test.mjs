@@ -2833,6 +2833,7 @@ test("a failed Namespace ensure reports a fixed or cleaned, bounded reason", asy
   const selection = { ...tenant, status: "provisioning", existingNamespace: "customer-support" };
   const ensure = (readNamespace, namespace = selection) => {
     const driver = createKubernetesComputeDriver(options());
+    driver.waitBeforeRetry = async () => {};
     driver.apiClients = Promise.resolve({ core: { readNamespace } });
     driver.executionApiClients = driver.apiClients;
     return driver.ensureNamespace(namespace);

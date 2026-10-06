@@ -5091,7 +5091,7 @@ test(
   requiresPostgres,
   async (context) => {
     // D521: a refused existing-namespace selection ended `failed` with no reason anywhere.
-    const fixture = await setup(context, { maxAttempts: 10 });
+    const fixture = await setup(context);
     const reason =
       "Existing Kubernetes namespace customer-support belongs to another tenant: its openclaw.dev/namespace label names a different Namespace.";
     const timedOut = "Kubernetes API request timed out.";
@@ -5156,7 +5156,7 @@ test(
     await fixture.work(
       { id: namespace.id, idempotencyKey: `namespace:${namespace.id}:reconcile:ready` },
       "failed_permanent",
-      // Four retries back off 1 + 2 + 4 + 8 seconds.
+      // The retries back off, under 10 s in all; the pending pass uses no attempt.
       40_000,
     );
     const ensured = (lines) =>
