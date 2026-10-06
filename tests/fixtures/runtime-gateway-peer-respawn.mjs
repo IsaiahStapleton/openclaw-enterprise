@@ -158,10 +158,23 @@ async function waitFor(description, timeoutMs, check) {
   }
 }
 
+// The wrapper's apply budget runs from the native spawn. On a starved runner
+// OpenClaw can outlast it and the wrapper reports GATEWAY_UNAVAILABLE or
+// RELOAD_NOT_CONFIRMED, which the ack clears. That report can also be stale: the
+// wrapper does not poll during the peer outage below. Any other failure is final.
+const pendingWorkspaceNodeFailures = new Set(["GATEWAY_UNAVAILABLE", "RELOAD_NOT_CONFIRMED"]);
+
 async function workspaceNodeAck() {
   const status = await (await fetch(runtimeStatusUrl)).json();
-  assert.equal(status.workspaceNodeFailure, undefined, JSON.stringify(status));
-  return status.workspaceNodeId === workspaceNodeId;
+  if (status.workspaceNodeId === workspaceNodeId) {
+    return true;
+  }
+  assert.ok(
+    status.workspaceNodeFailure === undefined ||
+      pendingWorkspaceNodeFailures.has(status.workspaceNodeFailure.code),
+    JSON.stringify(status),
+  );
+  return false;
 }
 
 function linearEnabled(config) {
