@@ -4671,10 +4671,12 @@ export class OpenClawController {
     signal?: AbortSignal,
   ): Promise<ChannelDirectoryResult> {
     const ids = input.ids;
+    // Lengths count code points, as the API contract's JSON Schema maxLength does.
+    const characters = (value: string): number => Array.from(value).length;
     const bounded = (value: unknown, max: number, allowEmpty = false): value is string =>
       typeof value === "string" &&
       (allowEmpty || value.length > 0) &&
-      value.length <= max &&
+      characters(value) <= max &&
       !value.includes("\u0000");
     if (
       !bounded(input.secretId, 200) ||
@@ -4689,7 +4691,7 @@ export class OpenClawController {
             (id) =>
               typeof id !== "string" ||
               id.length === 0 ||
-              id.length > 200 ||
+              characters(id) > 200 ||
               hasControlCharacter(id),
           ) ||
           new Set(ids).size !== ids.length ||
