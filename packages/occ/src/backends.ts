@@ -20,7 +20,9 @@ function path(value: string, key: string): string {
 
 function backendId(value: unknown, label = "Backend ID"): string {
   if (typeof value !== "string" || !BACKEND_ID.test(value)) {
-    throw new ScopeViolationError(`${label} must be a nonempty string.`);
+    throw new ScopeViolationError(
+      `${label} must be a string of 1 to 200 characters without leading or trailing whitespace or control characters.`,
+    );
   }
   return value;
 }

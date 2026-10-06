@@ -251,8 +251,9 @@ backend:
 
 Enable it with the Installation Backend. The dedicated Secret mounts only in
 the API Pod at `/etc/openclaw/chatgpt/admin-key`; `apiKeyPath` must match.
-`providerCidr` adds one IPv4 `/32` destination on TCP/443 to the API Pod's
-NetworkPolicy. It configures no DNS, routing, or application proxy. The bundled
+`providerCidr` is required when `enabled` is true: the chart refuses to render
+without exactly one IPv4 `/32`. It adds that destination on TCP/443 to the API
+Pod's NetworkPolicy. It configures no DNS, routing, or application proxy. The bundled
 client sends HTTPS directly to `api.chatgpt.com`; the upstream URL is fixed,
 and the chart configures no HTTP CONNECT or `HTTPS_PROXY` transport. Entering
 an ordinary forward proxy's IP will not cause the client to use it.

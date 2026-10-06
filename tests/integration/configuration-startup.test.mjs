@@ -438,6 +438,14 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
       (value) => (value.backend[0].configuration.adminKeyPath = "/tmp/old-admin-key"),
       /adminKeyPath.*unsupported/,
     ],
+    [
+      (value) => (value.backend[0].id = " openai"),
+      /backend\[0\]\.id must be a string of 1 to 200 characters without leading or trailing whitespace/,
+    ],
+    [
+      (value) => (value.backend[0].id = "a".repeat(201)),
+      /backend\[0\]\.id must be a string of 1 to 200/,
+    ],
     [(value) => (value.backend[0].type = "installed"), /must be chatgpt/],
     [(value) => (value.backend[0].package = "@example/backend"), /unsupported option package/],
     [
