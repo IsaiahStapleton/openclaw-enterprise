@@ -440,16 +440,19 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
     ],
     [
       (value) => (value.backend[0].id = " openai"),
-      /backend\[0\]\.id must be a string of 1 to 200 characters without leading or trailing whitespace or control characters\./,
+      /backend\[0\]\.id must be a string of 1 to 200 characters with no leading or trailing whitespace and no control characters or line or paragraph separators\./,
     ],
     [
       (value) => (value.backend[0].id = "a".repeat(201)),
       /backend\[0\]\.id must be a string of 1 to 200/,
     ],
-    ...["openai ", "open\u0007ai", 7].map((id) => [
-      (value) => (value.backend[0].id = id),
-      /backend\[0\]\.id must be a string of 1 to 200/,
-    ]),
+    // 201 code points, a C1 control and a line separator, refused as the API refuses them.
+    ...["openai ", "open\u0007ai", 7, "😀".repeat(201), "open\u0085ai", "open\u2028ai"].map(
+      (id) => [
+        (value) => (value.backend[0].id = id),
+        /backend\[0\]\.id must be a string of 1 to 200/,
+      ],
+    ),
     [(value) => (value.backend[0].type = "installed"), /must be chatgpt/],
     [(value) => (value.backend[0].package = "@example/backend"), /unsupported option package/],
     [

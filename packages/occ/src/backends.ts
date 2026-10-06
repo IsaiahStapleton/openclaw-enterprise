@@ -5,10 +5,10 @@ import type {
   DriverCapability,
   OpenShellBackendDefinition,
 } from "@openclaw-enterprise/contracts";
+import { BACKEND_ID_MAX_CHARACTERS, isBackendId } from "@openclaw-enterprise/contracts";
 import { asRecord, deepFreeze, isNonEmptyString } from "@openclaw-enterprise/utils";
 import { DriverSelectionError, ResourceConflictError, ScopeViolationError } from "./errors.ts";
 
-const BACKEND_ID = /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).{1,200}$/;
 const WORKSPACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_CHATGPT_CREDENTIAL_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -19,9 +19,11 @@ function path(value: string, key: string): string {
 }
 
 function backendId(value: unknown, label = "Backend ID"): string {
-  if (typeof value !== "string" || !BACKEND_ID.test(value)) {
+  // The API schema's rule (contracts BackendId), so a configured Backend ID and an Agent's
+  // backendId accept exactly the same strings.
+  if (!isBackendId(value)) {
     throw new ScopeViolationError(
-      `${label} must be a string of 1 to 200 characters without leading or trailing whitespace or control characters.`,
+      `${label} must be a string of 1 to ${BACKEND_ID_MAX_CHARACTERS} characters with no leading or trailing whitespace and no control characters or line or paragraph separators.`,
     );
   }
   return value;

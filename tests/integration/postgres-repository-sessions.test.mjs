@@ -364,8 +364,14 @@ test(
           "provider identity contains surrounding spaces": repositoryCredentials({
             bindings: [repositoryBinding({ backendId: " provider " })],
           }),
-          "provider identity exceeds 200 UTF-16 code units": repositoryCredentials({
-            bindings: [repositoryBinding({ backendId: "😀".repeat(101) })],
+          "provider identity exceeds 200 characters": repositoryCredentials({
+            bindings: [repositoryBinding({ backendId: "😀".repeat(201) })],
+          }),
+          "provider identity contains a C1 control": repositoryCredentials({
+            bindings: [repositoryBinding({ backendId: "provider\u0085" })],
+          }),
+          "provider identity contains a line separator": repositoryCredentials({
+            bindings: [repositoryBinding({ backendId: "pro\u2028vider" })],
           }),
           "provider identity starts with a nonbreaking space": repositoryCredentials({
             bindings: [repositoryBinding({ backendId: "\u00a0provider" })],
