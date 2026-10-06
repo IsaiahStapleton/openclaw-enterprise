@@ -233,7 +233,7 @@ Other Harnesses are replaced, restarting their Gateway.
   `cron.triggers`, `models` or `models.providers`. The deploy request fails
   with `400 INVALID_REQUEST` naming the setting path, and no revision is
   created. A provider row that is not an object, or whose `models` is not a
-  list of catalog entries for the selected model, is refused earlier by OCC's
+  list of catalog entries for the Agent's configured models, is refused earlier by OCC's
   model check: also `400 INVALID_REQUEST`, but with fixed text such as "The
   configured Agent model provider is invalid." that does not name the path.
 - Default reads cover the enrolled Agent's Harness workspace and managed skill

@@ -70,14 +70,14 @@ resources. Its external lifecycle, restricted Pod Security labels, and
 tenant-local RoleBindings must already be in place; see
 [Kubernetes namespace requirements](drivers/kubernetes-compute/networking-and-isolation.md#namespaces-and-isolation).
 Docker and external Compute Drivers reject this option with
-`409`; ordinary creation without the option remains supported. Deleting the
+`409`; ordinary creation without the option remains supported. Creating a
+Configuration in an explicitly selected external Namespace returns
+`409 NAMESPACE_NOT_READY` until worker provisioning completes. Deleting the
 OCC Namespace leaves its tenant markers on the Kubernetes namespace, so
 selecting that namespace again ends `failed` until an operator clears them; see
 [Namespace admission](security.md#namespace-admission-and-resource-isolation).
 A `failed` Namespace does not say why; the worker logs only
-`code: NAMESPACE_INCOMPLETE`. Creating a
-Configuration in an explicitly selected external Namespace returns
-`409 NAMESPACE_NOT_READY` until worker provisioning completes.
+`code: NAMESPACE_INCOMPLETE`.
 
 ## Lifecycle
 
