@@ -23,6 +23,17 @@ async function jsonLines(path) {
     .map((line) => JSON.parse(line));
 }
 
+// Stub lines for a saved-identity probe that appends a "probe" row to the events
+// file in the supervisor's HOME (the test directory) and never answers, keeping
+// the event loop busy as a slow probe does.
+const pendingIdentityProbe = [
+  "cp.execFile = () => {",
+  '  const events = require("node:path").join(process.env.HOME, "events.jsonl");',
+  '  require("node:fs").appendFileSync(events, JSON.stringify({ kind: "probe" }) + "\\n");',
+  "  setInterval(() => {}, 60_000);",
+  "};",
+];
+
 // Runs the supervisor program the container receives; supervision, signals and
 // environments run unchanged.
 // - Stubbed: native initialization (the runtime-image test covers it), and every child
@@ -128,13 +139,15 @@ test(
         "const [events, kind, args] = process.argv.slice(2);",
         "appendFileSync(events, JSON.stringify({ kind, pid: process.pid, parent: process.ppid,",
         'args: JSON.parse(args ?? "[]"),',
-        "hasSetup: process.env.OPENCLAW_NODE_SETUP_CODE !== undefined,",
+        "hasSetup: process.env.OPENCLAW_NODE_SETUP_CODE !== undefined ||",
+        "  process.env.OPENCLAW_NODE_SETUP_ENVELOPE !== undefined,",
         "hasModelKey: process.env.OPENAI_API_KEY !== undefined,",
         'autoUpdateDisabled: process.env.OPENCLAW_NO_AUTO_UPDATE === "1",',
         'hasTransportToken: process.env.APP_SERVER_TOKEN !== undefined }) + "\\n");',
         'if (kind === "codex") spawn(process.execPath, [__filename, events, "grandchild"], { stdio: "inherit" });',
         "setInterval(() => {}, 1_000);",
       ],
+      stubs: pendingIdentityProbe,
       env: {
         OPENCLAW_NODE_SETUP_ENVELOPE: setupEnvelopePath,
         OPENAI_API_KEY: "synthetic-model-key",
@@ -202,13 +215,28 @@ test(
       "node restarted after its renewed setup projection disappeared",
       (rows) => rows.filter(({ kind }) => kind === "node").length === 3,
     );
+    const cachedSetupNode = afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1);
     assert.equal(
-      afterProjectionRemoval.filter(({ kind }) => kind === "node").at(-1).args[4],
+      cachedSetupNode.args[4],
       Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
     );
+
+    // An envelope without a bootstrap token is not a setup: the node is not
+    // started and the supervisor falls back to the saved-identity probe.
+    await writeFile(setupEnvelopePath, JSON.stringify({ ...renewedSetup, bootstrapToken: "" }));
+    process.kill(cachedSetupNode.pid, "SIGKILL");
+    const afterEmptyToken = await waitFor(
+      "identity probe or node start after an empty bootstrap token",
+      (rows) =>
+        rows.some(({ kind }) => kind === "probe") ||
+        rows.filter(({ kind }) => kind === "node").length === 4,
+    );
+    assert.equal(afterEmptyToken.filter(({ kind }) => kind === "node").length, 3);
+
+    // Stop exits once the children are gone, without waiting for the probe.
     supervisor.kill("SIGTERM");
     assert.deepEqual(await exited, [0, null], output());
-    for (const { pid } of await events()) {
+    for (const { pid } of (await events()).filter(({ pid }) => pid !== undefined)) {
       assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     }
   },
@@ -280,13 +308,19 @@ test(
     await evaluated(null);
     assert.deepEqual(nodes(await events()), [], "no node without a setup or a saved identity");
 
-    // The kubelet swaps Secret files atomically; an empty or truncated code is
-    // still treated as absent rather than handed to native pairing.
+    // The kubelet swaps Secret files atomically; an empty, truncated or
+    // line-wrapped code (which native pairing rejects, though Buffer decodes it)
+    // is still treated as absent rather than handed to native pairing.
     const code = Buffer.from(
       JSON.stringify({ url: "wss://gateway.example.test", bootstrapToken: "bootstrap" }),
     ).toString("base64url");
     await mkdir(setupDirectory);
-    for (const incomplete of ["", "\n", code.slice(0, 17)]) {
+    for (const incomplete of [
+      "",
+      "\n",
+      code.slice(0, 17),
+      `${code.slice(0, 40)}\n${code.slice(40)}`,
+    ]) {
       await writeFile(setupPath, incomplete);
       await evaluated(incomplete);
       assert.deepEqual(nodes(await events()), [], JSON.stringify(incomplete));
@@ -372,6 +406,32 @@ test(
     assert.equal(node.args.includes("--pair-if-needed"), false);
     assert.equal(rows.filter(({ kind }) => kind === "codex").length, 1);
 
+    supervisor.kill("SIGTERM");
+    assert.deepEqual(await exited, [0, null], output());
+  },
+);
+
+// A Pod deleted while Codex is between restarts and the node still waits for its
+// setup has no child left to stop. A pending identity probe must not hold the exit.
+test(
+  "a stop with no running child exits at once",
+  {
+    timeout: 15_000,
+    skip: process.platform !== "linux" && "Run the container entrypoint test on Linux.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "oce-node-stop-idle-"));
+    const { supervisor, exited, waitFor, output } = await startSupervisor(t, directory, {
+      child: [],
+      stubs: [
+        // Every child fails to start, so Codex is only ever between restarts.
+        'cp.spawn = (command, args, options) => realSpawn(process.env.HOME + "/missing", [], options);',
+        ...pendingIdentityProbe,
+      ],
+      env: { OPENCLAW_NODE_SETUP_PATH: join(directory, "setup", "setup-code") },
+    });
+    await waitFor("identity probe", (rows) => rows.some(({ kind }) => kind === "probe"));
+    await waitFor("Codex start failure", (text) => text.includes("Codex failed to start."), output);
     supervisor.kill("SIGTERM");
     assert.deepEqual(await exited, [0, null], output());
   },
