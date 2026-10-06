@@ -8,8 +8,10 @@ Kubernetes lanes use. For lanes, coverage and failures, see [GitHub Actions test
 Imports stream `docker image save` into node-local `ctr image import` on each owned
 k3d node (`image-stream-import`): k3d `tools-node` can hide per-node failures while
 exiting successfully. Imports are serialized per cluster, then preparation verifies
-digest and CRI references; each of those node checks, and the tag before them, times
-out after 30 seconds.
+digest and CRI references. Each node check and tag, and each host engine image
+inspect and tag before the import, times out after 30 seconds
+(`OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS` overrides it). A timeout fails preparation;
+it never counts as a missing image, so nothing is pulled for it.
 
 ## Select immutable images for local preparation
 
