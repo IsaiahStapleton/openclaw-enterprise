@@ -2702,6 +2702,17 @@ test("Channel directory lookup checks the exact edit target and Secret before an
     body: { ...body, ids: ["U123"] },
   });
   assert.equal(mixed.status, 400);
+  // The body is a union of lookup and hydration shapes. A lookup whose query is too long
+  // names only that field, not the fields other shapes require.
+  const longQuery = await controller.request("POST", path, {
+    body: { ...body, query: "q".repeat(201) },
+  });
+  assert.equal(longQuery.status, 400);
+  assert.equal(
+    longQuery.body.error.message,
+    "The request does not match the operation contract: body /query is too long.",
+  );
+  assert.deepEqual(longQuery.body.error.details, [{ path: "/query", code: "TOO_LONG" }]);
   assert.deepEqual(
     (
       await controller.request("POST", path, {
@@ -4517,7 +4528,7 @@ test("Agent provisioning API validates inline configuration with existing Secret
           source: { kind: "provisioning-secret", name: "model-api-key" },
         },
       }),
-      /^The request does not match the operation contract: body \/harnessAuth\/source is not an accepted field;/,
+      "The request does not match the operation contract: body /harnessAuth/source/namespaceId is required.",
     ],
     [
       "too many binding destinations",
