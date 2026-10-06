@@ -441,6 +441,11 @@ test("bound Slack credential fields show Secret references without reading value
   await waitForInputValue(appToken, secretOptionLabel(appSecret));
   await waitForInputValue(botToken, secretOptionLabel(botSecret));
   assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
+  // Picking the Secret that is already bound stages nothing.
+  await selectSecret(page, "Slack app token", appSecret);
+  await expectNoText(page, "Secret binding staged. Save changes to apply it.");
+  await waitForInputValue(appToken, secretOptionLabel(appSecret));
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
   assert.deepEqual(nonAuthWriteRequests(requests), []);
   assert.equal(await page.getByRole("button", { name: "Deploy new version" }).isDisabled(), false);
 });
@@ -542,6 +547,31 @@ test("partially bound Slack credentials save only the missing token", async (t) 
     executionMode: "dedicated",
     secretBindings,
   });
+  // Near-miss bindings on the bot Secret: another Agent holds the exact operate Role, and
+  // this Agent holds only a read Role. Neither is this Agent's operate grant.
+  const otherAgent = await fixture.createAgent(namespace.id, "Other Slack Agent", values, {
+    executionMode: "dedicated",
+  });
+  const policyPath = `/namespaces/${namespace.id}/iam`;
+  for (const [permission, subjectId] of [
+    [{ action: "operate", resourceKind: "secret" }, otherAgent.servicePrincipalId],
+    [{ action: "read", resourceKind: "secret" }, agent.servicePrincipalId],
+  ]) {
+    const role = await fixture.request("POST", `${policyPath}/roles`, {
+      body: { permissions: [permission] },
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+    const binding = await fixture.request("POST", `${policyPath}/access-bindings`, {
+      body: {
+        subjectKind: "identity",
+        subjectId,
+        roleId: role.data.id,
+        resourceKind: "secret",
+        resourceId: botSecret.id,
+      },
+    });
+    assert.equal(binding.status, 201, JSON.stringify(binding.body));
+  }
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
 
@@ -583,6 +613,20 @@ test("missing Slack credential fields require both Secret references before savi
   const agent = await fixture.createAgent(namespace.id, "Slack Credential Agent", values, {
     executionMode: "dedicated",
   });
+  // Roles that resemble secret operate but are not exactly it; grants must create their own.
+  for (const permissions of [
+    [
+      { action: "operate", resourceKind: "secret" },
+      { action: "read", resourceKind: "secret" },
+    ],
+    [{ action: "read", resourceKind: "secret" }],
+    [{ action: "operate", resourceKind: "agent" }],
+  ]) {
+    const role = await fixture.request("POST", `/namespaces/${namespace.id}/iam/roles`, {
+      body: { permissions },
+    });
+    assert.equal(role.status, 201, JSON.stringify(role.body));
+  }
   const { page } = await newPage(t, fixture);
   const requests = apiRequests(page, fixture.origin);
 
@@ -601,6 +645,8 @@ test("missing Slack credential fields require both Secret references before savi
   await page
     .getByText("Channel Secret bindings saved. Deploy the new version to deliver them.")
     .waitFor();
+  // Confirmed grants leave nothing pending, so there is nothing left to save or retry.
+  assert.equal(await page.getByRole("button", { name: "Save channel Secrets" }).isDisabled(), true);
 
   assert.deepEqual(secretWrites(requests, namespace.id), []);
   assert.deepEqual(await secretGrants(fixture, requests, namespace.id, agent), [
