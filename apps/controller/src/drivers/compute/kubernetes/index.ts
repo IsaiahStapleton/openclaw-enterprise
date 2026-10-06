@@ -1150,18 +1150,21 @@ const MAX_NAMESPACE_FAILURE_REASON_LENGTH = 256;
  * pass through: they name this Namespace's own ID and Kubernetes placement, and a foreign
  * marker or object only by its key or kind. Anything else (Kubernetes response bodies,
  * lifecycle hooks, the Sandbox Driver) gets a fixed text, so no response text and no
- * value of another tenant reaches the worker log.
+ * value of another tenant reaches the worker log. GatewaySettingFailure names settings the
+ * caller submitted, so it never passes through. Characters the worker log refuses become
+ * `_`, so the log keeps the reason instead of dropping it.
  */
 function namespaceFailureReason(error: unknown): string {
   if (
-    error instanceof OwnershipFailure ||
-    error instanceof ConfigurationFailure ||
-    error instanceof KubernetesRequestTimeout
+    (error instanceof OwnershipFailure ||
+      error instanceof ConfigurationFailure ||
+      error instanceof KubernetesRequestTimeout) &&
+    !(error instanceof GatewaySettingFailure)
   ) {
-    const characters = Array.from(error.message.replace(/[\p{Cc}\p{Cf}]|\p{Cs}/gu, "?"));
-    return characters.length <= MAX_NAMESPACE_FAILURE_REASON_LENGTH
-      ? characters.join("")
-      : `${characters.slice(0, MAX_NAMESPACE_FAILURE_REASON_LENGTH - 1).join("")}…`;
+    const cleaned = error.message.replace(/[^A-Za-z0-9._: /@-]/gu, "_");
+    return cleaned.length <= MAX_NAMESPACE_FAILURE_REASON_LENGTH
+      ? cleaned
+      : `${cleaned.slice(0, MAX_NAMESPACE_FAILURE_REASON_LENGTH - 3)}...`;
   }
   if (error instanceof KubernetesApiUnavailableError || unreachableSocketFailure(error)) {
     return "The Kubernetes API server is unreachable.";

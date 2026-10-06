@@ -4075,7 +4075,7 @@ export class ControllerWorker {
     // The Compute Driver's bounded reason for a failed Namespace pass; the lifecycle audit
     // and Namespace status keep only the failure class.
     const reason =
-      resolved.observation?.failure === undefined
+      claim.namespaceTarget !== "ready" || resolved.observation?.failure === undefined
         ? undefined
         : namespaceFailureReason(resolved.observation);
     this.emit({
