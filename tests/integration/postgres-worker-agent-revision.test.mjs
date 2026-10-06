@@ -4367,6 +4367,8 @@ revisionTest(
 revisionTest(
   "Namespace teardown audits one pending pass and the terminal pass, not every pass",
   async (fixture) => {
+    // D323: each worker pass while Kubernetes namespaces terminated wrote its own
+    // lifecycle.delete audit row (38 rows for one deletion).
     const namespace = {
       id: `ns_${randomUUID()}`,
       name: `delete-audit-${randomUUID()}`,
@@ -6420,6 +6422,8 @@ revisionTest(
   },
 );
 
+// The default 900-second deadline stays in force: an unready runtime without
+// failure evidence remains pending, and the held rejection ends the deployment.
 for (const scenario of [
   {
     name: "rejected runtime credentials fail deployment before the convergence deadline",
@@ -6481,6 +6485,9 @@ for (const scenario of [
 revisionTest(
   "held runtime probe and login failures fail deployment before the convergence deadline",
   async (fixture) => {
+    // Runtime entrypoints publish these codes only after their own retries end
+    // and then hold the container unready with nothing to restart it, so the
+    // default 900-second deadline could only report the same failure later.
     const probeStatusFailure = {
       component: "gateway",
       check: "model-probe",
@@ -6596,6 +6603,12 @@ revisionTest(
 revisionTest(
   "a replacement that fails after pointer publication stays the Agent's active revision",
   async (fixture) => {
+    // Kubernetes embedded replacement reports a new revision ready while its
+    // predecessor serves, publishes it, and only then replaces the shared
+    // gateway. When the replacement's startup model probe then rejects the
+    // credential, the predecessor no longer runs: the failed revision owns the
+    // only runtime, so it stays active for stop, deletion, and diagnostics
+    // until a later revision replaces it. OCC never rolls back automatically.
     const { owner, candidate: healthy } = await fixture.admitInitialRevision(
       "failed-published-replacement",
     );
