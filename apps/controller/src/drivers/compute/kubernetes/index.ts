@@ -1731,7 +1731,8 @@ function requireCodexGatewayConfigurationShape(configuration: OpenClawConfigurat
     new ConfigurationHarnessError(message(path, shape));
   // A provider key is submitted and can be any length. Cut it (by whole characters, ending
   // in "…") so the message fits the 256-character error cap with its wording whole, as
-  // contract messages cut long paths.
+  // contract messages cut long paths (configurationFieldMessage in occ's errors.ts cuts a
+  // whole setting path the same way).
   const unsupportedProvider = (key: string, rest: string, shape: string) => {
     const room =
       HARNESS_MESSAGE_CAP - Array.from(message(`models.providers.${rest}`, shape)).length;

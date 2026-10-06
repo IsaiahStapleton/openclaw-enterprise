@@ -4652,8 +4652,9 @@ test("dedicated Codex admission rejects settings its Gateway entrypoint cannot r
       },
     );
   }
-  // A key that fits stays whole.
-  const padded = `${" ".repeat(100)}OpenAI`;
+  // A key that exactly fills the cap stays whole; one character more is cut.
+  const room = 256 - `Configuration setting models.providers. must be an object${wording}`.length;
+  const padded = `${" ".repeat(room - 6)}OpenAI`;
   assert.throws(
     () =>
       driver.validateHarnessAuth(codex, oauth, {
@@ -4661,6 +4662,16 @@ test("dedicated Codex admission rejects settings its Gateway entrypoint cannot r
         models: { providers: { [padded]: "stub" } },
       }),
     { message: `Configuration setting models.providers.${padded} must be an object${wording}` },
+  );
+  assert.throws(
+    () =>
+      driver.validateHarnessAuth(codex, oauth, {
+        ...base,
+        models: { providers: { [` ${padded}`]: "stub" } },
+      }),
+    {
+      message: `Configuration setting models.providers.${" ".repeat(room - 5)}Open… must be an object${wording}`,
+    },
   );
 });
 
