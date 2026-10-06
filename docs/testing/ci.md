@@ -99,7 +99,7 @@ kubeconfig, environment values and Pod specs are excluded. After a failed prepar
 run, local callers must run `node scripts/ci/cleanup.mjs --state <state-file>`.
 Diagnostics explain setup failures without establishing coverage.
 
-The `k3d-model`, `gateway-routing`, `slack`, `openshell`, and `k3d-otel` lanes prepare the controller image and workspace routing for dedicated Harness node enrollment. Supply an immutable Node 24 `NODE_BASE_IMAGE` for the build; OpenShell CI uses the repository variable `CONTAINER_NODE_BASE_IMAGE`. Preparation supplies the imported controller digest and private routing CA paths; Slack still requires approved runtime images and credentials.
+The `k3d-model`, `gateway-routing`, `slack`, `openshell`, and `k3d-otel` lanes prepare the controller image and workspace routing for dedicated Harness node enrollment. Supply an immutable Node 24 `NODE_BASE_IMAGE`; gateway-routing, Slack and OpenShell CI use the repository variable `CONTAINER_NODE_BASE_IMAGE`. Preparation supplies the imported controller digest and private routing CA paths; Slack still requires approved runtime images and credentials.
 
 Routing, OpenShell, and logging have CI preparation contracts. Routing installs
 pinned Gateway API, cert-manager v1.18.4 and Envoy Gateway v1.6.7 manifests and
