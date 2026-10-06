@@ -1129,6 +1129,11 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
       /Preset agent: contains unsupported fields/,
     ],
     [
+      "invalid-name.json",
+      JSON.stringify({ name: "edge\u00a0", template: {} }),
+      /Preset file .*invalid-name\.json\.name must follow the Name rule: 1 to 200 characters/,
+    ],
+    [
       "duplicate.json",
       JSON.stringify({ name: "Standard Codex", template: {} }),
       /Default Preset Standard Codex is configured more than once: .*duplicate\.json and .*duplicate-b\.json/,
@@ -1172,6 +1177,7 @@ test("API and worker name a Preset file failure in their startup error code", as
       "invalid-template.json",
       JSON.stringify({ name: "invalid", template: { agent: { unsupported: true } } }),
     ],
+    ["invalid-name.json", JSON.stringify({ name: "line\u2028break", template: {} })],
     ["duplicate.json", duplicate, ["cases/duplicate.json", "cases/duplicate-b.json"]],
     ["not-a-list.json", undefined, "cases/not-a-list.json"],
   ]) {

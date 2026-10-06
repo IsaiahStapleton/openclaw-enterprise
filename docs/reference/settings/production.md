@@ -238,7 +238,7 @@ before another attempt.
 | `OCC_AUTH_BASE_URL`               | Same absolute Better Auth base URL used by the API.                                                     |
 | `OCC_BOOTSTRAP_ADMIN_EMAIL`       | Email address for the first administrator account.                                                      |
 | `OCC_BOOTSTRAP_PASSWORD_FILE`     | New file path on protected operator-owned storage for the generated password.                           |
-| `OCC_BOOTSTRAP_INSTALLATION_NAME` | Nonempty display name used when creating the Installation.                                              |
+| `OCC_BOOTSTRAP_INSTALLATION_NAME` | Installation display name; it must follow the API Name rule (`INSTALLATION_NAME_INVALID`).              |
 | `OCC_BOOTSTRAP_SERVICE_KEY_FILE`  | New private absolute JSON path; on fresh production bootstrap, a distinct sibling of the password file. |
 
 Repeated bootstrap preserves the existing Installation only when the exact

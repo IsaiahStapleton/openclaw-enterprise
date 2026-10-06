@@ -93,6 +93,12 @@ If the candidate API and worker refuse to start because of
 `--resume` cannot succeed. Keep both namespaces and their storage, and return to
 the previous controller image after the check below.
 
+If they log `INSTALLATION_NAME_INVALID`, the stored Installation name breaks the
+API Name rule: 1 to 200 characters, with no leading or trailing whitespace,
+control characters, or line or paragraph separators. No API renames an
+Installation, so correct `occ.installation.name` with the dedicated migrator
+credential, then resume.
+
 Before selecting an older controller or runtime image, verify it can read all
 state written by the candidate and restore compatible data if required. Never
 delete Agents, revisions, PVCs, or the bootstrap volume to force recovery.

@@ -52,20 +52,26 @@ export const BackendId = Type.String({
   pattern: BACKEND_ID_PATTERN,
 });
 
-const BACKEND_ID = new RegExp(BACKEND_ID_PATTERN, "u");
+const PLAIN_TEXT = new RegExp(PLAIN_TEXT_PATTERN, "u");
 const LONE_SURROGATE = /\p{Cs}/u;
 
 /**
- * True when `value` meets the Backend ID rule, checked the way Ajv checks the schema. A lone
- * surrogate is refused too: it has no UTF-8 spelling, so it could not be stored as given.
+ * True when `value` is 1 to `maxCharacters` code points that follow the plain text rule,
+ * checked the way Ajv checks the schema. A lone surrogate is refused too: it has no UTF-8
+ * spelling, so it could not be stored as given.
  */
-export function isBackendId(value: unknown): value is string {
+function isPlainText(value: unknown, maxCharacters: number): value is string {
   return (
     typeof value === "string" &&
-    BACKEND_ID.test(value) &&
+    PLAIN_TEXT.test(value) &&
     !LONE_SURROGATE.test(value) &&
-    Array.from(value).length <= BACKEND_ID_MAX_CHARACTERS
+    Array.from(value).length <= maxCharacters
   );
+}
+
+/** True when `value` meets the Backend ID rule (see `isPlainText`). */
+export function isBackendId(value: unknown): value is string {
+  return isPlainText(value, BACKEND_ID_MAX_CHARACTERS);
 }
 
 export const Timestamp = Type.String({
@@ -73,12 +79,26 @@ export const Timestamp = Type.String({
   pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
 });
 
+export const NAME_MAX_CHARACTERS = 200;
+/** The Name rule in words, for refusals of names that skip the API schema. */
+export const NAME_RULE =
+  "1 to 200 characters, with no leading or trailing whitespace and no control characters or line or paragraph separators";
+
 /** A resource Name: 1 to 200 code points that follow the plain text rule. */
 export const Name = Type.String({
   minLength: 1,
-  maxLength: 200,
+  maxLength: NAME_MAX_CHARACTERS,
   pattern: PLAIN_TEXT_PATTERN,
 });
+
+/**
+ * True when `value` meets the Name rule, checked the way Ajv checks the `Name` schema (plus
+ * the lone surrogate refusal of `isPlainText`). OCC applies it to names that skip the API:
+ * the stored Installation, configured default Presets and direct controller calls.
+ */
+export function isName(value: unknown): value is string {
+  return isPlainText(value, NAME_MAX_CHARACTERS);
+}
 
 export const PluginApproversSchema = Type.Array(
   Type.Object(
