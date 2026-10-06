@@ -4770,11 +4770,6 @@ test("Agent provisioning API validates inline configuration with existing Secret
     { body: provisioningRequestBody(namespace.data.id, secrets) },
   );
   assert.equal(computeRefused.status, 409, JSON.stringify(computeRefused.body));
-  assert.equal(computeRefused.body.error.code, "RESOURCE_CONFLICT");
-  assert.equal(
-    computeRefused.body.error.message,
-    "The Compute Driver cannot provision this execution mode or gateway configuration.",
-  );
   const refusals = logLines.filter((line) => line.event === "agent_provisioning.compute_refused");
   assert.equal(refusals.length, 1, JSON.stringify(refusals));
   assert.deepEqual(
@@ -4788,6 +4783,11 @@ test("Agent provisioning API validates inline configuration with existing Secret
       requestId: computeRefused.body.meta.requestId,
       reason: "Dedicated Harness storage requires gateway routing and node enrollment.",
     },
+  );
+  assert.equal(computeRefused.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    computeRefused.body.error.message,
+    "The Compute Driver cannot provision this execution mode or gateway configuration.",
   );
   // A dependency the Compute Driver reports as unavailable stays retryable.
   computeDriver.validateAgentProvisioning = () => {

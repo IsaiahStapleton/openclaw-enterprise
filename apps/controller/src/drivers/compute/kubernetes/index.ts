@@ -9431,9 +9431,8 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
       trustedProxy.allowUsers !== undefined &&
       !isDeepStrictEqual(trustedProxy.allowUsers, [TRUSTED_PROXY_IDENTITY])
     ) {
-      throw new GatewaySettingFailure(
-        "gateway.auth.trustedProxy.allowUsers",
-        `must contain only ${TRUSTED_PROXY_IDENTITY} when set`,
+      throw new ConfigurationFailure(
+        `Kubernetes native trustedProxy.allowUsers must contain only ${TRUSTED_PROXY_IDENTITY}.`,
       );
     }
     if (trustedProxy.allowLoopback !== undefined && trustedProxy.allowLoopback !== false) {
