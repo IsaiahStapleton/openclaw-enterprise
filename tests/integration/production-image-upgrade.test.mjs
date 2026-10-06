@@ -406,7 +406,7 @@ esac
   );
 });
 
-test("production image upgrades refuse uppercase digest hex before touching the cluster", async (t) => {
+test("production image upgrades refuse uppercase or wrong-length digests before touching the cluster", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "occ-production-upgrade-digest-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   // Image references are checked during argument validation, before any file,

@@ -642,7 +642,7 @@ for (const { scenario, error } of [
       // The bounded wait is about 5 s; the lookups back off to one per second.
       const lookups = criLookups("agent-0");
       assert.ok(lookups >= 2 && lookups <= 12, `bounded CRI wait made ${lookups} lookups`);
-      // The last lookup starts once the wait has run out, so the lookups span most of it.
+      // The last lookup ends once the wait has run out, so the lookups span most of it.
       const times = preparation
         .filter(({ args }) => args[1] === `k3d-${cluster.name}-agent-0` && args[2] === "crictl")
         .map(({ at }) => at);
