@@ -1705,6 +1705,65 @@ test(
   },
 );
 
+test(
+  "a Compute gateway change before the worker runs rejects the provisioning work without retrying",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const computeDriver = createRuntimeComputeDriver();
+    const fixture = await createFixture(context, {
+      computeDriver,
+      configurationDriver: createProvisioningConfigurationDriver({
+        id: "configuration-provisioning-compute-refusal",
+      }),
+      secretDriver: createTestSecretDriver({ id: "secret-provisioning" }),
+    });
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const body = provisioningBody(namespace.id, secrets);
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body,
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+
+    // The Installation's gateway settings or routing changed, so the Compute Driver now refuses
+    // the stored plan with its own error class. Every attempt would refuse it the same way, so
+    // the worker fails it on the first one and says why.
+    const refusal = "Kubernetes Agent provisioning requires gateway routing and node enrollment.";
+    computeDriver.validateAgentProvisioning = () => {
+      throw new Error(refusal);
+    };
+    await fixture.startWorker();
+    const failed = await waitFor("the worker to refuse the provisioning work", async () => {
+      const row = await provisioningRow(fixture.pool, namespace.id, body.requestId);
+      return row.progress.error === undefined ? undefined : row;
+    });
+    await fixture.stopWorker();
+    const message =
+      "The Compute Driver cannot provision this execution mode or gateway configuration.";
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(failed.progress.error, { code: "PROVISIONING_REJECTED", message });
+    const work = await fixture.pool.query(
+      "SELECT state, reason_code, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+      [admitted.data.provisioning.workId],
+    );
+    assert.deepEqual(work.rows, [
+      { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED", attempt_count: 1 },
+    ]);
+
+    // Reading status reports the stored failure rather than a 500 or a fresh refusal.
+    const status = await fixture.request("GET", admitted.data.provisioning.url);
+    assert.equal(status.status, 200, JSON.stringify(status.body));
+    assert.equal(status.data.status, "failed");
+    assert.deepEqual(status.data.error, failed.progress.error);
+    // Retry runs the plan again, so it is refused as a conflict; the driver's text stays local.
+    const retried = await fixture.request("POST", `${admitted.data.provisioning.url}/retry`);
+    assert.equal(retried.status, 409, JSON.stringify(retried.body));
+    assert.equal(retried.body.error.code, "RESOURCE_CONFLICT");
+    assert.equal(retried.body.error.message, message);
+    assert.doesNotMatch(JSON.stringify(retried.body), /node enrollment/);
+  },
+);
+
 // Provision Agents through the worker and return their settled provisioning views.
 async function provisionAgents(fixture, namespaceId, count = 1) {
   const secrets = await createProvisioningSecrets(fixture, namespaceId);

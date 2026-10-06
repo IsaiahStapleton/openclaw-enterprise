@@ -776,17 +776,23 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
   return render(shown);
 }
 
+const COMPUTE_PROVISIONING_REFUSED =
+  "The Compute Driver cannot provision this execution mode or gateway configuration.";
+
 /**
- * The provisioning status message for a worker failure. Only the shared duplicate-name text and
- * the plugin-policy and native-support refusals pass through; other error messages stay
- * internal. Those refusals name only Installation configuration and the work's own plugin
- * selection, and HTTP returns them verbatim. The status contract caps `error.message` at 256
- * characters.
+ * The provisioning status message for a worker failure. Only the shared duplicate-name and
+ * Compute refusal texts and the plugin-policy and native-support refusals pass through; other
+ * error messages stay internal. Those refusals name only Installation configuration and the
+ * work's own plugin selection, and HTTP returns them verbatim. The status contract caps
+ * `error.message` at 256 characters.
  */
 function provisioningFailureMessage(code: string, error: unknown): string {
   if (code === "PROVISIONING_REJECTED") {
-    if (error instanceof ResourceStateConflictError && error.message === AGENT_NAME_CONFLICT) {
-      return AGENT_NAME_CONFLICT;
+    if (
+      error instanceof ResourceStateConflictError &&
+      (error.message === AGENT_NAME_CONFLICT || error.message === COMPUTE_PROVISIONING_REFUSED)
+    ) {
+      return error.message;
     }
     if (error instanceof PluginPolicyValidationError || error instanceof NativeWorkerSupportError) {
       const characters = Array.from(error.message);
@@ -823,6 +829,25 @@ const HARNESS_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.freeze({
 
 function validExecutionMode(value: unknown): value is HarnessExecutionMode {
   return value === "embedded" || value === "dedicated";
+}
+
+// The Compute Driver refuses a plan it cannot provision (execution mode, gateway settings,
+// routing) with its own error class. Report that as a refusal of this plan, as
+// validateHarnessAuth does, so the API answers 409 rather than 500 and the worker does not
+// retry a plan every attempt will refuse.
+function validateComputeAgentProvisioning(
+  compute: ComputeDriver,
+  executionMode: HarnessExecutionMode,
+  configuration: Readonly<OpenClawConfigurationDocument>,
+): void {
+  try {
+    compute.validateAgentProvisioning?.({ executionMode, configuration });
+  } catch (error) {
+    if (error instanceof DependencyUnavailableError) {
+      throw error;
+    }
+    throw new ResourceStateConflictError(COMPUTE_PROVISIONING_REFUSED);
+  }
 }
 
 function requireDedicatedNativeSupport(
@@ -1861,7 +1886,14 @@ export class OpenClawController {
         "The selected Drivers do not support Agent provisioning recovery.",
       );
     }
-    compute.validateAgentProvisioning({ executionMode, configuration: configurationInput.values });
+    // executionMode is optional and defaults to embedded; name the supported mode as a request
+    // the caller can fix, before the Compute Driver refuses the plan.
+    const provisioningModes = compute.agentProvisioning?.executionModes;
+    if (provisioningModes !== undefined && !provisioningModes.includes(executionMode)) {
+      throw new ConfigurationHarnessError(
+        `Agent provisioning needs ${provisioningModes.join(" or ")} execution; this request uses ${executionMode} execution. Set executionMode.`,
+      );
+    }
     if (harnessAuth === null || harnessAuth.method === "runtime") {
       throw new ScopeViolationError(
         "Agent provisioning requires dedicated Harness authentication.",
@@ -1912,6 +1944,8 @@ export class OpenClawController {
         id: input.namespaceId,
         namespaceId: input.namespaceId,
       });
+      // A replay is checked against the current Installation by authorizeProvisioningRecord.
+      validateComputeAgentProvisioning(compute, executionMode, configurationInput.values);
       // Reject foreign references before channel validation can report them as a scope miss.
       rejectCrossNamespaceSecretSources(
         input.namespaceId,
@@ -2238,7 +2272,8 @@ export class OpenClawController {
           error instanceof AgentDeletingError ||
           error instanceof NamespaceNotReadyError ||
           // An Installation change (Plugin Driver, runtime image) refuses the stored plan
-          // the same way on every attempt, as HTTP retry does with a 400.
+          // the same way on every attempt, as HTTP retry does with a 400. A Compute plan
+          // refusal arrives as a ResourceConflictError (409) and is rejected the same way.
           error instanceof PluginPolicyValidationError ||
           error instanceof NativeWorkerSupportError)
       ) {
@@ -6801,10 +6836,12 @@ export class OpenClawController {
     ) {
       throw new DependencyUnavailableError("The accepted provisioning Drivers are unavailable.");
     }
-    compute.validateAgentProvisioning({
-      executionMode: plan.executionMode,
-      configuration: plan.configuration.values,
-    });
+    // Compute plan validation is admission for writes (replay, retry, the worker), like the
+    // plugin policy below: a status read still reports the stored work after an Installation
+    // gateway or routing change makes the Compute Driver refuse the plan.
+    if (!statusRead) {
+      validateComputeAgentProvisioning(compute, plan.executionMode, plan.configuration.values);
+    }
     if (record.status === "failed") {
       // A failed plan does not keep its Secrets or ServiceAccount from deletion; say which is gone.
       await this.assertProvisioningSourcesExist(state, namespaceId, plan);
@@ -6915,8 +6952,8 @@ export class OpenClawController {
     if (found.record.actorId !== principalId) {
       throw new AuthorizationDeniedError("Only the initiating actor can read provisioning status.");
     }
-    // Retry repeats the full check, native support and plugin policy included, after its
-    // lifecycle checks.
+    // Retry repeats the full check, native support, plugin policy and the Compute plan check
+    // included, after its lifecycle checks.
     await this.authorizeProvisioningRecord(state, principalId, found.record, { statusRead: true });
     return found;
   }
