@@ -1,7 +1,7 @@
 ---
 created: 2026-09-28
-updated: 2026-09-29
-last_updated_session: r2-fix-7
+updated: 2026-10-06
+last_updated_session: authoring-run/feaed473-dcbe-4c10-93fc-39e937f1e798
 ---
 
 # Installation Profile Rendering Flow
@@ -86,6 +86,12 @@ token because Installation startup configuration does not consume it.
 same-Namespace Secret or through the Console. Managed `chatgpt_service_account`
 provisioning is optional and renders only when `codex.managedServiceAccounts` is
 supplied.
+
+The shared `digestImage` check in `buildRendered` requires the literal
+`sha256` algorithm and 64 lowercase hexadecimal characters for
+`controlPlane.controllerImage`, `runtime.image`, and enabled `repository.image`.
+Noncanonical digest casing adds a field-specific diagnostic; the final error
+branch writes only `preflight.json`, leaving no deployable artifacts.
 
 Preflight applies the downstream contracts for IPv4 CIDRs, native-admin DNS
 hostnames and their shared cookie parent domain, and paired metrics scraper
@@ -193,6 +199,8 @@ activation, and repository registry creation need separate evidence.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-06 13:20: Reject noncanonical SHA-256 image digests before emitting deployment files. (authoring-run/feaed473-dcbe-4c10-93fc-39e937f1e798 - f2fb8cbe952d7c27b2690f86134c89e6912cb883)
 
 - 2026-09-29 20:30: Stop defaulting the repository broker Service name so the chart upgrade guard applies.
 

@@ -209,7 +209,8 @@
       "path": "tests/integration/presets-controller.test.mjs"
     },
     {
-      "path": "tests/integration/profile-renderer.test.mjs"
+      "path": "tests/integration/profile-renderer.test.mjs",
+      "expectedTests": ["preflight rejects noncanonical SHA-256 image digests"]
     },
     {
       "path": "tests/integration/bootstrap-output.test.mjs"
