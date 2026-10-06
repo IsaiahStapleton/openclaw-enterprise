@@ -110,8 +110,10 @@ survive database or audit failure.
 
 Agent provisioning also requires `validateAgentProvisioning({ executionMode,
 configuration })`. A thrown `ComputeGatewaySettingError` reaches the caller as a
-`409` naming the setting; `DependencyUnavailableError` stays retryable; any other
-error becomes a fixed `409`, with its message logged as `reason`.
+`409` naming the setting, and the worker stores it as a permanent
+`PROVISIONING_REJECTED`. `DependencyUnavailableError` stays a retryable
+dependency failure. Any other error becomes a fixed `409`, with the first 512
+characters of its message logged as `reason`.
 
 With `requiresAgentRuntimeCredentials: true`, OCC checks stored status and
 [creates missing transport credentials](../console/create-and-deploy.md#initial-runtime-credentials)
