@@ -1831,17 +1831,24 @@ test(
 );
 
 test(
-  "a Harness authentication refusal of the caller's Configuration is named on create, in the failed work and on retry",
+  "a Harness authentication refusal of the caller's Configuration is named on create, replay, handoff, in the failed work and on retry",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
     const computeDriver = createRuntimeComputeDriver();
     // Kubernetes Compute raises this for a Codex Gateway setting it cannot rewrite; the
     // setting path can carry a submitted provider key, here with a control character.
-    const refusal =
-      "Configuration setting models.providers.op\u0007enai.models must be a list of objects: a dedicated Codex Gateway cannot apply it otherwise.";
+    const settingRefusal = (key) =>
+      `Configuration setting models.providers.${key}.models must be a list of objects: a dedicated Codex Gateway cannot apply it otherwise.`;
+    // Exactly the 256-character status cap, counting the astral character once, so the
+    // status keeps it whole.
+    const fill = 256 - Array.from(settingRefusal("op\u0007enai\u{1F600}")).length;
+    const refusal = settingRefusal(`op\u0007enai${"x".repeat(fill)}\u{1F600}`);
+    assert.equal(Array.from(refusal).length, 256);
     const named = refusal.replace("\u0007", "?");
     let refusing = true;
+    let harnessChecks = 0;
     computeDriver.validateHarnessAuth = () => {
+      harnessChecks += 1;
       if (refusing) {
         throw new ConfigurationHarnessError(refusal);
       }
@@ -1892,10 +1899,20 @@ test(
     ]);
 
     // Status reports the stored failure without rechecking Harness authentication.
+    const checksBeforeStatus = harnessChecks;
     const status = await fixture.request("GET", admitted.data.provisioning.url);
     assert.equal(status.status, 200, JSON.stringify(status.body));
     assert.equal(status.data.status, "failed");
     assert.deepEqual(status.data.error, failed.progress.error);
+    assert.equal(harnessChecks, checksBeforeStatus, "a status read runs no Harness check");
+    // A replay of the admitted request checks the stored plan again and names the setting too.
+    const provisionPath = `/namespaces/${namespace.id}/agents/provision`;
+    const replayed = await fixture.request("POST", provisionPath, { body });
+    assert.equal(replayed.status, 400, JSON.stringify(replayed.body));
+    assert.deepEqual(
+      { code: replayed.body.error.code, message: replayed.body.error.message },
+      { code: "INVALID_REQUEST", message: named },
+    );
     // Retry runs the plan again and names the setting too.
     const retried = await fixture.request("POST", `${admitted.data.provisioning.url}/retry`);
     assert.equal(retried.status, 400, JSON.stringify(retried.body));
@@ -1916,6 +1933,46 @@ test(
         message: "The configured model, authentication, or channel bindings cannot be provisioned.",
       },
     );
+
+    // Admission and the worker fences check the placeholder "provisioning" Harness version;
+    // deployment checks the approved runtime version. A Driver that refuses only the latter
+    // fails the work at the deployment handoff, and its message is named as well. Over the
+    // cap, format characters and lone surrogates become "?" and the cut keeps whole
+    // characters.
+    const emoji = "\u{1F600}".repeat(220);
+    computeDriver.validateHarnessAuth = (harness) => {
+      if (harness.version !== "provisioning") {
+        throw new ConfigurationHarnessError(settingRefusal(`op\u200Benai\uD800${emoji}`));
+      }
+    };
+    const handoffBody = provisioningBody(namespace.id, secrets);
+    const handedOff = await fixture.request("POST", provisionPath, { body: handoffBody });
+    assert.equal(handedOff.status, 202, JSON.stringify(handedOff.body));
+    await fixture.startWorker();
+    const handoffFailed = await waitFor("the handoff to refuse the provisioning work", async () => {
+      const row = await provisioningRow(fixture.pool, namespace.id, handoffBody.requestId);
+      return row.progress.error === undefined ? undefined : row;
+    });
+    await fixture.stopWorker();
+    assert.equal(handoffFailed.status, "failed");
+    assert.notEqual(handoffFailed.agent_id, null, "the handoff runs after the Agent exists");
+    const shown = Array.from(settingRefusal(`op?enai?${emoji}`))
+      .slice(0, 255)
+      .join("");
+    assert.deepEqual(handoffFailed.progress.error, {
+      code: "PROVISIONING_REJECTED",
+      message: `${shown}…`,
+    });
+
+    // Authorization comes first: a caller who lost its grants gets 403, not the setting.
+    computeDriver.validateHarnessAuth = () => {
+      throw new ConfigurationHarnessError(refusal);
+    };
+    await fixture.revokeCurrentPrincipal();
+    const denied = await fixture.request("POST", provisionPath, { body });
+    assert.equal(denied.status, 403, JSON.stringify(denied.body));
+    assert.equal(denied.body.error.code, "FORBIDDEN");
+    assert.doesNotMatch(JSON.stringify(denied.body), /models\.providers/);
   },
 );
 

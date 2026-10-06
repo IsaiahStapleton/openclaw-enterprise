@@ -314,12 +314,15 @@ if (command === "docker" || command === "podman") {
     const ctr = ["ctr", "-n", "k8s.io", "images"];
     if (equals(args.slice(2), [...ctr, "list"])) {
       if (scenario === "hung-ctr-list" && node.endsWith("-agent-0")) await hang();
+      // The first list on the server is the digest lookup after the import.
+      if (scenario === "hung-server-list" && node.endsWith("-server-0")) await hang();
       const references = [state.importedNodes?.[node] && state.tag, alias].filter(Boolean);
       finish("REF TYPE DIGEST SIZE PLATFORMS LABELS\n" + references.map((ref) =>
         ref + " application/vnd.oci.image.manifest.v1+json " + manifestDigest + " 1 linux/amd64 -\n",
       ).join(""));
     }
     if (equals(args.slice(2, 8), [...ctr, "tag", state.tag]) && args.length === 9) {
+      if (scenario === "hung-ctr-tag" && node.endsWith("-agent-0")) await hang();
       if (scenario !== "missing-alias") {
         state.aliases ??= {};
         state.aliases[node] = args[8];
@@ -586,6 +589,16 @@ for (const { scenario, error } of [
     scenario: "hung-ctr-list",
     error:
       /containerd on k3d-\S+-agent-0 did not answer within 1000 ms \(ctr -n k8s\.io images list\)\./,
+  },
+  {
+    scenario: "hung-server-list",
+    error:
+      /containerd on k3d-\S+-server-0 did not answer within 1000 ms \(ctr -n k8s\.io images list\)\./,
+  },
+  {
+    scenario: "hung-ctr-tag",
+    error:
+      /containerd on k3d-\S+-agent-0 did not answer within 1000 ms \(ctr -n k8s\.io images tag \S+ \S+\)\./,
   },
   { scenario: "nonzero-import", error: /synthetic import command failure/ },
   { scenario: "nonzero-worker-import", error: /synthetic import command failure/ },
