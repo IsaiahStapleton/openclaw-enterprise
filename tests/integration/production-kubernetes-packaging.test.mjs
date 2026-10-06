@@ -2654,15 +2654,6 @@ test(
   async () => {
     for (const [description, override] of [
       ["mutable controller", { "images.controller": "registry.example/controller:latest" }],
-      // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other spellings.
-      [
-        "uppercase controller digest",
-        { "images.controller": `registry.example/controller@sha256:${"A".repeat(64)}` },
-      ],
-      [
-        "uppercase controller digest algorithm",
-        { "images.controller": `registry.example/controller@SHA256:${"a".repeat(64)}` },
-      ],
       ["missing Better Auth secret", { "auth.secretName": "" }],
       ["missing bootstrap admin email", { "bootstrap.adminEmail": "" }],
       ["missing bootstrap password claim", { "bootstrap.password.claimName": "" }],
@@ -2813,6 +2804,23 @@ test(
         render(override),
         ({ code, stderr }) => code !== 0 && stderr.length > 0,
         description,
+      );
+    }
+    // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other
+    // spellings at pull time. The uppercase algorithm was already refused; uppercase hex
+    // was not.
+    for (const image of [
+      `registry.example/controller@sha256:${"A".repeat(64)}`,
+      `registry.example/controller@SHA256:${"a".repeat(64)}`,
+    ]) {
+      await assert.rejects(
+        render({ "images.controller": image }),
+        ({ code, stderr }) =>
+          code !== 0 &&
+          stderr.includes(
+            "images.controller must be an approved immutable SHA-256 image reference",
+          ),
+        image,
       );
     }
   },

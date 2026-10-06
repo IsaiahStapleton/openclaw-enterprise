@@ -92,7 +92,8 @@ test(
       );
     await render([]);
     // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other
-    // spellings at pull time, so the chart refuses them at render time.
+    // spellings at pull time, so the chart refuses them at render time. The uppercase
+    // algorithm was already refused; uppercase hex was not.
     for (const name of ["prometheus", "grafana", "loki"]) {
       for (const digest of [`sha256:${"A".repeat(64)}`, `SHA256:${"a".repeat(64)}`]) {
         await assert.rejects(
