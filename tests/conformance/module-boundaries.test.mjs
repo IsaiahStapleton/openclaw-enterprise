@@ -1689,14 +1689,17 @@ test("does not preserve falsely known targets through reassigned paths or loader
       (edge) => edge.rule === "unresolved-dynamic-import" && edge.from.endsWith("reassigned.mjs"),
     ),
   );
-  // Dynamic imports through the reassigned loader and around a deferred
-  // require.resolve result report why they stay unknown.
-  const reasons = report.violations
-    .filter((edge) => edge.from.endsWith("reassigned.mjs") && edge.kind === "dynamic-import")
-    .map((edge) => edge.message);
-  assert.ok(reasons.includes("A recognized loader binding is assigned elsewhere in this source."));
-  assert.ok(
-    reasons.includes("Path manipulation around require.resolve is outside bounded analysis."),
+  // Each dynamic import reports why its target stays unknown.
+  assert.deepEqual(
+    report.violations
+      .filter((edge) => edge.from.endsWith("reassigned.mjs") && edge.kind === "dynamic-import")
+      .map((edge) => edge.message)
+      .sort(),
+    [
+      "A recognized loader binding is assigned elsewhere in this source.",
+      "Module paths require a local const initializer with no assignment.",
+      "Path manipulation around require.resolve is outside bounded analysis.",
+    ],
   );
 });
 
@@ -1722,6 +1725,7 @@ test("bounds cyclic loader provenance and reports an unresolved dependency witho
   assert.ok(violates(report, "apps/app/src/cyclic-loader.mjs", "unresolved-dynamic-import"));
   assert.equal(from(report, "apps/app/src/cyclic-loader.mjs").length, 0);
   assert.ok(violates(report, "apps/app/src/cyclic-path.mjs", "unresolved-dynamic-import"));
+  assert.equal(from(report, "apps/app/src/cyclic-path.mjs").length, 0);
 });
 
 test("bounds cyclic computed factory provenance inside dynamic imports", async (t) => {
