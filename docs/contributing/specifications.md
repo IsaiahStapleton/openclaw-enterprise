@@ -113,13 +113,22 @@ and recordings remain outside the repository, as required by
 ## Status and review
 
 Keep status in the owning document rather than duplicating it in the index.
-Every RFC entry point must begin with YAML frontmatter containing `status`:
+Every RFC entry point must begin with YAML frontmatter containing `status` and
+`author`:
 
 ```yaml
 ---
 status: Proposed
+author: github-login
 ---
 ```
+
+`author` is the original RFC PR author's GitHub login, without `@`. It is required
+for every non-archived RFC entry point, regardless of status. For a new draft,
+use the contributor who will open its PR. When backfilling, follow file history
+through renames and use the original PR author, not a later editor or merger.
+Do not replace authorship with a responsible team; describe responsibilities in
+the proposal.
 
 Companion Markdown notes have an `rfc` frontmatter link to the owning entry
 point, relative to the note (usually `rfc: index.md`). Read the decision status
@@ -160,7 +169,7 @@ authorized scope change is recorded. Acceptance of an RFC is not evidence of
 availability. Use [documentation checks](documentation.md#preview-and-check)
 for document-only changes, without running product tests.
 
-`pnpm docs:check` also checks non-archived specs for required RFC statuses,
+`pnpm docs:check` also checks non-archived specs for required RFC statuses and author logins,
 relative `rfc` references to RFC entry points, and local Markdown link targets.
 Run `node scripts/check-specs.mjs` for that check alone. It does not check remote
 URLs, heading fragments, or the meaning of a recorded decision. Three preserved

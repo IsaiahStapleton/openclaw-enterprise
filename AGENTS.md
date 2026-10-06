@@ -299,7 +299,8 @@ an independent plan can build on the existing architecture without a new RFC.
 Keep verification in the owning document or its supporting pages, not a separate
 reports area. Keep completed and superseded records in place.
 
-RFC entry points require `status` in YAML frontmatter. Companion notes link to
+RFC entry points require `status` and the original PR author's GitHub login in
+`author` YAML frontmatter. Companion notes link to
 their parent through `rfc` frontmatter instead of duplicating its decision
 status. Follow the specification process for historical status uncertainty.
 

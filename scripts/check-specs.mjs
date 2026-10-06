@@ -81,6 +81,14 @@ for (const file of files) {
       throw new Error("frontmatter must be a YAML mapping");
     }
     if (rfcEntries.has(file)) {
+      if (
+        typeof data.author !== "string" ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/i.test(data.author) ||
+        data.author.includes("--") ||
+        data.author === "github-login"
+      ) {
+        throw new Error("RFC requires an author GitHub login in frontmatter (without @)");
+      }
       if (!statuses.has(data.status)) {
         throw new Error("RFC requires a valid status in frontmatter");
       }
@@ -134,7 +142,7 @@ if (errors.length) {
   process.exitCode = 1;
 } else {
   console.log(
-    `Validated ${files.length} spec documents, ${rfcEntries.size} RFC statuses, and ${links} local link targets.`,
+    `Validated ${files.length} spec documents, ${rfcEntries.size} RFC statuses and authors, and ${links} local link targets.`,
   );
 }
 if (historicalLinks) {
