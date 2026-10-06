@@ -1718,6 +1718,23 @@ test("contract error details stay within the published path cap and name what a 
     wrongSource.payload.error.message,
     `${contract} /harnessAuth/source has the wrong type (expected object).`,
   );
+
+  // An operation without query parameters or a request body says which one it refused.
+  const query = await request(fixture.app, `/namespaces/${namespace.id}/agents?limit=5`);
+  assert.equal(query.response.status, 400);
+  assert.equal(
+    query.payload.error.message,
+    "The request does not match the operation contract: this operation accepts no query parameters.",
+  );
+  const emptyBody = await request(fixture.app, `/namespaces/${namespace.id}`, {
+    method: "DELETE",
+    body: {},
+  });
+  assert.equal(emptyBody.response.status, 400);
+  assert.equal(
+    emptyBody.payload.error.message,
+    "The request does not match the operation contract: this operation accepts no request body.",
+  );
 });
 
 test("log polls describe only the requested source and skip Event lists", async () => {

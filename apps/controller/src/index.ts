@@ -1587,7 +1587,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       operation.operationId !== "listAgentRepositoryOptions" &&
       operation.operationId !== "getAgentDeploymentRuntimeLogs"
     ) {
-      throw failure(400, "INVALID_REQUEST", "The request does not match the operation contract.");
+      throw failure(
+        400,
+        "INVALID_REQUEST",
+        "The request does not match the operation contract: this operation accepts no query parameters.",
+      );
     }
     for (const [parameter, pattern] of Object.entries(RESOURCE_ID)) {
       if (
@@ -3719,7 +3723,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             throw failure(
               400,
               "INVALID_REQUEST",
-              "The request does not match the operation contract.",
+              "The request does not match the operation contract: this operation accepts no request body.",
             );
           }
           const unstorable =
