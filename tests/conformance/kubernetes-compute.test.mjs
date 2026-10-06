@@ -11591,7 +11591,8 @@ test("Kubernetes workspace setup redacts backend failures and refuses foreign pr
 // must surface as a transient Kubernetes API failure: the worker then waits within the
 // convergence deadline instead of spending its attempt budget. Other answers keep the redacted
 // delivery error. Either way the status and Status reason stay visible to diagnostics, while
-// the client error, whose message and body echo the submitted Secret, stays behind.
+// the client error, whose message and body echo the submitted Secret, stays behind. A Secret
+// that already exists is replaced instead of created; that write is classified the same way.
 for (const embedded of [true, false]) {
   test(`Kubernetes ${embedded ? "embedded" : "dedicated"} private Secret writes classify API answers without echoing Secret data`, async () => {
     const { ApiException } = createRequire(
@@ -11609,25 +11610,103 @@ for (const embedded of [true, false]) {
         stage: "workspace_setup",
       },
     ];
+    for (const [target, write, status, reason, transient] of targets.flatMap((target) =>
+      ["create", "replace"].flatMap((write) =>
+        [
+          [503, "ServiceUnavailable", true],
+          [429, "TooManyRequests", true],
+          [403, "Forbidden", false],
+        ].map((answer) => [target, write, ...answer]),
+      ),
+    )) {
+      const fixture = workspaceSetupFixture(embedded);
+      const clients = await fixture.driver.apiClients;
+      if (write === "replace") {
+        // A first pass creates every Secret. Then the runtime Secret's stored data differs
+        // from the admitted credentials (as after a rotation), and the workspace setup is
+        // completed while the stored payload is not (as after a lost ready acknowledgement),
+        // so the next pass replaces the target.
+        await fixture.driver.prepareRevision(fixture.revision, fixture.context);
+        for (const object of fixture.objects.values()) {
+          if (
+            object.kind === "Secret" &&
+            /^(harness|gateway)-secrets-/u.test(object.metadata.name)
+          ) {
+            object.data = {};
+          }
+        }
+        fixture.context.workspaceSetup.completed = true;
+      }
+      const method = `${write}NamespacedSecret`;
+      const send = clients.core[method];
+      let rejected = 0;
+      const written = [];
+      clients.core[method] = async (request) => {
+        if (target.name.test(request.body.metadata.name)) {
+          rejected += 1;
+          written.push(...Object.values(request.body.data));
+          // The client's own error keeps the answer as JSON text and echoes it in its
+          // message; this answer also echoes the submitted Secret.
+          const answer = { kind: "Status", code: status, reason, message: request.body };
+          throw new ApiException(status, "Unknown API Status Code!", JSON.stringify(answer), {});
+        }
+        return send(request);
+      };
+      const error = await fixture.driver.prepareRevision(fixture.revision, fixture.context).then(
+        () => assert.fail("the private Secret write must fail"),
+        (failure) => failure,
+      );
+      assert.equal(rejected, 1, "a mutating write is never retried inside the pass");
+      if (transient) {
+        assert.equal(error.name, "TransientDependencyError");
+        assert.equal(error.code, "KUBERNETES_API_UNAVAILABLE");
+        assert.equal(error.reason, "unavailable");
+        assert.equal(error.message, `The Kubernetes API answered HTTP ${status}.`);
+      } else {
+        assert.equal(error.name, "DependencyUnavailableError");
+        assert.equal(error.message, target.message);
+      }
+      assert.equal(error.cause.code, status);
+      assert.equal(error.cause.reason, reason);
+      assert.equal(error.cause.cause, undefined);
+      assert.deepEqual(fixture.driver.describePrepareRevisionFailure(error), {
+        code: transient ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
+        stage: target.stage,
+        errorClass: "KubernetesApiError",
+        message: "The Kubernetes API rejected revision preparation.",
+        status,
+      });
+      const evidence = inspect(error, { depth: 8 });
+      assert.ok(written.length > 0);
+      for (const secret of [...written, "fixture-model-key", "private-create-documents"]) {
+        assert.equal(evidence.includes(secret), false);
+      }
+    }
+  });
+}
+
+// Two more ways a private Secret write can end. A connection that breaks while the write is
+// sent (EPIPE, or ECONNABORTED for a socket the local kernel aborted) never got an answer
+// from the API server, so it is transient like a refused connection. An owner that cancels
+// the pass while the write is in flight gets its own cancellation back, as from every other
+// Kubernetes call, not the delivery error that would read as an unavailable dependency.
+for (const embedded of [true, false]) {
+  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} private Secret writes keep broken connections transient and cancellations intact`, async () => {
+    const targets = [
+      { name: /^(harness|gateway)-secrets-/u, stage: "harness_auth" },
+      { name: /^workspace-setup-/u, stage: "workspace_setup" },
+    ];
     for (const target of targets) {
-      for (const [status, reason, transient] of [
-        [503, "ServiceUnavailable", true],
-        [429, "TooManyRequests", true],
-        [403, "Forbidden", false],
-      ]) {
+      for (const code of ["EPIPE", "ECONNABORTED"]) {
         const fixture = workspaceSetupFixture(embedded);
         const clients = await fixture.driver.apiClients;
         const create = clients.core.createNamespacedSecret;
-        let rejected = 0;
-        const written = [];
         clients.core.createNamespacedSecret = async (request) => {
           if (target.name.test(request.body.metadata.name)) {
-            rejected += 1;
-            written.push(...Object.values(request.body.data));
-            // The client's own error keeps the answer as JSON text and echoes it in its
-            // message; this answer also echoes the submitted Secret.
-            const answer = { kind: "Status", code: status, reason, message: request.body };
-            throw new ApiException(status, "Unknown API Status Code!", JSON.stringify(answer), {});
+            // The client's fetch rejects with the socket error as its cause.
+            throw new TypeError("fetch failed", {
+              cause: Object.assign(new Error(`write ${code}`), { code, syscall: "write" }),
+            });
           }
           return create(request);
         };
@@ -11635,32 +11714,40 @@ for (const embedded of [true, false]) {
           () => assert.fail("the private Secret write must fail"),
           (failure) => failure,
         );
-        assert.equal(rejected, 1, "a mutating write is never retried inside the pass");
-        if (transient) {
-          assert.equal(error.name, "TransientDependencyError");
-          assert.equal(error.code, "KUBERNETES_API_UNAVAILABLE");
-          assert.equal(error.reason, "unavailable");
-          assert.equal(error.message, `The Kubernetes API answered HTTP ${status}.`);
-        } else {
-          assert.equal(error.name, "DependencyUnavailableError");
-          assert.equal(error.message, target.message);
-        }
-        assert.equal(error.cause.code, status);
-        assert.equal(error.cause.reason, reason);
+        assert.equal(error.name, "TransientDependencyError");
+        assert.equal(error.code, "KUBERNETES_API_UNAVAILABLE");
+        assert.equal(error.reason, "unreachable");
+        assert.equal(error.cause.code, code);
         assert.equal(error.cause.cause, undefined);
         assert.deepEqual(fixture.driver.describePrepareRevisionFailure(error), {
-          code: transient ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
+          code: "KUBERNETES_API_UNAVAILABLE",
           stage: target.stage,
-          errorClass: "KubernetesApiError",
-          message: "The Kubernetes API rejected revision preparation.",
-          status,
+          errorClass: "KubernetesApiUnavailableError",
+          message: "The Kubernetes API server is unreachable.",
         });
-        const evidence = inspect(error, { depth: 8 });
-        assert.ok(written.length > 0);
-        for (const secret of [...written, "fixture-model-key", "private-create-documents"]) {
-          assert.equal(evidence.includes(secret), false);
-        }
       }
+
+      const fixture = workspaceSetupFixture(embedded);
+      const clients = await fixture.driver.apiClients;
+      const create = clients.core.createNamespacedSecret;
+      const owner = new AbortController();
+      const cancellation = new Error("revision pass cancelled");
+      clients.core.createNamespacedSecret = async (request) => {
+        if (!target.name.test(request.body.metadata.name)) {
+          return create(request);
+        }
+        // The owner cancels while the write is in flight, and the client rejects with the
+        // reason of the request's signal, which follows the owner's.
+        const signal = currentComputeAbortSignal();
+        owner.abort(cancellation);
+        throw signal.reason;
+      };
+      await assert.rejects(
+        withComputeAbortSignal(owner.signal, () =>
+          fixture.driver.prepareRevision(fixture.revision, fixture.context),
+        ),
+        (error) => error === cancellation,
+      );
     }
   });
 }
