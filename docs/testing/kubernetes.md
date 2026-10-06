@@ -46,13 +46,15 @@ OCC_TEST_KUBERNETES_CONTEXT=k3d-oce \
 OCC_TEST_KUBERNETES_IMAGE=oce-fixture:local \
 OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local \
   node --test tests/integration/kubernetes-compute-real.test.mjs \
+    tests/integration/kubernetes-compute-provisioning-real.test.mjs \
     tests/integration/kubernetes-compute-driver-real.test.mjs
 ```
 
 All four fixture cases must run: Driver lifecycle/isolation (in the
 `kubernetes-compute-driver-real` file, which CI runs in `k3d-fixture-plugins`),
-externally managed namespace preservation, provisioning handoff, and PostgreSQL
-API-plus-worker reconciliation. Both files share
+externally managed namespace preservation and provisioning handoff (in
+`kubernetes-compute-provisioning-real`, run in `k3d-fixture-state`), and PostgreSQL
+API-plus-worker reconciliation. The files share
 `tests/helpers/kubernetes-compute-real.mjs`. No model key is needed. Missing all
 cluster selectors skips the suite; partial selectors fail, and a missing
 database skips the API-plus-worker case.
