@@ -1706,6 +1706,48 @@ test("contract error details stay within the published path cap and name what a 
     assert.deepEqual(result.payload.error.details, [{ path, code }]);
   }
 
+  // A cut path names an ancestor of the offending field, which itself is accepted, so the
+  // message says the problem is inside it. Uncut paths keep naming the field itself.
+  const agents = `/namespaces/${namespace.id}/agents`;
+  const agent = { name: "Contract detail agent", configurationId: `cfg_${randomUUID()}` };
+  const messages = [
+    [
+      configurations,
+      { ...configuration, secretBindings: { [longBinding]: { source, extra: 1 } } },
+      "/secretBindings contains a field that is not accepted.",
+    ],
+    [
+      configurations,
+      { ...configuration, secretBindings: { [longBinding]: { source: "x" } } },
+      "/secretBindings contains a field that has the wrong type (expected object).",
+    ],
+    [
+      configurations,
+      { ...configuration, secretBindings: { [longBinding]: {} } },
+      "/secretBindings or an object under it is missing a required field.",
+    ],
+    [
+      agents,
+      { ...agent, harnessAuth: { method: "api_key", source, [longBinding]: 1 } },
+      "/harnessAuth contains a field that is not accepted.",
+    ],
+    [
+      configurations,
+      { ...configuration, secretBindings: { short: { source, extra: 1 } } },
+      "/secretBindings/short/extra is not an accepted field.",
+    ],
+    [
+      agents,
+      { ...agent, harnessAuth: { method: "api_key", source, extra: 1 } },
+      "/harnessAuth/extra is not an accepted field.",
+    ],
+  ];
+  for (const [route, body, message] of messages) {
+    const result = await request(fixture.app, route, { body });
+    assert.equal(result.response.status, 400, JSON.stringify(result.payload).slice(0, 200));
+    assert.equal(result.payload.error.message, `${contract} ${message}`);
+  }
+
   // A union whose shapes all accept one type names that type, not "one of" a single entry.
   const wholeBody = await request(
     fixture.app,

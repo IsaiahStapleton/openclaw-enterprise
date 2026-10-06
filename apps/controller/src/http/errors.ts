@@ -173,6 +173,8 @@ interface ContractProblem {
   readonly detail: ErrorDetail;
   /** The accepted type or values, taken from the schema, never from the request. */
   readonly expected?: string;
+  /** The path lost segments to the detail path cap, so it names an ancestor of the field. */
+  readonly shortened?: boolean;
 }
 
 function expectedType(parameters: Record<string, unknown>): string | undefined {
@@ -487,12 +489,15 @@ function validationProblems(error: FastifyError): readonly ContractProblem[] {
   // Instance paths name submitted object keys, such as an unknown field or a map entry, so
   // they are capped like other detail paths.
   const problems = collapseScalarUnions(error.validation)
-    .map(({ detail, expected }) => {
-      const bounded = { ...detail, path: cappedPath(detail.path) };
-      return expected === undefined ? { detail: bounded } : { detail: bounded, expected };
+    .map((problem): ContractProblem => {
+      const path = cappedPath(problem.detail.path);
+      // Dropped segments make the path an ancestor of the field. A cut inside one long first key
+      // still names that key, so it keeps the field's own wording.
+      const shortened = path.split("/").length < problem.detail.path.split("/").length;
+      return { ...problem, detail: { ...problem.detail, path }, shortened };
     })
-    .filter(({ detail, expected }) => {
-      const key = JSON.stringify([detail.path, detail.code, expected]);
+    .filter(({ detail, expected, shortened }) => {
+      const key = JSON.stringify([detail.path, detail.code, expected, shortened]);
       if (seen.has(key)) {
         return false;
       }
@@ -514,6 +519,18 @@ const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.fr
   TOO_DEEP: "is nested too deeply",
 });
 
+// A path that lost segments to the cap names an ancestor of the offending field, which may
+// well be accepted, so the message places the problem inside it.
+const SHORTENED_PATH_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({
+  REQUIRED: "or an object under it is missing a required field",
+  UNKNOWN_FIELD: "contains a field that is not accepted",
+  INVALID_TYPE: "contains a field that has the wrong type",
+  INVALID_FORMAT: "contains a field that has an invalid format",
+  INVALID_VALUE: "contains a field that has an unsupported value",
+  TOO_LONG: "contains a field that is too long",
+  TOO_DEEP: "contains a field that is nested too deeply",
+});
+
 // Names the first few offending fields so clients that print only the message, such as
 // occ, still show which field to fix. The full list stays in `details`.
 function contractMessage(error: FastifyError, found: readonly ContractProblem[]): string {
@@ -527,10 +544,12 @@ function contractMessage(error: FastifyError, found: readonly ContractProblem[])
   const problems = [
     ...new Set(
       found.map(
-        ({ detail, expected }) =>
-          `${context}${detail.path || "/"} ${DETAIL_PROBLEMS[detail.code]}${
-            expected === undefined ? "" : ` (expected ${expected})`
-          }`,
+        (problem) =>
+          `${context}${problem.detail.path || "/"} ${
+            (problem.shortened === true ? SHORTENED_PATH_PROBLEMS : DETAIL_PROBLEMS)[
+              problem.detail.code
+            ]
+          }${problem.expected === undefined ? "" : ` (expected ${problem.expected})`}`,
       ),
     ),
   ];
