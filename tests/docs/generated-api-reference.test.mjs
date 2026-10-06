@@ -234,3 +234,17 @@ test("operations without a request body do not list 413 or 415", async () => {
     .map((operation) => operation.operationId);
   assert.deepEqual(listed, []);
 });
+
+test("the error envelope table documents the shared ErrorResponse, not an inline copy", async () => {
+  // Inline /api/auth/* error schemas also carry `details` so schema 400s keep their field
+  // pointers. The reference introduction must still describe the shared envelope's codes
+  // and limits, which those inline copies do not repeat.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const page = generateApiReferenceOutputs(document)[0].content;
+  const section = page.slice(page.indexOf("## Error responses"), page.indexOf("## Resources"));
+  assert.match(section, /^\| `error\.code` \| `"INVALID_REQUEST" or /m);
+  assert.match(
+    section,
+    /^\| `error\.message` \| `string` \| Yes \| min length: 1; max length: 256 \|$/m,
+  );
+});

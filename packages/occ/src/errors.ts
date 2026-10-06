@@ -621,8 +621,9 @@ export class PluginPolicyValidationError extends Error {
     let message = "The supplied plugin policies are invalid.";
     if (field === "unknownPlugin") {
       // driverId comes from trusted Installation configuration, never from the request.
-      // pluginId is the caller's own selection key; the API contract limits it to
-      // [A-Za-z0-9._~:@-]. It follows the rule, so HTTP's message cap cuts the advice first.
+      // pluginId is a selection key admitted under the API contract's [A-Za-z0-9._~:@-] rule,
+      // from this request or from storage. It follows the rule, so HTTP's message cap cuts
+      // the advice first.
       message = `A plugin selection names a plugin that the selected Plugin Driver${
         driverId === undefined ? "" : ` (${driverId})`
       } does not offer${

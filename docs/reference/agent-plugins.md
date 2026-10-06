@@ -329,9 +329,10 @@ native review trigger; explicit tool overrides do not need catalog annotations.
   outside the selected Driver's catalog (OpenClaw) or its prefix and marketplace
   (Codex), such as `occ-plugin:diffs` while `codex-plugin` is selected, names
   that Driver and the rejected plugin ID in the message, with a
-  `/plugins/<id>` detail when the request body submitted that selection. A
-  stored selection refused at deploy, or at an update that omits `plugins`, has
-  no detail.
+  `/plugins/<id>` detail when the selection came from this request's body. A
+  selection read back from storage (at deploy, at an update that omits
+  `plugins`, or at a provisioning replay, retry or status read) still names the
+  plugin but has no detail.
 - `403`: denied exact-Agent permission.
 - `404`: missing or foreign Agent or Configuration.
 - `409`: ordinary Agent conflict, such as duplicate name.

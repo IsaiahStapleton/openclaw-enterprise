@@ -343,6 +343,9 @@ test("console auth routes reject untrusted browser origins and issue production 
   });
   assert.equal(malformedSignIn.response.status, 400, malformedSignIn.text);
   assert.equal(JSON.parse(malformedSignIn.text).error.code, "INVALID_REQUEST");
+  assert.deepEqual(JSON.parse(malformedSignIn.text).error.details, [
+    { path: "/password", code: "REQUIRED" },
+  ]);
 
   // Every status answered above is in the checked-in OpenAPI contract, so clients generated
   // from it handle the Origin and schema refusals. The contract once listed neither.

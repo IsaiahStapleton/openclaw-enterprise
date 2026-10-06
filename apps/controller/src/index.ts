@@ -7,6 +7,7 @@ import {
   AgentRuntimeLogsResponse,
   AgentRuntimeResponse,
   CredentialSourceResponse,
+  ErrorDetail as ErrorDetailSchema,
   ErrorResponse,
   JsonValue,
   occApiRoutes,
@@ -2451,7 +2452,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           type: "object",
           additionalProperties: false,
           required: ["code", "message"],
-          properties: { code: { type: "string" }, message: { type: "string" } },
+          properties: {
+            code: { type: "string" },
+            message: { type: "string" },
+            // Schema 400s point at the rejected field; without this the serializer drops it.
+            details: { type: "array", maxItems: 32, items: ErrorDetailSchema },
+          },
         },
         meta,
       },
