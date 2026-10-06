@@ -4525,8 +4525,9 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
 });
 
 test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
+  const computeDriver = createProvisioningCapableComputeDriver();
   const fixture = await createInjectedFixture({
-    computeDriver: createProvisioningCapableComputeDriver(),
+    computeDriver,
     configurationDriver: createProvisioningCapableConfigurationDriver(),
   });
   const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
@@ -4659,6 +4660,18 @@ test("Agent provisioning API validates inline configuration with existing Secret
       "Secret references cannot cross Namespaces.",
     ],
     [
+      // executionMode is optional and defaults to embedded; the Compute Driver provisions only
+      // dedicated Agents, so the request is refused naming the field to set.
+      "omitted execution mode",
+      provisioningRequestBody(namespace.data.id, secrets, { executionMode: undefined }),
+      "Agent provisioning needs dedicated execution; this request uses embedded execution. Set executionMode.",
+    ],
+    [
+      "embedded execution mode",
+      provisioningRequestBody(namespace.data.id, secrets, { executionMode: "embedded" }),
+      "Agent provisioning needs dedicated execution; this request uses embedded execution. Set executionMode.",
+    ],
+    [
       "reserved environment destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: {
@@ -4689,6 +4702,24 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
+  // A plan the Compute Driver refuses for its own reasons (gateway settings, routing) is a
+  // conflict naming the refusal. The driver's error class is private, so it used to be a 500.
+  computeDriver.validateAgentProvisioning = () => {
+    throw new Error("Kubernetes native gateway auth must be an object.");
+  };
+  const computeRefused = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  computeDriver.validateAgentProvisioning = () => {};
+  assert.equal(computeRefused.status, 409, JSON.stringify(computeRefused.body));
+  assert.equal(computeRefused.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    computeRefused.body.error.message,
+    "The Compute Driver cannot provision this execution mode or gateway configuration.",
+  );
   const wrongTypeHarnessAuth = await injectedRequest(
     fixture.app,
     "POST",
