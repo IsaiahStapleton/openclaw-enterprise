@@ -40,8 +40,10 @@ same way.
 A detail path longer than 512 characters is cut to its leading whole
 segments (or the start of a long first key, keeping whole `~0` and `~1`
 escapes). When whole segments were dropped, a contract validation message
-says that the cut path contains the offending field, unless the
-256-character message cap cuts that wording off.
+says that the cut path contains the offending field. To fit the
+256-character message cap, a message cuts long paths (ending them with `…`)
+and shows fewer problems before it cuts any problem wording; `details` keeps
+the paths.
 
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |

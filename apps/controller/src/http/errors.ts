@@ -531,6 +531,13 @@ const SHORTENED_PATH_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = O
   TOO_DEEP: "contains a field that is nested too deeply",
 });
 
+// The error contract caps messages at 256 characters.
+const MESSAGE_CAP = 256;
+// The shortest cut path a message shows when it lists more than one problem, and when it
+// shows only one (a character and the ellipsis).
+const MIN_SHOWN_PATH = 32;
+const MIN_SOLE_PATH = 2;
+
 // Names the first few offending fields so clients that print only the message, such as
 // occ, still show which field to fix. The full list stays in `details`.
 function contractMessage(error: FastifyError, found: readonly ContractProblem[]): string {
@@ -541,28 +548,100 @@ function contractMessage(error: FastifyError, found: readonly ContractProblem[])
     typeof error.validationContext === "string" && error.validationContext.length > 0
       ? `${error.validationContext} `
       : "";
-  const problems = [
-    ...new Set(
-      found.map(
-        (problem) =>
-          `${context}${problem.detail.path || "/"} ${
-            (problem.shortened === true ? SHORTENED_PATH_PROBLEMS : DETAIL_PROBLEMS)[
-              problem.detail.code
-            ]
-          }${problem.expected === undefined ? "" : ` (expected ${problem.expected})`}`,
-      ),
-    ),
-  ];
-  const shown = problems.slice(0, 3).join("; ");
+  const seen = new Set<string>();
+  const problems: { readonly path: string; readonly wording: string }[] = [];
+  for (const problem of found) {
+    const path = `${context}${problem.detail.path || "/"}`;
+    const wording = ` ${
+      (problem.shortened === true ? SHORTENED_PATH_PROBLEMS : DETAIL_PROBLEMS)[problem.detail.code]
+    }${problem.expected === undefined ? "" : ` (expected ${problem.expected})`}`;
+    if (!seen.has(path + wording)) {
+      seen.add(path + wording);
+      problems.push({ path, wording });
+    }
+  }
+  const prefix = "The request does not match the operation contract: ";
+  // Long paths are cut before any wording is: show fewer problems rather than cut any path
+  // below MIN_SHOWN_PATH, so each shown problem keeps its path start and its whole wording.
+  for (let count = Math.min(problems.length, 3); count >= 1; count -= 1) {
+    const shown = problems.slice(0, count);
+    const more = problems.length > count ? `; and ${problems.length - count} more` : "";
+    const fixed = `${prefix}${shown.map(({ wording }) => wording).join("; ")}${more}.`;
+    const paths = pathsWithin(
+      shown.map(({ path }) => path),
+      MESSAGE_CAP - Array.from(fixed).length,
+      count === 1 ? MIN_SOLE_PATH : MIN_SHOWN_PATH,
+    );
+    if (paths !== undefined) {
+      const listed = shown.map(({ wording }, index) => `${paths[index]}${wording}`).join("; ");
+      return capped(`${prefix}${listed}${more}.`);
+    }
+  }
+  // Wording too long for the cap even with the shortest cut path (none is today): cut the
+  // message end.
+  const listed = problems
+    .slice(0, 3)
+    .map(({ path, wording }) => `${path}${wording}`)
+    .join("; ");
   const more = problems.length > 3 ? `; and ${problems.length - 3} more` : "";
-  return capped(`The request does not match the operation contract: ${shown}${more}.`);
+  return capped(`${prefix}${listed}${more}.`);
 }
 
-// The error contract caps messages at 256 characters; long JSON Pointer paths are cut.
+/**
+ * Cuts the longest of `paths` first, each to the same length ending in "…", so that together
+ * they take at most `budget` characters. Paths that fit stay whole. Returns undefined when a
+ * cut path would be shorter than `minimum` characters. Counts code points, so a cut never
+ * leaves half of a surrogate pair; it can split a `~0` or `~1` escape, which `details` keeps.
+ */
+function pathsWithin(
+  paths: readonly string[],
+  budget: number,
+  minimum: number,
+): readonly string[] | undefined {
+  const characters = paths.map((path) => Array.from(path));
+  if (characters.reduce((total, path) => total + path.length, 0) <= budget) {
+    return paths;
+  }
+  // The largest length that every longer path can be cut to.
+  let left = budget;
+  let longer = characters.length;
+  let length = 0;
+  for (const size of characters.map((path) => path.length).sort((a, b) => a - b)) {
+    if (size * longer > left) {
+      length = Math.floor(left / longer);
+      break;
+    }
+    left -= size;
+    longer -= 1;
+  }
+  if (length < minimum) {
+    return undefined;
+  }
+  return characters.map((path) =>
+    path.length <= length ? path.join("") : `${path.slice(0, length - 1).join("")}…`,
+  );
+}
+
+/**
+ * Puts `path` between `before` and `after`, cutting the path so that the whole message fits
+ * the cap and `after`, the problem wording, stays whole.
+ */
+function pathMessage(before: string, path: string, after: string): string {
+  const [shown] = pathsWithin(
+    [path],
+    MESSAGE_CAP - Array.from(before + after).length,
+    MIN_SOLE_PATH,
+  ) ?? [path];
+  return capped(`${before}${shown}${after}`);
+}
+
+// Any message longer than the cap is cut at its end; contract messages cut paths first.
 // Control and format characters from submitted object keys are replaced, and the cut keeps whole characters.
 function capped(message: string): string {
   const characters = Array.from(message.replace(/[\p{Cc}\p{Cf}]/gu, "?"));
-  return characters.length <= 256 ? characters.join("") : `${characters.slice(0, 255).join("")}…`;
+  return characters.length <= MESSAGE_CAP
+    ? characters.join("")
+    : `${characters.slice(0, MESSAGE_CAP - 1).join("")}…`;
 }
 
 // In Unicode mode, `\p{Cs}` matches only a surrogate that is not part of a pair.
@@ -630,10 +709,10 @@ export function unstorableTextFailure(
   return failure(
     400,
     "INVALID_REQUEST",
-    capped(
-      `The request does not match the operation contract: ${context} ${path || "/"} contains ${
-        nul ? "a NUL character" : "an unpaired UTF-16 surrogate"
-      }.`,
+    pathMessage(
+      `The request does not match the operation contract: ${context} `,
+      path || "/",
+      ` contains ${nul ? "a NUL character" : "an unpaired UTF-16 surrogate"}.`,
     ),
     [{ path, code: nul ? "INVALID_FORMAT" : "INVALID_VALUE" }],
   );
