@@ -33,6 +33,7 @@ import {
   signInToControllerApp,
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
+import { createReadyComputeDriver } from "../helpers/development.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
 import { stopProcess } from "../helpers/stop-process.mjs";
@@ -312,28 +313,11 @@ function createProvisioningCapableConfigurationDriver() {
 function createProvisioningCapableComputeDriver() {
   const runtimeStatus = new Map();
   const keyOf = ({ namespace, agent }) => `${namespace.id}:${agent.id}`;
-  return {
-    id: "compute-provisioning-api",
-    capability: "compute",
-    implementation: "deterministic-test",
+  return createReadyComputeDriver("compute-provisioning-api", {
     agentProvisioning: { executionModes: ["dedicated"] },
     requiresAgentRuntimeCredentials: true,
-    async ensureNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceReady: true };
-    },
-    async deleteNamespace(namespace) {
-      return { namespaceId: namespace.id, namespaceDeleted: true };
-    },
     validateHarnessAuth() {},
     validateAgentProvisioning() {},
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
     async provisionAgentRuntimeCredentials(binding) {
       runtimeStatus.set(keyOf(binding), { transportConfigured: true });
       return { transportConfigured: true };
@@ -342,8 +326,7 @@ function createProvisioningCapableComputeDriver() {
       return runtimeStatus.get(keyOf(binding)) ?? { transportConfigured: false };
     },
     async stopRevision() {},
-    async retireRevision() {},
-  };
+  });
 }
 
 async function bindHarnessKey(fixture, namespaceId, agent) {
@@ -437,37 +420,27 @@ async function createInjectedFixture(options = {}) {
     options.iamDriver ??
     new NativeIAMDriver({ loadNativeIAMState: async () => state }, { id: "iam-integration" });
   const computeCalls = { ensureNamespace: [], deleteNamespace: [] };
-  const computeDriver = options.computeDriver ?? {
-    id: "compute-integration",
-    capability: "compute",
-    implementation: "deterministic-test",
-    async ensureNamespace(namespace) {
-      computeCalls.ensureNamespace.push(namespace.id);
-      return {
-        namespaceId: namespace.id,
-        namespaceReady: true,
-      };
-    },
-    async deleteNamespace(namespace) {
-      computeCalls.deleteNamespace.push(namespace.id);
-      return {
-        namespaceId: namespace.id,
-        namespaceDeleted: true,
-      };
-    },
-    // OCC API coverage exercises admission; runtime compatibility belongs to Compute suites.
-    validateHarnessAuth() {},
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
-    async stopRevision() {},
-    async retireRevision() {},
-  };
+  const computeDriver =
+    options.computeDriver ??
+    createReadyComputeDriver("compute-integration", {
+      async ensureNamespace(namespace) {
+        computeCalls.ensureNamespace.push(namespace.id);
+        return {
+          namespaceId: namespace.id,
+          namespaceReady: true,
+        };
+      },
+      async deleteNamespace(namespace) {
+        computeCalls.deleteNamespace.push(namespace.id);
+        return {
+          namespaceId: namespace.id,
+          namespaceDeleted: true,
+        };
+      },
+      // OCC API coverage exercises admission; runtime compatibility belongs to Compute suites.
+      validateHarnessAuth() {},
+      async stopRevision() {},
+    });
   const auditSink = options.auditSink ?? new InMemoryAuditSink();
   const configurationDriver =
     options.configurationDriver ??
@@ -2270,10 +2243,7 @@ test("Agent Backend API preserves nullable drafts and immutable revision associa
 test("Installation API exposes Agent provisioning capabilities without configured Backends", async () => {
   let ensureNamespaceCalls;
   let deleteNamespaceCalls;
-  const computeDriver = {
-    id: "compute-provisioning-capable",
-    capability: "compute",
-    implementation: "deterministic-test",
+  const computeDriver = createReadyComputeDriver("compute-provisioning-capable", {
     agentProvisioning: { executionModes: ["dedicated"] },
     async ensureNamespace(namespace) {
       ensureNamespaceCalls.push(namespace.id);
@@ -2285,17 +2255,8 @@ test("Installation API exposes Agent provisioning capabilities without configure
     },
     validateHarnessAuth() {},
     validateAgentProvisioning() {},
-    async prepareRevision(revision) {
-      return {
-        namespaceId: revision.namespaceId,
-        agentId: revision.agentId,
-        revisionId: revision.id,
-        ready: true,
-      };
-    },
     async stopRevision() {},
-    async retireRevision() {},
-  };
+  });
   const fixture = await createInjectedFixture({
     backends: [],
     backendSummaries: [],
