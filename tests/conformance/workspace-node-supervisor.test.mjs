@@ -23,12 +23,13 @@ async function jsonLines(path) {
     .map((line) => JSON.parse(line));
 }
 
-// Stub lines for a saved-identity probe that appends a "probe" row to
-// `directory`/events.jsonl and never answers, keeping the event loop busy as a
-// slow probe does.
-const pendingIdentityProbe = (directory) => [
+// Stub lines for a saved-identity probe that appends a "probe" row to the events
+// file in the supervisor's HOME (the test directory) and never answers, keeping
+// the event loop busy as a slow probe does.
+const pendingIdentityProbe = [
   "cp.execFile = () => {",
-  `  require("node:fs").appendFileSync(${JSON.stringify(join(directory, "events.jsonl"))}, JSON.stringify({ kind: "probe" }) + "\\n");`,
+  '  const events = require("node:path").join(process.env.HOME, "events.jsonl");',
+  '  require("node:fs").appendFileSync(events, JSON.stringify({ kind: "probe" }) + "\\n");',
   "  setInterval(() => {}, 60_000);",
   "};",
 ];
@@ -146,7 +147,7 @@ test(
         'if (kind === "codex") spawn(process.execPath, [__filename, events, "grandchild"], { stdio: "inherit" });',
         "setInterval(() => {}, 1_000);",
       ],
-      stubs: pendingIdentityProbe(directory),
+      stubs: pendingIdentityProbe,
       env: {
         OPENCLAW_NODE_SETUP_ENVELOPE: setupEnvelopePath,
         OPENAI_API_KEY: "synthetic-model-key",
@@ -424,8 +425,8 @@ test(
       child: [],
       stubs: [
         // Every child fails to start, so Codex is only ever between restarts.
-        `cp.spawn = (command, args, options) => realSpawn(${JSON.stringify(join(directory, "missing"))}, [], options);`,
-        ...pendingIdentityProbe(directory),
+        'cp.spawn = (command, args, options) => realSpawn(process.env.HOME + "/missing", [], options);',
+        ...pendingIdentityProbe,
       ],
       env: { OPENCLAW_NODE_SETUP_PATH: join(directory, "setup", "setup-code") },
     });
