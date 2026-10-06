@@ -263,8 +263,8 @@ ServicePrincipal as subject; its accepted delete event lists all of them in
 `accessBindingsRemovedOnCompletion`. A deleting Agent admits no new binding of
 those kinds. Completion also removes the deny Restrictions on the Agent or its
 AgentRevisions, at Installation or Namespace scope; the same event lists them in
-`restrictionsRemovedOnCompletion`. Each of these lists appears only when it is
-nonempty.
+`restrictionsRemovedOnCompletion`. Each of these three audit lists appears only
+when it is nonempty.
 Namespace teardown removes the Namespace's bindings and Roles with the tombstone
 and records them in the lifecycle event. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings
